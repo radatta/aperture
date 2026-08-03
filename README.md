@@ -10,9 +10,24 @@ Not a mood tracker, not a habit-shaming app, not a productivity cult. Balance is
 
 ## Status
 
-**Pre-build.** Product + technical + infra specs are complete; implementation hasn't started. The blueprint lives in [`docs/`](docs/) — start at [`docs/index.md`](docs/index.md).
+**Foundation built — Phase 0 (2026-08-03).** The pnpm monorepo installs, typechecks, lints, tests, builds, and serves — green end to end. No product code yet; Phases 1–14 of [`docs/V1_PLAN.md`](docs/V1_PLAN.md) remain. Specs (product, technical, infra) are complete — start at [`docs/index.md`](docs/index.md).
 
-Build begins at **Phase 0** of [`docs/V1_PLAN.md`](docs/V1_PLAN.md) (pnpm workspace scaffolding). Build order is **page-first, backend-second**: the app runs against a stubbed API and the whole UX gets validated in-hand before any Lambda or DynamoDB is wired.
+Build order is **page-first, backend-second**: the app runs against a stubbed API and the whole UX gets validated in-hand before any Lambda or DynamoDB is wired. Next up is **Phase 1** — the shared `ApiClient` contract + in-memory stub.
+
+## Develop
+
+Requires **Node 22** (see `.nvmrc`) and **pnpm** (`corepack enable pnpm`).
+
+```bash
+pnpm install       # install the workspace
+pnpm dev           # run the app (Vite) → localhost:5173
+pnpm typecheck     # tsc -b across all packages (project references)
+pnpm lint          # eslint (flat config)
+pnpm test          # vitest across all packages
+pnpm build         # production build
+```
+
+Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `packages/shared/` (the cross-cutting contract) · `scripts/`.
 
 ## What it does (v1)
 

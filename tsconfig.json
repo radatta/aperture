@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./app" },
+    { "path": "./lambdas" },
+    { "path": "./cdk" },
+    { "path": "./scripts" }
+  ]
+}

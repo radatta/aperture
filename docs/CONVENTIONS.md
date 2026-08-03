@@ -36,3 +36,17 @@ When proposing a dep, **justify against A/B explicitly**, note its footprint + t
 Build the `app/` against a **stubbed API first** — validate the home modes, the capture flow, and the calibration UX feel right in-hand — **then** wire the Lambda + DynamoDB behind the same contract.
 
 Rationale: it's far cheaper to discover the product is wrong against a stub than against real infra.
+
+---
+
+## Monorepo: internal packages resolve from source
+
+Workspace packages export **TypeScript source**, not built JS. `@aperture/shared` sets
+`"exports": "./src/index.ts"`; `app` and `lambdas` import it directly and their bundler (Vite / esbuild)
+transpiles it — **no build step in the dev or test loop**. `shared` still emits a **gitignored `dist/`**
+purely to satisfy TS project references, which forbid a *referenced* composite project from disabling
+emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it exists, that's why.
+
+**Command shape:** typecheck is one root `tsc -b` over the project-reference graph; lint is one root
+`eslint .` (flat config). `test` and `build` fan out per-package (`pnpm -r`). Vitest runs two envs —
+**jsdom** for `app`, **node** for everything else (Lambda runtime parity).

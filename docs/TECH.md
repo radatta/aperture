@@ -1,7 +1,7 @@
 # Aperture — Technical Spec
 
 Implements `PRODUCT.md`. AWS-native PWA, web-first, online-first. Solo build, single user.
-Status: **Phase 2 (Technical) — in progress.**
+Status: **Specs complete; implementation underway — workspace foundation (V1_PLAN Phase 0) built 2026-08-03.**
 Started: 2026-08-02.
 
 > Product is the source of truth. If this doc and `PRODUCT.md` disagree, product wins.
@@ -156,6 +156,8 @@ aperture/
 
 **Tooling:** **pnpm** (package manager + workspaces) — **never npm/yarn** · **Vitest** (one test runner, Node everywhere) · Vite (app bundler) · TS project refs · ESLint + Prettier · esbuild-via-CDK for Lambda bundling · GitHub Actions CI. Dependency discipline per **[CONVENTIONS.md](CONVENTIONS.md)** (first-principles: build it ourselves by default).
 
+**As built (Phase 0):** Node 22 · pnpm 11 · TypeScript **6** (pinned below 7 for lint support) · Vite 8 · Vitest 4 · React 19 · ESLint 10. Internal packages resolve **from source** (`@aperture/shared` exports `src/index.ts`; consumers transpile it, no dev/test build step); `shared` emits a gitignored `dist/` only to satisfy project references. Full rationale + the version-pin gotchas in **[V1_PLAN.md](V1_PLAN.md) → Phase 0 (as built)**.
+
 ---
 
 ## 5. The AI seam (v1.1+, boundary only)
@@ -170,4 +172,6 @@ Nothing built in v1 — just a clean boundary so reflection is additive later.
 
 ## Status
 
-Phase 2 complete. Infra decisions are resolved in **[INFRA.md](INFRA.md)** (Function URL + CloudFront OAC, Cognito, dev+prod, CDK split, GitHub OIDC CI, Porkbun/ACM domain as last step). Remaining before build is execution, not decisions.
+Specs complete; infra decisions resolved in **[INFRA.md](INFRA.md)** (Function URL + CloudFront OAC, Cognito, dev+prod, CDK split, GitHub OIDC CI, Porkbun/ACM domain as last step).
+
+**Implementation:** the pnpm/TS/Vitest workspace foundation (V1_PLAN Phase 0) is built and green as of 2026-08-03 — pinned toolchain, project references, dual Vitest envs, blank app shell. Next: **Phase 1** (shared contract + in-memory stub).

@@ -8,6 +8,8 @@ key files it creates, dependencies, and the spec sections it implements. Build o
 **page-first**: workspace → stub contract → validate home/capture/calibration UX against the
 stub → real Lambda + DynamoDB → auth → CI/infra → custom domain LAST.
 
+**Build status (2026-08-03):** Phase 0 ✅ built & green. Phases 1–14 pending. Next: **Phase 1**.
+
 ---
 
 ## A. Order-sensitive decisions — build these in from day one
@@ -78,7 +80,7 @@ noted. "It's popular" is not a reason. Every tempting point is flagged here so i
 
 ---
 
-## Phase 0 — Workspace & tooling foundation
+## Phase 0 — Workspace & tooling foundation ✅ BUILT (2026-08-03)
 
 **Goal:** a green pnpm monorepo that lints, typechecks, and runs an empty Vitest suite across all
 packages. No product code yet.
@@ -101,6 +103,20 @@ packages. No product code yet.
 **Depends on:** nothing. **Implements:** TECH §4, CONVENTIONS (pnpm, Vitest).
 **Trade-off:** invest in project-refs + dual Vitest envs now so `lambdas/` never needs a second
 runner later — the whole point of the pnpm/Vitest call.
+
+**As built (2026-08-03):** green end to end — `install · typecheck · lint · test · build · dev` all pass.
+- **Pins** (resolved via `npm show`, not guessed): Node **22** (`.nvmrc`, `engines >=22.12`, Lambda
+  `nodejs22.x`) · pnpm **11.18** (corepack) · TypeScript **6.0.3** · Vite **8.2** · Vitest **4.1** ·
+  React **19.2** · ESLint **10.8** + typescript-eslint **8.65** · Prettier **3.9**.
+- **TS pinned to 6, not 7:** `typescript-eslint@8.65` peers `typescript <6.1.0`, so TS 7 (the
+  native-compiler rewrite) breaks type-aware lint. Bump when typescript-eslint supports TS 7.
+- **Node 22, not 24:** matches the dev environment and the Lambda runtime; keeps dev == deploy target.
+- **Internal packages resolve from source:** `@aperture/shared` exports `./src/index.ts`; `app`/`lambdas`
+  import it directly and their bundler transpiles it — **no build step in the dev/test loop**. `shared`
+  emits a gitignored `dist/` only to satisfy TS project references (a *referenced* composite project
+  can't be `noEmit` — TS6310). Nothing imports that `dist/`.
+- **Structure:** typecheck = one root `tsc -b` (project references); lint = one root `eslint .` (flat
+  config); `test`/`build` fan out per-package (`pnpm -r`). Dual Vitest envs — jsdom (`app`), node (rest).
 
 ---
 

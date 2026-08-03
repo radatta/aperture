@@ -1,0 +1,8 @@
+packages:
+  - app
+  - lambdas
+  - cdk
+  - packages/*
+  - scripts
+minimumReleaseAgeExclude:
+  - globals@17.9.0
