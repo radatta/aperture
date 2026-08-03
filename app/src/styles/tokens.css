@@ -1,0 +1,37 @@
+/* Palette derived from localNotes/preview.webp: a dusky teal-green ground, soft off-white ink,
+   a seafoam translucent highlight for active states, and one warm gold accent (the wingtips).
+   Dark is the identity anchor (:root). Light is derived. ThemeProvider always stamps
+   data-theme="dark|light" (resolving "auto" against the OS in JS), so no media query is needed. */
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface: #33453f; /* app ground */
+  --panel: #3b4d47; /* cards / rows */
+  --panel-2: #45574f; /* raised */
+  --ink: #e8ece9; /* primary text */
+  --ink-muted: #9fb0a9; /* secondary / counts */
+  --ink-subtle: #7a8d86; /* tertiary */
+  --line: rgba(255, 255, 255, 0.09); /* hairlines */
+  --teal: #7fb2a2; /* active / links */
+  --teal-soft: rgba(127, 178, 162, 0.16); /* active row fill */
+  --gold: #cfab6b; /* the accent */
+  --gold-soft: rgba(207, 171, 107, 0.16);
+  --danger: #d98a72; /* soft, never alarming */
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --surface: #eef1ec;
+  --panel: #ffffff;
+  --panel-2: #f6f8f4;
+  --ink: #21302b;
+  --ink-muted: #566661;
+  --ink-subtle: #82918b;
+  --line: rgba(18, 38, 32, 0.1);
+  --teal: #3c6f61;
+  --teal-soft: rgba(60, 111, 97, 0.12);
+  --gold: #9c7a2f;
+  --gold-soft: rgba(156, 122, 47, 0.14);
+  --danger: #b4553a;
+}
