@@ -4,6 +4,7 @@ import {
   contributesCalibration,
   heartbeatSession,
   resolveStaleSession,
+  resumeSession,
   taskTransition,
   withEstimate,
 } from './machines';
@@ -96,5 +97,18 @@ describe('sessions — heartbeat lifecycle', () => {
     expect(kept.status).toBe('completed');
     expect(kept.endedAt).toBe(12 * 60_000);
     expect(kept.activeMinutes).toBe(12);
+  });
+
+  it('pause → resume excludes the paused gap from accrued time', () => {
+    // Work 10 min, then pause (a final heartbeat captures it).
+    const paused = heartbeatSession(running(), 10 * 60_000);
+    expect(paused.activeMinutes).toBe(10);
+    // Sit paused for 30 min, then resume — resume just resets the clock, no accrual.
+    const resumed = resumeSession(paused, 40 * 60_000);
+    expect(resumed.activeMinutes).toBe(10); // gap not credited
+    expect(resumed.lastHeartbeatAt).toBe(40 * 60_000);
+    // Work 5 more min: only post-resume time counts.
+    const after = heartbeatSession(resumed, 45 * 60_000);
+    expect(after.activeMinutes).toBe(15);
   });
 });

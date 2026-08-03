@@ -1,0 +1,167 @@
+import { useEffect, useState } from 'react';
+import { todayKey } from '@aperture/shared';
+import type { Task, TaskPlan } from '@aperture/shared';
+import { Button } from '../../components/Button';
+import { Card } from '../../components/Card';
+import { Field } from '../../components/Field';
+import { MiniBar } from '../../components/MiniBar';
+import { Text } from '../../components/Text';
+import { fmtDuration } from '../../lib/format';
+import { useBacklog } from '../../data/hooks/useBacklog';
+import { useDay, useSetCapacity } from '../../data/hooks/useDay';
+import { usePlansForDay, useRemovePlan, useUpsertPlan } from '../../data/hooks/usePlans';
+import { useSettings } from '../../data/hooks/useSettings';
+import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
+import { plannedVsAvailable } from '../calibration/calibration';
+import { CategoryTag } from './CategoryTag';
+import { TaskCard } from './TaskCard';
+import { plannedDefault } from './taskMath';
+
+// The morning plan pass (PRODUCT §3 ☀️): set the day's capacity, pull backlog tasks in, and see
+// planned hours vs available — under-scoping caught here, before it becomes stress.
+export function PlanSection() {
+  const { data: settings } = useSettings();
+  const day = todayKey(settings?.dayStartHour ?? 4);
+
+  const { data: dayRec } = useDay(day);
+  const { data: plans = [] } = usePlansForDay(day);
+  const { data: allTasks = [] } = useAllTasks();
+  const { data: backlog = [] } = useBacklog();
+
+  const setCapacity = useSetCapacity(day);
+  const upsertPlan = useUpsertPlan();
+  const removePlan = useRemovePlan();
+  const transition = useTransitionTask();
+
+  const taskById = new Map(allTasks.map((t) => [t.id, t]));
+  const plannedRows = plans
+    .map((plan) => ({ plan, task: taskById.get(plan.taskId) }))
+    .filter((r): r is { plan: TaskPlan; task: Task } => !!r.task);
+  const plannedMin = plans.reduce((s, p) => s + p.plannedMinutes, 0);
+  const pva = plannedVsAvailable(plannedMin, dayRec?.capacityHours ?? null);
+
+  async function addToDay(taskId: string) {
+    const task = taskById.get(taskId);
+    if (!task) return;
+    await upsertPlan.mutateAsync({
+      taskId,
+      day,
+      plannedMinutes: plannedDefault(task) || task.estimateMin || 30,
+      order: plans.length,
+    });
+    if (task.status === 'backlog') await transition.mutateAsync({ id: taskId, to: 'planned' });
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <div className="flex flex-col gap-3">
+          <CapacityField
+            key={dayRec?.id ?? day}
+            initial={dayRec?.capacityHours ?? null}
+            onSave={(h) => setCapacity.mutate(h)}
+          />
+          {pva.availableMin === null ? (
+            <Text size="sm" tone="subtle">
+              {fmtDuration(plannedMin)} planned. Set your available hours to see if you&apos;re
+              over-scoping.
+            </Text>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <MiniBar plannedMin={pva.plannedMin} availableMin={pva.availableMin} />
+              <Text size="sm" tone={pva.over ? 'gold' : 'muted'} tabular>
+                {fmtDuration(plannedMin)} planned into a {fmtDuration(pva.availableMin)} day
+                {pva.over ? ` · ${fmtDuration(pva.overByMin)} over` : ''}
+              </Text>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <div className="flex flex-col gap-2">
+        <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+          Planned today
+        </Text>
+        {plannedRows.length === 0 ? (
+          <Text tone="subtle" size="sm">
+            Nothing planned yet — pull something in from the backlog below.
+          </Text>
+        ) : (
+          plannedRows.map(({ plan, task }) => (
+            <TaskCard
+              key={plan.id}
+              task={task}
+              actions={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={async () => {
+                    await removePlan.mutateAsync(plan.id);
+                    if (task.status === 'planned')
+                      await transition.mutateAsync({ id: task.id, to: 'backlog' });
+                  }}
+                >
+                  Unplan
+                </Button>
+              }
+            />
+          ))
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+          Backlog
+        </Text>
+        {backlog.length === 0 ? (
+          <Text tone="subtle" size="sm">
+            Backlog is clear.
+          </Text>
+        ) : (
+          backlog.map((task) => (
+            <Card key={task.id}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <Text weight="medium" className="truncate">
+                    {task.title}
+                  </Text>
+                  <CategoryTag categoryId={task.categoryId} />
+                </div>
+                <Button size="sm" onClick={() => addToDay(task.id)}>
+                  Add to today
+                </Button>
+              </div>
+            </Card>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Manual hours-available (v1 capacity is a number, not calendar-derived). Saves on blur/Enter.
+function CapacityField({
+  initial,
+  onSave,
+}: {
+  initial: number | null;
+  onSave: (h: number | null) => void;
+}) {
+  const [value, setValue] = useState(initial?.toString() ?? '');
+  useEffect(() => setValue(initial?.toString() ?? ''), [initial]);
+  const commit = () => onSave(value === '' ? null : Number(value));
+  return (
+    <Field
+      label="Hours available today"
+      type="number"
+      min={0}
+      step={0.5}
+      inputMode="decimal"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && commit()}
+      className="w-40"
+    />
+  );
+}

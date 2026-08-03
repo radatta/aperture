@@ -1,10 +1,8 @@
 import { createContext, useContext } from 'react';
-import type { ResolvedTheme, Theme } from '../styles/theme';
+import type { ResolvedTheme } from '../styles/theme';
 
 export interface ThemeContextValue {
-  theme: Theme; // stored preference
-  resolved: ResolvedTheme; // what actually paints
-  setTheme: (t: Theme) => void;
+  resolved: ResolvedTheme; // what actually paints (light | dark)
 }
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);

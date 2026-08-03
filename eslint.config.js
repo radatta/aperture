@@ -48,4 +48,12 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
   },
+
+  // Tests + test utilities aren't hot-reloaded — the fast-refresh rule doesn't apply.
+  {
+    files: ['**/*.test.{ts,tsx}', 'app/src/test/**'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 );

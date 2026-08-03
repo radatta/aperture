@@ -71,3 +71,37 @@ export function fmtMonthDay(key: string): string {
   const p = key.split('-');
   return `${Number(p[1])}/${Number(p[2])}`;
 }
+
+const WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
+
+export function fmtWeekday(key: string): string {
+  return WEEKDAYS[weekdayOf(key)]!;
+}
+
+// Header form: "Saturday, Aug 2" — the glanceable date for the home.
+export function fmtDayHeading(key: string): string {
+  const p = key.split('-');
+  return `${fmtWeekday(key)}, ${MONTHS[Number(p[1]) - 1]} ${Number(p[2])}`;
+}

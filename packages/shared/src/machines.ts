@@ -91,6 +91,13 @@ export function heartbeatSession(session: PomodoroSession, now: number): Pomodor
   };
 }
 
+// Resume after a pause: reset the heartbeat clock to now WITHOUT crediting the paused gap. Pause
+// captures active time via a final heartbeat, then the client stops beating; this restarts the clock
+// so the next beat measures only post-resume time.
+export function resumeSession(session: PomodoroSession, now: number): PomodoroSession {
+  return { ...session, lastHeartbeatAt: now, updatedAt: now };
+}
+
 export function completeSession(session: PomodoroSession, now: number): PomodoroSession {
   const beat = heartbeatSession(session, now);
   return { ...beat, status: 'completed', endedAt: now, updatedAt: now };

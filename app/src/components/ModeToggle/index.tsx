@@ -1,8 +1,10 @@
+import type { ReactNode } from 'react';
 import { cx } from '../../lib/cx';
 
 export interface SegmentedOption<T extends string> {
   value: T;
-  label: string;
+  label: ReactNode;
+  title?: string; // used as aria-label + tooltip when the label is icon-only
 }
 
 export interface ModeToggleProps<T extends string> {
@@ -29,9 +31,11 @@ export function ModeToggle<T extends string>({
             key={o.value}
             type="button"
             aria-pressed={active}
+            aria-label={o.title}
+            title={o.title}
             onClick={() => onChange(o.value)}
             className={cx(
-              'rounded-lg px-3 py-1.5 text-sm transition',
+              'flex items-center rounded-lg px-3 py-1.5 text-sm transition',
               active ? 'bg-teal-soft text-ink' : 'text-ink-muted hover:text-ink',
             )}
           >

@@ -14,6 +14,7 @@ import {
   discardSession,
   heartbeatSession,
   resolveStaleSession,
+  resumeSession,
   splitFollowUp,
   taskTransition,
   weekdayOf,
@@ -216,6 +217,9 @@ class StubClient implements ApiClient {
       .filter((t) => t.status === 'backlog')
       .sort((a, b) => b.createdAt - a.createdAt);
   }
+  async listTasks(): Promise<Task[]> {
+    return this.alive(this.store.tasks).sort((a, b) => b.createdAt - a.createdAt);
+  }
   async getTask(id: string): Promise<Task | null> {
     return this.find(this.store.tasks, id) ?? null;
   }
@@ -238,6 +242,9 @@ class StubClient implements ApiClient {
   async setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
     return this.writes.put(this.store.tasks, withEstimate(task, estimateMin, bufferMin, this.now()));
+  }
+  async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
+    return this.writes.patch(this.store.tasks, id, { categoryId });
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
@@ -340,6 +347,10 @@ class StubClient implements ApiClient {
   async heartbeatSession(id: string): Promise<PomodoroSession> {
     const session = this.mustFind(this.store.sessions, id);
     return this.writes.put(this.store.sessions, heartbeatSession(session, this.now()));
+  }
+  async resumeSession(id: string): Promise<PomodoroSession> {
+    const session = this.mustFind(this.store.sessions, id);
+    return this.writes.put(this.store.sessions, resumeSession(session, this.now()));
   }
   async stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession> {
     const session = this.mustFind(this.store.sessions, id);
@@ -510,6 +521,21 @@ class StubClient implements ApiClient {
       active: input.active ?? true,
     });
   }
+  async setCategoryWork(
+    id: string,
+    isWork: boolean,
+    backfillPast: boolean,
+  ): Promise<{ category: Category; backfilled: number }> {
+    const category = this.writes.patch(this.store.categories, id, { isWork });
+    let backfilled = 0;
+    if (backfillPast) {
+      for (const s of this.alive(this.store.sessions).filter((x) => x.categoryId === id)) {
+        this.writes.put(this.store.sessions, { ...s, wasWork: isWork, updatedAt: this.now() });
+        backfilled++;
+      }
+    }
+    return { category, backfilled };
+  }
   async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
     const referrers = [
       ...this.alive(this.store.tasks).filter((t) => t.categoryId === id),
@@ -555,6 +581,10 @@ class StubClient implements ApiClient {
       }))
       .filter((p) => p.day >= range.from && p.day <= range.to)
       .sort((a, b) => a.day.localeCompare(b.day));
+  }
+
+  async exportData(): Promise<unknown> {
+    return { exportedAt: this.now(), userId: USER_ID, ...this.store };
   }
 }
 

@@ -3,8 +3,10 @@ import {
   addDays,
   dayKey,
   daysBetween,
+  fmtDayHeading,
   fmtMonthDay,
   fmtMonthDayYear,
+  fmtWeekday,
   isoWeekKey,
   weekdayOf,
 } from './dates';
@@ -49,5 +51,11 @@ describe('iso week & formatting', () => {
   it('formats month-first with no leading zeros', () => {
     expect(fmtMonthDayYear('2026-06-07')).toBe('6/7/2026');
     expect(fmtMonthDay('2026-06-07')).toBe('6/7');
+  });
+  it('names the weekday and the header date', () => {
+    // 2026-08-02 is a Sunday.
+    expect(fmtWeekday('2026-08-02')).toBe('Sunday');
+    expect(fmtDayHeading('2026-08-02')).toBe('Sunday, Aug 2');
+    expect(fmtDayHeading('2026-12-25')).toBe('Friday, Dec 25');
   });
 });

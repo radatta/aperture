@@ -88,9 +88,14 @@ export interface ApiClient {
 
   // Tasks
   listBacklog(): Promise<Task[]>;
+  // All live tasks (any status) — a task# prefix read; views filter by status client/Lambda-side.
+  listTasks(): Promise<Task[]>;
   getTask(id: string): Promise<Task | null>;
   createTask(input: CreateTaskInput): Promise<Task>;
   setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task>;
+  // Category can change any time — labels resolve live and wasWork is snapshotted on sessions, so
+  // there's no freeze constraint here (unlike the estimate).
+  setTaskCategory(id: string, categoryId: string | null): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
   setTaskActual(id: string, actualMin: number): Promise<Task>;
   // Scope change: finish/cancel the original and spawn a follow-up (never edit a locked estimate).
@@ -112,7 +117,8 @@ export interface ApiClient {
 
   // Sessions (pomodoro)
   startSession(input: StartSessionInput): Promise<PomodoroSession>;
-  heartbeatSession(id: string): Promise<PomodoroSession>;
+  heartbeatSession(id: string): Promise<PomodoroSession>; // also used to capture time up to a pause
+  resumeSession(id: string): Promise<PomodoroSession>; // reset the clock after a pause (no accrual)
   stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession>;
   listSessionsForDay(day: string): Promise<PomodoroSession[]>;
   findRunningSession(): Promise<PomodoroSession | null>;
@@ -139,6 +145,13 @@ export interface ApiClient {
   // Categories
   listCategories(): Promise<Category[]>;
   upsertCategory(input: UpsertCategoryInput): Promise<Category>;
+  // Flip isWork. wasWork is a snapshot on past sessions (immutable history) — backfillPast is the
+  // explicit opt-in to reclassify them anyway; returns how many were changed.
+  setCategoryWork(
+    id: string,
+    isWork: boolean,
+    backfillPast: boolean,
+  ): Promise<{ category: Category; backfilled: number }>;
   deleteCategory(id: string, reassignToId: string | null): Promise<void>;
 
   // Settings
@@ -147,4 +160,7 @@ export interface ApiClient {
 
   // Calibration (derived, read-only)
   getCalibration(range: DateRange): Promise<CalibrationPoint[]>;
+
+  // Full data export (JSON) — the user owns their data. A snapshot of every entity.
+  exportData(): Promise<unknown>;
 }

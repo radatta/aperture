@@ -1,33 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { resolveTheme, type Theme } from '../styles/theme';
+import { themeForMode, type ResolvedTheme } from '../styles/theme';
+import { useSettings } from '../data/hooks/useSettings';
+import { useHomeMode } from '../modules/home/home-context';
 import { ThemeContext } from './theme-context';
 
-function prefersDark(): boolean {
-  return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches;
-}
-
-// Applies data-theme to <html>. "auto" tracks the OS today; once the home-mode provider lands
-// (Phase 4) it will call setTheme(themeForMode(mode)) so the app tints with the time of day.
-// Settings.theme override wiring arrives with the data hooks (Phase 3); default is "auto".
-export function ThemeProvider({ children, initial = 'auto' }: { children: ReactNode; initial?: Theme }) {
-  const [theme, setTheme] = useState<Theme>(initial);
-  const [systemDark, setSystemDark] = useState<boolean>(prefersDark);
-
-  useEffect(() => {
-    if (typeof matchMedia === 'undefined') return;
-    const mq = matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => setSystemDark(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-
-  const resolved = resolveTheme(theme, systemDark);
+// Owns the `data-theme` attribute on <html> — the single writer. The palette follows the home mode
+// (morning/day = light, night = dark) unless settings.theme pins an explicit light/dark override.
+// So the app tints with the time of day, reinforcing the ritual. Must sit under HomeModeProvider.
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const { mode } = useHomeMode();
+  const { data: settings } = useSettings();
+  const pref = settings?.theme ?? 'auto';
+  const resolved: ResolvedTheme = pref === 'auto' ? themeForMode(mode) : pref;
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolved);
   }, [resolved]);
 
-  const value = useMemo(() => ({ theme, resolved, setTheme }), [theme, resolved]);
+  const value = useMemo(() => ({ resolved }), [resolved]);
   return <ThemeContext value={value}>{children}</ThemeContext>;
 }

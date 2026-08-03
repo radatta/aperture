@@ -13,3 +13,8 @@ export function fmtClock(totalSeconds: number): string {
   const ss = s % 60;
   return `${mm}:${String(ss).padStart(2, '0')}`;
 }
+
+// Time-of-day for a log timestamp, e.g. "9:42 AM" (local).
+export function fmtTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}

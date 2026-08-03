@@ -107,6 +107,32 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     }
   }
 
+  // A handful of unscoped backlog tasks — captured title-only, waiting for the morning plan pass.
+  // These make the morning "plan today" card real and give Phase 5 material to scope.
+  const backlogTitles = [
+    'Draft the project proposal',
+    'Fix the flaky CI test',
+    'Reply to advisor email',
+    'Outline the reading notes',
+    'Book dentist appointment',
+  ];
+  backlogTitles.forEach((title, i) => {
+    store.tasks.push({
+      ...mk(nowMs - (i + 1) * HOUR),
+      title,
+      status: 'backlog',
+      categoryId: null,
+      seriesId: null,
+      estimateMin: null,
+      bufferMin: null,
+      estimateLockedMin: null,
+      actualAccruedMin: 0,
+      startedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+    });
+  });
+
   const read: Habit = {
     ...mk(nowMs - 20 * DAY),
     name: 'Read 20 min',
