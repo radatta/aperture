@@ -4,15 +4,23 @@
 // `sub`; Phase 12 provisions the table + wires TABLE_NAME.
 import { APERTURE } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
+import { createCognitoVerifier, resolveUserId } from './auth/verify';
 import { handleRpc } from './handler';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
 const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 
+// Verifier is wired only when the pool env is present (deployed). Locally it's null → dev userId.
+const verifier =
+  process.env.USER_POOL_ID && process.env.USER_POOL_CLIENT_ID
+    ? createCognitoVerifier(process.env.USER_POOL_ID, process.env.USER_POOL_CLIENT_ID)
+    : null;
+
 interface HttpEvent {
   rawPath?: string;
   requestContext?: { http?: { path?: string; method?: string } };
+  headers?: Record<string, string | undefined>;
   body?: string | null;
 }
 interface HttpResult {
@@ -34,9 +42,10 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
 
   const method = path.split('/api/')[1]?.split('/')[0] ?? '';
   const body = event.body ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean }) : {};
-  const userId = 'local'; // Phase 11: Cognito `sub` from the validated JWT
+  const authHeader = event.headers?.authorization ?? event.headers?.Authorization;
 
   try {
+    const userId = await resolveUserId(authHeader, verifier); // JWT `sub`, or dev user locally
     const result = await handleRpc(doc, {
       userId,
       method,
@@ -46,7 +55,11 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'error';
-    const status = message.startsWith('Unknown method') ? 404 : 400;
+    const status = message.startsWith('Unauthorized')
+      ? 401
+      : message.startsWith('Unknown method')
+        ? 404
+        : 400;
     return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
   }
 }

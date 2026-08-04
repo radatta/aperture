@@ -1,5 +1,6 @@
 import { API_METHODS } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
+import { getAuthToken } from '../auth/tokenStore';
 
 // The minimal fetch surface we use — narrow enough that the global `fetch` satisfies it and a test can
 // inject an in-process handler in its place.
@@ -11,13 +12,20 @@ export type FetchLike = (
 // The HTTP implementation of ApiClient: each method is one RPC — POST /api/<method> with the positional
 // args as the JSON body, the JSON response as the return value. Built from the shared API_METHODS list
 // (the same list the handler validates against), so client and server can never drift.
-export function createHttpClient(base: string, fetchImpl?: FetchLike): ApiClient {
+export function createHttpClient(
+  base: string,
+  fetchImpl?: FetchLike,
+  getToken: () => string | null = getAuthToken,
+): ApiClient {
   const doFetch: FetchLike = fetchImpl ?? ((url, init) => fetch(url, init));
 
   async function rpc(method: string, args: unknown[]): Promise<unknown> {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const token = getToken(); // read per request — it refreshes under us
+    if (token) headers['authorization'] = `Bearer ${token}`;
     const res = await doFetch(`${base}/api/${method}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({ args }),
     });
     if (!res.ok) throw new Error(`${method} failed (${res.status})`);

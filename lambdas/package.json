@@ -10,7 +10,8 @@
   "dependencies": {
     "@aperture/shared": "workspace:*",
     "@aws-sdk/client-dynamodb": "3.1102.0",
-    "@aws-sdk/lib-dynamodb": "3.1102.0"
+    "@aws-sdk/lib-dynamodb": "3.1102.0",
+    "aws-jwt-verify": "5.2.1"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

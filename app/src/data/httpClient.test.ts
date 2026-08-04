@@ -36,4 +36,32 @@ describe('createHttpClient (RPC transport)', () => {
     const api = createHttpClient('', async () => ({ ok: true, status: 200, text: async () => '' }));
     await expect(api.removePlan('p1')).resolves.toBeUndefined();
   });
+
+  it('attaches a Bearer token from the provider when one is present', async () => {
+    let headers: Record<string, string> = {};
+    const api = createHttpClient(
+      '',
+      async (_url, init) => {
+        headers = init.headers;
+        return { ok: true, status: 200, text: async () => 'null' };
+      },
+      () => 'tok-123',
+    );
+    await api.listTasks();
+    expect(headers['authorization']).toBe('Bearer tok-123');
+  });
+
+  it('omits Authorization when there is no token (stub/dev)', async () => {
+    let headers: Record<string, string> = {};
+    const api = createHttpClient(
+      '',
+      async (_url, init) => {
+        headers = init.headers;
+        return { ok: true, status: 200, text: async () => 'null' };
+      },
+      () => null,
+    );
+    await api.listTasks();
+    expect(headers['authorization']).toBeUndefined();
+  });
 });
