@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { PomodoroSession } from '@aperture/shared';
-import { activeSec, isStale, remainingSec, targetSecFor, STALE_MS } from './pomodoro';
+import { activeSec, isDone, isStale, remainingSec, targetSecFor, STALE_MS } from './pomodoro';
 
 const session = (over: Partial<PomodoroSession>): PomodoroSession => ({
   id: 's',
@@ -10,6 +10,7 @@ const session = (over: Partial<PomodoroSession>): PomodoroSession => ({
   deletedAt: null,
   taskId: null,
   categoryId: null,
+  label: null,
   wasWork: true,
   kind: 'work',
   startedAt: 0,
@@ -55,5 +56,19 @@ describe('isStale', () => {
   it('is stale only past the threshold', () => {
     expect(isStale(session({ lastHeartbeatAt: 0 }), STALE_MS - 1)).toBe(false);
     expect(isStale(session({ lastHeartbeatAt: 0 }), STALE_MS + 1)).toBe(true);
+  });
+});
+
+describe('isDone — the chime & hold trigger', () => {
+  it('is done only once active time reaches the block target', () => {
+    const almost = session({ activeMinutes: 24, lastHeartbeatAt: 0 });
+    expect(isDone(almost, 1500, false, 0)).toBe(false);
+    const spent = session({ activeMinutes: 25, lastHeartbeatAt: 0 });
+    expect(isDone(spent, 1500, false, 0)).toBe(true);
+  });
+  it('resolves independently per timer (a longer block is not yet done at the same time)', () => {
+    const s = session({ activeMinutes: 25, lastHeartbeatAt: 0 });
+    expect(isDone(s, 1500, false, 0)).toBe(true); // 1 block
+    expect(isDone(s, 3000, false, 0)).toBe(false); // extended to 2 blocks
   });
 });

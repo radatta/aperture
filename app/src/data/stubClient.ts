@@ -326,6 +326,14 @@ class StubClient implements ApiClient {
   // --- Sessions ------------------------------------------------------------
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
     const t = this.now();
+    // Multiple timers can run at once (parallel focus), but a given task gets at most one live
+    // work block — re-focusing an already-running task returns the existing timer, not a duplicate.
+    if (input.taskId && input.kind === 'work') {
+      const existing = this.alive(this.store.sessions).find(
+        (s) => s.status === 'running' && s.kind === 'work' && s.taskId === input.taskId,
+      );
+      if (existing) return existing;
+    }
     const categoryId =
       input.categoryId ??
       (input.taskId ? (this.find(this.store.tasks, input.taskId)?.categoryId ?? null) : null);
@@ -334,6 +342,7 @@ class StubClient implements ApiClient {
       ...this.base(),
       taskId: input.taskId,
       categoryId,
+      label: input.label ?? null,
       wasWork,
       kind: input.kind,
       startedAt: t,
@@ -367,6 +376,9 @@ class StubClient implements ApiClient {
   }
   async findRunningSession(): Promise<PomodoroSession | null> {
     return this.alive(this.store.sessions).find((s) => s.status === 'running') ?? null;
+  }
+  async listRunningSessions(): Promise<PomodoroSession[]> {
+    return this.alive(this.store.sessions).filter((s) => s.status === 'running');
   }
   async resolveStaleSession(id: string, decision: 'keep' | 'discard'): Promise<PomodoroSession> {
     const session = this.mustFind(this.store.sessions, id);

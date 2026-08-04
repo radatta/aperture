@@ -1,3 +1,6 @@
+// DEAD CODE pending cleanup: the single-pill timer was replaced by the stacked multi-timer dock
+// (TimerBar renders rows inline) when parallel focus landed. Kept as a free revert net; delete in a
+// follow-up once the concurrent-timer UI has settled.
 import { cx } from '../../lib/cx';
 import { fmtClock } from '../../lib/format';
 import { Text } from '../Text';

@@ -73,6 +73,7 @@ describe('sessions — heartbeat lifecycle', () => {
       deletedAt: null,
       taskId: 't1',
       categoryId: 'c1',
+      label: null,
       wasWork: true,
       kind: 'work',
       startedAt: 0,

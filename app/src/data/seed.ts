@@ -94,6 +94,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         ...mk(startedAt),
         taskId: task.id,
         categoryId: cat.id,
+        label: null,
         wasWork: cat.isWork,
         kind: 'work',
         startedAt,

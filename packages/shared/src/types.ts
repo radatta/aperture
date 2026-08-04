@@ -88,6 +88,7 @@ export type SessionStatus = 'running' | 'completed' | 'discarded';
 export interface PomodoroSession extends BaseEntity {
   taskId: string | null;
   categoryId: string | null; // follows the task when taskId is set; manual for freeform focus
+  label: string | null; // freeform focus name (e.g. "CC: refactor") — how you tell concurrent timers apart
   wasWork: boolean; // snapshot of the category's isWork at write time — immutable history
   kind: SessionKind;
   startedAt: number;

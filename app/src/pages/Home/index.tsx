@@ -209,31 +209,39 @@ function TodayTasksCard() {
 }
 
 // Daytime: the pomodoro. Controls live in the persistent timer (bottom-right); this card starts a
-// focus block on an in-progress task (so work time accrues to it) and reflects the running state.
+// focus block on an in-progress task (so work time accrues to it) and reflects the running set —
+// you can have several going at once (parallel focus).
 function FocusCard() {
-  const { session, remaining, start } = usePomodoro();
+  const { timers, startFocus } = usePomodoro();
   const { data: tasks = [] } = useAllTasks();
   const inProgress = tasks.filter((t) => t.status === 'in_progress');
 
-  if (session) {
-    const isBreak = session.kind === 'break';
-    const title = isBreak
-      ? 'Break'
-      : session.taskId
-        ? (tasks.find((t) => t.id === session.taskId)?.title ?? 'Focus')
-        : 'Free focus';
+  if (timers.length > 0) {
     return (
       <HomeCard title="Focus">
-        <div className="flex items-center justify-between gap-3">
-          <Text size="sm" tone="muted" className="truncate">
-            {isBreak ? 'On a break' : `Focused · ${title}`}
-          </Text>
-          <Text size="lg" tabular>
-            {fmtClock(remaining)}
-          </Text>
+        <div className="flex flex-col gap-1.5">
+          {timers.map(({ session, remaining, done }) => {
+            const title =
+              session.kind === 'break'
+                ? 'Break'
+                : (session.label ??
+                  (session.taskId ? (tasks.find((t) => t.id === session.taskId)?.title ?? 'Focus') : 'Focus'));
+            return (
+              <div key={session.id} className="flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1 truncate">
+                  <Text size="sm" tone="muted">
+                    {title}
+                  </Text>
+                </div>
+                <Text size="sm" tabular tone={done ? 'gold' : undefined} className="shrink-0">
+                  {done ? 'Done' : fmtClock(remaining)}
+                </Text>
+              </div>
+            );
+          })}
         </div>
-        <Text size="xs" tone="subtle" className="mt-1">
-          Controls in the timer, bottom-right.
+        <Text size="xs" tone="subtle" className="mt-2">
+          {timers.length === 1 ? 'Controls in the timer, bottom-right.' : `${timers.length} running · controls bottom-right.`}
         </Text>
       </HomeCard>
     );
@@ -248,7 +256,7 @@ function FocusCard() {
               <Text size="sm" className="truncate">
                 {t.title}
               </Text>
-              <Button size="sm" onClick={() => start(t.id)}>
+              <Button size="sm" onClick={() => startFocus({ taskId: t.id })}>
                 Focus
               </Button>
             </div>
@@ -257,10 +265,10 @@ function FocusCard() {
       ) : (
         <div className="flex flex-col gap-2">
           <Text size="sm" tone="muted">
-            Start a task, then focus it here — or a free block.
+            Start a task, then focus it here — or a free block. Run several at once if you're juggling.
           </Text>
           <div>
-            <Button variant="ghost" size="sm" onClick={() => start(null)}>
+            <Button variant="ghost" size="sm" onClick={() => startFocus()}>
               Start 25-min focus
             </Button>
           </div>

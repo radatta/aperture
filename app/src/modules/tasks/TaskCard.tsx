@@ -48,7 +48,7 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
             </Button>
           )}
           {task.status === 'in_progress' && (
-            <Button variant="ghost" size="sm" onClick={() => pomodoro.start(task.id)}>
+            <Button variant="ghost" size="sm" onClick={() => pomodoro.startFocus({ taskId: task.id })}>
               Focus
             </Button>
           )}

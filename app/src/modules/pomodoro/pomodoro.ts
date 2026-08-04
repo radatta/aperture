@@ -35,3 +35,14 @@ export function remainingSec(
 export function isStale(session: PomodoroSession, now: number): boolean {
   return now - session.lastHeartbeatAt > STALE_MS;
 }
+
+// A block that has reached its target holds at "done" (chime + wait for stop/extend) rather than
+// auto-rolling into a break. Derived, so every concurrent timer resolves it independently.
+export function isDone(
+  session: PomodoroSession,
+  targetSec: number,
+  paused: boolean,
+  now: number,
+): boolean {
+  return remainingSec(session, targetSec, paused, now) <= 0;
+}

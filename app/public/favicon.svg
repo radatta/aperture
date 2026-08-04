@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+    <rect x="0" y="0" width="64" height="64" rx="14.08" fill="#33453f"/>
+    <circle cx="32" cy="32" r="29.44" fill="#33453f"/>
+    <circle cx="32" cy="32" r="10.610176000000001" fill="#7fb2a2"/>
+    <path d="M32,2.5599999999999987 A29.44,29.44 0 0 1 57.49578788741387,17.28 L37.00,23.33 Z" fill="#e0bd82" stroke="#33453f" stroke-width="0.448" stroke-linejoin="round"/><path d="M57.49578788741387,17.28 A29.44,29.44 0 0 1 57.495787887413876,46.72 L42.01,32.00 Z" fill="#cfab6b" stroke="#33453f" stroke-width="0.448" stroke-linejoin="round"/><path d="M57.495787887413876,46.72 A29.44,29.44 0 0 1 32.00000000000001,61.44 L37.00,40.67 Z" fill="#e0bd82" stroke="#33453f" stroke-width="0.448" stroke-linejoin="round"/><path d="M32,61.44 A29.44,29.44 0 0 1 6.504212112586131,46.72000000000001 L27.00,40.67 Z" fill="#cfab6b" stroke="#33453f" stroke-width="0.448" stroke-linejoin="round"/><path d="M6.504212112586131,46.72000000000001 A29.44,29.44 0 0 1 6.504212112586114,17.280000000000015 L21.99,32.00 Z" fill="#e0bd82" stroke="#33453f" stroke-width="0.448" stroke-linejoin="round"/><path d="M6.504212112586128,17.279999999999994 A29.44,29.44 0 0 1 31.999999999999993,2.5599999999999987 L27.00,23.33 Z" fill="#cfab6b" stroke="#33453f" stroke-width="0.448" stroke-linejoin="round"/>
+    <circle cx="32" cy="32" r="10.610176000000001" fill="none" stroke="#33453f" stroke-width="0.64"/>
+  </svg>

@@ -53,6 +53,7 @@ export interface StartSessionInput {
   taskId: string | null;
   categoryId: string | null;
   kind: SessionKind;
+  label?: string | null; // freeform focus name for ad-hoc parallel work (e.g. "CC: refactor")
 }
 
 export interface UpsertHabitInput {
@@ -121,7 +122,9 @@ export interface ApiClient {
   resumeSession(id: string): Promise<PomodoroSession>; // reset the clock after a pause (no accrual)
   stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession>;
   listSessionsForDay(day: string): Promise<PomodoroSession[]>;
-  findRunningSession(): Promise<PomodoroSession | null>;
+  findRunningSession(): Promise<PomodoroSession | null>; // first running (kept for single-session callers)
+  listRunningSessions(): Promise<PomodoroSession[]>; // ALL concurrently-running timers
+
   resolveStaleSession(id: string, decision: 'keep' | 'discard'): Promise<PomodoroSession>;
 
   // Habits

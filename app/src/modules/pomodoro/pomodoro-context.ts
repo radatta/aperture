@@ -1,18 +1,30 @@
 import { createContext, useContext } from 'react';
 import type { PomodoroSession } from '@aperture/shared';
 
-export interface PomodoroContextValue {
-  session: PomodoroSession | null; // the running session (null when idle)
+// One running timer, with its derived display state. Several run concurrently (parallel focus).
+export interface RunningTimer {
+  session: PomodoroSession;
   paused: boolean;
-  stale: PomodoroSession | null; // a session left running when the app closed — awaiting keep/discard
-  remaining: number; // seconds left in the current block
-  start: (taskId: string | null) => void; // start a work block (switches focus if one's running)
+  remaining: number; // seconds left in the current block (0 once done)
+  done: boolean; // reached target — holding for stop/extend (no auto-break)
+}
+
+export interface StartFocusInput {
+  taskId?: string | null;
+  label?: string | null; // freeform name for ad-hoc parallel work
+}
+
+export interface PomodoroContextValue {
+  timers: RunningTimer[]; // all running timers (work + break), newest last
+  stale: PomodoroSession[]; // sessions left running when the app closed — awaiting keep/discard
+  startFocus: (input?: StartFocusInput) => void; // add a concurrent work block (dedups per task)
   startBreak: () => void;
-  pause: () => void;
-  resume: () => void;
-  stop: (status: 'completed' | 'discarded') => void;
-  keepStale: () => void;
-  discardStale: () => void;
+  pause: (id: string) => void;
+  resume: (id: string) => void;
+  extend: (id: string) => void; // give a done timer one more block
+  stop: (id: string, status?: 'completed' | 'discarded') => void;
+  keepStale: (id: string) => void;
+  discardStale: (id: string) => void;
 }
 
 export const PomodoroContext = createContext<PomodoroContextValue | null>(null);
