@@ -28,6 +28,7 @@ export const sk = {
   hcheckAllPrefix: () => `hcheck#`,
 
   day: (date: string) => `day#${date}`,
+  dayPrefix: () => `day#`,
 
   habit: (id: string) => `habit#${id}`,
   habitPrefix: () => `habit#`,

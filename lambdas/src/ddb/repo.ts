@@ -45,6 +45,9 @@ export class Repo {
   async listLog(day: string): Promise<LogEntry[]> {
     return alive((await this.doc.query(this.p(), sk.logPrefix(day))).map((i) => toEntity<LogEntry>(i)));
   }
+  async listAllLog(): Promise<LogEntry[]> {
+    return alive((await this.doc.query(this.p(), sk.logAllPrefix())).map((i) => toEntity<LogEntry>(i)));
+  }
   async findLog(id: string): Promise<LogEntry | null> {
     const it = await this.scanById(sk.logAllPrefix(), id);
     return it ? toEntity<LogEntry>(it) : null;
@@ -76,19 +79,22 @@ export class Repo {
   async listPlans(day: string): Promise<TaskPlan[]> {
     return alive((await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)));
   }
+  async listAllPlans(): Promise<TaskPlan[]> {
+    return alive((await this.doc.query(this.p(), sk.planAllPrefix())).map((i) => toEntity<TaskPlan>(i)));
+  }
   async findPlan(id: string): Promise<TaskPlan | null> {
     const it = await this.scanById(sk.planAllPrefix(), id);
     return it ? toEntity<TaskPlan>(it) : null;
   }
-  async putPlan(p: TaskPlan, previousSk?: string): Promise<TaskPlan> {
+  async putPlan(p: TaskPlan, previous?: TaskPlan): Promise<TaskPlan> {
     // Order/day live in the SK, so a moved plan lands at a new key — drop the old row first.
     const nextSk = sk.plan(p.day, p.order, p.id);
-    if (previousSk && previousSk !== nextSk) await this.writes.delete(this.p(), previousSk);
+    if (previous) {
+      const prevSk = sk.plan(previous.day, previous.order, previous.id);
+      if (prevSk !== nextSk) await this.writes.delete(this.p(), prevSk);
+    }
     await this.writes.put(entityItem(this.userId, nextSk, p));
     return p;
-  }
-  async deletePlan(p: TaskPlan): Promise<void> {
-    await this.writes.delete(this.p(), sk.plan(p.day, p.order, p.id));
   }
 
   // --- Series ---
@@ -154,6 +160,9 @@ export class Repo {
       (c) => c.date >= fromDate && c.date <= toDate,
     );
   }
+  async listAllChecks(): Promise<HabitCheck[]> {
+    return alive((await this.doc.query(this.p(), sk.hcheckAllPrefix())).map((i) => toEntity<HabitCheck>(i)));
+  }
 
   // --- Ideas ---
   async listIdeas(): Promise<Idea[]> {
@@ -176,6 +185,9 @@ export class Repo {
   async putDay(d: Day): Promise<Day> {
     await this.writes.put(entityItem(this.userId, sk.day(d.date), d));
     return d;
+  }
+  async listAllDays(): Promise<Day[]> {
+    return alive((await this.doc.query(this.p(), sk.dayPrefix())).map((i) => toEntity<Day>(i)));
   }
 
   // --- Categories ---

@@ -80,8 +80,9 @@ describe('Repo persistence', () => {
       taskId: 't1',
       day: '2026-08-04',
     };
-    await r.putPlan({ ...base, plannedMinutes: 30, order: 1 });
-    await r.putPlan({ ...base, plannedMinutes: 30, order: 5 }, 'plan#2026-08-04#000001#p1');
+    const atOne = { ...base, plannedMinutes: 30, order: 1 };
+    await r.putPlan(atOne);
+    await r.putPlan({ ...base, plannedMinutes: 30, order: 5 }, atOne);
     const plans = await r.listPlans('2026-08-04');
     expect(plans).toHaveLength(1);
     expect(plans[0]!.order).toBe(5);
