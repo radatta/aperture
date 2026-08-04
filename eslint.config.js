@@ -40,7 +40,7 @@ export default tseslint.config(
     files: [
       'lambdas/**/*.ts',
       'cdk/**/*.ts',
-      'scripts/**/*.ts',
+      'scripts/**/*.{ts,mjs}',
       'packages/**/*.ts',
       '**/*.config.{ts,js}',
     ],

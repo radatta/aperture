@@ -5,11 +5,23 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "synth": "cdk synth",
+    "bootstrap": "cdk bootstrap",
+    "deploy:dev": "cdk deploy ApertureData-dev ApertureApp-dev -c stage=dev --outputs-file cdk-outputs.dev.json",
+    "deploy:prod": "cdk deploy ApertureData-prod ApertureApp-prod -c stage=prod --outputs-file cdk-outputs.prod.json"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "aws-cdk": "2.1135.0",
+    "esbuild": "0.28.1",
+    "tsx": "4.23.5",
     "typescript": "6.0.3",
     "vitest": "4.1.10"
+  },
+  "dependencies": {
+    "@aperture/shared": "workspace:*",
+    "aws-cdk-lib": "2.263.0",
+    "constructs": "10.8.1"
   }
 }

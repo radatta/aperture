@@ -1,3 +1,4 @@
+import { AUTH_HEADER } from '@aperture/shared';
 import { describe, expect, it } from 'vitest';
 import { createHttpClient } from './httpClient';
 import type { FetchLike } from './httpClient';
@@ -48,7 +49,8 @@ describe('createHttpClient (RPC transport)', () => {
       () => 'tok-123',
     );
     await api.listTasks();
-    expect(headers['authorization']).toBe('Bearer tok-123');
+    expect(headers[AUTH_HEADER]).toBe('Bearer tok-123');
+    expect(headers['authorization']).toBeUndefined(); // never the reserved header (OAC uses it)
   });
 
   it('omits Authorization when there is no token (stub/dev)', async () => {
@@ -62,6 +64,6 @@ describe('createHttpClient (RPC transport)', () => {
       () => null,
     );
     await api.listTasks();
-    expect(headers['authorization']).toBeUndefined();
+    expect(headers[AUTH_HEADER]).toBeUndefined();
   });
 });

@@ -1,0 +1,118 @@
+import { fileURLToPath } from 'node:url';
+import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import type { StackProps } from 'aws-cdk-lib';
+import { AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import type { Construct } from 'constructs';
+
+export interface AppStackProps extends StackProps {
+  stage: string;
+  table: dynamodb.Table;
+  userPool: cognito.UserPool;
+  originSecret: string; // CloudFront→Lambda origin-lockdown token (anti-abuse; JWT is the real gate)
+}
+
+const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', import.meta.url));
+
+// The REPLACEABLE stack (INFRA §3/§4/§7): Lambda BFF + Function URL, S3 + CloudFront. Redeploys freely;
+// nothing precious lives here. CloudFront OAC keeps the S3 bucket private. The Lambda Function URL is
+// public (auth NONE — CloudFront OAC can't SigV4-sign POST bodies to a Function URL), locked down instead
+// by a shared secret header CloudFront stamps on every origin request; the handler rejects requests
+// without it. Defense-in-depth only — the Cognito JWT the handler validates is the real auth gate.
+export class ApertureAppStack extends Stack {
+  constructor(scope: Construct, id: string, props: AppStackProps) {
+    super(scope, id, props);
+    const { stage, table, userPool, originSecret } = props;
+
+    // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
+    const fn = new NodejsFunction(this, 'Bff', {
+      functionName: `aperture-bff-${stage}`,
+      entry: LAMBDA_ENTRY,
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      timeout: Duration.seconds(15),
+      memorySize: 512,
+      environment: {
+        TABLE_NAME: table.tableName,
+        USER_POOL_ID: userPool.userPoolId,
+        STAGE: stage,
+        ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
+      },
+      bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] }, // v3 SDK is in the runtime
+    });
+    table.grantReadWriteData(fn);
+    // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
+    const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
+
+    // Private site bucket — assets are synced post-build (not by CDK), so infra ≠ app deploy.
+    const bucket = new s3.Bucket(this, 'Site', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      removalPolicy: RemovalPolicy.DESTROY, // just built assets — re-syncable
+      autoDeleteObjects: true,
+    });
+
+    // /api/* forwards ONLY the custom auth header + content-type — never Authorization (OAC owns it).
+    const apiOrp = new cloudfront.OriginRequestPolicy(this, 'ApiOriginPolicy', {
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(AUTH_HEADER, 'content-type'),
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.none(),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+    });
+
+    const distribution = new cloudfront.Distribution(this, 'Cdn', {
+      defaultRootObject: 'index.html',
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+      additionalBehaviors: {
+        '/api/*': {
+          // No OAC: CloudFront stamps the origin-secret header (always overwrites any viewer-sent value)
+          // so only requests through this distribution reach the Lambda.
+          origin: new origins.FunctionUrlOrigin(fnUrl, {
+            customHeaders: { [ORIGIN_SECRET_HEADER]: originSecret },
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL, // POST for RPC
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // data is network-only (TECH §1)
+          originRequestPolicy: apiOrp,
+        },
+      },
+      // SPA fallback: client-side routes 403/404 from S3 → serve index.html (INFRA §7).
+      errorResponses: [
+        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: Duration.seconds(0) },
+        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: Duration.seconds(0) },
+      ],
+    });
+
+    // SPA app client (PKCE, no secret). Callback = this env's CloudFront URL (custom domain added later).
+    const appUrl = `https://${distribution.distributionDomainName}`;
+    const client = new cognito.UserPoolClient(this, 'AppClient', {
+      userPool,
+      userPoolClientName: `aperture-app-${stage}`,
+      generateSecret: false,
+      authFlows: { userSrp: true },
+      preventUserExistenceErrors: true,
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+        callbackUrls: [appUrl],
+        logoutUrls: [appUrl],
+      },
+    });
+    // NB: the Lambda deliberately does NOT take the client id — verifying against the pool is enough
+    // for a single-client pool, and consuming it here would form a client→CloudFront→Lambda→client cycle.
+
+    new CfnOutput(this, 'AppUrl', { value: appUrl }); // CloudFront domain; also the API base (/api/* same origin)
+    new CfnOutput(this, 'SiteBucket', { value: bucket.bucketName });
+    new CfnOutput(this, 'DistributionId', { value: distribution.distributionId });
+    new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId });
+  }
+}

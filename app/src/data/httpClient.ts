@@ -1,4 +1,4 @@
-import { API_METHODS } from '@aperture/shared';
+import { API_METHODS, AUTH_HEADER } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { getAuthToken } from '../auth/tokenStore';
 
@@ -22,7 +22,7 @@ export function createHttpClient(
   async function rpc(method: string, args: unknown[]): Promise<unknown> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     const token = getToken(); // read per request — it refreshes under us
-    if (token) headers['authorization'] = `Bearer ${token}`;
+    if (token) headers[AUTH_HEADER] = `Bearer ${token}`; // custom header — survives CloudFront OAC signing
     const res = await doFetch(`${base}/api/${method}`, {
       method: 'POST',
       headers,

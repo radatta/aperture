@@ -1,0 +1,60 @@
+import { CfnOutput, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import type { StackProps } from 'aws-cdk-lib';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import type { Construct } from 'constructs';
+
+export interface DataStackProps extends StackProps {
+  stage: string;
+}
+
+// The PRECIOUS stack (INFRA §3): your data + your identity. RETAIN on everything, PITR on, deployed
+// rarely — an app redeploy can never touch it. The app stack references the table + pool from here.
+export class ApertureDataStack extends Stack {
+  readonly table: dynamodb.Table;
+  readonly userPool: cognito.UserPool;
+
+  constructor(scope: Construct, id: string, props: DataStackProps) {
+    super(scope, id, props);
+    const { stage } = props;
+
+    // Single table (TECH §2.4): PK/SK strings, on-demand, PITR (35-day backup), RETAIN.
+    this.table = new dynamodb.Table(this, 'Table', {
+      tableName: `aperture-${stage}`,
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    // GSI1 — done tasks by completion time (calibration window read). GSI1SK is numeric epoch-ms.
+    this.table.addGlobalSecondaryIndex({
+      indexName: 'GSI1',
+      partitionKey: { name: 'GSI1PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'GSI1SK', type: dynamodb.AttributeType.NUMBER },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Cognito pool (INFRA §6): invite-only (self-signup OFF — you admin-create your user), email login.
+    this.userPool = new cognito.UserPool(this, 'UserPool', {
+      userPoolName: `aperture-${stage}`,
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    // Hosted UI domain (free Cognito prefix; the login page). Account-suffixed for global uniqueness —
+    // override via `-c cognitoPrefix=...` if the default is taken.
+    const prefix =
+      (this.node.tryGetContext('cognitoPrefix') as string | undefined) ?? `aperture-${stage}-${this.account}`;
+    this.userPool.addDomain('HostedUi', { cognitoDomain: { domainPrefix: prefix } });
+
+    new CfnOutput(this, 'TableName', { value: this.table.tableName });
+    new CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
+    new CfnOutput(this, 'Region', { value: this.region });
+    new CfnOutput(this, 'CognitoAuthority', {
+      value: `https://cognito-idp.${this.region}.amazonaws.com/${this.userPool.userPoolId}`,
+    });
+  }
+}

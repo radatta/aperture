@@ -19,6 +19,10 @@ export const sk = {
   planPrefix: (day: string) => `plan#${day}#`,
   planAllPrefix: () => `plan#`,
 
+  // Running timers live under a dedicated prefix so the pomodoro heartbeat is a direct GetItem and the
+  // running set is a tiny scan; on stop a session moves to its day bucket for history. `sess#` spans both.
+  sessionRunning: (id: string) => `sess#running#${id}`,
+  sessionRunningPrefix: () => `sess#running#`,
   session: (day: string, id: string) => `sess#${day}#${id}`,
   sessionDayPrefix: (day: string) => `sess#${day}#`,
   sessionPrefix: () => `sess#`,

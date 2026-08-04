@@ -60,3 +60,14 @@ export interface RpcRequest {
   args: unknown[];
   testMode?: boolean; // smoke path: run reads + logic, persist nothing (writes-object no-op)
 }
+
+// The JWT rides in a CUSTOM header, not Authorization: kept distinct so nothing downstream mistakes it
+// for a SigV4 credential. Client sends this, handler reads it (shared name → the two halves can't drift).
+export const AUTH_HEADER = 'x-aperture-authorization';
+
+// Origin-lockdown secret. The Lambda Function URL is public (auth NONE — OAC can't SigV4-sign POST
+// bodies to a Function URL), so CloudFront stamps this shared secret on every origin request and the
+// handler rejects anything without it. Anti-abuse only — the Cognito JWT is the real auth gate. The
+// value is generated per-env into a gitignored file at synth; both CloudFront + the Lambda read it from
+// that one source (shared header name → no drift).
+export const ORIGIN_SECRET_HEADER = 'x-aperture-origin-secret';

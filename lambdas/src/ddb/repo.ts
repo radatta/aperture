@@ -111,20 +111,28 @@ export class Repo {
   }
 
   // --- Sessions ---
-  async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.sessionDayPrefix(day))).map((i) => toEntity<PomodoroSession>(i)),
-    );
-  }
+  // Running timers: `sess#running#<id>` (direct GetItem for the heartbeat, small prefix for the running
+  // set). On stop/discard a session moves to its day bucket `sess#<day>#<id>` for history. `sess#`
+  // begins-with spans both, for the all-sessions reads (export, category backfill).
   async listAllSessions(): Promise<PomodoroSession[]> {
     return alive((await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)));
   }
-  async findSession(id: string): Promise<PomodoroSession | null> {
-    const it = await this.scanById(sk.sessionPrefix(), id);
+  async listRunningSessions(): Promise<PomodoroSession[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.sessionRunningPrefix())).map((i) => toEntity<PomodoroSession>(i)),
+    );
+  }
+  async getRunningSession(id: string): Promise<PomodoroSession | null> {
+    const it = await this.doc.get(this.p(), sk.sessionRunning(id));
     return it ? toEntity<PomodoroSession>(it) : null;
   }
   async putSession(s: PomodoroSession): Promise<PomodoroSession> {
-    await this.writes.put(entityItem(this.userId, sk.session(s.day, s.id), s));
+    if (s.status === 'running') {
+      await this.writes.put(entityItem(this.userId, sk.sessionRunning(s.id), s));
+    } else {
+      await this.writes.delete(this.p(), sk.sessionRunning(s.id)); // drop the running copy on stop
+      await this.writes.put(entityItem(this.userId, sk.session(s.day, s.id), s));
+    }
     return s;
   }
 

@@ -208,8 +208,8 @@ export class BackendClient implements ApiClient {
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
     const t = this.now();
     if (input.taskId && input.kind === 'work') {
-      const existing = (await this.repo.listAllSessions()).find(
-        (s) => s.status === 'running' && s.kind === 'work' && s.taskId === input.taskId,
+      const existing = (await this.repo.listRunningSessions()).find(
+        (s) => s.kind === 'work' && s.taskId === input.taskId,
       );
       if (existing) return existing;
     }
@@ -231,8 +231,9 @@ export class BackendClient implements ApiClient {
       lastHeartbeatAt: t,
     });
   }
+  // Heartbeat/resume/stop/resolveStale only ever act on RUNNING sessions → a direct running-key read.
   private async mustSession(id: string): Promise<PomodoroSession> {
-    const s = await this.repo.findSession(id);
+    const s = await this.repo.getRunningSession(id);
     if (!s) throw new Error(`Not found: ${id}`);
     return s;
   }
@@ -250,7 +251,7 @@ export class BackendClient implements ApiClient {
     return next;
   }
   async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
-    return this.repo.listSessionsForDay(day);
+    return (await this.repo.listAllSessions()).filter((s) => s.day === day);
   }
   async findRunningSession(): Promise<PomodoroSession | null> {
     return (await this.runningSessions())[0] ?? null;
@@ -259,9 +260,7 @@ export class BackendClient implements ApiClient {
     return this.runningSessions();
   }
   private async runningSessions(): Promise<PomodoroSession[]> {
-    return (await this.repo.listAllSessions())
-      .filter((s) => s.status === 'running')
-      .sort((a, b) => a.createdAt - b.createdAt);
+    return (await this.repo.listRunningSessions()).sort((a, b) => a.createdAt - b.createdAt);
   }
   async resolveStaleSession(id: string, decision: 'keep' | 'discard'): Promise<PomodoroSession> {
     const next = resolveStaleSession(await this.mustSession(id), decision, this.now());

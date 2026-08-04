@@ -6,7 +6,11 @@ export interface Verifier {
   verify(token: string): Promise<{ sub: string }>;
 }
 
-export function createCognitoVerifier(userPoolId: string, clientId: string): Verifier {
+// clientId is optional: passing null verifies against the pool without binding to a specific app
+// client. For a single-client, invite-only pool that's sufficient (signature + issuer + expiry +
+// token_use=access are still enforced), and it avoids a Cognito↔CloudFront↔Lambda deploy cycle — the
+// Lambda would otherwise depend on the client, which depends on CloudFront, which depends on the Lambda.
+export function createCognitoVerifier(userPoolId: string, clientId: string | null = null): Verifier {
   const verifier = CognitoJwtVerifier.create({ userPoolId, tokenUse: 'access', clientId });
   return {
     async verify(token: string) {
