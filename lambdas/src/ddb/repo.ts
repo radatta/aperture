@@ -1,0 +1,203 @@
+import type {
+  Category,
+  Day,
+  Habit,
+  HabitCheck,
+  Idea,
+  LogEntry,
+  PomodoroSession,
+  Settings,
+  Task,
+  TaskPlan,
+  TaskSeries,
+} from '@aperture/shared';
+import type { DocClient, Item } from './DocClient';
+import type { Writes } from './writes';
+import { gsi1, pk, sk } from './keys';
+import { entityItem, taskItem, toEntity } from './mapping';
+
+type Deletable = { deletedAt: number | null };
+const alive = <T extends Deletable>(rows: T[]): T[] => rows.filter((r) => r.deletedAt === null);
+
+// The persistence facade the routes sit on: reads go straight to the DocClient, every write goes
+// through `writes` (the single audit point). Entities keyed as `type#<id>` get a direct read; the few
+// that bucket day/order into the SK (log, plan, session) fall back to a prefix scan to resolve an id.
+//
+// TODO(scale, pre-deploy): `findSessionById` scans the whole `sess#` prefix, which the pomodoro
+// heartbeat hits often. Fine at single-user volume for Phase 10 (in-memory), but before the Phase 12
+// deploy, move running sessions under a `sess#running#` prefix so the hot path is a direct read.
+export class Repo {
+  constructor(
+    private readonly doc: DocClient,
+    private readonly writes: Writes,
+    private readonly userId: string,
+  ) {}
+
+  private p(): string {
+    return pk(this.userId);
+  }
+  private async scanById(prefix: string, id: string): Promise<Item | null> {
+    const rows = await this.doc.query(this.p(), prefix);
+    return rows.find((r) => r.id === id) ?? null;
+  }
+
+  // --- Log ---
+  async listLog(day: string): Promise<LogEntry[]> {
+    return alive((await this.doc.query(this.p(), sk.logPrefix(day))).map((i) => toEntity<LogEntry>(i)));
+  }
+  async findLog(id: string): Promise<LogEntry | null> {
+    const it = await this.scanById(sk.logAllPrefix(), id);
+    return it ? toEntity<LogEntry>(it) : null;
+  }
+  async putLog(e: LogEntry): Promise<LogEntry> {
+    await this.writes.put(entityItem(this.userId, sk.log(e.day, e.id), e));
+    return e;
+  }
+
+  // --- Tasks ---
+  async listTasks(): Promise<Task[]> {
+    return alive((await this.doc.query(this.p(), sk.taskPrefix())).map((i) => toEntity<Task>(i)));
+  }
+  async getTask(id: string): Promise<Task | null> {
+    const it = await this.doc.get(this.p(), sk.task(id));
+    const t = it ? toEntity<Task>(it) : null;
+    return t && t.deletedAt === null ? t : null;
+  }
+  async putTask(t: Task): Promise<Task> {
+    await this.writes.put(taskItem(this.userId, t));
+    return t;
+  }
+  async doneTasksInWindow(fromMs: number, toMs: number): Promise<Task[]> {
+    const rows = await this.doc.queryIndex(gsi1.donePk(this.userId), { from: fromMs, to: toMs });
+    return alive(rows.map((i) => toEntity<Task>(i)));
+  }
+
+  // --- Plans ---
+  async listPlans(day: string): Promise<TaskPlan[]> {
+    return alive((await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)));
+  }
+  async findPlan(id: string): Promise<TaskPlan | null> {
+    const it = await this.scanById(sk.planAllPrefix(), id);
+    return it ? toEntity<TaskPlan>(it) : null;
+  }
+  async putPlan(p: TaskPlan, previousSk?: string): Promise<TaskPlan> {
+    // Order/day live in the SK, so a moved plan lands at a new key — drop the old row first.
+    const nextSk = sk.plan(p.day, p.order, p.id);
+    if (previousSk && previousSk !== nextSk) await this.writes.delete(this.p(), previousSk);
+    await this.writes.put(entityItem(this.userId, nextSk, p));
+    return p;
+  }
+  async deletePlan(p: TaskPlan): Promise<void> {
+    await this.writes.delete(this.p(), sk.plan(p.day, p.order, p.id));
+  }
+
+  // --- Series ---
+  async listSeries(): Promise<TaskSeries[]> {
+    return alive((await this.doc.query(this.p(), sk.seriesPrefix())).map((i) => toEntity<TaskSeries>(i)));
+  }
+  async getSeries(id: string): Promise<TaskSeries | null> {
+    const it = await this.doc.get(this.p(), sk.series(id));
+    return it ? toEntity<TaskSeries>(it) : null;
+  }
+  async putSeries(s: TaskSeries): Promise<TaskSeries> {
+    await this.writes.put(entityItem(this.userId, sk.series(s.id), s));
+    return s;
+  }
+
+  // --- Sessions ---
+  async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.sessionDayPrefix(day))).map((i) => toEntity<PomodoroSession>(i)),
+    );
+  }
+  async listAllSessions(): Promise<PomodoroSession[]> {
+    return alive((await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)));
+  }
+  async findSession(id: string): Promise<PomodoroSession | null> {
+    const it = await this.scanById(sk.sessionPrefix(), id);
+    return it ? toEntity<PomodoroSession>(it) : null;
+  }
+  async putSession(s: PomodoroSession): Promise<PomodoroSession> {
+    await this.writes.put(entityItem(this.userId, sk.session(s.day, s.id), s));
+    return s;
+  }
+
+  // --- Habits ---
+  async listHabits(): Promise<Habit[]> {
+    return alive((await this.doc.query(this.p(), sk.habitPrefix())).map((i) => toEntity<Habit>(i)));
+  }
+  async getHabit(id: string): Promise<Habit | null> {
+    const it = await this.doc.get(this.p(), sk.habit(id));
+    return it ? toEntity<Habit>(it) : null;
+  }
+  async putHabit(h: Habit): Promise<Habit> {
+    await this.writes.put(entityItem(this.userId, sk.habit(h.id), h));
+    return h;
+  }
+
+  // --- Habit checks (composite date+habit key → direct read/delete, no scan) ---
+  async getCheck(date: string, habitId: string): Promise<HabitCheck | null> {
+    const it = await this.doc.get(this.p(), sk.hcheck(date, habitId));
+    const c = it ? toEntity<HabitCheck>(it) : null;
+    return c && c.deletedAt === null ? c : null;
+  }
+  async putCheck(c: HabitCheck, date: string, habitId: string): Promise<HabitCheck> {
+    await this.writes.put(entityItem(this.userId, sk.hcheck(date, habitId), c));
+    return c;
+  }
+  async deleteCheck(date: string, habitId: string): Promise<void> {
+    await this.writes.delete(this.p(), sk.hcheck(date, habitId));
+  }
+  async listChecks(fromDate: string, toDate: string): Promise<HabitCheck[]> {
+    const rows = await this.doc.query(this.p(), sk.hcheckAllPrefix());
+    return alive(rows.map((i) => toEntity<HabitCheck>(i))).filter(
+      (c) => c.date >= fromDate && c.date <= toDate,
+    );
+  }
+
+  // --- Ideas ---
+  async listIdeas(): Promise<Idea[]> {
+    return alive((await this.doc.query(this.p(), sk.ideaPrefix())).map((i) => toEntity<Idea>(i)));
+  }
+  async getIdea(id: string): Promise<Idea | null> {
+    const it = await this.doc.get(this.p(), sk.idea(id));
+    return it ? toEntity<Idea>(it) : null;
+  }
+  async putIdea(i: Idea): Promise<Idea> {
+    await this.writes.put(entityItem(this.userId, sk.idea(i.id), i));
+    return i;
+  }
+
+  // --- Day singleton ---
+  async getDayRow(date: string): Promise<Day | null> {
+    const it = await this.doc.get(this.p(), sk.day(date));
+    return it ? toEntity<Day>(it) : null;
+  }
+  async putDay(d: Day): Promise<Day> {
+    await this.writes.put(entityItem(this.userId, sk.day(d.date), d));
+    return d;
+  }
+
+  // --- Categories ---
+  async listCategories(): Promise<Category[]> {
+    return alive((await this.doc.query(this.p(), sk.catPrefix())).map((i) => toEntity<Category>(i)));
+  }
+  async getCategory(id: string): Promise<Category | null> {
+    const it = await this.doc.get(this.p(), sk.cat(id));
+    return it ? toEntity<Category>(it) : null;
+  }
+  async putCategory(c: Category): Promise<Category> {
+    await this.writes.put(entityItem(this.userId, sk.cat(c.id), c));
+    return c;
+  }
+
+  // --- Settings singleton ---
+  async getSettingsRow(): Promise<Settings | null> {
+    const it = await this.doc.get(this.p(), sk.settings());
+    return it ? toEntity<Settings>(it) : null;
+  }
+  async putSettings(s: Settings): Promise<Settings> {
+    await this.writes.put(entityItem(this.userId, sk.settings(), s));
+    return s;
+  }
+}
