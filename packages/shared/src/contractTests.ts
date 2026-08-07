@@ -21,7 +21,8 @@ export function runApiContract(
     };
 
     it('logs: create is retrievable by its own day, and updates', async () => {
-      const e = await api.createLogEntry('shipped it');
+      const e = await api.createLogEntry('shipped it', '2026-08-04');
+      expect(e.day).toBe('2026-08-04'); // bucketed by the client-supplied day, not a server-derived one
       const list = await api.listLogEntries(e.day);
       expect(list.map((x) => x.text)).toContain('shipped it');
       const updated = await api.updateLogEntry(e.id, 'shipped it, finally');
@@ -65,13 +66,35 @@ export function runApiContract(
     });
 
     it('sessions: several run at once, a task dedups, and work time accrues to the task', async () => {
-      const a = await api.startSession({ taskId: null, categoryId: null, kind: 'work', label: 'CC: a' });
-      await api.startSession({ taskId: null, categoryId: null, kind: 'work', label: 'CC: b' });
+      const a = await api.startSession({
+        taskId: null,
+        categoryId: null,
+        kind: 'work',
+        label: 'CC: a',
+        day: '2026-08-04',
+      });
+      await api.startSession({
+        taskId: null,
+        categoryId: null,
+        kind: 'work',
+        label: 'CC: b',
+        day: '2026-08-04',
+      });
       expect(await api.listRunningSessions()).toHaveLength(2);
 
       const task = await api.createTask({ title: 'Focused work' });
-      const s1 = await api.startSession({ taskId: task.id, categoryId: null, kind: 'work' });
-      const s2 = await api.startSession({ taskId: task.id, categoryId: null, kind: 'work' });
+      const s1 = await api.startSession({
+        taskId: task.id,
+        categoryId: null,
+        kind: 'work',
+        day: '2026-08-04',
+      });
+      const s2 = await api.startSession({
+        taskId: task.id,
+        categoryId: null,
+        kind: 'work',
+        day: '2026-08-04',
+      });
       expect(s2.id).toBe(s1.id); // dedup: one live timer per task
 
       advance(2 * 60_000); // two minutes of work
@@ -80,13 +103,21 @@ export function runApiContract(
       expect((await api.getTask(task.id))?.actualAccruedMin).toBe(2);
 
       // Stopping removes it from the running set; the ad-hoc ones stay.
-      expect((await api.listRunningSessions()).map((s) => s.label).sort()).toEqual(['CC: a', 'CC: b']);
+      expect((await api.listRunningSessions()).map((s) => s.label).sort()).toEqual([
+        'CC: a',
+        'CC: b',
+      ]);
       void a;
     });
 
     it('plans: soft-delete removes them from the day', async () => {
       const task = await api.createTask({ title: 'Planned' });
-      const plan = await api.upsertPlan({ taskId: task.id, day: '2026-08-04', plannedMinutes: 30, order: 1 });
+      const plan = await api.upsertPlan({
+        taskId: task.id,
+        day: '2026-08-04',
+        plannedMinutes: 30,
+        order: 1,
+      });
       expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).toContain(plan.id);
       await api.removePlan(plan.id);
       expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).not.toContain(plan.id);
@@ -139,7 +170,13 @@ export function runApiContract(
 
     it('categories: work-flip backfills past sessions only when asked; delete reassigns referrers', async () => {
       const cat = await api.upsertCategory({ label: 'Side', isWork: true });
-      const s = await api.startSession({ taskId: null, categoryId: cat.id, kind: 'work', label: 'x' });
+      const s = await api.startSession({
+        taskId: null,
+        categoryId: cat.id,
+        kind: 'work',
+        label: 'x',
+        day: '2026-08-04',
+      });
       expect(s.wasWork).toBe(true); // snapshot at write
 
       const noBackfill = await api.setCategoryWork(cat.id, false, false);

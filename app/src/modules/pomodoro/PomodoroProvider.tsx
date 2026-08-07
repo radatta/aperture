@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PomodoroSession } from '@aperture/shared';
+import { todayKey } from '@aperture/shared';
 import { useApi } from '../../data/api-context';
 import { useSettings } from '../../data/hooks/useSettings';
 import { invalidateTaskData } from '../../data/hooks/invalidate';
@@ -151,6 +152,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
           categoryId: null,
           kind: 'work',
           label: input?.label ?? null,
+          day: todayKey(settings?.dayStartHour ?? 4), // client owns "today"; server is UTC
         })
         .then((s) => {
           invalidateTaskData(qc);
@@ -158,12 +160,20 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
           setPausedIds((p) => withDeleted(p, s.id)); // re-focusing a dedup'd task clears any stale pause
         });
     },
-    [api, qc, upsert],
+    [api, qc, upsert, settings],
   );
 
   const startBreak = useCallback(() => {
-    api.startSession({ taskId: null, categoryId: null, kind: 'break', label: null }).then(upsert);
-  }, [api, upsert]);
+    api
+      .startSession({
+        taskId: null,
+        categoryId: null,
+        kind: 'break',
+        label: null,
+        day: todayKey(settings?.dayStartHour ?? 4), // client owns "today"; server is UTC
+      })
+      .then(upsert);
+  }, [api, upsert, settings]);
 
   const pause = useCallback(
     (id: string) => {
