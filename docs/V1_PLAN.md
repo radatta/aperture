@@ -446,10 +446,16 @@ be called directly. Locked by INFRA §4.
   smoke dev → build app (env from CDK outputs) → S3 sync + invalidate → **manual approval** → same for
   prod. `dev` branch → one-off dev deploy. (INFRA §9)
 
-**Key files:** `.github/workflows/pr.yml`, `.github/workflows/deploy.yml`, `scripts/smoke.ts`.
+**Key files:** `.github/workflows/pr.yml`, `.github/workflows/deploy.yml`, `scripts/src/smoke.ts`,
+`cdk/lib/cicd-stack.ts`.
 **Depends on:** Phase 12. **Implements:** INFRA §9, CONVENTIONS (pnpm/Vitest in CI).
 **Trade-off:** manual approval before prod is the guardrail on the `RETAIN` data stack — an app bug
 can't silently reach real data.
+**Status: code COMPLETE (2026-08), not yet live.** Roles (assume-bootstrap-roles), workflows, and smoke
+runner built + green. Prod trust bound to the `prod` GitHub environment (creds gated by approval).
+Remaining is account/GitHub setup, all on the user: push repo + deploy `ApertureCicd`
+(`-c githubRepo=owner/repo`), set repo vars (role ARNs, region) + secrets (`ORIGIN_SECRET_DEV/PROD`),
+create the `prod` environment with a required reviewer.
 
 ---
 

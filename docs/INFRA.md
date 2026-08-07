@@ -10,8 +10,8 @@ The AWS blueprint behind `TECH.md`. All IaC via **CDK**. Region: **`us-east-1`**
 GitHub Actions ──(OIDC, no static keys)──► cdk deploy + app build/deploy
 
         ┌──────── CloudFront (per env, HTTPS) ────────┐
-        │   default behavior → S3   (React PWA)       │
-        │   /api/*            → Lambda Function URL    │  (OAC-signed)
+        │   default behavior → S3   (React PWA, OAC)  │
+        │   /api/*            → Lambda Function URL    │  (public; secret header)
         └──────────────────────────────────────────────┘
               │                              │
             S3 (static)              Lambda BFF (1, multi-route)
@@ -80,8 +80,10 @@ No static credentials — OIDC role assumption. GitHub Flow, simplified:
 - Feature branch → PR (lint + test only) → squash to `main`.
 - `main` pipeline: lint/typecheck/test (pnpm + Vitest) → `cdk deploy ApertureData-dev` + `ApertureApp-dev` → smoke dev → build app (Vite, env from CDK outputs) → S3 sync + CloudFront invalidate → **manual approval** → same for prod.
 - `dev` branch → one-off dev deploy (not a promotion step).
-- OIDC trust: dev role ← `refs/heads/dev`, prod role ← `main`.
-- **Smoke tests** invoke the Lambda with a `testMode` payload; writes-object pattern guarantees no side effects.
+- OIDC trust: dev role ← `refs/heads/dev` + `refs/heads/main` (main pipeline deploys dev first); prod role ← the **`prod` GitHub environment** subject (`environment:prod`), so prod credentials are unassumable until the environment's approval gate passes — the gate is enforced at the credential layer, not just the workflow. Roles hold no direct deploy power: `cdk deploy` funnels through the account's CDK bootstrap roles; the roles get only S3-sync / CloudFront-invalidate / Lambda-invoke for their stage.
+- OIDC provider + both roles live in a one-off, hand-deployed `ApertureCicd` stack (`-c githubRepo=owner/repo`); the pipeline never touches it.
+- **Origin secret** reaches CI as a GitHub secret (`ORIGIN_SECRET_DEV/PROD` → `APERTURE_ORIGIN_SECRET`), so it's stable across runs.
+- **Smoke tests** invoke the Lambda by **direct `aws lambda invoke`** with a `testMode` payload (synthetic user, writes-object no-ops) → no side effects, even against prod.
 
 ## 10. Secrets
 

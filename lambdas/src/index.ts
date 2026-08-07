@@ -34,25 +34,32 @@ const CORS: Record<string, string> = {
   'access-control-allow-methods': 'POST,OPTIONS',
 };
 
+// CI smoke tests reach the handler by DIRECT invoke (aws lambda invoke) with a testMode payload — no
+// HTTP request context, no JWT. They run as this throwaway user against an always-empty partition, and
+// the writes-object no-ops, so a smoke run touches no real data even against prod.
+const SMOKE_USER = 'smoke-test';
+
 export async function handler(event: HttpEvent): Promise<HttpResult> {
   const path = event.rawPath ?? event.requestContext?.http?.path ?? '';
+  const isHttp = event.requestContext?.http !== undefined; // false for direct (CI-cred'd) invokes
   if (event.requestContext?.http?.method === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
 
-  // Origin lockdown: the Function URL is public, so only requests that came through CloudFront (which
-  // stamps the shared secret) are honored. Skipped when unset (local/dev without the header wired).
+  const body = event.body ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean }) : {};
+
+  // Origin lockdown for HTTP requests only: the Function URL is public, so only requests through
+  // CloudFront (which stamps the shared secret) are honored. Direct invokes are AWS-cred-gated already.
   const originSecret = process.env.ORIGIN_SECRET;
-  if (originSecret && event.headers?.[ORIGIN_SECRET_HEADER] !== originSecret) {
+  if (isHttp && originSecret && event.headers?.[ORIGIN_SECRET_HEADER] !== originSecret) {
     return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Forbidden' }) };
   }
 
   const method = path.split('/api/')[1]?.split('/')[0] ?? '';
-  const body = event.body ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean }) : {};
-  // JWT arrives in the custom header (past CloudFront OAC); fall back to Authorization for direct/local calls.
+  // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;
 
   try {
-    const userId = await resolveUserId(authHeader, verifier); // JWT `sub`, or dev user locally
+    const userId = body.testMode ? SMOKE_USER : await resolveUserId(authHeader, verifier); // JWT `sub`, or dev user locally
     const result = await handleRpc(doc, {
       userId,
       method,

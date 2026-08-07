@@ -1,0 +1,76 @@
+name: Deploy
+
+# GitHub Flow: push to main → dev (auto) then prod (approval-gated). Push to dev → one-off dev deploy.
+# Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
+on:
+  push:
+    branches: [main, dev]
+
+permissions:
+  id-token: write # assume the AWS deploy role via OIDC
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  deploy-dev:
+    needs: check
+    runs-on: ubuntu-latest
+    env:
+      APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_DEV }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy dev stacks
+        run: pnpm --filter @aperture/cdk exec cdk deploy ApertureData-dev ApertureApp-dev -c stage=dev --require-approval never --outputs-file cdk-outputs.dev.json
+      - name: Smoke dev
+        run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts dev
+      - name: Publish frontend (dev)
+        run: node scripts/aws/publish-frontend.mjs dev
+
+  deploy-prod:
+    needs: deploy-dev
+    if: github.ref == 'refs/heads/main' # dev-branch pushes stop at dev
+    runs-on: ubuntu-latest
+    environment: prod # the approval gate — also what scopes the prod OIDC subject
+    env:
+      APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy prod stacks
+        run: pnpm --filter @aperture/cdk exec cdk deploy ApertureData-prod ApertureApp-prod -c stage=prod --require-approval never --outputs-file cdk-outputs.prod.json
+      - name: Smoke prod
+        run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts prod
+      - name: Publish frontend (prod)
+        run: node scripts/aws/publish-frontend.mjs prod

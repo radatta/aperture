@@ -4,10 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { App } from 'aws-cdk-lib';
 import { ApertureDataStack } from '../lib/data-stack';
 import { ApertureAppStack } from '../lib/app-stack';
+import { ApertureCicdStack } from '../lib/cicd-stack';
 
-// CloudFront→Lambda origin-lockdown secret, one per stage. Generated once into a gitignored file and
-// reused on every deploy so CloudFront + the Lambda always agree; never committed. Anti-abuse only.
+// CloudFront→Lambda origin-lockdown secret, one per stage. In CI it comes from a GitHub secret via
+// APERTURE_ORIGIN_SECRET (stable across runs); locally it's generated once into a gitignored file and
+// reused so CloudFront + the Lambda always agree. Never committed. Anti-abuse only.
 function originSecretFor(stage: string): string {
+  const fromEnv = process.env.APERTURE_ORIGIN_SECRET;
+  if (fromEnv) return fromEnv.trim();
   const dir = fileURLToPath(new URL('../../.secrets', import.meta.url)); // cdk/.secrets/
   const file = `${dir}/origin-secret.${stage}`;
   if (existsSync(file)) return readFileSync(file, 'utf8').trim();
@@ -31,3 +35,9 @@ new ApertureAppStack(app, `ApertureApp-${stage}`, {
   userPool: data.userPool,
   originSecret: originSecretFor(stage),
 });
+
+// CI/CD roles — a one-off, account-wide stack (not per-stage). Only built when a repo is supplied, so
+// normal `cdk deploy ApertureApp-<stage>` runs don't need it: deploy it once with
+// `cdk deploy ApertureCicd -c githubRepo=owner/repo`.
+const githubRepo = app.node.tryGetContext('githubRepo') as string | undefined;
+if (githubRepo) new ApertureCicdStack(app, 'ApertureCicd', { env, githubRepo });
