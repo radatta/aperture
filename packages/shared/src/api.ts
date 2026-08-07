@@ -54,6 +54,7 @@ export interface StartSessionInput {
   categoryId: string | null;
   kind: SessionKind;
   label?: string | null; // freeform focus name for ad-hoc parallel work (e.g. "CC: refactor")
+  day: string; // client's local day-key. The client owns "today" — the server runs in UTC and must not derive it.
 }
 
 export interface UpsertHabitInput {
@@ -84,7 +85,8 @@ export type SettingsPatch = Partial<
 export interface ApiClient {
   // Log
   listLogEntries(day: string): Promise<LogEntry[]>;
-  createLogEntry(text: string): Promise<LogEntry>;
+  // day = client's local day-key; the server is UTC and must bucket by the value the client reads back with.
+  createLogEntry(text: string, day: string): Promise<LogEntry>;
   updateLogEntry(id: string, text: string): Promise<LogEntry>;
 
   // Tasks

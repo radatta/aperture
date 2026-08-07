@@ -29,7 +29,7 @@ describe('stub — seed', () => {
 describe('stub — capture', () => {
   it('log entries land on today and read back', async () => {
     const api = client();
-    const entry = await api.createLogEntry('first real entry');
+    const entry = await api.createLogEntry('first real entry', today);
     expect(entry.day).toBe(today);
     const list = await api.listLogEntries(today);
     expect(list.some((e) => e.id === entry.id)).toBe(true);

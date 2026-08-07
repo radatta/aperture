@@ -12,7 +12,12 @@ describe('category isWork flip + backfill', () => {
     const api = client();
     const cat = await api.upsertCategory({ label: 'Side project', isWork: true });
     const task = await api.createTask({ title: 't', categoryId: cat.id });
-    const session = await api.startSession({ taskId: task.id, categoryId: null, kind: 'work' });
+    const session = await api.startSession({
+      day: '2026-08-04',
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+    });
     expect(session.wasWork).toBe(true); // snapshot at write time
 
     const noBackfill = await api.setCategoryWork(cat.id, false, false);
@@ -53,7 +58,7 @@ describe('settings + export', () => {
     expect(updated.dayStartHour).toBe(5);
     expect(updated.pomodoroWorkMin).toBe(50);
 
-    await api.createLogEntry('exportable');
+    await api.createLogEntry('exportable', '2026-08-04');
     const data = (await api.exportData()) as { logEntries: { text: string }[] };
     expect(data.logEntries.some((l) => l.text === 'exportable')).toBe(true);
   });

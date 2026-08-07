@@ -80,9 +80,6 @@ export class BackendClient implements ApiClient {
     await this.repo.putSettings(def);
     return def;
   }
-  private async today(): Promise<string> {
-    return dayKey(this.now(), (await this.ensureSettings()).dayStartHour);
-  }
   private async mustTask(id: string): Promise<Task> {
     const t = await this.repo.getTask(id);
     if (!t) throw new Error(`Not found: ${id}`);
@@ -93,8 +90,8 @@ export class BackendClient implements ApiClient {
   async listLogEntries(day: string): Promise<LogEntry[]> {
     return (await this.repo.listLog(day)).sort((a, b) => a.createdAt - b.createdAt);
   }
-  async createLogEntry(text: string): Promise<LogEntry> {
-    return this.repo.putLog({ ...this.base(), day: await this.today(), text });
+  async createLogEntry(text: string, day: string): Promise<LogEntry> {
+    return this.repo.putLog({ ...this.base(), day, text });
   }
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {
     const e = await this.repo.findLog(id);
@@ -130,8 +127,14 @@ export class BackendClient implements ApiClient {
       cancelledAt: null,
     });
   }
-  async setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task> {
-    return this.repo.putTask(withEstimate(await this.mustTask(id), estimateMin, bufferMin, this.now()));
+  async setTaskEstimate(
+    id: string,
+    estimateMin: number | null,
+    bufferMin: number | null,
+  ): Promise<Task> {
+    return this.repo.putTask(
+      withEstimate(await this.mustTask(id), estimateMin, bufferMin, this.now()),
+    );
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
@@ -151,7 +154,10 @@ export class BackendClient implements ApiClient {
   ): Promise<{ original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
     const original = await this.repo.putTask(taskTransition(task, finishStatus, this.now()));
-    const followUp = await this.repo.putTask({ ...this.base(), ...splitFollowUp(task, followUpTitle) });
+    const followUp = await this.repo.putTask({
+      ...this.base(),
+      ...splitFollowUp(task, followUpTitle),
+    });
     return { original, followUp };
   }
 
@@ -175,7 +181,11 @@ export class BackendClient implements ApiClient {
   }
   async removePlan(id: string): Promise<void> {
     const existing = await this.repo.findPlan(id);
-    if (existing) await this.repo.putPlan({ ...existing, deletedAt: this.now(), updatedAt: this.now() }, existing);
+    if (existing)
+      await this.repo.putPlan(
+        { ...existing, deletedAt: this.now(), updatedAt: this.now() },
+        existing,
+      );
   }
 
   // --- Series ---
@@ -214,8 +224,11 @@ export class BackendClient implements ApiClient {
       if (existing) return existing;
     }
     const categoryId =
-      input.categoryId ?? (input.taskId ? ((await this.repo.getTask(input.taskId))?.categoryId ?? null) : null);
-    const wasWork = categoryId ? ((await this.repo.getCategory(categoryId))?.isWork ?? false) : false;
+      input.categoryId ??
+      (input.taskId ? ((await this.repo.getTask(input.taskId))?.categoryId ?? null) : null);
+    const wasWork = categoryId
+      ? ((await this.repo.getCategory(categoryId))?.isWork ?? false)
+      : false;
     return this.repo.putSession({
       ...this.base(),
       taskId: input.taskId,
@@ -225,7 +238,7 @@ export class BackendClient implements ApiClient {
       kind: input.kind,
       startedAt: t,
       endedAt: null,
-      day: await this.today(),
+      day: input.day,
       activeMinutes: 0,
       status: 'running',
       lastHeartbeatAt: t,
@@ -245,7 +258,10 @@ export class BackendClient implements ApiClient {
   }
   async stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession> {
     const session = await this.mustSession(id);
-    const next = status === 'completed' ? completeSession(session, this.now()) : discardSession(session, this.now());
+    const next =
+      status === 'completed'
+        ? completeSession(session, this.now())
+        : discardSession(session, this.now());
     await this.repo.putSession(next);
     if (status === 'completed') await this.accrueToTask(next);
     return next;
@@ -384,7 +400,12 @@ export class BackendClient implements ApiClient {
   }
   async setDayReflection(day: string, prompt: string, text: string): Promise<Day> {
     const d = await this.getDay(day);
-    return this.repo.putDay({ ...d, reflectionPrompt: prompt, reflectionText: text, updatedAt: this.now() });
+    return this.repo.putDay({
+      ...d,
+      reflectionPrompt: prompt,
+      reflectionText: text,
+      updatedAt: this.now(),
+    });
   }
 
   // --- Categories ---
@@ -434,9 +455,12 @@ export class BackendClient implements ApiClient {
     const habits = (await this.repo.listHabits()).filter((h) => h.categoryId === id);
     const series = (await this.repo.listSeries()).filter((s) => s.categoryId === id);
     assertCategoryDeletable(tasks.length + habits.length + series.length, reassignToId);
-    for (const t of tasks) await this.repo.putTask({ ...t, categoryId: reassignToId, updatedAt: this.now() });
-    for (const h of habits) await this.repo.putHabit({ ...h, categoryId: reassignToId, updatedAt: this.now() });
-    for (const s of series) await this.repo.putSeries({ ...s, categoryId: reassignToId, updatedAt: this.now() });
+    for (const t of tasks)
+      await this.repo.putTask({ ...t, categoryId: reassignToId, updatedAt: this.now() });
+    for (const h of habits)
+      await this.repo.putHabit({ ...h, categoryId: reassignToId, updatedAt: this.now() });
+    for (const s of series)
+      await this.repo.putSeries({ ...s, categoryId: reassignToId, updatedAt: this.now() });
     const cat = await this.repo.getCategory(id);
     if (cat) await this.repo.putCategory({ ...cat, deletedAt: this.now(), updatedAt: this.now() });
   }

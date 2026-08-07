@@ -176,9 +176,6 @@ class StubClient implements ApiClient {
   private dayStartHour(): number {
     return this.ensureSettings().dayStartHour;
   }
-  private today(): string {
-    return dayKey(this.now(), this.dayStartHour());
-  }
   private ensureSettings(): Settings {
     if (this.store.settings) return this.store.settings;
     const settings: Settings = {
@@ -199,10 +196,10 @@ class StubClient implements ApiClient {
       .filter((e) => e.day === day)
       .sort((a, b) => a.createdAt - b.createdAt);
   }
-  async createLogEntry(text: string): Promise<LogEntry> {
+  async createLogEntry(text: string, day: string): Promise<LogEntry> {
     return this.writes.insert(this.store.logEntries, {
       ...this.base(),
-      day: this.today(),
+      day,
       text,
     });
   }
@@ -238,9 +235,16 @@ class StubClient implements ApiClient {
       cancelledAt: null,
     });
   }
-  async setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task> {
+  async setTaskEstimate(
+    id: string,
+    estimateMin: number | null,
+    bufferMin: number | null,
+  ): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
-    return this.writes.put(this.store.tasks, withEstimate(task, estimateMin, bufferMin, this.now()));
+    return this.writes.put(
+      this.store.tasks,
+      withEstimate(task, estimateMin, bufferMin, this.now()),
+    );
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { categoryId });
@@ -258,7 +262,10 @@ class StubClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = this.mustFind(this.store.tasks, id);
-    const original = this.writes.put(this.store.tasks, taskTransition(task, finishStatus, this.now()));
+    const original = this.writes.put(
+      this.store.tasks,
+      taskTransition(task, finishStatus, this.now()),
+    );
     const followUp = this.writes.insert(this.store.tasks, {
       ...this.base(),
       ...splitFollowUp(task, followUpTitle),
@@ -336,7 +343,9 @@ class StubClient implements ApiClient {
     const categoryId =
       input.categoryId ??
       (input.taskId ? (this.find(this.store.tasks, input.taskId)?.categoryId ?? null) : null);
-    const wasWork = categoryId ? (this.find(this.store.categories, categoryId)?.isWork ?? false) : false;
+    const wasWork = categoryId
+      ? (this.find(this.store.categories, categoryId)?.isWork ?? false)
+      : false;
     return this.writes.insert(this.store.sessions, {
       ...this.base(),
       taskId: input.taskId,
@@ -346,7 +355,7 @@ class StubClient implements ApiClient {
       kind: input.kind,
       startedAt: t,
       endedAt: null,
-      day: this.today(),
+      day: input.day,
       activeMinutes: 0,
       status: 'running',
       lastHeartbeatAt: t,

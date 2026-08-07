@@ -14,7 +14,7 @@ export function useCreateLogEntry(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (text: string) => api.createLogEntry(text),
+    mutationFn: (text: string) => api.createLogEntry(text, day),
     onMutate: async (text) => {
       await qc.cancelQueries({ queryKey: qk.log(day) });
       const prev = qc.getQueryData<LogEntry[]>(qk.log(day));
