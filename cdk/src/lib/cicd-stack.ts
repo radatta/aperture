@@ -4,7 +4,12 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
 
 export interface CicdStackProps extends StackProps {
-  githubRepo: string; // 'owner/repo' — drives the OIDC trust subject
+  githubRepo: string; // 'owner/repo' — human-facing slug; also the default OIDC subject segment
+  // The owner/repo segment as it actually appears in the token's `sub` claim. Defaults to githubRepo.
+  // Some enterprises/orgs enforce a custom OIDC subject that embeds the immutable owner/repo IDs
+  // (e.g. 'owner@123/repo@456'); when that's in effect the name-based slug won't match, so pass the
+  // real segment via `-c githubSubject=...`. Kept out of committed code (deploy-time context).
+  githubSubject?: string;
 }
 
 const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com';
@@ -20,7 +25,7 @@ const CDK_QUALIFIER = 'hnb659fds'; // default bootstrap qualifier (cdk-hnb659fds
 export class ApertureCicdStack extends Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
     super(scope, id, props);
-    const { githubRepo } = props;
+    const { githubRepo, githubSubject = githubRepo } = props;
     const { account, region } = this;
 
     const provider = new iam.OpenIdConnectProvider(this, 'GithubOidc', {
@@ -80,14 +85,14 @@ export class ApertureCicdStack extends Stack {
     const devRole = makeRole(
       'DeployDev',
       'aperture-github-deploy-dev',
-      [`repo:${githubRepo}:ref:refs/heads/dev`, `repo:${githubRepo}:ref:refs/heads/main`],
+      [`repo:${githubSubject}:ref:refs/heads/dev`, `repo:${githubSubject}:ref:refs/heads/main`],
       'dev',
     );
     // prod: environment-based — only a job running in the approval-gated `prod` environment gets this sub.
     const prodRole = makeRole(
       'DeployProd',
       'aperture-github-deploy-prod',
-      [`repo:${githubRepo}:environment:prod`],
+      [`repo:${githubSubject}:environment:prod`],
       'prod',
     );
 

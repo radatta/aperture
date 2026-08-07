@@ -40,4 +40,8 @@ new ApertureAppStack(app, `ApertureApp-${stage}`, {
 // normal `cdk deploy ApertureApp-<stage>` runs don't need it: deploy it once with
 // `cdk deploy ApertureCicd -c githubRepo=owner/repo`.
 const githubRepo = app.node.tryGetContext('githubRepo') as string | undefined;
-if (githubRepo) new ApertureCicdStack(app, 'ApertureCicd', { env, githubRepo });
+if (githubRepo) {
+  // Override the OIDC subject segment when an org/enterprise enforces an ID-embedded sub claim.
+  const githubSubject = app.node.tryGetContext('githubSubject') as string | undefined;
+  new ApertureCicdStack(app, 'ApertureCicd', { env, githubRepo, githubSubject });
+}
