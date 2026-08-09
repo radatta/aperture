@@ -13,6 +13,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/*.tsbuildinfo',
       'localNotes/**',
+      'extension/**', // dep-free plain-JS browser extension, not built/linted by the workspace
     ],
   },
   js.configs.recommended,

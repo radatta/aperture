@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Aperture LeetCode Capture",
+  "version": "1.0.0",
+  "description": "Captures your own LeetCode submissions (accepted and wrong) as they happen and POSTs them to the Aperture backend, authenticated with a personal device token.",
+  "permissions": ["storage"],
+  "host_permissions": ["*://leetcode.com/*"],
+  "optional_host_permissions": ["*://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://leetcode.com/*"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "js": ["src/inject-main.js"]
+    },
+    {
+      "matches": ["*://leetcode.com/*"],
+      "run_at": "document_start",
+      "js": ["src/content-relay.js"]
+    }
+  ],
+  "background": {
+    "scripts": ["src/background.js"]
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "aperture-leetcode@local"
+    }
+  }
+}
