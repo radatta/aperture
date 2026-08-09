@@ -29,6 +29,52 @@ export function runApiContract(
       expect(updated.text).toBe('shipped it, finally');
     });
 
+    it('leetcode: record normalizes verdict, buckets by client tz, and is idempotent on submission id', async () => {
+      const base = {
+        problemSlug: 'two-sum',
+        problemTitle: 'Two Sum',
+        submittedAt: 1_700_000_000_000, // 2023-11-14T22:13:20Z
+        tzOffsetMinutes: 300, // UTC-5
+        lang: 'python3',
+      };
+      const wrong = await api.recordLeetcodeAttempt({
+        ...base,
+        leetcodeSubmissionId: 'sub-1',
+        statusCode: 11,
+        statusMsg: 'Wrong Answer',
+        difficulty: 'Easy',
+        topicTags: ['array', 'hash-table'],
+      });
+      expect(wrong.verdict).toBe('wrong_answer');
+      expect(wrong.difficulty).toBe('Easy');
+      expect(wrong.topicTags).toEqual(['array', 'hash-table']);
+      // day = submittedAt shifted by tz offset + dayStartHour(4), via UTC getters → runner-TZ-independent
+      expect(wrong.day).toBe('2023-11-14');
+
+      // Same submission id re-fires → same row, original verdict preserved (no overwrite).
+      const dup = await api.recordLeetcodeAttempt({
+        ...base,
+        leetcodeSubmissionId: 'sub-1',
+        statusCode: 10,
+        statusMsg: 'Accepted',
+      });
+      expect(dup.id).toBe(wrong.id);
+      expect(dup.verdict).toBe('wrong_answer');
+
+      const ac = await api.recordLeetcodeAttempt({
+        ...base,
+        leetcodeSubmissionId: 'sub-2',
+        statusCode: 10,
+        statusMsg: 'Accepted',
+        submittedAt: base.submittedAt + 60_000,
+      });
+      const list = await api.listLeetcodeAttempts();
+      expect(list).toHaveLength(2); // dup didn't add a row
+      expect(list[0]!.id).toBe(ac.id); // reverse-chron: newer first
+      expect(list[0]!.difficulty).toBeNull(); // unset → null, not undefined
+      expect(list[0]!.verdict).toBe('accepted');
+    });
+
     it('tasks: estimate freezes on start of work and yields a calibration point when done', async () => {
       const t = await api.createTask({ title: 'Task A', estimateMin: 30, bufferMin: 8 });
       expect((await api.listBacklog()).map((x) => x.id)).toContain(t.id);

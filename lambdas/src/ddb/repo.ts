@@ -4,6 +4,7 @@ import type {
   Habit,
   HabitCheck,
   Idea,
+  LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
   Settings,
@@ -43,10 +44,14 @@ export class Repo {
 
   // --- Log ---
   async listLog(day: string): Promise<LogEntry[]> {
-    return alive((await this.doc.query(this.p(), sk.logPrefix(day))).map((i) => toEntity<LogEntry>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.logPrefix(day))).map((i) => toEntity<LogEntry>(i)),
+    );
   }
   async listAllLog(): Promise<LogEntry[]> {
-    return alive((await this.doc.query(this.p(), sk.logAllPrefix())).map((i) => toEntity<LogEntry>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.logAllPrefix())).map((i) => toEntity<LogEntry>(i)),
+    );
   }
   async findLog(id: string): Promise<LogEntry | null> {
     const it = await this.scanById(sk.logAllPrefix(), id);
@@ -55,6 +60,25 @@ export class Repo {
   async putLog(e: LogEntry): Promise<LogEntry> {
     await this.writes.put(entityItem(this.userId, sk.log(e.day, e.id), e));
     return e;
+  }
+
+  // --- LeetCode attempts ---
+  async listLeetcodeAttempts(): Promise<LeetcodeAttempt[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.lcAllPrefix())).map((i) => toEntity<LeetcodeAttempt>(i)),
+    );
+  }
+  // TODO(scale, pre-deploy): prefix scan for dedup — matches findLog/findPlan single-user tolerance.
+  // Before a high-volume deploy, add a `lcsub#<id>` pointer item so this is a direct read.
+  async findLeetcodeBySubmissionId(submissionId: string): Promise<LeetcodeAttempt | null> {
+    return (
+      (await this.listLeetcodeAttempts()).find((a) => a.leetcodeSubmissionId === submissionId) ??
+      null
+    );
+  }
+  async putLeetcodeAttempt(a: LeetcodeAttempt): Promise<LeetcodeAttempt> {
+    await this.writes.put(entityItem(this.userId, sk.lc(a.day, a.id), a));
+    return a;
   }
 
   // --- Tasks ---
@@ -77,10 +101,14 @@ export class Repo {
 
   // --- Plans ---
   async listPlans(day: string): Promise<TaskPlan[]> {
-    return alive((await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)),
+    );
   }
   async listAllPlans(): Promise<TaskPlan[]> {
-    return alive((await this.doc.query(this.p(), sk.planAllPrefix())).map((i) => toEntity<TaskPlan>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.planAllPrefix())).map((i) => toEntity<TaskPlan>(i)),
+    );
   }
   async findPlan(id: string): Promise<TaskPlan | null> {
     const it = await this.scanById(sk.planAllPrefix(), id);
@@ -99,7 +127,9 @@ export class Repo {
 
   // --- Series ---
   async listSeries(): Promise<TaskSeries[]> {
-    return alive((await this.doc.query(this.p(), sk.seriesPrefix())).map((i) => toEntity<TaskSeries>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.seriesPrefix())).map((i) => toEntity<TaskSeries>(i)),
+    );
   }
   async getSeries(id: string): Promise<TaskSeries | null> {
     const it = await this.doc.get(this.p(), sk.series(id));
@@ -115,11 +145,15 @@ export class Repo {
   // set). On stop/discard a session moves to its day bucket `sess#<day>#<id>` for history. `sess#`
   // begins-with spans both, for the all-sessions reads (export, category backfill).
   async listAllSessions(): Promise<PomodoroSession[]> {
-    return alive((await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)),
+    );
   }
   async listRunningSessions(): Promise<PomodoroSession[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.sessionRunningPrefix())).map((i) => toEntity<PomodoroSession>(i)),
+      (await this.doc.query(this.p(), sk.sessionRunningPrefix())).map((i) =>
+        toEntity<PomodoroSession>(i),
+      ),
     );
   }
   async getRunningSession(id: string): Promise<PomodoroSession | null> {
@@ -169,7 +203,9 @@ export class Repo {
     );
   }
   async listAllChecks(): Promise<HabitCheck[]> {
-    return alive((await this.doc.query(this.p(), sk.hcheckAllPrefix())).map((i) => toEntity<HabitCheck>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.hcheckAllPrefix())).map((i) => toEntity<HabitCheck>(i)),
+    );
   }
 
   // --- Ideas ---
@@ -200,7 +236,9 @@ export class Repo {
 
   // --- Categories ---
   async listCategories(): Promise<Category[]> {
-    return alive((await this.doc.query(this.p(), sk.catPrefix())).map((i) => toEntity<Category>(i)));
+    return alive(
+      (await this.doc.query(this.p(), sk.catPrefix())).map((i) => toEntity<Category>(i)),
+    );
   }
   async getCategory(id: string): Promise<Category | null> {
     const it = await this.doc.get(this.p(), sk.cat(id));

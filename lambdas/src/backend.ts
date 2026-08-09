@@ -3,8 +3,10 @@ import {
   completeSession,
   createUlid,
   dayKey,
+  dayKeyForOffset,
   discardSession,
   heartbeatSession,
+  normalizeVerdict,
   resolveStaleSession,
   resumeSession,
   seriesDueOn,
@@ -24,8 +26,10 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
+  LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
+  RecordLeetcodeAttemptInput,
   Settings,
   SettingsPatch,
   StartSessionInput,
@@ -97,6 +101,33 @@ export class BackendClient implements ApiClient {
     const e = await this.repo.findLog(id);
     if (!e) throw new Error(`Not found: ${id}`);
     return this.repo.putLog({ ...e, text, updatedAt: this.now() });
+  }
+
+  // --- Recruiting (LeetCode) ---
+  async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
+    const dup = await this.repo.findLeetcodeBySubmissionId(input.leetcodeSubmissionId);
+    if (dup) return dup; // idempotent — the extension may fire twice for one submission
+    const start = (await this.ensureSettings()).dayStartHour;
+    return this.repo.putLeetcodeAttempt({
+      ...this.base(),
+      day: dayKeyForOffset(input.submittedAt, input.tzOffsetMinutes, start),
+      problemSlug: input.problemSlug,
+      problemTitle: input.problemTitle,
+      verdict: normalizeVerdict(input.statusCode, input.statusMsg),
+      submittedAt: input.submittedAt,
+      lang: input.lang,
+      runtimeMs: input.runtimeMs ?? null,
+      memory: input.memory ?? null,
+      leetcodeSubmissionId: input.leetcodeSubmissionId,
+      frontendId: input.frontendId ?? null,
+      difficulty: input.difficulty ?? null,
+      topicTags: input.topicTags ?? null,
+    });
+  }
+  async listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]> {
+    return (await this.repo.listLeetcodeAttempts())
+      .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
+      .sort((a, b) => b.submittedAt - a.submittedAt); // reverse-chron
   }
 
   // --- Tasks ---

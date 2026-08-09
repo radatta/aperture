@@ -3,6 +3,7 @@ import { AppShell } from './components/AppShell';
 import { HomePage } from './pages/Home';
 import { LogPage } from './pages/Log';
 import { TasksPage } from './pages/Tasks';
+import { RecruitingPage } from './pages/Recruiting';
 import { HabitsPage } from './pages/Habits';
 import { InboxPage } from './pages/Inbox';
 import { SettingsPage } from './pages/Settings';
@@ -17,6 +18,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <HomePage /> },
       { path: 'log', element: <LogPage /> },
       { path: 'tasks', element: <TasksPage /> },
+      { path: 'recruiting', element: <RecruitingPage /> },
       { path: 'habits', element: <HabitsPage /> },
       { path: 'inbox', element: <InboxPage /> },
       { path: 'settings', element: <SettingsPage /> },

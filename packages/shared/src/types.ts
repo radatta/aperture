@@ -133,3 +133,30 @@ export interface CalibrationPoint {
   actualAccruedMin: number;
   categoryId: string | null;
 }
+
+// --- Recruiting: LeetCode attempts -----------------------------------------
+// One row per submission, captured by the browser extension. Accepted AND wrong verdicts.
+// attempt-count is DERIVED at read time (count per problemSlug) — never a stored counter.
+export type LeetcodeVerdict =
+  | 'accepted'
+  | 'wrong_answer'
+  | 'time_limit'
+  | 'runtime_error'
+  | 'compile_error'
+  | 'memory_limit'
+  | 'other';
+
+export interface LeetcodeAttempt extends BaseEntity {
+  day: string; // YYYY-MM-DD, bucketed via dayStartHour + the client's reported tz offset
+  problemSlug: string;
+  problemTitle: string;
+  verdict: LeetcodeVerdict;
+  submittedAt: number; // epoch ms from LeetCode (task_finish_time)
+  lang: string;
+  runtimeMs: number | null;
+  memory: number | null; // bytes
+  leetcodeSubmissionId: string; // idempotent dedup key
+  frontendId: string | null;
+  difficulty: string | null; // 'Easy' | 'Medium' | 'Hard' | null
+  topicTags: string[] | null;
+}

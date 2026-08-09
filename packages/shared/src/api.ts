@@ -13,6 +13,7 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
+  LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
   RecurrenceRule,
@@ -76,6 +77,25 @@ export interface UpsertCategoryInput {
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive
   to: string; // YYYY-MM-DD inclusive
+}
+
+// The browser extension ships raw signals; the server owns verdict normalization + day bucketing.
+// tzOffsetMinutes = the client's getTimezoneOffset() — the server owns dayStartHour, so a foreign
+// client can't compute the final day-key itself (why this isn't the createLogEntry(day) shape).
+export interface RecordLeetcodeAttemptInput {
+  leetcodeSubmissionId: string; // idempotent dedup key
+  problemSlug: string;
+  problemTitle: string;
+  statusCode?: number | null; // raw LeetCode status_code (primary verdict signal)
+  statusMsg?: string | null; // raw status_msg (fallback)
+  submittedAt: number; // epoch ms (LeetCode task_finish_time)
+  tzOffsetMinutes: number;
+  lang: string;
+  runtimeMs?: number | null;
+  memory?: number | null; // bytes
+  frontendId?: string | null;
+  difficulty?: string | null;
+  topicTags?: string[] | null;
 }
 
 export type SettingsPatch = Partial<
@@ -165,6 +185,11 @@ export interface ApiClient {
 
   // Calibration (derived, read-only)
   getCalibration(range: DateRange): Promise<CalibrationPoint[]>;
+
+  // Recruiting (LeetCode) — attempts captured by the browser extension (device-token auth on the write).
+  // Idempotent on leetcodeSubmissionId; listLeetcodeAttempts is derived/read-only, reverse-chron.
+  recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt>;
+  listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]>;
 
   // Full data export (JSON) — the user owns their data. A snapshot of every entity.
   exportData(): Promise<unknown>;

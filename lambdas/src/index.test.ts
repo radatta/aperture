@@ -14,7 +14,9 @@ describe('handler edge', () => {
   });
 
   it('answers a CORS preflight with 204', async () => {
-    const res = await handler({ requestContext: { http: { method: 'OPTIONS', path: '/api/getSettings' } } });
+    const res = await handler({
+      requestContext: { http: { method: 'OPTIONS', path: '/api/getSettings' } },
+    });
     expect(res.statusCode).toBe(204);
   });
 
@@ -50,5 +52,34 @@ describe('handler edge', () => {
       headers: {},
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+// Device-token ingest branch — only the auth-FAILURE paths, which return before any DynamoDB access
+// (the write path itself is proven by the shared contract suite via handleRpc). No external calls.
+describe('handler device-token ingest branch', () => {
+  afterEach(() => {
+    delete process.env.DEVICE_TOKEN;
+    delete process.env.DEVICE_USER_ID;
+  });
+
+  const ingest = (headers: Record<string, string | undefined>) =>
+    handler({
+      rawPath: '/api/recordLeetcodeAttempt',
+      requestContext: { http: { method: 'POST', path: '/api/recordLeetcodeAttempt' } },
+      headers,
+      body: JSON.stringify({ args: [{}] }),
+    });
+
+  it('401s the ingest method when the device token is wrong', async () => {
+    process.env.DEVICE_TOKEN = 'right-token';
+    const res = await ingest({ 'x-aperture-authorization': 'Bearer wrong-token' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('401s the ingest method when the device token is missing', async () => {
+    process.env.DEVICE_TOKEN = 'right-token';
+    const res = await ingest({});
+    expect(res.statusCode).toBe(401);
   });
 });

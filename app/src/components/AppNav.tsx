@@ -9,6 +9,7 @@ const LINKS = [
   { to: '/', label: 'Home', end: true },
   { to: '/log', label: 'Log' },
   { to: '/tasks', label: 'Tasks' },
+  { to: '/recruiting', label: 'Recruiting' },
   { to: '/habits', label: 'Habits' },
   { to: '/inbox', label: 'Inbox' },
   { to: '/settings', label: 'Settings' },

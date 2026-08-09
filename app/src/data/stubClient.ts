@@ -10,8 +10,10 @@ import {
   completeSession,
   createUlid,
   dayKey,
+  dayKeyForOffset,
   discardSession,
   heartbeatSession,
+  normalizeVerdict,
   resolveStaleSession,
   resumeSession,
   seriesDueOn,
@@ -31,8 +33,10 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
+  LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
+  RecordLeetcodeAttemptInput,
   Settings,
   SettingsPatch,
   StartSessionInput,
@@ -61,6 +65,7 @@ export interface Store {
   sessions: PomodoroSession[];
   days: Day[];
   categories: Category[];
+  leetcodeAttempts: LeetcodeAttempt[];
   settings: Settings | null;
 }
 
@@ -76,6 +81,7 @@ export function emptyStore(): Store {
     sessions: [],
     days: [],
     categories: [],
+    leetcodeAttempts: [],
     settings: null,
   };
 }
@@ -114,7 +120,9 @@ class StubClient implements ApiClient {
   private load(): Store | null {
     try {
       const raw = globalThis.localStorage?.getItem(this.key);
-      return raw ? (JSON.parse(raw) as Store) : null;
+      // Coalesce over emptyStore() so a pre-existing persisted store gains new collections (e.g.
+      // leetcodeAttempts) without a wipe or an undefined.push crash.
+      return raw ? { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) } : null;
     } catch {
       return null;
     }
@@ -205,6 +213,34 @@ class StubClient implements ApiClient {
   }
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {
     return this.writes.patch(this.store.logEntries, id, { text });
+  }
+
+  // --- Recruiting (LeetCode) -----------------------------------------------
+  async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
+    const dup = this.alive(this.store.leetcodeAttempts).find(
+      (a) => a.leetcodeSubmissionId === input.leetcodeSubmissionId,
+    );
+    if (dup) return dup; // idempotent — mirrors backend
+    return this.writes.insert(this.store.leetcodeAttempts, {
+      ...this.base(),
+      day: dayKeyForOffset(input.submittedAt, input.tzOffsetMinutes, this.dayStartHour()),
+      problemSlug: input.problemSlug,
+      problemTitle: input.problemTitle,
+      verdict: normalizeVerdict(input.statusCode, input.statusMsg),
+      submittedAt: input.submittedAt,
+      lang: input.lang,
+      runtimeMs: input.runtimeMs ?? null,
+      memory: input.memory ?? null,
+      leetcodeSubmissionId: input.leetcodeSubmissionId,
+      frontendId: input.frontendId ?? null,
+      difficulty: input.difficulty ?? null,
+      topicTags: input.topicTags ?? null,
+    });
+  }
+  async listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]> {
+    return this.alive(this.store.leetcodeAttempts)
+      .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
+      .sort((a, b) => b.submittedAt - a.submittedAt);
   }
 
   // --- Tasks ---------------------------------------------------------------

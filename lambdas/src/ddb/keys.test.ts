@@ -12,6 +12,8 @@ describe('single-table keys', () => {
     expect(sk.log('2026-08-04', 'x').startsWith(sk.logPrefix('2026-08-04'))).toBe(true);
     expect(sk.session('2026-08-04', 'x').startsWith(sk.sessionDayPrefix('2026-08-04'))).toBe(true);
     expect(sk.session('2026-08-04', 'x').startsWith(sk.sessionPrefix())).toBe(true);
+    expect(sk.lc('2026-08-04', 'x').startsWith(sk.lcPrefix('2026-08-04'))).toBe(true);
+    expect(sk.lc('2026-08-04', 'x').startsWith(sk.lcAllPrefix())).toBe(true);
   });
 
   it('pads plan order so lexical SK order matches numeric order', () => {

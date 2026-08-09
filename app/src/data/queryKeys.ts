@@ -8,6 +8,7 @@ export const qk = {
   categories: () => ['categories'] as const,
   series: () => ['series'] as const,
   calibration: (from: string, to: string) => ['calibration', from, to] as const,
+  leetcodeAttempts: (from = 'all', to = 'all') => ['leetcodeAttempts', from, to] as const,
   habits: () => ['habits'] as const,
   habitChecks: (from: string, to: string) => ['habitChecks', from, to] as const,
   ideas: (status = 'all') => ['ideas', status] as const,

@@ -6,7 +6,11 @@ import { handleRpc } from './handler';
 describe('handleRpc dispatch', () => {
   it('routes a known method with its args', async () => {
     const doc = new InMemoryDoc();
-    const task = (await handleRpc(doc, { userId: 'local', method: 'createTask', args: [{ title: 'x' }] })) as Task;
+    const task = (await handleRpc(doc, {
+      userId: 'local',
+      method: 'createTask',
+      args: [{ title: 'x' }],
+    })) as Task;
     expect(task.title).toBe('x');
     expect(doc.size).toBe(1);
   });
@@ -37,9 +41,17 @@ describe('handleRpc dispatch', () => {
   it('scopes data by userId (one user cannot read another)', async () => {
     const doc = new InMemoryDoc();
     await handleRpc(doc, { userId: 'alice', method: 'createTask', args: [{ title: 'a-task' }] });
-    const bobTasks = (await handleRpc(doc, { userId: 'bob', method: 'listTasks', args: [] })) as Task[];
+    const bobTasks = (await handleRpc(doc, {
+      userId: 'bob',
+      method: 'listTasks',
+      args: [],
+    })) as Task[];
     expect(bobTasks).toEqual([]);
-    const aliceTasks = (await handleRpc(doc, { userId: 'alice', method: 'listTasks', args: [] })) as Task[];
+    const aliceTasks = (await handleRpc(doc, {
+      userId: 'alice',
+      method: 'listTasks',
+      args: [],
+    })) as Task[];
     expect(aliceTasks.map((t) => t.title)).toEqual(['a-task']);
   });
 });

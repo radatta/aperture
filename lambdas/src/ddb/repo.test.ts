@@ -97,7 +97,15 @@ describe('Repo persistence', () => {
   });
 
   it('habit checks read/delete by composite (date, habitId) with no scan', async () => {
-    const check = { id: 'c1', userId: U, createdAt: 0, updatedAt: 0, deletedAt: null, habitId: 'h1', date: '2026-08-04' };
+    const check = {
+      id: 'c1',
+      userId: U,
+      createdAt: 0,
+      updatedAt: 0,
+      deletedAt: null,
+      habitId: 'h1',
+      date: '2026-08-04',
+    };
     await r.putCheck(check, '2026-08-04', 'h1');
     expect((await r.getCheck('2026-08-04', 'h1'))?.id).toBe('c1');
     await r.deleteCheck('2026-08-04', 'h1');
