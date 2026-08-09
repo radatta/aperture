@@ -41,7 +41,7 @@ content-type: application/json
 {
   leetcodeSubmissionId: string,   // submission_id, as a string
   problemSlug: string,            // from the submit URL /problems/<slug>/submit/
-  problemTitle: string,           // question().title (GraphQL)
+  problemTitle: string,           // observed questionData title, else title-cased from slug
   statusCode: number,             // status_code from /v2/check/ (10 AC, 11 WA, 12 MLE, 14 TLE, 15 RE, 20 CE)
   statusMsg: string,              // status_msg
   submittedAt: number,            // task_finish_time (epoch ms)
@@ -50,18 +50,19 @@ content-type: application/json
   runtimeMs: number | null,       // status_runtime "0 ms" -> 0
   memory: number | null,          // `memory` bytes number (pretty "20.8 MB" string ignored)
   frontendId: string | null,      // question_id from the submit body if available, else null
-  difficulty: string | null,      // question().difficulty
-  topicTags: string[] | null      // question().topicTags[].name
+  difficulty: string | null,      // observed questionData difficulty (null on cache miss)
+  topicTags: string[] | null      // observed questionData topicTags[].name (null on cache miss)
 }
 ```
 
 ## How it works
 
-LeetCode's own network calls are observed and mirrored; nothing is blocked or altered.
+LeetCode's own network calls are observed and mirrored; nothing is blocked or altered. **The extension
+is 100% passive — it never issues a request of its own** (no automated/scraping call, best ToS posture).
 
 - **Submit** — `POST https://leetcode.com/problems/<slug>/submit/`, body `{lang, question_id, typed_code}`, response `{submission_id}`. The interceptor remembers `submission_id -> {slug, lang, question_id}`.
 - **Result poll** — `GET https://leetcode.com/submissions/detail/<submission_id>/v2/check/` (note `/v2/`), polled repeatedly. On the **first** response with `state === "SUCCESS"`, the extension fires **once** for that submission.
-- **Metadata** — a GraphQL `POST https://leetcode.com/graphql/` with `credentials: 'include'` (the page's own session) fetches `question(titleSlug){ title difficulty topicTags{ name } }` for display title, difficulty, and tags. Best-effort: failures degrade to `null`s and the attempt is still recorded.
+- **Metadata** — captured **passively** from the page's **own** `questionData` GraphQL response (fetched when you open the problem), keyed by `titleSlug`, cached `slug -> {title, difficulty, topicTags}`. We only inspect `/graphql/` responses whose request carried a `titleSlug` variable. On a cache miss (rare — e.g. submitting from a cached page that didn't refetch), `title` degrades to a slug-derived string and `difficulty`/`topicTags` are `null`; the attempt is still recorded.
 
 ### MAIN vs ISOLATED worlds
 
