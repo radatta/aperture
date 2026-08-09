@@ -41,7 +41,7 @@ content-type: application/json
 {
   leetcodeSubmissionId: string,   // submission_id, as a string
   problemSlug: string,            // from the submit URL /problems/<slug>/submit/
-  problemTitle: string,           // observed questionData title, else title-cased from slug
+  problemTitle: string,           // document.title minus " - LeetCode", else title-cased from slug
   statusCode: number,             // status_code from /v2/check/ (10 AC, 11 WA, 12 MLE, 14 TLE, 15 RE, 20 CE)
   statusMsg: string,              // status_msg
   submittedAt: number,            // task_finish_time (epoch ms)
@@ -50,8 +50,8 @@ content-type: application/json
   runtimeMs: number | null,       // status_runtime "0 ms" -> 0
   memory: number | null,          // `memory` bytes number (pretty "20.8 MB" string ignored)
   frontendId: string | null,      // question_id from the submit body if available, else null
-  difficulty: string | null,      // observed questionData difficulty (null on cache miss)
-  topicTags: string[] | null      // observed questionData topicTags[].name (null on cache miss)
+  difficulty: string | null,      // header pill "Easy"/"Medium"/"Hard" from the DOM (null if not found)
+  topicTags: string[] | null      // from /tag/ anchors in the DOM (null if topics are hidden)
 }
 ```
 
@@ -62,7 +62,7 @@ is 100% passive — it never issues a request of its own** (no automated/scrapin
 
 - **Submit** — `POST https://leetcode.com/problems/<slug>/submit/`, body `{lang, question_id, typed_code}`, response `{submission_id}`. The interceptor remembers `submission_id -> {slug, lang, question_id}`.
 - **Result poll** — `GET https://leetcode.com/submissions/detail/<submission_id>/v2/check/` (note `/v2/`), polled repeatedly. On the **first** response with `state === "SUCCESS"`, the extension fires **once** for that submission.
-- **Metadata** — captured **passively** from the page's **own** `questionData` GraphQL response (fetched when you open the problem), keyed by `titleSlug`, cached `slug -> {title, difficulty, topicTags}`. We only inspect `/graphql/` responses whose request carried a `titleSlug` variable. On a cache miss (rare — e.g. submitting from a cached page that didn't refetch), `title` degrades to a slug-derived string and `difficulty`/`topicTags` are `null`; the attempt is still recorded.
+- **Metadata** — read straight from the **rendered page** at capture time (no network call): `title` from `document.title`, `difficulty` from the header Easy/Medium/Hard pill (link-nested similar-questions rows are skipped), `topicTags` from the `a[href^="/tag/"]` anchors. LeetCode **server-renders** this — there is no client `questionData` request to intercept, so the DOM is the source. Best-effort: `title` degrades to a slug-derived string and `difficulty`/`topicTags` to `null` if not found (e.g. LeetCode is hiding topics behind a "Show Topics" toggle).
 
 ### MAIN vs ISOLATED worlds
 

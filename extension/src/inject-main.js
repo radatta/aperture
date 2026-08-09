@@ -1,17 +1,16 @@
 // Aperture LeetCode interceptor — runs in the page's MAIN world (manifest content_scripts world: "MAIN").
-// It monkey-patches window.fetch and XMLHttpRequest so it can OBSERVE LeetCode's own network traffic
-// regardless of which transport LeetCode uses for a given request. It NEVER blocks or alters the real
-// request/response, NEVER issues its own requests, and NEVER throws into the page.
+// It monkey-patches window.fetch and XMLHttpRequest so it can OBSERVE LeetCode's own submit/judge
+// traffic regardless of which transport LeetCode uses. It NEVER blocks or alters the real request/
+// response, NEVER issues its own requests, and NEVER throws into the page.
 //
 // It is 100% passive: every byte it reads is a response to a request the page made because you were
-// browsing/solving normally. There is no automated/scraping call.
+// solving normally. There is no automated/scraping call.
 //
 // Flow:
-//   1. As you open a problem, the page fetches its own metadata via GraphQL (questionData). We observe
-//      that response and cache slug -> { title, difficulty, topicTags }.
-//   2. On a submit call (POST /problems/<slug>/submit/) we remember submission_id -> {slug, lang, question_id}.
-//   3. On a result poll (GET /submissions/detail/<id>/v2/check/) whose state === "SUCCESS", we fire once,
-//      attach the cached metadata (or nulls / a slug-derived title on a cache miss), and dispatch a
+//   1. On a submit call (POST /problems/<slug>/submit/) we remember submission_id -> {slug, lang, question_id}.
+//   2. On a result poll (GET /submissions/detail/<id>/v2/check/) whose state === "SUCCESS", we fire once,
+//      read problem metadata (title/difficulty/topicTags) straight from the RENDERED PAGE (LeetCode
+//      server-renders it — there is no client questionData request to intercept), and dispatch a
 //      CustomEvent that the ISOLATED-world relay (content-relay.js) forwards to the background script.
 //
 // The background script adds tzOffsetMinutes and performs the actual POST to the Aperture backend.
@@ -25,14 +24,24 @@
 
   const SUBMIT_RE = /\/problems\/([^/]+)\/submit\/?(?:\?|$)/;
   const CHECK_RE = /\/submissions\/detail\/([^/]+)\/v2\/check\/?(?:\?|$)/;
-  const GRAPHQL_RE = /\/graphql\/?(?:\?|$)/;
 
   // submission_id (string) -> { slug, lang, question_id }
   const submitContext = new Map();
   // submission_ids we've already fired for, so we emit exactly once per submission.
   const firedSubmissions = new Set();
-  // slug -> { title, difficulty, topicTags } — populated passively from the page's own questionData.
-  const metaCache = new Map();
+
+  // Debug logging — MAIN world, so these land in the LeetCode page's DevTools console. Flip DEBUG on
+  // to trace capture (interceptor-loaded marker + per-submit payload with difficulty candidates).
+  const DEBUG = false;
+  function dlog() {
+    if (!DEBUG) return;
+    try {
+      console.debug.apply(console, ["[Aperture]"].concat(Array.prototype.slice.call(arguments)));
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+  dlog("interceptor loaded on", location.pathname);
 
   // ---- Parsing helpers -----------------------------------------------------
 
@@ -82,9 +91,8 @@
     }
   }
 
-  // Cache-miss fallback: derive a readable title from the slug. "two-sum" -> "Two Sum".
-  // Imperfect (e.g. "3sum" -> "3sum") but always available with zero network cost.
-  function titleFromSlug(slug) {
+  // "hash-table" -> "Hash Table". Used for a slug-derived title fallback and tag-name fallback.
+  function humanizeSlug(slug) {
     if (typeof slug !== "string" || !slug) return null;
     return slug
       .split("-")
@@ -92,47 +100,61 @@
       .join(" ");
   }
 
-  // ---- Problem metadata (passive cache) ------------------------------------
+  // ---- Problem metadata (read from the rendered page, no network) ----------
 
-  // Observe the page's OWN questionData response and cache the metadata. We never issue this query
-  // ourselves — this only runs on graphql responses whose request carried a `titleSlug` variable.
-  function handleGraphql(requestBodyText, responseText) {
+  // Read title/difficulty/topicTags off the DOM at capture time. LeetCode server-renders these, so the
+  // problem you just submitted is fully present. Best-effort: any field we can't find degrades to null
+  // (title falls back to a slug-derived string). Returns a `dbg` field for the debug log only.
+  function readProblemMeta(slug) {
+    let title = humanizeSlug(slug);
+    let difficulty = null;
+    let topicTags = null;
+    const dbg = {};
+
+    // Title: "Roman to Integer - LeetCode" -> "Roman to Integer".
     try {
-      const req = safeJsonParse(requestBodyText);
-      const res = safeJsonParse(responseText);
-      const q = res && res.data && res.data.question;
-      if (!q) return;
-      const slug =
-        (req && req.variables && typeof req.variables.titleSlug === "string" && req.variables.titleSlug) ||
-        (typeof q.titleSlug === "string" && q.titleSlug) ||
-        null;
-      if (!slug) return;
-
-      const tags = Array.isArray(q.topicTags)
-        ? q.topicTags.map((t) => (t && typeof t.name === "string" ? t.name : null)).filter(Boolean)
-        : null;
-
-      // Merge — different questionData queries expose different subsets; keep any field we already have.
-      const prev = metaCache.get(slug) || { title: null, difficulty: null, topicTags: null };
-      metaCache.set(slug, {
-        title: typeof q.title === "string" ? q.title : prev.title,
-        difficulty: typeof q.difficulty === "string" ? q.difficulty : prev.difficulty,
-        topicTags: tags && tags.length ? tags : prev.topicTags,
-      });
+      const t = (document.title || "").replace(/\s*-\s*LeetCode\s*$/i, "").trim();
+      if (t) title = t;
     } catch (_e) {
-      // Never throw into the page.
+      /* keep fallback */
     }
-  }
 
-  // Synchronous lookup at capture time. Falls back to a slug-derived title; difficulty/tags stay null
-  // if we never observed this problem's metadata (e.g. submitted from a cached page with no refetch).
-  function getCachedMeta(slug) {
-    const hit = (slug && metaCache.get(slug)) || null;
-    return {
-      title: (hit && hit.title) || titleFromSlug(slug),
-      difficulty: (hit && hit.difficulty) || null,
-      topicTags: (hit && hit.topicTags) || null,
-    };
+    // Difficulty: leaf nodes whose text is exactly Easy/Medium/Hard. The problem's own pill is in the
+    // header (first in DOM order, not inside a link); similar-questions rows are link-nested — skip those.
+    try {
+      const cands = Array.prototype.slice
+        .call(document.querySelectorAll("div,span,a,button,p"))
+        .filter(
+          (e) => e.childElementCount === 0 && /^(Easy|Medium|Hard)$/.test((e.textContent || "").trim()),
+        );
+      dbg.difficultyCandidates = cands.map((e) => (e.textContent || "").trim());
+      const chosen = cands.find((e) => !e.closest("a")) || cands[0] || null;
+      if (chosen) difficulty = (chosen.textContent || "").trim();
+    } catch (_e) {
+      /* leave null */
+    }
+
+    // Topic tags: anchors to /tag/<slug>/ are the current problem's topics. Prefer the anchor text,
+    // fall back to humanizing the slug. Dedup by tag slug. (Empty if LeetCode is hiding topics.)
+    try {
+      const seen = Object.create(null);
+      const tags = [];
+      const anchors = document.querySelectorAll('a[href*="/tag/"]');
+      for (let i = 0; i < anchors.length; i++) {
+        const href = anchors[i].getAttribute("href") || "";
+        const m = href.match(/\/tag\/([^/?#]+)/);
+        if (!m) continue;
+        const key = m[1];
+        if (seen[key]) continue;
+        seen[key] = true;
+        tags.push((anchors[i].textContent || "").trim() || humanizeSlug(key));
+      }
+      if (tags.length) topicTags = tags;
+    } catch (_e) {
+      /* leave null */
+    }
+
+    return { title, difficulty, topicTags, dbg };
   }
 
   // ---- Core handlers -------------------------------------------------------
@@ -175,7 +197,15 @@
 
       const ctx = submitContext.get(submissionId) || {};
       const slug = ctx.slug || null;
-      const meta = getCachedMeta(slug); // synchronous — no network
+      const meta = readProblemMeta(slug); // synchronous DOM read — no network
+      dlog("check SUCCESS → building payload", {
+        submissionId,
+        slug,
+        title: meta.title,
+        difficulty: meta.difficulty,
+        topicTags: meta.topicTags,
+        difficultyCandidates: meta.dbg.difficultyCandidates,
+      });
 
       const payload = {
         leetcodeSubmissionId: submissionId,
@@ -209,26 +239,22 @@
   if (realFetch) {
     window.fetch = function (input, init) {
       let url = "";
-      let method = "GET";
       try {
         if (typeof input === "string") {
           url = input;
         } else if (input && typeof input.url === "string") {
           url = input.url;
-          method = input.method || method;
         }
-        if (init && init.method) method = init.method;
       } catch (_e) {
         // ignore
       }
 
       const isSubmit = SUBMIT_RE.test(url);
       const isCheck = CHECK_RE.test(url);
-      const isGraphql = GRAPHQL_RE.test(url);
 
-      // Capture request body text for submit + graphql calls (from init.body when it's a string).
+      // Capture request body text for submit calls (from init.body when it's a string).
       let reqBodyText = null;
-      if (isSubmit || isGraphql) {
+      if (isSubmit) {
         try {
           if (init && typeof init.body === "string") reqBodyText = init.body;
         } catch (_e) {
@@ -236,12 +262,9 @@
         }
       }
 
-      // graphql is high-volume on LeetCode — only bother with responses whose request wants a titleSlug.
-      const wantGraphql = isGraphql && typeof reqBodyText === "string" && reqBodyText.indexOf("titleSlug") !== -1;
-
       const p = realFetch(input, init);
 
-      if (isSubmit || isCheck || wantGraphql) {
+      if (isSubmit || isCheck) {
         p.then((res) => {
           try {
             // Clone so we never disturb the page's own consumption of the body.
@@ -251,7 +274,6 @@
               .then((text) => {
                 if (isSubmit) handleSubmit(url, reqBodyText, text);
                 else if (isCheck) handleCheck(url, text);
-                else if (wantGraphql) handleGraphql(reqBodyText, text);
               })
               .catch(() => {});
           } catch (_e) {
@@ -289,11 +311,8 @@
         const url = this.__apertureUrl || "";
         const isSubmit = SUBMIT_RE.test(url);
         const isCheck = CHECK_RE.test(url);
-        const isGraphql = GRAPHQL_RE.test(url);
-        const reqBodyText = typeof body === "string" ? body : null;
-        const wantGraphql =
-          isGraphql && typeof reqBodyText === "string" && reqBodyText.indexOf("titleSlug") !== -1;
-        if (isSubmit || isCheck || wantGraphql) {
+        if (isSubmit || isCheck) {
+          const reqBodyText = typeof body === "string" ? body : null;
           this.addEventListener("load", () => {
             try {
               // Only read text-like responses.
@@ -310,7 +329,6 @@
               if (text == null) return;
               if (isSubmit) handleSubmit(url, reqBodyText, text);
               else if (isCheck) handleCheck(url, text);
-              else if (wantGraphql) handleGraphql(reqBodyText, text);
             } catch (_e) {
               // Never throw into the page.
             }

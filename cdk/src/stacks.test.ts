@@ -130,6 +130,7 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     table: data.table,
     userPool: data.userPool,
     originSecret: 'test-origin-secret',
+    deviceToken: 'test-device-token',
     domainName: 'dev.aperture.rahuldatta.dev',
     certificateArn: certArn,
   });
@@ -162,6 +163,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       table: data.table,
       userPool: data.userPool,
       originSecret: 'test-origin-secret',
+      deviceToken: 'test-device-token',
     });
     return Template.fromStack(appStack);
   };

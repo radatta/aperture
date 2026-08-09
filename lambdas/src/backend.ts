@@ -106,11 +106,11 @@ export class BackendClient implements ApiClient {
   // --- Recruiting (LeetCode) ---
   async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
     // The extension is 100% passive — it never issues its own LeetCode request. Problem metadata
-    // (title/difficulty/tags) is read from the page's OWN questionData GraphQL response as you browse,
-    // cached, then attached here. So there is no ToS-sensitive automated call to count. We still log
-    // each ingest with whether metadata was captured, to watch the passive-capture hit rate via a Logs
-    // Insights query. CloudWatch Logs is free at our scale; a custom metric ($0.30/mo) would be the
-    // biggest cost in the project, so we deliberately don't emit one.
+    // (title/difficulty/tags) is read straight off the rendered problem page (LeetCode server-renders
+    // it) at capture time, then attached here. So there is no ToS-sensitive automated call to count.
+    // We still log each ingest with whether metadata was captured, to watch the DOM-scrape hit rate via
+    // a Logs Insights query. CloudWatch Logs is free at our scale; a custom metric ($0.30/mo) would be
+    // the biggest cost in the project, so we deliberately don't emit one.
     const metaCaptured =
       input.difficulty != null || (Array.isArray(input.topicTags) && input.topicTags.length > 0);
     console.log(JSON.stringify({ event: 'leetcode_ingest', problemSlug: input.problemSlug, metaCaptured }));
