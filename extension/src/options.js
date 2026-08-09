@@ -69,7 +69,10 @@
     }
   }
 
-  form.addEventListener("submit", async (e) => {
+  // NOTE: the handler is deliberately NOT async. permissions.request() must be invoked synchronously
+  // inside the user gesture (the click) — any `await` before it drops the gesture and Firefox rejects
+  // it with "may only be called from a user input handler". So we call it FIRST, then persist + report.
+  form.addEventListener("submit", (e) => {
     e.preventDefault();
     setStatus("", "");
 
@@ -96,29 +99,36 @@
       return;
     }
 
+    // FIRST async call — still within the user gesture (nothing awaited yet).
+    let permPromise;
     try {
-      await storageSet({ apiOrigin, deviceToken });
+      permPromise = permissionsRequest({ origins: [parsed.origin + "/*"] });
     } catch (err) {
-      setStatus("Failed to save settings.", "err");
+      setStatus("Permission request failed: " + (err && err.message ? err.message : err), "err");
       return;
     }
 
-    // Request the optional host permission so the background fetch can reach this origin.
-    try {
-      const granted = await permissionsRequest({ origins: [parsed.origin + "/*"] });
-      if (granted) {
-        setStatus("Saved. Permission granted for " + parsed.origin + ".", "ok");
-      } else {
-        setStatus(
-          "Saved, but host permission was not granted — attempts won't send until you allow " +
-            parsed.origin +
-            ".",
-          "err"
+    permPromise.then(
+      (granted) => {
+        storageSet({ apiOrigin, deviceToken }).then(
+          () => {
+            if (granted) {
+              setStatus("Saved. Permission granted for " + parsed.origin + ".", "ok");
+            } else {
+              setStatus(
+                "Saved, but host permission was not granted — attempts won't send until you allow " +
+                  parsed.origin +
+                  ".",
+                "err"
+              );
+            }
+          },
+          () => setStatus("Failed to save settings.", "err"),
         );
-      }
-    } catch (err) {
-      setStatus("Saved, but permission request failed: " + (err && err.message ? err.message : err), "err");
-    }
+      },
+      (err) =>
+        setStatus("Permission request failed: " + (err && err.message ? err.message : err), "err"),
+    );
   });
 
   load();

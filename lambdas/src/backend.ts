@@ -105,6 +105,11 @@ export class BackendClient implements ApiClient {
 
   // --- Recruiting (LeetCode) ---
   async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
+    // The extension queries LeetCode's /graphql/ (problem metadata) once per captured submission — the
+    // one ToS-sensitive call. Log every ingest so we can count how often it happens via a Logs Insights
+    // query. CloudWatch Logs is free at our scale; a custom metric ($0.30/mo) would be the biggest cost
+    // in the project, so we deliberately don't emit one.
+    console.log(JSON.stringify({ event: 'leetcode_graphql_query', problemSlug: input.problemSlug }));
     const dup = await this.repo.findLeetcodeBySubmissionId(input.leetcodeSubmissionId);
     if (dup) return dup; // idempotent — the extension may fire twice for one submission
     const start = (await this.ensureSettings()).dayStartHour;
