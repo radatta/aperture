@@ -71,16 +71,30 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 
 - Prod `aperture.rahuldatta.dev` · dev `dev.aperture.rahuldatta.dev`. DNS at **Porkbun** (external).
 - **One-time, $0, no recurring work:** create ACM certs in **`us-east-1`** (DNS validation), add the validation CNAMEs in Porkbun once, add the CloudFront alias CNAMEs once. ACM **auto-renews** DNS-validated certs while the CNAME stays — no per-deploy, no per-renewal work.
-- **Reference certs by ARN in CDK** (don't have CDK create them) → deploys never touch DNS/certs.
+- **Reference certs by ARN in CDK** (don't have CDK create them) → deploys never touch DNS/certs. The
+  ARN comes from `APERTURE_CERT_ARN` (GitHub **var** `CERT_ARN_DEV`/`CERT_ARN_PROD` per stage), read in
+  `cdk/src/config/domains.ts` alongside the committed domain names; the app stack takes `domainName` +
+  `certificateArn` props and adds the alias + cert to CloudFront only when both are present (else stays
+  on the CloudFront default domain, so pre-domain deploys are unaffected).
+- **Region note:** the cert lives in **`us-east-1`** (CloudFront's hard requirement) even though the
+  stacks deploy to **`us-west-1`** — referencing by ARN makes the split a non-issue.
 - Not on the critical path — wire it right before real daily use.
+- **Status (2026-08):** CDK wiring is in place (`domains.ts`, app-stack alias/cert, deploy.yml cert-ARN
+  vars, tests). Remaining ops steps: create the two us-east-1 certs, add the Porkbun validation + alias
+  CNAMEs, set the `CERT_ARN_*` GitHub vars, deploy.
 
 ## 9. CI/CD — GitHub Actions, OIDC
 
 No static credentials — OIDC role assumption. GitHub Flow, simplified:
 - Feature branch → PR (lint + test only) → squash to `main`.
-- `main` pipeline: lint/typecheck/test (pnpm + Vitest) → `cdk deploy ApertureData-dev` + `ApertureApp-dev` → smoke dev → build app (Vite, env from CDK outputs) → S3 sync + CloudFront invalidate → **manual approval** → same for prod.
+- `main` pipeline: lint/typecheck/test (pnpm + Vitest) → `cdk deploy ApertureData-dev` + `ApertureApp-dev` → smoke dev → build app (Vite, env from CDK outputs) → S3 sync + CloudFront invalidate → **manual approval (see caveat below)** → same for prod.
 - `dev` branch → one-off dev deploy (not a promotion step).
-- OIDC trust: dev role ← `refs/heads/dev` + `refs/heads/main` (main pipeline deploys dev first); prod role ← the **`prod` GitHub environment** subject (`environment:prod`), so prod credentials are unassumable until the environment's approval gate passes — the gate is enforced at the credential layer, not just the workflow. Roles hold no direct deploy power: `cdk deploy` funnels through the account's CDK bootstrap roles; the roles get only S3-sync / CloudFront-invalidate / Lambda-invoke for their stage.
+- OIDC trust: dev role ← `environment:dev` + `refs/heads/dev` + `refs/heads/main` (deploy-dev runs in the `dev` environment for the ruleset gate; ref subs kept as a cutover superset, prunable later); prod role ← the **`prod` GitHub environment** subject (`environment:prod`). The environment scoping is real — only a job that declares that `environment:` gets the matching OIDC sub, so only it can assume the role. Roles hold no direct deploy power: `cdk deploy` funnels through the account's CDK bootstrap roles; the roles get only S3-sync / CloudFront-invalidate / Lambda-invoke for their stage.
+- **⚠️ Approval-gate caveat (current repo):** the **manual-approval pause** requires GitHub Environment **required-reviewer** protection rules, which are unavailable on a **free private repo** (need public, or Pro/Team/Enterprise). On this repo they're not enforced, so on a `main` push **deploy-prod runs automatically right after deploy-dev — no human pause**. The practical safety valve is the **`dev` branch**: push there first for a dev-only deploy + validate, then push `main` once you're ready for prod. If the repo later goes public or onto a paid plan, add a required reviewer to the `prod` environment and the single-`main`-push flow gains a real pause.
+- **Branch ruleset (`main`)** — governance for the default branch is a GitHub **ruleset** defined in repo **Settings → Rules → Rulesets** (that's the source of truth; a personal JSON export lives at the gitignored `localNotes/main.json`), `enforcement: active`, no bypass actors. Rules: block **deletion** + **force-push** (`non_fast_forward`), **required linear history**, **PR required** (0 approvals, **squash-only** merge), and **`required_deployments: [dev]`** — a merge into `main` is blocked until the merging commit has a successful deployment to the **`dev`** environment. This is the *enforced* version of the "dev is the staging gate" discipline — it substitutes for the prod approval pause that a free private repo can't have. Note rulesets ARE available on this free private repo even though Environment required-reviewers aren't.
+  - **Wiring (done):** `required_deployments` only clears when a GitHub **deployment** to the `dev` environment exists for the commit. Wired via: (1) a `dev` GitHub environment whose deployment-branch policy allows **`dev` and `main`** (deploy-dev runs from both), (2) `environment: dev` on the `deploy-dev` job so it records the deployment, (3) the dev OIDC role trusting `environment:dev` (see trust bullet above). **Apply order matters:** redeploy `ApertureCicd` (trust) FIRST, then land the `deploy.yml` change — otherwise deploy-dev's `environment:dev` sub isn't yet trusted and the AssumeRole fails.
+  - **Flow:** push branch → `dev` (deploys + records the dev deployment on that SHA) → PR that same commit → `main` (ruleset sees the dev deployment → merge allowed) → squash-merge → main pipeline redeploys dev + deploys prod.
+  - **Docs-only fast-path:** the gate is SHA-specific (the *exact* commit being merged must have a dev deployment — an older one doesn't count), so even a one-line docs fix needs a dev deployment. To avoid a full deploy for that, `deploy-dev`/`deploy-prod` detect when a push touches only `docs/` or a top-level `*.md` and **skip the heavy steps (cdk deploy, smoke, publish) while the job still runs in its environment** — so the deployment is still recorded (gate satisfied) but nothing is actually deployed. Anything outside those paths, or an indeterminate base, → full deploy.
 - OIDC provider + both roles live in a one-off, hand-deployed `ApertureCicd` stack (`-c githubRepo=owner/repo`); the pipeline never touches it.
 - **Origin secret** reaches CI as a GitHub secret (`ORIGIN_SECRET_DEV/PROD` → `APERTURE_ORIGIN_SECRET`), so it's stable across runs.
 - **Smoke tests** invoke the Lambda by **direct `aws lambda invoke`** with a `testMode` payload (synthetic user, writes-object no-ops) → no side effects, even against prod.

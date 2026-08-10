@@ -451,11 +451,14 @@ be called directly. Locked by INFRA §4.
 **Depends on:** Phase 12. **Implements:** INFRA §9, CONVENTIONS (pnpm/Vitest in CI).
 **Trade-off:** manual approval before prod is the guardrail on the `RETAIN` data stack — an app bug
 can't silently reach real data.
-**Status: code COMPLETE (2026-08), not yet live.** Roles (assume-bootstrap-roles), workflows, and smoke
-runner built + green. Prod trust bound to the `prod` GitHub environment (creds gated by approval).
-Remaining is account/GitHub setup, all on the user: push repo + deploy `ApertureCicd`
-(`-c githubRepo=owner/repo`), set repo vars (role ARNs, region) + secrets (`ORIGIN_SECRET_DEV/PROD`),
-create the `prod` environment with a required reviewer.
+**Status: LIVE (2026-08).** Roles (assume-bootstrap-roles), workflows, and smoke runner built + green;
+dev + prod deployed. Prod trust bound to the `prod` GitHub environment (scopes the prod role to
+`environment:prod` jobs). Account/GitHub setup done: `ApertureCicd` deployed, repo vars (role ARNs,
+region) + secrets (`ORIGIN_SECRET_DEV/PROD`) set, `prod` environment created.
+**⚠️ No approval pause on this repo:** required-reviewer protection needs a public repo or Pro/Team/
+Enterprise — unavailable on a free private repo — so deploy-prod runs automatically after deploy-dev on a
+`main` push. Use the **`dev` branch** as the practical gate (dev-only deploy → validate → then push
+`main`). See INFRA §9 "Approval-gate caveat." Revisit if the repo goes public / onto a paid plan.
 
 ---
 
@@ -465,14 +468,18 @@ create the `prod` environment with a required reviewer.
 critical path; wired right before real daily use.
 
 **Milestones & tasks**
-- **14.1 Prod stacks** — deploy `ApertureData-prod` + `ApertureApp-prod` via the pipeline's approval
-  gate; admin-create the prod user (invite-only).
-- **14.2 ACM certs** — create in **`us-east-1`** (DNS-validated) for `aperture.rahuldatta.dev` +
-  `dev.aperture.rahuldatta.dev`; **reference by ARN in CDK** (CDK does not create them → deploys never
-  touch DNS/certs). (INFRA §8)
-- **14.3 Porkbun DNS (one-time)** — add ACM validation CNAMEs + CloudFront alias CNAMEs once; ACM
-  auto-renews while the CNAME stays. **No Route 53.** (INFRA §8/§11)
-- **14.4 Cognito callbacks** — add the custom-domain callback/logout URLs to the app client. (INFRA §6)
+- **14.1 Prod stacks** — ✅ done (CI go-live): `ApertureData-prod` + `ApertureApp-prod` via the approval
+  gate; prod user admin-created (invite-only).
+- **CDK wiring for 14.2–14.4** — ✅ done: `cdk/src/config/domains.ts` (stage→domain, cert ARN from
+  `APERTURE_CERT_ARN`), app-stack `domainName`/`certificateArn` props → CloudFront alias + cert, and the
+  app client's callbacks include the custom domain **and** the CloudFront default (redirect_uri =
+  `location.origin`). `deploy.yml` passes `CERT_ARN_DEV`/`CERT_ARN_PROD` vars. Alias/cert only apply when
+  the ARN is set → pre-cert deploys stay on the CloudFront domain.
+- **14.2 ACM certs** — ⏳ create in **`us-east-1`** (DNS-validated) for `aperture.rahuldatta.dev` +
+  `dev.aperture.rahuldatta.dev`; cert lives in us-east-1 while stacks are us-west-1 (ref-by-ARN). (INFRA §8)
+- **14.3 Porkbun DNS (one-time)** — ⏳ add ACM validation CNAMEs + CloudFront alias CNAMEs once; ACM
+  auto-renews while the CNAME stays. **No Route 53.** Then set the `CERT_ARN_*` GitHub vars + deploy. (INFRA §8/§11)
+- **14.4 Cognito callbacks** — ✅ wired in CDK (app client callback/logout URLs); applies on the domain deploy. (INFRA §6)
 
 **Key files:** `cdk/lib/app-stack.ts` (alias + cert ARN ref), `cdk/config/domains.ts`.
 **Depends on:** Phases 12–13. **Implements:** INFRA §8/§11.

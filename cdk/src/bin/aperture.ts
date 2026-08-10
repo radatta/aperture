@@ -5,6 +5,7 @@ import { App } from 'aws-cdk-lib';
 import { ApertureDataStack } from '../lib/data-stack';
 import { ApertureAppStack } from '../lib/app-stack';
 import { ApertureCicdStack } from '../lib/cicd-stack';
+import { domainConfigFor } from '../config/domains';
 
 // CloudFront→Lambda origin-lockdown secret, one per stage. In CI it comes from a GitHub secret via
 // APERTURE_ORIGIN_SECRET (stable across runs); locally it's generated once into a gitignored file and
@@ -28,12 +29,16 @@ const stage = (app.node.tryGetContext('stage') as string | undefined) ?? 'dev';
 const env = { region: 'us-west-1' };
 
 const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env });
+// Custom domain (Phase 14): undefined until the stage's cert ARN is wired (APERTURE_CERT_ARN) →
+// stays on the CloudFront default domain, so this is a no-op before the domain step.
+const domain = domainConfigFor(stage);
 new ApertureAppStack(app, `ApertureApp-${stage}`, {
   stage,
   env,
   table: data.table,
   userPool: data.userPool,
   originSecret: originSecretFor(stage),
+  ...(domain ? { domainName: domain.domainName, certificateArn: domain.certificateArn } : {}),
 });
 
 // CI/CD roles — a one-off, account-wide stack (not per-stage). Only built when a repo is supplied, so
