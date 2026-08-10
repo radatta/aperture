@@ -58,6 +58,14 @@ run(
 );
 
 console.log(`\n▶ Invalidating CloudFront ${app.DistributionId}`);
-run(`aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*"${profileFlag}`);
+// Capture the invalidation id (JSON, not inherited stdout) so we can wait for it — the post-deploy health
+// check needs the edge serving the new build, not a stale cached shell.
+const invJson = execSync(
+  `aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*" --output json${profileFlag}`,
+  { cwd: root, encoding: 'utf8' },
+);
+const invalidationId = JSON.parse(invJson).Invalidation.Id;
+console.log(`  invalidation ${invalidationId} created — waiting for it to complete...`);
+run(`aws cloudfront wait invalidation-completed --distribution-id ${app.DistributionId} --id ${invalidationId}${profileFlag}`);
 
 console.log(`\n✓ Published ${stage} → ${app.AppUrl}\n`);

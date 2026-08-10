@@ -100,6 +100,9 @@ jobs:
       - name: Publish frontend (dev)
         if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs dev
+      - name: Post-deploy health check (dev) # curls the real public URLs — proves the edge wiring + origin-secret gate
+        if: steps.changes.outputs.deploy == 'true'
+        run: node scripts/aws/health-check.mjs dev
 
   deploy-prod:
     needs: deploy-dev
@@ -159,6 +162,9 @@ jobs:
       - name: Publish frontend (prod)
         if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs prod
+      - name: Post-deploy health check (prod) # curls the real public URLs — proves the edge wiring + origin-secret gate
+        if: steps.changes.outputs.deploy == 'true'
+        run: node scripts/aws/health-check.mjs prod
 
   # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
   # signal without watching the Actions tab. Runs for both main and dev pushes. Failure = high priority

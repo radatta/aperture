@@ -54,6 +54,12 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   }
 
   const method = path.split('/api/')[1]?.split('/')[0] ?? '';
+  // Public health probe for the post-deploy synthetic check: sits BEHIND the origin-secret gate above but
+  // AHEAD of any auth/DynamoDB. So a headerless HTTP call still 403s (proves the gate is enforced) while a
+  // CloudFront-stamped call gets 200 (proves the edge → Lambda wiring). No JWT, no table access, no writes.
+  if (method === 'health') {
+    return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true, stage: process.env.STAGE ?? null }) };
+  }
   // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;

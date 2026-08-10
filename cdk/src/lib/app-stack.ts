@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, Validations } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import { AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
@@ -11,6 +11,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { Monitoring } from './monitoring';
 
 export interface AppStackProps extends StackProps {
   stage: string;
@@ -40,12 +41,13 @@ export class ApertureAppStack extends Stack {
         : undefined;
 
     // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
+    const fnTimeout = Duration.seconds(15); // shared with the Monitoring duration alarm below
     const fn = new NodejsFunction(this, 'Bff', {
       functionName: `aperture-bff-${stage}`,
       entry: LAMBDA_ENTRY,
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_22_X,
-      timeout: Duration.seconds(15),
+      timeout: fnTimeout,
       memorySize: 512,
       environment: {
         TABLE_NAME: table.tableName,
@@ -56,6 +58,21 @@ export class ApertureAppStack extends Stack {
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] }, // v3 SDK is in the runtime
     });
     table.grantReadWriteData(fn);
+    // cdk-nag granular IAM suppressions (IAM4: the standard CloudWatch Logs managed exec policy; IAM5:
+    // grantReadWriteData's index/* wildcard, which the single-table GSI query needs — the table is scoped).
+    // WORKAROUND for an open cdk-nag v3 bug (cdklabs/cdk-nag#2359/#2351): `Validations.of(x).acknowledge()`
+    // splits the rule id on `::` and rejects the granular finding ids, which embed ARNs containing `::`.
+    // Until that's fixed upstream, write the acknowledgment metadata cdk-nag itself reads (isAcknowledged)
+    // directly. The ids must match synth's "Acknowledge with '...'" hint verbatim; the IAM5 id embeds the
+    // cross-stack table export (hence `ApertureData-${stage}` + the table's logical-id hash) — if the data
+    // stack's table construct id changes, synth re-flags IAM5 and this must be updated. Revisit when #2359
+    // lands a real fix. See docs/CICD_HARDENING.md #2.
+    fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+      'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
+        'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy for the BFF.',
+      [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttTableCD117FA1ArnE2C8C204/index/*]`]:
+        'grantReadWriteData needs index/* to query the single-table GSI; the table itself is scoped.',
+    });
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
     const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
 
@@ -63,6 +80,7 @@ export class ApertureAppStack extends Stack {
     const bucket = new s3.Bucket(this, 'Site', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true, // deny non-TLS requests (adds the aws:SecureTransport bucket policy)
       removalPolicy: RemovalPolicy.DESTROY, // just built assets — re-syncable
       autoDeleteObjects: true,
     });
@@ -130,5 +148,13 @@ export class ApertureAppStack extends Stack {
     new CfnOutput(this, 'SiteBucket', { value: bucket.bucketName });
     new CfnOutput(this, 'DistributionId', { value: distribution.distributionId });
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId });
+    // Direct Function URL — the post-deploy synthetic check hits this to prove the origin-secret gate
+    // rejects a headerless request (through CloudFront the viewer can't set/unset that header).
+    new CfnOutput(this, 'FunctionUrl', { value: fnUrl.url });
+
+    // Runtime watch on the BFF, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
+    // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
+    // worth it, and the synthetic check already proves the edge wiring at deploy time).
+    if (stage === 'prod') new Monitoring(this, 'Monitoring', { fn, timeout: fnTimeout });
   }
 }

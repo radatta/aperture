@@ -3,6 +3,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, it } from 'vitest';
 import { ApertureDataStack } from './lib/data-stack';
 import { ApertureAppStack } from './lib/app-stack';
+import { ApertureBillingStack } from './lib/billing-stack';
 
 // Assert the synthesized CloudFormation, with asset bundling skipped so the tests are fast + offline
 // (the real esbuild bundling is exercised by `cdk synth`). One app so the cross-stack refs resolve.
@@ -140,5 +141,52 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       CallbackURLs: Match.arrayWith(['https://dev.aperture.rahuldatta.dev']),
     });
+  });
+});
+
+describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
+  const build = (stage: string) => {
+    const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
+    const env = { account: '111111111111', region: 'us-west-1' };
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env });
+    const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
+      stage,
+      env,
+      table: data.table,
+      userPool: data.userPool,
+      originSecret: 'test-origin-secret',
+    });
+    return Template.fromStack(appStack);
+  };
+
+  it('adds three Lambda alarms + an SNS email topic in prod', () => {
+    const t = build('prod');
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+    t.resourceCountIs('AWS::SNS::Topic', 1);
+    t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
+  });
+
+  it('adds no alarms or SNS topic in dev (prod-only)', () => {
+    const t = build('dev');
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 0);
+    t.resourceCountIs('AWS::SNS::Topic', 0);
+  });
+});
+
+describe('ApertureBillingStack (hand-deployed cost guard)', () => {
+  const app = new App();
+  const t = Template.fromStack(new ApertureBillingStack(app, 'ApertureBilling', { env: { region: 'us-east-1' } }));
+
+  it('has a monthly cost budget with email notifications', () => {
+    t.hasResourceProperties('AWS::Budgets::Budget', {
+      Budget: Match.objectLike({ BudgetType: 'COST', TimeUnit: 'MONTHLY' }),
+    });
+  });
+
+  // No CfnAnomalyMonitor: AWS auto-creates a default account-wide SERVICE monitor (one per dimension max),
+  // so a second one fails with AlreadyExists. The budget is the sole cost guard here.
+  it('does not create a Cost Anomaly monitor (reuses the account default)', () => {
+    t.resourceCountIs('AWS::CE::AnomalyMonitor', 0);
+    t.resourceCountIs('AWS::CE::AnomalySubscription', 0);
   });
 });

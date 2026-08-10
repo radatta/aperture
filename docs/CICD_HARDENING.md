@@ -12,8 +12,10 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 ## Status
 
-- **Batch 1 wired (2026-08-10):** #3 gitleaks (`.github/workflows/gitleaks.yml`), #4 Dependabot (`.github/dependabot.yml`), #1 ntfy notify job (`.github/workflows/deploy.yml`). `gitleaks-action` tag confirmed **`v3`** (v3.0.0). The ntfy job **no-ops until `NTFY_TOPIC` is set**, so it's safe already-landed; it activates once the operator creates the topic + adds the secret.
-- **Pending:** #6 health check, #5 CloudWatch alarms, #2 cdk-nag, #7 budget (hand-deploy). Plus the manual prereqs below.
+- **Batch 1 wired (2026-08-10):** #3 gitleaks (`.github/workflows/gitleaks.yml`), #4 Dependabot (`.github/dependabot.yml`), #1 ntfy notify job (`.github/workflows/deploy.yml`). `gitleaks-action` tag confirmed **`v3`** (v3.0.0). The ntfy job **no-ops until `NTFY_TOPIC` is set** — activates once the operator creates the topic + adds the secret (done: secret set, subscribed on desktop).
+- **Batch 2 wired (2026-08-10):** #6 health check (`/api/health` route + `FunctionUrl` output + `publish-frontend.mjs` invalidation-wait + `health-check.mjs` + deploy.yml steps), #5 CloudWatch alarms (`monitoring.ts`, prod-only, **Option B** — Lambda alarms only, no CloudFront), #7 billing stack (`billing-stack.ts`, hand-deploy), #2 cdk-nag (`cdk-nag@3.0.2`, AwsSolutions pack, wired in `bin/aperture.ts`; suppressions + two enforce-SSL fixes; see the workaround note in item 2). All synth clean on dev+prod; tests + typecheck + lint green.
+- **Still needs the operator (manual):** confirm the two SNS **email** subscriptions (alarms via first prod deploy + budget via the hand-deploy) to `rahul3datta@gmail.com`; flip the AWS **root billing toggle** then `cdk deploy ApertureBilling -c billing=true`.
+- **Billing stack fix (2026-08-10):** first hand-deploy hit `AlreadyExists` on the CE anomaly monitor (AWS default SERVICE monitor already exists; one per dimension). Dropped both CE resources — budget is the sole guard. See item 7.
 
 ## Cost — all $0
 
@@ -25,7 +27,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 | 4 | Dependabot | $0 | GitHub-native, runs off GitHub infra (not your Actions minutes) |
 | 5 | CloudWatch alarms | $0 | ≤10 alarms/month free (we use 3–4); SNS email 1,000/month free |
 | 6 | Post-deploy synthetic check | $0 | `curl` in CI; extra Lambda/CloudFront hits are free-tier / fractions of a cent |
-| 7 | Budget + anomaly | $0 | Notification-only budgets free & unlimited; Cost Anomaly Detection free |
+| 7 | Budget | $0 | Notification-only budgets free & unlimited (anomaly monitor dropped — see item 7) |
 
 **The only things that would cost money are deliberately out of scope:** auto-remediating "budget actions" ($0.10/day), CloudWatch Synthetics canaries (~$10/mo), and any alarm past the 10-free tier. GitHub Actions free private-repo tier is 2,000 min/month — these add ~a couple minutes per run.
 
@@ -73,7 +75,9 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 **Files:** `cdk/package.json` (add `cdk-nag` devDep — **dependency to justify first**), `cdk/src/bin/aperture.ts` (wire at the `App` created ~line 27), inline `NagSuppressions` in `app-stack.ts` / data stack / the new monitoring construct.
 
-- **First step:** confirm the v3 validation-plugin API in the current `cdk-nag@3.0.2` README (don't hardcode from memory).
+- **API (confirmed, v3.0.2):** `Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }))` (v3 dropped the classic `Aspects.of().add()`), suppress with `Validations.of(construct).acknowledge({ id, reason })`. Base rule ids work for non-granular findings.
+- **⚠️ Granular IAM4/IAM5 suppression — upstream bug workaround.** `acknowledge()` splits the id on `::` and rejects granular finding ids that embed an ARN (IAM4 managed-policy ARN, IAM5 resource ARN) — an open cdk-nag v3 bug ([cdklabs/cdk-nag#2359](https://github.com/cdklabs/cdk-nag/issues/2359), [#2351](https://github.com/cdklabs/cdk-nag/issues/2351)). Base rule ids are *accepted but don't suppress* granular findings. Workaround (in `app-stack.ts`): write the acknowledgment metadata cdk-nag reads directly — `fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, { '<exact finding id from synth>': reason })`. The IAM5 id embeds the cross-stack table export (`ApertureData-${stage}:ExportsOutput…TableCD117FA1…/index/*`) so it's stage-interpolated and drifts if the table construct id changes (synth re-flags → update). Revisit when #2359 lands a fix. Pinned `cdk-nag` exact (`3.0.2`) so a patch can't silently change the metadata contract.
+- **Suppressions (~11) + 2 fixes:** suppressed fine-by-design — COG1/COG2/COG8 (single-user pool), IAM4/IAM5 (above), L1 (Node 22 LTS target), S1/CFR1/CFR2/CFR3 (no access logs/WAF/geo), CFR4 (default cert only in pre-domain synth). **Fixed rather than suppressed:** S10 (`enforceSSL` on the S3 bucket) and SNS3 (`enforceSSL` on the alarm topic) — genuine cheap hardening. OAC + PITR pass already → the regression guards we wanted.
 - Runs inside the existing `cdk synth` step in both deploy jobs — no workflow change.
 - Expected ~8–12 one-time suppressions, each with a real reason string: no WAF on CloudFront, no Cognito MFA/advanced security, S3 access-logging off, default viewer cert pre-domain, Lambda no-DLQ/basic-exec-role, Function URL `authType: NONE` (origin-secret gate), and the `grantReadWriteData` IAM wildcard on index ARNs (real — suppress with justification or scope down).
 - OAC ✓ and PITR ✓ should already pass — those are the regression guards worth having.
@@ -106,7 +110,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
   - each `.addAlarmAction(new cw_actions.SnsAction(topic))`
 - **Skip DynamoDB throttle alarms** (on-demand + a known CDK math-expression limitation make them not worth it).
 
-### DECISION NEEDED — CloudFront 5xx alarm (region split)
+### DECISION — CloudFront 5xx alarm: **Option B chosen** (skip it), 2026-08-10.
 
 - **Option A — add it (cross-region).** A dedicated `ApertureCloudFrontMonitoring-prod` stack in `aperture.ts` with `env: { region: 'us-east-1' }`, its **own** SNS topic + email subscription, a raw `Metric` (`AWS/CloudFront`, `5xxErrorRate`, `Region: 'Global'`), and `crossRegionReferences: true` on both stacks to pass `distributionId`. Cost: a **second** SNS topic + **second** email confirmation + cross-region wiring complexity.
 - **Option B — skip it (recommended).** Keep only the three Lambda alarms. Rationale: at single-user scale the extra topic/confirmation/complexity outweighs the value, and item 6's **negative-gate check already proves the origin-secret edge is enforced at deploy time** — the main edge-wiring failure this alarm would catch. Revisit if real traffic grows.
@@ -134,7 +138,8 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 - Deploy once by hand: `cdk deploy ApertureBilling -c billing=true`. The per-stage pipeline never touches it.
 - `CfnBudget`: monthly `COST`, `$1` actual → warn, `$5` **forecast** → hard warn; EMAIL subscriber `<FILL: personal email>`. Budgets are global — deploy this stack in `us-east-1` by convention (document the choice).
 - `CfnAnomalyMonitor` (`DIMENSIONAL`, `SERVICE`) + `CfnAnomalySubscription` (`IMMEDIATE`, EMAIL `<FILL: personal email>`). Free, ML-based.
-- **Root-toggle prerequisite** (see checklist): creating budgets/anomaly resources needs the root-user billing-access toggle, independent of IAM policy — which is exactly why this is a separate hand-deploy and must not enter the pipeline. Console-setup is a fine fallback if the CDK deploy is a hassle.
+- **Root-toggle prerequisite** (see checklist): creating a budget needs the root-user billing-access toggle, independent of IAM policy — which is exactly why this is a separate hand-deploy and must not enter the pipeline. Console-setup is a fine fallback if the CDK deploy is a hassle.
+- **⚠️ Anomaly monitor dropped (2026-08-10).** The first hand-deploy failed: `AWS::CE::AnomalyMonitor` → `CREATE_FAILED / AlreadyExists`. AWS auto-creates a default account-wide `SERVICE`-dimension anomaly monitor and permits **only one monitor per dimension**, so our `CfnAnomalyMonitor` (also `DIMENSIONAL/SERVICE`) collides. Fix: removed both `CfnAnomalyMonitor` + `CfnAnomalySubscription` from the stack — the `$1/$5` budget is the sole cost guard, which is plenty at single-user scale. If an anomaly email is ever wanted, attach a free alert subscription to the **existing default monitor** in the console (Cost Management → Cost Anomaly Detection → Alert subscriptions); no IaC. The `AlreadyExists` (vs `AccessDenied`) also confirmed the root billing toggle was correctly enabled.
 
 ---
 
@@ -148,6 +153,6 @@ Everything else uses the existing `aws-cdk-lib` (`aws-cloudwatch`, `aws-cloudwat
 
 ## Open items
 
-- `<FILL: personal email>` in items 5 and 7 (operator's GitHub-account email; never a work address).
-- **Item 5 CloudFront alarm: Option A vs B** — recommended B (skip); confirm before wiring.
-- Verify the exact `cdk-nag@3.0.2` v3 validation-plugin API in the README at wiring time (item 2).
+- **Operator manual steps** (blocking full activation): confirm the two SNS email subscriptions to `rahul3datta@gmail.com` (alarms fire their confirmation on the first prod deploy; budget on the hand-deploy); flip the AWS root billing-access toggle, then `cdk deploy ApertureBilling -c billing=true`.
+- **cdk-nag #2359 watch:** when the upstream granular-acknowledge bug is fixed, replace the `addMetadata` workaround in `app-stack.ts` with the normal `Validations.of(fn).acknowledge(...)`.
+- Email address is now filled (`rahul3datta@gmail.com`, personal) in `monitoring.ts` + `billing-stack.ts` — not a work address.
