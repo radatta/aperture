@@ -1,0 +1,69 @@
+// Post-deploy synthetic health check: hits the REAL public HTTPS endpoints to prove the whole
+// CloudFront → Function URL → Lambda path (and the origin-secret gate) works end-to-end — something the
+// `aws lambda invoke` smoke test can't see, since it bypasses CloudFront entirely. Reads AppUrl +
+// FunctionUrl from cdk-outputs.<stage>.json (written by `cdk deploy`). Exits non-zero on any failed check.
+// Uses Node's global fetch (Node 22) — no curl/jq. Assumes the CloudFront invalidation is already
+// complete (publish-frontend.mjs waits for it before this runs).
+// Usage: node scripts/aws/health-check.mjs [dev|prod]
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const stage = process.argv[2] ?? 'dev';
+const root = fileURLToPath(new URL('../..', import.meta.url));
+const outputs = JSON.parse(readFileSync(`${root}/cdk/cdk-outputs.${stage}.json`, 'utf8'));
+const app = outputs[`ApertureApp-${stage}`];
+if (!app?.AppUrl || !app?.FunctionUrl) throw new Error(`Missing AppUrl/FunctionUrl in cdk-outputs.${stage}.json`);
+
+const appUrl = app.AppUrl.replace(/\/$/, '');
+const fnUrl = app.FunctionUrl.replace(/\/$/, '');
+
+let failures = 0;
+const expect = (cond, msg) => {
+  if (!cond) throw new Error(msg);
+};
+const check = async (name, fn) => {
+  try {
+    await fn();
+    console.log(`  ✓ ${name}`);
+  } catch (err) {
+    failures++;
+    console.error(`  ✗ ${name} — ${err instanceof Error ? err.message : String(err)}`);
+  }
+};
+
+console.log(`\n▶ Health check ${stage} → ${appUrl}`);
+
+await check('app shell 200', async () => {
+  const r = await fetch(`${appUrl}/`);
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+});
+
+await check('manifest served as application/manifest+json', async () => {
+  const r = await fetch(`${appUrl}/manifest.webmanifest`);
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+  const ct = r.headers.get('content-type') ?? '';
+  expect(ct.includes('application/manifest+json'), `content-type was "${ct}"`);
+});
+
+await check('SPA fallback (deep route → app shell 200)', async () => {
+  const r = await fetch(`${appUrl}/some/deep/route-${stage}`);
+  expect(r.status === 200, `expected 200 (fallback to index.html), got ${r.status}`);
+});
+
+await check('edge → Lambda: CloudFront stamps origin secret → /api/health 200', async () => {
+  const r = await fetch(`${appUrl}/api/health`);
+  expect(r.status === 200, `expected 200 through CloudFront, got ${r.status}`);
+  const body = await r.json();
+  expect(body?.ok === true, `unexpected body ${JSON.stringify(body)}`);
+});
+
+await check('origin-secret gate enforced: direct Function URL, no header → 403', async () => {
+  const r = await fetch(`${fnUrl}/api/health`);
+  expect(r.status === 403, `expected 403 without the secret header, got ${r.status}`);
+});
+
+if (failures) {
+  console.error(`\n✗ health check FAILED: ${failures} check(s)\n`);
+  process.exit(1);
+}
+console.log(`\n✓ health check passed (${stage})\n`);

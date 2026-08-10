@@ -6,6 +6,11 @@ on:
   push:
     branches: [main, dev]
 
+# Serialize deploys per ref — never cancel a deploy mid-flight (a half-applied stack is worse than a queue).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write # assume the AWS deploy role via OIDC
   contents: read
@@ -36,6 +41,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need history to diff the push for the docs-only fast-path
+      # On a `dev`-branch push, require the branch to already contain main. This is the chokepoint for the
+      # merge gate: you push here to record the dev deployment that `required_deployments:[dev]` needs, then
+      # PR that same SHA to main — so if it's current with main now, the PR is inherently up to date. A stale
+      # branch fails here → the deployment is marked failed → the gate stays closed. No-op on main pushes.
+      - name: Branch is up to date with main
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor origin/main HEAD || {
+            echo "::error::dev is behind main — merge/rebase main in before pushing"; exit 1
+          }
       # Docs-only pushes skip the heavy deploy steps but the job still RUNS in the `dev` environment, so
       # GitHub still records the deployment that the `required_deployments: [dev]` ruleset needs. Anything
       # outside docs/ or a top-level *.md → full deploy. Unknown/no base → deploy (safe).
@@ -67,15 +83,26 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
+      # One synth → diff + deploy consume the same cdk.out: no double esbuild bundle, and the diff you read
+      # is byte-identical to what deploys. --no-lookups fails loudly on any (unexpected) context lookup.
+      - name: CDK synth
+        if: steps.changes.outputs.deploy == 'true'
+        run: pnpm --filter @aperture/cdk exec cdk synth ApertureData-dev ApertureApp-dev -c stage=dev --no-lookups --output cdk.out
+      - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
+        if: steps.changes.outputs.deploy == 'true'
+        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-dev ApertureApp-dev --method=change-set
       - name: Deploy dev stacks
         if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk deploy ApertureData-dev ApertureApp-dev -c stage=dev --require-approval never --outputs-file cdk-outputs.dev.json
+        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-dev ApertureApp-dev --require-approval never --outputs-file cdk-outputs.dev.json
       - name: Smoke dev
         if: steps.changes.outputs.deploy == 'true'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts dev
       - name: Publish frontend (dev)
         if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs dev
+      - name: Post-deploy health check (dev) # curls the real public URLs — proves the edge wiring + origin-secret gate
+        if: steps.changes.outputs.deploy == 'true'
+        run: node scripts/aws/health-check.mjs dev
 
   deploy-prod:
     needs: deploy-dev
@@ -118,12 +145,59 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
+      # One synth → diff + deploy consume the same cdk.out: no double esbuild bundle, and the diff you read
+      # is byte-identical to what deploys. --no-lookups fails loudly on any (unexpected) context lookup.
+      - name: CDK synth
+        if: steps.changes.outputs.deploy == 'true'
+        run: pnpm --filter @aperture/cdk exec cdk synth ApertureData-prod ApertureApp-prod -c stage=prod --no-lookups --output cdk.out
+      - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
+        if: steps.changes.outputs.deploy == 'true'
+        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-prod ApertureApp-prod --method=change-set
       - name: Deploy prod stacks
         if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk deploy ApertureData-prod ApertureApp-prod -c stage=prod --require-approval never --outputs-file cdk-outputs.prod.json
+        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-prod ApertureApp-prod --require-approval never --outputs-file cdk-outputs.prod.json
       - name: Smoke prod
         if: steps.changes.outputs.deploy == 'true'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts prod
       - name: Publish frontend (prod)
         if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs prod
+      - name: Post-deploy health check (prod) # curls the real public URLs — proves the edge wiring + origin-secret gate
+        if: steps.changes.outputs.deploy == 'true'
+        run: node scripts/aws/health-check.mjs prod
+
+  # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
+  # signal without watching the Actions tab. Runs for both main and dev pushes. Failure = high priority
+  # (breaks through), success = min priority (quiet). NTFY_TOPIC is the only access control on the public
+  # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
+  # until the secret is set, so it's safe to land before the topic exists.
+  notify:
+    needs: [check, deploy-dev, deploy-prod]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          DEV_RESULT: ${{ needs.deploy-dev.result }}
+          PROD_RESULT: ${{ needs.deploy-prod.result }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
+          # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
+          # dev-branch push, and a docs-only fast-path job still reports success (steps just no-op).
+          failed=0
+          for r in "$CHECK_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
+          done
+          body="check=$CHECK_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
+          if [ "$failed" = "1" ]; then
+            curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
+              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          else
+            curl -s -H "Title: ✅ Aperture deploy ok ($REF)" -H "Priority: min" \
+              -d "$body" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          fi

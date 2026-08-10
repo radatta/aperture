@@ -475,10 +475,10 @@ critical path; wired right before real daily use.
   app client's callbacks include the custom domain **and** the CloudFront default (redirect_uri =
   `location.origin`). `deploy.yml` passes `CERT_ARN_DEV`/`CERT_ARN_PROD` vars. Alias/cert only apply when
   the ARN is set → pre-cert deploys stay on the CloudFront domain.
-- **14.2 ACM certs** — ⏳ create in **`us-east-1`** (DNS-validated) for `aperture.rahuldatta.dev` +
-  `dev.aperture.rahuldatta.dev`; cert lives in us-east-1 while stacks are us-west-1 (ref-by-ARN). (INFRA §8)
-- **14.3 Porkbun DNS (one-time)** — ⏳ add ACM validation CNAMEs + CloudFront alias CNAMEs once; ACM
-  auto-renews while the CNAME stays. **No Route 53.** Then set the `CERT_ARN_*` GitHub vars + deploy. (INFRA §8/§11)
+- **14.2 ACM certs** — ✅ done: two us-east-1 DNS-validated certs (`aperture.rahuldatta.dev` +
+  `dev.aperture.rahuldatta.dev`), referenced by ARN via `CERT_ARN_*` GitHub vars (cert us-east-1, stacks us-west-1). (INFRA §8)
+- **14.3 DNS (one-time)** — ✅ done: validation + alias CNAMEs added at **Netlify** (rahuldatta.dev's NS
+  are delegated to Netlify/NS1, not Porkbun). ACM auto-renews while the CNAMEs stay. **No Route 53.** (INFRA §8/§11)
 - **14.4 Cognito callbacks** — ✅ wired in CDK (app client callback/logout URLs); applies on the domain deploy. (INFRA §6)
 
 **Key files:** `cdk/lib/app-stack.ts` (alias + cert ARN ref), `cdk/config/domains.ts`.

@@ -35,10 +35,37 @@ run('pnpm --filter @aperture/app build', {
   },
 });
 
-console.log(`\n▶ Syncing to s3://${app.SiteBucket}`);
-run(`aws s3 sync app/dist "s3://${app.SiteBucket}" --delete${profileFlag}`);
+const bucket = app.SiteBucket;
+console.log(`\n▶ Syncing to s3://${bucket}`);
+// Two-pass sync so the app shell can't go stale. Hashed files in assets/ are immutable → cache forever.
+run(
+  `aws s3 sync app/dist/assets "s3://${bucket}/assets" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
+);
+// Everything else (index.html, sw.js, manifest, icons) must revalidate: a cached index.html would point
+// at asset hashes the --delete already pruned → white screen. --exclude assets/* leaves the immutable
+// pass above untouched (and never deletes old hashes, so in-flight clients can still load old chunks).
+run(
+  `aws s3 sync app/dist "s3://${bucket}" --delete --exclude "assets/*" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+);
+// Pin Content-Type on the PWA files — s3 sync guesses by extension and can serve .webmanifest as
+// octet-stream (Chrome ignores it → no install). Host-independent; no-cache so SW/manifest updates
+// always revalidate at the edge.
+run(
+  `aws s3 cp app/dist/manifest.webmanifest "s3://${bucket}/manifest.webmanifest" --content-type "application/manifest+json" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+);
+run(
+  `aws s3 cp app/dist/sw.js "s3://${bucket}/sw.js" --content-type "text/javascript" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+);
 
 console.log(`\n▶ Invalidating CloudFront ${app.DistributionId}`);
-run(`aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*"${profileFlag}`);
+// Capture the invalidation id (JSON, not inherited stdout) so we can wait for it — the post-deploy health
+// check needs the edge serving the new build, not a stale cached shell.
+const invJson = execSync(
+  `aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*" --output json${profileFlag}`,
+  { cwd: root, encoding: 'utf8' },
+);
+const invalidationId = JSON.parse(invJson).Invalidation.Id;
+console.log(`  invalidation ${invalidationId} created — waiting for it to complete...`);
+run(`aws cloudfront wait invalidation-completed --distribution-id ${app.DistributionId} --id ${invalidationId}${profileFlag}`);
 
 console.log(`\n✓ Published ${stage} → ${app.AppUrl}\n`);

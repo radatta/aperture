@@ -5,6 +5,11 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs — a new push to the PR branch makes the in-flight lint/test round moot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
