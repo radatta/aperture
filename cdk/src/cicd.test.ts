@@ -21,7 +21,7 @@ describe('ApertureCicdStack', () => {
     t.resourceCountIs('Custom::AWSCDKOpenIdConnectProvider', 1);
   });
 
-  it('trusts the dev role from the dev environment + the dev/main branch refs', () => {
+  it('trusts the dev role only from the dev environment', () => {
     t.hasResourceProperties('AWS::IAM::Role', {
       RoleName: 'aperture-github-deploy-dev',
       AssumeRolePolicyDocument: Match.objectLike({
@@ -30,13 +30,10 @@ describe('ApertureCicdStack', () => {
             Action: 'sts:AssumeRoleWithWebIdentity',
             Condition: Match.objectLike({
               StringLike: {
-                // environment:dev — deploy-dev runs in the `dev` GitHub environment (ruleset gate);
-                // the branch refs are kept as a cutover superset.
-                'token.actions.githubusercontent.com:sub': [
-                  'repo:acme/aperture:environment:dev',
-                  'repo:acme/aperture:ref:refs/heads/dev',
-                  'repo:acme/aperture:ref:refs/heads/main',
-                ],
+                // environment:dev — deploy-dev always runs in the `dev` GitHub environment (on both the
+                // dev- and main-branch pushes), so that's the only trusted sub. The cutover ref subs were
+                // pruned 2026-08.
+                'token.actions.githubusercontent.com:sub': ['repo:acme/aperture:environment:dev'],
               },
             }),
           }),

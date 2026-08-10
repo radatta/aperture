@@ -35,8 +35,27 @@ run('pnpm --filter @aperture/app build', {
   },
 });
 
-console.log(`\n▶ Syncing to s3://${app.SiteBucket}`);
-run(`aws s3 sync app/dist "s3://${app.SiteBucket}" --delete${profileFlag}`);
+const bucket = app.SiteBucket;
+console.log(`\n▶ Syncing to s3://${bucket}`);
+// Two-pass sync so the app shell can't go stale. Hashed files in assets/ are immutable → cache forever.
+run(
+  `aws s3 sync app/dist/assets "s3://${bucket}/assets" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
+);
+// Everything else (index.html, sw.js, manifest, icons) must revalidate: a cached index.html would point
+// at asset hashes the --delete already pruned → white screen. --exclude assets/* leaves the immutable
+// pass above untouched (and never deletes old hashes, so in-flight clients can still load old chunks).
+run(
+  `aws s3 sync app/dist "s3://${bucket}" --delete --exclude "assets/*" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+);
+// Pin Content-Type on the PWA files — s3 sync guesses by extension and can serve .webmanifest as
+// octet-stream (Chrome ignores it → no install). Host-independent; no-cache so SW/manifest updates
+// always revalidate at the edge.
+run(
+  `aws s3 cp app/dist/manifest.webmanifest "s3://${bucket}/manifest.webmanifest" --content-type "application/manifest+json" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+);
+run(
+  `aws s3 cp app/dist/sw.js "s3://${bucket}/sw.js" --content-type "text/javascript" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+);
 
 console.log(`\n▶ Invalidating CloudFront ${app.DistributionId}`);
 run(`aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*"${profileFlag}`);
