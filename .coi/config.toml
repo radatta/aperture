@@ -44,6 +44,3 @@ rate_limit_per_second = 100
 dns_query_threshold   = 100
 log_dns_queries       = true
 # lima_host = "incus"   # [VERIFY empirically] enable Mac network monitoring; test in a throwaway shell first
-
-[defaults]
-forward_env = ["CLAUDE_CODE_OAUTH_TOKEN"]   # forwarded from host env at launch; value never stored in-file
