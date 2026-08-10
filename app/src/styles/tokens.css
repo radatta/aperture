@@ -1,37 +1,48 @@
 /* Palette derived from localNotes/preview.webp: a dusky teal-green ground, soft off-white ink,
    a seafoam translucent highlight for active states, and one warm gold accent (the wingtips).
-   Dark is the identity anchor (:root). Light is derived. ThemeProvider always stamps
-   data-theme="dark|light" (resolving "auto" against the OS in JS), so no media query is needed. */
+   Dark is the identity anchor (:root). Light is derived — the "lights-on" version of the SAME
+   family, never a white app (PRODUCT §5). ThemeProvider always stamps data-theme="dark|light"
+   (resolving "auto" in JS), so no media query is needed. */
 
 :root,
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --surface: #33453f; /* app ground */
-  --panel: #3b4d47; /* cards / rows */
-  --panel-2: #45574f; /* raised */
+  --surface: #2f423c; /* app ground — a touch deeper so panels can lift off it */
+  --panel: #3a4d47; /* cards / rows */
+  --panel-2: #45584f; /* raised — dock, active segment ground */
   --ink: #e8ece9; /* primary text */
-  --ink-muted: #9fb0a9; /* secondary / counts */
-  --ink-subtle: #7a8d86; /* tertiary */
-  --line: rgba(255, 255, 255, 0.09); /* hairlines */
-  --teal: #7fb2a2; /* active / links */
-  --teal-soft: rgba(127, 178, 162, 0.16); /* active row fill */
-  --gold: #cfab6b; /* the accent */
-  --gold-soft: rgba(207, 171, 107, 0.16);
-  --danger: #d98a72; /* soft, never alarming */
+  --ink-muted: #a3b4ad; /* secondary / counts */
+  --ink-subtle: #7d908a; /* tertiary */
+  --line: rgba(255, 255, 255, 0.1); /* hairlines */
+  --line-strong: rgba(255, 255, 255, 0.2); /* empty habit cells, input borders */
+  --teal: #86b9a8; /* active / links */
+  --teal-soft: rgba(134, 185, 168, 0.18); /* active row fill */
+  --gold: #d4b075; /* the accent */
+  --gold-soft: rgba(212, 176, 117, 0.18);
+  --danger: #dd9078; /* soft, never alarming */
+
+  --ring: rgba(134, 185, 168, 0.75); /* focus-visible */
+  --shadow-dock: 0 -1px 0 rgba(255, 255, 255, 0.05), 0 8px 30px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --surface: #eef1ec;
-  --panel: #ffffff;
-  --panel-2: #f6f8f4;
-  --ink: #21302b;
-  --ink-muted: #566661;
-  --ink-subtle: #82918b;
-  --line: rgba(18, 38, 32, 0.1);
-  --teal: #3c6f61;
-  --teal-soft: rgba(60, 111, 97, 0.12);
-  --gold: #9c7a2f;
-  --gold-soft: rgba(156, 122, 47, 0.14);
-  --danger: #b4553a;
+  --surface: #e6ebe4; /* pale warm off-white WITH the sage tint — not white */
+  --panel: #f4f7f1;
+  --panel-2: #fbfcf9;
+  --ink: #1d2b26;
+  --ink-muted: #4e605a;
+  --ink-subtle: #78877f;
+  --line: rgba(18, 38, 32, 0.12);
+  --line-strong: rgba(18, 38, 32, 0.26);
+  --teal: #35685a;
+  --teal-soft: rgba(53, 104, 90, 0.13);
+  --gold: #8d6b22;
+  --gold-soft: rgba(141, 107, 34, 0.15);
+  --danger: #a8492e;
+
+  --ring: rgba(53, 104, 90, 0.7);
+  --shadow-dock: 0 -1px 0 rgba(18, 38, 32, 0.04), 0 8px 30px rgba(18, 38, 32, 0.12);
+  --shadow-pop: 0 8px 24px rgba(18, 38, 32, 0.16);
 }

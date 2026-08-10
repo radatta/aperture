@@ -78,3 +78,56 @@ export function CheckIcon(p: IconProps) {
     </Svg>
   );
 }
+
+// Capture's commit affordance — a paper-plane, the one universally-read "send this" mark.
+export function SendIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M21 3 10.5 13.5M21 3l-6.5 18-4-8.5L2 8.5 21 3Z" />
+    </Svg>
+  );
+}
+
+// Overflow — the secondary actions a row keeps out of sight until asked.
+export function MoreIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="5" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+// Inline-edit cue on log rows — nothing else says "this line is editable".
+export function PencilIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z" />
+    </Svg>
+  );
+}
+
+export function ArrowUpIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </Svg>
+  );
+}
+
+export function ArrowDownIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 5v14M19 12l-7 7-7-7" />
+    </Svg>
+  );
+}
+
+export function PlusIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
