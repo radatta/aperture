@@ -159,3 +159,39 @@ jobs:
       - name: Publish frontend (prod)
         if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs prod
+
+  # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
+  # signal without watching the Actions tab. Runs for both main and dev pushes. Failure = high priority
+  # (breaks through), success = min priority (quiet). NTFY_TOPIC is the only access control on the public
+  # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
+  # until the secret is set, so it's safe to land before the topic exists.
+  notify:
+    needs: [check, deploy-dev, deploy-prod]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          DEV_RESULT: ${{ needs.deploy-dev.result }}
+          PROD_RESULT: ${{ needs.deploy-prod.result }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
+          # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
+          # dev-branch push, and a docs-only fast-path job still reports success (steps just no-op).
+          failed=0
+          for r in "$CHECK_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
+          done
+          body="check=$CHECK_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
+          if [ "$failed" = "1" ]; then
+            curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
+              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          else
+            curl -s -H "Title: ✅ Aperture deploy ok ($REF)" -H "Priority: min" \
+              -d "$body" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          fi
