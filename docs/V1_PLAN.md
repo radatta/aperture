@@ -451,11 +451,14 @@ be called directly. Locked by INFRA §4.
 **Depends on:** Phase 12. **Implements:** INFRA §9, CONVENTIONS (pnpm/Vitest in CI).
 **Trade-off:** manual approval before prod is the guardrail on the `RETAIN` data stack — an app bug
 can't silently reach real data.
-**Status: code COMPLETE (2026-08), not yet live.** Roles (assume-bootstrap-roles), workflows, and smoke
-runner built + green. Prod trust bound to the `prod` GitHub environment (creds gated by approval).
-Remaining is account/GitHub setup, all on the user: push repo + deploy `ApertureCicd`
-(`-c githubRepo=owner/repo`), set repo vars (role ARNs, region) + secrets (`ORIGIN_SECRET_DEV/PROD`),
-create the `prod` environment with a required reviewer.
+**Status: LIVE (2026-08).** Roles (assume-bootstrap-roles), workflows, and smoke runner built + green;
+dev + prod deployed. Prod trust bound to the `prod` GitHub environment (scopes the prod role to
+`environment:prod` jobs). Account/GitHub setup done: `ApertureCicd` deployed, repo vars (role ARNs,
+region) + secrets (`ORIGIN_SECRET_DEV/PROD`) set, `prod` environment created.
+**⚠️ No approval pause on this repo:** required-reviewer protection needs a public repo or Pro/Team/
+Enterprise — unavailable on a free private repo — so deploy-prod runs automatically after deploy-dev on a
+`main` push. Use the **`dev` branch** as the practical gate (dev-only deploy → validate → then push
+`main`). See INFRA §9 "Approval-gate caveat." Revisit if the repo goes public / onto a paid plan.
 
 ---
 

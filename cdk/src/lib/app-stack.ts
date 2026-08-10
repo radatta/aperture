@@ -126,6 +126,7 @@ export class ApertureAppStack extends Stack {
     // for a single-client pool, and consuming it here would form a client→CloudFront→Lambda→client cycle.
 
     new CfnOutput(this, 'AppUrl', { value: appUrl }); // custom domain if set, else CloudFront; also the API base (/api/* same origin)
+    new CfnOutput(this, 'CloudFrontDomain', { value: distribution.distributionDomainName }); // alias-CNAME target for the custom domain
     new CfnOutput(this, 'SiteBucket', { value: bucket.bucketName });
     new CfnOutput(this, 'DistributionId', { value: distribution.distributionId });
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId });
