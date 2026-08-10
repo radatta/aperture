@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_DEV }}
+      APERTURE_CERT_ARN: ${{ vars.CERT_ARN_DEV }} # us-east-1 ACM cert ARN; unset → no custom-domain alias
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -56,6 +57,7 @@ jobs:
     environment: prod # the approval gate — also what scopes the prod OIDC subject
     env:
       APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_PROD }}
+      APERTURE_CERT_ARN: ${{ vars.CERT_ARN_PROD }} # us-east-1 ACM cert ARN; unset → no custom-domain alias
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

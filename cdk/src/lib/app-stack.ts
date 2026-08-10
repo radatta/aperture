@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import { AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
@@ -16,6 +17,8 @@ export interface AppStackProps extends StackProps {
   table: dynamodb.Table;
   userPool: cognito.UserPool;
   originSecret: string; // CloudFront→Lambda origin-lockdown token (anti-abuse; JWT is the real gate)
+  domainName?: string; // custom-domain alias for CloudFront (Phase 14). Unset → CloudFront default domain only.
+  certificateArn?: string; // us-east-1 ACM cert ARN for domainName; required whenever domainName is set.
 }
 
 const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', import.meta.url));
@@ -28,7 +31,13 @@ const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', impo
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
-    const { stage, table, userPool, originSecret } = props;
+    const { stage, table, userPool, originSecret, domainName, certificateArn } = props;
+    // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,
+    // so deploys never touch DNS/certs. Absent until the domain step is done → CloudFront default domain.
+    const certificate =
+      domainName && certificateArn
+        ? acm.Certificate.fromCertificateArn(this, 'SiteCert', certificateArn)
+        : undefined;
 
     // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
     const fn = new NodejsFunction(this, 'Bff', {
@@ -67,6 +76,7 @@ export class ApertureAppStack extends Stack {
 
     const distribution = new cloudfront.Distribution(this, 'Cdn', {
       defaultRootObject: 'index.html',
+      ...(certificate && domainName ? { domainNames: [domainName], certificate } : {}),
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
@@ -92,8 +102,13 @@ export class ApertureAppStack extends Stack {
       ],
     });
 
-    // SPA app client (PKCE, no secret). Callback = this env's CloudFront URL (custom domain added later).
-    const appUrl = `https://${distribution.distributionDomainName}`;
+    // SPA app client (PKCE, no secret). redirect_uri is window.location.origin (AuthProvider), so EVERY
+    // origin the app can be served from must be a registered callback: the custom domain (when set) AND
+    // the CloudFront default (still directly reachable). appUrl — the CfnOutput / CI's canonical URL — is
+    // the custom domain when present, else CloudFront.
+    const cfUrl = `https://${distribution.distributionDomainName}`;
+    const appUrl = domainName ? `https://${domainName}` : cfUrl;
+    const oauthUrls = domainName ? [appUrl, cfUrl] : [cfUrl];
     const client = new cognito.UserPoolClient(this, 'AppClient', {
       userPool,
       userPoolClientName: `aperture-app-${stage}`,
@@ -103,14 +118,14 @@ export class ApertureAppStack extends Stack {
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
-        callbackUrls: [appUrl],
-        logoutUrls: [appUrl],
+        callbackUrls: oauthUrls,
+        logoutUrls: oauthUrls,
       },
     });
     // NB: the Lambda deliberately does NOT take the client id — verifying against the pool is enough
     // for a single-client pool, and consuming it here would form a client→CloudFront→Lambda→client cycle.
 
-    new CfnOutput(this, 'AppUrl', { value: appUrl }); // CloudFront domain; also the API base (/api/* same origin)
+    new CfnOutput(this, 'AppUrl', { value: appUrl }); // custom domain if set, else CloudFront; also the API base (/api/* same origin)
     new CfnOutput(this, 'SiteBucket', { value: bucket.bucketName });
     new CfnOutput(this, 'DistributionId', { value: distribution.distributionId });
     new CfnOutput(this, 'UserPoolClientId', { value: client.userPoolClientId });

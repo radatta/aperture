@@ -71,8 +71,17 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 
 - Prod `aperture.rahuldatta.dev` · dev `dev.aperture.rahuldatta.dev`. DNS at **Porkbun** (external).
 - **One-time, $0, no recurring work:** create ACM certs in **`us-east-1`** (DNS validation), add the validation CNAMEs in Porkbun once, add the CloudFront alias CNAMEs once. ACM **auto-renews** DNS-validated certs while the CNAME stays — no per-deploy, no per-renewal work.
-- **Reference certs by ARN in CDK** (don't have CDK create them) → deploys never touch DNS/certs.
+- **Reference certs by ARN in CDK** (don't have CDK create them) → deploys never touch DNS/certs. The
+  ARN comes from `APERTURE_CERT_ARN` (GitHub **var** `CERT_ARN_DEV`/`CERT_ARN_PROD` per stage), read in
+  `cdk/src/config/domains.ts` alongside the committed domain names; the app stack takes `domainName` +
+  `certificateArn` props and adds the alias + cert to CloudFront only when both are present (else stays
+  on the CloudFront default domain, so pre-domain deploys are unaffected).
+- **Region note:** the cert lives in **`us-east-1`** (CloudFront's hard requirement) even though the
+  stacks deploy to **`us-west-1`** — referencing by ARN makes the split a non-issue.
 - Not on the critical path — wire it right before real daily use.
+- **Status (2026-08):** CDK wiring is in place (`domains.ts`, app-stack alias/cert, deploy.yml cert-ARN
+  vars, tests). Remaining ops steps: create the two us-east-1 certs, add the Porkbun validation + alias
+  CNAMEs, set the `CERT_ARN_*` GitHub vars, deploy.
 
 ## 9. CI/CD — GitHub Actions, OIDC
 
