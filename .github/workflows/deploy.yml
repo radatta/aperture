@@ -28,26 +28,53 @@ jobs:
   deploy-dev:
     needs: check
     runs-on: ubuntu-latest
+    environment: dev # records a GitHub deployment → satisfies the `required_deployments: [dev]` ruleset on main
     env:
       APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_DEV }}
       APERTURE_CERT_ARN: ${{ vars.CERT_ARN_DEV }} # us-east-1 ACM cert ARN; unset → no custom-domain alias
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # need history to diff the push for the docs-only fast-path
+      # Docs-only pushes skip the heavy deploy steps but the job still RUNS in the `dev` environment, so
+      # GitHub still records the deployment that the `required_deployments: [dev]` ruleset needs. Anything
+      # outside docs/ or a top-level *.md → full deploy. Unknown/no base → deploy (safe).
+      - name: Detect deployable changes
+        id: changes
+        run: |
+          base="${{ github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"; echo "No usable base — deploying."; exit 0
+          fi
+          changed=$(git diff --name-only "$base" "${{ github.sha }}")
+          echo "Changed files:"; echo "$changed"
+          if printf '%s\n' "$changed" | grep -qvE '^(docs/|[^/]*\.md)$'; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"; echo "Docs-only — skipping deploy (deployment still recorded)."
+          fi
       - uses: pnpm/action-setup@v6
+        if: steps.changes.outputs.deploy == 'true'
       - uses: actions/setup-node@v7
+        if: steps.changes.outputs.deploy == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.changes.outputs.deploy == 'true'
       - uses: aws-actions/configure-aws-credentials@v6
+        if: steps.changes.outputs.deploy == 'true'
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy dev stacks
+        if: steps.changes.outputs.deploy == 'true'
         run: pnpm --filter @aperture/cdk exec cdk deploy ApertureData-dev ApertureApp-dev -c stage=dev --require-approval never --outputs-file cdk-outputs.dev.json
       - name: Smoke dev
+        if: steps.changes.outputs.deploy == 'true'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts dev
       - name: Publish frontend (dev)
+        if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs dev
 
   deploy-prod:
@@ -60,19 +87,43 @@ jobs:
       APERTURE_CERT_ARN: ${{ vars.CERT_ARN_PROD }} # us-east-1 ACM cert ARN; unset → no custom-domain alias
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # need history to diff the push for the docs-only fast-path
+      # Same docs-only fast-path as deploy-dev: a docs-only merge to main skips the heavy prod steps.
+      - name: Detect deployable changes
+        id: changes
+        run: |
+          base="${{ github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"; echo "No usable base — deploying."; exit 0
+          fi
+          changed=$(git diff --name-only "$base" "${{ github.sha }}")
+          echo "Changed files:"; echo "$changed"
+          if printf '%s\n' "$changed" | grep -qvE '^(docs/|[^/]*\.md)$'; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"; echo "Docs-only — skipping prod deploy."
+          fi
       - uses: pnpm/action-setup@v6
+        if: steps.changes.outputs.deploy == 'true'
       - uses: actions/setup-node@v7
+        if: steps.changes.outputs.deploy == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.changes.outputs.deploy == 'true'
       - uses: aws-actions/configure-aws-credentials@v6
+        if: steps.changes.outputs.deploy == 'true'
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
           aws-region: ${{ vars.AWS_REGION }}
       - name: Deploy prod stacks
+        if: steps.changes.outputs.deploy == 'true'
         run: pnpm --filter @aperture/cdk exec cdk deploy ApertureData-prod ApertureApp-prod -c stage=prod --require-approval never --outputs-file cdk-outputs.prod.json
       - name: Smoke prod
+        if: steps.changes.outputs.deploy == 'true'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts prod
       - name: Publish frontend (prod)
+        if: steps.changes.outputs.deploy == 'true'
         run: node scripts/aws/publish-frontend.mjs prod
