@@ -20,3 +20,13 @@ export function recentWeeks(today: string, n: number): string[][] {
 export function countIn(dates: Set<string>, days: string[]): number {
   return days.reduce((n, d) => n + (dates.has(d) ? 1 : 0), 0);
 }
+
+// "Aug 4" for the Monday that opens a calendar row — four unlabelled bands of squares give no
+// answer to "which week am I looking at".
+export function weekLabel(mondayKey: string): string {
+  const [, m, d] = mondayKey.split('-');
+  const month = MONTHS[Number(m) - 1] ?? '';
+  return `${month} ${Number(d)}`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

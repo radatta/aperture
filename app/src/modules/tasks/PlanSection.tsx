@@ -84,7 +84,9 @@ export function PlanSection() {
         </Text>
         {plannedRows.length === 0 ? (
           <Text tone="subtle" size="sm">
-            Nothing planned yet — pull something in from the backlog below.
+            {backlog.length > 0
+              ? 'Nothing planned yet — pull something in from the backlog below.'
+              : 'Nothing planned, and the backlog is empty. Capture a task from the bar below to start.'}
           </Text>
         ) : (
           plannedRows.map(({ plan, task }) => (
@@ -115,17 +117,24 @@ export function PlanSection() {
         </Text>
         {backlog.length === 0 ? (
           <Text tone="subtle" size="sm">
-            Backlog is clear.
+            Backlog is clear — nothing waiting on you.
           </Text>
         ) : (
           backlog.map((task) => (
-            <Card key={task.id}>
+            <Card key={task.id} className="px-3.5 py-3">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex min-w-0 flex-col gap-0.5">
                   <Text weight="medium" className="truncate">
                     {task.title}
                   </Text>
-                  <CategoryTag categoryId={task.categoryId} />
+                  <div className="flex items-center gap-2">
+                    <CategoryTag categoryId={task.categoryId} />
+                    {task.estimateMin != null && (
+                      <Text size="xs" tone="muted" tabular>
+                        {fmtDuration(task.estimateMin)} est
+                      </Text>
+                    )}
+                  </div>
                 </div>
                 <Button size="sm" onClick={() => addToDay(task.id)}>
                   Add to today
@@ -139,6 +148,11 @@ export function PlanSection() {
   );
 }
 
+// The typical shapes of a day. The over-scoping catch only fires once capacity is set, and an
+// empty number box asking for a decimal is the most skippable control on the page — one tap gets
+// you to the number that makes the whole morning pass work.
+const CAPACITY_PRESETS = [2, 4, 6, 8];
+
 // Manual hours-available (v1 capacity is a number, not calendar-derived). Saves on blur/Enter.
 function CapacityField({
   initial,
@@ -150,18 +164,39 @@ function CapacityField({
   const [value, setValue] = useState(initial?.toString() ?? '');
   useEffect(() => setValue(initial?.toString() ?? ''), [initial]);
   const commit = () => onSave(value === '' ? null : Number(value));
+
+  function pick(h: number) {
+    setValue(String(h));
+    onSave(h);
+  }
+
   return (
-    <Field
-      label="Hours available today"
-      type="number"
-      min={0}
-      step={0.5}
-      inputMode="decimal"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => e.key === 'Enter' && commit()}
-      className="w-40"
-    />
+    <div className="flex flex-wrap items-end gap-3">
+      <Field
+        label="Hours available today"
+        type="number"
+        min={0}
+        step={0.5}
+        inputMode="decimal"
+        placeholder="—"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && commit()}
+        className="w-32"
+      />
+      <div className="flex gap-1.5 pb-0.5">
+        {CAPACITY_PRESETS.map((h) => (
+          <Button
+            key={h}
+            variant={Number(value) === h ? 'primary' : 'ghost'}
+            size="sm"
+            onClick={() => pick(h)}
+          >
+            {h}h
+          </Button>
+        ))}
+      </div>
+    </div>
   );
 }

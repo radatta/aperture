@@ -25,13 +25,19 @@ export function InboxPage() {
         Inbox
       </Text>
       {ideas.length === 0 ? (
-        <Text tone="subtle" size="sm">
-          Inbox is clear. Capture an idea from the bar below (switch the toggle to Idea).
-        </Text>
+        <div className="flex flex-col gap-1">
+          <Text tone="muted" size="sm">
+            Inbox is clear.
+          </Text>
+          <Text tone="subtle" size="sm">
+            Switch the bar below to Idea and anything half-formed lands here, to be sorted whenever
+            you feel like it.
+          </Text>
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
           {ideas.map((idea) => (
-            <Card key={idea.id}>
+            <Card key={idea.id} className="px-3.5 py-3">
               <div className="flex items-start justify-between gap-3">
                 <Text className="min-w-0 flex-1">{idea.text}</Text>
                 <div className="flex shrink-0 flex-wrap justify-end gap-1.5">

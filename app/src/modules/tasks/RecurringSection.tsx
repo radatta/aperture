@@ -6,6 +6,7 @@ import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
+import { PlusIcon } from '../../components/icons';
 import { useCategories } from '../../data/hooks/useCategories';
 import { useDeactivateSeries, useSeries, useUpsertSeries } from '../../data/hooks/useSeries';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -68,6 +69,7 @@ function SeriesForm() {
   const { data: cats = [] } = useCategories();
   const upsert = useUpsertSeries();
 
+  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [kind, setKind] = useState<Kind>('weekdays');
   const [interval, setInterval] = useState('2');
@@ -93,6 +95,19 @@ function SeriesForm() {
     });
     setTitle('');
     setEstimate('');
+    setOpen(false);
+  }
+
+  // Collapsed by default, same reasoning as the habit form: the tab's job is to show what already
+  // recurs, not to greet you with a six-control form.
+  if (!open) {
+    return (
+      <div>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(true)} className="gap-1.5">
+          <PlusIcon size={15} /> New recurring task
+        </Button>
+      </div>
+    );
   }
 
   return (
@@ -173,9 +188,12 @@ function SeriesForm() {
             })}
           </div>
         )}
-        <div>
+        <div className="flex gap-2">
           <Button size="sm" onClick={create} disabled={!title.trim() || upsert.isPending}>
             Add series
+          </Button>
+          <Button variant="quiet" size="sm" onClick={() => setOpen(false)}>
+            Cancel
           </Button>
         </div>
       </div>

@@ -27,9 +27,15 @@ export function BacklogSection() {
           Backlog
         </Text>
         {backlog.length === 0 ? (
-          <Text tone="subtle" size="sm">
-            Backlog is clear. Capture a task from the bar below to add one.
-          </Text>
+          <div className="flex flex-col gap-1">
+            <Text tone="muted" size="sm">
+              Backlog is clear.
+            </Text>
+            <Text tone="subtle" size="sm">
+              Switch the bar below to Task and type a title — capture never asks for an estimate;
+              you scope it later, in the morning pass.
+            </Text>
+          </div>
         ) : (
           backlog.map((t) => <TaskCard key={t.id} task={t} />)
         )}
