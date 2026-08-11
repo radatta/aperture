@@ -14,7 +14,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 - **Batch 1 wired (2026-08-10):** #3 gitleaks (`.github/workflows/gitleaks.yml`), #4 Dependabot (`.github/dependabot.yml`), #1 ntfy notify job (`.github/workflows/deploy.yml`). `gitleaks-action` tag confirmed **`v3`** (v3.0.0). The ntfy job **no-ops until `NTFY_TOPIC` is set** — activates once the operator creates the topic + adds the secret (done: secret set, subscribed on desktop).
 - **Batch 2 wired (2026-08-10):** #6 health check (`/api/health` route + `FunctionUrl` output + `publish-frontend.mjs` invalidation-wait + `health-check.mjs` + deploy.yml steps), #5 CloudWatch alarms (`monitoring.ts`, prod-only, **Option B** — Lambda alarms only, no CloudFront), #7 billing stack (`billing-stack.ts`, hand-deploy), #2 cdk-nag (`cdk-nag@3.0.2`, AwsSolutions pack, wired in `bin/aperture.ts`; suppressions + two enforce-SSL fixes; see the workaround note in item 2). All synth clean on dev+prod; tests + typecheck + lint green.
-- **Still needs the operator (manual):** confirm the two SNS **email** subscriptions (alarms via first prod deploy + budget via the hand-deploy) to `rahul3datta@gmail.com`; flip the AWS **root billing toggle** then `cdk deploy ApertureBilling -c billing=true`.
+- **Still needs the operator (manual):** confirm the **one** SNS **email** subscription — the prod alarm topic (`monitoring.ts`), which fires its confirmation on the first prod deploy — to `rahul3datta@gmail.com`. The budget (`billing-stack.ts`) uses a **direct** `EMAIL` subscriber, **not** SNS, so it needs **no** confirmation and emails on threshold. Flip the AWS **root billing toggle** then `cdk deploy ApertureBilling -c billing=true`.
 - **Billing stack fix (2026-08-10):** first hand-deploy hit `AlreadyExists` on the CE anomaly monitor (AWS default SERVICE monitor already exists; one per dimension). Dropped both CE resources — budget is the sole guard. See item 7.
 
 ## Cost — all $0
@@ -153,6 +153,7 @@ Everything else uses the existing `aws-cdk-lib` (`aws-cloudwatch`, `aws-cloudwat
 
 ## Open items
 
-- **Operator manual steps** (blocking full activation): confirm the two SNS email subscriptions to `rahul3datta@gmail.com` (alarms fire their confirmation on the first prod deploy; budget on the hand-deploy); flip the AWS root billing-access toggle, then `cdk deploy ApertureBilling -c billing=true`.
+- **Operator manual steps** (blocking full activation): confirm the **one** SNS email subscription to `rahul3datta@gmail.com` — the prod alarm topic, which fires its confirmation on the first prod deploy. The budget subscriber is direct `EMAIL` (not SNS) → no confirmation. Flip the AWS root billing-access toggle, then `cdk deploy ApertureBilling -c billing=true`. **(All done as of 2026-08-10 — merged to main, prod deployed, alarm sub confirmed, ntfy verified on dev+prod.)**
 - **cdk-nag #2359 watch:** when the upstream granular-acknowledge bug is fixed, replace the `addMetadata` workaround in `app-stack.ts` with the normal `Validations.of(fn).acknowledge(...)`.
 - Email address is now filled (`rahul3datta@gmail.com`, personal) in `monitoring.ts` + `billing-stack.ts` — not a work address.
+
