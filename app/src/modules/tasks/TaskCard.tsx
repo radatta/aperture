@@ -73,7 +73,9 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
               Done
             </Button>
           )}
-          {overflow.length > 0 && <Menu items={overflow} label={`More actions for ${task.title}`} />}
+          {overflow.length > 0 && (
+            <Menu items={overflow} label={`More actions for ${task.title}`} />
+          )}
         </div>
       </div>
 
@@ -147,7 +149,11 @@ function SplitForm({ task, onDone }: { task: Task; onDone: () => void }) {
           size="sm"
           disabled={!title.trim() || split.isPending}
           onClick={async () => {
-            await split.mutateAsync({ id: task.id, finishStatus: finish, followUpTitle: title.trim() });
+            await split.mutateAsync({
+              id: task.id,
+              finishStatus: finish,
+              followUpTitle: title.trim(),
+            });
             onDone();
           }}
         >

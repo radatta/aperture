@@ -111,8 +111,9 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
     <Card className="px-3.5 py-2.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          {/* Borderless until you touch it — five bordered boxes stacked read as a form to fill in,
-              when in fact these are already-set names you rarely rename. */}
+          {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
+              form to fill in, but hover-only would leave the field unmarked on touch — and this is
+              an installable phone app. */}
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
@@ -120,9 +121,14 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
             onBlur={() =>
               label.trim() &&
               label !== cat.label &&
-              upsert.mutate({ id: cat.id, label: label.trim(), isWork: cat.isWork, order: cat.order })
+              upsert.mutate({
+                id: cat.id,
+                label: label.trim(),
+                isWork: cat.isWork,
+                order: cat.order,
+              })
             }
-            className="w-40 rounded-lg border border-transparent bg-transparent px-2 py-1 text-ink outline-none transition hover:border-line focus:border-teal focus:bg-surface"
+            className="w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 text-ink outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface"
           />
           <Text size="xs" tone={cat.isWork ? 'teal' : 'subtle'}>
             {cat.isWork ? 'Work' : 'Non-work'}
@@ -136,7 +142,7 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
             aria-label={`Move ${cat.label} up`}
             disabled={index === 0}
             onClick={() => move(-1)}
-            className="px-2"
+            className="h-9 w-9 px-0"
           >
             <ArrowUpIcon size={15} />
           </Button>
@@ -146,7 +152,7 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
             aria-label={`Move ${cat.label} down`}
             disabled={index === cats.length - 1}
             onClick={() => move(1)}
-            className="px-2"
+            className="h-9 w-9 px-0"
           >
             <ArrowDownIcon size={15} />
           </Button>
@@ -158,7 +164,13 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
                 onSelect: () => setPanel('work'),
               },
               ...(others.length > 0
-                ? [{ label: 'Delete…', tone: 'danger' as const, onSelect: () => setPanel('delete') }]
+                ? [
+                    {
+                      label: 'Delete…',
+                      tone: 'danger' as const,
+                      onSelect: () => setPanel('delete'),
+                    },
+                  ]
                 : []),
             ]}
           />
@@ -259,7 +271,7 @@ function PreferencesSection() {
               { value: 'light', label: 'Light' },
               { value: 'dark', label: 'Dark' },
             ]}
-            className="w-52"
+            className="w-60"
           />
         </div>
       </Card>

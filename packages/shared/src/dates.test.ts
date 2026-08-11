@@ -6,6 +6,7 @@ import {
   fmtDayHeading,
   fmtMonthDay,
   fmtMonthDayYear,
+  fmtMonthShortDay,
   fmtWeekday,
   isoWeekKey,
   weekdayOf,
@@ -57,5 +58,12 @@ describe('iso week & formatting', () => {
     expect(fmtWeekday('2026-08-02')).toBe('Sunday');
     expect(fmtDayHeading('2026-08-02')).toBe('Sunday, Aug 2');
     expect(fmtDayHeading('2026-12-25')).toBe('Friday, Dec 25');
+  });
+  // Labels a calendar row, where the weekday is already the column header.
+  it('drops the weekday and the leading zero for the compact form', () => {
+    expect(fmtMonthShortDay('2026-08-03')).toBe('Aug 3');
+    expect(fmtMonthShortDay('2026-08-31')).toBe('Aug 31');
+    expect(fmtMonthShortDay('2026-12-28')).toBe('Dec 28');
+    expect(fmtMonthShortDay('2027-01-04')).toBe('Jan 4');
   });
 });

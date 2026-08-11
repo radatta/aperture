@@ -25,7 +25,9 @@ export function AppNav() {
           className={({ isActive }) =>
             cx(
               'shrink-0 border-b-2 pb-1 transition',
-              isActive ? 'border-gold text-ink' : 'border-transparent text-ink-muted hover:text-ink',
+              isActive
+                ? 'border-gold text-ink'
+                : 'border-transparent text-ink-muted hover:text-ink',
             )
           }
         >

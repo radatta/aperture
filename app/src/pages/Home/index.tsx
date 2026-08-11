@@ -187,7 +187,8 @@ function TodayTasksCard() {
       {totalCount === 0 ? (
         <div className="flex flex-col items-start gap-2">
           <Text tone="subtle" size="sm">
-            Nothing planned today. Capture with the bar below, or pull something in from the backlog.
+            Nothing planned today. Capture with the bar below, or pull something in from the
+            backlog.
           </Text>
           <ButtonLink size="sm" to="/tasks">
             Open the backlog
@@ -234,7 +235,9 @@ function FocusCard() {
               session.kind === 'break'
                 ? 'Break'
                 : (session.label ??
-                  (session.taskId ? (tasks.find((t) => t.id === session.taskId)?.title ?? 'Focus') : 'Focus'));
+                  (session.taskId
+                    ? (tasks.find((t) => t.id === session.taskId)?.title ?? 'Focus')
+                    : 'Focus'));
             return (
               <div key={session.id} className="flex items-center justify-between gap-3">
                 <div className="min-w-0 flex-1 truncate">
@@ -250,7 +253,9 @@ function FocusCard() {
           })}
         </div>
         <Text size="xs" tone="subtle" className="mt-2">
-          {timers.length === 1 ? 'Controls in the timer, bottom-right.' : `${timers.length} running · controls bottom-right.`}
+          {timers.length === 1
+            ? 'Controls in the timer, bottom-right.'
+            : `${timers.length} running · controls bottom-right.`}
         </Text>
       </HomeCard>
     );
@@ -341,7 +346,12 @@ function ReviewCard({ today }: { today: string }) {
             {recent.map((e) => (
               <div key={e.id} className="flex gap-3">
                 {/* fixed, non-wrapping — "10:46 PM" was breaking across two lines on a phone */}
-                <Text size="xs" tone="subtle" tabular className="w-[4.5rem] shrink-0 whitespace-nowrap pt-0.5">
+                <Text
+                  size="xs"
+                  tone="subtle"
+                  tabular
+                  className="w-[4.5rem] shrink-0 whitespace-nowrap pt-0.5"
+                >
                   {fmtTime(e.createdAt)}
                 </Text>
                 <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">

@@ -17,8 +17,18 @@ import type { RunningTimer } from './pomodoro-context';
 // during the morning plan and the night reflection. Starting a block from cold now lives where the
 // intent lives: the daytime home's Focus card, and Focus on an in-progress task.
 export function TimerBar() {
-  const { timers, stale, pause, resume, extend, stop, startFocus, startBreak, keepStale, discardStale } =
-    usePomodoro();
+  const {
+    timers,
+    stale,
+    pause,
+    resume,
+    extend,
+    stop,
+    startFocus,
+    startBreak,
+    keepStale,
+    discardStale,
+  } = usePomodoro();
   const { data: tasks = [] } = useAllTasks();
 
   if (timers.length === 0 && stale.length === 0) return null;

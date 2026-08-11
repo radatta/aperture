@@ -87,7 +87,10 @@ export function CaptureBar() {
       <div className="flex items-center justify-between gap-2 pb-1.5">
         <ModeToggle<CaptureMode>
           size="sm"
-          options={CAPTURE_MODES.map((m) => ({ value: m, label: m[0]!.toUpperCase() + m.slice(1) }))}
+          options={CAPTURE_MODES.map((m) => ({
+            value: m,
+            label: m[0]!.toUpperCase() + m.slice(1),
+          }))}
           value={mode}
           onChange={setMode}
         />

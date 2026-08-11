@@ -29,7 +29,11 @@ describe('createHttpClient (RPC transport)', () => {
   });
 
   it('throws on a non-ok response', async () => {
-    const api = createHttpClient('', async () => ({ ok: false, status: 500, text: async () => '' }));
+    const api = createHttpClient('', async () => ({
+      ok: false,
+      status: 500,
+      text: async () => '',
+    }));
     await expect(api.listTasks()).rejects.toThrow(/listTasks failed \(500\)/);
   });
 

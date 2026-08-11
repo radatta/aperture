@@ -9,6 +9,7 @@ import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { useCategories } from '../../data/hooks/useCategories';
 import { useDeactivateSeries, useSeries, useUpsertSeries } from '../../data/hooks/useSeries';
+import { useDisclosure } from '../../lib/useDisclosure';
 import { useSettings } from '../../data/hooks/useSettings';
 import { CategoryTag } from './CategoryTag';
 import { ruleSummary } from './taskMath';
@@ -69,7 +70,7 @@ function SeriesForm() {
   const { data: cats = [] } = useCategories();
   const upsert = useUpsertSeries();
 
-  const [open, setOpen] = useState(false);
+  const { open, triggerRef, onOpen, onClose } = useDisclosure();
   const [title, setTitle] = useState('');
   const [kind, setKind] = useState<Kind>('weekdays');
   const [interval, setInterval] = useState('2');
@@ -85,7 +86,8 @@ function SeriesForm() {
   }
 
   async function create() {
-    if (!title.trim()) return;
+    // `title` only clears after the await, so an unguarded second Enter would create two series.
+    if (!title.trim() || upsert.isPending) return;
     await upsert.mutateAsync({
       title: title.trim(),
       categoryId: categoryId || null,
@@ -95,7 +97,15 @@ function SeriesForm() {
     });
     setTitle('');
     setEstimate('');
-    setOpen(false);
+    onClose();
+  }
+
+  // Cancel discards the draft; the rule/day selection stays, since that's the shape of series you
+  // tend to make repeatedly.
+  function cancel() {
+    setTitle('');
+    setEstimate('');
+    onClose();
   }
 
   // Collapsed by default, same reasoning as the habit form: the tab's job is to show what already
@@ -103,7 +113,7 @@ function SeriesForm() {
   if (!open) {
     return (
       <div>
-        <Button variant="ghost" size="sm" onClick={() => setOpen(true)} className="gap-1.5">
+        <Button ref={triggerRef} variant="ghost" size="sm" onClick={onOpen} className="gap-1.5">
           <PlusIcon size={15} /> New recurring task
         </Button>
       </div>
@@ -118,6 +128,7 @@ function SeriesForm() {
         </Text>
         <div className="flex flex-wrap items-end gap-3">
           <Field
+            autoFocus
             label="Title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -172,9 +183,7 @@ function SeriesForm() {
                   key={d}
                   type="button"
                   aria-pressed={on}
-                  onClick={() =>
-                    setDays((cur) => (on ? cur.filter((x) => x !== i) : [...cur, i]))
-                  }
+                  onClick={() => setDays((cur) => (on ? cur.filter((x) => x !== i) : [...cur, i]))}
                   className={
                     'rounded-lg border px-2.5 py-1 text-xs transition ' +
                     (on
@@ -192,7 +201,7 @@ function SeriesForm() {
           <Button size="sm" onClick={create} disabled={!title.trim() || upsert.isPending}>
             Add series
           </Button>
-          <Button variant="quiet" size="sm" onClick={() => setOpen(false)}>
+          <Button variant="quiet" size="sm" onClick={cancel}>
             Cancel
           </Button>
         </div>

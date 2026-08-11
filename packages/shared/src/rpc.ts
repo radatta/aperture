@@ -54,7 +54,8 @@ export const API_METHODS = [
 
 export type ApiMethod = (typeof API_METHODS)[number];
 
-export const isApiMethod = (m: string): m is ApiMethod => (API_METHODS as readonly string[]).includes(m);
+export const isApiMethod = (m: string): m is ApiMethod =>
+  (API_METHODS as readonly string[]).includes(m);
 
 export interface RpcRequest {
   args: unknown[];

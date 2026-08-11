@@ -10,7 +10,13 @@ import { Text } from '../../components/Text';
 //
 // The row used to be a bare <button> with no hover state, so nothing on the page suggested an entry
 // could be corrected at all. Now the row lifts on hover and a pencil fades in.
-export function LogEntryRow({ entry, onSave }: { entry: LogEntry; onSave: (text: string) => void }) {
+export function LogEntryRow({
+  entry,
+  onSave,
+}: {
+  entry: LogEntry;
+  onSave: (text: string) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
 

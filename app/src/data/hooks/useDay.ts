@@ -31,7 +31,8 @@ export function useSetReflection(day: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { prompt: string; text: string }) => api.setDayReflection(day, v.prompt, v.text),
+    mutationFn: (v: { prompt: string; text: string }) =>
+      api.setDayReflection(day, v.prompt, v.text),
     onSuccess: (next) => qc.setQueryData(qk.day(day), next),
   });
 }

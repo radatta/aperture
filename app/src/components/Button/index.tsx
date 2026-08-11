@@ -1,5 +1,4 @@
-import type { ButtonHTMLAttributes } from 'react';
-import type { ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { Link } from 'react-router';
 import { cx } from '../../lib/cx';
 
@@ -23,12 +22,20 @@ const sizeClass: Record<Size, string> = {
 const base = 'inline-flex items-center justify-center rounded-xl font-medium transition';
 
 function recipe(variant: Variant, size: Size, className?: string) {
-  return cx(base, 'disabled:opacity-50 disabled:pointer-events-none', variantClass[variant], sizeClass[size], className);
+  return cx(
+    base,
+    'disabled:opacity-50 disabled:pointer-events-none',
+    variantClass[variant],
+    sizeClass[size],
+    className,
+  );
 }
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
+  // React 19 takes ref as a plain prop; disclosure triggers need one to take focus back on close.
+  ref?: Ref<HTMLButtonElement>;
 }
 
 export function Button({

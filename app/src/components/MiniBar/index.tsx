@@ -11,7 +11,10 @@ export function MiniBar({ plannedMin, availableMin, className }: MiniBarProps) {
   const model = miniBar(plannedMin, availableMin);
   return (
     <div
-      className={cx('h-2 w-full overflow-hidden rounded-full border border-line bg-surface', className)}
+      className={cx(
+        'h-2 w-full overflow-hidden rounded-full border border-line bg-surface',
+        className,
+      )}
       role="progressbar"
       aria-valuenow={Math.round(model.fillPct)}
     >

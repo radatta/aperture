@@ -39,7 +39,8 @@ export function renderApp(
   opts: { api?: ApiClient; path?: string; seed?: boolean } = {},
 ): RenderResult & { api: ApiClient } {
   const api =
-    opts.api ?? createStubClient({ seed: opts.seed ?? true, storageKey: `app-test-${Math.random()}` });
+    opts.api ??
+    createStubClient({ seed: opts.seed ?? true, storageKey: `app-test-${Math.random()}` });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter(routes, { initialEntries: [opts.path ?? '/'] });
   const result = render(

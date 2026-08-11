@@ -26,7 +26,7 @@ export function PlanSection() {
   const { data: dayRec } = useDay(day);
   const { data: plans = [] } = usePlansForDay(day);
   const { data: allTasks = [] } = useAllTasks();
-  const { data: backlog = [] } = useBacklog();
+  const { data: backlog = [], isPending: backlogPending } = useBacklog();
 
   const setCapacity = useSetCapacity(day);
   const upsertPlan = useUpsertPlan();
@@ -84,7 +84,9 @@ export function PlanSection() {
         </Text>
         {plannedRows.length === 0 ? (
           <Text tone="subtle" size="sm">
-            {backlog.length > 0
+            {/* `backlog` defaults to [], so branching on its length alone would assert "the backlog
+                is empty" while the query is still in flight, then swap the copy underneath you. */}
+            {backlogPending || backlog.length > 0
               ? 'Nothing planned yet — pull something in from the backlog below.'
               : 'Nothing planned, and the backlog is empty. Capture a task from the bar below to start.'}
           </Text>
@@ -191,6 +193,11 @@ function CapacityField({
             key={h}
             variant={Number(value) === h ? 'primary' : 'ghost'}
             size="sm"
+            aria-pressed={Number(value) === h}
+            // Keep focus in the input: otherwise clicking a preset blurs it, firing commit() with
+            // the old typed value on top of pick()'s write — two racing capacity mutations for one
+            // tap, and over HTTP the stale one can land last.
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => pick(h)}
           >
             {h}h

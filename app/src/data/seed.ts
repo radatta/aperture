@@ -65,7 +65,11 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
 
     store.logEntries.push({ ...mk(t), day, text: snippets[d % snippets.length]! });
     if (d % 3 === 0) {
-      store.logEntries.push({ ...mk(t - 4 * HOUR), day, text: snippets[(d + 2) % snippets.length]! });
+      store.logEntries.push({
+        ...mk(t - 4 * HOUR),
+        day,
+        text: snippets[(d + 2) % snippets.length]!,
+      });
     }
 
     if (d % 2 === 0) {

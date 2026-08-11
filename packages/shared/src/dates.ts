@@ -105,3 +105,9 @@ export function fmtDayHeading(key: string): string {
   const p = key.split('-');
   return `${fmtWeekday(key)}, ${MONTHS[Number(p[1]) - 1]} ${Number(p[2])}`;
 }
+
+// Compact form: "Aug 2" — labels a row in a calendar grid, where the weekday is already the column.
+export function fmtMonthShortDay(key: string): string {
+  const p = key.split('-');
+  return `${MONTHS[Number(p[1]) - 1]} ${Number(p[2])}`;
+}
