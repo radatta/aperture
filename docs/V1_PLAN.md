@@ -175,9 +175,9 @@ would defer the hard modeling questions to the expensive phase — exactly what 
   dark set; **auto-theme is a one-line data-attribute flip** driven later by home mode. (TECH §1, PRODUCT §5)
 - **2.2 Type + density** — pick + self-host a quality neutral sans with slight warmth (not
   system-default); set the airy-overall / crisp-data-blocks density scale. (PRODUCT §5 locked commitments)
-- **2.3 Primitive components** — `components/`: `Card, Text, Button, Field, ModeToggle, StatPair`
-  (estimate/actual), `MiniBar` (planned-vs-available), `TimerPill`. Semantic token layer, not raw
-  utilities scattered. Snapshot/interaction tests where cheap.
+- **2.3 Primitive components** — `components/`: `Card, Text, Button, Field, ModeToggle, Menu`
+  (row overflow), `DeltaBar` (estimate/actual), `MiniBar` (planned-vs-available), `TimerPill`.
+  Semantic token layer, not raw utilities scattered. Snapshot/interaction tests where cheap.
 - **2.4 Theme context** — `ThemeProvider` reading `settings.theme` override else follows home mode.
 
 **Key files:** `app/src/styles/tokens.css`, `app/src/styles/theme.ts`, `app/src/components/*`,
@@ -257,9 +257,10 @@ validation target.
 - **5.6 Recurring tasks** — `taskSeries` with simple `rule` (daily/weekdays/weekly/everyN); occurrences
   are real tasks with `seriesId` (own estimate/actual/calibration); **lazy materialization on day load**.
   Edit-one vs edit-series semantics. (PRODUCT §4a, TECH §2.2, §A.8/§A.10)
-- **5.7 Calibration surfaces** — `modules/calibration/`: per-task estimate-vs-actual delta (night
-  review, hand-rolled `StatPair`/`MiniBar`); simple aggregate estimate/actual ratio + trend, **honestly
-  sparse early**. No charts dep. (PRODUCT §4a, §6.4)
+- **5.7 Calibration surfaces** — `modules/calibration/`: per-task estimate-vs-actual delta drawn as a
+  bar (night review, hand-rolled `DeltaBar`/`MiniBar`) so the gap is seen rather than subtracted;
+  simple aggregate estimate/actual ratio + trend, **honestly sparse early**. No charts dep.
+  (PRODUCT §4a, §6.4)
 - **5.8 Backlog deep view** — `pages/Tasks.tsx`: full backlog, filter, split, cancel, series management.
 
 **Key files:** `app/src/modules/tasks/*`, `app/src/modules/calibration/*`, `app/src/pages/Tasks.tsx`,

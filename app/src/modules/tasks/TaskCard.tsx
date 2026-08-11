@@ -4,6 +4,8 @@ import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
+import { Menu } from '../../components/Menu';
+import type { MenuItem } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
@@ -24,22 +26,41 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
   const canScope = task.status === 'backlog' || task.status === 'planned';
   const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
 
+  // Keep the visible set to the actions you'd actually press — the lifecycle one and its natural
+  // partner (plus whatever the section slots in). Everything else folds into the overflow, instead
+  // of the old row of four equally-loud buttons per task.
+  //
+  // Note "Drop": the row action that abandons a task used to be called "Cancel", one row away from
+  // the "Cancel" that closes a panel. Same stored status, an unambiguous label.
+  const overflow: MenuItem[] = [];
+  if (task.status !== 'done' && task.status !== 'cancelled')
+    overflow.push({ label: 'Split…', onSelect: () => toggle('split') });
+  if (task.status === 'in_progress')
+    overflow.push({ label: 'Focus', onSelect: () => pomodoro.startFocus({ taskId: task.id }) });
+  if (canScope)
+    overflow.push({
+      label: 'Drop task',
+      tone: 'danger',
+      onSelect: () => transition.mutate({ id: task.id, to: 'cancelled' }),
+    });
+
   return (
-    <Card>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
+    <Card className="px-3.5 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
           <Text weight="medium" className="truncate">
             {task.title}
           </Text>
-          <div className="flex items-center gap-2">
-            <CategoryTag categoryId={task.categoryId} />
-            <TaskMeta task={task} />
-          </div>
+          <TaskMeta task={task} />
         </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
+          {actions}
           {canScope && (
-            <Button variant="ghost" size="sm" onClick={() => toggle('scope')}>
-              Scope
+            <Button variant="quiet" size="sm" onClick={() => toggle('scope')}>
+              {/* Only "Rescope" while the estimate can still move the calibration baseline. Once
+                  it's frozen (a task that rolled back out of in_progress), editing it changes
+                  nothing that matters, so don't advertise a re-estimate. */}
+              {task.estimateMin != null && task.estimateLockedMin == null ? 'Rescope' : 'Scope'}
             </Button>
           )}
           {canScope && (
@@ -48,30 +69,11 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
             </Button>
           )}
           {task.status === 'in_progress' && (
-            <Button variant="ghost" size="sm" onClick={() => pomodoro.startFocus({ taskId: task.id })}>
-              Focus
-            </Button>
-          )}
-          {task.status === 'in_progress' && (
             <Button size="sm" onClick={() => toggle('done')}>
               Done
             </Button>
           )}
-          {task.status !== 'done' && task.status !== 'cancelled' && (
-            <Button variant="ghost" size="sm" onClick={() => toggle('split')}>
-              Split
-            </Button>
-          )}
-          {canScope && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => transition.mutate({ id: task.id, to: 'cancelled' })}
-            >
-              Cancel
-            </Button>
-          )}
-          {actions}
+          {overflow.length > 0 && <Menu items={overflow} label={`More actions for ${task.title}`} />}
         </div>
       </div>
 
@@ -82,28 +84,30 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
   );
 }
 
+// One quiet metadata line. An uncategorized, unestimated task used to print "Uncategorized
+// unscoped" — two statements of nothing, on every row, at the weight of real data. Absence is now
+// shown by absence; the Scope button already says what's missing.
 function TaskMeta({ task }: { task: Task }) {
+  const bits: string[] = [];
   if (task.status === 'in_progress') {
     const hasEstimate = task.estimateLockedMin != null || task.estimateMin != null;
-    return (
-      <Text size="xs" tone="muted" tabular>
-        {fmtDuration(task.actualAccruedMin)} logged ·{' '}
-        {hasEstimate ? `${fmtDuration(remainingMin(task))} left` : 'no estimate'}
-      </Text>
+    bits.push(`${fmtDuration(task.actualAccruedMin)} logged`);
+    if (hasEstimate) bits.push(`${fmtDuration(remainingMin(task))} left`);
+  } else if (task.estimateMin != null) {
+    bits.push(
+      `${fmtDuration(task.estimateMin)} est${task.bufferMin ? ` +${fmtDuration(task.bufferMin)}` : ''}`,
     );
   }
-  if (task.estimateMin != null) {
-    return (
-      <Text size="xs" tone="muted" tabular>
-        {fmtDuration(task.estimateMin)} est
-        {task.bufferMin ? ` +${fmtDuration(task.bufferMin)}` : ''}
-      </Text>
-    );
-  }
+
   return (
-    <Text size="xs" tone="subtle">
-      unscoped
-    </Text>
+    <div className="flex items-center gap-2">
+      <CategoryTag categoryId={task.categoryId} />
+      {bits.length > 0 && (
+        <Text size="xs" tone="muted" tabular>
+          {bits.join(' · ')}
+        </Text>
+      )}
+    </div>
   );
 }
 

@@ -93,7 +93,7 @@ export function PlanSection() {
               task={task}
               actions={
                 <Button
-                  variant="ghost"
+                  variant="quiet"
                   size="sm"
                   onClick={async () => {
                     await removePlan.mutateAsync(plan.id);

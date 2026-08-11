@@ -3,9 +3,9 @@ import { Link } from 'react-router';
 import type { ReactNode } from 'react';
 import { dayKey, todayKey } from '@aperture/shared';
 import { cx } from '../../lib/cx';
-import { Button } from '../../components/Button';
+import { Button, ButtonLink } from '../../components/Button';
+import { DeltaBar } from '../../components/DeltaBar';
 import { MiniBar } from '../../components/MiniBar';
-import { StatPair } from '../../components/StatPair';
 import { Text } from '../../components/Text';
 import { ChevronRightIcon } from '../../components/icons';
 import { fmtClock, fmtDuration, fmtTime } from '../../lib/format';
@@ -151,16 +151,20 @@ function PlanTodayCard() {
   return (
     <HomeCard title="Plan today" aside={<CardLink to="/tasks">Plan</CardLink>}>
       {pva.availableMin === null ? (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col items-start gap-2">
           <Text tone="muted" size="sm">
             {totalCount > 0
               ? `${totalCount} planned · ${fmtDuration(plannedMin)}`
               : 'Nothing planned yet.'}
-            {backlog.length > 0 ? ` · ${backlog.length} in backlog` : ''}
+            {backlog.length > 0 ? ` · ${backlog.length} waiting in the backlog` : ''}
           </Text>
           <Text tone="subtle" size="xs">
-            Set your available hours in Plan to catch over-scoping.
+            Set your available hours to catch over-scoping before it becomes stress.
           </Text>
+          {/* An empty state that only describes the emptiness is a dead end — hand over the control. */}
+          <ButtonLink size="sm" to="/tasks">
+            Start the plan pass
+          </ButtonLink>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -181,9 +185,14 @@ function TodayTasksCard() {
   return (
     <HomeCard title="Today's tasks" aside={<CardLink to="/tasks">Open</CardLink>}>
       {totalCount === 0 ? (
-        <Text tone="subtle" size="sm">
-          Nothing planned today.
-        </Text>
+        <div className="flex flex-col items-start gap-2">
+          <Text tone="subtle" size="sm">
+            Nothing planned today. Capture with the bar below, or pull something in from the backlog.
+          </Text>
+          <ButtonLink size="sm" to="/tasks">
+            Open the backlog
+          </ButtonLink>
+        </div>
       ) : (
         <div className="flex flex-col gap-1.5">
           <Text size="sm" tone="muted">
@@ -212,7 +221,7 @@ function TodayTasksCard() {
 // focus block on an in-progress task (so work time accrues to it) and reflects the running set —
 // you can have several going at once (parallel focus).
 function FocusCard() {
-  const { timers, startFocus } = usePomodoro();
+  const { timers, startFocus, startBreak } = usePomodoro();
   const { data: tasks = [] } = useAllTasks();
   const inProgress = tasks.filter((t) => t.status === 'in_progress');
 
@@ -265,11 +274,17 @@ function FocusCard() {
       ) : (
         <div className="flex flex-col gap-2">
           <Text size="sm" tone="muted">
-            Start a task, then focus it here — or a free block. Run several at once if you're juggling.
+            Start a task, then focus it here — or a free block. Run several at once if you're
+            juggling.
           </Text>
-          <div>
+          {/* Both cold-start entry points live here now that the timer dock only appears while
+              something is actually running. */}
+          <div className="flex flex-wrap gap-2">
             <Button variant="ghost" size="sm" onClick={() => startFocus()}>
               Start 25-min focus
+            </Button>
+            <Button variant="quiet" size="sm" onClick={() => startBreak()}>
+              Take a break
             </Button>
           </div>
         </div>
@@ -319,16 +334,17 @@ function ReviewCard({ today }: { today: string }) {
       <div className="flex flex-col gap-3">
         {entries.length === 0 ? (
           <Text tone="subtle" size="sm">
-            Nothing logged yet today.
+            Nothing logged yet today — the bar below is already in Log mode.
           </Text>
         ) : (
           <div className="flex flex-col gap-1.5">
             {recent.map((e) => (
               <div key={e.id} className="flex gap-3">
-                <Text size="xs" tone="subtle" tabular className="pt-0.5">
+                {/* fixed, non-wrapping — "10:46 PM" was breaking across two lines on a phone */}
+                <Text size="xs" tone="subtle" tabular className="w-[4.5rem] shrink-0 whitespace-nowrap pt-0.5">
                   {fmtTime(e.createdAt)}
                 </Text>
-                <Text size="sm" tone="muted" className="line-clamp-1">
+                <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">
                   {e.text}
                 </Text>
               </div>
@@ -339,17 +355,17 @@ function ReviewCard({ today }: { today: string }) {
           </div>
         )}
         {doneToday.length > 0 && (
-          <div className="flex flex-col gap-2 border-t border-line pt-3">
-            <Text size="xs" tone="muted">
+          <div className="flex flex-col gap-3 border-t border-line pt-3">
+            <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
               Done today · estimate vs actual
             </Text>
             {doneToday.map((t) => (
-              <div key={t.id} className="flex flex-col gap-0.5">
-                <Text size="xs" tone="subtle" className="truncate">
-                  {t.title}
-                </Text>
-                <StatPair estimateMin={t.estimateLockedMin!} actualMin={t.actualAccruedMin} />
-              </div>
+              <DeltaBar
+                key={t.id}
+                label={t.title}
+                estimateMin={t.estimateLockedMin!}
+                actualMin={t.actualAccruedMin}
+              />
             ))}
           </div>
         )}
@@ -366,9 +382,14 @@ function HabitsCard({ title }: { title: string }) {
   return (
     <HomeCard title={title}>
       {active.length === 0 ? (
-        <Text tone="subtle" size="sm">
-          No habits yet — add some on the Habits page.
-        </Text>
+        <div className="flex flex-col items-start gap-2">
+          <Text tone="subtle" size="sm">
+            No habits yet. Weekly cadence, no streaks — a miss is just a miss.
+          </Text>
+          <ButtonLink size="sm" to="/habits">
+            Add a habit
+          </ButtonLink>
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
@@ -377,7 +398,11 @@ function HabitsCard({ title }: { title: string }) {
                 key={h.id}
                 className="rounded-full border border-line px-2.5 py-1 text-xs text-ink-muted"
               >
-                {h.name} · {h.cadencePerWeek}×
+                {h.name}
+                <Text size="xs" tone="subtle">
+                  {' '}
+                  · {h.cadencePerWeek}×
+                </Text>
               </span>
             ))}
           </div>
