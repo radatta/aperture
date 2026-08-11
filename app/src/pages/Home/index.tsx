@@ -100,7 +100,7 @@ function IntentCard() {
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
         placeholder="One line to aim the day…"
         aria-label="Day intent"
-        className="w-full bg-transparent text-ink outline-none placeholder:text-ink-subtle"
+        className="w-full bg-transparent text-ink outline-none placeholder:text-ink-muted"
       />
     </HomeCard>
   );
@@ -125,7 +125,7 @@ function ReflectionCard({ today }: { today: string }) {
           placeholder="Optional — skip freely."
           aria-label="Reflection"
           rows={2}
-          className="w-full resize-none rounded-xl border border-line bg-surface px-3 py-2 text-ink outline-none placeholder:text-ink-subtle focus:border-teal"
+          className="w-full resize-none rounded-xl border border-line bg-surface px-3 py-2 text-ink outline-none placeholder:text-ink-muted focus:border-teal"
         />
         <div className="flex items-center gap-2">
           <Button
@@ -186,7 +186,7 @@ function TodayTasksCard() {
     <HomeCard title="Today's tasks" aside={<CardLink to="/tasks">Open</CardLink>}>
       {totalCount === 0 ? (
         <div className="flex flex-col items-start gap-2">
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             Nothing planned today. Capture with the bar below, or pull something in from the
             backlog.
           </Text>
@@ -306,7 +306,7 @@ function TimeBudgetCard() {
   return (
     <HomeCard title="Time budget">
       {plannedMin === 0 ? (
-        <Text tone="subtle" size="sm">
+        <Text tone="muted" size="sm">
           No plan to budget against yet.
         </Text>
       ) : (
@@ -340,7 +340,7 @@ function ReviewCard({ today }: { today: string }) {
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>
       <div className="flex flex-col gap-3">
         {entries.length === 0 ? (
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             Nothing logged yet today — the bar below is already in Log mode.
           </Text>
         ) : (
@@ -395,7 +395,7 @@ function HabitsCard({ title }: { title: string }) {
     <HomeCard title={title}>
       {active.length === 0 ? (
         <div className="flex flex-col items-start gap-2">
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             No habits yet. Weekly cadence, no streaks — a miss is just a miss.
           </Text>
           <ButtonLink size="sm" to="/habits">

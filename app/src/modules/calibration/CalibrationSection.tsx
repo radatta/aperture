@@ -32,7 +32,7 @@ export function CalibrationSection() {
             <Text tone="muted" size="sm">
               No finished tasks with an estimate yet.
             </Text>
-            <Text tone="subtle" size="sm">
+            <Text tone="muted" size="sm">
               Scope a task, work it, mark it done — the gap between what you thought it would take
               and what it took shows up here.
             </Text>

@@ -107,7 +107,7 @@ export function CaptureBar() {
           aria-label={`Capture ${mode}`}
           className={cx(
             'min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-ink outline-none',
-            'placeholder:text-ink-subtle',
+            'placeholder:text-ink-muted',
           )}
         />
         <button
@@ -133,7 +133,7 @@ export function CaptureBar() {
 // which is also why the Send button is never hidden.
 function Hint() {
   return (
-    <Text size="xs" tone="subtle" className="hidden pr-1 sm:block">
+    <Text size="xs" tone="muted" className="hidden pr-1 sm:block">
       Tab switches · Enter saves · Shift+Enter new line
     </Text>
   );

@@ -57,8 +57,8 @@ export function LogPage() {
       <div className="flex flex-col divide-y divide-line">
         {entries.length === 0 ? (
           <div className="flex flex-col gap-1 py-8">
-            <Text tone="muted">Nothing logged {isToday ? 'yet today' : 'this day'}.</Text>
-            <Text tone="subtle" size="sm">
+            <Text>Nothing logged {isToday ? 'yet today' : 'this day'}.</Text>
+            <Text tone="muted" size="sm">
               {isToday
                 ? 'The bar below is already in Log mode — plain text, no fields, straight into today.'
                 : 'Entries land on the day they were captured; there is no backdating.'}

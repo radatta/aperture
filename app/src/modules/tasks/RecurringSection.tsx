@@ -30,7 +30,7 @@ export function RecurringSection() {
           Active series
         </Text>
         {active.length === 0 ? (
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             No recurring tasks yet.
           </Text>
         ) : (

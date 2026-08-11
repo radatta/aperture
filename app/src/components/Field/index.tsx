@@ -17,7 +17,7 @@ export function Field({ label, className, ...rest }: FieldProps) {
       <input
         className={cx(
           'rounded-xl border border-line bg-surface px-3 py-2 text-ink',
-          'placeholder:text-ink-subtle outline-none transition',
+          'placeholder:text-ink-muted outline-none transition',
           'focus:border-teal focus:bg-panel',
           className,
         )}

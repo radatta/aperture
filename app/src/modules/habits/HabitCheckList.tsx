@@ -20,7 +20,7 @@ export function HabitCheckList() {
   const active = habits.filter((h) => h.active);
   if (active.length === 0)
     return (
-      <Text tone="subtle" size="sm">
+      <Text tone="muted" size="sm">
         No habits yet — add some on the Habits page.
       </Text>
     );

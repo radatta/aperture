@@ -62,7 +62,7 @@ export function PlanSection() {
             onSave={(h) => setCapacity.mutate(h)}
           />
           {pva.availableMin === null ? (
-            <Text size="sm" tone="subtle">
+            <Text size="sm" tone="muted">
               {fmtDuration(plannedMin)} planned. Set your available hours to see if you&apos;re
               over-scoping.
             </Text>
@@ -83,7 +83,7 @@ export function PlanSection() {
           Planned today
         </Text>
         {plannedRows.length === 0 ? (
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             {/* `backlog` defaults to [], so branching on its length alone would assert "the backlog
                 is empty" while the query is still in flight, then swap the copy underneath you. */}
             {backlogPending || backlog.length > 0
@@ -118,7 +118,7 @@ export function PlanSection() {
           Backlog
         </Text>
         {backlog.length === 0 ? (
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             Backlog is clear — nothing waiting on you.
           </Text>
         ) : (

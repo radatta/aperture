@@ -17,7 +17,7 @@ export function ComingSoonPage({
         {title}
       </Text>
       <Text tone="muted">{blurb}</Text>
-      <Text tone="subtle" size="sm">
+      <Text tone="muted" size="sm">
         Lights up in Phase {phase}.
       </Text>
     </div>

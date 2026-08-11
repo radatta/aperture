@@ -47,7 +47,7 @@ export function HabitsPage() {
       <HabitForm />
       <div className="flex flex-col gap-3">
         {active.length === 0 ? (
-          <Text tone="subtle" size="sm">
+          <Text tone="muted" size="sm">
             No habits yet. Start one with “New habit” — weekly cadence, no streaks, and a miss is
             just a miss.
           </Text>

@@ -28,10 +28,8 @@ export function BacklogSection() {
         </Text>
         {backlog.length === 0 ? (
           <div className="flex flex-col gap-1">
+            <Text>Backlog is clear.</Text>
             <Text tone="muted" size="sm">
-              Backlog is clear.
-            </Text>
-            <Text tone="subtle" size="sm">
               Switch the bar below to Task and type a title — capture never asks for an estimate;
               you scope it later, in the morning pass.
             </Text>

@@ -30,7 +30,7 @@ export function HomeCard({
 export function ComingSoon({ phase, children }: { phase: number; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <Text tone="subtle" size="sm">
+      <Text tone="muted" size="sm">
         {children}
       </Text>
       <Text tone="subtle" size="xs" className="opacity-60">

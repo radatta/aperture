@@ -26,10 +26,8 @@ export function InboxPage() {
       </Text>
       {ideas.length === 0 ? (
         <div className="flex flex-col gap-1">
+          <Text>Inbox is clear.</Text>
           <Text tone="muted" size="sm">
-            Inbox is clear.
-          </Text>
-          <Text tone="subtle" size="sm">
             Switch the bar below to Idea and anything half-formed lands here, to be sorted whenever
             you feel like it.
           </Text>
