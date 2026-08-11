@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Menu } from './index';
 
@@ -62,7 +63,25 @@ describe('Menu', () => {
     const { user, trigger } = setup();
     await user.click(trigger);
     await user.keyboard('{Enter}');
-    expect(document.activeElement).toBe(trigger);
+    // Deferred a frame, because a destructive item may unmount the trigger instead.
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it('leaves focus alone when the action removes the trigger itself', async () => {
+    const user = userEvent.setup();
+    function Host() {
+      const [gone, setGone] = useState(false);
+      if (gone) return <p>row removed</p>;
+      return (
+        <Menu items={[{ label: 'Drop task', tone: 'danger', onSelect: () => setGone(true) }]} />
+      );
+    }
+    render(<Host />);
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Drop task' }));
+    expect(await screen.findByText('row removed')).toBeTruthy();
+    // The old trigger is gone; the point is that nothing throws and no stale node holds focus.
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
   });
 
   it('closes on an outside click without stealing focus back', async () => {

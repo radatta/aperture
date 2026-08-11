@@ -21,14 +21,14 @@ export function placeholderFor(mode: CaptureMode): string {
 }
 
 // The receipt shown after a submit. Capture is a trust exercise — you hand the app a thought and
-// it disappears — so every submit says where the thought went, and links there.
-export function receiptFor(mode: CaptureMode): { text: string; to: string; label: string } {
+// it vanishes from the field — so every submit says where the thought went.
+export function receiptFor(mode: CaptureMode): { text: string; label: string } {
   switch (mode) {
     case 'log':
-      return { text: 'Logged', to: '/log', label: 'today' };
+      return { text: 'Logged', label: 'today' };
     case 'task':
-      return { text: 'Task added', to: '/tasks', label: 'backlog' };
+      return { text: 'Task added', label: 'backlog' };
     case 'idea':
-      return { text: 'Captured', to: '/inbox', label: 'inbox' };
+      return { text: 'Captured', label: 'inbox' };
   }
 }

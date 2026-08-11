@@ -4,6 +4,7 @@ import type { Habit } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { EmptyState } from '../../components/EmptyState';
 import { Field } from '../../components/Field';
 import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
@@ -33,7 +34,7 @@ export function HabitsPage() {
   const from = weeks[0]![0]!;
   const to = weeks[WEEKS - 1]![6]!;
 
-  const { data: habits = [] } = useHabits();
+  const { data: habits = [], isPending, isError } = useHabits();
   const { data: checks = [] } = useHabitChecks(from, to);
   const active = habits.filter((h) => h.active);
 
@@ -47,10 +48,9 @@ export function HabitsPage() {
       <HabitForm />
       <div className="flex flex-col gap-3">
         {active.length === 0 ? (
-          <Text tone="muted" size="sm">
-            No habits yet. Start one with “New habit” — weekly cadence, no streaks, and a miss is
-            just a miss.
-          </Text>
+          <EmptyState pending={isPending} error={isError} title="No habits yet.">
+            Start one with “New habit” — weekly cadence, no streaks, and a miss is just a miss.
+          </EmptyState>
         ) : (
           active.map((h) => (
             <HabitCard

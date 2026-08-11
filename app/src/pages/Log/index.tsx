@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { addDays, todayKey } from '@aperture/shared';
 import { Button } from '../../components/Button';
+import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { ChevronLeftIcon, ChevronRightIcon } from '../../components/icons';
 import { useLog, useUpdateLogEntry } from '../../data/hooks/useLog';
@@ -16,7 +17,7 @@ export function LogPage() {
   const [day, setDay] = useState(today);
   const isToday = day === today;
 
-  const { data: entries = [] } = useLog(day);
+  const { data: entries = [], isPending, isError } = useLog(day);
   const update = useUpdateLogEntry(day);
 
   return (
@@ -56,13 +57,16 @@ export function LogPage() {
 
       <div className="flex flex-col divide-y divide-line">
         {entries.length === 0 ? (
-          <div className="flex flex-col gap-1 py-8">
-            <Text>Nothing logged {isToday ? 'yet today' : 'this day'}.</Text>
-            <Text tone="muted" size="sm">
+          <div className="py-8">
+            <EmptyState
+              pending={isPending}
+              error={isError}
+              title={`Nothing logged ${isToday ? 'yet today' : 'this day'}.`}
+            >
               {isToday
                 ? 'The bar below is already in Log mode — plain text, no fields, straight into today.'
                 : 'Entries land on the day they were captured; there is no backdating.'}
-            </Text>
+            </EmptyState>
           </div>
         ) : (
           entries.map((entry) => (

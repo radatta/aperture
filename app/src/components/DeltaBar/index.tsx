@@ -57,11 +57,13 @@ export function DeltaBar({ estimateMin, actualMin, label, className }: DeltaBarP
         <Text size="xs" tone="subtle" tabular>
           {fmtDuration(estimateMin)} est
         </Text>
+        {/* The word carries the direction, so the number is unsigned — "-20% under" was saying it
+            twice, and contradicting itself on the second reading. */}
         {delta && (
           <Text size="xs" tone={delta.over ? 'gold' : 'teal'} tabular className="ml-auto">
             {delta.over ? '+' : ''}
-            {delta.pct}%{' '}
-            <Text size="xs" tone="subtle">
+            {Math.abs(delta.pct)}%{' '}
+            <Text size="xs" tone="muted">
               {delta.over ? 'over' : delta.pct === 0 ? '' : 'under'}
             </Text>
           </Text>

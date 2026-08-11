@@ -69,6 +69,10 @@ export function Menu({ items, label = 'More actions' }: { items: MenuItem[]; lab
     } else if (e.key === 'Escape') {
       e.preventDefault();
       close();
+    } else if (e.key === 'Tab') {
+      // Tabbing out of a menu dismisses it (menu convention) — but let the Tab itself through, so
+      // focus continues on to whatever comes next rather than snapping back to the trigger.
+      close(false);
     }
   }
 
@@ -82,7 +86,11 @@ export function Menu({ items, label = 'More actions' }: { items: MenuItem[]; lab
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         onClick={() => (open ? close() : setOpen(true))}
-        onKeyDown={(e) => e.key === 'ArrowDown' && !open && setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key !== 'ArrowDown' || open) return;
+          e.preventDefault(); // or the page scrolls out from under the menu as it opens
+          setOpen(true);
+        }}
         className={cx(
           'flex h-8 w-8 items-center justify-center rounded-xl transition',
           open ? 'bg-panel-2 text-ink' : 'text-ink-subtle hover:bg-panel-2 hover:text-ink',
@@ -107,8 +115,15 @@ export function Menu({ items, label = 'More actions' }: { items: MenuItem[]; lab
               role="menuitem"
               onKeyDown={(e) => onItemKeyDown(e, i)}
               onClick={() => {
-                close();
+                setOpen(false);
                 it.onSelect();
+                // Take focus back only if the trigger survived. Destructive items ("Drop task",
+                // "Archive habit") remove the very row this menu lives in, so focusing the trigger
+                // unconditionally would aim at a node React is about to unmount — landing focus on
+                // <body>, the exact failure this component exists to avoid.
+                requestAnimationFrame(() => {
+                  if (triggerRef.current?.isConnected) triggerRef.current.focus();
+                });
               }}
               className={cx(
                 'block w-full px-3 py-1.5 text-left text-sm transition hover:bg-teal-soft',

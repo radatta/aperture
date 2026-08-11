@@ -1,6 +1,7 @@
 import { todayKey } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useCreateLogEntry } from '../../data/hooks/useLog';
 import { useCreateTask } from '../../data/hooks/useTasks';
@@ -13,7 +14,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 export function InboxPage() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
-  const { data: ideas = [] } = useIdeas('open');
+  const { data: ideas = [], isPending, isError } = useIdeas('open');
 
   const createTask = useCreateTask();
   const createLog = useCreateLogEntry(today);
@@ -25,13 +26,10 @@ export function InboxPage() {
         Inbox
       </Text>
       {ideas.length === 0 ? (
-        <div className="flex flex-col gap-1">
-          <Text>Inbox is clear.</Text>
-          <Text tone="muted" size="sm">
-            Switch the bar below to Idea and anything half-formed lands here, to be sorted whenever
-            you feel like it.
-          </Text>
-        </div>
+        <EmptyState pending={isPending} error={isError} title="Inbox is clear.">
+          Switch the bar below to Idea and anything half-formed lands here, to be sorted whenever
+          you feel like it.
+        </EmptyState>
       ) : (
         <div className="flex flex-col gap-2">
           {ideas.map((idea) => (

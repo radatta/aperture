@@ -5,6 +5,7 @@ import { dayKey, todayKey } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
+import { EmptyState } from '../../components/EmptyState';
 import { MiniBar } from '../../components/MiniBar';
 import { Text } from '../../components/Text';
 import { ChevronRightIcon } from '../../components/icons';
@@ -158,7 +159,7 @@ function PlanTodayCard() {
               : 'Nothing planned yet.'}
             {backlog.length > 0 ? ` · ${backlog.length} waiting in the backlog` : ''}
           </Text>
-          <Text tone="subtle" size="xs">
+          <Text tone="muted" size="xs">
             Set your available hours to catch over-scoping before it becomes stress.
           </Text>
           {/* An empty state that only describes the emptiness is a dead end — hand over the control. */}
@@ -181,19 +182,21 @@ function PlanTodayCard() {
 
 // Daytime: what's left today, planned vs elapsed.
 function TodayTasksCard() {
-  const { rows, doneCount, totalCount } = useTodayPlan();
+  const { rows, doneCount, totalCount, isPending } = useTodayPlan();
   return (
     <HomeCard title="Today's tasks" aside={<CardLink to="/tasks">Open</CardLink>}>
       {totalCount === 0 ? (
-        <div className="flex flex-col items-start gap-2">
-          <Text tone="muted" size="sm">
-            Nothing planned today. Capture with the bar below, or pull something in from the
-            backlog.
-          </Text>
-          <ButtonLink size="sm" to="/tasks">
-            Open the backlog
-          </ButtonLink>
-        </div>
+        <EmptyState
+          pending={isPending}
+          title="Nothing planned today."
+          action={
+            <ButtonLink size="sm" to="/tasks">
+              Open the backlog
+            </ButtonLink>
+          }
+        >
+          Capture with the bar below, or pull something in from the backlog.
+        </EmptyState>
       ) : (
         <div className="flex flex-col gap-1.5">
           <Text size="sm" tone="muted">
@@ -254,7 +257,7 @@ function FocusCard() {
         </div>
         {/* The timer stack moved into the bottom dock above the capture bar — it is no longer a
             floating panel in the bottom-right corner. */}
-        <Text size="xs" tone="subtle" className="mt-2">
+        <Text size="xs" tone="muted" className="mt-2">
           {timers.length === 1
             ? 'Controls are in the bar at the bottom.'
             : `${timers.length} running · controls in the bar at the bottom.`}
@@ -361,7 +364,7 @@ function ReviewCard({ today }: { today: string }) {
                 </Text>
               </div>
             ))}
-            <Text size="xs" tone="subtle" className="opacity-70">
+            <Text size="xs" tone="subtle">
               {entries.length} {entries.length === 1 ? 'entry' : 'entries'} today
             </Text>
           </div>
@@ -389,19 +392,22 @@ function ReviewCard({ today }: { today: string }) {
 // Shared between morning ("due") and night ("check"). Read-only for now — marking them off + the
 // weekly calendar are Phase 7. Shows the real seeded habits so the shell isn't hollow.
 function HabitsCard({ title }: { title: string }) {
-  const { data: habits = [] } = useHabits();
+  const { data: habits = [], isPending } = useHabits();
   const active = habits.filter((h) => h.active);
   return (
     <HomeCard title={title}>
       {active.length === 0 ? (
-        <div className="flex flex-col items-start gap-2">
-          <Text tone="muted" size="sm">
-            No habits yet. Weekly cadence, no streaks — a miss is just a miss.
-          </Text>
-          <ButtonLink size="sm" to="/habits">
-            Add a habit
-          </ButtonLink>
-        </div>
+        <EmptyState
+          pending={isPending}
+          title="No habits yet."
+          action={
+            <ButtonLink size="sm" to="/habits">
+              Add a habit
+            </ButtonLink>
+          }
+        >
+          Weekly cadence, no streaks — a miss is just a miss.
+        </EmptyState>
       ) : (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
@@ -418,7 +424,7 @@ function HabitsCard({ title }: { title: string }) {
               </span>
             ))}
           </div>
-          <Text size="xs" tone="subtle" className="opacity-60">
+          <Text size="xs" tone="muted">
             Check them off tonight, or on the Habits page.
           </Text>
         </div>

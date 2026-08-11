@@ -23,8 +23,12 @@ export function AppShell() {
   useEffect(() => {
     const el = dockRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setDockHeight(entry!.contentRect.height));
+    // offsetHeight, not contentRect: contentRect is the CONTENT box and so excludes the dock's own
+    // pb-safe. On a home-indicator iPhone that's ~34px the reserve would land short — precisely the
+    // overlap this measurement exists to prevent.
+    const ro = new ResizeObserver(() => setDockHeight(el.offsetHeight));
     ro.observe(el);
+    setDockHeight(el.offsetHeight);
     return () => ro.disconnect();
   }, []);
 
@@ -45,7 +49,10 @@ export function AppShell() {
         data-dock
         className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-4 pb-safe"
       >
-        <div className="pointer-events-auto mx-auto flex max-w-3xl flex-col gap-2">
+        {/* This column stays pointer-events-none and each PANEL opts back in. The timer stack is
+            only sm:w-80 and the idle starter is a single button, so an auto-everywhere column
+            would swallow clicks on the page showing through the transparent strip beside them. */}
+        <div className="mx-auto flex max-w-3xl flex-col gap-2">
           <TimerBar />
           <CaptureBar />
         </div>

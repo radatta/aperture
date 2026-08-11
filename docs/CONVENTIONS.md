@@ -50,3 +50,40 @@ emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it
 **Command shape:** typecheck is one root `tsc -b` over the project-reference graph; lint is one root
 `eslint .` (flat config). `test` and `build` fan out per-package (`pnpm -r`). Vitest runs two envs —
 **jsdom** for `app`, **node** for everything else (Lambda runtime parity).
+
+## UI: colour tiers, one dock, and the focus-return contract
+
+These are cross-cutting rules for `app/` — they were paid for once and are easy to undo by accident.
+
+**Colour tiers are a contrast contract, not a taste.** `app/src/styles/tokens.css` is solved against
+WCAG, not eyeballed:
+
+- `ink`, `ink-muted`, `teal`, `gold`, `danger` **carry content** and clear **4.5:1 on all three
+  grounds** (`surface`, `panel`, `panel-2`).
+- `ink-subtle` clears **3:1 only**. It is **supplementary**: de-emphasised metadata, column headers,
+  separators. **Nothing a reader needs may use it** — not placeholders, not hints, not the sentence
+  in an empty state (which is often the only text on screen).
+- `line-strong` is opaque and clears 3:1 on `panel`, because it is the *sole* carrier of an unchecked
+  habit cell. `line` is a decorative hairline between surfaces that also differ by fill, so it is
+  deliberately below 3:1.
+
+Two traps: **don't stack `opacity-*` on `ink-subtle`** (it composites below 3:1 and a
+computed-colour audit won't catch it), and **keep the dark `panel` steps small** — a lighter raised
+ground crushes contrast for everything sitting on the dock.
+
+**The bottom dock is one element.** `AppShell` renders a single fixed column holding the timer stack
+above the capture bar. Never add a second `fixed` bottom-anchored element — that is exactly how the
+timers ended up covering the capture bar and the page's last card. The shell measures the dock
+(`offsetHeight`, *not* `contentRect`, which excludes `pb-safe`) and reserves that much bottom
+padding, because the dock's height varies from ~112px idle to ~400px with several timers and a
+wrapped capture. The column is `pointer-events-none`; each **panel** opts back in.
+
+**Anything that dismisses something returns focus to what opened it.** `components/Menu` and
+`lib/useDisclosure` both hold this: a collapsed form's trigger, and a menu's trigger, are re-focused
+on close — except when the action removed that trigger (a destructive row action), where focus is
+left alone rather than aimed at a node about to unmount. If you add another popover or
+collapse-in-place control, use `useDisclosure` rather than a bare `useState`.
+
+**Empty states go through `components/EmptyState`.** React Query defaults `data` to `[]`, so
+branching on `list.length === 0` alone asserts "Backlog is clear" while the query is still in flight.
+`EmptyState` takes `pending`/`error` and is the one place that knows the three states.

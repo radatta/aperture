@@ -17,8 +17,9 @@ import { routes } from '../routes';
 export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }): RenderResult {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
-    // Built once: rebuilding on every wrapper render would reset the router to "/" on a rerender()
-    // and silently throw away any navigation the test had performed.
+    // Built once, so a rerender() can't reset the router to "/" and throw away navigation the test
+    // performed. The trade: `children` is captured at first render, so rerender() with a *different*
+    // element won't take. No test needs that; if one ever does, swap to <MemoryRouter>.
     const [router] = useState(() =>
       createMemoryRouter([{ path: '*', element: children }], { initialEntries: ['/'] }),
     );

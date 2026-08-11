@@ -33,7 +33,7 @@ export function ComingSoon({ phase, children }: { phase: number; children: React
       <Text tone="muted" size="sm">
         {children}
       </Text>
-      <Text tone="subtle" size="xs" className="opacity-60">
+      <Text tone="subtle" size="xs">
         Lights up in Phase {phase}
       </Text>
     </div>

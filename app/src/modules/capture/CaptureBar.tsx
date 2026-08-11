@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Link } from 'react-router';
 import { todayKey } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
@@ -60,10 +59,13 @@ export function CaptureBar() {
   function submit() {
     const value = text.trim();
     if (!value) return;
-    if (mode === 'log') createLog.mutate(value);
-    else if (mode === 'task') createTask.mutate(value);
-    else createIdea.mutate(value);
-    setReceipt(mode);
+    // The receipt is a promise that the thought landed, so it waits for the write to actually
+    // succeed. Announcing "Logged" off the optimistic path would, on a failed create, tell you it
+    // was saved while your text is already gone.
+    const confirm = { onSuccess: () => setReceipt(mode) };
+    if (mode === 'log') createLog.mutate(value, confirm);
+    else if (mode === 'task') createTask.mutate(value, confirm);
+    else createIdea.mutate(value, confirm);
     setText('');
     setMode('log');
     inputRef.current?.focus();
@@ -83,7 +85,7 @@ export function CaptureBar() {
   }
 
   return (
-    <div className="rounded-2xl border border-line bg-panel-2 p-2 shadow-[var(--shadow-dock)]">
+    <div className="pointer-events-auto rounded-2xl border border-line bg-panel-2 p-2 shadow-[var(--shadow-dock)]">
       <div className="flex items-center justify-between gap-2 pb-1.5">
         <ModeToggle<CaptureMode>
           size="sm"
@@ -94,7 +96,11 @@ export function CaptureBar() {
           value={mode}
           onChange={setMode}
         />
-        {receipt ? <Receipt mode={receipt} /> : <Hint />}
+        {/* Live region: "a submit is never silent" has to hold for a screen reader too, and the
+            receipt swaps in without any focus change to announce it. */}
+        <div aria-live="polite" className="min-w-0">
+          {receipt ? <Receipt mode={receipt} /> : <Hint />}
+        </div>
       </div>
       <div className="flex items-end gap-2">
         <textarea
@@ -139,13 +145,14 @@ function Hint() {
   );
 }
 
+// Plain text, not a link. It disappears after ~1.8s, so as a link it was a target no keyboard user
+// could ever reach — and the nav already carries a permanent route to all three destinations. It
+// says where the thought went; getting there is the nav's job.
 function Receipt({ mode }: { mode: CaptureMode }) {
   const r = receiptFor(mode);
   return (
-    <Link to={r.to} className="pr-1">
-      <Text size="xs" tone="teal">
-        {r.text} → {r.label}
-      </Text>
-    </Link>
+    <Text size="xs" tone="teal" className="pr-1">
+      {r.text} → {r.label}
+    </Text>
   );
 }

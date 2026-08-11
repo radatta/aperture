@@ -124,6 +124,16 @@ export function ArrowDownIcon(p: IconProps) {
   );
 }
 
+// The always-reachable focus starter in the dock.
+export function TimerIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="13" r="8" />
+      <path d="M12 9.5V13l2.5 1.5M9.5 2h5" />
+    </Svg>
+  );
+}
+
 export function PlusIcon(p: IconProps) {
   return (
     <Svg {...p}>

@@ -57,10 +57,15 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
           {actions}
           {canScope && (
             <Button variant="quiet" size="sm" onClick={() => toggle('scope')}>
-              {/* Only "Rescope" while the estimate can still move the calibration baseline. Once
-                  it's frozen (a task that rolled back out of in_progress), editing it changes
-                  nothing that matters, so don't advertise a re-estimate. */}
-              {task.estimateMin != null && task.estimateLockedMin == null ? 'Rescope' : 'Scope'}
+              {/* "Scope" only when there is genuinely nothing scoped yet. A task that rolled back
+                  out of in_progress has a real estimate AND a frozen calibration baseline, so
+                  "Scope" would misdescribe it — but "Rescope" would over-promise, since editing
+                  can no longer move the frozen number. "Edit" says exactly what it does. */}
+              {task.estimateMin == null
+                ? 'Scope'
+                : task.estimateLockedMin == null
+                  ? 'Rescope'
+                  : 'Edit'}
             </Button>
           )}
           {canScope && (

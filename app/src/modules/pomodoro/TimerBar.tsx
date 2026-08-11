@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { PomodoroSession, Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
+import { TimerIcon } from '../../components/icons';
 import { cx } from '../../lib/cx';
 import { fmtClock } from '../../lib/format';
 import { useAllTasks } from '../../data/hooks/useTasks';
@@ -12,10 +13,11 @@ import type { RunningTimer } from './pomodoro-context';
 // The persistent pomodoro UI — one row per concurrent timer, plus stale keep/discard prompts,
 // stacked directly above the capture bar by AppShell (pomodoro is not a route).
 //
-// It renders NOTHING when nothing is running. It used to keep an idle "+ New focus | Break" panel
-// floating over every screen forever, which competed with capture for the same corner and shouted
-// during the morning plan and the night reflection. Starting a block from cold now lives where the
-// intent lives: the daytime home's Focus card, and Focus on an in-progress task.
+// Idle, it collapses to a single icon button rather than the old floating "+ New focus | Break"
+// panel, which competed with capture for the same corner of vision on every screen. It can't
+// collapse to nothing: the Focus card that offers a cold start only renders in DAYTIME mode, so
+// dropping the idle control entirely left 18 hours of the day (morning and night) with no way to
+// start an ad-hoc block at all.
 export function TimerBar() {
   const {
     timers,
@@ -31,7 +33,8 @@ export function TimerBar() {
   } = usePomodoro();
   const { data: tasks = [] } = useAllTasks();
 
-  if (timers.length === 0 && stale.length === 0) return null;
+  if (timers.length === 0 && stale.length === 0)
+    return <IdleStarter onStart={() => startFocus()} />;
 
   return (
     <div className="flex flex-col gap-2 sm:ml-auto sm:w-80">
@@ -60,6 +63,25 @@ export function TimerBar() {
   );
 }
 
+// One quiet control, right-aligned so it never sits where the capture text begins. Deliberately
+// icon+word and nothing else — a break from cold is a fringe intent and lives on the daytime
+// Focus card; once anything is running, the full controls appear below.
+function IdleStarter({ onStart }: { onStart: () => void }) {
+  return (
+    <div className="flex justify-end">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onStart}
+        title="Start a 25-minute focus block"
+        className="pointer-events-auto gap-1.5 bg-panel-2 shadow-[var(--shadow-dock)]"
+      >
+        <TimerIcon size={15} /> Focus
+      </Button>
+    </div>
+  );
+}
+
 function timerLabel(session: PomodoroSession, tasks: Task[]): string {
   if (session.kind === 'break') return 'Break';
   if (session.label) return session.label;
@@ -71,7 +93,7 @@ function Row({ done, children }: { done?: boolean; children: ReactNode }) {
   return (
     <div
       className={cx(
-        'flex items-center gap-1.5 rounded-2xl border bg-panel-2 p-1.5 pl-2.5 shadow-[var(--shadow-dock)]',
+        'pointer-events-auto flex items-center gap-1.5 rounded-2xl border bg-panel-2 p-1.5 pl-2.5 shadow-[var(--shadow-dock)]',
         done ? 'border-gold' : 'border-line',
       )}
     >
