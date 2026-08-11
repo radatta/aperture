@@ -49,6 +49,17 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   const estimates = [30, 45, 60, 90];
   const factors = [0.8, 1.1, 1.3, 1.6]; // mostly > 1 → the honest "I underestimate" bias
   const workCats = ['Deep Work', 'Admin', 'Learning'];
+  // Real-shaped titles: the calibration list is a column of task names, and "Task from 2026-08-04"
+  // seven times over makes the signature surface read as filler rather than as your own week.
+  const doneTitles = [
+    'Write the migration plan',
+    'Review the PR backlog',
+    'Debug the auth redirect',
+    'Draft standup notes',
+    'Refactor the query layer',
+    'Read the design doc',
+    'Fix the failing snapshot test',
+  ];
   const snippets = [
     'Shipped the thing I was dreading. Easier than the dread.',
     'Long meeting; low focus after.',
@@ -81,7 +92,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       const startedAt = completedAt - actual * 60_000;
       const task: Task = {
         ...mk(startedAt),
-        title: `Task from ${day}`,
+        title: doneTitles[(d / 2) % doneTitles.length]!,
         status: 'done',
         categoryId: cat.id,
         seriesId: null,

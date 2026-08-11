@@ -218,7 +218,7 @@ function TodayTasksCard() {
   );
 }
 
-// Daytime: the pomodoro. Controls live in the persistent timer (bottom-right); this card starts a
+// Daytime: the pomodoro. Controls live in the bottom dock's timer stack; this card starts a
 // focus block on an in-progress task (so work time accrues to it) and reflects the running set —
 // you can have several going at once (parallel focus).
 function FocusCard() {
@@ -252,10 +252,12 @@ function FocusCard() {
             );
           })}
         </div>
+        {/* The timer stack moved into the bottom dock above the capture bar — it is no longer a
+            floating panel in the bottom-right corner. */}
         <Text size="xs" tone="subtle" className="mt-2">
           {timers.length === 1
-            ? 'Controls in the timer, bottom-right.'
-            : `${timers.length} running · controls bottom-right.`}
+            ? 'Controls are in the bar at the bottom.'
+            : `${timers.length} running · controls in the bar at the bottom.`}
         </Text>
       </HomeCard>
     );
