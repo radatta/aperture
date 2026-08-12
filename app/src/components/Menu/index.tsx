@@ -70,9 +70,13 @@ export function Menu({ items, label = 'More actions' }: { items: MenuItem[]; lab
       e.preventDefault();
       close();
     } else if (e.key === 'Tab') {
-      // Tabbing out of a menu dismisses it (menu convention) — but let the Tab itself through, so
-      // focus continues on to whatever comes next rather than snapping back to the trigger.
-      close(false);
+      // Tabbing out dismisses (menu convention). Swallow the Tab and hand focus back to the trigger
+      // rather than letting the browser move it: React flushes this discrete update at the end of
+      // dispatch, so the focused menuitem is detached before the browser acts and focus lands on
+      // <body> — the failure this component exists to prevent. From the trigger the next Tab
+      // continues naturally.
+      e.preventDefault();
+      close();
     }
   }
 

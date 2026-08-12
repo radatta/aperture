@@ -177,12 +177,19 @@ function HabitCard({
         </div>
       </div>
 
+      {/* alertdialog + autoFocus: the confirm renders at the BOTTOM of the card while focus is
+          still on the menu trigger at the top, so without this nothing tells a screen-reader user
+          that a destructive question just appeared. */}
       {confirming && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3">
+        <div
+          role="alertdialog"
+          aria-label={`Archive ${habit.name}?`}
+          className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
+        >
           <Text size="sm" tone="muted">
             Archive “{habit.name}”? It stops showing up in the nightly check. Its history is kept.
           </Text>
-          <Button variant="gold" size="sm" onClick={archive}>
+          <Button autoFocus variant="gold" size="sm" onClick={archive}>
             Archive
           </Button>
           <Button variant="quiet" size="sm" onClick={() => setConfirming(false)}>

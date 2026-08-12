@@ -78,6 +78,22 @@ describe('CaptureBar', () => {
     expect(await screen.findByText(/Task added/)).toBeTruthy();
   });
 
+  // Capture's whole premise is that it's safe to hand it a thought. The field clears optimistically,
+  // so without an onError the write rolls back, the entry disappears, the box is already empty, and
+  // nothing says so — the thought is just gone.
+  it('puts the text back and says so when the write fails', async () => {
+    const api = createStubClient({ seed: false, storageKey: 'cap-fail' });
+    api.createLogEntry = () => Promise.reject(new Error('offline'));
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+
+    await user.type(field(), 'a thought I do not want to lose');
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+    await waitFor(() => expect(field().value).toBe('a thought I do not want to lose'));
+  });
+
   it('commits from the Send button, for phones with no Enter key on the keyboard', async () => {
     const api = createStubClient({ seed: false, storageKey: 'cap-send' });
     const user = userEvent.setup();

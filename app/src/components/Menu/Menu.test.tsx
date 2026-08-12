@@ -84,6 +84,17 @@ describe('Menu', () => {
     expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
   });
 
+  // The one dismissal path that had no test. React flushes the close at the end of dispatch, so
+  // letting the browser's own Tab through would move focus to a menuitem that's already detached.
+  it('closes on Tab and keeps focus on a live element', async () => {
+    const { user, trigger } = setup();
+    await user.click(trigger);
+    await user.keyboard('{Tab}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it('closes on an outside click without stealing focus back', async () => {
     const { user, trigger } = setup();
     await user.click(trigger);

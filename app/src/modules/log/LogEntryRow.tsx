@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { LogEntry } from '@aperture/shared';
 import { fmtTime } from '../../lib/format';
 import { PencilIcon } from '../../components/icons';
 import { Text } from '../../components/Text';
+import { useAutoGrow } from '../capture/useAutoGrow';
 
 // A single timestamped log line with light inline edit (typo fixes). No backdating — the timestamp
 // is fixed at capture; only the text is editable.
@@ -19,6 +20,10 @@ export function LogEntryRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  // Same growing-field behaviour as capture, from the same hook — the old `rows` heuristic guessed
+  // line count from character count, which is wrong the moment the column isn't 60ch.
+  useAutoGrow(ref, editing ? draft : '');
 
   function commit() {
     const value = draft.trim();
@@ -47,8 +52,9 @@ export function LogEntryRow({
       </div>
       {editing ? (
         <textarea
+          ref={ref}
           autoFocus
-          rows={Math.min(6, Math.max(1, Math.ceil(draft.length / 60)))}
+          rows={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}

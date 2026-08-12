@@ -3,6 +3,7 @@ import { todayKey } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { EmptyState } from '../../components/EmptyState';
 import { Field } from '../../components/Field';
 import { MiniBar } from '../../components/MiniBar';
 import { Text } from '../../components/Text';
@@ -24,7 +25,7 @@ export function PlanSection() {
   const day = todayKey(settings?.dayStartHour ?? 4);
 
   const { data: dayRec } = useDay(day);
-  const { data: plans = [] } = usePlansForDay(day);
+  const { data: plans = [], isPending: plansPending } = usePlansForDay(day);
   const { data: allTasks = [] } = useAllTasks();
   const { data: backlog = [], isPending: backlogPending } = useBacklog();
 
@@ -83,13 +84,20 @@ export function PlanSection() {
           Planned today
         </Text>
         {plannedRows.length === 0 ? (
-          <Text tone="muted" size="sm">
-            {/* `backlog` defaults to [], so branching on its length alone would assert "the backlog
-                is empty" while the query is still in flight, then swap the copy underneath you. */}
+          // Every list here defaults to [], so length alone can't tell "empty" from "still
+          // loading" or "failed" — EmptyState is the one place that knows the difference.
+          <EmptyState
+            pending={plansPending}
+            title={
+              backlogPending || backlog.length > 0
+                ? 'Nothing planned yet.'
+                : 'Nothing planned, and the backlog is empty.'
+            }
+          >
             {backlogPending || backlog.length > 0
-              ? 'Nothing planned yet — pull something in from the backlog below.'
-              : 'Nothing planned, and the backlog is empty. Capture a task from the bar below to start.'}
-          </Text>
+              ? 'Pull something in from the backlog below.'
+              : 'Capture a task from the bar below to start.'}
+          </EmptyState>
         ) : (
           plannedRows.map(({ plan, task }) => (
             <TaskCard

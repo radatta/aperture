@@ -26,7 +26,14 @@ export function CaptureBar() {
   const today = todayKey(settings?.dayStartHour ?? 4);
   const [mode, setMode] = useState<CaptureMode>('log');
   const [text, setText] = useState('');
-  const [receipt, setReceipt] = useState<CaptureMode | null>(null);
+  // `at` is a nonce: two captures in a row in the same mode would otherwise set an identical value,
+  // React would bail out of the re-render, the dismiss effect would never re-run, and the second
+  // confirmation would vanish after the FIRST timer's remainder.
+  const [receipt, setReceipt] = useState<{
+    mode: CaptureMode;
+    failed?: boolean;
+    at: number;
+  } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const createLog = useCreateLogEntry(today);
@@ -49,9 +56,10 @@ export function CaptureBar() {
   }, []);
 
   // The receipt is a transient acknowledgement, not state anyone can act on — clear it on a timer,
-  // and on unmount so a route change mid-fade can't set state on a dead component.
+  // and on unmount so a route change mid-fade can't set state on a dead component. A failure notice
+  // stays put: it's telling you your text was restored and needs another try.
   useEffect(() => {
-    if (!receipt) return;
+    if (!receipt || receipt.failed) return;
     const id = setTimeout(() => setReceipt(null), RECEIPT_MS);
     return () => clearTimeout(id);
   }, [receipt]);
@@ -59,13 +67,22 @@ export function CaptureBar() {
   function submit() {
     const value = text.trim();
     if (!value) return;
-    // The receipt is a promise that the thought landed, so it waits for the write to actually
-    // succeed. Announcing "Logged" off the optimistic path would, on a failed create, tell you it
-    // was saved while your text is already gone.
-    const confirm = { onSuccess: () => setReceipt(mode) };
-    if (mode === 'log') createLog.mutate(value, confirm);
-    else if (mode === 'task') createTask.mutate(value, confirm);
-    else createIdea.mutate(value, confirm);
+    const submitted = mode;
+    // The field clears optimistically so capture stays instant — which means a failed write would
+    // otherwise destroy the thought outright: the creates roll back, the entry disappears from the
+    // list, and the text is already gone from the field. Capture is the #1 mechanic and the whole
+    // premise is that it's safe to hand it something, so a failure puts the text back and says so.
+    const handlers = {
+      onSuccess: () => setReceipt({ mode: submitted, at: Date.now() }),
+      onError: () => {
+        setText((current) => (current === '' ? value : current));
+        setMode(submitted);
+        setReceipt({ mode: submitted, failed: true, at: Date.now() });
+      },
+    };
+    if (submitted === 'log') createLog.mutate(value, handlers);
+    else if (submitted === 'task') createTask.mutate(value, handlers);
+    else createIdea.mutate(value, handlers);
     setText('');
     setMode('log');
     inputRef.current?.focus();
@@ -96,11 +113,13 @@ export function CaptureBar() {
           value={mode}
           onChange={setMode}
         />
-        {/* Live region: "a submit is never silent" has to hold for a screen reader too, and the
-            receipt swaps in without any focus change to announce it. */}
-        <div aria-live="polite" className="min-w-0">
-          {receipt ? <Receipt mode={receipt} /> : <Hint />}
+        {/* Live region wraps the receipt ONLY. With the hint inside it, the hint re-entered the
+            region when the receipt expired and every capture ended with the keyboard hint being
+            read aloud 1.8s later. */}
+        <div aria-live="polite" role="status" className="min-w-0">
+          {receipt && <Receipt receipt={receipt} />}
         </div>
+        {!receipt && <Hint />}
       </div>
       <div className="flex items-end gap-2">
         <textarea
@@ -148,8 +167,14 @@ function Hint() {
 // Plain text, not a link. It disappears after ~1.8s, so as a link it was a target no keyboard user
 // could ever reach — and the nav already carries a permanent route to all three destinations. It
 // says where the thought went; getting there is the nav's job.
-function Receipt({ mode }: { mode: CaptureMode }) {
-  const r = receiptFor(mode);
+function Receipt({ receipt }: { receipt: { mode: CaptureMode; failed?: boolean } }) {
+  if (receipt.failed)
+    return (
+      <Text size="xs" tone="danger" className="pr-1">
+        Couldn&apos;t save — your text is back in the box.
+      </Text>
+    );
+  const r = receiptFor(receipt.mode);
   return (
     <Text size="xs" tone="teal" className="pr-1">
       {r.text} → {r.label}

@@ -12,8 +12,8 @@ import { createStubClient } from '../data/stubClient';
 import { routes } from '../routes';
 
 // Render a component with a fresh QueryClient and an injected (isolated) ApiClient.
-// A router is part of the baseline: in the real app nothing renders outside one, and components
-// that link somewhere (the capture bar's "Logged → today" receipt) need the context to exist.
+// A router is part of the baseline: in the real app nothing renders outside one, so any component
+// reaching for router context (a NavLink, a ButtonLink) works here the same way it does in the app.
 export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }): RenderResult {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {

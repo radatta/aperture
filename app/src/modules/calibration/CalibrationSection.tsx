@@ -50,7 +50,7 @@ export function CalibrationSection() {
             </div>
             {/* the aggregate as one bar, so the headline number has a shape */}
             <DeltaBar estimateMin={agg.totalEstimateMin} actualMin={agg.totalActualMin} />
-            <Text size="xs" tone="subtle">
+            <Text size="xs" tone="muted">
               {fmtDuration(agg.totalActualMin)} spent against {fmtDuration(agg.totalEstimateMin)}{' '}
               estimated · {agg.count} {agg.count === 1 ? 'task' : 'tasks'} · last 30 days
               {agg.count < 5 ? ' · still sparse, read it lightly' : ''}

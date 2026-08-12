@@ -130,7 +130,7 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
             }
             className="w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 text-ink outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface"
           />
-          <Text size="xs" tone={cat.isWork ? 'teal' : 'subtle'}>
+          <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
             {cat.isWork ? 'Work' : 'Non-work'}
           </Text>
         </div>
@@ -218,7 +218,7 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
       )}
 
       {backfilled !== null && (
-        <Text size="xs" tone="subtle" className="mt-2">
+        <Text size="xs" tone="muted" className="mt-2">
           Reclassified {backfilled} past {backfilled === 1 ? 'session' : 'sessions'}.
         </Text>
       )}

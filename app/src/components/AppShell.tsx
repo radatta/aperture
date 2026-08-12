@@ -46,6 +46,8 @@ export function AppShell() {
       </div>
       <div
         ref={dockRef}
+        // Selector for the out-of-repo browser harness that asserts nothing on a page is ever
+        // covered by the dock. Not used by app code or CSS.
         data-dock
         className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-4 pb-safe"
       >

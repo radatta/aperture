@@ -54,7 +54,9 @@ export function DeltaBar({ estimateMin, actualMin, label, className }: DeltaBarP
         <Text size="sm" weight="medium" tabular>
           {fmtDuration(actualMin)}
         </Text>
-        <Text size="xs" tone="subtle" tabular>
+        {/* muted, not subtle: this is the other half of the comparison the whole component exists
+            to show — it is not supplementary. */}
+        <Text size="xs" tone="muted" tabular>
           {fmtDuration(estimateMin)} est
         </Text>
         {/* The word carries the direction, so the number is unsigned — "-20% under" was saying it

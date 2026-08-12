@@ -182,12 +182,13 @@ function PlanTodayCard() {
 
 // Daytime: what's left today, planned vs elapsed.
 function TodayTasksCard() {
-  const { rows, doneCount, totalCount, isPending } = useTodayPlan();
+  const { rows, doneCount, totalCount, isPending, isError } = useTodayPlan();
   return (
     <HomeCard title="Today's tasks" aside={<CardLink to="/tasks">Open</CardLink>}>
       {totalCount === 0 ? (
         <EmptyState
           pending={isPending}
+          error={isError}
           title="Nothing planned today."
           action={
             <ButtonLink size="sm" to="/tasks">
@@ -392,13 +393,14 @@ function ReviewCard({ today }: { today: string }) {
 // Shared between morning ("due") and night ("check"). Read-only for now — marking them off + the
 // weekly calendar are Phase 7. Shows the real seeded habits so the shell isn't hollow.
 function HabitsCard({ title }: { title: string }) {
-  const { data: habits = [], isPending } = useHabits();
+  const { data: habits = [], isPending, isError } = useHabits();
   const active = habits.filter((h) => h.active);
   return (
     <HomeCard title={title}>
       {active.length === 0 ? (
         <EmptyState
           pending={isPending}
+          error={isError}
           title="No habits yet."
           action={
             <ButtonLink size="sm" to="/habits">
@@ -417,7 +419,7 @@ function HabitsCard({ title }: { title: string }) {
                 className="rounded-full border border-line px-2.5 py-1 text-xs text-ink-muted"
               >
                 {h.name}
-                <Text size="xs" tone="subtle">
+                <Text size="xs" tone="muted">
                   {' '}
                   · {h.cadencePerWeek}×
                 </Text>
