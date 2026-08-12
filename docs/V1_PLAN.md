@@ -8,7 +8,19 @@ key files it creates, dependencies, and the spec sections it implements. Build o
 **page-first**: workspace → stub contract → validate home/capture/calibration UX against the
 stub → real Lambda + DynamoDB → auth → CI/infra → custom domain LAST.
 
-**Build status (2026-08-03):** Phase 0 ✅ built & green. Phases 1–14 pending. Next: **Phase 1**.
+**Build status (2026-08-11):** Phases **0–14 ✅ built** — every phase's code artifacts are in the
+repo and all six packages are green (236 tests). Verified against the tree, not from memory; the
+per-phase evidence is in the "as built" note under each phase heading where one exists.
+
+**Open, and deliberately not claimed as done** — neither is code, so neither can be verified here:
+
+- **9.2 — the stub-validation gate.** "Dogfood against the stub for a real morning + night" before
+  trusting the backend. This is a human gate; only the author knows whether it happened.
+- **Prod / custom domain actually live.** The CDK wiring (14.1–14.4) is in `cdk/`, but a successful
+  deploy is not an artifact in the repo. Confirm against the AWS console / a live fetch.
+
+Shipped **beyond** this plan (see `CICD_HARDENING.md`): cdk-nag, billing + CloudWatch alarms,
+health check, gitleaks, Dependabot, deploy notifications.
 
 ---
 
