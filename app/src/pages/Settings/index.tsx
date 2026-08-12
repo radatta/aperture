@@ -3,8 +3,10 @@ import type { Category } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
+import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
+import { ArrowDownIcon, ArrowUpIcon } from '../../components/icons';
 import { useApi } from '../../data/api-context';
 import {
   useCategories,
@@ -106,41 +108,72 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
   }
 
   return (
-    <Card>
+    <Card className="px-3.5 py-2.5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
+              form to fill in, but hover-only would leave the field unmarked on touch — and this is
+              an installable phone app. */}
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
+            aria-label={`Rename ${cat.label}`}
             onBlur={() =>
               label.trim() &&
               label !== cat.label &&
-              upsert.mutate({ id: cat.id, label: label.trim(), isWork: cat.isWork, order: cat.order })
+              upsert.mutate({
+                id: cat.id,
+                label: label.trim(),
+                isWork: cat.isWork,
+                order: cat.order,
+              })
             }
-            className="w-40 rounded-lg border border-line bg-surface px-2 py-1 text-ink outline-none focus:border-teal"
+            className="w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 text-ink outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface"
           />
           <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
             {cat.isWork ? 'Work' : 'Non-work'}
           </Text>
         </div>
-        <div className="flex flex-wrap justify-end gap-1.5">
-          <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => move(-1)}>
-            Up
-          </Button>
-          <Button variant="ghost" size="sm" disabled={index === cats.length - 1} onClick={() => move(1)}>
-            Down
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setPanel(panel === 'work' ? null : 'work')}>
-            Make {cat.isWork ? 'non-work' : 'work'}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* Arrows, not the words "Up"/"Down" — reordering is a nudge, not a sentence. */}
+          <Button
+            variant="quiet"
+            size="sm"
+            aria-label={`Move ${cat.label} up`}
+            disabled={index === 0}
+            onClick={() => move(-1)}
+            className="h-9 w-9 px-0"
+          >
+            <ArrowUpIcon size={15} />
           </Button>
           <Button
-            variant="ghost"
+            variant="quiet"
             size="sm"
-            disabled={others.length === 0}
-            onClick={() => setPanel(panel === 'delete' ? null : 'delete')}
+            aria-label={`Move ${cat.label} down`}
+            disabled={index === cats.length - 1}
+            onClick={() => move(1)}
+            className="h-9 w-9 px-0"
           >
-            Delete
+            <ArrowDownIcon size={15} />
           </Button>
+          <Menu
+            label={`More actions for ${cat.label}`}
+            items={[
+              {
+                label: `Make ${cat.isWork ? 'non-work' : 'work'}…`,
+                onSelect: () => setPanel('work'),
+              },
+              ...(others.length > 0
+                ? [
+                    {
+                      label: 'Delete…',
+                      tone: 'danger' as const,
+                      onSelect: () => setPanel('delete'),
+                    },
+                  ]
+                : []),
+            ]}
+          />
         </div>
       </div>
 
@@ -185,7 +218,7 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
       )}
 
       {backfilled !== null && (
-        <Text size="xs" tone="subtle" className="mt-2">
+        <Text size="xs" tone="muted" className="mt-2">
           Reclassified {backfilled} past {backfilled === 1 ? 'session' : 'sessions'}.
         </Text>
       )}
@@ -238,7 +271,7 @@ function PreferencesSection() {
               { value: 'light', label: 'Light' },
               { value: 'dark', label: 'Dark' },
             ]}
-            className="w-52"
+            className="w-60"
           />
         </div>
       </Card>

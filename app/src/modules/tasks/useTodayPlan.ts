@@ -14,6 +14,11 @@ export interface TodayPlan {
   doneCount: number;
   totalCount: number;
   pva: PlannedVsAvailable;
+  // True until BOTH halves of the join have landed. Consumers render "nothing planned today"
+  // off totalCount === 0, which is also what an in-flight query looks like.
+  isPending: boolean;
+  // ...and what a FAILED one looks like. Without this, an error renders as a confident empty plan.
+  isError: boolean;
 }
 
 // The day's plan joined to its tasks — shared by the morning plan card, the daytime tasks + budget
@@ -22,8 +27,8 @@ export function useTodayPlan(): TodayPlan {
   const { data: settings } = useSettings();
   const day = todayKey(settings?.dayStartHour ?? 4);
   const { data: dayRec } = useDay(day);
-  const { data: plans = [] } = usePlansForDay(day);
-  const { data: tasks = [] } = useAllTasks();
+  const { data: plans = [], isPending: plansPending, isError: plansError } = usePlansForDay(day);
+  const { data: tasks = [], isPending: tasksPending, isError: tasksError } = useAllTasks();
 
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const rows = plans
@@ -42,5 +47,7 @@ export function useTodayPlan(): TodayPlan {
     doneCount,
     totalCount: rows.length,
     pva: plannedVsAvailable(plannedMin, dayRec?.capacityHours ?? null),
+    isPending: plansPending || tasksPending,
+    isError: plansError || tasksError,
   };
 }

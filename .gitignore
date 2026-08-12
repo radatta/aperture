@@ -15,3 +15,5 @@ cdk-outputs.*.json
 !.env.example
 
 localNotes/
+nohup.out
+.local/

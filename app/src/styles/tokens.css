@@ -1,37 +1,58 @@
 /* Palette derived from localNotes/preview.webp: a dusky teal-green ground, soft off-white ink,
    a seafoam translucent highlight for active states, and one warm gold accent (the wingtips).
-   Dark is the identity anchor (:root). Light is derived. ThemeProvider always stamps
-   data-theme="dark|light" (resolving "auto" against the OS in JS), so no media query is needed. */
+   Dark is the identity anchor (:root). Light is derived — the "lights-on" version of the SAME
+   family, never a white app (PRODUCT §5). ThemeProvider always stamps data-theme="dark|light"
+   (resolving "auto" in JS), so no media query is needed.
+
+   Every value below was solved against WCAG, not eyeballed (scratchpad contrast audit):
+     - ink / ink-muted / teal / gold / danger clear 4.5:1 on ALL THREE grounds (surface, panel,
+       panel-2). These carry content.
+     - ink-subtle clears 3:1. It is supplementary only — de-emphasised metadata and separators.
+       Nothing a reader needs (placeholders, hints, empty-state guidance) may use it.
+     - line-strong clears 3:1 against panel: it is the *only* thing marking an unchecked habit
+       cell, so it's a non-text UI boundary, not decoration.
+   The panel steps in dark are deliberately small. A lighter raised ground crushed contrast for
+   everything sitting on the dock; separation there comes from the border and shadow instead. */
 
 :root,
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --surface: #33453f; /* app ground */
-  --panel: #3b4d47; /* cards / rows */
-  --panel-2: #45574f; /* raised */
+  --surface: #2f423c; /* app ground */
+  --panel: #374a43; /* cards / rows */
+  --panel-2: #3e5049; /* raised — dock, active segment ground */
   --ink: #e8ece9; /* primary text */
-  --ink-muted: #9fb0a9; /* secondary / counts */
-  --ink-subtle: #7a8d86; /* tertiary */
-  --line: rgba(255, 255, 255, 0.09); /* hairlines */
-  --teal: #7fb2a2; /* active / links */
-  --teal-soft: rgba(127, 178, 162, 0.16); /* active row fill */
-  --gold: #cfab6b; /* the accent */
-  --gold-soft: rgba(207, 171, 107, 0.16);
-  --danger: #d98a72; /* soft, never alarming */
+  --ink-muted: #b1bfb9; /* secondary / counts — AA on every ground */
+  --ink-subtle: #8c9d97; /* tertiary — 3:1, supplementary only */
+  --line: rgba(255, 255, 255, 0.1); /* hairlines */
+  --line-strong: #849690; /* empty habit cells, input borders — 3:1 on panel */
+  --teal: #9bc5b7; /* active / links */
+  --teal-soft: rgba(155, 197, 183, 0.18); /* active row fill */
+  --gold: #d8b882; /* the accent */
+  --gold-soft: rgba(216, 184, 130, 0.18);
+  --danger: #e7b09e; /* soft, never alarming */
+
+  --ring: rgba(155, 197, 183, 0.8); /* focus-visible */
+  --shadow-dock: 0 -1px 0 rgba(255, 255, 255, 0.05), 0 8px 30px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --surface: #eef1ec;
-  --panel: #ffffff;
-  --panel-2: #f6f8f4;
-  --ink: #21302b;
-  --ink-muted: #566661;
-  --ink-subtle: #82918b;
-  --line: rgba(18, 38, 32, 0.1);
-  --teal: #3c6f61;
-  --teal-soft: rgba(60, 111, 97, 0.12);
-  --gold: #9c7a2f;
-  --gold-soft: rgba(156, 122, 47, 0.14);
-  --danger: #b4553a;
+  --surface: #e6ebe4; /* pale warm off-white WITH the sage tint — not white */
+  --panel: #f4f7f1;
+  --panel-2: #fbfcf9;
+  --ink: #1d2b26;
+  --ink-muted: #4e605a;
+  --ink-subtle: #78877f;
+  --line: rgba(18, 38, 32, 0.12);
+  --line-strong: #78877f;
+  --teal: #35685a;
+  --teal-soft: rgba(53, 104, 90, 0.13);
+  --gold: #816120;
+  --gold-soft: rgba(129, 97, 32, 0.15);
+  --danger: #a8492e;
+
+  --ring: rgba(53, 104, 90, 0.75);
+  --shadow-dock: 0 -1px 0 rgba(18, 38, 32, 0.04), 0 8px 30px rgba(18, 38, 32, 0.12);
+  --shadow-pop: 0 8px 24px rgba(18, 38, 32, 0.16);
 }

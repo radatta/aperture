@@ -50,7 +50,11 @@ describe('taskTransition — estimate freeze', () => {
   });
 
   it('rollover (in_progress → backlog) is allowed; a still-planned task stays editable', () => {
-    const rolled = taskTransition(baseTask({ status: 'in_progress', estimateLockedMin: 60 }), 'backlog', 1000);
+    const rolled = taskTransition(
+      baseTask({ status: 'in_progress', estimateLockedMin: 60 }),
+      'backlog',
+      1000,
+    );
     expect(rolled.status).toBe('backlog');
     const planned = baseTask();
     expect(withEstimate(planned, 90, 10, 2000).estimateMin).toBe(90);
@@ -58,8 +62,12 @@ describe('taskTransition — estimate freeze', () => {
 
   it('only done + locked tasks contribute calibration', () => {
     expect(contributesCalibration(baseTask({ status: 'done', estimateLockedMin: 60 }))).toBe(true);
-    expect(contributesCalibration(baseTask({ status: 'cancelled', estimateLockedMin: 60 }))).toBe(false);
-    expect(contributesCalibration(baseTask({ status: 'done', estimateLockedMin: null }))).toBe(false);
+    expect(contributesCalibration(baseTask({ status: 'cancelled', estimateLockedMin: 60 }))).toBe(
+      false,
+    );
+    expect(contributesCalibration(baseTask({ status: 'done', estimateLockedMin: null }))).toBe(
+      false,
+    );
   });
 });
 

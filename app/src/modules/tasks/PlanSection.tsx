@@ -3,6 +3,7 @@ import { todayKey } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { EmptyState } from '../../components/EmptyState';
 import { Field } from '../../components/Field';
 import { MiniBar } from '../../components/MiniBar';
 import { Text } from '../../components/Text';
@@ -24,9 +25,9 @@ export function PlanSection() {
   const day = todayKey(settings?.dayStartHour ?? 4);
 
   const { data: dayRec } = useDay(day);
-  const { data: plans = [] } = usePlansForDay(day);
+  const { data: plans = [], isPending: plansPending } = usePlansForDay(day);
   const { data: allTasks = [] } = useAllTasks();
-  const { data: backlog = [] } = useBacklog();
+  const { data: backlog = [], isPending: backlogPending } = useBacklog();
 
   const setCapacity = useSetCapacity(day);
   const upsertPlan = useUpsertPlan();
@@ -62,7 +63,7 @@ export function PlanSection() {
             onSave={(h) => setCapacity.mutate(h)}
           />
           {pva.availableMin === null ? (
-            <Text size="sm" tone="subtle">
+            <Text size="sm" tone="muted">
               {fmtDuration(plannedMin)} planned. Set your available hours to see if you&apos;re
               over-scoping.
             </Text>
@@ -83,9 +84,20 @@ export function PlanSection() {
           Planned today
         </Text>
         {plannedRows.length === 0 ? (
-          <Text tone="subtle" size="sm">
-            Nothing planned yet — pull something in from the backlog below.
-          </Text>
+          // Every list here defaults to [], so length alone can't tell "empty" from "still
+          // loading" or "failed" — EmptyState is the one place that knows the difference.
+          <EmptyState
+            pending={plansPending}
+            title={
+              backlogPending || backlog.length > 0
+                ? 'Nothing planned yet.'
+                : 'Nothing planned, and the backlog is empty.'
+            }
+          >
+            {backlogPending || backlog.length > 0
+              ? 'Pull something in from the backlog below.'
+              : 'Capture a task from the bar below to start.'}
+          </EmptyState>
         ) : (
           plannedRows.map(({ plan, task }) => (
             <TaskCard
@@ -93,7 +105,7 @@ export function PlanSection() {
               task={task}
               actions={
                 <Button
-                  variant="ghost"
+                  variant="quiet"
                   size="sm"
                   onClick={async () => {
                     await removePlan.mutateAsync(plan.id);
@@ -114,18 +126,25 @@ export function PlanSection() {
           Backlog
         </Text>
         {backlog.length === 0 ? (
-          <Text tone="subtle" size="sm">
-            Backlog is clear.
+          <Text tone="muted" size="sm">
+            Backlog is clear — nothing waiting on you.
           </Text>
         ) : (
           backlog.map((task) => (
-            <Card key={task.id}>
+            <Card key={task.id} className="px-3.5 py-3">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex min-w-0 flex-col gap-0.5">
                   <Text weight="medium" className="truncate">
                     {task.title}
                   </Text>
-                  <CategoryTag categoryId={task.categoryId} />
+                  <div className="flex items-center gap-2">
+                    <CategoryTag categoryId={task.categoryId} />
+                    {task.estimateMin != null && (
+                      <Text size="xs" tone="muted" tabular>
+                        {fmtDuration(task.estimateMin)} est
+                      </Text>
+                    )}
+                  </div>
                 </div>
                 <Button size="sm" onClick={() => addToDay(task.id)}>
                   Add to today
@@ -139,6 +158,11 @@ export function PlanSection() {
   );
 }
 
+// The typical shapes of a day. The over-scoping catch only fires once capacity is set, and an
+// empty number box asking for a decimal is the most skippable control on the page — one tap gets
+// you to the number that makes the whole morning pass work.
+const CAPACITY_PRESETS = [2, 4, 6, 8];
+
 // Manual hours-available (v1 capacity is a number, not calendar-derived). Saves on blur/Enter.
 function CapacityField({
   initial,
@@ -150,18 +174,44 @@ function CapacityField({
   const [value, setValue] = useState(initial?.toString() ?? '');
   useEffect(() => setValue(initial?.toString() ?? ''), [initial]);
   const commit = () => onSave(value === '' ? null : Number(value));
+
+  function pick(h: number) {
+    setValue(String(h));
+    onSave(h);
+  }
+
   return (
-    <Field
-      label="Hours available today"
-      type="number"
-      min={0}
-      step={0.5}
-      inputMode="decimal"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => e.key === 'Enter' && commit()}
-      className="w-40"
-    />
+    <div className="flex flex-wrap items-end gap-3">
+      <Field
+        label="Hours available today"
+        type="number"
+        min={0}
+        step={0.5}
+        inputMode="decimal"
+        placeholder="—"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && commit()}
+        className="w-32"
+      />
+      <div className="flex gap-1.5 pb-0.5">
+        {CAPACITY_PRESETS.map((h) => (
+          <Button
+            key={h}
+            variant={Number(value) === h ? 'primary' : 'ghost'}
+            size="sm"
+            aria-pressed={Number(value) === h}
+            // Keep focus in the input: otherwise clicking a preset blurs it, firing commit() with
+            // the old typed value on top of pick()'s write — two racing capacity mutations for one
+            // tap, and over HTTP the stale one can land last.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => pick(h)}
+          >
+            {h}h
+          </Button>
+        ))}
+      </div>
+    </div>
   );
 }

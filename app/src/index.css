@@ -11,6 +11,7 @@
   --color-ink-muted: var(--ink-muted);
   --color-ink-subtle: var(--ink-subtle);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-teal: var(--teal);
   --color-teal-soft: var(--teal-soft);
   --color-gold: var(--gold);
@@ -37,5 +38,47 @@
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* The bottom dock is fixed; stop iOS rubber-banding it away from the viewport edge. */
+    overscroll-behavior-y: none;
+  }
+
+  /* One focus ring for the whole app. Every control uses outline-none + a border tint for
+     mouse states, which leaves keyboard users with no "you are here" — this puts it back in
+     one place instead of thirty. :focus-visible so a mouse click never draws it. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--teal-soft);
+  }
+
+  /* Motion is decoration here (segment slides, bar fills, the dock's confirm line). Anyone who
+     asked the OS to stop it gets it stopped, once, globally. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* The capture dock sits on the home-bar edge on iOS; keep it above the indicator. */
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+  /* Horizontally scrollable rows (the nav on a phone) without a visible scrollbar. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }

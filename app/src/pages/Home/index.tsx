@@ -3,9 +3,10 @@ import { Link } from 'react-router';
 import type { ReactNode } from 'react';
 import { dayKey, todayKey } from '@aperture/shared';
 import { cx } from '../../lib/cx';
-import { Button } from '../../components/Button';
+import { Button, ButtonLink } from '../../components/Button';
+import { DeltaBar } from '../../components/DeltaBar';
+import { EmptyState } from '../../components/EmptyState';
 import { MiniBar } from '../../components/MiniBar';
-import { StatPair } from '../../components/StatPair';
 import { Text } from '../../components/Text';
 import { ChevronRightIcon } from '../../components/icons';
 import { fmtClock, fmtDuration, fmtTime } from '../../lib/format';
@@ -100,7 +101,7 @@ function IntentCard() {
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
         placeholder="One line to aim the day…"
         aria-label="Day intent"
-        className="w-full bg-transparent text-ink outline-none placeholder:text-ink-subtle"
+        className="w-full bg-transparent text-ink outline-none placeholder:text-ink-muted"
       />
     </HomeCard>
   );
@@ -125,7 +126,7 @@ function ReflectionCard({ today }: { today: string }) {
           placeholder="Optional — skip freely."
           aria-label="Reflection"
           rows={2}
-          className="w-full resize-none rounded-xl border border-line bg-surface px-3 py-2 text-ink outline-none placeholder:text-ink-subtle focus:border-teal"
+          className="w-full resize-none rounded-xl border border-line bg-surface px-3 py-2 text-ink outline-none placeholder:text-ink-muted focus:border-teal"
         />
         <div className="flex items-center gap-2">
           <Button
@@ -151,16 +152,20 @@ function PlanTodayCard() {
   return (
     <HomeCard title="Plan today" aside={<CardLink to="/tasks">Plan</CardLink>}>
       {pva.availableMin === null ? (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col items-start gap-2">
           <Text tone="muted" size="sm">
             {totalCount > 0
               ? `${totalCount} planned · ${fmtDuration(plannedMin)}`
               : 'Nothing planned yet.'}
-            {backlog.length > 0 ? ` · ${backlog.length} in backlog` : ''}
+            {backlog.length > 0 ? ` · ${backlog.length} waiting in the backlog` : ''}
           </Text>
-          <Text tone="subtle" size="xs">
-            Set your available hours in Plan to catch over-scoping.
+          <Text tone="muted" size="xs">
+            Set your available hours to catch over-scoping before it becomes stress.
           </Text>
+          {/* An empty state that only describes the emptiness is a dead end — hand over the control. */}
+          <ButtonLink size="sm" to="/tasks">
+            Start the plan pass
+          </ButtonLink>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -177,13 +182,22 @@ function PlanTodayCard() {
 
 // Daytime: what's left today, planned vs elapsed.
 function TodayTasksCard() {
-  const { rows, doneCount, totalCount } = useTodayPlan();
+  const { rows, doneCount, totalCount, isPending, isError } = useTodayPlan();
   return (
     <HomeCard title="Today's tasks" aside={<CardLink to="/tasks">Open</CardLink>}>
       {totalCount === 0 ? (
-        <Text tone="subtle" size="sm">
-          Nothing planned today.
-        </Text>
+        <EmptyState
+          pending={isPending}
+          error={isError}
+          title="Nothing planned today."
+          action={
+            <ButtonLink size="sm" to="/tasks">
+              Open the backlog
+            </ButtonLink>
+          }
+        >
+          Capture with the bar below, or pull something in from the backlog.
+        </EmptyState>
       ) : (
         <div className="flex flex-col gap-1.5">
           <Text size="sm" tone="muted">
@@ -208,11 +222,11 @@ function TodayTasksCard() {
   );
 }
 
-// Daytime: the pomodoro. Controls live in the persistent timer (bottom-right); this card starts a
+// Daytime: the pomodoro. Controls live in the bottom dock's timer stack; this card starts a
 // focus block on an in-progress task (so work time accrues to it) and reflects the running set —
 // you can have several going at once (parallel focus).
 function FocusCard() {
-  const { timers, startFocus } = usePomodoro();
+  const { timers, startFocus, startBreak } = usePomodoro();
   const { data: tasks = [] } = useAllTasks();
   const inProgress = tasks.filter((t) => t.status === 'in_progress');
 
@@ -225,7 +239,9 @@ function FocusCard() {
               session.kind === 'break'
                 ? 'Break'
                 : (session.label ??
-                  (session.taskId ? (tasks.find((t) => t.id === session.taskId)?.title ?? 'Focus') : 'Focus'));
+                  (session.taskId
+                    ? (tasks.find((t) => t.id === session.taskId)?.title ?? 'Focus')
+                    : 'Focus'));
             return (
               <div key={session.id} className="flex items-center justify-between gap-3">
                 <div className="min-w-0 flex-1 truncate">
@@ -240,8 +256,12 @@ function FocusCard() {
             );
           })}
         </div>
-        <Text size="xs" tone="subtle" className="mt-2">
-          {timers.length === 1 ? 'Controls in the timer, bottom-right.' : `${timers.length} running · controls bottom-right.`}
+        {/* The timer stack moved into the bottom dock above the capture bar — it is no longer a
+            floating panel in the bottom-right corner. */}
+        <Text size="xs" tone="muted" className="mt-2">
+          {timers.length === 1
+            ? 'Controls are in the bar at the bottom.'
+            : `${timers.length} running · controls in the bar at the bottom.`}
         </Text>
       </HomeCard>
     );
@@ -265,11 +285,17 @@ function FocusCard() {
       ) : (
         <div className="flex flex-col gap-2">
           <Text size="sm" tone="muted">
-            Start a task, then focus it here — or a free block. Run several at once if you're juggling.
+            Start a task, then focus it here — or a free block. Run several at once if you're
+            juggling.
           </Text>
-          <div>
+          {/* Both cold-start entry points live here now that the timer dock only appears while
+              something is actually running. */}
+          <div className="flex flex-wrap gap-2">
             <Button variant="ghost" size="sm" onClick={() => startFocus()}>
               Start 25-min focus
+            </Button>
+            <Button variant="quiet" size="sm" onClick={() => startBreak()}>
+              Take a break
             </Button>
           </div>
         </div>
@@ -284,7 +310,7 @@ function TimeBudgetCard() {
   return (
     <HomeCard title="Time budget">
       {plannedMin === 0 ? (
-        <Text tone="subtle" size="sm">
+        <Text tone="muted" size="sm">
           No plan to budget against yet.
         </Text>
       ) : (
@@ -318,38 +344,44 @@ function ReviewCard({ today }: { today: string }) {
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>
       <div className="flex flex-col gap-3">
         {entries.length === 0 ? (
-          <Text tone="subtle" size="sm">
-            Nothing logged yet today.
+          <Text tone="muted" size="sm">
+            Nothing logged yet today — the bar below is already in Log mode.
           </Text>
         ) : (
           <div className="flex flex-col gap-1.5">
             {recent.map((e) => (
               <div key={e.id} className="flex gap-3">
-                <Text size="xs" tone="subtle" tabular className="pt-0.5">
+                {/* fixed, non-wrapping — "10:46 PM" was breaking across two lines on a phone */}
+                <Text
+                  size="xs"
+                  tone="subtle"
+                  tabular
+                  className="w-[4.5rem] shrink-0 whitespace-nowrap pt-0.5"
+                >
                   {fmtTime(e.createdAt)}
                 </Text>
-                <Text size="sm" tone="muted" className="line-clamp-1">
+                <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">
                   {e.text}
                 </Text>
               </div>
             ))}
-            <Text size="xs" tone="subtle" className="opacity-70">
+            <Text size="xs" tone="subtle">
               {entries.length} {entries.length === 1 ? 'entry' : 'entries'} today
             </Text>
           </div>
         )}
         {doneToday.length > 0 && (
-          <div className="flex flex-col gap-2 border-t border-line pt-3">
-            <Text size="xs" tone="muted">
+          <div className="flex flex-col gap-3 border-t border-line pt-3">
+            <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
               Done today · estimate vs actual
             </Text>
             {doneToday.map((t) => (
-              <div key={t.id} className="flex flex-col gap-0.5">
-                <Text size="xs" tone="subtle" className="truncate">
-                  {t.title}
-                </Text>
-                <StatPair estimateMin={t.estimateLockedMin!} actualMin={t.actualAccruedMin} />
-              </div>
+              <DeltaBar
+                key={t.id}
+                label={t.title}
+                estimateMin={t.estimateLockedMin!}
+                actualMin={t.actualAccruedMin}
+              />
             ))}
           </div>
         )}
@@ -361,14 +393,23 @@ function ReviewCard({ today }: { today: string }) {
 // Shared between morning ("due") and night ("check"). Read-only for now — marking them off + the
 // weekly calendar are Phase 7. Shows the real seeded habits so the shell isn't hollow.
 function HabitsCard({ title }: { title: string }) {
-  const { data: habits = [] } = useHabits();
+  const { data: habits = [], isPending, isError } = useHabits();
   const active = habits.filter((h) => h.active);
   return (
     <HomeCard title={title}>
       {active.length === 0 ? (
-        <Text tone="subtle" size="sm">
-          No habits yet — add some on the Habits page.
-        </Text>
+        <EmptyState
+          pending={isPending}
+          error={isError}
+          title="No habits yet."
+          action={
+            <ButtonLink size="sm" to="/habits">
+              Add a habit
+            </ButtonLink>
+          }
+        >
+          Weekly cadence, no streaks — a miss is just a miss.
+        </EmptyState>
       ) : (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap gap-2">
@@ -377,11 +418,15 @@ function HabitsCard({ title }: { title: string }) {
                 key={h.id}
                 className="rounded-full border border-line px-2.5 py-1 text-xs text-ink-muted"
               >
-                {h.name} · {h.cadencePerWeek}×
+                {h.name}
+                <Text size="xs" tone="muted">
+                  {' '}
+                  · {h.cadencePerWeek}×
+                </Text>
               </span>
             ))}
           </div>
-          <Text size="xs" tone="subtle" className="opacity-60">
+          <Text size="xs" tone="muted">
             Check them off tonight, or on the Habits page.
           </Text>
         </div>

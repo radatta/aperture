@@ -11,19 +11,27 @@ export interface ModeToggleProps<T extends string> {
   options: SegmentedOption<T>[];
   value: T;
   onChange: (value: T) => void;
+  size?: 'sm' | 'md';
   className?: string;
 }
 
 // Segmented control — the active segment uses the seafoam highlight from the reference. Backs the
-// capture bar [Log | Task | Idea] and the home mode switch.
+// capture bar [Log | Task | Idea], the home mode switch, and the Tasks tabs.
 export function ModeToggle<T extends string>({
   options,
   value,
   onChange,
+  size = 'md',
   className,
 }: ModeToggleProps<T>) {
   return (
-    <div className={cx('inline-flex gap-1 rounded-xl border border-line bg-surface p-1', className)}>
+    <div
+      role="group"
+      className={cx(
+        'inline-flex shrink-0 gap-0.5 rounded-xl border border-line bg-surface p-0.5',
+        className,
+      )}
+    >
       {options.map((o) => {
         const active = o.value === value;
         return (
@@ -35,8 +43,11 @@ export function ModeToggle<T extends string>({
             title={o.title}
             onClick={() => onChange(o.value)}
             className={cx(
-              'flex items-center rounded-lg px-3 py-1.5 text-sm transition',
-              active ? 'bg-teal-soft text-ink' : 'text-ink-muted hover:text-ink',
+              'flex items-center justify-center rounded-[0.625rem] transition',
+              size === 'sm' ? 'px-2.5 py-1 text-sm' : 'px-3 py-1.5 text-sm',
+              active
+                ? 'bg-teal-soft font-medium text-ink shadow-[inset_0_0_0_1px_var(--teal-soft)]'
+                : 'text-ink-muted hover:bg-panel hover:text-ink',
             )}
           >
             {o.label}

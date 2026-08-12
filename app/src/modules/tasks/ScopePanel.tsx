@@ -81,8 +81,13 @@ export function ScopePanel({ task, onDone }: { task: Task; onDone: () => void })
         <Button variant="ghost" size="sm" onClick={onDone}>
           Cancel
         </Button>
-        <Text size="xs" tone="subtle">
-          Editable until work starts — then it freezes.
+        {/* The new "Edit" affordance opens this panel after work started, where the field still
+            edits but the calibration baseline is already frozen. Saying "editable until work
+            starts" there would contradict the surface that opened it. */}
+        <Text size="xs" tone="muted">
+          {task.estimateLockedMin != null
+            ? "Editing this won't move the frozen estimate calibration is measured against."
+            : 'Editable until work starts — then it freezes.'}
         </Text>
       </div>
     </div>

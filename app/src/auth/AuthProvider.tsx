@@ -55,8 +55,14 @@ function OidcBridge({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthState>(
     () => ({
-      status: oidc.isLoading ? 'loading' : oidc.isAuthenticated ? 'authenticated' : 'unauthenticated',
-      user: oidc.user ? { sub: oidc.user.profile.sub, email: oidc.user.profile.email ?? null } : null,
+      status: oidc.isLoading
+        ? 'loading'
+        : oidc.isAuthenticated
+          ? 'authenticated'
+          : 'unauthenticated',
+      user: oidc.user
+        ? { sub: oidc.user.profile.sub, email: oidc.user.profile.email ?? null }
+        : null,
       error: oidc.error?.message ?? null,
       signIn: () => void oidc.signinRedirect(),
       signOut: () => void oidc.signoutRedirect(),

@@ -3,15 +3,21 @@ import type { ReactNode } from 'react';
 import type { PomodoroSession, Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
+import { TimerIcon } from '../../components/icons';
 import { cx } from '../../lib/cx';
 import { fmtClock } from '../../lib/format';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { usePomodoro } from './pomodoro-context';
 import type { RunningTimer } from './pomodoro-context';
 
-// The persistent pomodoro UI — a stack fixed above the capture bar, following you across every view
-// (pomodoro is not a route). One row per concurrent timer, plus stale keep/discard prompts and a
-// "new focus" starter for ad-hoc parallel work.
+// The persistent pomodoro UI — one row per concurrent timer, plus stale keep/discard prompts,
+// stacked directly above the capture bar by AppShell (pomodoro is not a route).
+//
+// Idle, it collapses to a single icon button rather than the old floating "+ New focus | Break"
+// panel, which competed with capture for the same corner of vision on every screen. It can't
+// collapse to nothing: the Focus card that offers a cold start only renders in DAYTIME mode, so
+// dropping the idle control entirely left 18 hours of the day (morning and night) with no way to
+// start an ad-hoc block at all.
 export function TimerBar() {
   const {
     timers,
@@ -28,10 +34,10 @@ export function TimerBar() {
   const { data: tasks = [] } = useAllTasks();
 
   if (timers.length === 0 && stale.length === 0)
-    return <NewFocus onStart={startFocus} onBreak={startBreak} idle />;
+    return <IdleStarter onStart={() => startFocus()} />;
 
   return (
-    <div className="fixed bottom-24 right-4 z-30 flex w-72 flex-col gap-2">
+    <div className="flex flex-col gap-2 sm:ml-auto sm:w-80">
       {stale.map((s) => (
         <StaleRow
           key={s.id}
@@ -57,6 +63,25 @@ export function TimerBar() {
   );
 }
 
+// One quiet control, right-aligned so it never sits where the capture text begins. Deliberately
+// icon+word and nothing else — a break from cold is a fringe intent and lives on the daytime
+// Focus card; once anything is running, the full controls appear below.
+function IdleStarter({ onStart }: { onStart: () => void }) {
+  return (
+    <div className="flex justify-end">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onStart}
+        title="Start a 25-minute focus block"
+        className="pointer-events-auto gap-1.5 bg-panel-2 shadow-[var(--shadow-dock)]"
+      >
+        <TimerIcon size={15} /> Focus
+      </Button>
+    </div>
+  );
+}
+
 function timerLabel(session: PomodoroSession, tasks: Task[]): string {
   if (session.kind === 'break') return 'Break';
   if (session.label) return session.label;
@@ -68,7 +93,7 @@ function Row({ done, children }: { done?: boolean; children: ReactNode }) {
   return (
     <div
       className={cx(
-        'flex items-center gap-2 rounded-2xl border bg-panel-2 p-2 shadow-lg',
+        'pointer-events-auto flex items-center gap-1.5 rounded-2xl border bg-panel-2 p-1.5 pl-2.5 shadow-[var(--shadow-dock)]',
         done ? 'border-gold' : 'border-line',
       )}
     >
@@ -109,8 +134,8 @@ function TimerRow({
         {done ? 'Done' : fmtClock(remaining)}
       </Text>
       {done ? (
-        <Button variant="ghost" size="sm" onClick={onExtend}>
-          +1
+        <Button variant="ghost" size="sm" onClick={onExtend} title="One more block">
+          Again
         </Button>
       ) : paused ? (
         <Button variant="ghost" size="sm" onClick={onResume}>
@@ -156,16 +181,14 @@ function StaleRow({
   );
 }
 
-// Start an ad-hoc parallel focus by name, or a break. `idle` renders it standalone-docked when
-// nothing is running yet (so there's always a way to start one).
+// Start another parallel focus by name, or a break — only offered while something is already
+// running, since that's when "and also this" is a real thought.
 function NewFocus({
   onStart,
   onBreak,
-  idle = false,
 }: {
   onStart: (input?: { label?: string | null }) => void;
   onBreak: () => void;
-  idle?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState('');
@@ -176,7 +199,20 @@ function NewFocus({
     setOpen(false);
   }
 
-  const inner = open ? (
+  if (!open) {
+    return (
+      <Row>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+          + New focus
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onBreak}>
+          Break
+        </Button>
+      </Row>
+    );
+  }
+
+  return (
     <Row>
       <input
         autoFocus
@@ -194,17 +230,5 @@ function NewFocus({
         Cancel
       </Button>
     </Row>
-  ) : (
-    <Row>
-      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-        + New focus
-      </Button>
-      <Button variant="ghost" size="sm" onClick={onBreak}>
-        Break
-      </Button>
-    </Row>
   );
-
-  if (!idle) return inner;
-  return <div className="fixed bottom-24 right-4 z-30 flex w-72 flex-col gap-2">{inner}</div>;
 }
