@@ -20,7 +20,7 @@ limit = "12GiB"
 swap  = "4GiB"
 
 [limits.runtime]
-max_processes = 300   # integer, not a quoted string
+max_processes = 1024   # integer, not a quoted string
 # max_duration — night profile only
 
 [network]
