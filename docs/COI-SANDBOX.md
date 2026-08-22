@@ -45,7 +45,7 @@ catches (`SIGABRT (134)` on your second session) is silent about its own cause:
 
 ```bash
 paste -d/ /sys/fs/cgroup/pids.{current,max}
-# want .../1024 or better. If it says .../300, the config bump isn't taking — see below.
+# want .../2048 (what .coi/config.toml asks for). If it says .../300, the bump isn't taking — see below.
 ```
 
 **Overnight (unattended):**
@@ -112,6 +112,7 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
    (this rig runs 7.3). Older Incus fails container launch with an idmap error.
 2. **Delegate host UID 501 to Incus.** Launch otherwise fails *"UID namespace isolation not
    supported"*:
+
    ```bash
    echo 'root:501:1' | sudo tee -a /etc/subuid
    echo 'root:501:1' | sudo tee -a /etc/subgid
@@ -122,6 +123,7 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
 3. **Make the repo mount writable.** Lima mounts the Mac home **read-only** (`virtiofs ro`) by
    default, so the container workspace is read-only. Fix with `limactl edit incus` — add a scoped
    writable mount for the repo path (it overmounts the ro parent):
+
    ```yaml
    mounts:
      - location: "~/Coding/Personal/aperture"
@@ -132,6 +134,7 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
 4. **Auth token.** `claude setup-token` mints a ~1-year subscription OAuth token. Store it in a
    mode-600 file — **not** an env var in a committed config, **not** a wholesale `~/.claude` mount
    (COI warns that clobbers its own credential injection):
+
    ```bash
    claude setup-token                          # copy the token
    umask 077 && printf %s "<token>" > ~/.coi-claude-token
@@ -172,11 +175,11 @@ host      = 6173
 containers pinning `6173` means the second one's proxy device fails to bind. Because
 `.coi/config.toml` is per-repo, give each project its own band:
 
-| Project | Band |
-| --- | --- |
+| Project         | Band           |
+| --------------- | -------------- |
 | you, on the Mac | `5173–5183` |
-| aperture | `6173–6183` |
-| next project | `6273–6283` |
+| aperture        | `6173–6183` |
+| next project    | `6273–6283` |
 
 There is also a `ports` field for *identity-mapped* ports — a count, published host==container,
 "allocated per workspace/slot". Fewer lines, but COI chooses the numbers, which defeats the
@@ -199,22 +202,26 @@ for c in $(incus list -c n --format csv); do
 done
 ```
 
-> **`COI_PORT_<NAME>` was not actually present.** The schema says each entry is *"exposed to the
-> session as `COI_PORT_<NAME>`"*, but on 2026-08-22 the live Claude process's own
-> `/proc/<pid>/environ` contained no `COI_*` variable at all — only the OAuth token. The
-> `COI_PORT_VITE=…` line COI writes into the generated `CLAUDE.md` preamble is prose, not proof of an
-> env var. Don't build anything on it; pinning `host` makes it moot.
+> **`COI_PORT_<NAME>` appears only once `host` is pinned.** The schema says each entry is *"exposed to
+> the session as `COI_PORT_<NAME>`"*. While `host` was auto-allocated, the live Claude process's own
+> `/proc/<pid>/environ` held no `COI_*` variable at all — only the OAuth token — so the
+> `COI_PORT_VITE=…` line COI writes into the generated `CLAUDE.md` preamble looked like prose rather
+> than proof. With `host` pinned, all 11 are present and correct (verified 2026-08-22:
+> `COI_PORT_VITE=6173` … `COI_PORT_VITE10=6183`). Read them back with
+> `tr '\0' '\n' < /proc/<pid>/environ | grep COI_PORT` on the Claude pid — not from a subshell, which
+> won't have inherited them. Still don't build on them: `app/vite.config.ts` derives its port from
+> `hostname()`, which works identically on the Mac.
 
 ## Config files
 
 Four files. Only the first lives in this repo; the rest are machine-local and never committed.
 
-| File                                           | Scope                      | Purpose                                                                                                                                                           |
-| ---------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                                           | Scope                      | Purpose                                                                                                                                                                                                        |
+| ---------------------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.coi/config.toml`                           | **repo (committed)** | Daytime posture:`coi-default` image, `permission_mode=bypass`, CPU/mem caps, `network.mode=restricted`, the Vite `6173–6183` port map (`host` pinned == `container`), monitoring on. Secret-free. |
-| `~/.coi/config.toml`                         | user (trusted)             | Auth injection:`[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`.                                                           |
-| `~/.coi-claude-token`                        | user, mode 600             | The token itself. Never mounted into the workspace.                                                                                                               |
-| `~/.coi/profiles/aperture-night/config.toml` | user (trusted)             | Night deltas:`network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`.     |
+| `~/.coi/config.toml`                         | user (trusted)             | Auth injection:`[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`.                                                                                                        |
+| `~/.coi-claude-token`                        | user, mode 600             | The token itself. Never mounted into the workspace.                                                                                                                                                            |
+| `~/.coi/profiles/aperture-night/config.toml` | user (trusted)             | Night deltas:`network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`.                                                  |
 
 Night profile, in full:
 
@@ -268,7 +275,7 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Prompt fills with`35;97;27M…` garbage                                                                            | A killed TUI never restored your terminal's mouse-reporting mode                                                                                     | Exit Claude cleanly (`Ctrl+D`). To recover: accept iTerm's "turn it off" prompt, or `reset`. **`stty sane` does not work.**                                                                                                                                                                                                    |
 | Long unattended run died ~when you shut the laptop                                                                  | `'Clamshell Sleep'` — lid close forces sleep; **`caffeinate` does not prevent it** (and on battery it does nothing at all)                | Lid open + AC +`caffeinate -s`; or clamshell mode / Amphetamine closed-display. Always on AC.                                                                                                                                                                                                                                            |
-| `Session can't start — SIGABRT (134)` on a 2nd/3rd session                                                       | Container**pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (→ `4096`). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Then verify a fresh container actually reports it** — as of 2026-08-22 the committed bump was silently not taking. |
+| `Session can't start — SIGABRT (134)` on a 2nd/3rd session                                                       | Container**pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (now `2048`, verified landing). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Always verify a fresh container reports the number you wrote** — `1024` silently didn't take, `2048` did, and the difference was never explained. |
 | Every container loses its mounts at once, then the VM reboots                                                       | A host-mount config change: the path must be visible in the Lima VM first, so applying it restarts the VM and kills every session                    | Make mount changes**before** starting a long run                                                                                                                                                                                                                                                                                     |
 | `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error) | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last                                                     | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`.                                                                                                                                                                                                                           |
 | Four "ephemeral" containers alive, GBs each                                                                         | Ephemeral destroy +`--resume` write happen only on a graceful shutdown                                                                             | Tear down properly when done — see*Run → Ending a session*                                                                                                                                                                                                                                                                             |
@@ -303,12 +310,13 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 
 ## Deferred / to-do
 
-- **Make `max_processes` actually take effect, and raise it to `4096`.** `edf1d4e` wrote `1024` into
-  `.coi/config.toml`; a container booted an hour later still reported `pids.max = 300`. The memory cap
-  from the same file *did* apply, so the file is being read and this key isn't landing — most likely
-  `coi trust` needs re-running after the edit, or a user-level value is winning the merge. Diagnosis
-  commands: [COI-INCIDENTS.md → Incident A → *Verify it took*](COI-INCIDENTS.md#verify-it-took--as-of-2026-08-22-it-had-not).
-  **This is the one open item here that actually breaks something** — a second session still can't start.
+- **`[limits.cpu] allowance = "80%"` isn't landing.** A container booted 2026-08-22 reports
+  `cpu.max = max 100000` — no quota — while `memory.high` and `pids.max` both match the file. Same
+  class as the `max_processes` miss that broke second sessions (fixed as of `54fbe95`, cause never
+  confirmed), and now the last
+  known instance of it. Nothing has been observed starving, so this is config correctness, not a live
+  failure. Diagnosis commands:
+  [COI-INCIDENTS.md → Incident A → *Verify it took*](COI-INCIDENTS.md#verify-it-took).
 - **Persisted audit log.** `coi audit` is live-only (`coi audit -f <name>`); there is no on-disk
   history, so after an incident you cannot answer "did the nft monitor pause or kill this run?".
   Worth filing upstream — it's the one question the current tooling makes unanswerable.
@@ -324,6 +332,7 @@ Not blockers — the rig is fully operational without these. Polish, in rough pr
   running box doesn't persist; it has to be baked. Supported path is a **profile** with a
   `[container.build]` section (never `COI_BUILD_SCRIPT_FROM_DISK=1` — that replaces COI's embedded
   security provisioning):
+
   ```toml
   [container]
   image = "coi-aperture"          # MUST differ from coi-default, else [container.build] is ignored

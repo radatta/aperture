@@ -20,8 +20,10 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 
 **TL;DR:** Not memory, not a Claude Code bug. The container's pids cgroup ceiling
 (`limits.processes`, templated to `300` by coi) was saturated at ~295. A second session needs ~15
-more threads, `clone()` returns `EAGAIN`, and the runtime `abort()`s. Fix: raise `max_processes` to
-`1024` in `.coi/config.toml`.
+more threads, `clone()` returns `EAGAIN`, and the runtime `abort()`s. Fix: raise `max_processes` in
+`.coi/config.toml` — now `2048`, and **verified landing** as of `54fbe95`. Raising the number is not
+by itself the fix: the first bump (`1024`) never reached Incus and the reason was never confirmed, so
+always measure. See *Verify it took*.
 
 ### Symptom
 
@@ -103,7 +105,7 @@ snapfuse ~45, docker/containerd/buildkitd ~24.
 ```bash
 # 1. PERSISTENT — .coi/config.toml. Without this, every new coi-* instance drifts back to 300.
 [limits.runtime]
-max_processes = 1024   # was 300
+max_processes = 2048   # was 300
 
 # 2. HOT-PATCH a running container — takes effect immediately, no restart. On the HOST.
 incus config set <ctr> limits.processes 8192
@@ -118,10 +120,13 @@ paste -d/ /sys/fs/cgroup/pids.{current,max}
 > `awk '{print $1"/"$2}' /sys/fs/cgroup/pids.current /sys/fs/cgroup/pids.max` — each file holds one
 > field on one line, so `$2` is always empty and you get `295/` then `300/`. Use `paste -d/`.
 
-### Verify it took — as of 2026-08-22 it had **not**
+### Verify it took
 
-Committing the config change is not the same as fixing it. Measured on `coi-88cded0c-1`, booted
-09:00 PDT — an hour *after* `edf1d4e` set `max_processes = 1024`:
+Committing the config change is not the same as fixing it. **Resolved as of `54fbe95`, cause
+unconfirmed** — the first attempt silently did nothing, which is the reason this section exists.
+
+Measured on `coi-88cded0c-1`, booted 09:00 PDT — an hour *after* `edf1d4e` set
+`max_processes = 1024`:
 
 ```
 /sys/fs/cgroup/pids.max      → 300      # the bump did NOT land
@@ -129,8 +134,26 @@ Committing the config change is not the same as fixing it. Measured on `coi-88cd
 /sys/fs/cgroup/cpu.max       → max      # and the 80% CPU allowance didn't either
 ```
 
-So the repo config is read at least in part, and `[limits.runtime] max_processes` specifically is
-not reaching Incus. Candidates, in order of suspicion — **all of these run on the host:**
+Re-measured later the same day on a container booted from `54fbe95` (`max_processes = 2048`):
+
+```
+/sys/fs/cgroup/pids.max      → 2048           # lands now
+/sys/fs/cgroup/memory.high   → 12GiB          # still lands
+/sys/fs/cgroup/cpu.max       → max 100000     # 80% allowance STILL doesn't land
+```
+
+(`cpu.max` is `"$QUOTA $PERIOD"`, so `max 100000` and the bare `max` recorded above are the same
+state — no quota. Same reading, transcribed at different widths.)
+
+**What's verified:** `pids.max` now matches the file, with 69 tasks against 2048 — the SIGABRT
+trigger is gone. **What is _not_ verified:** *why*. Nothing in the diff between the two runs targets
+the merge path — `1024 → 2048` is the same key in the same section — so the likely cause is
+something done on the host between them (a `coi trust` re-run being the prime suspect), not the
+value itself. Don't read this as "the key works"; read it as "verify every time."
+
+The CPU allowance is still not reaching Incus, so the diagnosis path below stays live for that key —
+swap `max_processes` for `allowance` in the greps. Candidates, in order of suspicion — **all of
+these run on the host:**
 
 ```bash
 # 1. Trust voided by the edit. .coi/config.toml's own header says "project config -> run coi trust";
@@ -149,7 +172,7 @@ incus config show <ctr> --expanded | grep processes # effective
 incus profile show <profile> | grep processes       # set it here if instance-level is ignored
 ```
 
-Don't call it fixed until a **fresh** container reports `.../1024`.
+Don't call it fixed until a **fresh** container reports the number you wrote.
 
 ### What's actually burning pids — measured 2026-08-22
 
@@ -210,14 +233,19 @@ Close numbers ⇒ pids exhaustion, whatever the error claims. Then in order:
 At ~16 threads per foreground session plus a browser and a dev server, **300 only ever budgeted for
 one session.** A pids ceiling is a *ceiling, not a reservation* — raising it costs nothing, memory is
 the real constraint, so be generous. Honest steady-state budget: chromium 60 + vite 60 + 4 sessions ×
-16 + docker 23 ≈ **210**, with `pnpm -r` fanning out on top. `1024` is the floor; **4096** is the
-number to actually set.
+16 + docker 23 ≈ **210**, with `pnpm -r` fanning out on top. `1024` is the floor; **`2048` is what's
+set** (`54fbe95`) and measured landing, at ~10× the honest budget. Go higher only if a real ceiling
+is ever hit again — the number costs nothing, but a change that doesn't land is worse than no change.
 
 ### Open follow-ups
 
 - [x] `max_processes` 300 → 1024 written into `.coi/config.toml` (`edf1d4e`)
-- [ ] **Make that value actually take effect** — a fresh container still reported `300`. See *Verify
-      it took* above. Raise to `4096` in the same pass.
+- [x] **Make that value actually take effect** — `1024` didn't land; `2048` (`54fbe95`) does. A
+      container booted 2026-08-22 reports `pids.max = 2048`. Cause of the first miss never
+      confirmed; see *Verify it took* above.
+- [ ] **`[limits.cpu] allowance = "80%"` still isn't landing** — same box reports
+      `cpu.max = max 100000` (no quota). Nothing has been observed starving, so this is a
+      correctness-of-config item, not a live failure.
 - [ ] Bake the service trim + chromium into a `coi-aperture` image — one job, closes two parked items
       (COI-SANDBOX.md → *Deferred / to-do*)
 - [ ] Add the pids check to the session-start ritual, since the failure mode is silent
