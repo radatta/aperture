@@ -37,7 +37,8 @@ cd ~/Coding/Personal/aperture && coi shell
 ```
 
 Bypass perms, restricted network, the Vite range mapped out, no runtime cap. `pnpm dev` inside binds
-`6173` (not `5173` — see *Ports* below); reach it on the Mac at the host port COI assigned.
+`6173` (not `5173` — see *Ports* below), and the host port is pinned to match, so
+`http://localhost:6173` in your Mac browser is the same server.
 
 **First command in a new container — check the pids headroom.** It's one line, and the failure it
 catches (`SIGABRT (134)` on your second session) is silent about its own cause:
@@ -140,48 +141,69 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
 
 ## Ports
 
-**Convention: the port tells you whose server it is.** `5173+` is you, on the Mac. `6173+` is a COI
-container. Chosen in `app/vite.config.ts` off the container hostname (`coi-*`), so one repo does the
-right thing on both sides with no flags and no env var to remember.
+**Convention: the port number tells you whose server it is.** `5173+` is you, on the Mac. `6173+` is
+a COI container. Picked in `app/vite.config.ts` off the container hostname (`coi-*`), so one repo does
+the right thing on both sides with no flags and no env var to remember.
 
-Why a **range** and not a single port: several Claude sessions often share one container, and Vite
-walks upward when its base port is taken (`6173 → 6174 → …`). Container network namespaces are
-separate, so two *containers* can both hold `6173` with no conflict — the range exists for multiple
-servers inside one box. `vite preview` deliberately shares the same base and increments into the same
-range.
+Two design choices make it work end to end.
 
-`.coi/config.toml` has to map **every** port in the range, or the ones Vite escapes to are
-unreachable from the Mac. Check `coi schema profile | grep -i port` for a range syntax first; if
-there isn't one, it's eleven entries:
+**1. A range, not a single port.** Several Claude sessions often share one container, and Vite walks
+upward when its base port is taken (`6173 → 6174 → …`). Container network namespaces are separate, so
+two *containers* could both hold `6173` — the range exists for multiple servers inside **one** box.
+`vite preview` deliberately shares the base and increments into the same range.
+
+**2. Pin `host` == `container`, so the port you see inside is the port on the Mac.** `PortEntry`
+takes an explicit `host` field — *"Exact host port to bind (omit for stable auto-allocation per
+workspace/slot)"*. Omit it and COI assigns something unrelated (`6173` → `localhost:42100`), and then
+the number carries no information and has to be looked up. Pin it and there is nothing to look up:
 
 ```toml
 [[ports.map]]
 name      = "vite"
 container = 6173
-[[ports.map]]
-name      = "vite1"
-container = 6174
-# ... vite2..vite10 → 6175..6183
+host      = 6173
+# ... vite1..vite10 → 6174..6183, host == container throughout
 ```
 
-**The host port is not the container port, and the container cannot discover it.** COI picks the
-Mac-side port itself (container `6173` → e.g. `localhost:42100`), and there is **no `COI_PORT_*`
-variable inside the container** — verified 2026-08-22 by reading the Claude process's own
-`/proc/<pid>/environ`. The `COI_PORT_VITE=…` line COI writes into the generated `CLAUDE.md` preamble
-is prose, not a live variable. So the two directions are answered differently:
+> Confirm the key spelling against your COI before trusting it:
+> `coi schema profile | jq '.["$defs"].PortEntry.properties | keys'`
+
+**The cost of pinning: host ports are one global namespace, so projects must not overlap.** Two
+containers pinning `6173` means the second one's proxy device fails to bind. Because
+`.coi/config.toml` is per-repo, give each project its own band:
+
+| Project | Band |
+| --- | --- |
+| you, on the Mac | `5173–5183` |
+| aperture | `6173–6183` |
+| next project | `6273–6283` |
+
+There is also a `ports` field for *identity-mapped* ports — a count, published host==container,
+"allocated per workspace/slot". Fewer lines, but COI chooses the numbers, which defeats the
+convention. Explicit entries are worth the verbosity.
+
+### Reading the port back
+
+With `host` pinned, `ss` inside the container is the whole answer:
 
 ```bash
-# INSIDE the container — which port did Vite actually take?
-ss -ltn | grep -oE ':(5|6)1[78][0-9]' | tr -d ':' | sort -u
+ss -ltn | grep -oE ':(5|6)[12][78][0-9]' | tr -d ':' | sort -u
+```
 
-# ON THE MAC — the authoritative container→host mapping, for one container...
-incus config device show <ctr> | grep -E 'listen|connect'
+If a mapping is ever *not* pinned, the authoritative view is host-side — worth a shell function, since
+this is the "what is Claude serving right now?" question:
 
-# ...or every container at once. Worth a shell function; this is the "what is Claude serving?" answer.
+```bash
 for c in $(incus list -c n --format csv); do
   echo "== $c"; incus config device show "$c" 2>/dev/null | grep -E 'listen|connect'
 done
 ```
+
+> **`COI_PORT_<NAME>` was not actually present.** The schema says each entry is *"exposed to the
+> session as `COI_PORT_<NAME>`"*, but on 2026-08-22 the live Claude process's own
+> `/proc/<pid>/environ` contained no `COI_*` variable at all — only the OAuth token. The
+> `COI_PORT_VITE=…` line COI writes into the generated `CLAUDE.md` preamble is prose, not proof of an
+> env var. Don't build anything on it; pinning `host` makes it moot.
 
 ## Config files
 
@@ -189,7 +211,7 @@ Four files. Only the first lives in this repo; the rest are machine-local and ne
 
 | File                                           | Scope                      | Purpose                                                                                                                                                           |
 | ---------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.coi/config.toml`                           | **repo (committed)** | Daytime posture:`coi-default` image, `permission_mode=bypass`, CPU/mem caps, `network.mode=restricted`, the Vite `6173–6183` port map, monitoring on. Secret-free. |
+| `.coi/config.toml`                           | **repo (committed)** | Daytime posture:`coi-default` image, `permission_mode=bypass`, CPU/mem caps, `network.mode=restricted`, the Vite `6173–6183` port map (`host` pinned == `container`), monitoring on. Secret-free. |
 | `~/.coi/config.toml`                         | user (trusted)             | Auth injection:`[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`.                                                           |
 | `~/.coi-claude-token`                        | user, mode 600             | The token itself. Never mounted into the workspace.                                                                                                               |
 | `~/.coi/profiles/aperture-night/config.toml` | user (trusted)             | Night deltas:`network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`.     |

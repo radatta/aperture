@@ -27,7 +27,7 @@ it. Inside a COI container the base is `6173`; on a bare Mac it's `5173` (`app/v
 docs/COI-SANDBOX.md → *Ports*). Resolve it from what's actually listening:
 
 ```bash
-PORT=$(ss -ltn 2>/dev/null | grep -oE ':(5|6)1[78][0-9]' | tr -d ':' | sort -u | head -1)
+PORT=$(ss -ltn 2>/dev/null | grep -oE ':(5|6)[12][78][0-9]' | tr -d ':' | sort -u | head -1)
 echo "vite on $PORT"
 ```
 

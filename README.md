@@ -48,8 +48,8 @@ otherwise:
    means the other platform installed last — see the incidents doc. This, not a port clash, is the
    usual reason `pnpm dev` "stops working locally" after a container session.
 4. **Ports are split by owner:** `5173+` is your Mac, `6173+` is a container. Chosen automatically off
-   the container hostname; a container's Mac-side port is assigned by COI and differs again — see
-   *Ports* in the runbook for how to look it up from either side.
+   the container hostname, with the host port pinned to match — so `localhost:6173` on the Mac is the
+   container's dev server, and the number alone tells you whose it is. See *Ports* in the runbook.
 
 ## What it does (v1)
 
