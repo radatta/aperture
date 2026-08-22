@@ -29,6 +29,25 @@ pnpm build         # production build
 
 Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `packages/shared/` (the cross-cutting contract) · `scripts/`.
 
+### Sandboxed dev (COI / Incus)
+
+Claude Code runs against this repo inside an Incus container — see
+**[docs/COI-SANDBOX.md](docs/COI-SANDBOX.md)** for the full runbook. Three rules that will bite you
+otherwise:
+
+1. **Always exit the TUI cleanly** (`Ctrl+D` / `/exit`) before you walk away, then `coi shutdown`.
+   Killing it abruptly — by closing the laptop lid, dropping the connection, or closing the window —
+   leaves your *local terminal* with mouse reporting still on, so your prompt fills with
+   `35;97;27M` garbage. Clean exit costs nothing and prevents it entirely.
+2. **Unattended runs need AC power, and `caffeinate` is not enough.** `caffeinate` blocks idle sleep
+   only; closing the lid sleeps the Mac regardless. Lid open + `caffeinate -s`, or clamshell mode /
+   Amphetamine's closed-display option if the lid must shut. A flat battery hibernates the Mac and
+   nothing prevents that.
+3. **`node_modules` is shared with the host** (`/workspace` is a virtiofs mount and `node_modules`
+   isn't separately mounted), so native binaries belong to whichever side installed last. If
+   `vite dev` dies with `Cannot find module '../lightningcss.*.node'`, run `pnpm install` on the side
+   you're using. Inside the container that needs `CI=true pnpm install`.
+
 ## What it does (v1)
 
 - **Glanceable home** — auto morning / day / night by clock, ≤5 things per mode. Home is glance; deep views are work.

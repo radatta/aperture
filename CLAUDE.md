@@ -29,6 +29,20 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 | `pnpm build` | Production build (`pnpm -r`) |
 | `pnpm format` | Prettier write |
 
+**Inside the COI container (the usual case), three things bite:**
+
+- **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
+- **`node_modules` is shared with the macOS host** — `/workspace` is a virtiofs mount and
+  `node_modules` isn't separately mounted, so native binaries belong to whichever side installed
+  last. If `vite dev`/`vite build` dies with `Cannot find module '../lightningcss.*.node'`, that's
+  this. `pnpm install` fixes it for the current platform (and breaks the other side until they do the
+  same). Doesn't affect `tsc` or `vitest`.
+- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs; the
+  memory ceiling produces confusing crashes (an OOM'd vitest, a `tsgo` fatal) that read as code
+  bugs. Serialise: screenshot, kill the browser, then test.
+
+Full runbook, plus how sessions die and what that leaves behind: `docs/COI-SANDBOX.md`.
+
 ## Conventions (hard rules — these override defaults)
 
 Full detail in `docs/CONVENTIONS.md`. The load-bearing ones:
