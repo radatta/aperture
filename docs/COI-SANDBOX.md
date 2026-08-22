@@ -31,23 +31,28 @@ no M-series VM caveat.
 ## Run
 
 **Daytime (interactive):**
+
 ```bash
 cd ~/Coding/Personal/aperture && coi shell
 ```
-Bypass perms, restricted network, Vite `5173` mapped out, no runtime cap. `pnpm dev` inside →
-`http://localhost:5173` in your Mac browser.
+
+Bypass perms, restricted network, the Vite range mapped out, no runtime cap. `pnpm dev` inside binds
+`6173` (not `5173` — see *Ports* below); reach it on the Mac at the host port COI assigned.
 
 **First command in a new container — check the pids headroom.** It's one line, and the failure it
 catches (`SIGABRT (134)` on your second session) is silent about its own cause:
+
 ```bash
 paste -d/ /sys/fs/cgroup/pids.{current,max}
 # want .../1024 or better. If it says .../300, the config bump isn't taking — see below.
 ```
 
 **Overnight (unattended):**
+
 ```bash
 coi run --profile aperture-night -- claude --dangerously-skip-permissions -p "<task>"
 ```
+
 Strict allowlist network, 10h hard cap.
 
 **Keeping an unattended run alive — read this, the obvious answer is wrong.**
@@ -57,11 +62,11 @@ Strict allowlist network, 10h hard cap.
 which is the opposite of macOS's `'Clamshell Sleep'` log string (sleep *caused by* the lid shutting).
 So:
 
-| Situation | What actually keeps it alive |
-| --- | --- |
-| Lid open, unattended | `caffeinate -s -- coi run ...` |
-| Lid closed | **Clamshell mode** (lid shut, machine awake — needs external display + AC + input device), or **Amphetamine**'s closed-display option, which on most Macs wants AC plus an external display or input device too. `caffeinate` will not save you. |
-| Any of the above | **On AC.** A flat battery hibernates the Mac and no assertion of any kind prevents that. |
+| Situation            | What actually keeps it alive                                                                                                                                                                                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lid open, unattended | `caffeinate -s -- coi run ...`                                                                                                                                                                                                                                |
+| Lid closed           | **Clamshell mode** (lid shut, machine awake — needs external display + AC + input device), or **Amphetamine**'s closed-display option, which on most Macs wants AC plus an external display or input device too. `caffeinate` will not save you. |
+| Any of the above     | **On AC.** A flat battery hibernates the Mac and no assertion of any kind prevents that.                                                                                                                                                                  |
 
 Why (reasoning, not log evidence — caffeinate wasn't running): in the 2026-08-22 incident powerd
 released its own `"Prevent sleep while display is on"` assertion at 09:11:35 and the machine slept
@@ -111,6 +116,7 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
    echo 'root:501:1' | sudo tee -a /etc/subgid
    sudo systemctl restart incus
    ```
+
    (501 = the Mac user's uid; the container's `code` user is uid 1000, mapped `both 501 1000`.)
 3. **Make the repo mount writable.** Lima mounts the Mac home **read-only** (`virtiofs ro`) by
    default, so the container workspace is read-only. Fix with `limactl edit incus` — add a scoped
@@ -120,6 +126,7 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
      - location: "~/Coding/Personal/aperture"
        writable: true
    ```
+
    virtiofs perf is fine (~30s cold `pnpm install`).
 4. **Auth token.** `claude setup-token` mints a ~1-year subscription OAuth token. Store it in a
    mode-600 file — **not** an env var in a committed config, **not** a wholesale `~/.claude` mount
@@ -128,20 +135,67 @@ Each step below fixed a real failure — none are optional on a fresh Mac.
    claude setup-token                          # copy the token
    umask 077 && printf %s "<token>" > ~/.coi-claude-token
    ```
+
    Wire it in the **user-scope** COI config (below) via `env_commands`.
+
+## Ports
+
+**Convention: the port tells you whose server it is.** `5173+` is you, on the Mac. `6173+` is a COI
+container. Chosen in `app/vite.config.ts` off the container hostname (`coi-*`), so one repo does the
+right thing on both sides with no flags and no env var to remember.
+
+Why a **range** and not a single port: several Claude sessions often share one container, and Vite
+walks upward when its base port is taken (`6173 → 6174 → …`). Container network namespaces are
+separate, so two *containers* can both hold `6173` with no conflict — the range exists for multiple
+servers inside one box. `vite preview` deliberately shares the same base and increments into the same
+range.
+
+`.coi/config.toml` has to map **every** port in the range, or the ones Vite escapes to are
+unreachable from the Mac. Check `coi schema profile | grep -i port` for a range syntax first; if
+there isn't one, it's eleven entries:
+
+```toml
+[[ports.map]]
+name      = "vite"
+container = 6173
+[[ports.map]]
+name      = "vite1"
+container = 6174
+# ... vite2..vite10 → 6175..6183
+```
+
+**The host port is not the container port, and the container cannot discover it.** COI picks the
+Mac-side port itself (container `6173` → e.g. `localhost:42100`), and there is **no `COI_PORT_*`
+variable inside the container** — verified 2026-08-22 by reading the Claude process's own
+`/proc/<pid>/environ`. The `COI_PORT_VITE=…` line COI writes into the generated `CLAUDE.md` preamble
+is prose, not a live variable. So the two directions are answered differently:
+
+```bash
+# INSIDE the container — which port did Vite actually take?
+ss -ltn | grep -oE ':(5|6)1[78][0-9]' | tr -d ':' | sort -u
+
+# ON THE MAC — the authoritative container→host mapping, for one container...
+incus config device show <ctr> | grep -E 'listen|connect'
+
+# ...or every container at once. Worth a shell function; this is the "what is Claude serving?" answer.
+for c in $(incus list -c n --format csv); do
+  echo "== $c"; incus config device show "$c" 2>/dev/null | grep -E 'listen|connect'
+done
+```
 
 ## Config files
 
 Four files. Only the first lives in this repo; the rest are machine-local and never committed.
 
-| File | Scope | Purpose |
-| --- | --- | --- |
-| `.coi/config.toml` | **repo (committed)** | Daytime posture: `coi-default` image, `permission_mode=bypass`, CPU/mem caps, `network.mode=restricted`, Vite `5173` port map, monitoring on. Secret-free. |
-| `~/.coi/config.toml` | user (trusted) | Auth injection: `[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`. |
-| `~/.coi-claude-token` | user, mode 600 | The token itself. Never mounted into the workspace. |
-| `~/.coi/profiles/aperture-night/config.toml` | user (trusted) | Night deltas: `network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`. |
+| File                                           | Scope                      | Purpose                                                                                                                                                           |
+| ---------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.coi/config.toml`                           | **repo (committed)** | Daytime posture:`coi-default` image, `permission_mode=bypass`, CPU/mem caps, `network.mode=restricted`, the Vite `6173–6183` port map, monitoring on. Secret-free. |
+| `~/.coi/config.toml`                         | user (trusted)             | Auth injection:`[defaults.env_commands]` `CLAUDE_CODE_OAUTH_TOKEN = "cat $HOME/.coi-claude-token"`.                                                           |
+| `~/.coi-claude-token`                        | user, mode 600             | The token itself. Never mounted into the workspace.                                                                                                               |
+| `~/.coi/profiles/aperture-night/config.toml` | user (trusted)             | Night deltas:`network.mode=allowlist` + `allowed_domains`, `limits.runtime.max_duration="10h"`, `auto_stop=true`, `[monitoring.nft] enabled=false`.     |
 
 Night profile, in full:
+
 ```toml
 [limits.runtime]
 max_duration = "10h"
@@ -154,6 +208,7 @@ allowed_domains = ["api.anthropic.com", "registry.npmjs.org"]
 [monitoring.nft]
 enabled = false
 ```
+
 Configs **merge**: user → repo → `--profile` layered on top as deltas; scalars are last-wins.
 
 ## Gotchas (don't re-derive these)
@@ -187,14 +242,14 @@ Configs **merge**: user → repo → `--profile` layered on top as deltas; scala
 Full forensics — timelines, log locations, ruled-out hypotheses, exact commands — live in
 **[COI-INCIDENTS.md](COI-INCIDENTS.md)**. Signatures only, so you can recognise which one you have:
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| Prompt fills with `35;97;27M…` garbage | A killed TUI never restored your terminal's mouse-reporting mode | Exit Claude cleanly (`Ctrl+D`). To recover: accept iTerm's "turn it off" prompt, or `reset`. **`stty sane` does not work.** |
-| Long unattended run died ~when you shut the laptop | `'Clamshell Sleep'` — lid close forces sleep; **`caffeinate` does not prevent it** (and on battery it does nothing at all) | Lid open + AC + `caffeinate -s`; or clamshell mode / Amphetamine closed-display. Always on AC. |
-| `Session can't start — SIGABRT (134)` on a 2nd/3rd session | Container **pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (→ `4096`). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Then verify a fresh container actually reports it** — as of 2026-08-22 the committed bump was silently not taking. |
-| Every container loses its mounts at once, then the VM reboots | A host-mount config change: the path must be visible in the Lima VM first, so applying it restarts the VM and kills every session | Make mount changes **before** starting a long run |
-| `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error) | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`. |
-| Four "ephemeral" containers alive, GBs each | Ephemeral destroy + `--resume` write happen only on a graceful shutdown | Tear down properly when done — see *Run → Ending a session* |
+| Symptom                                                                                                             | Cause                                                                                                                                                | Fix                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Prompt fills with`35;97;27M…` garbage                                                                            | A killed TUI never restored your terminal's mouse-reporting mode                                                                                     | Exit Claude cleanly (`Ctrl+D`). To recover: accept iTerm's "turn it off" prompt, or `reset`. **`stty sane` does not work.**                                                                                                                                                                                                    |
+| Long unattended run died ~when you shut the laptop                                                                  | `'Clamshell Sleep'` — lid close forces sleep; **`caffeinate` does not prevent it** (and on battery it does nothing at all)                | Lid open + AC +`caffeinate -s`; or clamshell mode / Amphetamine closed-display. Always on AC.                                                                                                                                                                                                                                            |
+| `Session can't start — SIGABRT (134)` on a 2nd/3rd session                                                       | Container**pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (→ `4096`). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Then verify a fresh container actually reports it** — as of 2026-08-22 the committed bump was silently not taking. |
+| Every container loses its mounts at once, then the VM reboots                                                       | A host-mount config change: the path must be visible in the Lima VM first, so applying it restarts the VM and kills every session                    | Make mount changes**before** starting a long run                                                                                                                                                                                                                                                                                     |
+| `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error) | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last                                                     | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`.                                                                                                                                                                                                                           |
+| Four "ephemeral" containers alive, GBs each                                                                         | Ephemeral destroy +`--resume` write happen only on a graceful shutdown                                                                             | Tear down properly when done — see*Run → Ending a session*                                                                                                                                                                                                                                                                             |
 
 ## Ops notes
 
@@ -259,6 +314,7 @@ Not blockers — the rig is fully operational without these. Polish, in rough pr
     "apt-get install -y -qq chromium",
   ]
   ```
+
   `coi build --profile <name>` publishes it; then point `[container] image` at `coi-aperture`.
   **`mask` snapd, don't `disable`** — `snapd.socket` is socket-activated, so one stray `snap` call
   wakes ~45 threads. Two knock-ons: chromium unlocks in-container Playwright / the `run-app` visual

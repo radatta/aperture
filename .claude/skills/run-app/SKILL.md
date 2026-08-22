@@ -19,13 +19,22 @@ So you launch with **no env flags** — `pnpm dev` is already in a screenshot-ab
 ## Launch Vite
 
 ```bash
-cd /path/to/aperture && pnpm dev   # root script → @aperture/app on http://localhost:5173 (run in background)
+cd /path/to/aperture && pnpm dev   # root script → @aperture/app (run in background)
+```
+
+**The port depends on where you are, and Vite walks upward if it's taken** — so read it, don't assume
+it. Inside a COI container the base is `6173`; on a bare Mac it's `5173` (`app/vite.config.ts`, and
+docs/COI-SANDBOX.md → *Ports*). Resolve it from what's actually listening:
+
+```bash
+PORT=$(ss -ltn 2>/dev/null | grep -oE ':(5|6)1[78][0-9]' | tr -d ':' | sort -u | head -1)
+echo "vite on $PORT"
 ```
 
 Poll for readiness (portable — works on macOS and Linux; don't assume `curl`):
 
 ```bash
-timeout 40 bash -c 'until node -e "fetch(\"http://localhost:5173\").then(()=>process.exit(0)).catch(()=>process.exit(1))"; do sleep 1; done'
+timeout 40 bash -c "until node -e \"fetch('http://localhost:$PORT').then(()=>process.exit(0)).catch(()=>process.exit(1))\"; do sleep 1; done"
 ```
 
 Stop with `pkill -f vite`.
@@ -59,7 +68,7 @@ const errors = [];
 page.on('console', m => m.type() === 'error' && errors.push(m.text()));
 page.on('pageerror', e => errors.push(String(e)));
 
-await page.goto('http://localhost:5173/tasks', { waitUntil: 'domcontentloaded' });
+await page.goto(`http://localhost:${process.env.PORT ?? 5173}/tasks`, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('text=Tasks', { timeout: 30000 }); // first Vite compile is slow — wait-for, never sleep
 
 await page.screenshot({ path: 'page.png', fullPage: true });

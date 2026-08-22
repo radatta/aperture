@@ -22,7 +22,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 
 | Command | Does |
 | --- | --- |
-| `pnpm dev` | Run the app (Vite) → http://localhost:5173 |
+| `pnpm dev` | Run the app (Vite) → `http://localhost:5173`, or `6173` inside a COI container (`docs/COI-SANDBOX.md` → *Ports*). Vite walks upward if taken — read the port, don't assume it. |
 | `pnpm typecheck` | `tsc -b` across the project-reference graph |
 | `pnpm lint` / `pnpm lint:fix` | ESLint (flat config), one root pass |
 | `pnpm test` | Vitest across all packages (`pnpm -r`) |

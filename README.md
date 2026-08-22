@@ -20,7 +20,7 @@ Requires **Node 22** (see `.nvmrc`) and **pnpm** (`corepack enable pnpm`).
 
 ```bash
 pnpm install       # install the workspace
-pnpm dev           # run the app (Vite) → localhost:5173
+pnpm dev           # run the app (Vite) → localhost:5173 (6173 inside a COI container)
 pnpm typecheck     # tsc -b across all packages (project references)
 pnpm lint          # eslint (flat config)
 pnpm test          # vitest across all packages
@@ -45,7 +45,11 @@ otherwise:
    Amphetamine's closed-display option if the lid must shut. A flat battery hibernates the Mac and
    nothing prevents that.
 3. **`node_modules` is shared with the host**, so a native-binding error from `vite` usually just
-   means the other platform installed last — see the incidents doc.
+   means the other platform installed last — see the incidents doc. This, not a port clash, is the
+   usual reason `pnpm dev` "stops working locally" after a container session.
+4. **Ports are split by owner:** `5173+` is your Mac, `6173+` is a container. Chosen automatically off
+   the container hostname; a container's Mac-side port is assigned by COI and differs again — see
+   *Ports* in the runbook for how to look it up from either side.
 
 ## What it does (v1)
 
