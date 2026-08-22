@@ -37,6 +37,13 @@ cd ~/Coding/Personal/aperture && coi shell
 Bypass perms, restricted network, Vite `5173` mapped out, no runtime cap. `pnpm dev` inside →
 `http://localhost:5173` in your Mac browser.
 
+**First command in a new container — check the pids headroom.** It's one line, and the failure it
+catches (`SIGABRT (134)` on your second session) is silent about its own cause:
+```bash
+paste -d/ /sys/fs/cgroup/pids.{current,max}
+# want .../1024 or better. If it says .../300, the config bump isn't taking — see below.
+```
+
 **Overnight (unattended):**
 ```bash
 coi run --profile aperture-night -- claude --dangerously-skip-permissions -p "<task>"
@@ -184,7 +191,7 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 | --- | --- | --- |
 | Prompt fills with `35;97;27M…` garbage | A killed TUI never restored your terminal's mouse-reporting mode | Exit Claude cleanly (`Ctrl+D`). To recover: accept iTerm's "turn it off" prompt, or `reset`. **`stty sane` does not work.** |
 | Long unattended run died ~when you shut the laptop | `'Clamshell Sleep'` — lid close forces sleep; **`caffeinate` does not prevent it** (and on battery it does nothing at all) | Lid open + AC + `caffeinate -s`; or clamshell mode / Amphetamine closed-display. Always on AC. |
-| `Session can't start — SIGABRT (134)` on a 2nd/3rd session | Container **pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (300 → 1024). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. |
+| `Session can't start — SIGABRT (134)` on a 2nd/3rd session | Container **pids cgroup** ceiling saturated (`limits.processes`), `clone()` → `EAGAIN`. **Not** memory, **not** a Claude bug | `paste -d/ /sys/fs/cgroup/pids.{current,max}` — if close, raise `max_processes` in `.coi/config.toml` (→ `4096`). Hot-patch: `incus config set <ctr> limits.processes 8192` on the **host**. **Then verify a fresh container actually reports it** — as of 2026-08-22 the committed bump was silently not taking. |
 | Every container loses its mounts at once, then the VM reboots | A host-mount config change: the path must be visible in the Lima VM first, so applying it restarts the VM and kills every session | Make mount changes **before** starting a long run |
 | `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error) | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`. |
 | Four "ephemeral" containers alive, GBs each | Ephemeral destroy + `--resume` write happen only on a graceful shutdown | Tear down properly when done — see *Run → Ending a session* |
@@ -219,36 +226,46 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 
 ## Deferred / to-do
 
+- **Make `max_processes` actually take effect, and raise it to `4096`.** `edf1d4e` wrote `1024` into
+  `.coi/config.toml`; a container booted an hour later still reported `pids.max = 300`. The memory cap
+  from the same file *did* apply, so the file is being read and this key isn't landing — most likely
+  `coi trust` needs re-running after the edit, or a user-level value is winning the merge. Diagnosis
+  commands: [COI-INCIDENTS.md → Incident A → *Verify it took*](COI-INCIDENTS.md#verify-it-took--as-of-2026-08-22-it-had-not).
+  **This is the one open item here that actually breaks something** — a second session still can't start.
 - **Persisted audit log.** `coi audit` is live-only (`coi audit -f <name>`); there is no on-disk
   history, so after an incident you cannot answer "did the nft monitor pause or kill this run?".
   Worth filing upstream — it's the one question the current tooling makes unanswerable.
 
 Not blockers — the rig is fully operational without these. Polish, in rough priority order.
 
-- **Lean the container: disable `dockerd` + `unattended-upgrades`.** `coi-default` is the "Docker"
-  image, so both run idle; `unattended-upgrades` is the root cause of the night-pause we currently
-  paper over with `[monitoring.nft] enabled=false`. Because the container is **ephemeral**, disabling
-  them in a running box doesn't persist — bake it into a custom image (`[container.build]` layering on
-  `coi-default`, same mechanism as chromium below) with something like:
-  ```
-  systemctl disable --now docker.service docker.socket unattended-upgrades || true
-  ```
-  Once done, the night profile could in principle re-enable the nft monitor (verify no other benign
-  egress trips it first).
-- **chromium in the image** — for in-container Playwright / the `run-app` visual skill. The only thing
-  missing from `coi-default` for the full loop. Supported path is a **profile** with a
-  `[container.build]` section on top of `coi-default` (never `COI_BUILD_SCRIPT_FROM_DISK=1` — that
-  replaces COI's embedded security provisioning):
+- **Build a `coi-aperture` image — lean box + chromium in one job.** These were two separate parked
+  items; they're one image build, and the pids incident makes it worth doing. `coi-default` is the
+  "Docker" image, so `dockerd` + `containerd` + `unattended-upgrades` + a pile of Ubuntu daemons run
+  idle. Measured 2026-08-22: **66 idle tasks → 30** after trimming, with the toolchain unaffected —
+  over half the box's pids budget was noise (full table: [COI-INCIDENTS.md](COI-INCIDENTS.md) →
+  *Incident A → What's actually burning pids*). Because the container is **ephemeral**, doing it in a
+  running box doesn't persist; it has to be baked. Supported path is a **profile** with a
+  `[container.build]` section (never `COI_BUILD_SCRIPT_FROM_DISK=1` — that replaces COI's embedded
+  security provisioning):
   ```toml
   [container]
   image = "coi-aperture"          # MUST differ from coi-default, else [container.build] is ignored
   [container.build]
   base = "coi-default"
-  commands = ["apt-get update -qq", "apt-get install -y -qq chromium"]
+  commands = [
+    "systemctl disable --now docker.service docker.socket containerd.service unattended-upgrades.service udisks2.service rsyslog.service cron.service || true",
+    "systemctl mask snapd.service snapd.socket snapd.seeded.service || true",
+    "apt-get update -qq",
+    "apt-get install -y -qq chromium",
+  ]
   ```
-  `coi build --profile <name>` publishes it; then point `[container] image` at `coi-aperture`. Defer
-  until in-container visual iteration is actually wanted — it's a daytime-attended activity and
-  lint/typecheck/test/build cover logic without it.
+  `coi build --profile <name>` publishes it; then point `[container] image` at `coi-aperture`.
+  **`mask` snapd, don't `disable`** — `snapd.socket` is socket-activated, so one stray `snap` call
+  wakes ~45 threads. Two knock-ons: chromium unlocks in-container Playwright / the `run-app` visual
+  skill (the only thing missing from `coi-default` for the full loop), and dropping
+  `unattended-upgrades` removes the night-pause trigger we currently paper over with
+  `[monitoring.nft] enabled=false`, so the night profile could re-enable the monitor — verify no
+  other benign egress trips it first.
 - **Verify nft network *alerting* on Mac.** Containment (allowlist DROP rules) is proven; whether the
   monitor *daemon* raises anomaly events on Mac is unconfirmed — we sidestepped it by disabling the
   monitor at night. To verify: in a daytime `restricted` shell, stream `coi audit -f` and trip a

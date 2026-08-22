@@ -118,20 +118,77 @@ paste -d/ /sys/fs/cgroup/pids.{current,max}
 > `awk '{print $1"/"$2}' /sys/fs/cgroup/pids.current /sys/fs/cgroup/pids.max` — each file holds one
 > field on one line, so `$2` is always empty and you get `295/` then `300/`. Use `paste -d/`.
 
-If the limit doesn't take, a profile is overriding it:
+### Verify it took — as of 2026-08-22 it had **not**
+
+Committing the config change is not the same as fixing it. Measured on `coi-88cded0c-1`, booted
+09:00 PDT — an hour *after* `edf1d4e` set `max_processes = 1024`:
+
+```
+/sys/fs/cgroup/pids.max      → 300      # the bump did NOT land
+/sys/fs/cgroup/memory.high   → 12GiB    # ...but the memory cap did
+/sys/fs/cgroup/cpu.max       → max      # and the 80% CPU allowance didn't either
+```
+
+So the repo config is read at least in part, and `[limits.runtime] max_processes` specifically is
+not reaching Incus. Candidates, in order of suspicion — **all of these run on the host:**
+
 ```bash
+# 1. Trust voided by the edit. .coi/config.toml's own header says "project config -> run coi trust";
+#    editing it after trusting may drop the repo config (or parts of it) from the merge.
+coi trust
+
+# 2. A user-level value winning the merge chain (user -> repo -> profile, scalars last-wins).
+grep -rn max_processes ~/.coi/ ~/.config/coi/ 2>/dev/null
+
+# 3. Wrong key or section for this COI version.
+coi schema profile | grep -i process
+
+# 4. An Incus profile overriding the instance value.
 incus config get <ctr> limits.processes             # instance level
 incus config show <ctr> --expanded | grep processes # effective
 incus profile show <profile> | grep processes       # set it here if instance-level is ignored
 ```
 
-### Cleanup worth doing anyway
+Don't call it fixed until a **fresh** container reports `.../1024`.
 
-- **snapd — 45 threads of nothing.** Nothing in this stack consumes snaps, and snapd forks
-  constantly (it was itself being refused). `systemctl disable --now snapd snapd.socket snapd.seeded`
-  would alone have gotten the container under 300. Raise the limit regardless.
-- **Docker-in-Incus** idles at ~24 threads (in-container count). Fine if you need image builds; stop
-  it when you don't.
+### What's actually burning pids — measured 2026-08-22
+
+Raising the ceiling is the fix; this is defence in depth. Measured on a fresh `coi-default` box with
+one Claude session and nothing else: **66 tasks idle → 30 after disabling the list below.** 55%
+reclaimed, and `node` / `pnpm` / `git` / `tsc` all verified working afterwards.
+
+| Service | Threads | Needed here? | Verdict |
+| --- | --- | --- | --- |
+| `dockerd` + `containerd` | **23** | 0 containers, 0 images | Biggest single win. Off. |
+| `udisks2` | 6 | Disk/removable-media manager | Meaningless in a container. Off. |
+| `polkit` | 4 | Auth agent for udisks/NM | Off *with* udisks; sudo is passwordless. |
+| `rsyslog` | 3 | Duplicates journald | Off. |
+| `unattended-upgrades` | 2 + apt forks | No | Off — and it's the nft night-pause trigger. |
+| `snapd` + `snapfuse` | 0 idle, **~45 awake** | Nothing consumes snaps | `snapd.socket` is socket-activated, so **`mask`, don't `disable`** — one stray `snap` call wakes it. |
+| `cron` | 1 + spikes | No | Forks logrotate / man-db / apt. Off. |
+| `ModemManager`, `multipathd`, `open-iscsi`, `lvm2-monitor`, `apport`, `pollinate`, `sysstat`, `open-vm-tools`, `vgauth`, `ubuntu-advantage`, `ufw`, `cloud-init*` | boot forks | No | Enabled-but-idle. Free to strip. |
+
+Trimmed baseline is 8 services: journald, logind, networkd, resolved, udevd, dbus, polkit,
+console-getty.
+
+**Because the container is ephemeral, `systemctl disable` evaporates on destroy** — this has to be
+baked into a custom image to be worth anything. See COI-SANDBOX.md → *Deferred / to-do* → the
+`coi-aperture` image.
+
+### The multipliers — these are what actually spike you
+
+The idle baseline never caused the abort. These arrive mid-session, which is exactly why the failure
+looks intermittent:
+
+- **`headless_shell` ≈ 60 threads** — the spikiest single thing in the box. `--renderer-process-limit=1`
+  trims it; killing the browser before tests (the CLAUDE.md rule) is the real control.
+- **Vite dev server ≈ 35–60** — node plus 4 libuv workers *per process*. `UV_THREADPOOL_SIZE=2`
+  roughly halves the worker share.
+- **`pnpm test -r`** — one Vitest per package, each with its own worker pool. Nothing in the repo caps
+  it today; `poolOptions.threads.maxThreads` would bound it.
+- **MCP servers × sessions** — no dedup across sessions, so it's N×M, and they aren't reliably reaped
+  when a session ends. The failed container had 6 live `claude` processes.
+- **Claude Code itself: ~16 threads/session** (measured 16, matching the ~15 estimate). Not the fat one.
 
 ### Triage: "session can't start"
 
@@ -150,15 +207,20 @@ Close numbers ⇒ pids exhaustion, whatever the error claims. Then in order:
 
 ### Budgeting
 
-At ~15 threads per foreground session plus a browser and a dev server, **300 only ever budgeted for
-one session.** Even 2048 is tight for four sessions plus a build. `1024` is a sane floor; `8192` is
-not extravagant.
+At ~16 threads per foreground session plus a browser and a dev server, **300 only ever budgeted for
+one session.** A pids ceiling is a *ceiling, not a reservation* — raising it costs nothing, memory is
+the real constraint, so be generous. Honest steady-state budget: chromium 60 + vite 60 + 4 sessions ×
+16 + docker 23 ≈ **210**, with `pnpm -r` fanning out on top. `1024` is the floor; **4096** is the
+number to actually set.
 
 ### Open follow-ups
 
-- [x] `max_processes` 300 → 1024 in `.coi/config.toml`
-- [ ] Disable snapd in the container image
-- [ ] Decide whether dockerd should run persistently or only during builds
+- [x] `max_processes` 300 → 1024 written into `.coi/config.toml` (`edf1d4e`)
+- [ ] **Make that value actually take effect** — a fresh container still reported `300`. See *Verify
+      it took* above. Raise to `4096` in the same pass.
+- [ ] Bake the service trim + chromium into a `coi-aperture` image — one job, closes two parked items
+      (COI-SANDBOX.md → *Deferred / to-do*)
+- [ ] Add the pids check to the session-start ritual, since the failure mode is silent
 - [ ] Trim MCP servers per-session — they multiply N×M with no dedup
 
 ---
