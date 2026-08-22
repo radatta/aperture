@@ -29,36 +29,47 @@ mode = "restricted"   # CONFIRMED by your run output
 [[ports.map]]
 name      = "vite"
 container = 6173
+host      = 6173
 [[ports.map]]
 name      = "vite1"
 container = 6174
+host      = 6174
 [[ports.map]]
 name      = "vite2"
 container = 6175
+host      = 6175
 [[ports.map]]
 name      = "vite3"
 container = 6176
+host      = 6176
 [[ports.map]]
 name      = "vite4"
 container = 6177
+host      = 6177
 [[ports.map]]
 name      = "vite5"
 container = 6178
+host      = 6178
 [[ports.map]]
 name      = "vite6"
 container = 6179
+host      = 6179
 [[ports.map]]
 name      = "vite7"
 container = 6180
+host      = 6180
 [[ports.map]]
 name      = "vite8"
 container = 6181
+host      = 6181
 [[ports.map]]
 name      = "vite9"
 container = 6182
+host      = 6182
 [[ports.map]]
 name      = "vite10"
 container = 6183
+host      = 6183
 
 [monitoring]
 enabled               = true
