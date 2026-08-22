@@ -37,9 +37,12 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   last. If `vite dev`/`vite build` dies with `Cannot find module '../lightningcss.*.node'`, that's
   this. `pnpm install` fixes it for the current platform (and breaks the other side until they do the
   same). Doesn't affect `tsc` or `vitest`.
-- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs; the
-  memory ceiling produces confusing crashes (an OOM'd vitest, a `tsgo` fatal) that read as code
-  bugs. Serialise: screenshot, kill the browser, then test.
+- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs, and
+  **two different ceilings** bite here, which is why the crashes read as code bugs when they aren't:
+  the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`, *not* memory) and memory itself
+  (`SIGKILL`/137). A `tsgo` fatal has also been seen under load with the mechanism never confirmed —
+  capture the **head** of the output, don't assume OOM. Serialise: screenshot, kill the browser,
+  then test. Details: `docs/COI-INCIDENTS.md`.
 
 Runbook: `docs/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/COI-INCIDENTS.md`.
 

@@ -44,10 +44,8 @@ otherwise:
    only; closing the lid sleeps the Mac regardless. Lid open + `caffeinate -s`, or clamshell mode /
    Amphetamine's closed-display option if the lid must shut. A flat battery hibernates the Mac and
    nothing prevents that.
-3. **`node_modules` is shared with the host** (`/workspace` is a virtiofs mount and `node_modules`
-   isn't separately mounted), so native binaries belong to whichever side installed last. If
-   `vite dev` dies with `Cannot find module '../lightningcss.*.node'`, run `pnpm install` on the side
-   you're using. Inside the container that needs `CI=true pnpm install`.
+3. **`node_modules` is shared with the host**, so a native-binding error from `vite` usually just
+   means the other platform installed last — see the incidents doc.
 
 ## What it does (v1)
 
