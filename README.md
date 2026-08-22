@@ -32,7 +32,8 @@ Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `pa
 ### Sandboxed dev (COI / Incus)
 
 Claude Code runs against this repo inside an Incus container — see
-**[docs/COI-SANDBOX.md](docs/COI-SANDBOX.md)** for the full runbook. Three rules that will bite you
+**[docs/COI-SANDBOX.md](docs/COI-SANDBOX.md)** for the runbook and
+**[docs/COI-INCIDENTS.md](docs/COI-INCIDENTS.md)** for the post-mortems. Three rules that will bite you
 otherwise:
 
 1. **Always exit the TUI cleanly** (`Ctrl+D` / `/exit`) before you walk away, then `coi shutdown`.

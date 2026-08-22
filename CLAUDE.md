@@ -41,7 +41,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   memory ceiling produces confusing crashes (an OOM'd vitest, a `tsgo` fatal) that read as code
   bugs. Serialise: screenshot, kill the browser, then test.
 
-Full runbook, plus how sessions die and what that leaves behind: `docs/COI-SANDBOX.md`.
+Runbook: `docs/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/COI-INCIDENTS.md`.
 
 ## Conventions (hard rules — these override defaults)
 
