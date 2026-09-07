@@ -53,7 +53,7 @@ fi
 
 # Destructive git: force push (any flag form).
 if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+push[[:space:]]+([^|;&]*[[:space:]])?(-f\b|--force\b|--force-with-lease\b)'; then
-  deny "Force-push is blocked — it rewrites shared history and can destroy the auto-save backup on the remote. If genuinely needed, stop and confirm which commits would be rewritten first."
+  deny "Force-push is blocked — it rewrites shared history. If genuinely needed, stop and confirm which commits would be rewritten first."
 fi
 
 # Destructive git: remote branch delete.
