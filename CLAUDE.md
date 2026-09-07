@@ -92,6 +92,8 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 
 Merges to `main` happen via PR, not a local push.
 
+**Commit messages: one lowercase line, a few words, nothing else.** No blank line, no body, no trailers — including `Co-Authored-By` (Claude Code's harness adds it by default; this rule overrides that). Past tense, what the change did: `retuned palette to pass contrast in both themes`. Context that needs recording belongs in `docs/`, not a commit body.
+
 ## Claude behavior
 
 - **Consult before big or irreversible actions**, and before deep research/exploration. Don't go off alone.
