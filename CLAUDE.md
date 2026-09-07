@@ -22,12 +22,29 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 
 | Command | Does |
 | --- | --- |
-| `pnpm dev` | Run the app (Vite) → http://localhost:5173 |
+| `pnpm dev` | Run the app (Vite) → `http://localhost:5173`, or `6173` inside a COI container (`docs/COI-SANDBOX.md` → *Ports*). Vite walks upward if taken — read the port, don't assume it. |
 | `pnpm typecheck` | `tsc -b` across the project-reference graph |
 | `pnpm lint` / `pnpm lint:fix` | ESLint (flat config), one root pass |
 | `pnpm test` | Vitest across all packages (`pnpm -r`) |
 | `pnpm build` | Production build (`pnpm -r`) |
 | `pnpm format` | Prettier write |
+
+**Inside the COI container (the usual case), three things bite:**
+
+- **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
+- **`node_modules` is shared with the macOS host** — `/workspace` is a virtiofs mount and
+  `node_modules` isn't separately mounted, so native binaries belong to whichever side installed
+  last. If `vite dev`/`vite build` dies with `Cannot find module '../lightningcss.*.node'`, that's
+  this. `pnpm install` fixes it for the current platform (and breaks the other side until they do the
+  same). Doesn't affect `tsc` or `vitest`.
+- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs, and
+  **two different ceilings** bite here, which is why the crashes read as code bugs when they aren't:
+  the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`, *not* memory) and memory itself
+  (`SIGKILL`/137). A `tsgo` fatal has also been seen under load with the mechanism never confirmed —
+  capture the **head** of the output, don't assume OOM. Serialise: screenshot, kill the browser,
+  then test. Details: `docs/COI-INCIDENTS.md`.
+
+Runbook: `docs/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/COI-INCIDENTS.md`.
 
 ## Conventions (hard rules — these override defaults)
 
@@ -74,6 +91,8 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 - **Local deploys** — `cdk deploy` / `cdk destroy`. Deploys go through CI on push to `main`; local deploy is off-path. (`cdk diff` / `cdk synth` are fine.)
 
 Merges to `main` happen via PR, not a local push.
+
+**Commit messages: one lowercase line, a few words, nothing else.** No blank line, no body, no trailers — including `Co-Authored-By` (Claude Code's harness adds it by default; this rule overrides that). Past tense, what the change did: `retuned palette to pass contrast in both themes`. Context that needs recording belongs in `docs/`, not a commit body.
 
 ## Claude behavior
 

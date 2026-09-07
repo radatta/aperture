@@ -20,7 +20,7 @@ Requires **Node 22** (see `.nvmrc`) and **pnpm** (`corepack enable pnpm`).
 
 ```bash
 pnpm install       # install the workspace
-pnpm dev           # run the app (Vite) → localhost:5173
+pnpm dev           # run the app (Vite) → localhost:5173 (6173 inside a COI container)
 pnpm typecheck     # tsc -b across all packages (project references)
 pnpm lint          # eslint (flat config)
 pnpm test          # vitest across all packages
@@ -28,6 +28,28 @@ pnpm build         # production build
 ```
 
 Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `packages/shared/` (the cross-cutting contract) · `scripts/`.
+
+### Sandboxed dev (COI / Incus)
+
+Claude Code runs against this repo inside an Incus container — see
+**[docs/COI-SANDBOX.md](docs/COI-SANDBOX.md)** for the runbook and
+**[docs/COI-INCIDENTS.md](docs/COI-INCIDENTS.md)** for the post-mortems. Three rules that will bite you
+otherwise:
+
+1. **Always exit the TUI cleanly** (`Ctrl+D` / `/exit`) before you walk away, then `coi shutdown`.
+   Killing it abruptly — by closing the laptop lid, dropping the connection, or closing the window —
+   leaves your *local terminal* with mouse reporting still on, so your prompt fills with
+   `35;97;27M` garbage. Clean exit costs nothing and prevents it entirely.
+2. **Unattended runs need AC power, and `caffeinate` is not enough.** `caffeinate` blocks idle sleep
+   only; closing the lid sleeps the Mac regardless. Lid open + `caffeinate -s`, or clamshell mode /
+   Amphetamine's closed-display option if the lid must shut. A flat battery hibernates the Mac and
+   nothing prevents that.
+3. **`node_modules` is shared with the host**, so a native-binding error from `vite` usually just
+   means the other platform installed last — see the incidents doc. This, not a port clash, is the
+   usual reason `pnpm dev` "stops working locally" after a container session.
+4. **Ports are split by owner:** `5173+` is your Mac, `6173+` is a container. Chosen automatically off
+   the container hostname, with the host port pinned to match — so `localhost:6173` on the Mac is the
+   container's dev server, and the number alone tells you whose it is. See *Ports* in the runbook.
 
 ## What it does (v1)
 
