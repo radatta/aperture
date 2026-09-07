@@ -29,7 +29,19 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 | `pnpm build` | Production build (`pnpm -r`) |
 | `pnpm format` | Prettier write |
 
-**Inside the COI container (the usual case), three things bite:**
+**Inside the COI container (the usual case), four things bite:**
+
+- **Never put a reverse-shell literal on a Bash command line — it kills the container.** COI's monitor
+  samples every process each poll and matches a hardcoded list: `python -c` / `python3 -c`,
+  `perl -e`, `php -r`, `ruby -e`, `bash -i`, `sh -i`, `nc -e`, `socat`, `/dev/tcp/`. A match is
+  **CRITICAL**, and `auto_kill_on_critical` kills the whole container — no pause, no latch, it
+  repeats. For the interpreter one-liners the "is this network related?" gate is satisfied by **any
+  `:` in the command**, so a dict, a slice (`v[-5:]`), a URL or a timestamp all qualify; in practice
+  every JSON one-liner matches. Use `python3 - <<'PY' … PY` (runs as `python3 -`, not on the list)
+  or `jq`. **This applies to the literal text anywhere in the command**, including test fixtures and
+  echoed strings — writing a file whose contents mention these belongs in the Write/Edit tools, not
+  a Bash heredoc. `.claude/hooks/coi-reverse-shell-guard.sh` enforces this; the rule stands whether
+  or not it's registered.
 
 - **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
 - **`node_modules` is shared with the macOS host** — `/workspace` is a virtiofs mount and
@@ -50,7 +62,7 @@ Runbook: `docs/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `d
 
 Full detail in `docs/CONVENTIONS.md`. The load-bearing ones:
 
-- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx).
+- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: `.github/workflows/pr.yml` resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI.
 - **First-principles dependency discipline.** Default to rolling our own. Only propose a dependency when EITHER (A) it's substantial hard-to-own logic, OR (B) it's security-critical / subtle-correctness / hard cross-platform edges we shouldn't hand-roll. When proposing one, justify against A/B explicitly, note its footprint + transitive deps, and state the roll-our-own alternative. **"It's popular" is not a reason.**
 - **Build order: page-first, backend-second.** Build `app/` against a stubbed API and validate the UX in-hand *before* wiring the Lambda + DynamoDB behind the same contract.
 - **Workspace packages resolve from source.** `packages/shared` exports `./src/index.ts`; app and lambdas import it directly and their bundler transpiles it — no build step in the dev/test loop. (`shared` still emits a gitignored `dist/` only to satisfy TS project references; nothing imports it.)
@@ -102,6 +114,16 @@ Merges to `main` happen via PR, not a local push.
 - **Non-trivial external research → the `search-specialist` agent.** Single-fact lookups can use `WebSearch`/`WebFetch` directly. Codebase search is `Explore`'s job.
 - **Keep `docs/index.md` current.** Add or update a doc's one-line entry there in the same change — a doc missing from the index is undiscoverable.
 - **Version awareness:** always check the registry for the actual latest version before pinning a package — `npm view <pkg> version` (a read-only registry query; fine even though installs are pnpm-only). Never guess versions from memory.
+- **A piped command hides its exit code.** `pnpm typecheck | tail` reports success even when the typecheck never ran — the exit status you see belongs to `tail`. Before reporting any pass/fail, use `set -o pipefail` and echo `${PIPESTATUS[0]}`. This produced a false "it passed" here on 2026-09-07.
+
+### Before concluding "X can't do Y"
+
+A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/COI-INCIDENTS.md` → the 2026-09-07 correction.
+
+- **Check the tool's own surface first.** `coi --help` was one command and would have ended it immediately. Same lesson as `findmnt` and `incus info` earlier in that incident. Never write "X doesn't support Y" into a doc — or build a workaround for it — without first running the thing that would disprove it.
+- **Remove your own workaround before re-testing.** The symlink built to fix the problem was *causing* the symptom, so every re-test confirmed the wrong answer. While a fix is installed, the original question is unfalsifiable. Take it out, then measure.
+- **Don't inherit a test's success criterion unexamined.** That test defined success as `claude --resume` working — one layer below where the answer actually lived. On a negative result, ask what the check really measures before building on it.
+- **Mark inference as inference.** "No kernel OOM, so Go alloc-failed fatally" and "nothing restores it, COI defect" were both reasoning written down as fact, and both were wrong. State what was observed, then what you concluded from it, separately — so the next reader can re-derive rather than inherit.
 
 ## Writing style
 
