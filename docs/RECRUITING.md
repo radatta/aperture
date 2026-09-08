@@ -268,11 +268,16 @@ was found: the interceptor was watching for a `questionData` call that LeetCode 
 3. Day bucketing lands on the right day for a real submission in your real timezone.
 4. Idempotency under a real double-fire.
 
-**All four passed on dev in 2026-08**, alongside the capture half on 2026-08-09. So none of these are
-unknowns — they're re-verify-on-drift, in the same bucket as the interceptor matching LeetCode's live
-request shapes and the DOM scrape finding the difficulty pill. Two things can silently invalidate them:
-LeetCode changing its request or page shape, and a **prod** run being the first exercise of a separate
-stage's secrets (a different token, a different Cognito pool, a different `sub`). Nothing warns you.
+**All four verified on dev 2026-09-07** (and previously 2026-08). A wrong-then-correct pair on `two-sum`,
+6s apart, produced two rows with the right verdicts, `userId` matching `DEVICE_USER_ID_DEV`, and
+difficulty + topic tags captured. Day bucketing is the one worth spelling out: submitted 22:57 PDT on
+2026-09-07 (05:57 UTC on the **8th**) and stored as `day: "2026-09-07"` — naive UTC bucketing would have
+filed it on the wrong day, so the tz-offset + `dayStartHour` path is genuinely exercised.
+
+So none of these are unknowns; they're re-verify-on-drift, alongside the interceptor matching LeetCode's
+live request shapes. Two things silently invalidate them: LeetCode changing its request or page shape,
+and a **prod** run being the first exercise of a separate stage's secrets (different token, different
+Cognito pool, different `sub`).
 
 Since a submission is a real write to real data, dev is where you do this — not prod. Smoke tests use
 `testMode` with a synthetic user and a no-op writes object, so they never exercise the ingest path.
@@ -286,11 +291,13 @@ largest line item in this project.
 
 ## Open items
 
-- **Validated on dev in 2026-08, but never merged to `main`.** The branch was pushed to `dev`, deployed,
-  and the Recruiting page confirmed working there — `DEVICE_TOKEN_DEV` has been set since. `dev` was
-  later force-moved onto another feature branch, so **the branch pointer retains no trace of this; the
-  GitHub Actions run history is the only record.** Don't re-derive deployment history from
-  `git log origin/dev` — it will tell you this never happened. Prod has never had the feature.
+- **Verified end-to-end on dev 2026-09-07; prod has never run it.** Also validated on dev in 2026-08,
+  after which `dev` was force-moved onto another feature branch — so **the branch pointer retains no
+  trace of that; GitHub Actions run history is the only record.** Don't re-derive deployment history
+  from `git log origin/dev`; it will tell you this never happened.
+- **Prod's secrets are unexercised.** `DEVICE_TOKEN_PROD` and `DEVICE_USER_ID_PROD` were set 2026-09-07
+  but no prod deploy has read them. Repeat the extension check against `aperture.rahuldatta.dev` after
+  the first prod deploy — a wrong `DEVICE_USER_ID_PROD` renders an empty page and errors nowhere.
 - **The summary line is hidden until there's data.** `0 solved · 0 problems · 0 attempts` sits outside
   `EmptyState`'s reach, so it would have kept asserting a total while the query was still loading or had
   failed. Revisit if a zero-state summary ever earns its place.
