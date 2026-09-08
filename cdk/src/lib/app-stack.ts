@@ -148,6 +148,12 @@ export class ApertureAppStack extends Stack {
       generateSecret: false,
       authFlows: { userSrp: true },
       preventUserExistenceErrors: true,
+      // The refresh token is what carries the session across app relaunches, so it — not the access
+      // token — sets how often you actually retype a password. Cognito allows up to 3650 days, but the
+      // token sits in browser localStorage, so the ceiling is deliberately short: a week caps how long
+      // a leaked one stays useful, at the cost of a weekly sign-in. Access/ID stay at the 1-hour
+      // default — they cross the network on every request and are cheap to renew.
+      refreshTokenValidity: Duration.days(7),
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
