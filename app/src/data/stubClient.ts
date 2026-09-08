@@ -29,6 +29,7 @@ import type {
   CreateTaskInput,
   DateRange,
   Day,
+  ExportBundle,
   Habit,
   HabitCheck,
   Idea,
@@ -135,7 +136,12 @@ class StubClient implements ApiClient {
     }
   }
 
-  // --- the writes seam: the ONLY place the store is mutated ----------------
+  // --- the writes seam: how collections are mutated ------------------------
+  // Every collection mutation goes through here (single audit point, mirroring the Lambda's rule).
+  // The one thing outside it is `ensureSettings`, which lazily materialises the settings SINGLETON —
+  // not a collection, so it doesn't fit these array-shaped helpers. Note that makes getSettings /
+  // dayStartHour / exportData read paths that can write on a virgin store; the backend's own
+  // ensureSettings does the same, so the two stay in parity.
   private writes = {
     insert: <T extends BaseEntity>(coll: T[], item: NoInfer<T>): T => {
       coll.push(item);
@@ -639,7 +645,31 @@ class StubClient implements ApiClient {
       .sort((a, b) => a.day.localeCompare(b.day));
   }
 
-  async exportData(): Promise<unknown> {
-    return { exportedAt: this.now(), userId: USER_ID, ...this.store };
+  // Enumerated, not spread. The spread silently tracked whatever Store happened to hold — which hid
+  // two divergences from the backend: soft-deleted rows leaked in, and a virgin store exported
+  // `settings: null`. Both are resolved here, and ExportBundle makes the key set a compile error.
+  async exportData(): Promise<ExportBundle> {
+    const bundle: ExportBundle = {
+      exportedAt: this.now(),
+      userId: USER_ID,
+      logEntries: this.alive(this.store.logEntries),
+      tasks: this.alive(this.store.tasks),
+      plans: this.alive(this.store.plans),
+      series: this.alive(this.store.series),
+      ideas: this.alive(this.store.ideas),
+      habits: this.alive(this.store.habits),
+      habitChecks: this.alive(this.store.habitChecks),
+      sessions: this.alive(this.store.sessions),
+      days: this.alive(this.store.days),
+      categories: this.alive(this.store.categories),
+      leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
+      settings: this.ensureSettings(),
+    };
+    // Store is the source of truth for what a full snapshot holds, so this is where a new collection
+    // has to be noticed. The old `...this.store` spread did that for free — it picked up new keys
+    // automatically, which made the contract's key-set assertion go red until the backend caught up.
+    // Enumerating lost that signal, so assert coverage explicitly: add a collection to Store and this
+    // stops compiling, which forces it into ExportBundle, which in turn breaks the backend's literal.
+    return bundle satisfies Record<keyof Store, unknown>;
   }
 }

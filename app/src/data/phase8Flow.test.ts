@@ -59,7 +59,7 @@ describe('settings + export', () => {
     expect(updated.pomodoroWorkMin).toBe(50);
 
     await api.createLogEntry('exportable', '2026-08-04');
-    const data = (await api.exportData()) as { logEntries: { text: string }[] };
+    const data = await api.exportData();
     expect(data.logEntries.some((l) => l.text === 'exportable')).toBe(true);
   });
 });

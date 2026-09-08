@@ -98,6 +98,32 @@ export interface RecordLeetcodeAttemptInput {
   topicTags?: string[] | null;
 }
 
+// The full export snapshot. Every collection is REQUIRED, and that's the point: the two ApiClient
+// impls build this differently (the stub from its in-memory store, the backend from enumerated repo
+// reads), and a missing collection used to be invisible — leetcodeAttempts shipped absent from the
+// real export while the stub looked fine. With both returning an object literal typed as this,
+// omitting a key AND adding a stray one are compile errors.
+//
+// Soft-deleted rows are EXCLUDED (see the export contract test). That's the right call while the
+// export is a one-way download; if an import/restore path ever lands it will need tombstones for
+// merge, plus a versioned envelope — revisit here at that point, not before.
+export interface ExportBundle {
+  exportedAt: number;
+  userId: string;
+  logEntries: LogEntry[];
+  tasks: Task[];
+  plans: TaskPlan[];
+  series: TaskSeries[];
+  ideas: Idea[];
+  habits: Habit[];
+  habitChecks: HabitCheck[];
+  sessions: PomodoroSession[];
+  days: Day[];
+  categories: Category[];
+  leetcodeAttempts: LeetcodeAttempt[];
+  settings: Settings; // always materialised — never the stub's nullable storage state
+}
+
 export type SettingsPatch = Partial<
   Pick<Settings, 'dayStartHour' | 'pomodoroWorkMin' | 'pomodoroBreakMin' | 'theme'>
 >;
@@ -192,5 +218,5 @@ export interface ApiClient {
   listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]>;
 
   // Full data export (JSON) — the user owns their data. A snapshot of every entity.
-  exportData(): Promise<unknown>;
+  exportData(): Promise<ExportBundle>;
 }

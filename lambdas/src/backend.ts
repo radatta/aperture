@@ -22,6 +22,7 @@ import type {
   CreateTaskInput,
   DateRange,
   Day,
+  ExportBundle,
   Habit,
   HabitCheck,
   Idea,
@@ -113,7 +114,9 @@ export class BackendClient implements ApiClient {
     // the biggest cost in the project, so we deliberately don't emit one.
     const metaCaptured =
       input.difficulty != null || (Array.isArray(input.topicTags) && input.topicTags.length > 0);
-    console.log(JSON.stringify({ event: 'leetcode_ingest', problemSlug: input.problemSlug, metaCaptured }));
+    console.log(
+      JSON.stringify({ event: 'leetcode_ingest', problemSlug: input.problemSlug, metaCaptured }),
+    );
     const dup = await this.repo.findLeetcodeBySubmissionId(input.leetcodeSubmissionId);
     if (dup) return dup; // idempotent — the extension may fire twice for one submission
     const start = (await this.ensureSettings()).dayStartHour;
@@ -533,7 +536,7 @@ export class BackendClient implements ApiClient {
       .sort((a, b) => a.day.localeCompare(b.day));
   }
 
-  async exportData(): Promise<unknown> {
+  async exportData(): Promise<ExportBundle> {
     return {
       exportedAt: this.now(),
       userId: this.userId,
