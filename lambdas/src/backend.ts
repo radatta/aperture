@@ -547,6 +547,7 @@ export class BackendClient implements ApiClient {
       sessions: await this.repo.listAllSessions(),
       days: await this.repo.listAllDays(),
       categories: await this.repo.listCategories(),
+      leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
       settings: await this.ensureSettings(),
     };
   }

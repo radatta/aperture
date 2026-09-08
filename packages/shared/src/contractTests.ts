@@ -249,10 +249,49 @@ export function runApiContract(
       expect(updated.pomodoroWorkMin).toBe(50);
     });
 
-    it('export: includes created entities', async () => {
+    // The export is the "you own your data" snapshot, so EVERY collection belongs in it. The two impls
+    // build it differently: the stub spreads its whole store (new entities included for free), the
+    // backend enumerates repo reads by hand (new entities silently missing) — which is exactly how
+    // leetcodeAttempts went absent from the real export while the stub looked fine.
+    //
+    // So assert the key set EXACTLY, not just the entities this test happens to create. Adding a
+    // collection then fails here until it's listed below AND added to the backend's enumeration, which
+    // is the only step that was skippable before.
+    it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
-      const data = (await api.exportData()) as { tasks: { id: string }[] };
+      const lc = await api.recordLeetcodeAttempt({
+        leetcodeSubmissionId: 'sub-export',
+        problemSlug: 'two-sum',
+        problemTitle: 'Two Sum',
+        statusCode: 10,
+        submittedAt: 1_700_000_000_000,
+        tzOffsetMinutes: 300,
+        lang: 'python3',
+      });
+      const data = (await api.exportData()) as Record<string, unknown> & {
+        tasks: { id: string }[];
+        leetcodeAttempts: { id: string }[];
+      };
+      expect(Object.keys(data).sort()).toEqual(
+        [
+          'categories',
+          'days',
+          'exportedAt',
+          'habitChecks',
+          'habits',
+          'ideas',
+          'leetcodeAttempts',
+          'logEntries',
+          'plans',
+          'series',
+          'sessions',
+          'settings',
+          'tasks',
+          'userId',
+        ].sort(),
+      );
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
+      expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
     });
   });
 }

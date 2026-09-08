@@ -88,6 +88,14 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **categories** — `id · label · isWork · order · active`.
 - Referenced by **id**. **Labels resolve live** (renames propagate to display). **`isWork` is snapshotted** onto sessions (`wasWork`) so history is frozen. Flipping `isWork` prompts an **optional retroactive backfill** ("also reclassify N past records?"). **Deleting** forces reassignment of all referencing items to another category first, then soft-deletes the empty one.
 
+**leetcodeAttempts** — one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.
+- `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
+- `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`. **Normalized server-side** from LeetCode's raw `status_code`/`status_msg` — the dep-free extension forwards raw signals only.
+- `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
+- **Idempotent on `leetcodeSubmissionId`** — a re-fire returns the existing row, original verdict intact.
+- **Attempt count per problem is DERIVED at read time**, never a stored counter.
+- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[RECRUITING.md](RECRUITING.md)**.
+
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
@@ -140,7 +148,7 @@ pnpm workspaces monorepo.
 aperture/
   app/                 # React PWA (Vite)
     src/
-      pages/           # Home, Log, Tasks, Habits, Inbox, Settings
+      pages/           # Home, Log, Tasks, Recruiting, Habits, Inbox, Settings
       modules/         # capture, pomodoro, tasks, habits, log, calibration
       components/      # primitives: Card, Text, … (anti-generic token layer)
       data/            # React Query hooks + api client
@@ -149,6 +157,8 @@ aperture/
       styles/          # Tailwind tokens (CSS-var theme)
   lambdas/             # BFF Lambda(s) — index.ts, routes, ddb client, jwt-validate, writes object
   cdk/                 # CDK app (infra)
+  extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a
+                       #   pnpm workspace member, and excluded from eslint + prettier
   packages/shared/     # shared TS types across app + lambda
   scripts/             # dev + CI utilities
   docs/  ·  localNotes/

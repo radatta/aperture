@@ -98,7 +98,7 @@ No static credentials — OIDC role assumption. GitHub Flow, simplified:
   - **Flow:** push branch → `dev` (deploys + records the dev deployment on that SHA) → PR that same commit → `main` (ruleset sees the dev deployment → merge allowed) → squash-merge → main pipeline redeploys dev + deploys prod.
   - **Docs-only fast-path:** the gate is SHA-specific (the *exact* commit being merged must have a dev deployment — an older one doesn't count), so even a one-line docs fix needs a dev deployment. To avoid a full deploy for that, `deploy-dev`/`deploy-prod` detect when a push touches only `docs/` or a top-level `*.md` and **skip the heavy steps (cdk deploy, smoke, publish) while the job still runs in its environment** — so the deployment is still recorded (gate satisfied) but nothing is actually deployed. Anything outside those paths, or an indeterminate base, → full deploy.
 - OIDC provider + both roles live in a one-off, hand-deployed `ApertureCicd` stack (`-c githubRepo=owner/repo`); the pipeline never touches it.
-- **Origin secret** reaches CI as a GitHub secret (`ORIGIN_SECRET_DEV/PROD` → `APERTURE_ORIGIN_SECRET`), so it's stable across runs.
+- **Origin secret** reaches CI as a GitHub secret (`ORIGIN_SECRET_DEV/PROD` → `APERTURE_ORIGIN_SECRET`), so it's stable across runs. The **device token** works identically (`DEVICE_TOKEN_DEV/PROD` → `APERTURE_DEVICE_TOKEN`), alongside the repo **var** `DEVICE_USER_ID_DEV/PROD` → `APERTURE_DEVICE_USER_ID`; both pairs must be set or the extension breaks silently ([RECRUITING.md](RECRUITING.md)).
 - **Smoke tests** invoke the Lambda by **direct `aws lambda invoke`** with a `testMode` payload (synthetic user, writes-object no-ops) → no side effects, even against prod.
 - **Deploy-time safety checks:**
   - **Single synth, shared by diff + deploy** — each stage runs `cdk synth … --no-lookups` once to `cdk.out`, then `cdk diff --app cdk.out` and `cdk deploy --app cdk.out` consume that same assembly. No double esbuild bundle, and the diff you read is byte-identical to what deploys. `--no-lookups` fails loudly if an (unexpected) context lookup is ever introduced.
@@ -109,6 +109,8 @@ No static credentials — OIDC role assumption. GitHub Flow, simplified:
 ## 10. Secrets
 
 - v1: none in the app path (Cognito public keys are public; no static creds anywhere).
+- **Origin secret** — CloudFront→Lambda origin lockdown. A plain Lambda env var, sourced from `APERTURE_ORIGIN_SECRET` (CI) or a gitignored `cdk/.secrets/` file. Anti-abuse only; the JWT is the real gate.
+- **Device token** — auth for the extension's LeetCode ingest endpoint. **Same class and same pattern as the origin secret** (single-user, one write method, tiny blast radius) → a plain env var from `APERTURE_DEVICE_TOKEN` / a gitignored file, deliberately **not** Secrets Manager. Paired with `APERTURE_DEVICE_USER_ID` (not secret, but account-specific → also uncommitted). **If `DEVICE_TOKEN_<STAGE>` isn't set in CI, every deploy rotates the token** and the extension's stored copy stops matching. Details + the operator checklist: **[RECRUITING.md](RECRUITING.md)**.
 - v1.1 AI: the model API key goes in **Secrets Manager**, fetched at Lambda cold start. Never in env vars or CDK config.
 
 ## 11. Cost
