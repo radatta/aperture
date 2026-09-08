@@ -200,7 +200,14 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
         ? { sub: oidc.user.profile.sub, email: oidc.user.profile.email ?? null }
         : null,
       error: hideError ? null : (oidc.error?.message ?? null),
-      signIn: () => void oidc.signinRedirect(),
+      // Asking for a sign-in ends the quiet window: from here on the user is acting, so anything that
+      // goes wrong is theirs to see. Without this an offline signinRedirect leaves a button that just
+      // looks dead. (Clearing it on userUnloaded instead would un-hide the expiry we're hiding — that
+      // event *is* the teardown.)
+      signIn: () => {
+        setHideError(false);
+        void oidc.signinRedirect();
+      },
       signOut: () => void oidc.signoutRedirect(),
     }),
     [oidc, phase, hideError],

@@ -112,6 +112,19 @@ function ErrorProbe() {
   return <div data-testid="error">{error ?? ''}</div>;
 }
 
+// Reports whether errors are currently suppressed, which `error` alone can't distinguish from "no error".
+function SignInTrigger() {
+  const { signIn, error } = useAuth();
+  return (
+    <>
+      <button data-testid="signin" onClick={signIn}>
+        sign in
+      </button>
+      <div data-testid="hidden">{error === null ? 'suppressed-or-none' : 'shown'}</div>
+    </>
+  );
+}
+
 // Counts mounts so an unmount of the tree under RequireAuth is directly assertable — that unmount is
 // what loses PomodoroProvider's in-memory paused/blocked state.
 let mounts = 0;
@@ -381,6 +394,31 @@ describe('renewal — authority rejects the grant', () => {
 
     expect(screen.getByTestId('error').textContent).toBe('');
     expect(screen.getByRole('button', { name: /sign in/i })).toBeTruthy();
+  });
+
+  // The quiet window has to end somewhere, or every later failure is swallowed too — tap Sign in while
+  // offline and the button just looks dead.
+  it('stops hiding errors once the user asks to sign in', async () => {
+    const fake = createFakeManager(makeUser({ expired: true }));
+    fake.renewFails(new ErrorResponse({ error: 'invalid_grant' }));
+    render(
+      <OidcProvider userManager={fake.manager}>
+        <OidcBridge manager={fake.manager}>
+          <ErrorProbe />
+          <SignInTrigger />
+        </OidcBridge>
+      </OidcProvider>,
+    );
+    await settle();
+    await act(async () => fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })));
+    await settle();
+    expect(screen.getByTestId('error').textContent).toBe('');
+
+    await act(async () => screen.getByTestId('signin').click());
+    await act(async () => fake.events.renewError.emit(new Error('discovery unreachable')));
+    await settle();
+
+    expect(screen.getByTestId('hidden').textContent).toBe('shown');
   });
 
   it('clears on a silentRenewError carrying invalid_grant, but retries a network one', async () => {
