@@ -201,6 +201,28 @@ free. Install it via `about:addons` → gear icon → **Install Add-on From File
 later makes it a *different* add-on, meaning a reinstall and a lost stored token. Settle it before the
 first submission, not after.
 
+**`data_collection_permissions` is required.** New submissions are rejected without
+`browser_specific_settings.gecko.data_collection_permissions`. We declare `{"required": ["none"]}` —
+attempt data goes only to the user's own backend, with no third party, and the `required` enum accepts
+only sensitive categories (PII, health, financial, auth, personal communications) plus `none`. Activity
+categories like `websiteActivity` exist **only** in `optional`, which would create a user-toggleable
+consent the extension doesn't check before POSTing — worse than not declaring it.
+
+**Two AMO error messages that mislead.** A schema failure can surface as *"Your add-on should end with
+.zip, .xpi or .crx"* on a perfectly valid `.zip` — ignore the filename advice and look for the real
+error in the validation results. And the review-history panel may render raw `$action_label` /
+`$comments` template placeholders; that's an AMO front-end bug, not information about your submission.
+
+**Status: signed and permanently installed, 2026-09-08.** AMO cleared it in under an hour, against
+Mozilla's own stated 3-days-to-3-weeks range for anything entering manual review — treat the fast path
+as luck, not the expectation. Verified by restarting Firefox and capturing a submission afterward, which
+is the specific thing a temporary add-on cannot do.
+
+**Do not re-upload a version to hurry a pending submission** — Mozilla staff confirmed (2026-03)
+that resubmitting **resets your queue position**. Polling the API doesn't help either. If a future
+version sits more than 48–72 hours, posting on discourse.mozilla.org is the only lever observed to move
+things.
+
 ### Why not two permanent installs (one per stage)
 
 Two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
@@ -304,9 +326,8 @@ largest line item in this project.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
   same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale, pre-deploy)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
-- **Not signed yet.** Every install so far has been a temporary add-on. Signing is a one-time AMO
-  unlisted submission (see Deployment & install) and should happen *after* the dev-stage validation
-  passes — signing first just means signing twice.
+- ~~Not signed yet.~~ **Done 2026-09-08** — signed via AMO unlisted, permanently installed, and
+  confirmed to survive a Firefox restart. The feature is complete and in daily use.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
   fallback, but neither has been run.
 - **No aggregate views.** No per-topic breakdown, no difficulty mix, no time-to-solve. V2, and per
