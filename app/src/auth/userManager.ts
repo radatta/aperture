@@ -19,5 +19,5 @@ export const getUserManager = (): UserManager =>
     scope: 'openid email',
     automaticSilentRenew: true,
     userStore: getUserStore(),
-    monitorSession: false, // Cognito publishes no check_session_iframe; leaving it on is a silent no-op
+    monitorSession: false, // already the default; pinned because Cognito publishes no check_session_iframe
   }));

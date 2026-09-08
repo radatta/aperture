@@ -107,6 +107,11 @@ function Probe() {
   return <div data-testid="status">{status}</div>;
 }
 
+function ErrorProbe() {
+  const { error } = useAuth();
+  return <div data-testid="error">{error ?? ''}</div>;
+}
+
 // Counts mounts so an unmount of the tree under RequireAuth is directly assertable — that unmount is
 // what loses PomodoroProvider's in-memory paused/blocked state.
 let mounts = 0;
@@ -222,16 +227,20 @@ describe('renewal — network failure keeps the session', () => {
     expect(fake.getStoredUser()?.refresh_token).toBe('r1');
   });
 
-  it('retries on a backoff ladder and then stops', async () => {
+  it('runs a fast ladder, then backs off to a slow retry', async () => {
     const fake = createFakeManager(makeUser({ expired: true }));
     fake.renewFails(new Error('offline'));
     renderBridge(fake);
     await settle();
-    await advance(30_000);
 
+    await advance(30_000); // 2+4+8+16s
     expect(fake.calls.signinSilent).toHaveBeenCalledTimes(5);
-    await advance(60_000);
+
+    await advance(30_000); // the fast ladder is done; nothing rapid in this window
     expect(fake.calls.signinSilent).toHaveBeenCalledTimes(5);
+
+    await advance(30_000); // the slow retry lands a minute after giving up
+    expect(fake.calls.signinSilent).toHaveBeenCalledTimes(6);
   });
 
   it('shows the loading state, not a sign-in button, while retrying', async () => {
@@ -258,6 +267,37 @@ describe('renewal — network failure keeps the session', () => {
     await settle();
 
     expect(status()).toBe('authenticated');
+  });
+
+  // The wakeup listeners only fire on events the browser raises. A Cognito 5xx, a captive portal or a
+  // DNS failure never flips navigator.onLine, so without a slow retry the app would sit on a sign-in
+  // button whose tap costs a password — the outcome this change exists to prevent.
+  it('keeps retrying after giving up, without a connectivity event', async () => {
+    const fake = createFakeManager(makeUser({ expired: true }));
+    fake.renewFails(new Error('503 from the authority'));
+    renderBridge(fake);
+    await settle();
+    await advance(30_000);
+    const exhausted = fake.calls.signinSilent.mock.calls.length;
+    expect(status()).toBe('unauthenticated');
+
+    fake.renewSucceeds();
+    await advance(60_000);
+
+    expect(fake.calls.signinSilent.mock.calls.length).toBeGreaterThan(exhausted);
+    expect(status()).toBe('authenticated');
+  });
+
+  it('does not flip the sign-in button back to loading for a background retry', async () => {
+    const fake = createFakeManager(makeUser({ expired: true }));
+    fake.renewFails(new Error('503'));
+    renderBridge(fake);
+    await settle();
+    await advance(30_000);
+    expect(status()).toBe('unauthenticated');
+
+    await advance(60_000); // a slow retry runs and fails again
+    expect(status()).toBe('unauthenticated');
   });
 
   it('ignores a visibilitychange to hidden', async () => {
@@ -317,6 +357,30 @@ describe('renewal — authority rejects the grant', () => {
     expect(fake.calls.removeUser).toHaveBeenCalledTimes(1);
     expect(fake.calls.signinSilent).toHaveBeenCalledTimes(1);
     expect(status()).toBe('unauthenticated');
+  });
+
+  // The weekly expiry is expected, not a fault. react-oidc-context sets `error` on silentRenewError and
+  // clears it only on USER_LOADED, so the teardown path would otherwise leave "invalid_grant" in red
+  // under the sign-in button.
+  it('does not surface an error when the session expires normally', async () => {
+    const fake = createFakeManager(makeUser({ expired: true }));
+    fake.renewFails(new ErrorResponse({ error: 'invalid_grant' }));
+    render(
+      <OidcProvider userManager={fake.manager}>
+        <OidcBridge manager={fake.manager}>
+          <ErrorProbe />
+          <RequireAuth>
+            <div>gated</div>
+          </RequireAuth>
+        </OidcBridge>
+      </OidcProvider>,
+    );
+    await settle();
+    await act(async () => fake.events.renewError.emit(new ErrorResponse({ error: 'invalid_grant' })));
+    await settle();
+
+    expect(screen.getByTestId('error').textContent).toBe('');
+    expect(screen.getByRole('button', { name: /sign in/i })).toBeTruthy();
   });
 
   it('clears on a silentRenewError carrying invalid_grant, but retries a network one', async () => {

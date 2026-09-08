@@ -15,6 +15,9 @@ const MAX_RENEW_ATTEMPTS = 5;
 // would otherwise self-sustain: renew succeeds, queries refetch, they 401 again, repeat at network
 // speed. Two attempts is enough for a genuinely stale token; past that the 401 isn't about the token.
 const MAX_UNAUTHORIZED_RENEWS = 2;
+// Once the ladder has given up, keep retrying at this interval. The wakeup listeners only catch failures
+// that flip navigator.onLine; a Cognito outage or captive portal never does.
+const STALLED_RETRY_MS = 60_000;
 
 // What renewal is doing, as far as the UI is concerned. Distinct from the OIDC context's own state:
 // 'renewing' keeps RequireAuth on the loading screen instead of offering a sign-in that would land on a
@@ -27,6 +30,10 @@ type Phase = 'idle' | 'renewing' | 'stalled';
 export function OidcBridge({ manager, children }: { manager: UserManager; children: ReactNode }) {
   const oidc = useOidc();
   const [phase, setPhase] = useState<Phase>('idle');
+  // react-oidc-context sets `error` on every silentRenewError and clears it only on USER_LOADED — and
+  // the invalid_grant teardown goes out through USER_UNLOADED, so without this a routine weekly expiry
+  // renders "invalid_grant" in danger text under the sign-in button and reads as a crash.
+  const [hideError, setHideError] = useState(false);
 
   // Mirror the token during render, not in an effect: child effects fire before parent effects, so an
   // effect here would let a child's first query go out token-less. Writing the module store in render
@@ -42,9 +49,12 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
     let recoverQueries = false; // a 401 sent us here, so refetch once the token is good
     let unauthorizedRenews = 0;
 
+    let current: Phase = 'idle'; // mirror of `phase`, readable inside this closure
+
     const settle = (next: Phase, owed: boolean) => {
       needsRenew = owed;
       clearTimeout(retry);
+      current = next;
       if (!cancelled) setPhase(next);
     };
 
@@ -58,7 +68,12 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
         // configured'), which reads as a network fault and buys a pointless 30s ladder for a session
         // that is simply signed out.
         if (!user?.refresh_token) return settle('stalled', false);
-        setPhase('renewing');
+        // Don't yank the sign-in button away for a background retry that already gave up once — the
+        // slow ladder below runs indefinitely, and flipping the UI every minute would just look broken.
+        if (current !== 'stalled') {
+          current = 'renewing';
+          setPhase('renewing');
+        }
         await manager.signinSilent(); // success is handled by userLoaded, not here
       } catch (err) {
         // Someone else finished the job while we were in flight (SilentRenewService, or the redirect
@@ -69,13 +84,19 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
         // dropped by a password change. Clearing the user is what puts RequireAuth back on sign-in; if
         // even that fails (storage full, private mode) fall through to the button rather than spin.
         if (err instanceof ErrorResponse && err.error === 'invalid_grant') {
+          setHideError(true); // an expected weekly expiry, not a fault to show the user
           await manager.removeUser().catch(() => settle('stalled', false));
           return;
         }
         // Anything else is the network. Never removeUser here: a tunnel would cost the very refresh
         // token this change exists to preserve. Stay owed, so a wakeup can retry it.
-        if (++attempt >= MAX_RENEW_ATTEMPTS) settle('stalled', true);
-        else if (!cancelled) retry = setTimeout(() => void renew(), 2 ** attempt * 1000);
+        if (++attempt >= MAX_RENEW_ATTEMPTS) {
+          settle('stalled', true);
+          // Keep trying, slowly. The wakeup listeners miss any failure that doesn't flip navigator.onLine
+          // — a Cognito 5xx, a captive portal, DNS — and without this the app sits on a button whose tap
+          // costs a password, which is the outcome this whole change exists to avoid.
+          if (!cancelled) retry = setTimeout(() => void renew(), STALLED_RETRY_MS);
+        } else if (!cancelled) retry = setTimeout(() => void renew(), 2 ** attempt * 1000);
       } finally {
         renewing = false;
       }
@@ -101,6 +122,7 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
     // instead is what previously left the UI stuck one expiry away from dropping the whole tree.
     const offLoaded = manager.events.addUserLoaded(() => {
       attempt = 0;
+      setHideError(false);
       settle('idle', false);
       if (recoverQueries) {
         recoverQueries = false;
@@ -115,9 +137,10 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
     });
     const offExpired = manager.events.addAccessTokenExpired(() => request('expired'));
     const offRenewError = manager.events.addSilentRenewError((err) => {
-      if (err instanceof ErrorResponse && err.error === 'invalid_grant')
+      if (err instanceof ErrorResponse && err.error === 'invalid_grant') {
+        setHideError(true); // expected expiry, not a fault (see hideError above)
         void manager.removeUser().catch(() => settle('stalled', false));
-      else request('renewError');
+      } else request('renewError');
     });
     setReauthHandler(() => request('unauthorized')); // the BFF's 401 is the same signal by another route
 
@@ -176,11 +199,11 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
       user: oidc.user
         ? { sub: oidc.user.profile.sub, email: oidc.user.profile.email ?? null }
         : null,
-      error: oidc.error?.message ?? null,
+      error: hideError ? null : (oidc.error?.message ?? null),
       signIn: () => void oidc.signinRedirect(),
       signOut: () => void oidc.signoutRedirect(),
     }),
-    [oidc, phase],
+    [oidc, phase, hideError],
   );
   return <AuthContext value={value}>{children}</AuthContext>;
 }
