@@ -29,6 +29,52 @@ export function runApiContract(
       expect(updated.text).toBe('shipped it, finally');
     });
 
+    it('leetcode: record normalizes verdict, buckets by client tz, and is idempotent on submission id', async () => {
+      const base = {
+        problemSlug: 'two-sum',
+        problemTitle: 'Two Sum',
+        submittedAt: 1_700_000_000_000, // 2023-11-14T22:13:20Z
+        tzOffsetMinutes: 300, // UTC-5
+        lang: 'python3',
+      };
+      const wrong = await api.recordLeetcodeAttempt({
+        ...base,
+        leetcodeSubmissionId: 'sub-1',
+        statusCode: 11,
+        statusMsg: 'Wrong Answer',
+        difficulty: 'Easy',
+        topicTags: ['array', 'hash-table'],
+      });
+      expect(wrong.verdict).toBe('wrong_answer');
+      expect(wrong.difficulty).toBe('Easy');
+      expect(wrong.topicTags).toEqual(['array', 'hash-table']);
+      // day = submittedAt shifted by tz offset + dayStartHour(4), via UTC getters → runner-TZ-independent
+      expect(wrong.day).toBe('2023-11-14');
+
+      // Same submission id re-fires → same row, original verdict preserved (no overwrite).
+      const dup = await api.recordLeetcodeAttempt({
+        ...base,
+        leetcodeSubmissionId: 'sub-1',
+        statusCode: 10,
+        statusMsg: 'Accepted',
+      });
+      expect(dup.id).toBe(wrong.id);
+      expect(dup.verdict).toBe('wrong_answer');
+
+      const ac = await api.recordLeetcodeAttempt({
+        ...base,
+        leetcodeSubmissionId: 'sub-2',
+        statusCode: 10,
+        statusMsg: 'Accepted',
+        submittedAt: base.submittedAt + 60_000,
+      });
+      const list = await api.listLeetcodeAttempts();
+      expect(list).toHaveLength(2); // dup didn't add a row
+      expect(list[0]!.id).toBe(ac.id); // reverse-chron: newer first
+      expect(list[0]!.difficulty).toBeNull(); // unset → null, not undefined
+      expect(list[0]!.verdict).toBe('accepted');
+    });
+
     it('tasks: estimate freezes on start of work and yields a calibration point when done', async () => {
       const t = await api.createTask({ title: 'Task A', estimateMin: 30, bufferMin: 8 });
       expect((await api.listBacklog()).map((x) => x.id)).toContain(t.id);
@@ -203,10 +249,74 @@ export function runApiContract(
       expect(updated.pomodoroWorkMin).toBe(50);
     });
 
-    it('export: includes created entities', async () => {
+    // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked
+    // object literal), so this assertion is a runtime backstop rather than the primary guard. It still
+    // earns its place: excess-property checking evaporates the moment an impl returns a variable, a
+    // spread, or an `as` cast, and it can't see a declared-but-actually-undefined value or a key the
+    // HTTP layer's JSON round-trip drops. Listing the collections here is deliberate double-entry —
+    // don't replace it with a constant the implementations also import.
+    it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
-      const data = (await api.exportData()) as { tasks: { id: string }[] };
+      const lc = await api.recordLeetcodeAttempt({
+        leetcodeSubmissionId: 'sub-export',
+        problemSlug: 'two-sum',
+        problemTitle: 'Two Sum',
+        statusCode: 10,
+        submittedAt: 1_700_000_000_000,
+        tzOffsetMinutes: 300,
+        lang: 'python3',
+      });
+      const data = await api.exportData();
+      expect(Object.keys(data).sort()).toEqual(
+        [
+          'categories',
+          'days',
+          'exportedAt',
+          'habitChecks',
+          'habits',
+          'ideas',
+          'leetcodeAttempts',
+          'logEntries',
+          'plans',
+          'series',
+          'sessions',
+          'settings',
+          'tasks',
+          'userId',
+        ].sort(),
+      );
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
+      expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
+      // Materialised, never the stub's nullable storage state — nothing in this test triggers
+      // ensureSettings() beforehand, so a stub that exported store.settings raw would fail here.
+      expect(data.settings).toBeTruthy();
+    });
+
+    // Soft-deleted rows stay out of the export. The two impls used to disagree — the stub spread its
+    // raw store (tombstones included), the backend's repo reads are alive()-filtered (excluded) — and
+    // no type can catch that, since both are well-typed arrays of the same element. Two probes because
+    // they take different paths: deleteCategory writes deletedAt via putCategory, removePlan goes
+    // through the stub's softDelete. (Not uncheckHabit — the stub soft-deletes it but the backend
+    // hard-deletes, so it can't distinguish filtering from absence.)
+    it('export: excludes soft-deleted rows', async () => {
+      const gone = await api.upsertCategory({ label: 'Gone', isWork: false });
+      const kept = await api.upsertCategory({ label: 'Kept', isWork: true });
+      await api.deleteCategory(gone.id, null); // unreferenced → a null target is allowed
+
+      const task = await api.createTask({ title: 'planned then unplanned' });
+      const plan = await api.upsertPlan({
+        taskId: task.id,
+        day: '2026-01-05',
+        plannedMinutes: 30,
+        order: 1,
+      });
+      await api.removePlan(plan.id);
+
+      const data = await api.exportData();
+      expect(data.categories.map((c) => c.id)).toContain(kept.id);
+      expect(data.categories.map((c) => c.id)).not.toContain(gone.id);
+      expect(data.plans.map((p) => p.id)).not.toContain(plan.id);
+      expect(data.tasks.map((t) => t.id)).toContain(task.id); // the task itself survives
     });
   });
 }

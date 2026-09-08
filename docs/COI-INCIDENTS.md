@@ -13,6 +13,9 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 | B | 13-hour unattended run died; terminal left spewing mouse codes | 2026-08-22 | Laptop lid closed → `'Clamshell Sleep'`; killed TUI never restored the terminal |
 | B.1 | Every container lost its mounts, VM rebooted | 2026-08-21 | A host-mount config change requires a Lima VM restart |
 | C | `vite` can't find a native binding | ongoing | `node_modules` shared with the macOS host across two platforms |
+| D | VM rebuilt from scratch; sessions and `coi` profiles gone | 2026-09-06 | A stray `-` in `limactl edit`'s `mounts:` block; `~/.coi/` was VM-local, so the rebuild deleted it |
+| E | Container froze on a HIGH threat verdict 2 min into a session | 2026-09-06 | False positive: session-start read I/O tripped `file_read_rate_mb_per_sec`; `coi audit` then failed to surface the event it had on disk |
+| F | Container **killed** three times mid-session, CRITICAL "reverse shell" | 2026-09-07 | False positive: a hardcoded pattern list flags `python3 -c`, gated only on "the command contains a `:`". Routine JSON one-liners match |
 
 ---
 
@@ -341,13 +344,18 @@ limactl shell incus -- sudo incus list
 
 ### Where the logs are (full map)
 
-**COI's own audit — check first, but know the limit:**
+**COI's own audit — read the file, not the CLI:**
 ```bash
-coi audit <container-name>        # bare `coi audit` errors: "no COI containers found for current workspace"
-coi audit -f <container-name>     # follow
+tail -50 ~/.coi/audit/<container-name>.jsonl        # per-poll telemetry, whole container lifetime
+grep '"level":"high"' ~/.coi/audit/<container-name>.jsonl
+coi audit -f <container-name>                        # live follow only
 ```
-> ⚠️ **`coi audit` is LIVE-ONLY. There is no persisted audit history.** After the fact you cannot
-> answer "did the nft monitor pause or kill it?" This is a real COI gap — see *Deferred / to-do*.
+> ⚠️ **Corrected 2026-09-06 — an earlier version of this line said `coi audit` is live-only with no
+> persisted history. Wrong.** `~/.coi/audit/<name>.jsonl` holds complete per-poll telemetry for the
+> container's whole lifetime, so "did the monitor pause or kill it?" **is** answerable. What's
+> broken is the CLI read path: `coi audit <name>` returned empty for a container whose file was
+> fully populated. Go to the file first. See *Incident E* and `COI-SANDBOX.md` →
+> *Container frozen — find out what tripped it*.
 
 **On the Mac:**
 ```bash
@@ -530,3 +538,455 @@ because it's a repo-wide change (and CI download cost) for a local-setup problem
 
 Also: **`pnpm install` needs `CI=true` inside the container**, or it aborts with
 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` when it wants to purge the modules dir.
+
+---
+
+# Incident D — a YAML typo rebuilt the VM and deleted two Claude Code sessions
+
+**2026-09-06.** Raw contemporaneous write-up: `localNotes/aperture-coi-incident-report.md` and
+`localNotes/coi-session-persistence-test.md` (both gitignored — this section is the durable copy,
+and is self-contained). The rejected Lima buffer is preserved at `localNotes/lima.REJECTED.yaml`.
+
+Two things happened in one evening. The rebuild is here; the false-positive threat pause that
+followed it is **Incident E** below.
+
+## Timeline
+
+| Time | Event |
+| --- | --- |
+| earlier | `ls /workspace` in a `coi shell` shows the **entire Mac home** — `.ssh`, `.aws`, `.gitconfig`, Desktop, Documents. The Lima `mounts:` block is `- location: "~"`. This is a real security finding, independent of everything below, and is the reason a `mounts:` edit was attempted at all. |
+| 19:15 | A separate thread opens: a previous Claude Code session was lost ("i lost my cc session permanently"), so `coi shutdown`'s persistence claim gets a written test plan. Its preferred fix is *also* a mount change (scoped host mount of `~/.claude/projects`). Both threads now point at `limactl edit incus`. |
+| 19:18–19:20 | The VM-side before/after snapshot for that test is captured — and not read back until much later. It turns out to hold the answer (see *The session-export finding*). |
+| 19:46 | `.coi/config.toml` → `persistent = true`, as a stopgap against further session loss. |
+| 19:55 | `limactl edit incus`. The YAML is rejected. Recovery attempts end with the `incus` instance recreated from scratch. |
+| 20:08–20:30 | Full manual bootstrap of the VM from nothing (below). |
+| 20:31 | First `coi shell` on the rebuilt VM — and the first container ever to run `persistent = true`. |
+| 20:33 | Container freezes on a HIGH threat verdict → **Incident E**. |
+
+## Cause — one character
+
+`limactl edit incus`, narrowing `mounts:` from `~` to the project path. The buffer written was:
+
+```yaml
+mounts:
+- location: "/Users/<you>/Coding/Personal/aperture"
+- writable: true      # <-- this dash makes it a SECOND list item
+```
+
+Lima rejected it:
+
+```
+FATA[0372] the YAML is invalid, saved the buffer as `lima.REJECTED.yaml`:
+field `mounts[1].location` must be an absolute path, got `.`
+```
+
+The dash turns `writable: true` into `mounts[1]` — a map with no `location`, which Lima defaults to
+`.`. Correct form indents it under the first item:
+
+```yaml
+mounts:
+- location: "/Users/<you>/Coding/Personal/aperture"
+  writable: true
+```
+
+**COI-SANDBOX's *One-time setup* step 3 already showed it correctly.** The runbook was right; the
+edit deviated from it. That is the argument for `scripts/coi-vm-setup.sh` existing at all —
+knowledge that lives only as prose does not survive contact with a live `limactl edit`.
+
+Recovering from the rejected buffer ended with the instance recreated — **not** via a deliberate
+`limactl delete`. (*Inference*: the precise step that triggered recreation was not captured. The
+outcome is certain; the trigger is not. Do not re-derive it — capture it live if it ever recurs.)
+
+First sign, on reconnecting:
+
+```
+$ coi shell
+Command 'coi' not found, did you mean: command 'co' from deb rcs (5.10.1-3)
+$ systemctl status incus
+Unit incus.service could not be found.
+$ grep root /etc/subuid /etc/subgid
+(empty — confirms a fresh, never-provisioned VM)
+```
+
+## Why it cost data — `~/.coi/` is VM-local
+
+This is the part worth internalising, and the part the original write-up got wrong.
+
+`~` inside the Lima VM is `/home/<user>.guest` — the VM's own disk. The Mac is reachable only at
+`/Users/<you>/…`, and only through whatever `mounts:` exposes. So:
+
+| Path | Lives on | Survives a VM rebuild |
+| --- | --- | --- |
+| `/workspace` (the repo) | Mac disk, via virtiofs | **yes** |
+| `<repo>/.coi/config.toml` | Mac disk — it's in the repo | **yes** |
+| `~/.coi/` — profiles, aliases, trust, **exported sessions** | VM disk | **no** |
+| the container's own `~/.claude` | container rootfs, on the VM disk | **no** |
+
+Destroyed by the rebuild:
+
+- **Session transcripts `94ef8ba6` and `12279d4a`** — both correctly exported by `coi shutdown`,
+  both unrecoverable.
+- **The `aperture-night` profile** (`~/.coi/profiles/aperture-night/config.toml`) — the unattended
+  overnight rig config. Its absence is silent until the next overnight run needs it.
+- `~/.coi/config.toml`, aliases, trust state.
+- The VM's `~/.gitconfig` — git identity had to be re-set before the next commit would go through.
+- Incus daemon install, storage pool, network bridge, the built `coi-default` image, subuid/subgid
+  delegation, and the `coi` binary.
+
+Not destroyed: the repo and all work product. `/workspace` is a host mount; no code was ever at risk.
+
+Verified post-rebuild — every entry in `~/.coi/` timestamped 20:08–20:30, `sessions-claude/`
+holding only the current session, `~/.coi/profiles/` absent entirely:
+
+```
+$ ls ~/.coi/sessions-claude/
+1afdf68c-dd67-4b32-878b-e878e6e6262d      # only the session running at the time
+$ ls ~/.coi/profiles/
+(does not exist)
+```
+
+## The session-export finding
+
+Stated separately because the runbook previously claimed the opposite, in both directions. Measured
+by diffing the VM's `~/.coi` tree either side of a `coi shutdown` — the 19:18/19:20 snapshot, 5
+files before, 468 after:
+
+```
+~/.coi/sessions-claude/<id>/.claude/projects/-workspace/<id>.jsonl   <-- the transcript
+~/.coi/sessions-claude/<id>/.claude/history.jsonl
+~/.coi/sessions-claude/<id>/.claude/file-history/<id>/...
+~/.coi/sessions-claude/<id>/.claude/.credentials.json
+~/.coi/sessions-claude/<id>/.claude/settings.json, CLAUDE.md, plugins/, backups/, cache/
+```
+
+Three separate facts:
+
+1. **Export works.** `coi shutdown` writes the complete `~/.claude` tree. `metadata.json` appears in
+   that directory at container *start*; the rest lands at teardown.
+2. **Restore does not.** The next container starts with an empty `~/.claude/projects/-workspace/`.
+   Nothing reads the export back in, so `--resume` never offers the old session. COI defect.
+3. **The export target is VM-local** — per the table above.
+
+Fact 3 is what actually cost the sessions. The feature worked; the storage location defeated it.
+
+## Recovery — and where the procedure now lives
+
+Zero to working took ~22 minutes (20:08–20:30) and had to be reconstructed live: **no such
+procedure existed.** COI-SANDBOX documented *end states* ("Incus ≥ 6.1 required") but not the
+commands, so it could not get you from a wiped VM to a shell.
+
+That reconstruction is now the canonical setup path — **[COI-SANDBOX.md → *One-time
+setup*](COI-SANDBOX.md)**, steps 1–11. It is deliberately not duplicated here; two copies of a
+procedure drift, and the runbook is the one someone actually opens when rebuilding.
+
+What this incident contributed to it, none of which was written down before:
+
+- The Zabbly one-liner and the `incus version` pin.
+- The `newgrp` propagation gotcha — `groups` says `incus-admin` while `coi health` still warns.
+- **`sudo incus admin init` at all.** A fresh install has no storage pool and no bridge; everything
+  downstream fails with `Failed getting root disk: No root device could be found` until it runs.
+  This was the single biggest missing piece.
+- The full prompt table with reasoning per answer, including `dir` vs `zfs`.
+- That `--auto` is a dead end: `Failed to automatically find an unused IPv4 subnet, manual
+  configuration required`, even though `ip addr`/`ip route` showed only Lima's `192.168.5.0/24`.
+  Never diagnosed; specify the subnet explicitly.
+- That subuid/subgid delegation is absent on a fresh VM (`grep root /etc/subuid /etc/subgid` empty).
+- That `coi build`'s 5–10 min and its FORWARD-rules/netplan self-heal output are **normal**, so
+  nobody kills it thinking it hung.
+- That `coi trust` is required on a rebuilt `~/.coi/`, because port declarations start untrusted.
+- The workspace re-verification (`ls /workspace`) promoted to a standing post-rebuild step.
+- Step 10, `scripts/coi-vm-setup.sh` — it did not exist during this recovery, and its absence is why
+  the losses above were permanent. (A step 12 / `coi-container-setup.sh` was added at the same time
+  and **deleted on 2026-09-07** — see the correction below.)
+
+## Storage decision — deferred, not decided
+
+`coi health` flags it every run:
+
+```
+[WARN] Incus storage pools: default (dir): 'dir' storage driver re-unpacks the image on
+  every launch — recreate the pool with a copy-on-write driver (zfs/btrfs)
+```
+
+Left as `dir`. `zfs` would remove the per-launch re-unpack and unlock `coi snapshot`
+(checkpoint/rollback), at the cost of a DKMS compile — the exact delay this recovery was trying not
+to repeat. Reasonable *under recovery pressure*; a bad way to make a standing decision. Open
+follow-up, not a conclusion.
+
+A stray `zfs-pool` was left behind by the aborted `--auto` attempt. Before deleting it, check
+`incus storage volume list zfs-pool`, not just `incus list` — pool and container names survived the
+rebuild identically, which makes a stale reference easy to misread as safe.
+
+## Fix — two layers as built; one survives (see the correction below)
+
+Both were idempotent, migrated rather than replaced, set the original aside rather than deleting,
+refused rather than clobbering, and took `--check`. Both were deliberately **not** `lima.yaml`
+edits: mount changes restart the VM (Incident B.1), and a typo in one is what caused this. Only the
+VM half still exists.
+
+| Script | Runs in | Fixes |
+| --- | --- | --- |
+| `scripts/coi-vm-setup.sh` | Lima VM | `~/.coi/sessions-claude` + `~/.coi/profiles` survive a VM rebuild |
+| ~~`scripts/coi-container-setup.sh`~~ | container | **Deleted 2026-09-07** — see the correction below. It symlinked `~/.claude/projects` to the Mac, which made COI skip that directory at export time |
+
+> **Correction, 2026-09-07 — "the export is not a restore" was wrong.** `coi shell --resume` reads
+> `~/.coi/sessions-claude/<id>/` back into a fresh container: measured across a real
+> destroy/restore cycle, every transcript returned byte-identical along with `history.jsonl`,
+> `settings.json`, `session-env/`, `file-history/` and `.credentials.json`, and `claude --resume`
+> opened them with full context.
+>
+> The original conclusion came from a test that defined success as `claude --resume` working and
+> never checked whether COI had its own resume. It survived scrutiny because the workaround built
+> to fix it — the `projects` symlink — **caused** the symptom: COI does not follow that symlink at
+> export time, so the restore could not be observed while the fix was installed. `coi --help` would
+> have settled it at the start. Same lesson as `findmnt` and `incus info` elsewhere in this file:
+> **check the tool's own surface before concluding a capability is missing.**
+>
+> `scripts/coi-vm-setup.sh` is unaffected and matters more now — `~/.coi/` is VM-local, so it
+> protects the store that `--resume` depends on. Details: `docs/COI-SANDBOX.md` →
+> *Run → Ending a session*.
+
+The now-deleted second script existed because of a follow-on finding that still holds: **the export
+only fires on `coi` teardown.** The Run 2 snapshot was taken after `Ctrl+D` and before
+`coi shutdown`, and held only `metadata.json`; all 463 files appeared across the shutdown. So
+exiting the TUI exports nothing, and neither does `limactl stop`, a Mac reboot, clamshell sleep
+(Incident B), or a dropped terminal. **There is still no continuous backup** — that part was never
+wrong. What was wrong was the remedy: the symlink cost more than the gap it covered. Current
+guidance is `COI-SANDBOX.md` → *Known failure modes*, row "Session lost after a crash / reboot /
+lid-close": exit `coi shell` at every real break — that teardown, not `coi shutdown`, is what
+exports — and if it ever bites for real use `CLAUDE_CONFIG_DIR`.
+
+Wired into COI-SANDBOX *One-time setup* as step 10. Step 12 was the container half, removed
+2026-09-07 — it survives only as a do-not-do note.
+
+## Ruled out — don't re-explore
+
+- **"Nothing is exported."** The original prediction, and wrong. `findmnt` inside the container
+  can't see the export because it happens at the `coi` level, outside the container.
+- **Mounting `~/.claude/projects` out of the container.** Unnecessary — COI already exports it.
+  Capture was never the problem; durability was.
+- **`persistent = true` as *the* fix.** A working stopgap — the container isn't destroyed, so
+  `--resume` finds the transcript in place — but container state is also on the VM disk, so the next
+  rebuild takes it too. **Updated 2026-09-07:** it doesn't reliably preserve the container rootfs
+  either, and `coi shell --resume` restores a destroyed container anyway, so reverting to
+  `persistent = false` is close to free. Not load-bearing in either direction.
+- **"No data loss occurred."** The original write-up's headline, based on assuming `~/.coi/` was on
+  the Mac. It wasn't.
+
+## Open follow-ups
+
+- Does `coi` recreate `sessions-claude`/`profiles` with `mkdir -p` (symlink survives) or replace them
+  outright (it doesn't)? `scripts/coi-vm-setup.sh --check` after a shutdown cycle answers it. If it
+  replaces them, this becomes a per-session step, not one-time.
+- **Does `persistent = true` suppress the session export?** COI writes `"persistent": true` into the
+  session's `metadata.json`, so it is a decision input somewhere, and a persistent container is
+  never torn down. Every export measured here (the 5 → 468 diff) came from an *ephemeral* container.
+  If the next shutdown leaves only `metadata.json` on the Mac side, the answer is yes — and the
+  right response is to revert to `persistent = false`, since that flag was only a stopgap for the
+  durability problem step 10 now solves. **Answered 2026-09-07: no.** Both observed exports
+  record `"persistent": true` and are complete, so the flag does not suppress the export. And
+  `coi shutdown --help` settles the other half: that command **deletes a persistent container
+  outright** — persistence only survives powering off from inside or exiting `coi shell`. Since
+  `--resume` rebuilds a deleted container from its export, reverting to `persistent = false` is
+  close to free.
+- Recreate the `aperture-night` profile.
+- Generate and commit an `incus admin init` preseed so the next rebuild is one command.
+- Decide `dir` vs `zfs` deliberately, off the critical path.
+- ~~File the restore defect upstream with COI.~~ **Withdrawn 2026-09-07** — there is no restore
+  defect; see the correction above. The `coi audit` read-path defect is unrelated and still stands.
+- `.credentials.json` rides along in the export, so it now lands on the Mac disk under gitignored
+  `localNotes/coi-state/` (mode 700). COI's "host cred isolation" check does not cover this
+  direction — it only checks host creds don't leak *into* containers.
+
+---
+
+# Incident E — a HIGH threat pause that was Claude Code starting up
+
+**2026-09-06, 20:33.** Two minutes into the first `coi shell` on the rebuilt VM.
+
+## Symptom
+
+Terminal output froze, and:
+
+```
+*** SECURITY: Container coi-88cded0c-1 PAUSED due to security threat.
+    Unfreeze with: coi unfreeze coi-88cded0c-1 ***
+```
+
+`coi list` confirmed status `Frozen`.
+
+## The diagnostic dead end — `coi audit` returned nothing
+
+```bash
+coi audit coi-88cded0c-1        # empty output
+```
+
+Empty, despite `coi list` confirming the exact container name and its frozen state. This matched a
+known runbook to-do ("audit log is live-only, no on-disk history"), so the working assumption became
+*no record exists*. **That assumption was wrong and cost time.** Also dry:
+`sudo journalctl -u incus --since "5 min ago"` showed only an unrelated DHCP lease line.
+
+## The fix — go around the CLI, straight to the file
+
+```bash
+find ~/.coi -iname "*audit*" -o -iname "*.jsonl"
+# /home/<user>.guest/.coi/audit/coi-88cded0c-1.jsonl
+# /home/<user>.guest/.coi/audit/coi-88cded0c-1-nft.jsonl
+```
+
+The file existed and was **fully populated** — per-poll JSON Lines telemetry (network connections,
+process list, filesystem read/write rates, resource usage) sampled every ~2s for the container's
+entire lifetime, including the event:
+
+```json
+{
+  "timestamp": "2026-09-06T20:33:13.036...",
+  "level": "high",
+  "category": "filesystem",
+  "title": "Large workspace read detected",
+  "description": "Read 32.45 MB at 16.00 MB/sec (threshold: 10.00 MB)",
+  "evidence": { "filesystem": {
+    "read_bytes_mb": 32.4453125,
+    "read_rate_mb_per_sec": 15.9992890555453,
+    "files_read": 0,
+    "duration": "sustained",
+    "threshold_mb": 10
+  }},
+  "action": "pending"
+}
+```
+
+followed immediately by the same event with `"action":"paused"`.
+
+## Assessment — false positive
+
+- **`files_read: 0`.** A sustained 32 MB read at ~16 MB/s that the monitor could not attribute to
+  any specific file. Consistent with interpreter/tool startup I/O — project files, config,
+  dependency manifests — not a targeted read.
+- **Timing.** Fired essentially at Claude Code's own process start in the tmux session, i.e. early
+  session indexing, not mid-task behaviour.
+- **No correlated network anomaly.** Active connections at that timestamp were unchanged from
+  steady state (existing HTTPS to Anthropic API infrastructure). Nothing new outbound.
+- **Network mode was `restricted`, not `allowlist`** — so this was not the already-known-noisy
+  allowlist-violation trigger. A distinct detector (`file_read_rate_mb_per_sec`) fired on its own.
+
+`coi unfreeze coi-88cded0c-1`. No recurrence that session.
+
+## Two distinct root causes
+
+1. **The `file_read_rate_mb_per_sec` / `file_read_threshold_mb` detector has no startup grace
+   period.** `.coi/config.toml` sets `file_read_threshold_mb = 50` and
+   `file_read_rate_mb_per_sec = 10` — sane steady-state values that legitimate session-start
+   indexing exceeds. Working as configured, but a detector that pauses the container on a schedule
+   trains you to reflexively unfreeze, which is how a real one gets waved through. Tune it or add
+   the grace period; "expect a freeze on launch" is the wrong fix.
+
+   **Read of COI source, 2026-09-07** (`localNotes/code-on-incus` @ `d304121`), after the same
+   detector froze a session on `pnpm install`:
+   - Those two keys drive the **write** detector as well — `NewDetector` copies them into
+     `fileWriteThresholdMB` / `fileWriteRateMBPerSec` (`internal/monitor/detector.go:21-29`). There
+     is no `file_write_*` key and no setter to override them.
+   - 50 and 10 are COI's shipped defaults (`internal/config/embedded/default_config.toml:107-115`),
+     which is why write verdicts appeared to echo hardcoded constants. We had copied the defaults.
+   - The burst and rate checks are **the same measurement** — one per-poll cgroup `io.stat` delta,
+     with `rate = burst / poll_interval_sec` (`internal/monitor/filesystem.go:50-66`). The lower
+     threshold always binds.
+   - It counts **all container block I/O**; "workspace" in the title is a hardcoded label with no
+     path filtering behind it (`internal/monitor/cgroup.go:224-237`).
+   - No grace period, no process or path exemption, and `enabled = false` is all-or-nothing.
+
+   Tuning guidance and the ruled-out levers: `COI-SANDBOX.md` →
+   *Container frozen — find out what tripped it*.
+2. **`coi audit <name>` does not reliably surface events that are present in
+   `~/.coi/audit/<name>.jsonl`.** A genuine CLI defect, and more specific than the runbook's older,
+   broader worry that there is *no* on-disk history. There **is** on-disk history, complete and
+   legible. The read-path is what's unreliable. Correct the framing wherever it appears.
+
+## Corrected diagnostic procedure
+
+```bash
+coi list                                       # exact container name + Frozen status
+find ~/.coi -iname "*audit*"                   # go to the file directly; don't wait for coi audit to fail
+tail -50 ~/.coi/audit/<container>.jsonl
+grep '"level":"high"' ~/.coi/audit/<container>.jsonl
+```
+
+Use `coi audit <name> -f` for *live* monitoring only — not as the first tool for investigating a
+pause that already happened.
+
+## What went right (both incidents)
+
+- `coi health` caught real configuration gaps — group reload, missing `libsystemd-dev`, the storage
+  tradeoff — before they became live-session problems.
+- `coi build` self-healed a fresh-bridge race (missing FORWARD rules, then netplan DHCP fallback).
+- The workspace scoping was re-verified before the environment was trusted, reusing the exact check
+  that had caught the original full-home mount.
+- Host-credential isolation held throughout; no host secret reached a container.
+- The audit telemetry pipeline is sound. Only its CLI read-path is not.
+
+---
+
+# Incident F — three container kills from `python3 -c`
+
+**2026-09-07, 11:58 / 13:02 / 13:12.** Level **CRITICAL**, category `process`, title
+*"Reverse shell detected"*, action `killed`. No attack occurred; nothing was compromised.
+
+## What actually ran
+
+| Time | Command | Session |
+| --- | --- | --- |
+| 11:58:40 | `gh api repos/aws/aws-cdk/pulls/32369 \| python3 -c "…print('merged_at:', …)"` | CDK/auth work |
+| 13:02:29 | `npm view aws-cdk-lib versions --json \| python3 -c "…print(v[-5:])"` | CDK/auth work |
+| 13:12:00 | a test harness for the guard hook, carrying `nc -e …` and `python3 -c` as **fixture strings** | this session |
+
+The third is the instructive one: writing a *test* for the protection tripped the thing it protects
+against, because the patterns were on the bash command line rather than in a file.
+
+## Mechanism
+
+- `internal/monitor/process.go:249-290` — a **hardcoded** pattern list (`python -c`, `python3 -c`,
+  `perl -e`, `php -r`, `ruby -e`, `bash -i`, `sh -i`, `nc -e`, `socat`, `/dev/tcp/`, …). No config
+  key edits it; `coi schema profile` exposes nothing for it.
+- `process.go:298-302` — the false-positive gate is
+  `strings.Contains(cmdLower, ":") || "sock" || "tcp" || "udp" || IP-pattern`. **Any colon anywhere.**
+  A dict, a Python slice (`v[-5:]`), a URL, a timestamp. `bash -i` / `sh -i` bypass the gate and
+  always fire.
+- `internal/monitor/responder.go:137-147` — CRITICAL + `auto_kill_on_critical` → `killContainer()`.
+  **No dedupe latch**, unlike HIGH's `r.paused`, so it recurs on every match.
+- Sampling is per `poll_interval_sec` (2s). Fast one-liners often slip between samples; ones blocked
+  on a slow pipe (`gh api`, `npm view`) are reliably caught. Prior successes were timing, not safety.
+
+## Assessment — false positive, and a costly detector
+
+`python3 -c` piped from a package registry or the GitHub API is ordinary development. The gate is
+supposed to separate "one-liner" from "one-liner opening a socket", and a substring test for `:`
+cannot do that. Worse, the repo's own `CLAUDE.md` rule — *"always check the registry for the actual
+latest version — `npm view <pkg> version`"* — leads directly to the shape that kills the box.
+
+Severity is asymmetric: a HIGH false positive costs an unfreeze, a CRITICAL one destroys the
+container.
+
+## Fix — don't emit the shape; don't disarm the monitor
+
+`auto_kill_on_critical = false` would stop the kills and was rejected: it is the sandbox's whole
+point, and it would also disarm the network CRITICALs that matter. The pattern list is compiled in,
+so there is nothing to tune. So:
+
+1. **`.claude/hooks/coi-reverse-shell-guard.sh`** — `PreToolUse` on Bash, denies these shapes before
+   they run. No-ops outside a `coi-*` host. Matches the literal text *anywhere* in the command,
+   including fixtures and documentation text — deliberate over-blocking, since the failure mode is
+   container death. File content mentioning these strings goes through the Write/Edit tools instead.
+2. **A `CLAUDE.md` rule**, so the constraint survives the hook being unregistered: use
+   `python3 - <<'PY' … PY` (runs as `python3 -`, unmatched) or `jq`.
+
+## Worth filing upstream
+
+Two defects, both narrow:
+
+- **The `:` heuristic is not a network test.** Requiring an actual socket indicator — an IP, a port,
+  `socket`, `connect` — would remove essentially every false positive here without weakening real
+  detection.
+- **CRITICAL has no dedupe latch** while HIGH does (`responder.go` `r.paused`). One benign pattern in
+  a loop kills the container repeatedly.
+
+Unrelated to the `coi audit` read-path defect in Incident E; both stand.

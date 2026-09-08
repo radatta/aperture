@@ -17,6 +17,8 @@ function templates() {
     table: data.table,
     userPool: data.userPool,
     originSecret: 'test-origin-secret',
+    deviceToken: 'test-device-token',
+    deviceUserId: 'test-device-user',
   });
   return { data: Template.fromStack(data), app: Template.fromStack(appStack) };
 }
@@ -64,7 +66,10 @@ describe('ApertureAppStack', () => {
         Origins: Match.arrayWith([
           Match.objectLike({
             OriginCustomHeaders: Match.arrayWith([
-              Match.objectLike({ HeaderName: 'x-aperture-origin-secret', HeaderValue: 'test-origin-secret' }),
+              Match.objectLike({
+                HeaderName: 'x-aperture-origin-secret',
+                HeaderValue: 'test-origin-secret',
+              }),
             ]),
           }),
         ]),
@@ -98,7 +103,9 @@ describe('ApertureAppStack', () => {
     // /api/* must route to the Function URL behavior (leading slash — a bare `api/*` silently falls
     // through to the S3 default, which we hit once for real).
     app.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: { CacheBehaviors: Match.arrayWith([Match.objectLike({ PathPattern: '/api/*' })]) },
+      DistributionConfig: {
+        CacheBehaviors: Match.arrayWith([Match.objectLike({ PathPattern: '/api/*' })]),
+      },
     });
   });
 
@@ -123,6 +130,7 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     table: data.table,
     userPool: data.userPool,
     originSecret: 'test-origin-secret',
+    deviceToken: 'test-device-token',
     domainName: 'dev.aperture.rahuldatta.dev',
     certificateArn: certArn,
   });
@@ -155,6 +163,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       table: data.table,
       userPool: data.userPool,
       originSecret: 'test-origin-secret',
+      deviceToken: 'test-device-token',
     });
     return Template.fromStack(appStack);
   };

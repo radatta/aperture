@@ -20,6 +20,8 @@ export interface AppStackProps extends StackProps {
   originSecret: string; // CloudFront→Lambda origin-lockdown token (anti-abuse; JWT is the real gate)
   domainName?: string; // custom-domain alias for CloudFront (Phase 14). Unset → CloudFront default domain only.
   certificateArn?: string; // us-east-1 ACM cert ARN for domainName; required whenever domainName is set.
+  deviceToken: string; // device-token auth for the extension's ingest endpoint (same class as originSecret)
+  deviceUserId?: string; // Cognito sub device-token writes attribute to; unset → handler 'local' fallback
 }
 
 const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', import.meta.url));
@@ -32,7 +34,8 @@ const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', impo
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
-    const { stage, table, userPool, originSecret, domainName, certificateArn } = props;
+    const { stage, table, userPool, originSecret, domainName, certificateArn, deviceToken, deviceUserId } =
+      props;
     // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,
     // so deploys never touch DNS/certs. Absent until the domain step is done → CloudFront default domain.
     const certificate =
@@ -54,6 +57,8 @@ export class ApertureAppStack extends Stack {
         USER_POOL_ID: userPool.userPoolId,
         STAGE: stage,
         ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
+        DEVICE_TOKEN: deviceToken, // extension ingest auth (resolveDeviceUserId), scoped to recordLeetcodeAttempt
+        ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}),
       },
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] }, // v3 SDK is in the runtime
     });
@@ -115,8 +120,18 @@ export class ApertureAppStack extends Stack {
       },
       // SPA fallback: client-side routes 403/404 from S3 → serve index.html (INFRA §7).
       errorResponses: [
-        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: Duration.seconds(0) },
-        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: Duration.seconds(0) },
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+          ttl: Duration.seconds(0),
+        },
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+          ttl: Duration.seconds(0),
+        },
       ],
     });
 

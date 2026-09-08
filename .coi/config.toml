@@ -4,7 +4,7 @@
 
 [container]
 image      = "coi-default"   # Node 22 + pnpm + jq + git; only chromium missing (defer)
-persistent = false           # ephemeral; workspace is the host mount so code always survives
+persistent = true           # survives coi shutdown; ~/.coi is VM-local so a VM rebuild still wipes it
 alias      = "aperture"
 
 [tool]
@@ -76,9 +76,9 @@ enabled               = true
 poll_interval_sec     = 2
 auto_pause_on_high    = true
 auto_kill_on_critical = true
-file_read_threshold_mb    = 50
-file_read_rate_mb_per_sec = 10
 
+file_read_threshold_mb    = 500
+file_read_rate_mb_per_sec = 250
 [monitoring.nft]
 enabled               = true
 rate_limit_per_second = 100

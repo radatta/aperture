@@ -3,8 +3,10 @@ import {
   completeSession,
   createUlid,
   dayKey,
+  dayKeyForOffset,
   discardSession,
   heartbeatSession,
+  normalizeVerdict,
   resolveStaleSession,
   resumeSession,
   seriesDueOn,
@@ -20,12 +22,15 @@ import type {
   CreateTaskInput,
   DateRange,
   Day,
+  ExportBundle,
   Habit,
   HabitCheck,
   Idea,
   IdeaStatus,
+  LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
+  RecordLeetcodeAttemptInput,
   Settings,
   SettingsPatch,
   StartSessionInput,
@@ -97,6 +102,44 @@ export class BackendClient implements ApiClient {
     const e = await this.repo.findLog(id);
     if (!e) throw new Error(`Not found: ${id}`);
     return this.repo.putLog({ ...e, text, updatedAt: this.now() });
+  }
+
+  // --- Recruiting (LeetCode) ---
+  async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
+    // The extension is 100% passive — it never issues its own LeetCode request. Problem metadata
+    // (title/difficulty/tags) is read straight off the rendered problem page (LeetCode server-renders
+    // it) at capture time, then attached here. So there is no ToS-sensitive automated call to count.
+    // We still log each ingest with whether metadata was captured, to watch the DOM-scrape hit rate via
+    // a Logs Insights query. CloudWatch Logs is free at our scale; a custom metric ($0.30/mo) would be
+    // the biggest cost in the project, so we deliberately don't emit one.
+    const metaCaptured =
+      input.difficulty != null || (Array.isArray(input.topicTags) && input.topicTags.length > 0);
+    console.log(
+      JSON.stringify({ event: 'leetcode_ingest', problemSlug: input.problemSlug, metaCaptured }),
+    );
+    const dup = await this.repo.findLeetcodeBySubmissionId(input.leetcodeSubmissionId);
+    if (dup) return dup; // idempotent — the extension may fire twice for one submission
+    const start = (await this.ensureSettings()).dayStartHour;
+    return this.repo.putLeetcodeAttempt({
+      ...this.base(),
+      day: dayKeyForOffset(input.submittedAt, input.tzOffsetMinutes, start),
+      problemSlug: input.problemSlug,
+      problemTitle: input.problemTitle,
+      verdict: normalizeVerdict(input.statusCode, input.statusMsg),
+      submittedAt: input.submittedAt,
+      lang: input.lang,
+      runtimeMs: input.runtimeMs ?? null,
+      memory: input.memory ?? null,
+      leetcodeSubmissionId: input.leetcodeSubmissionId,
+      frontendId: input.frontendId ?? null,
+      difficulty: input.difficulty ?? null,
+      topicTags: input.topicTags ?? null,
+    });
+  }
+  async listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]> {
+    return (await this.repo.listLeetcodeAttempts())
+      .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
+      .sort((a, b) => b.submittedAt - a.submittedAt); // reverse-chron
   }
 
   // --- Tasks ---
@@ -493,7 +536,7 @@ export class BackendClient implements ApiClient {
       .sort((a, b) => a.day.localeCompare(b.day));
   }
 
-  async exportData(): Promise<unknown> {
+  async exportData(): Promise<ExportBundle> {
     return {
       exportedAt: this.now(),
       userId: this.userId,
@@ -507,6 +550,7 @@ export class BackendClient implements ApiClient {
       sessions: await this.repo.listAllSessions(),
       days: await this.repo.listAllDays(),
       categories: await this.repo.listCategories(),
+      leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
       settings: await this.ensureSettings(),
     };
   }

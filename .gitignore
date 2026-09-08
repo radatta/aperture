@@ -17,3 +17,5 @@ cdk-outputs.*.json
 localNotes/
 nohup.out
 .local/
+
+.claude/worktrees

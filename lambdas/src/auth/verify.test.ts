@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveUserId } from './verify';
+import { resolveDeviceUserId, resolveUserId } from './verify';
 import type { Verifier } from './verify';
 
 const okVerifier: Verifier = {
@@ -26,6 +26,26 @@ describe('resolveUserId', () => {
   });
 
   it('rejects an invalid token as Unauthorized (never leaks the underlying error)', async () => {
-    await expect(resolveUserId('Bearer forged', okVerifier)).rejects.toThrow(/Unauthorized: invalid token/);
+    await expect(resolveUserId('Bearer forged', okVerifier)).rejects.toThrow(
+      /Unauthorized: invalid token/,
+    );
+  });
+});
+
+describe('resolveDeviceUserId', () => {
+  it('falls back to local when no device token is configured (dev)', () => {
+    expect(resolveDeviceUserId(undefined, undefined, undefined)).toBe('local');
+    expect(resolveDeviceUserId('Bearer whatever', undefined, 'sub-1')).toBe('local');
+  });
+
+  it('returns the configured device user when the token matches', () => {
+    expect(resolveDeviceUserId('Bearer tok', 'tok', 'sub-1')).toBe('sub-1');
+    expect(resolveDeviceUserId('Bearer tok', 'tok', undefined)).toBe('local'); // no owner → local
+  });
+
+  it('rejects a missing or wrong device token as Unauthorized', () => {
+    expect(() => resolveDeviceUserId(undefined, 'tok', 'sub-1')).toThrow(/Unauthorized/);
+    expect(() => resolveDeviceUserId('Bearer nope', 'tok', 'sub-1')).toThrow(/Unauthorized/);
+    expect(() => resolveDeviceUserId('Bearer toke', 'tok', 'sub-1')).toThrow(/Unauthorized/); // length differs
   });
 });

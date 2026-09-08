@@ -4,6 +4,7 @@ export * from './ulid';
 export * from './dates';
 export * from './machines';
 export * from './recurrence';
+export * from './leetcode';
 export * from './api';
 export * from './rpc';
 // NB: ./contractTests is intentionally NOT re-exported here — it imports vitest and is consumed only

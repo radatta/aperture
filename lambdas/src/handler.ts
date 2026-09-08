@@ -22,9 +22,9 @@ export async function handleRpc(doc: DocClient, call: RpcCall): Promise<unknown>
     userId: call.userId,
     now: call.now,
   });
-  const fn = (backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>)[
-    call.method
-  ];
+  const fn = (
+    backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>
+  )[call.method];
   if (!fn) throw new Error(`Unknown method: ${call.method}`); // isApiMethod already ensured this
   return fn.apply(backend, call.args ?? []);
 }

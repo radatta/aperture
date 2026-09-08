@@ -49,7 +49,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
-- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones.
+- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. One live violation — see **[Tech debt](#tech-debt)**.
+- **`exportData` excludes tombstones.** The "you own your data" snapshot returns live rows only, on both impls, asserted by the export contract test. So a soft-deleted row is **unrecoverable from an export** — deliberate while the export is a one-way download with no import path. If restore/merge ever lands it will need tombstones plus a versioned envelope; revisit then. The bundle's shape is the shared `ExportBundle` type, and every collection is required — omitting one is a compile error, not a silent gap (which is how `leetcodeAttempts` once shipped missing).
 
 ### 2.2 Entities
 
@@ -87,6 +88,14 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **categories** — `id · label · isWork · order · active`.
 - Referenced by **id**. **Labels resolve live** (renames propagate to display). **`isWork` is snapshotted** onto sessions (`wasWork`) so history is frozen. Flipping `isWork` prompts an **optional retroactive backfill** ("also reclassify N past records?"). **Deleting** forces reassignment of all referencing items to another category first, then soft-deletes the empty one.
+
+**leetcodeAttempts** — one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.
+- `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
+- `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`. **Normalized server-side** from LeetCode's raw `status_code`/`status_msg` — the dep-free extension forwards raw signals only.
+- `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
+- **Idempotent on `leetcodeSubmissionId`** — a re-fire returns the existing row, original verdict intact.
+- **Attempt count per problem is DERIVED at read time**, never a stored counter.
+- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[RECRUITING.md](RECRUITING.md)**.
 
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
 
@@ -140,7 +149,7 @@ pnpm workspaces monorepo.
 aperture/
   app/                 # React PWA (Vite)
     src/
-      pages/           # Home, Log, Tasks, Habits, Inbox, Settings
+      pages/           # Home, Log, Tasks, Recruiting, Habits, Inbox, Settings
       modules/         # capture, pomodoro, tasks, habits, log, calibration
       components/      # primitives: Card, Text, … (anti-generic token layer)
       data/            # React Query hooks + api client
@@ -149,6 +158,8 @@ aperture/
       styles/          # Tailwind tokens (CSS-var theme)
   lambdas/             # BFF Lambda(s) — index.ts, routes, ddb client, jwt-validate, writes object
   cdk/                 # CDK app (infra)
+  extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a
+                       #   pnpm workspace member, and excluded from eslint + prettier
   packages/shared/     # shared TS types across app + lambda
   scripts/             # dev + CI utilities
   docs/  ·  localNotes/
@@ -167,6 +178,45 @@ Nothing built in v1 — just a clean boundary so reflection is additive later.
 - **Substrate already exists:** reflection reads `logEntries` / `tasks` / `pomodoroSessions` over a date range — existing access patterns. **No schema change** needed for basic reflection.
 - **Reserved entity** (not built): `reflections` — `id · periodType(week|month|year) · periodKey · generatedAt · promptVersion · content`.
 - **Model:** Claude (Anthropic API), latest at build time, per repo norms.
+
+---
+
+## Tech debt
+
+Known deviations from the rules above, each named with the rule it breaks. An entry stays until it's
+fixed or the rule changes — not until people stop noticing it.
+
+### Hard-deletes — breaks §2.1 "Soft-delete everywhere"
+
+**The rule: nothing is ever hard-deleted.** Every entity carries `deletedAt`, deleting sets it, reads
+filter tombstones. This isn't fastidiousness. `updatedAt` is **last-write-wins across devices**, so a row
+that simply vanishes is indistinguishable from a row that never synced — the tombstone is the only way
+one device can tell another that something was deliberately removed rather than lost. Destroy the row and
+a stale device silently resurrects it on next write.
+
+**Live violation: `uncheckHabit`.** `BackendClient.uncheckHabit` calls `repo.deleteCheck`, a real
+DynamoDB `DeleteItem` — the row is gone. The stub soft-deletes the same row. Every other delete in the
+app follows the rule (`deleteCategory` and `removePlan` both write `deletedAt`), so this is the lone
+outlier, and two things make it worse than an ordinary bug:
+
+*(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day, and the running-copy
+of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
+`deleteCheck` is the only one that destroys a row.)*
+
+- **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
+  `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The
+  contract suite — the mechanism that exists to keep stub and backend honest — is structurally blind
+  here. It will drift further without anything going red.
+- **It's the delete most likely to be hit by accident.** Unchecking a habit is a one-tap action on a
+  mis-tap, and it's the one delete in the app that destroys data.
+
+Fix: `uncheckHabit` sets `deletedAt` like everything else, `listHabitChecks` filters. The regression test
+can't live in the contract suite (see above) — it belongs in `lambdas/`, asserting the raw item still
+exists via a direct repo/table read after the delete. That asymmetry is the real lesson: **a contract
+test proves two impls agree, not that either is correct.**
+
+**Before adding any delete path**, check it writes `deletedAt` rather than removing the row, and that
+something outside the contract suite can tell the difference.
 
 ---
 

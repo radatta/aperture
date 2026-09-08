@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 
 // A narrow verifier surface so the request path is testable with a fake — the real one wraps
@@ -10,7 +11,10 @@ export interface Verifier {
 // client. For a single-client, invite-only pool that's sufficient (signature + issuer + expiry +
 // token_use=access are still enforced), and it avoids a Cognito↔CloudFront↔Lambda deploy cycle — the
 // Lambda would otherwise depend on the client, which depends on CloudFront, which depends on the Lambda.
-export function createCognitoVerifier(userPoolId: string, clientId: string | null = null): Verifier {
+export function createCognitoVerifier(
+  userPoolId: string,
+  clientId: string | null = null,
+): Verifier {
   const verifier = CognitoJwtVerifier.create({ userPoolId, tokenUse: 'access', clientId });
   return {
     async verify(token: string) {
@@ -44,4 +48,25 @@ export async function resolveUserId(
   } catch {
     throw new Error('Unauthorized: invalid token');
   }
+}
+
+// The browser extension authenticates the ingest endpoint with a static DEVICE TOKEN, not a Cognito JWT
+// (a long-lived personal key for a single-user, minimal-power write). Scoped by the caller to ONLY the
+// ingest method. The token reaches us as a plain Lambda env var — same class and same delivery as
+// ORIGIN_SECRET, deliberately NOT Secrets Manager (INFRA §10). Dev (no token configured) falls back to
+// the 'local' user, mirroring resolveUserId's no-verifier path.
+export function resolveDeviceUserId(
+  authHeader: string | undefined,
+  expectedToken: string | undefined,
+  deviceUserId: string | undefined,
+): string {
+  if (!expectedToken) return 'local'; // dev: no device token wired → same 'local' user as JWT-less dev
+  const token = bearer(authHeader);
+  if (!token) throw new Error('Unauthorized: missing device token');
+  const a = Buffer.from(token);
+  const b = Buffer.from(expectedToken);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    throw new Error('Unauthorized: invalid device token');
+  }
+  return deviceUserId ?? 'local';
 }

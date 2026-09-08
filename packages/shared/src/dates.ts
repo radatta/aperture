@@ -23,6 +23,19 @@ export function todayKey(dayStartHour: number, now: number = Date.now()): string
   return dayKey(now, dayStartHour);
 }
 
+// Day bucketing for a FOREIGN client (the LeetCode extension) that can't run the local-getter dayKey:
+// it reports an instant + its own UTC offset, and the (UTC) Lambda buckets it. Uses UTC getters so the
+// result is identical in the Lambda and the browser stub — parity-safe — unlike dayKey's LOCAL getters.
+// getTimezoneOffset() is (UTC - local) in minutes; local wall-clock = UTC - offset.
+export function dayKeyForOffset(
+  epochMs: number,
+  tzOffsetMinutes: number,
+  dayStartHour: number,
+): string {
+  const shifted = new Date(epochMs - tzOffsetMinutes * 60_000 - dayStartHour * MS_PER_HOUR);
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
+}
+
 // Parse a day key to a local Date at NOON — noon keeps ±day arithmetic safe across DST shifts.
 function keyToNoon(key: string): Date {
   const p = key.split('-');

@@ -3,7 +3,14 @@
 // against an empty store. Values are index-derived (not random) so the seed is reproducible.
 
 import { dayKey } from '@aperture/shared';
-import type { BaseEntity, Category, Habit, PomodoroSession, Task } from '@aperture/shared';
+import type {
+  BaseEntity,
+  Category,
+  Habit,
+  LeetcodeVerdict,
+  PomodoroSession,
+  Task,
+} from '@aperture/shared';
 import type { Store } from './stubClient';
 
 const USER_ID = 'local';
@@ -179,4 +186,49 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   [1, 3, 5, 8, 10, 12].forEach((d) => check(read, d));
   [2, 5, 9, 12].forEach((d) => check(workout, d));
   check(call, 6);
+
+  // LeetCode attempts — a few backdated, with wrong→accepted arcs so the derived attempt-count reads > 1.
+  const lc = (
+    dAgo: number,
+    slug: string,
+    title: string,
+    verdict: LeetcodeVerdict,
+    difficulty: string,
+    topicTags: string[],
+    subId: string,
+  ) => {
+    const t = nowMs - dAgo * DAY - 2 * HOUR;
+    store.leetcodeAttempts.push({
+      ...mk(t),
+      day: dayKey(t, START_HOUR),
+      problemSlug: slug,
+      problemTitle: title,
+      verdict,
+      submittedAt: t,
+      lang: 'python3',
+      runtimeMs: verdict === 'accepted' ? 12 : null,
+      memory: verdict === 'accepted' ? 20_800_000 : null,
+      leetcodeSubmissionId: subId,
+      frontendId: null,
+      difficulty,
+      topicTags,
+    });
+  };
+  const TS = ['Array', 'Hash Table'];
+  const SW = ['Hash Table', 'String', 'Sliding Window'];
+  lc(5.02, 'two-sum', 'Two Sum', 'runtime_error', 'Easy', TS, 'seed-lc-1');
+  lc(5, 'two-sum', 'Two Sum', 'accepted', 'Easy', TS, 'seed-lc-2');
+  lc(
+    3,
+    'add-two-numbers',
+    'Add Two Numbers',
+    'accepted',
+    'Medium',
+    ['Linked List', 'Math'],
+    'seed-lc-3',
+  );
+  const LS = 'longest-substring-without-repeating-characters';
+  const LST = 'Longest Substring Without Repeating Characters';
+  lc(1.02, LS, LST, 'wrong_answer', 'Medium', SW, 'seed-lc-4');
+  lc(1, LS, LST, 'accepted', 'Medium', SW, 'seed-lc-5');
 }

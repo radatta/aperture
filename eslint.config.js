@@ -13,6 +13,8 @@ export default tseslint.config(
       '**/coverage/**',
       '**/*.tsbuildinfo',
       'localNotes/**',
+      '.claude/worktrees/**', // gitignored sibling worktrees — other branches' code, not ours to lint
+      'extension/**', // dep-free plain-JS browser extension, not built/linted by the workspace
     ],
   },
   js.configs.recommended,

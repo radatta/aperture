@@ -13,6 +13,7 @@ import type {
   HabitCheck,
   Idea,
   IdeaStatus,
+  LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
   RecurrenceRule,
@@ -76,6 +77,51 @@ export interface UpsertCategoryInput {
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive
   to: string; // YYYY-MM-DD inclusive
+}
+
+// The browser extension ships raw signals; the server owns verdict normalization + day bucketing.
+// tzOffsetMinutes = the client's getTimezoneOffset() — the server owns dayStartHour, so a foreign
+// client can't compute the final day-key itself (why this isn't the createLogEntry(day) shape).
+export interface RecordLeetcodeAttemptInput {
+  leetcodeSubmissionId: string; // idempotent dedup key
+  problemSlug: string;
+  problemTitle: string;
+  statusCode?: number | null; // raw LeetCode status_code (primary verdict signal)
+  statusMsg?: string | null; // raw status_msg (fallback)
+  submittedAt: number; // epoch ms (LeetCode task_finish_time)
+  tzOffsetMinutes: number;
+  lang: string;
+  runtimeMs?: number | null;
+  memory?: number | null; // bytes
+  frontendId?: string | null;
+  difficulty?: string | null;
+  topicTags?: string[] | null;
+}
+
+// The full export snapshot. Every collection is REQUIRED, and that's the point: the two ApiClient
+// impls build this differently (the stub from its in-memory store, the backend from enumerated repo
+// reads), and a missing collection used to be invisible — leetcodeAttempts shipped absent from the
+// real export while the stub looked fine. With both returning an object literal typed as this,
+// omitting a key AND adding a stray one are compile errors.
+//
+// Soft-deleted rows are EXCLUDED (see the export contract test). That's the right call while the
+// export is a one-way download; if an import/restore path ever lands it will need tombstones for
+// merge, plus a versioned envelope — revisit here at that point, not before.
+export interface ExportBundle {
+  exportedAt: number;
+  userId: string;
+  logEntries: LogEntry[];
+  tasks: Task[];
+  plans: TaskPlan[];
+  series: TaskSeries[];
+  ideas: Idea[];
+  habits: Habit[];
+  habitChecks: HabitCheck[];
+  sessions: PomodoroSession[];
+  days: Day[];
+  categories: Category[];
+  leetcodeAttempts: LeetcodeAttempt[];
+  settings: Settings; // always materialised — never the stub's nullable storage state
 }
 
 export type SettingsPatch = Partial<
@@ -166,6 +212,11 @@ export interface ApiClient {
   // Calibration (derived, read-only)
   getCalibration(range: DateRange): Promise<CalibrationPoint[]>;
 
+  // Recruiting (LeetCode) — attempts captured by the browser extension (device-token auth on the write).
+  // Idempotent on leetcodeSubmissionId; listLeetcodeAttempts is derived/read-only, reverse-chron.
+  recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt>;
+  listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]>;
+
   // Full data export (JSON) — the user owns their data. A snapshot of every entity.
-  exportData(): Promise<unknown>;
+  exportData(): Promise<ExportBundle>;
 }

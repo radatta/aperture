@@ -12,6 +12,12 @@ export const sk = {
   logPrefix: (day: string) => `log#${day}#`,
   logAllPrefix: () => `log#`,
 
+  // LeetCode attempts, day-bucketed like log. Derived reads scan the `lc#` prefix (single-user volume,
+  // same posture as calibration scanning tasks). Dedup-by-submission-id is a prefix scan for now.
+  lc: (day: string, id: string) => `lc#${day}#${id}`,
+  lcPrefix: (day: string) => `lc#${day}#`,
+  lcAllPrefix: () => `lc#`,
+
   task: (id: string) => `task#${id}`,
   taskPrefix: () => `task#`,
 

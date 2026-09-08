@@ -25,6 +25,36 @@ function originSecretFor(stage: string): string {
   return secret;
 }
 
+// Device token for the LeetCode-capture browser extension → the ingest endpoint. Same class of
+// credential as the origin secret (single-user, tiny blast radius), so it follows the SAME pattern — a
+// plain Lambda env var from a gitignored file (or APERTURE_DEVICE_TOKEN in CI), NOT Secrets Manager.
+// Generated once per stage; `cat cdk/.secrets/device-token.<stage>` to paste into the extension options.
+// NB: CI MUST set the DEVICE_TOKEN_<STAGE> secret, else each CI deploy rotates it and the extension's
+// stored token stops matching (a local deploy reuses the file, so it's stable there).
+function deviceTokenFor(stage: string): string {
+  const fromEnv = process.env.APERTURE_DEVICE_TOKEN;
+  if (fromEnv) return fromEnv.trim();
+  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
+  const file = `${dir}/device-token.${stage}`;
+  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+  mkdirSync(dir, { recursive: true });
+  const token = randomBytes(24).toString('hex');
+  writeFileSync(file, `${token}\n`);
+  return token;
+}
+
+// The Cognito `sub` device-token writes are attributed to, so captured attempts show under the
+// signed-in user. Not a secret, but account-specific → not committed: APERTURE_DEVICE_USER_ID (CI), else
+// a gitignored file, else undefined → the handler falls back to the 'local' dev user.
+function deviceUserIdFor(stage: string): string | undefined {
+  const fromEnv = process.env.APERTURE_DEVICE_USER_ID;
+  if (fromEnv) return fromEnv.trim();
+  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
+  const file = `${dir}/device-user-id.${stage}`;
+  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+  return undefined;
+}
+
 // Two stacks per stage. Region pinned to us-west-1; account comes from the deploying credentials
 // (CDK_DEFAULT_ACCOUNT), so nothing account-specific is committed. `-c stage=prod` for prod.
 const app = new App();
@@ -42,6 +72,8 @@ const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   userPool: data.userPool,
   originSecret: originSecretFor(stage),
   ...(domain ? { domainName: domain.domainName, certificateArn: domain.certificateArn } : {}),
+  deviceToken: deviceTokenFor(stage),
+  deviceUserId: deviceUserIdFor(stage),
 });
 
 // CI/CD roles — a one-off, account-wide stack (not per-stage). Only built when a repo is supplied, so
