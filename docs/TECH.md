@@ -49,8 +49,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
-- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones.
-  - **Known exception:** `uncheckHabit` **hard-deletes** the check row in the backend (`repo.deleteCheck`) while the stub soft-deletes it. The contract suite structurally cannot see the difference — both return `[]` from `listHabitChecks` — so no test will catch this drifting further. Unresolved.
+- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. One live violation — see **[Tech debt](#tech-debt)**.
 - **`exportData` excludes tombstones.** The "you own your data" snapshot returns live rows only, on both impls, asserted by the export contract test. So a soft-deleted row is **unrecoverable from an export** — deliberate while the export is a one-way download with no import path. If restore/merge ever lands it will need tombstones plus a versioned envelope; revisit then. The bundle's shape is the shared `ExportBundle` type, and every collection is required — omitting one is a compile error, not a silent gap (which is how `leetcodeAttempts` once shipped missing).
 
 ### 2.2 Entities
@@ -179,6 +178,45 @@ Nothing built in v1 — just a clean boundary so reflection is additive later.
 - **Substrate already exists:** reflection reads `logEntries` / `tasks` / `pomodoroSessions` over a date range — existing access patterns. **No schema change** needed for basic reflection.
 - **Reserved entity** (not built): `reflections` — `id · periodType(week|month|year) · periodKey · generatedAt · promptVersion · content`.
 - **Model:** Claude (Anthropic API), latest at build time, per repo norms.
+
+---
+
+## Tech debt
+
+Known deviations from the rules above, each named with the rule it breaks. An entry stays until it's
+fixed or the rule changes — not until people stop noticing it.
+
+### Hard-deletes — breaks §2.1 "Soft-delete everywhere"
+
+**The rule: nothing is ever hard-deleted.** Every entity carries `deletedAt`, deleting sets it, reads
+filter tombstones. This isn't fastidiousness. `updatedAt` is **last-write-wins across devices**, so a row
+that simply vanishes is indistinguishable from a row that never synced — the tombstone is the only way
+one device can tell another that something was deliberately removed rather than lost. Destroy the row and
+a stale device silently resurrects it on next write.
+
+**Live violation: `uncheckHabit`.** `BackendClient.uncheckHabit` calls `repo.deleteCheck`, a real
+DynamoDB `DeleteItem` — the row is gone. The stub soft-deletes the same row. Every other delete in the
+app follows the rule (`deleteCategory` and `removePlan` both write `deletedAt`), so this is the lone
+outlier, and two things make it worse than an ordinary bug:
+
+*(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day, and the running-copy
+of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
+`deleteCheck` is the only one that destroys a row.)*
+
+- **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
+  `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The
+  contract suite — the mechanism that exists to keep stub and backend honest — is structurally blind
+  here. It will drift further without anything going red.
+- **It's the delete most likely to be hit by accident.** Unchecking a habit is a one-tap action on a
+  mis-tap, and it's the one delete in the app that destroys data.
+
+Fix: `uncheckHabit` sets `deletedAt` like everything else, `listHabitChecks` filters. The regression test
+can't live in the contract suite (see above) — it belongs in `lambdas/`, asserting the raw item still
+exists via a direct repo/table read after the delete. That asymmetry is the real lesson: **a contract
+test proves two impls agree, not that either is correct.**
+
+**Before adding any delete path**, check it writes `deletedAt` rather than removing the row, and that
+something outside the contract suite can tell the difference.
 
 ---
 
