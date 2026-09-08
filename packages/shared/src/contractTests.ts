@@ -249,14 +249,12 @@ export function runApiContract(
       expect(updated.pomodoroWorkMin).toBe(50);
     });
 
-    // The export is the "you own your data" snapshot, so EVERY collection belongs in it. The two impls
-    // build it differently: the stub spreads its whole store (new entities included for free), the
-    // backend enumerates repo reads by hand (new entities silently missing) — which is exactly how
-    // leetcodeAttempts went absent from the real export while the stub looked fine.
-    //
-    // So assert the key set EXACTLY, not just the entities this test happens to create. Adding a
-    // collection then fails here until it's listed below AND added to the backend's enumeration, which
-    // is the only step that was skippable before.
+    // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked
+    // object literal), so this assertion is a runtime backstop rather than the primary guard. It still
+    // earns its place: excess-property checking evaporates the moment an impl returns a variable, a
+    // spread, or an `as` cast, and it can't see a declared-but-actually-undefined value or a key the
+    // HTTP layer's JSON round-trip drops. Listing the collections here is deliberate double-entry —
+    // don't replace it with a constant the implementations also import.
     it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
       const lc = await api.recordLeetcodeAttempt({
@@ -268,10 +266,7 @@ export function runApiContract(
         tzOffsetMinutes: 300,
         lang: 'python3',
       });
-      const data = (await api.exportData()) as Record<string, unknown> & {
-        tasks: { id: string }[];
-        leetcodeAttempts: { id: string }[];
-      };
+      const data = await api.exportData();
       expect(Object.keys(data).sort()).toEqual(
         [
           'categories',
@@ -292,6 +287,36 @@ export function runApiContract(
       );
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
       expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
+      // Materialised, never the stub's nullable storage state — nothing in this test triggers
+      // ensureSettings() beforehand, so a stub that exported store.settings raw would fail here.
+      expect(data.settings).toBeTruthy();
+    });
+
+    // Soft-deleted rows stay out of the export. The two impls used to disagree — the stub spread its
+    // raw store (tombstones included), the backend's repo reads are alive()-filtered (excluded) — and
+    // no type can catch that, since both are well-typed arrays of the same element. Two probes because
+    // they take different paths: deleteCategory writes deletedAt via putCategory, removePlan goes
+    // through the stub's softDelete. (Not uncheckHabit — the stub soft-deletes it but the backend
+    // hard-deletes, so it can't distinguish filtering from absence.)
+    it('export: excludes soft-deleted rows', async () => {
+      const gone = await api.upsertCategory({ label: 'Gone', isWork: false });
+      const kept = await api.upsertCategory({ label: 'Kept', isWork: true });
+      await api.deleteCategory(gone.id, null); // unreferenced → a null target is allowed
+
+      const task = await api.createTask({ title: 'planned then unplanned' });
+      const plan = await api.upsertPlan({
+        taskId: task.id,
+        day: '2026-01-05',
+        plannedMinutes: 30,
+        order: 1,
+      });
+      await api.removePlan(plan.id);
+
+      const data = await api.exportData();
+      expect(data.categories.map((c) => c.id)).toContain(kept.id);
+      expect(data.categories.map((c) => c.id)).not.toContain(gone.id);
+      expect(data.plans.map((p) => p.id)).not.toContain(plan.id);
+      expect(data.tasks.map((t) => t.id)).toContain(task.id); // the task itself survives
     });
   });
 }

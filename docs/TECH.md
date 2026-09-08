@@ -50,6 +50,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
 - **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones.
+  - **Known exception:** `uncheckHabit` **hard-deletes** the check row in the backend (`repo.deleteCheck`) while the stub soft-deletes it. The contract suite structurally cannot see the difference — both return `[]` from `listHabitChecks` — so no test will catch this drifting further. Unresolved.
+- **`exportData` excludes tombstones.** The "you own your data" snapshot returns live rows only, on both impls, asserted by the export contract test. So a soft-deleted row is **unrecoverable from an export** — deliberate while the export is a one-way download with no import path. If restore/merge ever lands it will need tombstones plus a versioned envelope; revisit then. The bundle's shape is the shared `ExportBundle` type, and every collection is required — omitting one is a compile error, not a silent gap (which is how `leetcodeAttempts` once shipped missing).
 
 ### 2.2 Entities
 
