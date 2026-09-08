@@ -1,4 +1,5 @@
 import { fmtMonthDayYear } from '@aperture/shared';
+import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useLeetcodeAttempts } from '../../data/hooks/useLeetcodeAttempts';
 import { summarize, verdictLabel, verdictTone, withAttemptOrdinals } from './recruitingHelpers';
@@ -7,7 +8,7 @@ import { summarize, verdictLabel, verdictTone, withAttemptOrdinals } from './rec
 // wrong), with a derived per-problem attempt-count. Rows are fed by the browser extension; there's no
 // authoring here. Firm-but-honest, never a streak or a red "you failed" — that tone lands in V2 planning.
 export function RecruitingPage() {
-  const { data: attempts = [] } = useLeetcodeAttempts();
+  const { data: attempts = [], isPending, isError } = useLeetcodeAttempts();
   const rows = withAttemptOrdinals(attempts);
   const s = summarize(attempts);
 
@@ -17,17 +18,27 @@ export function RecruitingPage() {
         <Text as="h1" size="2xl" weight="semibold">
           Recruiting
         </Text>
-        <Text as="p" size="sm" tone="muted">
-          {s.solved} solved · {s.problems} {s.problems === 1 ? 'problem' : 'problems'} ·{' '}
-          {s.attempts} {s.attempts === 1 ? 'attempt' : 'attempts'}
-        </Text>
+        {/* Only once there's something to summarize — "0 solved · 0 problems · 0 attempts" is the same
+            confidently-wrong assertion as a premature empty state, and it's outside EmptyState's reach. */}
+        {rows.length > 0 && (
+          <Text as="p" size="sm" tone="muted">
+            {s.solved} solved · {s.problems} {s.problems === 1 ? 'problem' : 'problems'} ·{' '}
+            {s.attempts} {s.attempts === 1 ? 'attempt' : 'attempts'}
+          </Text>
+        )}
       </header>
 
       <div className="flex flex-col divide-y divide-line">
         {rows.length === 0 ? (
-          <Text tone="subtle" className="py-8">
-            No LeetCode attempts captured yet. Install the extension to start logging them here.
-          </Text>
+          <div className="py-8">
+            <EmptyState
+              pending={isPending}
+              error={isError}
+              title="No LeetCode attempts captured yet."
+            >
+              Install the extension to start logging them here.
+            </EmptyState>
+          </div>
         ) : (
           rows.map(({ attempt, attemptNo, problemAttempts }) => (
             <div key={attempt.id} className="flex items-start justify-between gap-4 py-3">

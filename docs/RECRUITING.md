@@ -250,7 +250,8 @@ never talks to the app's dev server. It POSTs to whatever origin you type into i
 | Iteration | instant HMR | reload the add-on | full CI deploy |
 
 **App locally** proves the page renders, ordinals and the summary line are right, verdict tones are
-right, the empty state is right, and the ApiClient contract holds. That's the entire UI, which is why it
+right, all three list states (loading / error / empty) are right, and the ApiClient contract holds —
+including that the export carries every collection and no tombstones. That's the entire UI, which is why it
 was built this way — page-first, backend-second. There is no `/api/*` proxy on the Vite server and no
 local API script, so this surface never involves the extension.
 
@@ -286,12 +287,9 @@ largest line item in this project.
 - **The ingest half has never executed.** As of 2026-09-07 the `leetcode-tracking` branch has never been
   merged and was never pushed to `dev` either, so `recordLeetcodeAttempt` has never existed on a
   deployed Lambda. Zero rows written. The capture half *was* verified live on 2026-08-09.
-- **The Recruiting page has no error state.** `useLeetcodeAttempts()` is destructured with a `[]`
-  default and no `isError`/`isPending` branch, so a failed query renders the "No LeetCode attempts
-  captured yet" empty state — a second silent-emptiness failure mode on top of the identity seam.
-- **`exportData` disagrees on soft-deleted rows.** The stub spreads its store (tombstones included); the
-  backend's repo reads are `alive()`-filtered (tombstones excluded). Same call, different data. Pick one
-  and assert it in the export contract test.
+- **The summary line is hidden until there's data.** `0 solved · 0 problems · 0 attempts` sits outside
+  `EmptyState`'s reach, so it would have kept asserting a total while the query was still loading or had
+  failed. Revisit if a zero-state summary ever earns its place.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
   same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale, pre-deploy)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
