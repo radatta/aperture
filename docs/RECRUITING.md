@@ -142,16 +142,100 @@ console (User pools → your pool → Users → the user → "sub" attribute).
 
 ### 2. Load the extension
 
+See **Deployment & install** below — the setup differs depending on whether you're capturing for real or
+validating a stage.
+
+## Deployment & install
+
+### The origins
+
+| Stage | Origin |
+| --- | --- |
+| prod | `https://aperture.rahuldatta.dev` |
+| dev | `https://dev.aperture.rahuldatta.dev` |
+
+Both have been live on their custom domains since 2026-08 (INFRA §8). **There is no local origin** — the
+Vite dev server has no `/api/*` route and there's no local API script, so "point it at localhost" has
+nothing on the other end. "Dev" here always means the deployed AWS stage, never your machine.
+
+### Three layers, each matched to its job
+
+**1. Daily driver — one signed extension, prod origin, your main Firefox profile.**
+This is the only one that needs to be permanent, and it genuinely does: a temporary add-on you forgot to
+re-load after a restart doesn't error, it just silently stops capturing. Same silent-failure family as
+the identity seam, and the reason signing is worth the one-time effort.
+
+**2. Stage validation — a temporary add-on in a SEPARATE Firefox profile, dev origin.**
+`about:profiles` → create a profile → load the add-on there from `about:debugging`. Separate profiles
+have separate extension storage, so there's no ID collision with the signed copy and no chance of your
+real practice landing in dev. This is where the four ingest checks get run.
+
+**3. Extension code iteration — temporary add-on, no endpoint needed.**
+`background.js` logs every outcome (`recorded attempt … -> 200`, `backend rejected attempt … <status>`,
+`failed to POST attempt …`), and everything upstream of the POST runs regardless. This is how the capture
+half was verified on 2026-08-09.
+
+### Loading a temporary add-on (layers 2 and 3)
+
 Firefox 128+ (needs `content_scripts` `world: "MAIN"`).
 
 1. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `extension/manifest.json`.
 2. Open its **options** page and set **API origin** (scheme + host, no path) and **Device token**.
 3. Accept the optional host-permission prompt for that origin — the POST can't be sent without it.
 
-**Temporary add-ons don't survive a Firefox restart.** You re-add it each time. Signing it for permanent
-install is deferred (see Open items).
+Temporary add-ons don't survive a Firefox restart; re-add each time. Acceptable for validation work,
+not for the daily driver.
 
-## Testing: local vs dev
+### Signing for permanent install (layer 1, one-time)
+
+Firefox **Release and Beta enforce extension signatures and cannot be told not to** —
+`xpinstall.signatures.required` only takes effect on Developer Edition, Nightly, and ESR. So permanent
+install means signing.
+
+Signing does **not** mean publishing. addons.mozilla.org accepts **unlisted** submissions: upload the
+zipped extension, get back a signed `.xpi` for self-distribution, never shown in the public directory,
+free. Install it via `about:addons` → gear icon → **Install Add-on From File**. Each new upload needs a
+`version` bump in `manifest.json`.
+
+**The extension ID is permanent once signed.** It's `aperture-leetcode@rahuldatta.dev` — changing it
+later makes it a *different* add-on, meaning a reinstall and a lost stored token. Settle it before the
+first submission, not after.
+
+### Why not two permanent installs (one per stage)
+
+Two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
+the ID *is* the add-on's identity. That's two manifests, two names, two AMO submissions, and two signing
+rounds on every change, forever. And what it buys is two live capture paths, which is the opposite of
+what you want: real practice should land in exactly one stage. A separate profile gets the same
+isolation for free.
+
+### What ever invalidates the setup
+
+The token exists in three places — the GitHub secret (source of truth), the Lambda env var (re-derived
+automatically on every deploy), and the extension's `storage.local` (manual, **never** syncs). Only the
+third one is ongoing work, and only for these events:
+
+| Event | What you redo |
+| --- | --- |
+| Any normal deploy | **nothing** |
+| Rotating the token deliberately | update the GitHub secret → redeploy → re-paste in the extension |
+| Cognito pool replaced | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never |
+| Origin changes | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08 |
+| New browser / profile / machine | paste the token there — `storage.local` is per-profile |
+| Firefox restart (temporary add-on only) | re-add it. The signed install is unaffected |
+
+Storage is keyed by extension ID, so the saved token should survive a temporary→signed transition with
+the ID unchanged. Worth confirming on the first signed install rather than assuming.
+
+### The Chrome alternative (no signing)
+
+Chrome **persists unpacked extensions across restarts** (`chrome://extensions` → Developer mode → Load
+unpacked) — the one property Firefox temporary add-ons lack. It nags with a bubble but stays loaded.
+Chrome has supported `world: "MAIN"` since 111, and the code already does `browser.*` with a `chrome`
+fallback. But the Chrome path is **untested** (see Open items), so this trades one AMO upload for an
+unknown amount of debugging. Only worth it if you already live in Chrome.
+
+## Testing: what each surface proves
 
 There are **three** testable surfaces here, not two, and conflating the first two is easy: the extension
 never talks to the app's dev server. It POSTs to whatever origin you type into its options page, so
@@ -211,8 +295,11 @@ largest line item in this project.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
   same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale, pre-deploy)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
-- **Firefox only, temporary install.** No Chrome build (`world: "MAIN"` is available there too, but the
-  manifest and the `browser.*`/`chrome` fallback haven't been tested); no signed permanent install.
+- **Not signed yet.** Every install so far has been a temporary add-on. Signing is a one-time AMO
+  unlisted submission (see Deployment & install) and should happen *after* the dev-stage validation
+  passes — signing first just means signing twice.
+- **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
+  fallback, but neither has been run.
 - **No aggregate views.** No per-topic breakdown, no difficulty mix, no time-to-solve. V2, and per
   **[EvaluatingChanges.md](EvaluatingChanges.md)** those wait for real usage rather than being designed
   against a guess.
