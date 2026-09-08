@@ -1050,6 +1050,51 @@ enabled = false
 
 Configs **merge**: user → repo → `--profile` layered on top as deltas; scalars are last-wins.
 
+## GitHub access inside the container
+
+The container has **no SSH key and no SSH agent** (COI reports "SSH agent: Not available"), and the
+remote is SSH — so out of the box `git fetch` and `git push` both fail from inside, and `gh` is
+unauthenticated. The practical damage isn't the missing push: it's that **every `origin/*` ref you
+compare against is whatever the Mac last fetched.** That produced two confidently-wrong conclusions on
+2026-09-07 — "this branch was never deployed to `dev`" and "`origin/dev` hasn't moved" — both stated as
+fact from refs that were structurally incapable of being current.
+
+**Setup — redo after a VM rebuild** (the container home survives `coi shutdown` because
+`persistent = true`, but `~/.coi` is VM-local):
+
+```bash
+git config --global url."https://github.com/".insteadOf git@github.com:
+gh auth login --with-token      # paste, Ctrl-D
+gh auth setup-git
+```
+
+- **Run this in a separate tmux window, never through Claude.** A token pasted into a Claude prompt
+  lands in the session transcript on disk.
+- **The `--global` rewrite is the point.** `/workspace/.git/config` is *shared with the Mac*, so
+  changing the remote there would switch your own pushes to HTTPS and break your working SSH setup.
+  A global `insteadOf` is container-only and leaves both untouched.
+- The token lives in `~/.git-credentials` in the container home — never under `/workspace`, which is
+  the Mac's disk.
+
+**Scope: read-only.** The PAT deliberately grants no write anywhere:
+
+| Permission | Why |
+| --- | --- |
+| Contents: **read** | `git fetch` — the whole point |
+| Pull requests: **read** | PR state. **Write would allow merging, and a merge to `main` IS the prod deploy** |
+| Actions: read | run status, job logs, the CDK diff |
+| Variables · Secrets · Deployments · Commit statuses: read | verify config instead of asking; secret *values* are never returned by any permission |
+
+Pushes and merges are the operator's, by hand. This isn't belt-and-braces on top of the hooks — with a
+single identity it's the **only** real control. A fine-grained PAT authenticates *as you*, GitHub has no
+per-branch token scoping, and a ruleset binds identities, not credentials — so nothing can distinguish
+"you" from "Claude acting as you". Enforcement would require a separate identity (machine account or
+GitHub App) named in a ruleset's bypass list. Rejected here: everything should be attributable to one
+human.
+
+`Checks: read` does not exist as a fine-grained permission, so `gh pr view --json statusCheckRollup`
+fails regardless. Use `gh run list` / `gh run view` — same information, Actions API.
+
 ## Gotchas (don't re-derive these)
 
 - **Two config formats — the big one.** The main/project config (`~/.coi/config.toml`,
