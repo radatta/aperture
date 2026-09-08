@@ -83,7 +83,9 @@ Same-origin `/api/*` via CloudFront OAC (no CORS). In-handler Cognito JWT valida
 
 **GitHub Flow.** Feature branch → PR → squash-merge to `main`. Merging to `main` runs the pipeline (lint/typecheck/test → deploy dev → approval → deploy prod). Pushing to `dev` does a one-off dev deploy. PRs run checks only.
 
-**`main` and `dev` are both deploy branches.**
+**`main` and `dev` are both deploy branches** — but they are not alike. `main` is protected and permanent. **`dev` is scratch: the user force-pushes it routinely to get a branch onto real infrastructure, and that is the intended workflow.** Its history is disposable and nothing ever merges out of it.
+
+So when a branch can't fast-forward onto `dev`, **do not propose merging `origin/dev` into it, rebasing onto it, or creating a temporary worktree** — the answer is that the user force-pushes over it. Claude still never pushes to `dev` at all (see Hard-blocked); the point is to stop inventing workarounds for a problem the user solves in one command.
 
 ### Claude drives git — guarded
 
