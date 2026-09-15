@@ -111,7 +111,8 @@ Merges to `main` happen via PR, not a local push.
 ## Claude behavior
 
 - **Consult before big or irreversible actions**, and before deep research/exploration. Don't go off alone.
-- **Use the `Plan` agent when a task will touch more than ~5 files** — design in an isolated context first, return with a concrete plan, then edit.
+- **Don't write code that wasn't asked for.** Diagnosis, research, and a proposal are the deliverable until the user says to implement. "Continue" means continue what was asked — it is not license to start editing.
+- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. The rationalisations to distrust are the plausible ones — "this is well understood", "it's only just over", "the design is obvious", "I already researched it". Every one of those is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, and rewriting logic you have already defended is not.
 - **Reviews go through the `code-reviewer` agent** (project-aware) — not inline reading. Run it before committing anything non-trivial.
 - **Non-trivial external research → the `search-specialist` agent.** Single-fact lookups can use `WebSearch`/`WebFetch` directly. Codebase search is `Explore`'s job.
 - **Keep `docs/index.md` current.** Add or update a doc's one-line entry there in the same change — a doc missing from the index is undiscoverable.
@@ -129,7 +130,7 @@ A wrong conclusion survived weeks and a night of work here, and each step below 
 
 ## Writing style
 
-Operator-level and tight. State what you observed, form a working assumption, ask only for the missing piece. Short paragraphs, no generic architecture lectures. Confident, not absolute.
+Operator-level and tight. State what you observed, form a working assumption, ask only for the missing piece. When asked to explain architecture, use ascii art and analogies if appropriate. Short paragraphs, no generic architecture lectures. Confident, not absolute.
 
 ## Coding style
 

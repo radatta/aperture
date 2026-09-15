@@ -58,7 +58,7 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 ## 6. Auth — Cognito
 
 - **One User Pool per env.** Self-signup **OFF** (invite-only; you admin-create your own user). MFA optional.
-- **App client:** SPA type, PKCE, no secret. Callback URLs = the env's app URL (CloudFront default first, custom domain added later).
+- **App client:** SPA type, PKCE, no secret. Callback URLs = the env's app URL (CloudFront default first, custom domain added later). **`refreshTokenValidity` is capped at 7 days** (Cognito defaults to 30) — it sets how often a password is actually typed, and the token persists in browser `localStorage`, so the ceiling is deliberately short. Access/ID tokens stay at the 1-hour default. Rationale and the renewal behaviour built on it: `TECH.md` §3.
 - **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-east-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional.
 - Frontend: `react-oidc-context` + Hosted UI.
 

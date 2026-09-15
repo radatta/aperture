@@ -115,6 +115,15 @@ describe('ApertureAppStack', () => {
       AllowedOAuthFlows: ['code'],
     });
   });
+
+  // The refresh token is the session's real ceiling — it's what the app renews with across relaunches,
+  // so this is what sets how often a password gets typed. CDK emits validity in minutes.
+  it('caps the refresh token at a week', () => {
+    app.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      RefreshTokenValidity: 7 * 24 * 60,
+      TokenValidityUnits: Match.objectLike({ RefreshToken: 'minutes' }),
+    });
+  });
 });
 
 describe('ApertureAppStack with a custom domain (Phase 14)', () => {
