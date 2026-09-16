@@ -12,7 +12,7 @@ A personal Firefox extension that records **your own** LeetCode submissions — 
 
 The add-on stays loaded until you restart Firefox (temporary add-ons don't persist). Requires Firefox **128+** for `content_scripts` `world: "MAIN"` support.
 
-For the permanent (signed) install, the per-stage origins, and why dev validation belongs in a separate Firefox profile, see **`docs/recruiting/index.md` → Deployment & install**.
+For the permanent (signed) install, the per-stage origins, and why dev validation belongs in a separate Firefox profile, see **`docs/areas/recruiting/index.md` → Deployment & install**.
 
 ## Configure
 

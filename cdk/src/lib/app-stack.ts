@@ -71,7 +71,7 @@ export class ApertureAppStack extends Stack {
     // directly. The ids must match synth's "Acknowledge with '...'" hint verbatim; the IAM5 id embeds the
     // cross-stack table export (hence `ApertureData-${stage}` + the table's logical-id hash) — if the data
     // stack's table construct id changes, synth re-flags IAM5 and this must be updated. Revisit when #2359
-    // lands a real fix. See docs/CICD_HARDENING.md #2.
+    // lands a real fix. See docs/arch/CICD_HARDENING.md #2.
     fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
       'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
         'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy for the BFF.',

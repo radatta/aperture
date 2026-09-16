@@ -743,7 +743,7 @@ VM half still exists.
 > **check the tool's own surface before concluding a capability is missing.**
 >
 > `scripts/coi-vm-setup.sh` is unaffected and matters more now — `~/.coi/` is VM-local, so it
-> protects the store that `--resume` depends on. Details: `docs/COI-SANDBOX.md` →
+> protects the store that `--resume` depends on. Details: `docs/ops/COI-SANDBOX.md` →
 > *Run → Ending a session*.
 
 The now-deleted second script existed because of a follow-on finding that still holds: **the export

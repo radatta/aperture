@@ -1,10 +1,10 @@
 # Aperture — Technical Spec
 
-Implements `PRODUCT.md`. AWS-native PWA, web-first, online-first. Solo build, single user.
+Implements `../product/PRODUCT.md`. AWS-native PWA, web-first, online-first. Solo build, single user.
 Status: **Specs complete; implementation underway — workspace foundation (V1_PLAN Phase 0) built 2026-08-03.**
 Started: 2026-08-02.
 
-> Product is the source of truth. If this doc and `PRODUCT.md` disagree, product wins.
+> Product is the source of truth. If this doc and `../product/PRODUCT.md` disagree, product wins.
 
 ---
 
@@ -23,7 +23,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> API (API GW HTTP API | Lambda Funct
 - **Routing:** React Router. **UI/session state:** React Context + hooks (home mode, running timer).
 - **Styling:** **Tailwind (v4, CSS-first)** with theme colors as **CSS custom properties** (`--surface`, `--fg`, `--accent-gold`, …) → auto light/dark is a one-line flip. Anti-generic: semantic token layer + a few primitive components, not raw utilities everywhere.
 - **Testing:** Vitest. **Lint/format:** ESLint + Prettier.
-- **Dates:** **roll our own** small helpers (day-start offset + ISO-week cadence are small, targeted) — only reach for a date lib if DST edge cases prove genuinely gnarly. Per [CONVENTIONS.md](CONVENTIONS.md).
+- **Dates:** **roll our own** small helpers (day-start offset + ISO-week cadence are small, targeted) — only reach for a date lib if DST edge cases prove genuinely gnarly. Per [CONVENTIONS.md](../product/CONVENTIONS.md).
 - **Charts:** deferred; v1 viz is hand-rolled CSS/SVG.
 
 **Backend / infra (direction set; details deferred to the infra discussion)**
@@ -95,12 +95,12 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
 - **Idempotent on `leetcodeSubmissionId`** — a re-fire returns the existing row, original verdict intact.
 - **Attempt count per problem is DERIVED at read time**, never a stored counter.
-- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[recruiting/](recruiting/index.md)**.
+- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[recruiting/](../areas/recruiting/index.md)**.
 
 **stories** — behavioral-interview STAR stories, authored in-app (the one place structured-at-entry is right — a story is a slowly-tightened artifact, not a capture).
 - `id · title · competencyTags[] · situation · action · result`
 - `competencyTags`: the fixed `CompetencyTag` union (`leadership · conflict · ownership · failure · ambiguity · impact`), a shared constant — not the editable `Category` entity. Multi-select.
-- Title required; S/A/R may be empty (a title-only stub is valid). List is `updatedAt`-desc; soft-delete like everything else. Full design: **[recruiting/story-bank.md](recruiting/story-bank.md)**.
+- Title required; S/A/R may be empty (a title-only stub is valid). List is `updatedAt`-desc; soft-delete like everything else. Full design: **[recruiting/story-bank.md](../areas/recruiting/story-bank.md)**.
 
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
 
@@ -178,7 +178,7 @@ aperture/
   docs/  ·  localNotes/
 ```
 
-**Tooling:** **pnpm** (package manager + workspaces) — **never npm/yarn** · **Vitest** (one test runner, Node everywhere) · Vite (app bundler) · TS project refs · ESLint + Prettier · esbuild-via-CDK for Lambda bundling · GitHub Actions CI. Dependency discipline per **[CONVENTIONS.md](CONVENTIONS.md)** (first-principles: build it ourselves by default).
+**Tooling:** **pnpm** (package manager + workspaces) — **never npm/yarn** · **Vitest** (one test runner, Node everywhere) · Vite (app bundler) · TS project refs · ESLint + Prettier · esbuild-via-CDK for Lambda bundling · GitHub Actions CI. Dependency discipline per **[CONVENTIONS.md](../product/CONVENTIONS.md)** (first-principles: build it ourselves by default).
 
 **As built (Phase 0):** Node 22 · pnpm 11 · TypeScript **6** (pinned below 7 for lint support) · Vite 8 · Vitest 4 · React 19 · ESLint 10. Internal packages resolve **from source** (`@aperture/shared` exports `src/index.ts`; consumers transpile it, no dev/test build step); `shared` emits a gitignored `dist/` only to satisfy project references. Full rationale + the version-pin gotchas in **[V1_PLAN.md](V1_PLAN.md) → Phase 0 (as built)**.
 

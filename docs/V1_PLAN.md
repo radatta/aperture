@@ -1,6 +1,6 @@
 # Aperture — v1 Implementation Plan
 
-Sequenced work breakdown to ship v1. Implements `PRODUCT.md`, `TECH.md`, `CONVENTIONS.md`, `INFRA.md`.
+Sequenced work breakdown to ship v1. Implements `product/PRODUCT.md`, `arch/TECH.md`, `product/CONVENTIONS.md`, `arch/INFRA.md`.
 Product is the source of truth; where this plan and product disagree, product wins.
 
 **How to read:** ordered phases → milestones → tasks. Each phase states its goal, tasks,
@@ -19,7 +19,7 @@ per-phase evidence is in the "as built" note under each phase heading where one 
 - **Prod / custom domain actually live.** The CDK wiring (14.1–14.4) is in `cdk/`, but a successful
   deploy is not an artifact in the repo. Confirm against the AWS console / a live fetch.
 
-Shipped **beyond** this plan (see `CICD_HARDENING.md`): cdk-nag, billing + CloudWatch alarms,
+Shipped **beyond** this plan (see `arch/CICD_HARDENING.md`): cdk-nag, billing + CloudWatch alarms,
 health check, gitleaks, Dependabot, deploy notifications.
 
 ---
