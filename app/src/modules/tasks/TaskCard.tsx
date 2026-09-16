@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -9,13 +10,14 @@ import type { MenuItem } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
-import { useSetActual, useSplitTask, useTransitionTask } from '../../data/hooks/useTasks';
+import { useSettings } from '../../data/hooks/useSettings';
+import { useSetActual, useSetDueDay, useSplitTask, useTransitionTask } from '../../data/hooks/useTasks';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { CategoryTag } from './CategoryTag';
 import { ScopePanel } from './ScopePanel';
 import { remainingMin } from './taskMath';
 
-type Panel = null | 'scope' | 'split' | 'done';
+type Panel = null | 'scope' | 'split' | 'done' | 'due';
 
 // One task, with the lifecycle actions its status allows. `actions` is an optional slot for
 // context-specific buttons (add-to-today / remove-from-plan) supplied by the section.
@@ -37,6 +39,10 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
     overflow.push({ label: 'Split…', onSelect: () => toggle('split') });
   if (task.status === 'in_progress')
     overflow.push({ label: 'Focus', onSelect: () => pomodoro.startFocus({ taskId: task.id }) });
+  // Due date is set in ScopePanel for backlog|planned; in_progress has no scope panel, so it gets its
+  // own entry here. Done/cancelled stay display-only.
+  if (task.status === 'in_progress')
+    overflow.push({ label: 'Due day…', onSelect: () => toggle('due') });
   if (canScope)
     overflow.push({
       label: 'Drop task',
@@ -87,6 +93,7 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
       {panel === 'scope' && <ScopePanel task={task} onDone={() => setPanel(null)} />}
       {panel === 'split' && <SplitForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'done' && <DoneForm task={task} onDone={() => setPanel(null)} />}
+      {panel === 'due' && <DueDayForm task={task} onDone={() => setPanel(null)} />}
     </Card>
   );
 }
@@ -95,6 +102,8 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
 // unscoped" — two statements of nothing, on every row, at the weight of real data. Absence is now
 // shown by absence; the Scope button already says what's missing.
 function TaskMeta({ task }: { task: Task }) {
+  const { data: settings } = useSettings();
+  const today = todayKey(settings?.dayStartHour ?? 4);
   const bits: string[] = [];
   if (task.status === 'in_progress') {
     const hasEstimate = task.estimateLockedMin != null || task.estimateMin != null;
@@ -112,6 +121,13 @@ function TaskMeta({ task }: { task: Task }) {
       {bits.length > 0 && (
         <Text size="xs" tone="muted" tabular>
           {bits.join(' · ')}
+        </Text>
+      )}
+      {/* Deadline reads flat and quiet at every status — a lapsed due date is an honest signal, never
+          a scold (no red, no countdown, no aggregate). Shown on done/cancelled too, as history. */}
+      {task.dueDay && (
+        <Text size="xs" tone="subtle">
+          {fmtDueDay(task.dueDay, today)}
         </Text>
       )}
     </div>
@@ -163,6 +179,41 @@ function SplitForm({ task, onDone }: { task: Task; onDone: () => void }) {
           }}
         >
           Split
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Due date for an in_progress task — the one status without a ScopePanel. Day-granular, editable
+// freely (a moved deadline is not a scope change), clears when the field is emptied.
+function DueDayForm({ task, onDone }: { task: Task; onDone: () => void }) {
+  const setDueDay = useSetDueDay();
+  const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
+  return (
+    <div className="mt-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field
+          label="Due"
+          type="date"
+          value={dueDay}
+          onChange={(e) => setDueDay_(e.target.value)}
+          className="w-40"
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={setDueDay.isPending}
+          onClick={async () => {
+            await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
+            onDone();
+          }}
+        >
+          Save
         </Button>
         <Button variant="ghost" size="sm" onClick={onDone}>
           Cancel

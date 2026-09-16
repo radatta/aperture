@@ -162,6 +162,9 @@ export interface ApiClient {
   // Category can change any time — labels resolve live and wasWork is snapshotted on sessions, so
   // there's no freeze constraint here (unlike the estimate).
   setTaskCategory(id: string, categoryId: string | null): Promise<Task>;
+  // Deadline metadata (day-granular). Settable at ANY status — a moved deadline is not a scope
+  // change, so this never touches estimateLockedMin.
+  setTaskDueDay(id: string, dueDay: string | null): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
   setTaskActual(id: string, actualMin: number): Promise<Task>;
   // Scope change: finish/cancel the original and spawn a follow-up (never edit a locked estimate).

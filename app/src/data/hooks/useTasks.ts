@@ -44,6 +44,16 @@ export function useSetCategory() {
   });
 }
 
+// Due date — day-granular deadline metadata. No freeze constraint: settable at any status.
+export function useSetDueDay() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; dueDay: string | null }) => api.setTaskDueDay(v.id, v.dueDay),
+    onSettled: () => invalidateTaskData(qc),
+  });
+}
+
 // The lifecycle move. Crossing out of planning (→ in_progress|done) freezes estimateLockedMin inside
 // the shared machine — this hook doesn't need to know, it just calls it.
 export function useTransitionTask() {

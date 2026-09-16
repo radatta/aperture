@@ -2,7 +2,7 @@
 // have something honest to render. Without this, page-first validation would judge every data view
 // against an empty store. Values are index-derived (not random) so the seed is reproducible.
 
-import { dayKey } from '@aperture/shared';
+import { addDays, dayKey } from '@aperture/shared';
 import type {
   BaseEntity,
   Category,
@@ -103,6 +103,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         title: doneTitles[(d / 2) % doneTitles.length]!,
         status: 'done',
         categoryId: cat.id,
+        dueDay: null,
         seriesId: null,
         estimateMin: est,
         bufferMin: Math.round(est * 0.25),
@@ -133,19 +134,23 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
 
   // A handful of unscoped backlog tasks — captured title-only, waiting for the morning plan pass.
   // These make the morning "plan today" card real and give Phase 5 material to scope.
-  const backlogTitles = [
-    'Draft the project proposal',
-    'Fix the flaky CI test',
-    'Reply to advisor email',
-    'Outline the reading notes',
-    'Book dentist appointment',
+  const today = dayKey(nowMs, START_HOUR);
+  // Mixed due days so the morning pull's soonest-due sort and the relative phrasing are both visible
+  // on first load: a couple dated (one overdue, one far out), the rest undated.
+  const backlogSeeds: { title: string; dueOffset: number | null }[] = [
+    { title: 'Draft the project proposal', dueOffset: 2 },
+    { title: 'Fix the flaky CI test', dueOffset: -1 },
+    { title: 'Reply to advisor email', dueOffset: null },
+    { title: 'Outline the reading notes', dueOffset: 12 },
+    { title: 'Book dentist appointment', dueOffset: null },
   ];
-  backlogTitles.forEach((title, i) => {
+  backlogSeeds.forEach(({ title, dueOffset }, i) => {
     store.tasks.push({
       ...mk(nowMs - (i + 1) * HOUR),
       title,
       status: 'backlog',
       categoryId: null,
+      dueDay: dueOffset === null ? null : addDays(today, dueOffset),
       seriesId: null,
       estimateMin: null,
       bufferMin: null,

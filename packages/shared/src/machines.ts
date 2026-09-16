@@ -65,6 +65,7 @@ export function splitFollowUp(original: Task, followUpTitle: string): Omit<Task,
     title: followUpTitle,
     status: 'backlog',
     categoryId: original.categoryId,
+    dueDay: original.dueDay, // a split changes scope, not the deadline — carry it (like categoryId)
     seriesId: null,
     estimateMin: original.estimateMin,
     bufferMin: original.bufferMin,

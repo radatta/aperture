@@ -5,11 +5,14 @@ import {
   dayKeyForOffset,
   daysBetween,
   fmtDayHeading,
+  fmtDueDay,
   fmtMonthDay,
   fmtMonthDayYear,
   fmtMonthShortDay,
   fmtWeekday,
+  fmtWeekdayShort,
   isoWeekKey,
+  todayKey,
   weekdayOf,
 } from './dates';
 
@@ -66,6 +69,37 @@ describe('iso week & formatting', () => {
     expect(fmtMonthShortDay('2026-08-31')).toBe('Aug 31');
     expect(fmtMonthShortDay('2026-12-28')).toBe('Dec 28');
     expect(fmtMonthShortDay('2027-01-04')).toBe('Jan 4');
+  });
+});
+
+describe('fmtDueDay — relative deadline phrasing', () => {
+  // 2026-06-15 is a Monday (2026-06-07 is a Sunday, per weekdayOf above).
+  const today = '2026-06-15';
+  it('names the near days explicitly', () => {
+    expect(fmtDueDay(today, today)).toBe('due today');
+    expect(fmtDueDay('2026-06-16', today)).toBe('due tomorrow');
+    expect(fmtDueDay('2026-06-14', today)).toBe('was due yesterday');
+  });
+  it('uses the weekday for ±2–6 days', () => {
+    expect(fmtWeekdayShort('2026-06-19')).toBe('Fri');
+    expect(fmtDueDay('2026-06-19', today)).toBe('due Fri'); // +4
+    expect(fmtDueDay('2026-06-21', today)).toBe('due Sun'); // +6
+    expect(fmtDueDay('2026-06-09', today)).toBe('was due Tue'); // -6
+  });
+  it('falls back to month/day beyond a week either direction', () => {
+    expect(fmtDueDay('2026-06-22', today)).toBe('due Jun 22'); // +7
+    expect(fmtDueDay('2026-06-08', today)).toBe('was due Jun 8'); // -7
+  });
+
+  // The trap: at 2:30am the wall-clock date has rolled but the logical day (4am start) hasn't. A task
+  // due "yesterday's calendar date" must still read "due today". The boundary lives in todayKey, and
+  // fmtDueDay is pure over (dueDay, today) — so composing the two is the honest test.
+  const at = (y: number, mo: number, d: number, h: number) => new Date(y, mo - 1, d, h, 0, 0, 0).getTime();
+  it('respects the dayStartHour rollover via todayKey', () => {
+    expect(fmtDueDay('2026-06-06', todayKey(4, at(2026, 6, 7, 3)))).toBe('due today'); // 3am, pre-rollover
+    expect(fmtDueDay('2026-06-06', todayKey(4, at(2026, 6, 7, 4)))).toBe('was due yesterday'); // 4am exactly
+    expect(fmtDueDay('2026-06-07', todayKey(4, at(2026, 6, 7, 3)))).toBe('due tomorrow'); // same wall date, not today
+    expect(fmtDueDay('2026-06-06', todayKey(0, at(2026, 6, 7, 0)))).toBe('was due yesterday'); // offset-0 control
   });
 });
 

@@ -28,6 +28,9 @@ export interface Task extends BaseEntity {
   status: TaskStatus;
   categoryId: string | null;
   seriesId: string | null; // set when spawned from a recurring series
+  // "YYYY-MM-DD" — when it's DUE, distinct from taskPlans.day (when I'll work it). Free metadata,
+  // set in the scope pass, editable at any status, never part of the estimate lock.
+  dueDay: string | null;
   // estimateMin / bufferMin are editable ONLY while backlog|planned.
   estimateMin: number | null;
   bufferMin: number | null;

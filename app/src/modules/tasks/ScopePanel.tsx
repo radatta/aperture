@@ -5,7 +5,7 @@ import { Field } from '../../components/Field';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { useCategories } from '../../data/hooks/useCategories';
-import { useSetCategory, useSetEstimate } from '../../data/hooks/useTasks';
+import { useSetCategory, useSetDueDay, useSetEstimate } from '../../data/hooks/useTasks';
 import { suggestedBuffer } from './taskMath';
 
 // The scoping step: estimate + buffer + category. Only reachable while backlog|planned — the stub
@@ -14,10 +14,12 @@ export function ScopePanel({ task, onDone }: { task: Task; onDone: () => void })
   const { data: cats = [] } = useCategories();
   const setEstimate = useSetEstimate();
   const setCategory = useSetCategory();
+  const setDueDay = useSetDueDay();
 
   const [estimate, setEstimate_] = useState<string>(task.estimateMin?.toString() ?? '');
   const [buffer, setBuffer] = useState<string>(task.bufferMin?.toString() ?? '');
   const [categoryId, setCategoryId] = useState<string>(task.categoryId ?? '');
+  const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
 
   const estNum = estimate === '' ? null : Number(estimate);
 
@@ -29,6 +31,9 @@ export function ScopePanel({ task, onDone }: { task: Task; onDone: () => void })
     });
     if ((task.categoryId ?? '') !== categoryId) {
       await setCategory.mutateAsync({ id: task.id, categoryId: categoryId || null });
+    }
+    if ((task.dueDay ?? '') !== dueDay) {
+      await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
     }
     onDone();
   }
@@ -73,9 +78,20 @@ export function ScopePanel({ task, onDone }: { task: Task; onDone: () => void })
           options={cats.map((c) => ({ value: c.id, label: c.label }))}
           className="w-40"
         />
+        <Field
+          label="Due"
+          type="date"
+          value={dueDay}
+          onChange={(e) => setDueDay_(e.target.value)}
+          className="w-40"
+        />
       </div>
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={save} disabled={setEstimate.isPending}>
+        <Button
+          size="sm"
+          onClick={save}
+          disabled={setEstimate.isPending || setCategory.isPending || setDueDay.isPending}
+        >
           Save
         </Button>
         <Button variant="ghost" size="sm" onClick={onDone}>

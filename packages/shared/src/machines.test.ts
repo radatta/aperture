@@ -20,6 +20,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     title: 'thing',
     status: 'planned',
     categoryId: null,
+    dueDay: null,
     seriesId: null,
     estimateMin: 60,
     bufferMin: 15,

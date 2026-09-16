@@ -113,6 +113,25 @@ export function fmtWeekday(key: string): string {
   return WEEKDAYS[weekdayOf(key)]!;
 }
 
+// "Fri" — short weekday, for the compact due-date phrasing.
+export function fmtWeekdayShort(key: string): string {
+  return WEEKDAYS[weekdayOf(key)]!.slice(0, 3);
+}
+
+// Relative due-date phrasing, at the day granularity: "due today" / "due Fri" / "was due Tue".
+// Pure over (dueDay, today) — the caller passes today = todayKey(dayStartHour), so the 4am rollover
+// lives in todayKey and never here. Weekday names for ±2–6 days; month/day beyond a week (where a
+// weekday alone is ambiguous); today/tomorrow/yesterday for the near cases.
+export function fmtDueDay(dueDay: string, today: string): string {
+  const n = daysBetween(today, dueDay); // >0 future, <0 past
+  if (n === 0) return 'due today';
+  if (n === 1) return 'due tomorrow';
+  if (n === -1) return 'was due yesterday';
+  if (n >= 2 && n <= 6) return `due ${fmtWeekdayShort(dueDay)}`;
+  if (n <= -2 && n >= -6) return `was due ${fmtWeekdayShort(dueDay)}`;
+  return n > 0 ? `due ${fmtMonthShortDay(dueDay)}` : `was due ${fmtMonthShortDay(dueDay)}`;
+}
+
 // Header form: "Saturday, Aug 2" — the glanceable date for the home.
 export function fmtDayHeading(key: string): string {
   const p = key.split('-');

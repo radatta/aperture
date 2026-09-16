@@ -18,6 +18,24 @@ export function remainingMin(task: Task): number {
   return Math.max(0, base - task.actualAccruedMin);
 }
 
+// Soonest-due-first HINT for the morning backlog pull: dated tasks ascending by dueDay, undated tasks
+// last in their incoming order. Stable + non-mutating (copies first). This is only ever applied to the
+// unplanned backlog — where no manual taskPlans.order exists — so it never overrides a user ordering.
+// Falsy dueDay ('' or the undefined that pre-dueDay rows read back as) counts as undated.
+export function byDueHint(tasks: Task[]): Task[] {
+  return tasks
+    .map((task, i) => ({ task, i }))
+    .sort((a, b) => {
+      const da = a.task.dueDay || null;
+      const db = b.task.dueDay || null;
+      if (da && db) return da < db ? -1 : da > db ? 1 : a.i - b.i;
+      if (da) return -1; // dated before undated
+      if (db) return 1;
+      return a.i - b.i; // both undated → keep incoming order
+    })
+    .map((x) => x.task);
+}
+
 const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 
 export function ruleSummary(rule: RecurrenceRule): string {
