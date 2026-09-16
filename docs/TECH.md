@@ -95,7 +95,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
 - **Idempotent on `leetcodeSubmissionId`** — a re-fire returns the existing row, original verdict intact.
 - **Attempt count per problem is DERIVED at read time**, never a stored counter.
-- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[RECRUITING.md](RECRUITING.md)**.
+- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[recruiting/](recruiting/index.md)**.
 
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
 
