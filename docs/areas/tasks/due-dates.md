@@ -1,6 +1,12 @@
 # Task Due Dates
 
-**Area:** tasks · **Status:** design locked, build pending · **Branch:** `task-due-dates`
+**Area:** tasks · **Branch:** `task-due-dates`
+
+**Status: built 2026-09-15** (branch `task-due-dates`, rebased onto `main` after story-bank #12). Validated
+on dev — set / clear / relative display / soonest-due sort verified against real Cognito → Lambda →
+DynamoDB, including the in-progress overflow surface and split-carries-the-deadline. Pending merge to
+`main` (lands before PR-C, which rebases onto it). Gate green: typecheck · lint · tests (app 193 ·
+lambdas 69 · shared 33 · cdk 18 · scripts 6) · headless UI pass · code-review (0 Sev-1/2).
 
 A day-granular **due date** on a task — *when it's due*, distinct from *when I'll work it*. The task
 model had scheduling (`taskPlans.day`) and estimates, but no deadline concept. This adds one, as free
@@ -178,66 +184,64 @@ Callable at any status; never touches `estimateLockedMin`. Setting `null` clears
 - **Dark theme:** a native date input's picker glyphs often need `color-scheme` set; if it looks wrong,
   fix with CSS, don't pull a picker dependency.
 
-## 7. Build record
+## 7. Build record (implementation plan)
 
-How the first cut was built — kept as the permanent account, not deleted after merge. Reconciled from a
-`Plan` pass against the real code. ~20 files; the count is driven by `dueDay` being a **required** field
-on `Task`, which breaks typecheck at every full-`Task` literal (the spec's original "~5–7" missed that
-fan-out and the second display surface).
+Ordered, page-first. Each phase names the files it touches. Checked once built; `↳` notes record where
+the build diverged from the plan or hit something worth remembering. Built 2026-09-15. ~20 files — the
+count is driven by `dueDay` being a **required** field on `Task`, which breaks typecheck at every
+full-`Task` literal (the `Plan` pass's original "~5–7" missed that fan-out and the second display surface).
 
-**Step 1 — contract (shared) + compile fixes, one atomic set** so typecheck goes green:
-- `packages/shared/src/types.ts` — add `dueDay: string | null` to `Task`.
-- `packages/shared/src/api.ts` — declare `setTaskDueDay` after `setTaskCategory`.
-- `packages/shared/src/rpc.ts` — insert `'setTaskDueDay'` after `'setTaskCategory'` (mid-list, for
-  merge hygiene against sibling PRs that append).
-- `packages/shared/src/machines.ts` — `splitFollowUp` carries `dueDay: original.dueDay` (a split
-  changes scope, not the deadline — same treatment as `categoryId`).
-- `lambdas/src/backend.ts` — add the method after `setTaskCategory`; `dueDay: null` in the `createTask`
-  and `materializeDueSeries` literals.
-- `app/src/data/stubClient.ts` — `setTaskDueDay` stub + `dueDay: null` in both literals.
-- Fixtures/literals: `machines.test.ts`, `lambdas/src/ddb/repo.test.ts`, `app/…/taskMath.test.ts`,
-  `app/src/data/seed.ts` (both literals). No change to `mapping.ts`, `handler.ts`, `httpClient.ts`.
+- [x] **Phase 0 — shared contract + compile fixes** (one atomic set so `tsc` goes green)
+  - `packages/shared/src/types.ts` — `dueDay: string | null` on `Task`.
+  - `packages/shared/src/api.ts` — `setTaskDueDay` on `ApiClient`, after `setTaskCategory`.
+  - `packages/shared/src/rpc.ts` — `'setTaskDueDay'` inserted **after `'setTaskCategory'`, mid-list**.
+    - ↳ *Mid-list insert, not append — deliberate merge hygiene. It paid off: story-bank appended its four story methods at the end, so on the rebase `API_METHODS` merged with zero conflict.*
+  - `packages/shared/src/machines.ts` — `splitFollowUp` carries `dueDay: original.dueDay`.
+  - `packages/shared/src/contractTests.ts` — a `tasks: due day …` case, inserted after the split test.
+  - Compile-fix fixtures: `machines.test.ts`, `lambdas/src/ddb/repo.test.ts`, `app/…/taskMath.test.ts`.
+    - ↳ *No change to `lambdas/src/ddb/mapping.ts` — `taskItem` spreads `...task` and `toEntity` strips keys rather than whitelisting, so `dueDay` round-trips for free both ways. The spec had hedged this; confirmed unnecessary.*
 
-**Step 2 — formatter (shared, node-testable):**
-- `packages/shared/src/dates.ts` — `fmtWeekdayShort(key)` and `fmtDueDay(dueDay, today)` (§6 table),
-  next to `fmtWeekday`. Pure; `today` comes from the caller's `todayKey(dayStartHour)`. Follows the
-  `modules/log/dayLabel.ts` shape (takes `today` as an argument).
-- `packages/shared/src/dates.test.ts` — the §6 table plus the `dayStartHour` boundary (see below).
+- [x] **Phase 1 — backend + stub** (both `ApiClient` impls)
+  - `lambdas/src/backend.ts` — `setTaskDueDay` after `setTaskCategory`; `dueDay: null` in the `createTask` + `materializeDueSeries` literals.
+  - `app/src/data/stubClient.ts` — `setTaskDueDay` (`writes.patch`) + `dueDay: null` in both literals.
 
-**Step 3 — page-first seed:** give 2–3 backlog seeds real `dueDay`s relative to now so the sort and the
-phrases are visible on first load.
+- [x] **Phase 2 — the formatter** (shared, node-testable)
+  - `packages/shared/src/dates.ts` — `fmtWeekdayShort` + `fmtDueDay(dueDay, today)` (§6 table), beside `fmtWeekday`.
+    - ↳ *The spec said to compute "today" via a `dayBoundary` helper — no such helper exists. Correct shape (matching `modules/log/dayLabel.ts`): the formatter is **pure over `(dueDay, today)`**, and the caller passes `today = todayKey(dayStartHour)`, so the 4am rollover lives in `todayKey` alone.*
+  - `packages/shared/src/dates.test.ts` — the phrase table + the `dayStartHour` boundary, tested by composing `fmtDueDay` with `todayKey(4, at(…))`: 2:30am pre-rollover reads `due today`; 4am exactly reads `was due yesterday`.
 
-**Step 4 — app: hook, sort, UI:**
-- `app/src/data/hooks/useTasks.ts` — `useSetDueDay()` mirroring `useSetCategory`.
-- `app/src/modules/tasks/taskMath.ts` — `byDueHint(tasks)`: stable sort, dated-ascending first, undated
-  keep incoming order, never mutate input.
-- `app/src/modules/tasks/ScopePanel.tsx` — date `Field`; only writes when changed.
-- `app/src/modules/tasks/TaskCard.tsx` — subtle `fmtDueDay` in `TaskMeta` (no status gating); a `'due'`
-  panel + overflow "Due day…" for in-progress.
-- `app/src/modules/tasks/PlanSection.tsx` — `byDueHint(backlog)` for the pull list + the subtle phrase
-  on the inline row.
+- [x] **Phase 3 — page-first seed**
+  - `app/src/data/seed.ts` — `dueDay: null` on the existing literals; a few backlog seeds given real due days (one overdue, one soon, one far out, two undated) so the sort and every phrase branch show on first load.
+    - ↳ *`tsc` caught a missed literal here (the done-task seed) on the first typecheck — the required-field fan-out again.*
 
-**Step 5 — contract test** in `packages/shared/src/contractTests.ts` (insert mid-file): create defaults
-null; set/read-back; still settable in-progress with `estimateLockedMin` unchanged; clear to null;
-survives `listTasks`. This exercise over `InMemoryDoc` + `Repo` is the round-trip check.
+- [x] **Phase 4 — app: hook, sort, UI**
+  - `app/src/data/hooks/useTasks.ts` — `useSetDueDay()` (mirrors `useSetCategory`).
+  - `app/src/modules/tasks/taskMath.ts` — `byDueHint(tasks)`: copy-then-stable-sort, dated ascending, undated last, input never mutated. + tests in `taskMath.test.ts`.
+    - ↳ *Falsy `dueDay` folds to undated — that includes the `undefined` pre-existing rows read back as, so old tasks sort last and never crash. Verified in dev against real rows that predate the field.*
+  - `app/src/modules/tasks/ScopePanel.tsx` — a `Due` date `Field`; writes only when changed.
+  - `app/src/modules/tasks/TaskCard.tsx` — subtle `fmtDueDay` in `TaskMeta` (shown at every status, incl. done/cancelled); a `'due'` panel + an in-progress overflow **"Due day…"**.
+    - ↳ *The second surface is forced, not cosmetic: `ScopePanel` is gated to backlog/planned and calls `setTaskEstimate` unconditionally (throws once frozen), so it can't edit an in-progress task's due date. "Editable at any status" (D3) is only real because of the overflow panel (D4).*
+  - `app/src/modules/tasks/PlanSection.tsx` — `byDueHint(backlog)` on the pull + the subtle phrase on its inline row.
+    - ↳ *The pull renders its own inline card, not `TaskCard`, so the due display is added in two places (D5).*
 
-**Step 6 — verify / headless UI pass / review / commit:**
-- `set -o pipefail; pnpm typecheck; pnpm lint; pnpm test` (echo `${PIPESTATUS[0]}` — never trust a
-  piped exit code).
-- **Headless UI pass via the `run-app` skill** (default stub + auth-bypass): drive the real app and
-  screenshot the surfaces this touches — the Plan tab's backlog pull (sorted, subtle `due …` phrases),
-  a Scope panel with the date field, a backlog `TaskCard`'s meta line, and an in-progress card's
-  overflow → "Due day…". Check **both themes** (the native `<input type="date">` glyphs often need
-  `color-scheme` in dark). This is where UI issues the unit tests can't see surface — **make the fixes
-  the screenshots reveal** (spacing, tone, dark-theme picker, a surface that didn't wire up) before
-  moving on. Serialise against `pnpm test` — screenshot, kill the browser, then test (12 GiB / 6 CPUs).
-- `code-reviewer` agent; address findings; one lowercase commit.
+- [x] **Phase 5 — headless UI pass** (`run-app`, both themes)
+  - Drove `/tasks` — Plan pull (sorted, subtle phrases), Backlog `TaskCard` meta, a Scope panel's date field, an in-progress card's overflow "Due day…". Light + dark.
+    - ↳ *No UI fixes needed. Dark's native date-picker glyphs are legible — the `[color-scheme:…]` handling (later hoisted into `Field`, Phase 6) worked. Bonus: the run confirmed `splitFollowUp` carries the deadline end-to-end — a split follow-up came out "…(cont.)" still reading "due Thu".*
+    - ↳ *Same sandbox fight as story-bank: the `apt` `chromium` is a snap wrapper that hangs, so it pivoted to Playwright's own headless-shell build (into an isolated `PLAYWRIGHT_BROWSERS_PATH` to dodge a cache lock the parallel session held). Dark driven via `emulateMedia` + `data-theme`.*
 
-**The `dayStartHour` boundary test** — the trap the formatter exists to avoid: at 02:30 on Sun the
-wall-clock date is already the next day, but the logical day is still Saturday. A task due Saturday must
-read `due today`, not `was due Sat`. Because `fmtDueDay` is pure over `(dueDay, today)`, the boundary
-lives entirely in `todayKey`; compose them in a node test — e.g. `fmtDueDay('2026-06-06',
-todayKey(4, at(2026,6,7,3)))` → `due today`, and at 04:00 exactly → `was due yesterday`.
+- [x] **Phase 6 — code-review**
+  - `code-reviewer`: 0 Sev-1/2. Two nits applied:
+    - ↳ *Save button now disabled on `setEstimate || setCategory || setDueDay` pending (was estimate-only — this change had widened the double-submit window by one await).*
+    - ↳ *`[color-scheme:light] dark:[color-scheme:dark]` hoisted from the two call sites into `Field` itself (auto-applied for `date`/`time`/`datetime-local`) — DRY at the component; confirmed no other date inputs exist.*
+
+- [x] **Phase 7 — split-bug fix** (pre-existing, found while dev-testing)
+  - `app/src/modules/tasks/TaskCard.tsx` `SplitForm` — gate "Done" on `canTransitionTask(task.status,'done')` (backlog/planned show a plain "will be cancelled" note); wrap the split in try/catch + an inline error line.
+    - ↳ *Splitting a backlog task and choosing "Done" threw `Invalid task transition: backlog → done`, and the unhandled rejection leaked raw JSON to the page. Unrelated to due dates but fixed here; headless-verified both the backlog (no "Done") and in-progress (has "Done") paths.*
+
+- [x] **Phase 8 — docs + reorg + gate**
+  - `docs/arch/TECH.md` §2.2 (the `dueDay` bullet), `docs/index.md`, this design doc.
+    - ↳ *Bundled the full docs reorg (`product/arch/areas/ops`) into this branch. On rebase onto story-bank's `main` it clashed — story-bank had already made `docs/recruiting/` — reconciled by folding that into `docs/areas/recruiting/{index.md,story-bank.md}` and repointing all seven inbound links.*
+  - Gate: `pnpm typecheck` · `pnpm lint` · `pnpm test` (319: app 193 · lambdas 69 · shared 33 · cdk 18 · scripts 6) all green. Commits: `reorganized docs…` · `added task due-dates design doc` · `added day-granular task due dates` · `fixed illegal split finish…` — one lowercase line each, no trailers.
 
 ## 8. Deferred / out of scope
 
