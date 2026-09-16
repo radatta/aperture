@@ -97,34 +97,34 @@ guess.
 The BFF is RPC, not REST. A story method exists in four durable places, tied together by the type system:
 
 ```
-╭─────────────────────────────────────────────╮
-│               FRONTEND · app/               │
-│        StoryBank.tsx  +  useStories()       │
-╰─────────────────────────────────────────────╯
-                       │
-                       ▼
-     React Query · POST /api/{method} + JWT
-                       │
-╭─────────────────────────────────────────────╮
-│          CONTRACT · packages/shared         │
-│       ApiClient · API_METHODS · Story       │
-╰─────────────────────────────────────────────╯
-                       │
-                       ▼
-       { method, args } → backend[method]
-                       │
-╭─────────────────────────────────────────────╮
-│              BACKEND · lambdas/             │
-│       BackendClient · 4 story methods       │
-╰─────────────────────────────────────────────╯
-                       │
-                       ▼
-    writes.put · delete = re-put +deletedAt
-                       │
-╭─────────────────────────────────────────────╮
-│              STORAGE · DynamoDB             │
-│       PK u#<userId>   SK story#<ulid>       │
-╰─────────────────────────────────────────────╯
++---------------------------------------------+
+|                FRONTEND  app/               |
+|         StoryBank.tsx + useStories()        |
++---------------------------------------------+
+                       |
+                       v
+    React Query -> POST /api/{method} + JWT
+                       |
++---------------------------------------------+
+|          CONTRACT  packages/shared          |
+|       ApiClient / API_METHODS / Story       |
++---------------------------------------------+
+                       |
+                       v
+      { method, args } -> backend[method]
+                       |
++---------------------------------------------+
+|              BACKEND  lambdas/              |
+|       BackendClient / 4 story methods       |
++---------------------------------------------+
+                       |
+                       v
+    writes.put / delete = re-put +deletedAt
+                       |
++---------------------------------------------+
+|              STORAGE  DynamoDB              |
+|       PK u#<userId>   SK story#<ulid>       |
++---------------------------------------------+
 ```
 
 
