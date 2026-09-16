@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -37,6 +38,22 @@ describe('Recruiting page', () => {
     renderApp({ path: '/' });
     const link = await screen.findByRole('link', { name: 'Recruiting' });
     expect(link).toBeTruthy();
+  });
+
+  // The tabs are real routes, not in-page state: Stories is a link, and its URL loads directly.
+  it('exposes Stories as a linked tab that switches the view', async () => {
+    const user = userEvent.setup();
+    renderApp({ path: '/recruiting' });
+    await user.click(await screen.findByRole('link', { name: 'Stories' }));
+    // Seeded stub has a story in the bank; the attempts list must be gone.
+    expect(await screen.findByText('Turned around the failing migration')).toBeTruthy();
+    expect(screen.queryByText(/attempt 2 of 2/)).toBeNull();
+  });
+
+  it('deep-links directly to /recruiting/stories', async () => {
+    renderApp({ path: '/recruiting/stories' });
+    expect(await screen.findByText('Turned around the failing migration')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Recruiting' })).toBeTruthy();
   });
 
   // The absence assertions are the point: a failed or in-flight query used to render "No LeetCode

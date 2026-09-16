@@ -3,6 +3,11 @@
 A deep view in the `/recruiting` hub holding ~8–12 STAR stories tagged by competency, so behavioral prep
 has a home. Second tab of recruiting, alongside LeetCode attempt capture ([index.md](index.md)).
 
+**Status: built 2026-09-15** (branch `story-bank`). Validated on dev — create / update / delete verified
+against real Cognito → Lambda → DynamoDB, including the deep-linked nested route. Pending merge to `main`.
+Gate green: typecheck · lint · tests (app 189 · lambdas 67 · shared 29 · cdk 18 · scripts 6) · headless UI
+pass · code-review (0 Sev-1/2).
+
 This doc is both the **design record** (the decisions below, each a deliberate product call with its
 reasoning) and the **build record** (the data model, how the layers are wired, and the implementation
 plan). Read alongside [../PRODUCT.md](../PRODUCT.md), [../TECH.md](../TECH.md) §2 (data model),
@@ -141,61 +146,58 @@ The BFF is RPC, not REST. A story method exists in four durable places, tied tog
 
 ## Build record (implementation plan)
 
-Ordered, page-first. Each phase names the files it touches.
+Ordered, page-first. Each phase names the files it touches. Checked once built; `↳` notes record where
+the build diverged from the plan above or hit something worth remembering. Built 2026-09-15.
 
-**Phase 0 — shared contract** (makes both `ApiClient` impls red on purpose)
-- `packages/shared/src/stories.ts` (new) — `COMPETENCY_TAGS` + `CompetencyTag`; re-export from `index.ts`.
-- `packages/shared/src/types.ts` — the `Story` type.
-- `packages/shared/src/api.ts` — `CreateStoryInput` / `StoryPatch`, the four `ApiClient` methods,
-  `ExportBundle.stories`.
-- `packages/shared/src/rpc.ts` — the four method names.
-- `packages/shared/src/contractTests.ts` — a `stories:` case + the export-key assertion.
+- [x] **Phase 0 — shared contract** (makes both `ApiClient` impls red on purpose)
+  - `packages/shared/src/stories.ts` (new) — `COMPETENCY_TAGS` + `CompetencyTag`; re-export from `index.ts`.
+    - ↳ *Also added an `isCompetencyTag` guard, then removed it as dead code (code-review). The only producer of story tags is our own typed client — no dumb producer like the LeetCode extension — so runtime tag validation earns nothing here.*
+  - `packages/shared/src/types.ts` — the `Story` type.
+    - ↳ *`types.ts` type-imports `CompetencyTag` from `stories.ts` (type-only → erased, no runtime cycle) rather than redefining the union, so the const and the type can't drift.*
+  - `packages/shared/src/api.ts` — `CreateStoryInput` / `StoryPatch`, the four `ApiClient` methods, `ExportBundle.stories`.
+  - `packages/shared/src/rpc.ts` — the four method names.
+  - `packages/shared/src/contractTests.ts` — a `stories:` case + the export-key assertion.
 
-**Phase 1 — stub** (page-first substrate)
-- `app/src/data/stubClient.ts` — `Store.stories`, the four methods (`writes.insert/patch/softDelete`;
-  `patch` already throws on a tombstone — the backend must match), list sort, `exportData`.
-- `app/src/data/seed.ts` — 2–3 seeded stories (one multi-tag + full S/A/R, one single-tag with empty
-  result) so page-first isn't judged against an empty list.
+- [x] **Phase 1 — stub** (page-first substrate)
+  - `app/src/data/stubClient.ts` — `Store.stories`, the four methods (`writes.insert/patch/softDelete`; `patch` already throws on a tombstone — the backend must match), list sort, `exportData`.
+  - `app/src/data/seed.ts` — seeded stories so page-first isn't judged against an empty bank.
+    - ↳ *Two, not three: one multi-tag with full S/A/R, one single-tag with an empty result (the "start ugly" state). Two was enough to show the list, the chips, and the ordering.*
 
-**Phase 2 — app data layer**
-- `app/src/data/queryKeys.ts` — `stories` key. `app/src/data/hooks/useStories.ts` (new) — query + three
-  mutations, each `onSettled` → invalidate. Mirror `useSeries.ts`.
+- [x] **Phase 2 — app data layer**
+  - `app/src/data/queryKeys.ts` — `stories` key. `app/src/data/hooks/useStories.ts` (new) — query + three mutations, each `onSettled` → invalidate. Mirror `useSeries.ts`.
 
-**Phase 3 — routing + UI**
-- `app/src/routes.tsx` — `recruiting` becomes a layout route (index `AttemptsSection`, `stories`
-  `StoryBank`).
-- `app/src/pages/Recruiting/AttemptsSection.tsx` (new) — the current list body moved out of `index.tsx`.
-- `app/src/pages/Recruiting/RecruitingTabs.tsx` (new) — two `NavLink`s as a segmented control.
-- `app/src/pages/Recruiting/index.tsx` — the hub: `h1` + tabs + `<Outlet/>`.
-- `app/src/components/Textarea/index.tsx` (new primitive) — label + `<textarea>`, `Field` classes.
-- `app/src/pages/Recruiting/StoryEditor.tsx` (new) — create+edit; title (autofocus), six `aria-pressed`
-  chips in a `role="group"`, three `Textarea`s; Save disabled on blank title; no Enter-to-submit.
-- `app/src/pages/Recruiting/StoryBank.tsx` (new) — `useStories`; collapsed "New story"; `EmptyState`;
-  per-row title + chips + Edit + `Delete…` confirm strip; focus returns to the trigger on dismiss. Validate
-  with the `run-app` skill, light + dark.
+- [x] **Phase 3 — routing + UI**
+  - `app/src/routes.tsx` — `recruiting` becomes a layout route (index `AttemptsSection`, `stories` `StoryBank`).
+  - `app/src/pages/Recruiting/AttemptsSection.tsx` (new) — the current list body moved out of `index.tsx`.
+  - `app/src/pages/Recruiting/RecruitingTabs.tsx` (new) — two `NavLink`s styled as a segmented control.
+    - ↳ *Used `<nav aria-label="Recruiting sections">`, not `role="tablist"` — these are real navigation links, not ARIA tabs, so the honest role is a nav landmark (`aria-current` comes free from `NavLink`).*
+  - `app/src/pages/Recruiting/index.tsx` — the hub: `h1` + tabs + `<Outlet/>`.
+  - `app/src/components/Textarea/index.tsx` (new primitive) — label + `<textarea>`, `Field` classes.
+  - `app/src/pages/Recruiting/StoryEditor.tsx` (new) — create+edit; title (autofocus), six `aria-pressed` chips in a `role="group"`, three `Textarea`s; Save disabled on blank title; no Enter-to-submit.
+  - `app/src/pages/Recruiting/StoryBank.tsx` (new) — `useStories`; collapsed "New story"; `EmptyState`; per-row title + chips + Edit + `Delete…` confirm strip; focus returns to the trigger on dismiss.
+    - ↳ *Added `disabled={del.isPending}` to the confirm Delete button (code-review) — matches the editor's own double-submit guard.*
 
-**Phase 4 — headless UI pass**
-- Run the app against the stub (`run-app` skill), drive `/recruiting` and `/recruiting/stories` in headless
-  Chromium, screenshot light + dark, and exercise create → edit → delete. Catch layout / contrast /
-  empty-state / focus / spacing issues the unit tests can't see, and fix them before locking tests down.
-  Serialize per the COI rule: screenshot → kill Chromium → then any test run.
+- [x] **Phase 4 — headless UI pass**
+  - Drove `/recruiting` and `/recruiting/stories` in headless Chromium (`run-app`), light + Night, exercising create → edit → delete.
+    - ↳ *No UI issues found — the story bank reuses existing primitives/tokens and rendered cleanly in both themes. Zero console errors across the whole flow.*
+    - ↳ *Chromium fought the sandbox: the `apt` `chromium` package is a snap wrapper that hangs in the container, so it pivoted to Playwright's own build + `playwright install-deps` (after clearing a hung dpkg lock). Dark had to be checked via the in-app **Night** mode toggle — the browser's `prefers-color-scheme` doesn't drive the theme (the app's `auto` follows home-mode).*
 
-**Phase 5 — app tests (jsdom)**
-- `app/src/pages/Recruiting/Recruiting.test.tsx` — keep the four; add tab-is-a-link + deep-link.
-- `app/src/pages/Recruiting/StoryBank.test.tsx` (new) — create/edit/delete/focus-return/loading/error.
+- [x] **Phase 5 — app tests (jsdom)**
+  - `app/src/pages/Recruiting/Recruiting.test.tsx` — kept the four; added tab-is-a-link + deep-link.
+  - `app/src/pages/Recruiting/StoryBank.test.tsx` (new) — create / title-required / focus-return / edit / delete-asks-first / loading + error states.
+    - ↳ *Initially skipped — the contract suite + visual pass + dev dogfood all passed, which masked that the new UI had no dedicated jsdom tests; caught while auditing this build record and written 2026-09-15. Used plain DOM property assertions (`.disabled`), not `jest-dom` matchers — this repo doesn't wire those up.*
 
-**Phase 6 — real backend (node)**
-- `lambdas/src/ddb/keys.ts` — `sk.story` / `sk.storyPrefix`.
-- `lambdas/src/ddb/repo.ts` — `listStories` / `getStory` / `putStory`.
-- `lambdas/src/backend.ts` — `mustStory` + the four methods (create S/A/R default to `''`; delete re-puts
-  with `deletedAt`, no-op if missing); `exportData` adds `stories`.
-- `lambdas/src/ddb/keys.test.ts` — the story key. `lambdas/src/backend.test.ts` (new) — a tombstone row
-  survives `deleteStory` yet drops from `listStories`.
+- [x] **Phase 6 — real backend (node)**
+  - `lambdas/src/ddb/keys.ts` — `sk.story` / `sk.storyPrefix`.
+  - `lambdas/src/ddb/repo.ts` — `listStories` / `getStory` / `putStory`.
+    - ↳ *`getStory` re-filters tombstones → `null` (mirrors `getTask`, not `getSeries`), so `updateStory` on a deleted row throws — parity with the stub's `patch`, which refuses a tombstoned id.*
+  - `lambdas/src/backend.ts` — `mustStory` + the four methods (create S/A/R default to `''`; delete re-puts with `deletedAt`, no-op if missing); `exportData` adds `stories`.
+  - `lambdas/src/ddb/keys.test.ts` — the story key. `lambdas/src/backend.test.ts` (new) — a tombstone row survives `deleteStory` yet drops from `listStories`.
 
-**Phase 7 — docs + gate**
-- Update [index.md](index.md), [../TECH.md](../TECH.md) §2, [../PRODUCT.md](../PRODUCT.md).
-- `set -o pipefail; pnpm typecheck; pnpm lint; pnpm test`, checking `${PIPESTATUS[0]}`. Run
-  `code-reviewer`. One lowercase-line commit.
+- [x] **Phase 7 — docs + gate**
+  - Updated [index.md](index.md), [../TECH.md](../TECH.md) §2, [../PRODUCT.md](../PRODUCT.md).
+    - ↳ *Also reorganized the recruiting docs into `docs/recruiting/` (`RECRUITING.md` → `recruiting/index.md`) and repointed the seven inbound links — done in the design-doc commit, ahead of the code.*
+  - Gate: `pnpm typecheck` · `pnpm lint` · `pnpm test` all green; `code-reviewer` run (0 Sev-1/2, its two minor findings applied — see Phase 0 and Phase 3 notes). Commits: `96fc34b` (docs) + the implementation commit; one lowercase line each, no trailers.
 
 ---
 
