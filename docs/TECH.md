@@ -95,7 +95,12 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `day` is bucketed server-side from `submittedAt` + the client's reported tz offset + `dayStartHour` (the server owns `dayStartHour`, so a foreign client can't compute the day key itself).
 - **Idempotent on `leetcodeSubmissionId`** — a re-fire returns the existing row, original verdict intact.
 - **Attempt count per problem is DERIVED at read time**, never a stored counter.
-- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[RECRUITING.md](RECRUITING.md)**.
+- Ingest is the one method authenticated by a static **device token** instead of a Cognito JWT. Full design + operator setup: **[recruiting/](recruiting/index.md)**.
+
+**stories** — behavioral-interview STAR stories, authored in-app (the one place structured-at-entry is right — a story is a slowly-tightened artifact, not a capture).
+- `id · title · competencyTags[] · situation · action · result`
+- `competencyTags`: the fixed `CompetencyTag` union (`leadership · conflict · ownership · failure · ambiguity · impact`), a shared constant — not the editable `Category` entity. Multi-select.
+- Title required; S/A/R may be empty (a title-only stub is valid). List is `updatedAt`-desc; soft-delete like everything else. Full design: **[recruiting/story-bank.md](recruiting/story-bank.md)**.
 
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
 
@@ -117,7 +122,7 @@ SK (type-prefixed range keys):
   sess#<day>#<ulid>             sessions for a day / week range
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)
   day#<date>                    day singleton (direct get)
-  habit#<id> · cat#<id> · idea#<ulid> · series#<id> · settings
+  habit#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
 ```
 - **One GSI** (calibration — done tasks by completion date): `GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".

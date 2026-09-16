@@ -52,6 +52,10 @@ export const sk = {
   series: (id: string) => `series#${id}`,
   seriesPrefix: () => `series#`,
 
+  // Behavioral story bank — a plain id-keyed entity; list is a `story#` begins-with scan (tiny N).
+  story: (id: string) => `story#${id}`,
+  storyPrefix: () => `story#`,
+
   settings: () => `settings`,
 } as const;
 

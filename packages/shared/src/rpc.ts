@@ -51,6 +51,10 @@ export const API_METHODS = [
   'getCalibration',
   'recordLeetcodeAttempt',
   'listLeetcodeAttempts',
+  'listStories',
+  'createStory',
+  'updateStory',
+  'deleteStory',
   'exportData',
 ] as const;
 

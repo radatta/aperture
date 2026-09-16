@@ -2,6 +2,8 @@
 // shared by the stub (app) and the eventual Lambda. Physical DynamoDB keys are derived
 // from these later; nothing here assumes DynamoDB.
 
+import type { CompetencyTag } from './stories';
+
 // Every stored item carries these. `deletedAt` is a soft-delete tombstone — we never hard-delete.
 // `updatedAt` is the last-write-wins clock for multi-device conflict resolution.
 export interface BaseEntity {
@@ -159,4 +161,17 @@ export interface LeetcodeAttempt extends BaseEntity {
   frontendId: string | null;
   difficulty: string | null; // 'Easy' | 'Medium' | 'Hard' | null
   topicTags: string[] | null;
+}
+
+// --- Recruiting: behavioral story bank -------------------------------------
+// A STAR story (Situation/Action/Result), tagged by competency, authored in-app. Structured-at-entry is
+// deliberate here — unlike capture elsewhere, a story is a slowly-tightened artifact reused across
+// interviews. The tag set is fixed (see COMPETENCY_TAGS); S/A/R may be empty (a title-only stub you fill
+// in later is valid).
+export interface Story extends BaseEntity {
+  title: string;
+  competencyTags: CompetencyTag[];
+  situation: string;
+  action: string;
+  result: string;
 }

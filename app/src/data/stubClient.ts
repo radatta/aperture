@@ -41,6 +41,9 @@ import type {
   Settings,
   SettingsPatch,
   StartSessionInput,
+  Story,
+  StoryPatch,
+  CreateStoryInput,
   Task,
   TaskPlan,
   TaskSeries,
@@ -67,6 +70,7 @@ export interface Store {
   days: Day[];
   categories: Category[];
   leetcodeAttempts: LeetcodeAttempt[];
+  stories: Story[];
   settings: Settings | null;
 }
 
@@ -83,6 +87,7 @@ export function emptyStore(): Store {
     days: [],
     categories: [],
     leetcodeAttempts: [],
+    stories: [],
     settings: null,
   };
 }
@@ -247,6 +252,29 @@ class StubClient implements ApiClient {
     return this.alive(this.store.leetcodeAttempts)
       .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
       .sort((a, b) => b.submittedAt - a.submittedAt);
+  }
+
+  // --- Story bank ----------------------------------------------------------
+  async listStories(): Promise<Story[]> {
+    return this.alive(this.store.stories).sort(
+      (a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id),
+    );
+  }
+  async createStory(input: CreateStoryInput): Promise<Story> {
+    return this.writes.insert(this.store.stories, {
+      ...this.base(),
+      title: input.title,
+      competencyTags: input.competencyTags ?? [],
+      situation: input.situation ?? '',
+      action: input.action ?? '',
+      result: input.result ?? '',
+    });
+  }
+  async updateStory(id: string, patch: StoryPatch): Promise<Story> {
+    return this.writes.patch(this.store.stories, id, patch); // patch throws on a tombstone
+  }
+  async deleteStory(id: string): Promise<void> {
+    this.writes.softDelete(this.store.stories, id);
   }
 
   // --- Tasks ---------------------------------------------------------------
@@ -663,6 +691,7 @@ class StubClient implements ApiClient {
       days: this.alive(this.store.days),
       categories: this.alive(this.store.categories),
       leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
+      stories: this.alive(this.store.stories),
       settings: this.ensureSettings(),
     };
     // Store is the source of truth for what a full snapshot holds, so this is where a new collection
