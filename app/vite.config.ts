@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { APERTURE_MANIFEST } from './pwa/manifest.ts';
 
-// Port ownership — so a listening port always tells you WHOSE dev server it is (docs/COI-SANDBOX.md
+// Port ownership — so a listening port always tells you WHOSE dev server it is (docs/ops/COI-SANDBOX.md
 // → Ports): 5173+ is you on the Mac, 6173+ is a COI container. Vite walks upward from its base port
 // when one is taken, which is what makes several Claude sessions in one container work; `.coi/config.toml`
 // maps 6173–6183, so whichever it lands on is reachable from the host. Past 6183 it still runs, just

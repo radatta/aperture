@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { todayKey } from '@aperture/shared';
+import { fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -16,7 +16,7 @@ import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
 import { plannedVsAvailable } from '../calibration/calibration';
 import { CategoryTag } from './CategoryTag';
 import { TaskCard } from './TaskCard';
-import { plannedDefault } from './taskMath';
+import { byDueHint, plannedDefault } from './taskMath';
 
 // The morning plan pass (PRODUCT §3 ☀️): set the day's capacity, pull backlog tasks in, and see
 // planned hours vs available — under-scoping caught here, before it becomes stress.
@@ -130,7 +130,7 @@ export function PlanSection() {
             Backlog is clear — nothing waiting on you.
           </Text>
         ) : (
-          backlog.map((task) => (
+          byDueHint(backlog).map((task) => (
             <Card key={task.id} className="px-3.5 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 flex-col gap-0.5">
@@ -142,6 +142,11 @@ export function PlanSection() {
                     {task.estimateMin != null && (
                       <Text size="xs" tone="muted" tabular>
                         {fmtDuration(task.estimateMin)} est
+                      </Text>
+                    )}
+                    {task.dueDay && (
+                      <Text size="xs" tone="subtle">
+                        {fmtDueDay(task.dueDay, day)}
                       </Text>
                     )}
                   </div>

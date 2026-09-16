@@ -4,13 +4,13 @@
 # RUN THIS IN THE LIMA VM: `limactl shell incus`, then this script's path under /Users/...
 # There is no container half any more — the old scripts/coi-container-setup.sh was deleted on
 # 2026-09-07 because its symlink made COI skip ~/.claude/projects at export time, which is what
-# made the restore look broken. See docs/COI-SANDBOX.md → One-time setup step 12.
+# made the restore look broken. See docs/ops/COI-SANDBOX.md → One-time setup step 12.
 #
 # Why: `~` in the Lima VM is /home/<user>.guest — VM-local. COI writes its own state there,
 # including the Claude Code session it exports on `coi shutdown`
 # (~/.coi/sessions-claude/<id>/.claude/, transcript included). A VM rebuild destroys all of it.
 # That is not hypothetical: a one-character YAML error in `limactl edit` wiped two session
-# transcripts and the aperture-night profile. See docs/COI-INCIDENTS.md → Incident D.
+# transcripts and the aperture-night profile. See docs/ops/COI-INCIDENTS.md → Incident D.
 #
 # This is the load-bearing step. `coi shell --resume` restores a destroyed container FROM
 # ~/.coi/sessions-claude/ — verified 2026-09-07, transcripts back byte-identical along with

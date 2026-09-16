@@ -10,8 +10,8 @@ pass · code-review (0 Sev-1/2).
 
 This doc is both the **design record** (the decisions below, each a deliberate product call with its
 reasoning) and the **build record** (the data model, how the layers are wired, and the implementation
-plan). Read alongside [../PRODUCT.md](../PRODUCT.md), [../TECH.md](../TECH.md) §2 (data model),
-[../CONVENTIONS.md](../CONVENTIONS.md) (UI contracts), and [index.md](index.md) (the hub it joins).
+plan). Read alongside [../PRODUCT.md](../../product/PRODUCT.md), [../TECH.md](../../arch/TECH.md) §2 (data model),
+[../CONVENTIONS.md](../../product/CONVENTIONS.md) (UI contracts), and [index.md](index.md) (the hub it joins).
 
 ---
 
@@ -62,7 +62,7 @@ the editor cannot emit an unknown tag (wire-identical to `string[]`, but type-ch
 tags (no signal, no consistency) and an editable tag *entity* (that's `Category`-style CRUD — overkill; the
 set changes rarely and a code edit is fine). The set is fixed for **recall consistency**, deliberately
 **not** to feed a coverage analytic — there is no "which competencies am I light on?" view. That would be a
-score to fail at, against the DON'T-BUILD posture in [../PRODUCT.md](../PRODUCT.md).
+score to fail at, against the DON'T-BUILD posture in [../PRODUCT.md](../../product/PRODUCT.md).
 
 **Tags are multi-select.** One story often answers several question types (a leadership story that's also
 about conflict), so a story carries a set, not a single primary competency.
@@ -177,7 +177,7 @@ the build diverged from the plan above or hit something worth remembering. Built
   - `lambdas/src/ddb/keys.test.ts` — the story key. `lambdas/src/backend.test.ts` (new) — a tombstone row survives `deleteStory` yet drops from `listStories`.
 
 - [x] **Phase 7 — docs + gate**
-  - Updated [index.md](index.md), [../TECH.md](../TECH.md) §2, [../PRODUCT.md](../PRODUCT.md).
+  - Updated [index.md](index.md), [../TECH.md](../../arch/TECH.md) §2, [../PRODUCT.md](../../product/PRODUCT.md).
     - ↳ *Also reorganized the recruiting docs into `docs/recruiting/` (`RECRUITING.md` → `recruiting/index.md`) and repointed the seven inbound links — done in the design-doc commit, ahead of the code.*
   - Gate: `pnpm typecheck` · `pnpm lint` · `pnpm test` all green; `code-reviewer` run (0 Sev-1/2, its two minor findings applied — see Phase 0 and Phase 3 notes). Commits: `96fc34b` (docs) + the implementation commit; one lowercase line each, no trailers.
 
@@ -189,7 +189,7 @@ the build diverged from the plan above or hit something worth remembering. Built
   order, update bumps `updatedAt` and reorders, empty S/A/R default to `''`, soft-deleted stories don't
   list, update-on-deleted rejects.
 - **Backend** (node env) — a tombstone row survives `deleteStory` in the table yet drops from
-  `listStories` (the "tell a tombstone from absence" check [../TECH.md](../TECH.md)'s tech-debt entry wants
+  `listStories` (the "tell a tombstone from absence" check [../TECH.md](../../arch/TECH.md)'s tech-debt entry wants
   for any new delete path).
 - **App** (jsdom) — the tab deep-links; create/edit/delete round-trips through the list; cancel returns
   focus and drops the draft; loading/error states.

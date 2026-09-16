@@ -194,6 +194,7 @@ export class BackendClient implements ApiClient {
       title: input.title,
       status: 'backlog',
       categoryId: input.categoryId ?? null,
+      dueDay: null,
       seriesId: null,
       estimateMin: input.estimateMin ?? null,
       bufferMin: input.bufferMin ?? null,
@@ -216,6 +217,10 @@ export class BackendClient implements ApiClient {
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, categoryId, updatedAt: this.now() });
+  }
+  async setTaskDueDay(id: string, dueDay: string | null): Promise<Task> {
+    const t = await this.mustTask(id);
+    return this.repo.putTask({ ...t, dueDay, updatedAt: this.now() });
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     return this.repo.putTask(taskTransition(await this.mustTask(id), to, this.now()));
@@ -449,6 +454,7 @@ export class BackendClient implements ApiClient {
         title: series.title,
         status: 'planned',
         categoryId: series.categoryId,
+        dueDay: null,
         seriesId: series.id,
         estimateMin: series.defaultEstimateMin,
         bufferMin: null,

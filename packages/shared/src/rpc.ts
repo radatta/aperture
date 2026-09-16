@@ -13,6 +13,7 @@ export const API_METHODS = [
   'createTask',
   'setTaskEstimate',
   'setTaskCategory',
+  'setTaskDueDay',
   'transitionTask',
   'setTaskActual',
   'splitTask',

@@ -142,6 +142,27 @@ export function runApiContract(
       );
     });
 
+    it('tasks: due day defaults null, is settable at any status without touching the lock, and clears', async () => {
+      const t = await api.createTask({ title: 'has a deadline' });
+      expect(t.dueDay).toBeNull(); // created undated
+
+      const dated = await api.setTaskDueDay(t.id, '2026-08-07');
+      expect(dated.dueDay).toBe('2026-08-07');
+      expect((await api.getTask(t.id))?.dueDay).toBe('2026-08-07'); // survives read-back
+
+      // Settable after work starts, and it never touches the frozen estimate baseline.
+      await api.setTaskEstimate(t.id, 30, 0);
+      const started = await api.transitionTask(t.id, 'in_progress');
+      expect(started.estimateLockedMin).toBe(30);
+      const moved = await api.setTaskDueDay(t.id, '2026-08-09');
+      expect(moved.dueDay).toBe('2026-08-09');
+      expect(moved.estimateLockedMin).toBe(30); // deadline change ≠ scope change
+
+      const cleared = await api.setTaskDueDay(t.id, null);
+      expect(cleared.dueDay).toBeNull();
+      expect((await api.listTasks()).find((x) => x.id === t.id)?.dueDay).toBeNull();
+    });
+
     it('sessions: several run at once, a task dedups, and work time accrues to the task', async () => {
       const a = await api.startSession({
         taskId: null,

@@ -32,8 +32,8 @@ Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `pa
 ### Sandboxed dev (COI / Incus)
 
 Claude Code runs against this repo inside an Incus container — see
-**[docs/COI-SANDBOX.md](docs/COI-SANDBOX.md)** for the runbook and
-**[docs/COI-INCIDENTS.md](docs/COI-INCIDENTS.md)** for the post-mortems. Three rules that will bite you
+**[docs/ops/COI-SANDBOX.md](docs/ops/COI-SANDBOX.md)** for the runbook and
+**[docs/ops/COI-INCIDENTS.md](docs/ops/COI-INCIDENTS.md)** for the post-mortems. Three rules that will bite you
 otherwise:
 
 1. **Always exit the TUI cleanly** (`Ctrl+D` / `/exit`) before you walk away, then `coi shutdown`.
@@ -76,15 +76,15 @@ Cost is effectively $0 at single-user scale.
 - **pnpm only** — never npm or yarn.
 - **Vitest** — one test runner, Node everywhere for Lambda parity.
 - **First-principles dependency discipline** — roll our own by default; a dep needs an explicit (A) substantial-hard-to-own-logic or (B) security-critical/subtle-correctness justification. *Popular is not a reason.*
-- Full rules in [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
+- Full rules in [`docs/product/CONVENTIONS.md`](docs/product/CONVENTIONS.md).
 
 ## Docs
 
 | Doc | What |
 |---|---|
 | [`docs/index.md`](docs/index.md) | Doc index — start here |
-| [`docs/PRODUCT.md`](docs/PRODUCT.md) | What Aperture is and how it feels (source of truth) |
-| [`docs/TECH.md`](docs/TECH.md) | Architecture, data model, routing/state, folder structure |
-| [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Cross-cutting rules |
-| [`docs/INFRA.md`](docs/INFRA.md) | AWS blueprint |
+| [`docs/product/PRODUCT.md`](docs/product/PRODUCT.md) | What Aperture is and how it feels (source of truth) |
+| [`docs/arch/TECH.md`](docs/arch/TECH.md) | Architecture, data model, routing/state, folder structure |
+| [`docs/product/CONVENTIONS.md`](docs/product/CONVENTIONS.md) | Cross-cutting rules |
+| [`docs/arch/INFRA.md`](docs/arch/INFRA.md) | AWS blueprint |
 | [`docs/V1_PLAN.md`](docs/V1_PLAN.md) | Sequenced v1 work breakdown |

@@ -331,5 +331,5 @@ largest line item in this project.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
   fallback, but neither has been run.
 - **No aggregate views.** No per-topic breakdown, no difficulty mix, no time-to-solve. V2, and per
-  **[EvaluatingChanges.md](../EvaluatingChanges.md)** those wait for real usage rather than being designed
+  **[EvaluatingChanges.md](../../product/EvaluatingChanges.md)** those wait for real usage rather than being designed
   against a guess.

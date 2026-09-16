@@ -2,7 +2,7 @@
 
 A personal life-OS PWA — one place for everything digital about me. Web-first, installable, multi-device. Its #1 job is a morning + night ritual (glance, plan, reflect); the signature move is **calibration** — surfacing the gap between what a task was *estimated* to take and what it *actually* took.
 
-Product is the source of truth: `docs/PRODUCT.md`. Full doc map: `docs/index.md`.
+Product is the source of truth: `docs/product/PRODUCT.md`. Full doc map: `docs/index.md`.
 
 ## Project structure
 
@@ -22,7 +22,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 
 | Command | Does |
 | --- | --- |
-| `pnpm dev` | Run the app (Vite) → `http://localhost:5173`, or `6173` inside a COI container (`docs/COI-SANDBOX.md` → *Ports*). Vite walks upward if taken — read the port, don't assume it. |
+| `pnpm dev` | Run the app (Vite) → `http://localhost:5173`, or `6173` inside a COI container (`docs/ops/COI-SANDBOX.md` → *Ports*). Vite walks upward if taken — read the port, don't assume it. |
 | `pnpm typecheck` | `tsc -b` across the project-reference graph |
 | `pnpm lint` / `pnpm lint:fix` | ESLint (flat config), one root pass |
 | `pnpm test` | Vitest across all packages (`pnpm -r`) |
@@ -54,13 +54,13 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`, *not* memory) and memory itself
   (`SIGKILL`/137). A `tsgo` fatal has also been seen under load with the mechanism never confirmed —
   capture the **head** of the output, don't assume OOM. Serialise: screenshot, kill the browser,
-  then test. Details: `docs/COI-INCIDENTS.md`.
+  then test. Details: `docs/ops/COI-INCIDENTS.md`.
 
-Runbook: `docs/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/COI-INCIDENTS.md`.
+Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/ops/COI-INCIDENTS.md`.
 
 ## Conventions (hard rules — these override defaults)
 
-Full detail in `docs/CONVENTIONS.md`. The load-bearing ones:
+Full detail in `docs/product/CONVENTIONS.md`. The load-bearing ones:
 
 - **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: `.github/workflows/pr.yml` resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI.
 - **First-principles dependency discipline.** Default to rolling our own. Only propose a dependency when EITHER (A) it's substantial hard-to-own logic, OR (B) it's security-critical / subtle-correctness / hard cross-platform edges we shouldn't hand-roll. When proposing one, justify against A/B explicitly, note its footprint + transitive deps, and state the roll-our-own alternative. **"It's popular" is not a reason.**
@@ -75,7 +75,7 @@ Full detail in `docs/CONVENTIONS.md`. The load-bearing ones:
 React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (OAC) --> DynamoDB
 ```
 
-Same-origin `/api/*` via CloudFront OAC (no CORS). In-handler Cognito JWT validation. Single-table DynamoDB (PITR + RETAIN). CDK IaC. GitHub Actions + OIDC — **no static credentials anywhere.** dev + prod. Details: `docs/TECH.md`, `docs/INFRA.md`.
+Same-origin `/api/*` via CloudFront OAC (no CORS). In-handler Cognito JWT validation. Single-table DynamoDB (PITR + RETAIN). CDK IaC. GitHub Actions + OIDC — **no static credentials anywhere.** dev + prod. Details: `docs/arch/TECH.md`, `docs/arch/INFRA.md`.
 
 **Writes discipline (BFF):** every external write (POST/PUT/PATCH/DELETE) is declared in one `writes` object at the top of the handler and nowhere else — helpers call functions passed in via `writes`, never write APIs directly. Single audit point; guarantees no writes fire during any test/smoke run.
 
@@ -121,7 +121,7 @@ Merges to `main` happen via PR, not a local push.
 
 ### Before concluding "X can't do Y"
 
-A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/COI-INCIDENTS.md` → the 2026-09-07 correction.
+A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/ops/COI-INCIDENTS.md` → the 2026-09-07 correction.
 
 - **Check the tool's own surface first.** `coi --help` was one command and would have ended it immediately. Same lesson as `findmnt` and `incus info` earlier in that incident. Never write "X doesn't support Y" into a doc — or build a workaround for it — without first running the thing that would disprove it.
 - **Remove your own workaround before re-testing.** The symlink built to fix the problem was *causing* the symptom, so every re-test confirmed the wrong answer. While a fix is installed, the original question is unfalsifiable. Take it out, then measure.
