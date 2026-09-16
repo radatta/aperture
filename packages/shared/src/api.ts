@@ -19,11 +19,13 @@ import type {
   RecurrenceRule,
   SessionKind,
   Settings,
+  Story,
   Task,
   TaskPlan,
   TaskSeries,
   TaskStatus,
 } from './types';
+import type { CompetencyTag } from './stories';
 
 export interface CreateTaskInput {
   title: string;
@@ -79,6 +81,20 @@ export interface DateRange {
   to: string; // YYYY-MM-DD inclusive
 }
 
+// Story bank: create takes a title (required — it's the list row); S/A/R and tags default to empty, so a
+// title-only stub is valid. Update is a whole-object patch (the editor saves the form at once), never
+// per-field setters.
+export interface CreateStoryInput {
+  title: string;
+  competencyTags?: CompetencyTag[];
+  situation?: string;
+  action?: string;
+  result?: string;
+}
+export type StoryPatch = Partial<
+  Pick<Story, 'title' | 'competencyTags' | 'situation' | 'action' | 'result'>
+>;
+
 // The browser extension ships raw signals; the server owns verdict normalization + day bucketing.
 // tzOffsetMinutes = the client's getTimezoneOffset() — the server owns dayStartHour, so a foreign
 // client can't compute the final day-key itself (why this isn't the createLogEntry(day) shape).
@@ -121,6 +137,7 @@ export interface ExportBundle {
   days: Day[];
   categories: Category[];
   leetcodeAttempts: LeetcodeAttempt[];
+  stories: Story[];
   settings: Settings; // always materialised — never the stub's nullable storage state
 }
 
@@ -216,6 +233,13 @@ export interface ApiClient {
   // Idempotent on leetcodeSubmissionId; listLeetcodeAttempts is derived/read-only, reverse-chron.
   recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt>;
   listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]>;
+
+  // Behavioral story bank — STAR stories authored in-app, tagged by competency. list is alive-filtered,
+  // updatedAt desc; delete is a soft-delete (tombstoned, filtered from list).
+  listStories(): Promise<Story[]>;
+  createStory(input: CreateStoryInput): Promise<Story>;
+  updateStory(id: string, patch: StoryPatch): Promise<Story>;
+  deleteStory(id: string): Promise<void>;
 
   // Full data export (JSON) — the user owns their data. A snapshot of every entity.
   exportData(): Promise<ExportBundle>;

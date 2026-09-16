@@ -8,6 +8,7 @@ import type {
   LogEntry,
   PomodoroSession,
   Settings,
+  Story,
   Task,
   TaskPlan,
   TaskSeries,
@@ -137,6 +138,24 @@ export class Repo {
   }
   async putSeries(s: TaskSeries): Promise<TaskSeries> {
     await this.writes.put(entityItem(this.userId, sk.series(s.id), s));
+    return s;
+  }
+
+  // --- Stories ---
+  async listStories(): Promise<Story[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.storyPrefix())).map((i) => toEntity<Story>(i)),
+    );
+  }
+  // getTask-style (re-filter tombstones → null), so updateStory on a deleted row throws — parity with
+  // the stub's `patch`, which refuses a tombstoned id.
+  async getStory(id: string): Promise<Story | null> {
+    const it = await this.doc.get(this.p(), sk.story(id));
+    const s = it ? toEntity<Story>(it) : null;
+    return s && s.deletedAt === null ? s : null;
+  }
+  async putStory(s: Story): Promise<Story> {
+    await this.writes.put(entityItem(this.userId, sk.story(s.id), s));
     return s;
   }
 

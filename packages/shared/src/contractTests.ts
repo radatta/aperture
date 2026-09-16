@@ -75,6 +75,37 @@ export function runApiContract(
       expect(list[0]!.verdict).toBe('accepted');
     });
 
+    it('stories: create defaults empty S/A/R, lists updatedAt-desc, patches, and soft-deletes', async () => {
+      const a = await api.createStory({ title: 'Led the migration', competencyTags: ['leadership'] });
+      // Empty S/A/R default to '' — a title-only stub is valid (start ugly, tighten later).
+      expect(a.situation).toBe('');
+      expect(a.action).toBe('');
+      expect(a.result).toBe('');
+      expect(a.competencyTags).toEqual(['leadership']);
+
+      advance(1000);
+      const b = await api.createStory({ title: 'Handled the outage' });
+      expect(b.competencyTags).toEqual([]); // omitted → empty, not undefined
+
+      // Newest-updated first.
+      expect((await api.listStories()).map((s) => s.id)).toEqual([b.id, a.id]);
+
+      // Patching the older one bumps updatedAt and moves it to the top.
+      advance(1000);
+      const patched = await api.updateStory(a.id, {
+        situation: 'Prod was down',
+        competencyTags: ['leadership', 'ownership'],
+      });
+      expect(patched.situation).toBe('Prod was down');
+      expect(patched.competencyTags).toEqual(['leadership', 'ownership']);
+      expect((await api.listStories()).map((s) => s.id)).toEqual([a.id, b.id]);
+
+      // Soft-delete drops it from the list, and updating a deleted story throws for every impl.
+      await api.deleteStory(b.id);
+      expect((await api.listStories()).map((s) => s.id)).toEqual([a.id]);
+      await expect(api.updateStory(b.id, { title: 'nope' })).rejects.toThrow();
+    });
+
     it('tasks: estimate freezes on start of work and yields a calibration point when done', async () => {
       const t = await api.createTask({ title: 'Task A', estimateMin: 30, bufferMin: 8 });
       expect((await api.listBacklog()).map((x) => x.id)).toContain(t.id);
@@ -266,6 +297,7 @@ export function runApiContract(
         tzOffsetMinutes: 300,
         lang: 'python3',
       });
+      const story = await api.createStory({ title: 'exportable story' });
       const data = await api.exportData();
       expect(Object.keys(data).sort()).toEqual(
         [
@@ -281,12 +313,14 @@ export function runApiContract(
           'series',
           'sessions',
           'settings',
+          'stories',
           'tasks',
           'userId',
         ].sort(),
       );
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
       expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
+      expect(data.stories.map((x) => x.id)).toContain(story.id);
       // Materialised, never the stub's nullable storage state — nothing in this test triggers
       // ensureSettings() beforehand, so a stub that exported store.settings raw would fail here.
       expect(data.settings).toBeTruthy();

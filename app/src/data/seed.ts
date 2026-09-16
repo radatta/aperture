@@ -6,6 +6,7 @@ import { dayKey } from '@aperture/shared';
 import type {
   BaseEntity,
   Category,
+  CompetencyTag,
   Habit,
   LeetcodeVerdict,
   PomodoroSession,
@@ -231,4 +232,35 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   const LST = 'Longest Substring Without Repeating Characters';
   lc(1.02, LS, LST, 'wrong_answer', 'Medium', SW, 'seed-lc-4');
   lc(1, LS, LST, 'accepted', 'Medium', SW, 'seed-lc-5');
+
+  // Story bank — a couple of STAR stories so page-first isn't judged against an empty bank. One is fully
+  // written with two tags; the other is a single-tag stub with an empty result — the "start ugly, tighten
+  // later" state the editor deliberately allows.
+  const story = (
+    dAgo: number,
+    title: string,
+    competencyTags: CompetencyTag[],
+    situation: string,
+    action: string,
+    result: string,
+  ) => {
+    const t = nowMs - dAgo * DAY;
+    store.stories.push({ ...mk(t), title, competencyTags, situation, action, result });
+  };
+  story(
+    6,
+    'Turned around the failing migration',
+    ['ownership', 'leadership'],
+    'Our data migration was three weeks behind and the team had lost confidence it would ever land.',
+    'I broke it into daily verifiable slices, paired on the riskiest one, and ran a 10-minute daily check-in.',
+    'We shipped in two weeks with zero rollbacks, and the check-in format stuck for later projects.',
+  );
+  story(
+    2,
+    'Disagreed with my lead on the rewrite',
+    ['conflict'],
+    'My lead wanted a full rewrite; I thought an incremental refactor was the safer bet.',
+    '',
+    '',
+  );
 }

@@ -34,6 +34,9 @@ import type {
   Settings,
   SettingsPatch,
   StartSessionInput,
+  Story,
+  StoryPatch,
+  CreateStoryInput,
   Task,
   TaskPlan,
   TaskSeries,
@@ -140,6 +143,37 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listLeetcodeAttempts())
       .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
       .sort((a, b) => b.submittedAt - a.submittedAt); // reverse-chron
+  }
+
+  // --- Story bank ---
+  private async mustStory(id: string): Promise<Story> {
+    const s = await this.repo.getStory(id);
+    if (!s) throw new Error(`Not found: ${id}`);
+    return s;
+  }
+  async listStories(): Promise<Story[]> {
+    // Same sort the stub applies (SK order doesn't give updatedAt-desc for free).
+    return (await this.repo.listStories()).sort(
+      (a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id),
+    );
+  }
+  async createStory(input: CreateStoryInput): Promise<Story> {
+    return this.repo.putStory({
+      ...this.base(),
+      title: input.title,
+      competencyTags: input.competencyTags ?? [],
+      situation: input.situation ?? '',
+      action: input.action ?? '',
+      result: input.result ?? '',
+    });
+  }
+  async updateStory(id: string, patch: StoryPatch): Promise<Story> {
+    return this.repo.putStory({ ...(await this.mustStory(id)), ...patch, updatedAt: this.now() });
+  }
+  async deleteStory(id: string): Promise<void> {
+    const existing = await this.repo.getStory(id);
+    if (existing)
+      await this.repo.putStory({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }
 
   // --- Tasks ---
@@ -551,6 +585,7 @@ export class BackendClient implements ApiClient {
       days: await this.repo.listAllDays(),
       categories: await this.repo.listCategories(),
       leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
+      stories: await this.repo.listStories(),
       settings: await this.ensureSettings(),
     };
   }
