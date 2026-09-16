@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { fmtDueDay, todayKey } from '@aperture/shared';
+import { canTransitionTask, fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -139,9 +139,10 @@ function TaskMeta({ task }: { task: Task }) {
 function SplitForm({ task, onDone }: { task: Task; onDone: () => void }) {
   const split = useSplitTask();
   const [title, setTitle] = useState(`${task.title} (cont.)`);
-  const [finish, setFinish] = useState<'done' | 'cancelled'>(
-    task.status === 'in_progress' ? 'done' : 'cancelled',
-  );
+  // "Done" is only a legal finish once work has started — the state machine forbids backlog|planned →
+  // done. Offering it there threw "Invalid task transition". Gate the option on what's actually legal.
+  const canFinishDone = canTransitionTask(task.status, 'done');
+  const [finish, setFinish] = useState<'done' | 'cancelled'>(canFinishDone ? 'done' : 'cancelled');
   return (
     <div className="mt-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
       <Text size="sm" tone="muted">
@@ -154,28 +155,40 @@ function SplitForm({ task, onDone }: { task: Task; onDone: () => void }) {
           onChange={(e) => setTitle(e.target.value)}
           className="w-64"
         />
-        <Select
-          label="Finish original as"
-          value={finish}
-          onChange={(e) => setFinish(e.target.value as 'done' | 'cancelled')}
-          options={[
-            { value: 'done', label: 'Done (keeps calibration)' },
-            { value: 'cancelled', label: 'Cancelled (excluded)' },
-          ]}
-          className="w-52"
-        />
+        {canFinishDone ? (
+          <Select
+            label="Finish original as"
+            value={finish}
+            onChange={(e) => setFinish(e.target.value as 'done' | 'cancelled')}
+            options={[
+              { value: 'done', label: 'Done (keeps calibration)' },
+              { value: 'cancelled', label: 'Cancelled (excluded)' },
+            ]}
+            className="w-52"
+          />
+        ) : (
+          // Not-yet-started tasks can only be cancelled (never "done"); no choice to offer.
+          <Text size="sm" tone="muted">
+            The original will be cancelled.
+          </Text>
+        )}
       </div>
       <div className="flex gap-2">
         <Button
           size="sm"
           disabled={!title.trim() || split.isPending}
           onClick={async () => {
-            await split.mutateAsync({
-              id: task.id,
-              finishStatus: finish,
-              followUpTitle: title.trim(),
-            });
-            onDone();
+            try {
+              await split.mutateAsync({
+                id: task.id,
+                finishStatus: finish,
+                followUpTitle: title.trim(),
+              });
+              onDone();
+            } catch {
+              // Surfaced inline below — swallow so it isn't an unhandled rejection (which leaked the
+              // raw error JSON to the page).
+            }
           }}
         >
           Split
@@ -184,6 +197,11 @@ function SplitForm({ task, onDone }: { task: Task; onDone: () => void }) {
           Cancel
         </Button>
       </div>
+      {split.isError && (
+        <Text size="xs" tone="danger">
+          Couldn&apos;t split this task. Please try again.
+        </Text>
+      )}
     </div>
   );
 }
