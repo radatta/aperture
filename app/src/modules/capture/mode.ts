@@ -1,4 +1,4 @@
-// Capture modes. Log is the default and where the bar always returns after a submit.
+// Capture modes. Log is the default; after a submit the bar stays in whatever mode you're in.
 export const CAPTURE_MODES = ['log', 'task', 'idea'] as const;
 export type CaptureMode = (typeof CAPTURE_MODES)[number];
 

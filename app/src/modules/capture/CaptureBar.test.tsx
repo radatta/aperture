@@ -26,7 +26,7 @@ describe('CaptureBar', () => {
       expect(entries.map((e) => e.text)).toContain('shipped the thing');
     });
     expect(field().value).toBe('');
-    // still Log mode (never asked for structure, snapped back)
+    // still Log mode — it was Log to begin with and a submit keeps the current mode
     expect(screen.getByLabelText('Capture log')).toBeTruthy();
   });
 
@@ -76,6 +76,8 @@ describe('CaptureBar', () => {
       expect(tasks.map((t) => t.title)).toContain('fix the flaky test');
     });
     expect(await screen.findByText(/Task added/)).toBeTruthy();
+    // Stays in Task mode after submit — logging several tasks in a row shouldn't mean re-picking it.
+    expect(screen.getByLabelText('Capture task')).toBeTruthy();
   });
 
   // Capture's whole premise is that it's safe to hand it a thought. The field clears optimistically,
