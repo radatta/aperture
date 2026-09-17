@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, Stack } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, Validations } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
@@ -21,7 +21,8 @@ const CDK_QUALIFIER = 'hnb659fds'; // default bootstrap qualifier (cdk-hnb659fds
 // The roles hold almost no direct power: cdk deploy is funneled through the account's CDK bootstrap roles
 // (they carry the real permissions), and the roles get only the handful of direct actions the frontend
 // publish + smoke step take outside CloudFormation. Prod trust is bound to the `prod` GitHub environment,
-// so prod credentials are unassumable until the environment's approval gate passes.
+// so the prod role is unassumable except from a job that declares `environment: prod` (branch-policy
+// scoped — the prod environment carries no required-reviewer approval today).
 export class ApertureCicdStack extends Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
     super(scope, id, props);
@@ -78,6 +79,40 @@ export class ApertureCicdStack extends Stack {
           resources: [`arn:aws:lambda:${region}:${account}:function:aperture-bff-${stage}`],
         }),
       );
+      // App-only deploys skip `cdk deploy`, so they can't read its --outputs-file; fetch-stack-outputs.mjs
+      // reads the same values straight from CloudFormation instead. Read-only, scoped to this stage's stacks.
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ['cloudformation:DescribeStacks'],
+          resources: [
+            `arn:aws:cloudformation:${region}:${account}:stack/ApertureData-${stage}/*`,
+            `arn:aws:cloudformation:${region}:${account}:stack/ApertureApp-${stage}/*`,
+          ],
+        }),
+      );
+
+      // cdk-nag IAM5: every wildcard in this deploy role is deliberate — assuming the account bootstrap
+      // roles, the stage's hash-suffixed site bucket, CloudFront invalidation (the distribution id isn't
+      // known until the app stack deploys), and the app-tier DescribeStacks. Acknowledge each with
+      // evidence. Written as raw acknowledgment metadata rather than `Validations.of().acknowledge()`
+      // because of a cdk-nag v3 bug (cdklabs/cdk-nag#2359) that splits rule ids on `::` and rejects
+      // finding ids containing ARNs — same workaround as app-stack.ts. The ids must match synth's
+      // "Acknowledge with '...'" hint verbatim; region is literal (us-west-1) and account stays the
+      // `<AWS::AccountId>` token, both as they appear in the finding.
+      role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+        [`AwsSolutions-IAM5[Resource::arn:aws:iam::<AWS::AccountId>:role/cdk-${CDK_QUALIFIER}-*-<AWS::AccountId>-${region}]`]:
+          'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]:
+          `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]:
+          `Object-level access to the same ${stage} site bucket.`,
+        [`AwsSolutions-IAM5[Resource::arn:aws:cloudfront::<AWS::AccountId>:distribution/*]`]:
+          'CloudFront invalidation; the distribution id is not known until the app stack deploys.',
+        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:<AWS::AccountId>:stack/ApertureApp-${stage}/*]`]:
+          'app-tier deploy reads stack outputs via DescribeStacks; CFN stack ARNs carry a wildcard suffix.',
+        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:<AWS::AccountId>:stack/ApertureData-${stage}/*]`]:
+          'Same, for the data stack outputs.',
+      });
       return role;
     };
 

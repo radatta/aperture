@@ -42,7 +42,7 @@ describe('ApertureCicdStack', () => {
     });
   });
 
-  it('binds the prod role to the approval-gated prod environment (not a branch)', () => {
+  it('binds the prod role to the prod GitHub environment (not a branch)', () => {
     t.hasResourceProperties('AWS::IAM::Role', {
       RoleName: 'aperture-github-deploy-prod',
       AssumeRolePolicyDocument: Match.objectLike({
@@ -63,6 +63,14 @@ describe('ApertureCicdStack', () => {
     t.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([Match.objectLike({ Action: 'sts:AssumeRole' })]),
+      }),
+    });
+  });
+
+  it('grants read-only DescribeStacks for the app-only deploy tier', () => {
+    t.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([Match.objectLike({ Action: 'cloudformation:DescribeStacks' })]),
       }),
     });
   });

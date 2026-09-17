@@ -1,7 +1,10 @@
 name: Deploy
 
-# GitHub Flow: push to main → dev (auto) then prod (approval-gated). Push to dev → one-off dev deploy.
+# GitHub Flow: push to main → dev then prod (both auto — no approval pause; the dev-deployment gate on
+# the main ruleset is the safety valve). Push to dev → one-off dev deploy.
 # Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
+# The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
+# changes → deploy each stage at the resulting tier.
 on:
   push:
     branches: [main, dev]
@@ -12,163 +15,92 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  id-token: write # assume the AWS deploy role via OIDC
   contents: read
 
 jobs:
   check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
+    uses: ./.github/workflows/ci.yml
 
-  deploy-dev:
-    needs: check
+  # Classify the push once (docs / app-only / full) and assert dev is current with main. Runs in
+  # parallel with `check`, off the critical path — deploy-dev waits on both anyway.
+  changes:
     runs-on: ubuntu-latest
-    environment: dev # records a GitHub deployment → satisfies the `required_deployments: [dev]` ruleset on main
-    env:
-      APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_DEV }}
-      APERTURE_CERT_ARN: ${{ vars.CERT_ARN_DEV }} # us-east-1 ACM cert ARN; unset → no custom-domain alias
-      APERTURE_DEVICE_TOKEN: ${{ secrets.DEVICE_TOKEN_DEV }} # pin this, else each deploy rotates the extension token
-      APERTURE_DEVICE_USER_ID: ${{ vars.DEVICE_USER_ID_DEV }} # your dev Cognito sub (not secret)
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.detect.outputs.mode }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # need history to diff the push for the docs-only fast-path
-      # On a `dev`-branch push, require the branch to already contain main. This is the chokepoint for the
-      # merge gate: you push here to record the dev deployment that `required_deployments:[dev]` needs, then
-      # PR that same SHA to main — so if it's current with main now, the PR is inherently up to date. A stale
-      # branch fails here → the deployment is marked failed → the gate stays closed. No-op on main pushes.
+          fetch-depth: 0 # need history to diff the push and to check ancestry against main
+      # On any non-main push (i.e. dev), require the branch to already contain main. This is the
+      # chokepoint for the merge gate: you push here to record the dev deployment that
+      # `required_deployments:[dev]` needs, then PR that same SHA to main — so if it's current with main
+      # now, the PR is inherently up to date. A stale branch fails here → no dev deployment recorded →
+      # the gate stays closed. No-op on main pushes (HEAD already is main).
       - name: Branch is up to date with main
-        if: github.ref == 'refs/heads/dev'
+        if: github.ref != 'refs/heads/main'
         run: |
           git fetch --no-tags origin main
           git merge-base --is-ancestor origin/main HEAD || {
             echo "::error::dev is behind main — merge/rebase main in before pushing"; exit 1
           }
-      # Docs-only pushes skip the heavy deploy steps but the job still RUNS in the `dev` environment, so
-      # GitHub still records the deployment that the `required_deployments: [dev]` ruleset needs. Anything
-      # outside docs/ or a top-level *.md → full deploy. Unknown/no base → deploy (safe).
-      - name: Detect deployable changes
-        id: changes
-        run: |
-          base="${{ github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"; echo "No usable base — deploying."; exit 0
-          fi
-          changed=$(git diff --name-only "$base" "${{ github.sha }}")
-          echo "Changed files:"; echo "$changed"
-          if printf '%s\n' "$changed" | grep -qvE '^(docs/|[^/]*\.md)$'; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"; echo "Docs-only — skipping deploy (deployment still recorded)."
-          fi
       - uses: pnpm/action-setup@v6
-        if: steps.changes.outputs.deploy == 'true'
       - uses: actions/setup-node@v7
-        if: steps.changes.outputs.deploy == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-        if: steps.changes.outputs.deploy == 'true'
-      - uses: aws-actions/configure-aws-credentials@v6
-        if: steps.changes.outputs.deploy == 'true'
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
-          aws-region: ${{ vars.AWS_REGION }}
-      # One synth → diff + deploy consume the same cdk.out: no double esbuild bundle, and the diff you read
-      # is byte-identical to what deploys. --no-lookups fails loudly on any (unexpected) context lookup.
-      - name: CDK synth
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk synth ApertureData-dev ApertureApp-dev -c stage=dev --no-lookups --output cdk.out
-      - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-dev ApertureApp-dev --method=change-set
-      - name: Deploy dev stacks
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-dev ApertureApp-dev --require-approval never --outputs-file cdk-outputs.dev.json
-      - name: Smoke dev
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts dev
-      - name: Publish frontend (dev)
-        if: steps.changes.outputs.deploy == 'true'
-        run: node scripts/aws/publish-frontend.mjs dev
-      - name: Post-deploy health check (dev) # curls the real public URLs — proves the edge wiring + origin-secret gate
-        if: steps.changes.outputs.deploy == 'true'
-        run: node scripts/aws/health-check.mjs dev
+      # docs-only → none (deploy job still runs in its environment, so the deployment is still recorded
+      # for the merge gate — nothing is actually deployed). app/** only → app. Anything else, or an
+      # indeterminate base → full. The rule is a tested module, not an inline regex (see the classifier).
+      - name: Classify deployable changes
+        id: detect
+        run: |
+          base="${{ github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"; echo "No usable base — full deploy."; exit 0
+          fi
+          changed=$(git diff --name-only "$base" "${{ github.sha }}")
+          echo "Changed files:"; echo "$changed"
+          mode=$(printf '%s\n' "$changed" | pnpm --silent --filter @aperture/scripts exec tsx src/classify-changes.ts)
+          echo "Deploy mode: $mode"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+  deploy-dev:
+    needs: [check, changes]
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      stage: dev
+      mode: ${{ needs.changes.outputs.mode }}
+      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+      aws_region: ${{ vars.AWS_REGION }}
+      cert_arn: ${{ vars.CERT_ARN_DEV }}
+      device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
+    secrets:
+      origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
+      device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
 
   deploy-prod:
-    needs: deploy-dev
+    needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode` output
     if: github.ref == 'refs/heads/main' # dev-branch pushes stop at dev
-    runs-on: ubuntu-latest
-    environment: prod # the approval gate — also what scopes the prod OIDC subject
-    env:
-      APERTURE_ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET_PROD }}
-      APERTURE_CERT_ARN: ${{ vars.CERT_ARN_PROD }} # us-east-1 ACM cert ARN; unset → no custom-domain alias
-      APERTURE_DEVICE_TOKEN: ${{ secrets.DEVICE_TOKEN_PROD }} # pin this, else each deploy rotates the extension token
-      APERTURE_DEVICE_USER_ID: ${{ vars.DEVICE_USER_ID_PROD }} # your prod Cognito sub (not secret)
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # need history to diff the push for the docs-only fast-path
-      # Same docs-only fast-path as deploy-dev: a docs-only merge to main skips the heavy prod steps.
-      - name: Detect deployable changes
-        id: changes
-        run: |
-          base="${{ github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"; echo "No usable base — deploying."; exit 0
-          fi
-          changed=$(git diff --name-only "$base" "${{ github.sha }}")
-          echo "Changed files:"; echo "$changed"
-          if printf '%s\n' "$changed" | grep -qvE '^(docs/|[^/]*\.md)$'; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"; echo "Docs-only — skipping prod deploy."
-          fi
-      - uses: pnpm/action-setup@v6
-        if: steps.changes.outputs.deploy == 'true'
-      - uses: actions/setup-node@v7
-        if: steps.changes.outputs.deploy == 'true'
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-        if: steps.changes.outputs.deploy == 'true'
-      - uses: aws-actions/configure-aws-credentials@v6
-        if: steps.changes.outputs.deploy == 'true'
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
-          aws-region: ${{ vars.AWS_REGION }}
-      # One synth → diff + deploy consume the same cdk.out: no double esbuild bundle, and the diff you read
-      # is byte-identical to what deploys. --no-lookups fails loudly on any (unexpected) context lookup.
-      - name: CDK synth
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk synth ApertureData-prod ApertureApp-prod -c stage=prod --no-lookups --output cdk.out
-      - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-prod ApertureApp-prod --method=change-set
-      - name: Deploy prod stacks
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-prod ApertureApp-prod --require-approval never --outputs-file cdk-outputs.prod.json
-      - name: Smoke prod
-        if: steps.changes.outputs.deploy == 'true'
-        run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts prod
-      - name: Publish frontend (prod)
-        if: steps.changes.outputs.deploy == 'true'
-        run: node scripts/aws/publish-frontend.mjs prod
-      - name: Post-deploy health check (prod) # curls the real public URLs — proves the edge wiring + origin-secret gate
-        if: steps.changes.outputs.deploy == 'true'
-        run: node scripts/aws/health-check.mjs prod
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      stage: prod
+      mode: ${{ needs.changes.outputs.mode }}
+      role_arn: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
+      aws_region: ${{ vars.AWS_REGION }}
+      cert_arn: ${{ vars.CERT_ARN_PROD }}
+      device_user_id: ${{ vars.DEVICE_USER_ID_PROD }}
+    secrets:
+      origin_secret: ${{ secrets.ORIGIN_SECRET_PROD }}
+      device_token: ${{ secrets.DEVICE_TOKEN_PROD }}
 
   # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
   # signal without watching the Actions tab. Runs for both main and dev pushes. Failure = high priority
@@ -176,7 +108,7 @@ jobs:
   # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
   # until the secret is set, so it's safe to land before the topic exists.
   notify:
-    needs: [check, deploy-dev, deploy-prod]
+    needs: [check, changes, deploy-dev, deploy-prod]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -184,6 +116,7 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           CHECK_RESULT: ${{ needs.check.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
           DEV_RESULT: ${{ needs.deploy-dev.result }}
           PROD_RESULT: ${{ needs.deploy-prod.result }}
           REF: ${{ github.ref_name }}
@@ -193,11 +126,13 @@ jobs:
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
           # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
           # dev-branch push, and a docs-only fast-path job still reports success (steps just no-op).
+          # `changes` is watched too: it holds the up-to-date-with-main gate, so its failure must not
+          # slip through as a success just because the deploy jobs got skipped.
           failed=0
-          for r in "$CHECK_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
+          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
           done
-          body="check=$CHECK_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
+          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
           if [ "$failed" = "1" ]; then
             curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
               -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
