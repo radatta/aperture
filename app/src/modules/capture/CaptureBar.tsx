@@ -15,8 +15,8 @@ import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode 
 const RECEIPT_MS = 1800;
 
 // The global capture bar — PRODUCT's #1 mechanic. Always present, bottom-docked for thumb reach.
-// Default Log; Tab cycles the mode; Enter submits; after submit it clears, stays focused, and snaps
-// back to Log. It never asks for structure — no estimate/category/due field exists here by design.
+// Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
+// the current mode. It never asks for structure — no estimate/category/due field exists here by design.
 //
 // The field is a growing textarea, not an input, and the mode toggle sits on its own row: on a
 // phone a segmented [Log|Task|Idea] plus a single-line input left ~22 characters of a sentence
@@ -84,7 +84,8 @@ export function CaptureBar() {
     else if (submitted === 'task') createTask.mutate(value, handlers);
     else createIdea.mutate(value, handlers);
     setText('');
-    setMode('log');
+    // Stay in the current mode after a submit — if you're logging tasks or ideas, the next capture is
+    // almost always the same kind, so snapping back to Log every time just made you re-pick it.
     inputRef.current?.focus();
   }
 

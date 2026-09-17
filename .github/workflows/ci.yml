@@ -1,0 +1,27 @@
+name: CI
+
+# The quality gate, factored out so pr.yml and deploy.yml run the exact same checks instead of two
+# copies drifting apart. Reusable (workflow_call) — callers own their own triggers + concurrency.
+on:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # version comes from the root packageManager field
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      # !cancelled() so a lint failure doesn't mask whether typecheck/test would pass — the job still
+      # fails, but the step list shows a red X per actual failure instead of skipping the rest.
+      - run: pnpm typecheck
+        if: ${{ !cancelled() }}
+      - run: pnpm test
+        if: ${{ !cancelled() }}
