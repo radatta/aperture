@@ -1,26 +1,34 @@
 import {
+  assertAttachmentAllowed,
   assertCategoryDeletable,
   completeSession,
+  countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
   discardSession,
   heartbeatSession,
+  isImage,
+  normalizeContentType,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
+  sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
   taskTransition,
+  UPLOAD_URL_TTL_MS,
   withEstimate,
 } from '@aperture/shared';
 import type {
   ApiClient,
+  Attachment,
   BaseEntity,
   BusyInterval,
   CalendarBusy,
   CalibrationPoint,
   Category,
+  CreateAttachmentInput,
   CreateTaskInput,
   DateRange,
   Day,
@@ -56,13 +64,26 @@ import type { Repo } from './ddb/repo';
 import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
+import type { Presigner } from './s3/presigner';
 
 export interface BackendOptions {
   userId?: string;
   now?: () => number;
   google?: GoogleGateway; // gated external calendar seam; defaults to the inert noop
   stateSecret?: string; // HMAC key for the OAuth state (derived from ORIGIN_SECRET in prod)
+  presigner?: Presigner;
 }
+
+// Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
+// is actually called (e.g. a smoke run, or a misconfigured handler).
+const unconfiguredPresigner: Presigner = {
+  putUrl: () => {
+    throw new Error('Attachments unavailable: no presigner configured.');
+  },
+  getUrl: () => {
+    throw new Error('Attachments unavailable: no presigner configured.');
+  },
+};
 
 // The server-side ApiClient — the SAME contract as the stub, over the DynamoDB Repo. Business rules
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
@@ -74,6 +95,7 @@ export class BackendClient implements ApiClient {
   private readonly ulid: () => string;
   private readonly google: GoogleGateway;
   private readonly stateSecret: string;
+  private readonly presigner: Presigner;
 
   constructor(
     private readonly repo: Repo,
@@ -84,6 +106,7 @@ export class BackendClient implements ApiClient {
     this.ulid = createUlid(this.now);
     this.google = opts.google ?? noopGoogle();
     this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
+    this.presigner = opts.presigner ?? unconfiguredPresigner;
   }
 
   private base(): BaseEntity {
@@ -196,6 +219,72 @@ export class BackendClient implements ApiClient {
     const existing = await this.repo.getStory(id);
     if (existing)
       await this.repo.putStory({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
+  }
+
+  // --- Task attachments ---
+  private async mustAttachment(id: string): Promise<Attachment> {
+    const a = await this.repo.findAttachment(id); // null on missing OR tombstoned
+    if (!a) throw new Error(`Not found: ${id}`);
+    return a;
+  }
+  async createAttachmentUploadUrl(
+    input: CreateAttachmentInput,
+  ): Promise<{ attachment: Attachment; uploadUrl: string }> {
+    await this.mustTask(input.taskId); // must exist under this user's partition (cross-user impossible)
+    const now = this.now();
+    const liveCount = (await this.repo.listAttachmentsForTask(input.taskId)).filter((a) =>
+      countsTowardCap(a, now),
+    ).length;
+    assertAttachmentAllowed(input.size, liveCount); // size/type/count enforced server-side, pre-signing
+    const b = this.base();
+    const attachment: Attachment = {
+      ...b,
+      taskId: input.taskId,
+      filename: sanitizeFilename(input.filename),
+      contentType: normalizeContentType(input.contentType),
+      size: input.size,
+      s3Key: `u/${this.userId}/${input.taskId}/${b.id}`, // scoped by the JWT sub, never the filename
+      status: 'pending',
+    };
+    await this.repo.putAttachment(attachment);
+    const uploadUrl = await this.presigner.putUrl(
+      attachment.s3Key,
+      attachment.contentType,
+      attachment.size,
+    );
+    return { attachment, uploadUrl };
+  }
+  async confirmAttachment(id: string): Promise<Attachment> {
+    const a = await this.mustAttachment(id);
+    if (a.status === 'ready') return a; // idempotent
+    // Past the upload TTL the presigned PUT can't have succeeded, and countsTowardCap has already freed
+    // the slot — confirming here would resurrect a discounted row (cap bypass) and mark a byte-less object
+    // ready. Reject; the client re-requests a fresh upload URL.
+    if (this.now() - a.createdAt >= UPLOAD_URL_TTL_MS)
+      throw new Error('Upload window expired; start the upload again.');
+    return this.repo.putAttachment({ ...a, status: 'ready', updatedAt: this.now() });
+  }
+  async listAttachments(taskId?: string): Promise<Attachment[]> {
+    const rows =
+      taskId === undefined
+        ? await this.repo.listAllAttachments()
+        : await this.repo.listAttachmentsForTask(taskId);
+    return rows
+      .filter((a) => a.status === 'ready')
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }
+  async getAttachmentDownloadUrl(id: string): Promise<string> {
+    const a = await this.mustAttachment(id);
+    // SVG/HTML/PDF-with-JS must never render inline from the S3 origin → force a download for non-images.
+    const disposition = isImage(a.contentType)
+      ? 'inline'
+      : `attachment; filename*=UTF-8''${encodeURIComponent(a.filename)}`;
+    return this.presigner.getUrl(a.s3Key, a.contentType, disposition);
+  }
+  async deleteAttachment(id: string): Promise<void> {
+    const a = await this.repo.findAttachment(id);
+    if (a) await this.repo.putAttachment({ ...a, deletedAt: this.now(), updatedAt: this.now() });
+    // The S3 object is intentionally orphaned (no bytes-cleanup path in v1).
   }
 
   // --- Tasks ---
@@ -778,6 +867,7 @@ export class BackendClient implements ApiClient {
       categories: await this.repo.listCategories(),
       leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
       stories: await this.repo.listStories(),
+      attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
       settings: await this.ensureSettings(),
     };
   }

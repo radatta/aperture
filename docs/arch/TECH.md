@@ -103,6 +103,10 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `competencyTags`: the fixed `CompetencyTag` union (`leadership · conflict · ownership · failure · ambiguity · impact`), a shared constant — not the editable `Category` entity. Multi-select.
 - Title required; S/A/R may be empty (a title-only stub is valid). List is `updatedAt`-desc; soft-delete like everything else. Full design: **[recruiting/story-bank.md](../areas/recruiting/story-bank.md)**.
 
+**attachments** — files on a task (receipt, spec, screenshot); the first entity whose payload is **bytes**, not JSON.
+- `id · taskId · filename · contentType · size · s3Key · status(pending|ready)` — metadata only; the bytes live in a separate **precious S3 bucket** at `u/<userId>/<taskId>/<id>`, never in DynamoDB.
+- Bytes move browser↔S3 directly via **presigned URLs** the Lambda signs but never carries — the JSON RPC edge stays binary-free. `pending` until the browser confirms the PUT; only `ready` rows list/export. Soft-delete tombstones the metadata and orphans the object. Full design: **[tasks/attachments.md](../areas/tasks/attachments.md)**.
+
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
@@ -123,9 +127,11 @@ SK (type-prefixed range keys):
   sess#<day>#<ulid>             sessions for a day / week range
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)
   day#<date>                    day singleton (direct get)
+  attach#<taskId>#<ulid>        a task's attachments        (begins_with attach#<taskId>)
   habit#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
 ```
 - **One GSI** (calibration — done tasks by completion date): `GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`.
+- **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".
 - **Balance / time-budget aggregate in the Lambda** over the day/week range (no GSI needed at this volume).
 - Access patterns enumerated in the infra discussion; keys above satisfy them with prefix reads + the one GSI.

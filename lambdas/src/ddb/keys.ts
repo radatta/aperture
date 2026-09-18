@@ -56,6 +56,12 @@ export const sk = {
   story: (id: string) => `story#${id}`,
   storyPrefix: () => `story#`,
 
+  // Task attachments — grouped by task so a card's files are one begins-with query; ULIDs sort by
+  // upload time within a task. `attach#` spans all tasks (export, find-by-id, task-delete cascade).
+  attach: (taskId: string, id: string) => `attach#${taskId}#${id}`,
+  attachTaskPrefix: (taskId: string) => `attach#${taskId}#`,
+  attachAllPrefix: () => `attach#`,
+
   settings: () => `settings`,
 } as const;
 

@@ -6,6 +6,7 @@
 // job — callers pass intent (text, ids), not timestamps.
 
 import type {
+  Attachment,
   CalibrationPoint,
   Category,
   Day,
@@ -96,6 +97,16 @@ export type StoryPatch = Partial<
   Pick<Story, 'title' | 'competencyTags' | 'situation' | 'action' | 'result'>
 >;
 
+// Task attachments: the client declares the file's shape (name/type/size) and the server mints a
+// presigned PUT scoped to exactly that size + type. The bytes go browser→S3 directly; nothing here
+// carries binary. size/contentType are what get signed, so the server — not the client — is authoritative.
+export interface CreateAttachmentInput {
+  taskId: string;
+  filename: string;
+  contentType: string;
+  size: number;
+}
+
 // The browser extension ships raw signals; the server owns verdict normalization + day bucketing.
 // tzOffsetMinutes = the client's getTimezoneOffset() — the server owns dayStartHour, so a foreign
 // client can't compute the final day-key itself (why this isn't the createLogEntry(day) shape).
@@ -139,6 +150,7 @@ export interface ExportBundle {
   categories: Category[];
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
+  attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
   settings: Settings; // always materialised — never the stub's nullable storage state
 }
 
@@ -304,6 +316,17 @@ export interface ApiClient {
   createStory(input: CreateStoryInput): Promise<Story>;
   updateStory(id: string, patch: StoryPatch): Promise<Story>;
   deleteStory(id: string): Promise<void>;
+
+  // Task attachments — bytes never cross the BFF. The Lambda mints presigned URLs; the browser PUTs the
+  // file to S3, then confirms (pending → ready). Downloads are minted per view, short-lived. delete is a
+  // soft-delete of the metadata; the S3 object is orphaned (no bytes-cleanup path in v1).
+  createAttachmentUploadUrl(
+    input: CreateAttachmentInput,
+  ): Promise<{ attachment: Attachment; uploadUrl: string }>;
+  confirmAttachment(id: string): Promise<Attachment>; // pending → ready; idempotent
+  listAttachments(taskId?: string): Promise<Attachment[]>; // ready + alive; all tasks when omitted
+  getAttachmentDownloadUrl(id: string): Promise<string>; // short-lived, minted per view
+  deleteAttachment(id: string): Promise<void>;
 
   // Full data export (JSON) — the user owns their data. A snapshot of every entity.
   exportData(): Promise<ExportBundle>;

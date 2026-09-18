@@ -6,6 +6,7 @@ import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
+import { fakePresigner } from './s3/presigner';
 
 // The Lambda backend, run against the SAME contract suite as the stub — this is the parity proof the
 // whole page-first architecture rests on. Two passes:
@@ -13,14 +14,20 @@ import { handleRpc } from './handler';
 //   2. through handleRpc — the real RPC dispatch (method validation + arg passing), end-to-end server-side
 runApiContract('lambda (direct)', (now) => {
   const doc = new InMemoryDoc();
-  return new BackendClient(new Repo(doc, liveWrites(doc), 'local'), { userId: 'local', now });
+  return new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+    userId: 'local',
+    now,
+    presigner: fakePresigner(),
+  });
 });
 
 runApiContract('lambda (via handleRpc dispatch)', (now) => {
   const doc = new InMemoryDoc();
+  const presigner = fakePresigner();
   const client: Record<string, unknown> = {};
   for (const method of API_METHODS) {
-    client[method] = (...args: unknown[]) => handleRpc(doc, { userId: 'local', method, args, now });
+    client[method] = (...args: unknown[]) =>
+      handleRpc(doc, { userId: 'local', method, args, now }, { presigner });
   }
   return client as unknown as ApiClient;
 });

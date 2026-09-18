@@ -63,6 +63,11 @@ export const API_METHODS = [
   'insertCalendarEvent',
   'deleteCalendarEvent',
   'disconnectGoogleAccount',
+  'createAttachmentUploadUrl',
+  'confirmAttachment',
+  'listAttachments',
+  'getAttachmentDownloadUrl',
+  'deleteAttachment',
   'exportData',
 ] as const;
 

@@ -61,15 +61,22 @@ const app = new App();
 const stage = (app.node.tryGetContext('stage') as string | undefined) ?? 'dev';
 const env = { region: 'us-west-1' };
 
-const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env });
 // Custom domain (Phase 14): undefined until the stage's cert ARN is wired (APERTURE_CERT_ARN) →
-// stays on the CloudFront default domain, so this is a no-op before the domain step.
+// stays on the CloudFront default domain, so this is a no-op before the domain step. Resolved before the
+// data stack because the files-bucket CORS origin is derived from it.
 const domain = domainConfigFor(stage);
+// Presigned uploads/downloads hit the files bucket directly, so its CORS must allow the app's origin — the
+// custom domain when set, else '*' (the CloudFront default domain wouldn't pass CORS, and the presigned URL
+// is the real credential anyway).
+const allowedOrigins = domain ? [`https://${domain.domainName}`] : ['*'];
+
+const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env, allowedOrigins });
 const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   stage,
   env,
   table: data.table,
   userPool: data.userPool,
+  filesBucket: data.filesBucket,
   originSecret: originSecretFor(stage),
   ...(domain ? { domainName: domain.domainName, certificateArn: domain.certificateArn } : {}),
   deviceToken: deviceTokenFor(stage),
@@ -104,6 +111,7 @@ Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }));
 // S3 origin, DynamoDB PITR, and S3/SNS TLS enforcement (enforceSSL, fixed rather than suppressed).
 const ack = (scope: IConstruct, id: string, reason: string) => Validations.of(scope).acknowledge({ id, reason });
 ack(data, 'AwsSolutions-COG1', 'Invite-only single-user pool; the operator sets their own password.');
+ack(data, 'AwsSolutions-S1', 'Private files bucket reached only via short-lived presigned URLs; S3 access logs add a bucket + cost for no value on a single-user app.');
 ack(data, 'AwsSolutions-COG2', 'No MFA — single-user personal app.');
 ack(data, 'AwsSolutions-COG8', 'Cognito Plus tier (advanced security) is unwarranted for one user and costs money.');
 ack(appStack, 'AwsSolutions-L1', 'Node 22 is the current LTS target; runtime bumps are deliberate, not gated on every deploy.');

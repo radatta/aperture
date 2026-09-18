@@ -18,6 +18,7 @@ export interface AppStackProps extends StackProps {
   stage: string;
   table: dynamodb.Table;
   userPool: cognito.UserPool;
+  filesBucket: s3.IBucket; // precious user-uploads bucket from the data stack (attachments live here)
   originSecret: string; // CloudFront→Lambda origin-lockdown token (anti-abuse; JWT is the real gate)
   domainName?: string; // custom-domain alias for CloudFront (Phase 14). Unset → CloudFront default domain only.
   certificateArn?: string; // us-east-1 ACM cert ARN for domainName; required whenever domainName is set.
@@ -35,7 +36,7 @@ const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', impo
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
-    const { stage, table, userPool, originSecret, domainName, certificateArn, deviceToken, deviceUserId } =
+    const { stage, table, userPool, filesBucket, originSecret, domainName, certificateArn, deviceToken, deviceUserId } =
       props;
     // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,
     // so deploys never touch DNS/certs. Absent until the domain step is done → CloudFront default domain.
@@ -55,6 +56,7 @@ export class ApertureAppStack extends Stack {
       memorySize: 512,
       environment: {
         TABLE_NAME: table.tableName,
+        FILES_BUCKET: filesBucket.bucketName,
         USER_POOL_ID: userPool.userPoolId,
         STAGE: stage,
         ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
@@ -81,6 +83,15 @@ export class ApertureAppStack extends Stack {
         resources: [`${ssmBase}/tokens/*`],
       }),
     );
+    // Attachments: object-level read/write under the per-user `u/` prefix ONLY (never bucket-level list or
+    // config). A presigned URL acts with this function's permissions, so this is also the ceiling on what a
+    // leaked URL can touch. Explicit statement rather than grantRead/grantPut — those add s3:List*/GetBucket*.
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:PutObject', 's3:GetObject'],
+        resources: [filesBucket.arnForObjects('u/*')],
+      }),
+    );
     // cdk-nag granular IAM suppressions (IAM4: the standard CloudWatch Logs managed exec policy; IAM5:
     // grantReadWriteData's index/* wildcard, which the single-table GSI query needs — the table is scoped).
     // WORKAROUND for an open cdk-nag v3 bug (cdklabs/cdk-nag#2359/#2351): `Validations.of(x).acknowledge()`
@@ -102,6 +113,12 @@ export class ApertureAppStack extends Stack {
         'The BFF reads Google client creds + per-account refresh tokens under /aperture/<stage>/google/*; the <sub> segment is dynamic, so the read is path-scoped with a wildcard.',
       [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${Stack.of(this).region}:<AWS::AccountId>:parameter/aperture/${stage}/google/tokens/*]`]:
         'Per-account refresh tokens are written/deleted at connect/disconnect under .../google/tokens/<sub>; the dynamic <sub> requires the trailing wildcard.',
+      // The attachments grant is object-scoped to the per-user `u/` prefix; the `/*` is over object keys
+      // within that prefix (one user's files), never bucket-level. Same brittleness as the table id above:
+      // if the data stack's Files bucket construct id changes, synth re-flags this and the hash must be
+      // updated from the "Acknowledge with '...'" hint.
+      [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttFiles8E6940B8ArnD8EE6C03/u/*]`]:
+        'Attachments need object read/write under the per-user u/ prefix; the bucket itself is not granted.',
     });
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
     const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
