@@ -338,7 +338,10 @@ class StubClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
-    return this.writes.put(this.store.tasks, taskTransition(task, to, this.now()));
+    const next = this.writes.put(this.store.tasks, taskTransition(task, to, this.now()));
+    // Delete-on-cancel parity with the backend: dropping a task clears its calendar event pointers.
+    if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
+    return next;
   }
   async setTaskActual(id: string, actualMin: number): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { actualAccruedMin: actualMin });

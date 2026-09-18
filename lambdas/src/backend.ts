@@ -17,11 +17,17 @@ import {
 import type {
   ApiClient,
   BaseEntity,
+  BusyInterval,
+  CalendarBusy,
   CalibrationPoint,
   Category,
   CreateTaskInput,
   DateRange,
   Day,
+  GetCalendarBusyInput,
+  GoogleCalendar,
+  GoogleStatus,
+  InsertCalendarEventInput,
   ExportBundle,
   Habit,
   HabitCheck,
@@ -47,10 +53,15 @@ import type {
   UpsertSeriesInput,
 } from '@aperture/shared';
 import type { Repo } from './ddb/repo';
+import { noopGoogle } from './google/gateway';
+import type { GoogleGateway } from './google/gateway';
+import { signState } from './google/state';
 
 export interface BackendOptions {
   userId?: string;
   now?: () => number;
+  google?: GoogleGateway; // gated external calendar seam; defaults to the inert noop
+  stateSecret?: string; // HMAC key for the OAuth state (derived from ORIGIN_SECRET in prod)
 }
 
 // The server-side ApiClient — the SAME contract as the stub, over the DynamoDB Repo. Business rules
@@ -61,6 +72,8 @@ export class BackendClient implements ApiClient {
   private readonly userId: string;
   private readonly now: () => number;
   private readonly ulid: () => string;
+  private readonly google: GoogleGateway;
+  private readonly stateSecret: string;
 
   constructor(
     private readonly repo: Repo,
@@ -69,6 +82,8 @@ export class BackendClient implements ApiClient {
     this.userId = opts.userId ?? 'local';
     this.now = opts.now ?? (() => Date.now());
     this.ulid = createUlid(this.now);
+    this.google = opts.google ?? noopGoogle();
+    this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
   }
 
   private base(): BaseEntity {
@@ -233,7 +248,12 @@ export class BackendClient implements ApiClient {
     return this.repo.putTask({ ...t, dueDay, updatedAt: this.now() });
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
-    return this.repo.putTask(taskTransition(await this.mustTask(id), to, this.now()));
+    const task = await this.mustTask(id);
+    const next = await this.repo.putTask(taskTransition(task, to, this.now()));
+    // Delete-on-cancel: dropping a task removes its calendar event (via the owning account) and clears
+    // the pointers. Guarded by gcalEventId, so tasks without an event are unaffected.
+    if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
+    return next;
   }
   async setTaskActual(id: string, actualMin: number): Promise<Task> {
     const t = await this.mustTask(id);
@@ -568,6 +588,142 @@ export class BackendClient implements ApiClient {
   async updateSettings(patch: SettingsPatch): Promise<Settings> {
     const current = await this.ensureSettings();
     return this.repo.putSettings({ ...current, ...patch, updatedAt: this.now() });
+  }
+
+  // --- Google Calendar (multi-account) ---
+  // Every external effect (SSM token get/put, Google fetch) goes through the gated `this.google`, so a
+  // testMode/smoke run makes zero real calls. Settings + task-pointer writes go through the repo Writes.
+
+  async googleConnectUrl(): Promise<{ url: string }> {
+    const state = signState(this.userId, this.stateSecret, this.now());
+    return { url: await this.google.buildConsentUrl(state) };
+  }
+
+  // Called by the browser-driven callback route (NOT via RPC), after index.ts verified the state and
+  // built this backend with the state's userId. Exchanges the code, stores the token, records the account.
+  async completeGoogleConnect(code: string): Promise<void> {
+    const { sub, email, refreshToken } = await this.google.exchangeCode(code);
+    await this.google.storeRefreshToken(sub, refreshToken);
+    const settings = await this.ensureSettings();
+    const others = settings.googleAccounts.filter((a) => a.sub !== sub);
+    await this.repo.putSettings({
+      ...settings,
+      googleAccounts: [...others, { sub, email }],
+      updatedAt: this.now(),
+    });
+  }
+
+  async getGoogleStatus(): Promise<GoogleStatus> {
+    const settings = await this.ensureSettings();
+    const accounts = await Promise.all(
+      settings.googleAccounts.map(async (a) => {
+        const state = await this.google.getAccountState(a.sub);
+        return {
+          sub: a.sub,
+          email: a.email,
+          connected: state.connected,
+          reconnectRequired: state.reconnectRequired,
+        };
+      }),
+    );
+    return { accounts };
+  }
+
+  async listGoogleCalendars(): Promise<GoogleCalendar[]> {
+    const settings = await this.ensureSettings();
+    const perAccount = await Promise.all(
+      settings.googleAccounts.map(async (a) => {
+        const cals = await this.google.listCalendars(a.sub).catch(() => []);
+        return cals.map((c) => ({
+          accountSub: a.sub,
+          calendarId: c.calendarId,
+          summary: c.summary,
+          primary: c.primary,
+        }));
+      }),
+    );
+    return perAccount.flat();
+  }
+
+  async getCalendarBusy(input: GetCalendarBusyInput): Promise<CalendarBusy> {
+    const settings = await this.ensureSettings();
+    const intervals: BusyInterval[] = [];
+    let allDayCount = 0;
+    // One account's dead token must not sink the whole read (the Cognito resilience model): swallow a
+    // per-account failure; the reconnect prompt surfaces via getGoogleStatus.
+    await Promise.all(
+      settings.calendarShapeRefs.map(async (ref) => {
+        try {
+          const res = await this.google.listBusy(
+            ref.accountSub,
+            ref.calendarId,
+            input.windowStartMs,
+            input.windowEndMs,
+          );
+          intervals.push(...res.intervals);
+          allDayCount += res.allDayCount;
+        } catch {
+          /* per-account failure is recoverable; see getGoogleStatus */
+        }
+      }),
+    );
+    return { intervals, allDayCount };
+  }
+
+  async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
+    const task = await this.mustTask(input.taskId);
+    // One live event per task — a second insert would orphan the first (edit-sync is a later PR).
+    if (task.gcalEventId) throw new Error('Task already has a calendar event');
+    const { eventId } = await this.google.insertEvent({
+      sub: input.accountSub,
+      calendarId: input.calendarId,
+      title: input.title,
+      startMs: input.startMs,
+      endMs: input.endMs,
+    });
+    return this.repo.putTask({
+      ...task,
+      gcalAccountId: input.accountSub,
+      gcalCalendarId: input.calendarId,
+      gcalEventId: eventId,
+      updatedAt: this.now(),
+    });
+  }
+
+  async deleteCalendarEvent(taskId: string): Promise<Task> {
+    const task = await this.mustTask(taskId);
+    // Blast-radius safety: only ever delete an event whose id WE stored, on its owning account+calendar.
+    if (task.gcalEventId && task.gcalAccountId && task.gcalCalendarId) {
+      await this.google
+        .deleteEvent({
+          sub: task.gcalAccountId,
+          calendarId: task.gcalCalendarId,
+          eventId: task.gcalEventId,
+        })
+        .catch(() => {}); // an already-gone event shouldn't block clearing the pointer
+    }
+    return this.repo.putTask({
+      ...task,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+      updatedAt: this.now(),
+    });
+  }
+
+  async disconnectGoogleAccount(accountSub: string): Promise<void> {
+    await this.google.removeAccount(accountSub);
+    const settings = await this.ensureSettings();
+    await this.repo.putSettings({
+      ...settings,
+      googleAccounts: settings.googleAccounts.filter((a) => a.sub !== accountSub),
+      calendarShapeRefs: settings.calendarShapeRefs.filter((r) => r.accountSub !== accountSub),
+      calendarWriteDefault:
+        settings.calendarWriteDefault?.accountSub === accountSub
+          ? null
+          : settings.calendarWriteDefault,
+      updatedAt: this.now(),
+    });
   }
 
   // --- Calibration ---

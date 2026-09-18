@@ -19,6 +19,8 @@ export const SMOKE_CALLS: SmokeCall[] = [
   { method: 'listCategories', args: [] },
   { method: 'listTasks', args: [] },
   { method: 'getCalibration', args: [] },
+  // Calendar read: proves the gated gateway no-ops under testMode (no SSM token read, no Google fetch).
+  { method: 'getGoogleStatus', args: [] },
 ];
 
 // The direct-invoke event shape the handler understands (no requestContext.http → skips the origin gate).
