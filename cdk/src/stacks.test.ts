@@ -1,6 +1,6 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ApertureDataStack } from './lib/data-stack';
 import { ApertureAppStack } from './lib/app-stack';
 import { ApertureBillingStack } from './lib/billing-stack';
@@ -55,6 +55,42 @@ describe('ApertureAppStack', () => {
       MemorySize: 512,
       Environment: { Variables: Match.objectLike({ STAGE: 'dev' }) },
     });
+  });
+
+  it('forwards the OAuth callback query params on /api/* (CloudFront strips them by default)', () => {
+    app.hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
+      OriginRequestPolicyConfig: Match.objectLike({
+        QueryStringsConfig: {
+          QueryStringBehavior: 'whitelist', // CloudFormation's term for allowList
+          QueryStrings: Match.arrayWith(['code', 'state', 'error']),
+        },
+      }),
+    });
+  });
+
+  it('scopes the BFF SSM access to the Google parameter path', () => {
+    app.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'ssm:GetParameter',
+            Resource: {
+              'Fn::Join': [
+                '',
+                Match.arrayWith([Match.stringLikeRegexp('parameter/aperture/dev/google/\\*')]),
+              ],
+            },
+          }),
+          Match.objectLike({ Action: Match.arrayWith(['ssm:PutParameter', 'ssm:DeleteParameter']) }),
+        ]),
+      },
+    });
+  });
+
+  it('sets no APP_URL without a custom domain (CloudFront domain is a cycle-forming token)', () => {
+    const fns = app.findResources('AWS::Lambda::Function');
+    const bff = Object.values(fns).find((f) => f.Properties?.FunctionName === 'aperture-bff-dev');
+    expect(bff?.Properties?.Environment?.Variables?.APP_URL).toBeUndefined();
   });
 
   it('fronts the Lambda with a public Function URL gated by the origin-secret header', () => {
@@ -157,6 +193,14 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
   it('registers both the custom domain and the CloudFront default as OAuth callbacks', () => {
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       CallbackURLs: Match.arrayWith(['https://dev.aperture.rahuldatta.dev']),
+    });
+  });
+
+  it('exposes APP_URL as the custom-domain base for the OAuth redirect', () => {
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({ APP_URL: 'https://dev.aperture.rahuldatta.dev' }),
+      },
     });
   });
 });

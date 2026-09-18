@@ -4,6 +4,12 @@ A personal life-OS PWA — one place for everything digital about me. Web-first,
 
 Product is the source of truth: `docs/product/PRODUCT.md`. Full doc map: `docs/index.md`.
 
+> **⚠️ Rahul — fix this!!** The git-aware hooks are **worktree-blind**: they read `/workspace` (the main
+> checkout) instead of the worktree the session runs in, so in a worktree session `precommit-guard`'s
+> secret-scan checks the wrong staged diff and `main-branch-guard` can block or wave through edits on the
+> wrong branch. Full write-up + fix in the tech-debt ledger (`docs/arch/TECH.md` → **Worktree-blind git
+> hooks**, action item #1). It's a ~15-min mechanical fix but touches 6 hook files (trips the Plan rule).
+
 ## Project structure
 
 pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
@@ -112,12 +118,15 @@ Merges to `main` happen via PR, not a local push.
 
 - **Consult before big or irreversible actions**, and before deep research/exploration. Don't go off alone.
 - **Don't write code that wasn't asked for.** Diagnosis, research, and a proposal are the deliverable until the user says to implement. "Continue" means continue what was asked — it is not license to start editing.
+- **When rebasing or pulling in others' merged work, read the PR(s) first.** Before `git rebase origin/main` (or building on top of freshly-merged branches), read the body of each PR that landed since you branched — `gh pr view <n>` — so you know what's being introduced. Rebasing blind means building on changes you haven't seen: the conflict you resolve or the contract you call may have moved for a reason the PR explains.
 - **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. The rationalisations to distrust are the plausible ones — "this is well understood", "it's only just over", "the design is obvious", "I already researched it". Every one of those is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, and rewriting logic you have already defended is not.
+- **Running the `Plan` agent: ask which model, never default.** When the user asks to run `Plan` (or you're about to spawn it) without naming a model, ask which model first — don't pick one silently. The user usually wants `fable`, but token budget varies, so it must be a deliberate choice each time.
 - **Reviews go through the `code-reviewer` agent** (project-aware) — not inline reading. Run it before committing anything non-trivial.
 - **Non-trivial external research → the `search-specialist` agent.** Single-fact lookups can use `WebSearch`/`WebFetch` directly. Codebase search is `Explore`'s job.
 - **Keep `docs/index.md` current.** Add or update a doc's one-line entry there in the same change — a doc missing from the index is undiscoverable.
 - **Version awareness:** always check the registry for the actual latest version before pinning a package — `npm view <pkg> version` (a read-only registry query; fine even though installs are pnpm-only). Never guess versions from memory.
 - **A piped command hides its exit code.** `pnpm typecheck | tail` reports success even when the typecheck never ran — the exit status you see belongs to `tail`. Before reporting any pass/fail, use `set -o pipefail` and echo `${PIPESTATUS[0]}`. This produced a false "it passed" here on 2026-09-07.
+- **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. When answering needs data from one of these, hand the user the exact command(s) to run and read back the output — treat them as your hands on that resource. This is the same "verify, don't assert" discipline: reason from real output the user pastes, not from an assumption about what the resource contains.
 
 ### Before concluding "X can't do Y"
 

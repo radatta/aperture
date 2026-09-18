@@ -12,18 +12,24 @@ import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useSetActual, useSetDueDay, useSplitTask, useTransitionTask } from '../../data/hooks/useTasks';
+import {
+  useDeleteCalendarEvent,
+  useGoogleCalendars,
+  useInsertCalendarEvent,
+} from '../../data/hooks/useCalendar';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { CategoryTag } from './CategoryTag';
 import { ScopePanel } from './ScopePanel';
 import { remainingMin } from './taskMath';
 
-type Panel = null | 'scope' | 'split' | 'done' | 'due';
+type Panel = null | 'scope' | 'split' | 'done' | 'due' | 'calendar';
 
 // One task, with the lifecycle actions its status allows. `actions` is an optional slot for
 // context-specific buttons (add-to-today / remove-from-plan) supplied by the section.
 export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode }) {
   const [panel, setPanel] = useState<Panel>(null);
   const transition = useTransitionTask();
+  const deleteEvent = useDeleteCalendarEvent();
   const pomodoro = usePomodoro();
   const canScope = task.status === 'backlog' || task.status === 'planned';
   const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
@@ -43,6 +49,15 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
   // own entry here. Done/cancelled stay display-only.
   if (task.status === 'in_progress')
     overflow.push({ label: 'Due day…', onSelect: () => toggle('due') });
+  // Add-to-calendar hangs off a set due day (the event's date). One live event per task; removing it
+  // deletes the real calendar event via its owning account.
+  if (task.status !== 'done' && task.status !== 'cancelled' && task.dueDay && !task.gcalEventId)
+    overflow.push({ label: 'Add to calendar…', onSelect: () => toggle('calendar') });
+  if (task.gcalEventId)
+    overflow.push({
+      label: 'Remove from calendar',
+      onSelect: () => deleteEvent.mutate(task.id),
+    });
   if (canScope)
     overflow.push({
       label: 'Drop task',
@@ -94,6 +109,7 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
       {panel === 'split' && <SplitForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'done' && <DoneForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'due' && <DueDayForm task={task} onDone={() => setPanel(null)} />}
+      {panel === 'calendar' && <AddToCalendarForm task={task} onDone={() => setPanel(null)} />}
     </Card>
   );
 }
@@ -128,6 +144,11 @@ function TaskMeta({ task }: { task: Task }) {
       {task.dueDay && (
         <Text size="xs" tone="subtle">
           {fmtDueDay(task.dueDay, today)}
+        </Text>
+      )}
+      {task.gcalEventId && (
+        <Text size="xs" tone="teal">
+          on calendar
         </Text>
       )}
     </div>
@@ -232,6 +253,90 @@ function DueDayForm({ task, onDone }: { task: Task; onDone: () => void }) {
           }}
         >
           Save
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Add-to-calendar: pick a calendar (default = the settings write-default), a start time on the due
+// day, and a duration. Time feeds the event only — it's never stored on the task (gcal owns the clock).
+function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => void }) {
+  const { data: settings } = useSettings();
+  const { data: calendars = [] } = useGoogleCalendars((settings?.googleAccounts.length ?? 0) > 0);
+  const insert = useInsertCalendarEvent();
+  const [time, setTime] = useState('09:00');
+  const [durationMin, setDurationMin] = useState<number>(task.estimateMin ?? 30);
+  const [calIdx, setCalIdx] = useState<number>(-1);
+
+  if (!task.dueDay) return null;
+  if (calendars.length === 0) {
+    return (
+      <div className="mt-3 rounded-xl border border-line bg-surface p-3">
+        <Text size="sm" tone="muted">
+          Connect a Google account in Settings first.
+        </Text>
+      </div>
+    );
+  }
+
+  const def = settings?.calendarWriteDefault;
+  const defaultIdx = def
+    ? calendars.findIndex((c) => c.accountSub === def.accountSub && c.calendarId === def.calendarId)
+    : -1;
+  const idx = calIdx >= 0 ? calIdx : defaultIdx >= 0 ? defaultIdx : 0;
+
+  return (
+    <div className="mt-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <Select
+          label="Calendar"
+          value={String(idx)}
+          onChange={(e) => setCalIdx(Number(e.target.value))}
+          options={calendars.map((c, i) => ({ value: String(i), label: c.summary }))}
+          className="w-56"
+        />
+        <Field
+          label="Start"
+          type="time"
+          value={time}
+          onChange={(e) => setTime(e.target.value)}
+          className="w-32"
+        />
+        <Field
+          label="Minutes"
+          type="number"
+          min={5}
+          step={5}
+          value={durationMin}
+          onChange={(e) => setDurationMin(Number(e.target.value))}
+          className="w-28"
+        />
+      </div>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={insert.isPending}
+          onClick={async () => {
+            const cal = calendars[idx]!;
+            const [y, m, d] = task.dueDay!.split('-').map(Number) as [number, number, number];
+            const [hh, mm] = time.split(':').map(Number) as [number, number];
+            const startMs = new Date(y, m - 1, d, hh, mm, 0, 0).getTime();
+            await insert.mutateAsync({
+              taskId: task.id,
+              accountSub: cal.accountSub,
+              calendarId: cal.calendarId,
+              title: task.title,
+              startMs,
+              endMs: startMs + durationMin * 60_000,
+            });
+            onDone();
+          }}
+        >
+          Add to calendar
         </Button>
         <Button variant="ghost" size="sm" onClick={onDone}>
           Cancel

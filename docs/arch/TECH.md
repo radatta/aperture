@@ -197,8 +197,45 @@ Nothing built in v1 — just a clean boundary so reflection is additive later.
 
 ## Tech debt
 
-Known deviations from the rules above, each named with the rule it breaks. An entry stays until it's
-fixed or the rule changes — not until people stop noticing it.
+Known deviations and defects, each named with the rule or invariant it breaks. An entry stays until
+it's fixed or the rule changes — not until people stop noticing it.
+
+### Worktree-blind git hooks — breaks worktree isolation
+
+**Action item #1 — fix before the next worktree session leans on these guards.** Surfaced 2026-09-17:
+the post-compact hook reported branch `ci-pipeline-refactor` while the session was actually on
+`google-calendar`.
+
+**The defect.** Six git-aware hooks resolve their working directory with `cd "${CLAUDE_PROJECT_DIR:-$(pwd)}"`.
+Claude sets `CLAUDE_PROJECT_DIR` to the **project root** (`/workspace`, the main checkout) and launches
+hooks from there — so in *any* worktree session every hook reads the main checkout's git state, never the
+worktree the session is actually running in. The worktree path reaches a hook only on its **stdin JSON**
+(`.cwd`; `transcript_path` also encodes it).
+
+**Blast radius, worst first:**
+
+- `precommit-guard.sh` — runs `git diff --cached` against `/workspace`'s index, so its **credential scan
+  inspects the wrong staged diff**. A secret staged in the worktree is never seen. It also gates the
+  commit on the wrong branch.
+- `main-branch-guard.sh` — allows/denies edits by `/workspace`'s branch. If `/workspace` sits on `main`
+  it **denies every edit in a feature-branch worktree**; if the worktree is on `main` while `/workspace`
+  is on a feature branch it **waves the edit through**.
+- `gh-safety-guard.sh` — mostly command-pattern matching (dir-independent, still correct); only its
+  "push from current protected branch" fallback reads the wrong branch. Explicit `git push main` is
+  still caught.
+- `post-compact-context.sh`, `load-context.sh`, `git-state-reminder.sh` — inject the wrong branch /
+  commits / ahead-behind into the session. Cosmetic but actively misleading; this is what exposed the bug.
+
+**Fix.** In each hook, resolve the dir from stdin first and fall back to today's behavior so it can't
+regress: `DIR=$(printf '%s' "$INPUT" | jq -r '.cwd // empty'); [ -n "$DIR" ] || DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"; cd "$DIR"`.
+The two SessionStart hooks that don't currently read stdin (`post-compact-context.sh`, `load-context.sh`)
+need an `INPUT=$(cat)` added first.
+
+**Two things the fixer must know.** (1) Verify empirically that `.cwd` carries the worktree — don't
+assume; instrument one prompt-hook fire, or read `transcript_path`. (2) The hook that actually executes
+is **`/workspace`'s copy** (resolved via `CLAUDE_PROJECT_DIR`), so the fix only goes live once merged to
+`main` and pulled into the main checkout — editing it on a feature branch changes nothing live. Six files
+also trips the **>5-file `Plan` rule**; run `Plan` (ask which model) before the edit.
 
 ### Hard-deletes — breaks §2.1 "Soft-delete everywhere"
 

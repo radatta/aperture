@@ -2,6 +2,8 @@ import { isApiMethod } from '@aperture/shared';
 import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
+import { noopGoogle } from './google/gateway';
+import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
 
 export interface RpcCall {
@@ -10,6 +12,8 @@ export interface RpcCall {
   args: unknown[];
   testMode?: boolean; // smoke path → write-free
   now?: () => number; // injectable clock (tests)
+  google?: GoogleGateway; // live calendar seam (index.ts); ignored in testMode
+  stateSecret?: string; // OAuth state HMAC key (ORIGIN_SECRET)
 }
 
 // Transport-agnostic RPC core: validate the method against the shared allowlist, build a BackendClient
@@ -18,9 +22,13 @@ export interface RpcCall {
 export async function handleRpc(doc: DocClient, call: RpcCall): Promise<unknown> {
   if (!isApiMethod(call.method)) throw new Error(`Unknown method: ${call.method}`);
   const writes = call.testMode ? noopWrites() : liveWrites(doc);
+  // testMode forces the inert gateway too — a smoke run reads no SSM token and makes no Google fetch.
+  const google = call.testMode ? noopGoogle() : (call.google ?? noopGoogle());
   const backend = new BackendClient(new Repo(doc, writes, call.userId), {
     userId: call.userId,
     now: call.now,
+    google,
+    stateSecret: call.stateSecret,
   });
   const fn = (
     backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>

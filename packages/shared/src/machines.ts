@@ -74,6 +74,10 @@ export function splitFollowUp(original: Task, followUpTitle: string): Omit<Task,
     startedAt: null,
     completedAt: null,
     cancelledAt: null,
+    // The calendar event belongs to the original task; the follow-up starts unlinked.
+    gcalAccountId: null,
+    gcalCalendarId: null,
+    gcalEventId: null,
   };
 }
 

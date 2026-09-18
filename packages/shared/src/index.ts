@@ -4,6 +4,7 @@ export * from './ulid';
 export * from './dates';
 export * from './machines';
 export * from './recurrence';
+export * from './calendar';
 export * from './leetcode';
 export * from './stories';
 export * from './api';

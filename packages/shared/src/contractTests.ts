@@ -5,6 +5,12 @@ import type { ApiClient } from './api';
 // Lambda (BackendClient over an in-memory table), and any future transport. If the swap is faithful,
 // all pass identically. `makeClient` is handed a clock so time-based behavior (heartbeat accrual) is
 // deterministic; each test gets a fresh, empty client.
+//
+// NOT covered here: the gated Google Calendar methods (getCalendarBusy/insertCalendarEvent/…). Their
+// behavior depends on external gateway state — connected accounts — that can't be established through
+// the ApiClient interface (connect is a browser OAuth redirect, not a method), so a fair cross-impl
+// comparison isn't possible in this suite. Parity is instead held by parallel per-impl tests with
+// matching scenarios: lambdas/src/backend.calendar.test.ts and app/src/data/stubClient.calendar.test.ts.
 export function runApiContract(
   label: string,
   makeClient: (now: () => number) => ApiClient | Promise<ApiClient>,

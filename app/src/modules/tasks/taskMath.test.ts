@@ -20,6 +20,9 @@ const task = (over: Partial<Task>): Task => ({
   startedAt: null,
   completedAt: null,
   cancelledAt: null,
+  gcalAccountId: null,
+  gcalCalendarId: null,
+  gcalEventId: null,
   ...over,
 });
 

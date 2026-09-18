@@ -26,6 +26,7 @@ import type {
   TaskStatus,
 } from './types';
 import type { CompetencyTag } from './stories';
+import type { CalendarBusy } from './calendar';
 
 export interface CreateTaskInput {
   title: string;
@@ -141,9 +142,58 @@ export interface ExportBundle {
   settings: Settings; // always materialised — never the stub's nullable storage state
 }
 
+// googleAccounts is deliberately absent — the connected-account list is mutated server-side only (the
+// OAuth callback adds, disconnectGoogleAccount removes), never patched directly by the client.
 export type SettingsPatch = Partial<
-  Pick<Settings, 'dayStartHour' | 'pomodoroWorkMin' | 'pomodoroBreakMin' | 'theme'>
+  Pick<
+    Settings,
+    | 'dayStartHour'
+    | 'pomodoroWorkMin'
+    | 'pomodoroBreakMin'
+    | 'theme'
+    | 'calendarShapeRefs'
+    | 'calendarWriteDefault'
+    | 'dayFocusStart'
+    | 'dayEndHour'
+  >
 >;
+
+// --- Google Calendar DTOs --------------------------------------------------
+// One calendar in the picker, tagged with the account it belongs to (calendarList.list per account).
+export interface GoogleCalendar {
+  accountSub: string;
+  calendarId: string;
+  summary: string;
+  primary: boolean;
+}
+// Per-account connection health. `connected` = a token exists; `reconnectRequired` = the token exists
+// but last failed with invalid_grant (mirrors the Cognito renewal model — a recoverable expected state).
+export interface GoogleAccountStatus {
+  sub: string;
+  email: string;
+  connected: boolean;
+  reconnectRequired: boolean;
+}
+export interface GoogleStatus {
+  accounts: GoogleAccountStatus[];
+}
+// Shape read: the client computes and sends the window bounds (epoch ms) — the Lambda is UTC and does
+// no date math. `day` is the client's local day-key, for logging/parity with other day-scoped reads.
+export interface GetCalendarBusyInput {
+  day: string;
+  windowStartMs: number;
+  windowEndMs: number;
+}
+// Event write, routed to the target calendar's owning account. Time feeds the event ONLY — never
+// denormalized onto the task (the task stays day-granular; gcal is the source of record for the clock).
+export interface InsertCalendarEventInput {
+  taskId: string;
+  accountSub: string;
+  calendarId: string;
+  title: string;
+  startMs: number;
+  endMs: number;
+}
 
 export interface ApiClient {
   // Log
@@ -228,6 +278,17 @@ export interface ApiClient {
   // Settings
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
+
+  // Google Calendar (multi-account). Connect is a browser redirect (GET /api/google/callback, outside
+  // this RPC surface); these are the RPC methods. Every read/write is gated (noop in testMode) so a
+  // smoke run touches no real token, event, or SSM param.
+  googleConnectUrl(): Promise<{ url: string }>; // consent URL w/ signed state — Connect AND Add-account
+  getGoogleStatus(): Promise<GoogleStatus>; // per-account connected / reconnectRequired
+  listGoogleCalendars(): Promise<GoogleCalendar[]>; // calendarList across all connected accounts
+  getCalendarBusy(input: GetCalendarBusyInput): Promise<CalendarBusy>; // raw intervals; client computes shape
+  insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task>; // creates the event, stores pointers
+  deleteCalendarEvent(taskId: string): Promise<Task>; // delete-on-cancel; clears the pointers
+  disconnectGoogleAccount(accountSub: string): Promise<void>; // drop the token + settings entry
 
   // Calibration (derived, read-only)
   getCalibration(range: DateRange): Promise<CalibrationPoint[]>;
