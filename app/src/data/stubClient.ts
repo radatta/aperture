@@ -582,6 +582,9 @@ class StubClient implements ApiClient {
         startedAt: null,
         completedAt: null,
         cancelledAt: null,
+        gcalAccountId: null,
+        gcalCalendarId: null,
+        gcalEventId: null,
       });
       this.writes.insert(this.store.plans, {
         ...this.base(),

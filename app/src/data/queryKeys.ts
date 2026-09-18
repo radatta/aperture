@@ -14,4 +14,7 @@ export const qk = {
   habitChecks: (from: string, to: string) => ['habitChecks', from, to] as const,
   ideas: (status = 'all') => ['ideas', status] as const,
   day: (day: string) => ['day', day] as const,
+  googleStatus: () => ['googleStatus'] as const,
+  googleCalendars: () => ['googleCalendars'] as const,
+  calendarBusy: (day: string) => ['calendarBusy', day] as const,
 };

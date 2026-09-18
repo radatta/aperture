@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Category } from '@aperture/shared';
+import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
@@ -15,6 +15,12 @@ import {
   useUpsertCategory,
 } from '../../data/hooks/useCategories';
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
+import {
+  useConnectGoogle,
+  useDisconnectGoogleAccount,
+  useGoogleCalendars,
+  useGoogleStatus,
+} from '../../data/hooks/useCalendar';
 
 // Settings (PRODUCT §4, §3, §A.4/§A.12): categories (id-referenced, live labels, reassign-on-delete,
 // isWork backfill), preferences (day-start, pomodoro, theme), and data export.
@@ -25,6 +31,7 @@ export function SettingsPage() {
         Settings
       </Text>
       <CategoriesSection />
+      <CalendarSection />
       <PreferencesSection />
       <DataSection />
     </div>
@@ -223,6 +230,177 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
         </Text>
       )}
     </Card>
+  );
+}
+
+const sameRef = (a: CalendarRef, b: CalendarRef) =>
+  a.accountSub === b.accountSub && a.calendarId === b.calendarId;
+
+// Google Calendar: connected accounts (connect / add / disconnect), which calendars feed the day
+// shape, the default write target, and the waking-hours window. Connecting is a browser redirect to
+// Google's consent screen; disconnecting drops the account's token + its refs server-side.
+function CalendarSection() {
+  const { data: settings } = useSettings();
+  const update = useUpdateSettings();
+  const { data: status } = useGoogleStatus();
+  const connect = useConnectGoogle();
+  const disconnect = useDisconnectGoogleAccount();
+  const accounts = settings?.googleAccounts ?? [];
+  const { data: calendars = [] } = useGoogleCalendars(accounts.length > 0);
+
+  if (!settings) return null;
+
+  const shapeRefs = settings.calendarShapeRefs;
+  const inShape = (ref: CalendarRef) => shapeRefs.some((r) => sameRef(r, ref));
+  const toggleShape = (ref: CalendarRef) =>
+    update.mutate({
+      calendarShapeRefs: inShape(ref)
+        ? shapeRefs.filter((r) => !sameRef(r, ref))
+        : [...shapeRefs, ref],
+    });
+  const statusFor = (sub: string) => status?.accounts.find((a) => a.sub === sub);
+
+  return (
+    <section className="flex flex-col gap-3">
+      <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
+        Calendar
+      </Text>
+
+      <Card>
+        <div className="flex flex-col gap-3">
+          {accounts.length === 0 ? (
+            <Text size="sm" tone="muted">
+              Connect a Google account to read your calendars and add events from tasks.
+            </Text>
+          ) : (
+            accounts.map((a) => {
+              const st = statusFor(a.sub);
+              return (
+                <div key={a.sub} className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-col">
+                    <Text size="sm">{a.email}</Text>
+                    {st?.reconnectRequired && (
+                      <Text size="xs" tone="gold">
+                        Needs reconnecting
+                      </Text>
+                    )}
+                  </div>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={disconnect.isPending}
+                    onClick={() => disconnect.mutate(a.sub)}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
+              );
+            })
+          )}
+          <div>
+            <Button size="sm" disabled={connect.isPending} onClick={() => connect.mutate()}>
+              {accounts.length === 0 ? 'Connect Google Calendar' : 'Add another account'}
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {accounts.length > 0 && (
+        <Card>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Text size="sm" weight="medium">
+                Calendars for your day shape
+              </Text>
+              {accounts.map((a) => (
+                <div key={a.sub} className="flex flex-col gap-1">
+                  <Text size="xs" tone="muted">
+                    {a.email}
+                  </Text>
+                  {calendars
+                    .filter((c) => c.accountSub === a.sub)
+                    .map((c) => {
+                      const ref = { accountSub: c.accountSub, calendarId: c.calendarId };
+                      return (
+                        <label key={c.calendarId} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={inShape(ref)}
+                            onChange={() => toggleShape(ref)}
+                          />
+                          <Text size="sm">
+                            {c.summary}
+                            {c.primary ? ' (primary)' : ''}
+                          </Text>
+                        </label>
+                      );
+                    })}
+                </div>
+              ))}
+            </div>
+
+            <WriteDefaultPicker
+              settings={settings}
+              calendars={calendars}
+              onChange={(ref) => update.mutate({ calendarWriteDefault: ref })}
+            />
+
+            <div className="flex flex-wrap items-end gap-4">
+              <Field
+                label="Waking hours start"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={settings.dayFocusStart}
+                onBlur={(e) => update.mutate({ dayFocusStart: Number(e.target.value) })}
+                className="w-36"
+              />
+              <Field
+                label="Waking hours end"
+                type="number"
+                min={0}
+                max={23}
+                defaultValue={settings.dayEndHour}
+                onBlur={(e) => update.mutate({ dayEndHour: Number(e.target.value) })}
+                className="w-36"
+              />
+            </div>
+          </div>
+        </Card>
+      )}
+    </section>
+  );
+}
+
+// The default calendar "add to calendar" writes to. Options are indexed (calendar ids aren't
+// select-value-safe), plus a "no default" that forces a per-event pick.
+function WriteDefaultPicker({
+  settings,
+  calendars,
+  onChange,
+}: {
+  settings: Settings;
+  calendars: GoogleCalendar[];
+  onChange: (ref: CalendarRef | null) => void;
+}) {
+  const current = settings.calendarWriteDefault;
+  const currentIdx = calendars.findIndex((c) => current && sameRef(c, current));
+  return (
+    <Select
+      label="Add events to (default)"
+      value={currentIdx >= 0 ? String(currentIdx) : ''}
+      onChange={(e) => {
+        const v = e.target.value;
+        if (v === '') return onChange(null);
+        const c = calendars[Number(v)]!;
+        onChange({ accountSub: c.accountSub, calendarId: c.calendarId });
+      }}
+      options={[
+        { value: '', label: 'No default (pick each time)' },
+        ...calendars.map((c, i) => ({ value: String(i), label: c.summary })),
+      ]}
+      className="w-72"
+    />
   );
 }
 
