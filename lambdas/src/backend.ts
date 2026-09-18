@@ -606,9 +606,20 @@ export class BackendClient implements ApiClient {
     await this.google.storeRefreshToken(sub, refreshToken);
     const settings = await this.ensureSettings();
     const others = settings.googleAccounts.filter((a) => a.sub !== sub);
+    // Default the account's primary calendar (id = email) into the shape set on connect, so a freshly
+    // connected account contributes to the day shape without a manual picker step; set it as the write
+    // default if none is set yet. Dedup so a reconnect doesn't double-add.
+    const primaryRef = { accountSub: sub, calendarId: email };
+    const hasRef = settings.calendarShapeRefs.some(
+      (r) => r.accountSub === sub && r.calendarId === email,
+    );
     await this.repo.putSettings({
       ...settings,
       googleAccounts: [...others, { sub, email }],
+      calendarShapeRefs: hasRef
+        ? settings.calendarShapeRefs
+        : [...settings.calendarShapeRefs, primaryRef],
+      calendarWriteDefault: settings.calendarWriteDefault ?? primaryRef,
       updatedAt: this.now(),
     });
   }
@@ -634,19 +645,18 @@ export class BackendClient implements ApiClient {
   }
 
   async listGoogleCalendars(): Promise<GoogleCalendar[]> {
+    // Primary-only: each account's PRIMARY calendar, whose calendarId is the account email. We do NOT
+    // call calendarList.list — the `calendar.events` scope does not grant it (403 "insufficient scopes";
+    // listing all calendars would need calendar.readonly / calendar.calendarlist.readonly). events.list
+    // and events.insert both work on the primary with the scope we have. If a non-primary picker is ever
+    // wanted, add that scope and restore the gateway's listCalendars (still on the interface).
     const settings = await this.ensureSettings();
-    const perAccount = await Promise.all(
-      settings.googleAccounts.map(async (a) => {
-        const cals = await this.google.listCalendars(a.sub).catch(() => []);
-        return cals.map((c) => ({
-          accountSub: a.sub,
-          calendarId: c.calendarId,
-          summary: c.summary,
-          primary: c.primary,
-        }));
-      }),
-    );
-    return perAccount.flat();
+    return settings.googleAccounts.map((a) => ({
+      accountSub: a.sub,
+      calendarId: a.email,
+      summary: a.email,
+      primary: true,
+    }));
   }
 
   async getCalendarBusy(input: GetCalendarBusyInput): Promise<CalendarBusy> {

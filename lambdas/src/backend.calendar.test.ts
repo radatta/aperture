@@ -29,6 +29,30 @@ describe('backend Google Calendar (multi-account)', () => {
     expect((await b.getSettings()).googleAccounts).toHaveLength(1);
   });
 
+  it('connect defaults the account primary into the shape set and write-default (no manual pick)', async () => {
+    const g = new InMemoryGoogle();
+    const b = makeBackend(g);
+    await b.completeGoogleConnect('A');
+    const s = await b.getSettings();
+    // primary calendarId is the account email; seeded as a shape ref and the write default, deduped.
+    expect(s.calendarShapeRefs).toEqual([{ accountSub: 'A', calendarId: 'A@example.com' }]);
+    expect(s.calendarWriteDefault).toEqual({ accountSub: 'A', calendarId: 'A@example.com' });
+    await b.completeGoogleConnect('A'); // reconnect doesn't duplicate the ref
+    expect((await b.getSettings()).calendarShapeRefs).toHaveLength(1);
+  });
+
+  it('listGoogleCalendars returns each account primary without a calendarList call', async () => {
+    const g = new InMemoryGoogle();
+    const b = makeBackend(g);
+    await b.completeGoogleConnect('A');
+    await b.completeGoogleConnect('B');
+    const cals = await b.listGoogleCalendars();
+    expect(cals).toEqual([
+      { accountSub: 'A', calendarId: 'A@example.com', summary: 'A@example.com', primary: true },
+      { accountSub: 'B', calendarId: 'B@example.com', summary: 'B@example.com', primary: true },
+    ]);
+  });
+
   it('getCalendarBusy merges refs across accounts, and one dead token does not sink the read', async () => {
     const g = new InMemoryGoogle();
     const b = makeBackend(g);

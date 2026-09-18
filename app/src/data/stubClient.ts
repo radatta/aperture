@@ -700,11 +700,14 @@ class StubClient implements ApiClient {
     };
   }
   async listGoogleCalendars(): Promise<GoogleCalendar[]> {
-    // Two calendars per connected account (primary + one extra) so the picker has choices.
-    return this.ensureSettings().googleAccounts.flatMap((a) => [
-      { accountSub: a.sub, calendarId: a.email, summary: a.email, primary: true },
-      { accountSub: a.sub, calendarId: `${a.sub}-secondary`, summary: 'Secondary', primary: false },
-    ]);
+    // Primary-only parity with the backend: each account's primary (calendarId = email). We can't list
+    // all calendars with the calendar.events scope (see backend.listGoogleCalendars).
+    return this.ensureSettings().googleAccounts.map((a) => ({
+      accountSub: a.sub,
+      calendarId: a.email,
+      summary: a.email,
+      primary: true,
+    }));
   }
   async getCalendarBusy(input: GetCalendarBusyInput): Promise<CalendarBusy> {
     if (this.ensureSettings().googleAccounts.length === 0) return { intervals: [], allDayCount: 0 };
