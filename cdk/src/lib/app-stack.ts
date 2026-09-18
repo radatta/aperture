@@ -7,6 +7,7 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -59,10 +60,27 @@ export class ApertureAppStack extends Stack {
         ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
         DEVICE_TOKEN: deviceToken, // extension ingest auth (resolveDeviceUserId), scoped to recordLeetcodeAttempt
         ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}),
+        // Google OAuth redirect/return base. Only a static custom-domain URL — the CloudFront domain is a
+        // token that would create a Lambda→distribution→FunctionURL→Lambda cycle. Unset without a domain.
+        ...(domainName ? { APP_URL: `https://${domainName}` } : {}),
       },
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] }, // v3 SDK is in the runtime
     });
     table.grantReadWriteData(fn);
+
+    // Google Calendar SSM access, path-scoped: READ client creds + per-account refresh tokens under
+    // /aperture/<stage>/google/*; WRITE (+ delete) only the per-account tokens under .../tokens/* (the
+    // connect/disconnect path). The <sub> segment is dynamic, so the token path needs a trailing wildcard.
+    const ssmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/google`;
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${ssmBase}/*`] }),
+    );
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
+        resources: [`${ssmBase}/tokens/*`],
+      }),
+    );
     // cdk-nag granular IAM suppressions (IAM4: the standard CloudWatch Logs managed exec policy; IAM5:
     // grantReadWriteData's index/* wildcard, which the single-table GSI query needs — the table is scoped).
     // WORKAROUND for an open cdk-nag v3 bug (cdklabs/cdk-nag#2359/#2351): `Validations.of(x).acknowledge()`
@@ -77,6 +95,13 @@ export class ApertureAppStack extends Stack {
         'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy for the BFF.',
       [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttTableCD117FA1ArnE2C8C204/index/*]`]:
         'grantReadWriteData needs index/* to query the single-table GSI; the table itself is scoped.',
+      // Google Calendar SSM access is path-scoped to /aperture/<stage>/google/*; the per-account <sub>
+      // segment is dynamic, so a trailing wildcard is unavoidable. Region resolves per-stack; partition
+      // + account render as pseudo-tokens (must match synth's "Acknowledge with '...'" hint verbatim).
+      [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${Stack.of(this).region}:<AWS::AccountId>:parameter/aperture/${stage}/google/*]`]:
+        'The BFF reads Google client creds + per-account refresh tokens under /aperture/<stage>/google/*; the <sub> segment is dynamic, so the read is path-scoped with a wildcard.',
+      [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${Stack.of(this).region}:<AWS::AccountId>:parameter/aperture/${stage}/google/tokens/*]`]:
+        'Per-account refresh tokens are written/deleted at connect/disconnect under .../google/tokens/<sub>; the dynamic <sub> requires the trailing wildcard.',
     });
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
     const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
@@ -93,7 +118,9 @@ export class ApertureAppStack extends Stack {
     // /api/* forwards ONLY the custom auth header + content-type — never Authorization (OAC owns it).
     const apiOrp = new cloudfront.OriginRequestPolicy(this, 'ApiOriginPolicy', {
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(AUTH_HEADER, 'content-type'),
-      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.none(),
+      // Forward the OAuth callback params — without this CloudFront strips the query string on /api/*,
+      // and /api/google/callback arrives with no code/state (invisible locally, breaks connect on deploy).
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.allowList('code', 'state', 'error'),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
     });
 
