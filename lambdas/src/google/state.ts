@@ -9,8 +9,12 @@ const STATE_TTL_MS = 10 * 60_000;
 
 const b64url = (s: string) => Buffer.from(s, 'utf8').toString('base64url');
 const unb64url = (s: string) => Buffer.from(s, 'base64url').toString('utf8');
+// Derive a purpose-specific subkey rather than using ORIGIN_SECRET (the CloudFront origin-header token)
+// verbatim, so the two uses aren't coupled.
+const deriveKey = (secret: string) =>
+  createHmac('sha256', secret).update('aperture-oauth-state-v1').digest();
 const sign = (payload: string, secret: string) =>
-  createHmac('sha256', secret).update(payload).digest('base64url');
+  createHmac('sha256', deriveKey(secret)).update(payload).digest('base64url');
 
 export function signState(userId: string, secret: string, now: number = Date.now()): string {
   const payload = b64url(`${userId}:${now}`);

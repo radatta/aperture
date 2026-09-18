@@ -617,7 +617,11 @@ export class BackendClient implements ApiClient {
     const settings = await this.ensureSettings();
     const accounts = await Promise.all(
       settings.googleAccounts.map(async (a) => {
-        const state = await this.google.getAccountState(a.sub);
+        // Per-account resilience (the Cognito model): a transient probe failure for one account must
+        // not sink the whole status read — degrade that one to reconnect-required.
+        const state = await this.google
+          .getAccountState(a.sub)
+          .catch(() => ({ connected: true, reconnectRequired: true }));
         return {
           sub: a.sub,
           email: a.email,
@@ -674,6 +678,9 @@ export class BackendClient implements ApiClient {
     const task = await this.mustTask(input.taskId);
     // One live event per task — a second insert would orphan the first (edit-sync is a later PR).
     if (task.gcalEventId) throw new Error('Task already has a calendar event');
+    // Two-system write: the event is created before its pointer is stored. If putTask below fails, a
+    // real event is left with no stored id (a retry double-books). Accepted for this PR — reconciliation
+    // lands with edit-sync; see docs/areas/calendar/index.md.
     const { eventId } = await this.google.insertEvent({
       sub: input.accountSub,
       calendarId: input.calendarId,

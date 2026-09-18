@@ -721,7 +721,11 @@ class StubClient implements ApiClient {
     };
   }
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
-    this.mustFind(this.store.tasks, input.taskId); // throw if the task is gone
+    const task = this.mustFind(this.store.tasks, input.taskId);
+    // Parity with the backend: one live event per task, and only onto a connected account.
+    if (task.gcalEventId) throw new Error('Task already has a calendar event');
+    if (!this.ensureSettings().googleAccounts.some((a) => a.sub === input.accountSub))
+      throw new Error(`No connected account: ${input.accountSub}`);
     return this.writes.patch(this.store.tasks, input.taskId, {
       gcalAccountId: input.accountSub,
       gcalCalendarId: input.calendarId,

@@ -98,7 +98,8 @@ token is a recoverable expected state, not a crash.
   `code`/`state` (invisible locally). The origin-request policy now allow-lists `code`, `state`, `error`.
 - **`APP_URL` only when a custom domain is set** — the CloudFront domain is a token that would form a
   Lambda→distribution→FunctionURL→Lambda cycle. Both stages have custom domains, so this is always set in
-  practice; unset only in an unconfigured stack.
+  practice; unset only in an unconfigured stack. **Consequence: calendar connect requires a domained
+  stage** — with no `APP_URL` the OAuth `redirect_uri` is relative and the consent flow can't complete.
 - **SSM IAM is path-scoped**: read `/aperture/<stage>/google/*` (client creds + tokens), write+delete
   `.../google/tokens/*` (the dynamic `<sub>` needs the wildcard; cdk-nag IAM5 acknowledged for both stages).
 
@@ -108,3 +109,12 @@ One OAuth client per env (same id/secret in both, in SSM SecureString at `/apert
 + `client_secret`), redirect URI `<APP_URL>/api/google/callback`, scope
 `openid email https://www.googleapis.com/auth/calendar.events`, consent screen **published**. Per-account
 refresh tokens are written by the app at connect time — never pre-created.
+
+## Dependency note
+
+`@aws-sdk/client-ssm@3.1102.0` (lambdas) is the one added dependency. Justification (CONVENTIONS A/B):
+**B** — the AWS control-plane client for reading client creds and reading/writing per-account refresh
+tokens; hand-rolling SigV4 for SSM is exactly the security-critical, subtle-correctness code the rule
+says not to own. Footprint is ~zero: pinned to the repo's existing SDK version and bundled `external`
+(`@aws-sdk/*` already ships in the Lambda runtime). Google's REST + OAuth are still rolled by hand (a few
+`fetch` calls) — no `googleapis` lib.

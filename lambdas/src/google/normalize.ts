@@ -50,7 +50,8 @@ export function normalizeEvents(items: GcalEvent[]): BusyResult {
     const start = ev.start ?? {};
     const end = ev.end ?? {};
 
-    // All-day: date-only, no clock time. Context, not committed time.
+    // All-day: date-only, no clock time. Context, not committed time. (A timed outOfOffice falls
+    // through to a committed interval below; an all-day OOO is counted here like any all-day block.)
     if (start.date && !start.dateTime) {
       allDayCount++;
       continue;
