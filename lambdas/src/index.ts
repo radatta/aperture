@@ -6,6 +6,11 @@ import { APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
 import { handleRpc } from './handler';
+import { BackendClient } from './backend';
+import { Repo } from './ddb/repo';
+import { liveWrites } from './ddb/writes';
+import { createLiveGoogle } from './google/liveGoogle';
+import { verifyState } from './google/state';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
@@ -15,10 +20,18 @@ const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 // clientId is optional (single-client pool) and left unset to avoid a deploy dependency cycle.
 const verifier = process.env.USER_POOL_ID ? createCognitoVerifier(process.env.USER_POOL_ID) : null;
 
+// The live calendar gateway (real fetch + SSM). Constructed once; makes no call until a method runs, so
+// this is inert in local/test where APP_URL/SSM aren't set. testMode requests never reach it (handleRpc
+// swaps in noopGoogle), so a smoke run stays external-call-free.
+const STAGE = process.env.STAGE ?? 'dev';
+const APP_URL = process.env.APP_URL ?? '';
+const google = createLiveGoogle({ stage: STAGE, appUrl: APP_URL });
+
 interface HttpEvent {
   rawPath?: string;
   requestContext?: { http?: { path?: string; method?: string } };
   headers?: Record<string, string | undefined>;
+  queryStringParameters?: Record<string, string | undefined> | null;
   body?: string | null;
 }
 interface HttpResult {
@@ -66,6 +79,40 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   if (method === 'health') {
     return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true, stage: process.env.STAGE ?? null }) };
   }
+
+  // Google OAuth callback — a REAL browser GET redirect, OUTSIDE the RPC dispatch. It sits behind the
+  // origin-secret gate above (a headerless call still 403s). The state is HMAC-verified for its userId
+  // (no JWT on this browser navigation); then exchange the code, store the token, record the account,
+  // and 302 back into the app. `?error=` and a bad/expired state are handled distinctly.
+  if (path.endsWith('/api/google/callback')) {
+    const back = (status: string): HttpResult => ({
+      statusCode: 302,
+      headers: { location: `${APP_URL}/settings?google=${status}` },
+      body: '',
+    });
+    const q = event.queryStringParameters ?? {};
+    if (q.error) return back('error');
+    if (!q.code || !q.state) {
+      return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Missing code/state' }) };
+    }
+    let userId: string;
+    try {
+      userId = verifyState(q.state, process.env.ORIGIN_SECRET ?? 'dev-state-secret').userId;
+    } catch {
+      return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid state' }) };
+    }
+    try {
+      const backend = new BackendClient(new Repo(doc, liveWrites(doc), userId), {
+        userId,
+        google,
+        stateSecret: process.env.ORIGIN_SECRET,
+      });
+      await backend.completeGoogleConnect(q.code);
+      return back('connected');
+    } catch {
+      return back('error');
+    }
+  }
   // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;
@@ -83,6 +130,8 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       method,
       args: body.args ?? [],
       testMode: body.testMode,
+      google,
+      stateSecret: process.env.ORIGIN_SECRET,
     });
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {
