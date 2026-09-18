@@ -40,6 +40,12 @@ export interface Task extends BaseEntity {
   startedAt: number | null;
   completedAt: number | null;
   cancelledAt: number | null;
+  // Google Calendar event pointer — set when "add to calendar" creates a real event, cleared on
+  // delete-on-cancel. All three are needed to delete: the event lives on gcalCalendarId, owned by the
+  // account gcalAccountId (whose token deletes it). Null when the task has no linked event.
+  gcalAccountId: string | null;
+  gcalCalendarId: string | null;
+  gcalEventId: string | null;
 }
 
 // Scheduling (the *when*), separate from the task (the *what*) → multi-day + ordering.
@@ -122,12 +128,34 @@ export interface Category extends BaseEntity {
   active: boolean;
 }
 
+// --- Google Calendar accounts (multi-account) ------------------------------
+// A connected Google account. `sub` (Google's stable subject id from the id_token) is the account key —
+// survives an email change; `email` is display only. The refresh token lives in SSM keyed by `sub`.
+export interface GoogleAccount {
+  sub: string;
+  email: string;
+}
+// Points at one calendar within one connected account. Used for the shape-read set and the write target.
+export interface CalendarRef {
+  accountSub: string;
+  calendarId: string;
+}
+
 // --- Settings (singleton) --------------------------------------------------
 export interface Settings extends BaseEntity {
-  dayStartHour: number; // default 4
+  dayStartHour: number; // default 4 — the day-rollover boundary, NOT the waking window
   pomodoroWorkMin: number; // default 25
   pomodoroBreakMin: number; // default 5
   theme: 'auto' | 'light' | 'dark'; // auto follows home mode
+  // Connected Google accounts (personal + school). Written server-side at connect/disconnect; [] when none.
+  googleAccounts: GoogleAccount[];
+  // Calendars whose events feed the morning shape read, across accounts. [] → shape falls back to manual.
+  calendarShapeRefs: CalendarRef[];
+  // Default calendar "add to calendar" writes to; per-event override lives in the dialog. null → user picks.
+  calendarWriteDefault: CalendarRef | null;
+  // Waking-window bounds (hours 0–23) for the shape read — SEPARATE from dayStartHour's 4am rollover.
+  dayFocusStart: number; // default 8
+  dayEndHour: number; // default 22
 }
 
 // --- Calibration (derived, read-only) -------------------------------------

@@ -56,6 +56,13 @@ export const API_METHODS = [
   'createStory',
   'updateStory',
   'deleteStory',
+  'googleConnectUrl',
+  'getGoogleStatus',
+  'listGoogleCalendars',
+  'getCalendarBusy',
+  'insertCalendarEvent',
+  'deleteCalendarEvent',
+  'disconnectGoogleAccount',
   'exportData',
 ] as const;
 

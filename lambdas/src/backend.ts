@@ -76,15 +76,22 @@ export class BackendClient implements ApiClient {
     return { id: this.ulid(), userId: this.userId, createdAt: t, updatedAt: t, deletedAt: null };
   }
   private async ensureSettings(): Promise<Settings> {
-    const row = await this.repo.getSettingsRow();
-    if (row) return row;
     const def: Settings = {
       ...this.base(),
       dayStartHour: 4,
       pomodoroWorkMin: 25,
       pomodoroBreakMin: 5,
       theme: 'auto',
+      googleAccounts: [],
+      calendarShapeRefs: [],
+      calendarWriteDefault: null,
+      dayFocusStart: 8,
+      dayEndHour: 22,
     };
+    const row = await this.repo.getSettingsRow();
+    // Backfill defaults over an existing row: fields added later (the calendar set) read as their
+    // default, not undefined, on settings written before those fields existed.
+    if (row) return { ...def, ...row };
     await this.repo.putSettings(def);
     return def;
   }
@@ -203,6 +210,9 @@ export class BackendClient implements ApiClient {
       startedAt: null,
       completedAt: null,
       cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
     });
   }
   async setTaskEstimate(
@@ -463,6 +473,9 @@ export class BackendClient implements ApiClient {
         startedAt: null,
         completedAt: null,
         cancelledAt: null,
+        gcalAccountId: null,
+        gcalCalendarId: null,
+        gcalEventId: null,
       });
       await this.repo.putPlan({
         ...this.base(),

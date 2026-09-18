@@ -24,10 +24,15 @@ import {
 import type {
   ApiClient,
   BaseEntity,
+  CalendarBusy,
   CalibrationPoint,
   Category,
   CreateTaskInput,
   DateRange,
+  GetCalendarBusyInput,
+  GoogleCalendar,
+  GoogleStatus,
+  InsertCalendarEventInput,
   Day,
   ExportBundle,
   Habit,
@@ -203,6 +208,11 @@ class StubClient implements ApiClient {
       pomodoroWorkMin: 25,
       pomodoroBreakMin: 5,
       theme: 'auto',
+      googleAccounts: [],
+      calendarShapeRefs: [],
+      calendarWriteDefault: null,
+      dayFocusStart: 8,
+      dayEndHour: 22,
     };
     this.store.settings = settings;
     this.persist();
@@ -304,6 +314,9 @@ class StubClient implements ApiClient {
       startedAt: null,
       completedAt: null,
       cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
     });
   }
   async setTaskEstimate(
@@ -660,6 +673,75 @@ class StubClient implements ApiClient {
     this.store.settings = next;
     this.persist();
     return next;
+  }
+
+  // --- Google Calendar (stub: an in-memory fake so the UI is exercisable page-first) ---------------
+  // No OAuth here — connecting is a real-backend redirect (Phase 5). The stub reflects whatever
+  // accounts settings hold (seeded for dev) and fabricates believable calendars + busy blocks so the
+  // shape panel, calendar picker, and add-to-calendar dialog render against real-shaped data.
+  async googleConnectUrl(): Promise<{ url: string }> {
+    // The stub can't complete an OAuth redirect; the real consent URL is built by the backend.
+    return { url: '#google-connect-unavailable-in-stub' };
+  }
+  async getGoogleStatus(): Promise<GoogleStatus> {
+    return {
+      accounts: this.ensureSettings().googleAccounts.map((a) => ({
+        sub: a.sub,
+        email: a.email,
+        connected: true,
+        reconnectRequired: false,
+      })),
+    };
+  }
+  async listGoogleCalendars(): Promise<GoogleCalendar[]> {
+    // Two calendars per connected account (primary + one extra) so the picker has choices.
+    return this.ensureSettings().googleAccounts.flatMap((a) => [
+      { accountSub: a.sub, calendarId: a.email, summary: a.email, primary: true },
+      { accountSub: a.sub, calendarId: `${a.sub}-secondary`, summary: 'Secondary', primary: false },
+    ]);
+  }
+  async getCalendarBusy(input: GetCalendarBusyInput): Promise<CalendarBusy> {
+    if (this.ensureSettings().googleAccounts.length === 0) return { intervals: [], allDayCount: 0 };
+    // Two fabricated blocks inside the window, deterministic relative to its start.
+    const H = 60 * 60_000;
+    const s = input.windowStartMs;
+    const clamp = (ms: number) => Math.min(ms, input.windowEndMs);
+    return {
+      intervals: [
+        { startMs: clamp(s + 2 * H), endMs: clamp(s + 3 * H) },
+        { startMs: clamp(s + 5 * H), endMs: clamp(s + 6.5 * H) },
+      ].filter((iv) => iv.endMs > iv.startMs),
+      allDayCount: 1,
+    };
+  }
+  async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
+    this.mustFind(this.store.tasks, input.taskId); // throw if the task is gone
+    return this.writes.patch(this.store.tasks, input.taskId, {
+      gcalAccountId: input.accountSub,
+      gcalCalendarId: input.calendarId,
+      gcalEventId: `stub-event-${this.now()}`,
+    });
+  }
+  async deleteCalendarEvent(taskId: string): Promise<Task> {
+    this.mustFind(this.store.tasks, taskId);
+    return this.writes.patch(this.store.tasks, taskId, {
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+    });
+  }
+  async disconnectGoogleAccount(accountSub: string): Promise<void> {
+    const current = this.ensureSettings();
+    const next: Settings = {
+      ...current,
+      googleAccounts: current.googleAccounts.filter((a) => a.sub !== accountSub),
+      calendarShapeRefs: current.calendarShapeRefs.filter((r) => r.accountSub !== accountSub),
+      calendarWriteDefault:
+        current.calendarWriteDefault?.accountSub === accountSub ? null : current.calendarWriteDefault,
+      updatedAt: this.now(),
+    };
+    this.store.settings = next;
+    this.persist();
   }
 
   // --- Calibration ---------------------------------------------------------

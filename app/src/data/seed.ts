@@ -46,12 +46,25 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   store.categories.push(...cats);
   const byLabel = (l: string) => cats.find((c) => c.label === l)!;
 
+  // Two seeded Google accounts so dev opens in the connected state (shape panel, pickers, add-to-cal all
+  // exercisable); placeholder emails, never real PII. Disconnect one in Settings to see the empty state.
   store.settings = {
     ...mk(nowMs - 30 * DAY),
     dayStartHour: START_HOUR,
     pomodoroWorkMin: 25,
     pomodoroBreakMin: 5,
     theme: 'auto',
+    googleAccounts: [
+      { sub: 'seed-personal', email: 'you@gmail.com' },
+      { sub: 'seed-school', email: 'you@school.edu' },
+    ],
+    calendarShapeRefs: [
+      { accountSub: 'seed-personal', calendarId: 'you@gmail.com' },
+      { accountSub: 'seed-school', calendarId: 'you@school.edu' },
+    ],
+    calendarWriteDefault: { accountSub: 'seed-personal', calendarId: 'you@gmail.com' },
+    dayFocusStart: 8,
+    dayEndHour: 22,
   };
 
   const estimates = [30, 45, 60, 90];
@@ -112,6 +125,9 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         startedAt,
         completedAt,
         cancelledAt: null,
+        gcalAccountId: null,
+        gcalCalendarId: null,
+        gcalEventId: null,
       };
       store.tasks.push(task);
       const session: PomodoroSession = {
@@ -159,6 +175,9 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       startedAt: null,
       completedAt: null,
       cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
     });
   });
 
