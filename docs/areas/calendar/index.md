@@ -59,6 +59,15 @@ impls: `LiveGoogle` (real `fetch` + SSM, rolled by hand — no `googleapis` lib)
 patches/deletes an event whose `eventId` it stored (`task.gcalEventId`, on `gcalAccountId` +
 `gcalCalendarId`). Discipline, not scope, keeps it off real meetings.
 
+**Primary-calendar-only (a scope consequence).** `calendar.events` grants event read/write but **not**
+`calendarList.list` — listing an account's calendars 403s ("insufficient scopes"; that needs
+`calendar.readonly` / `calendar.calendarlist.readonly`). Rather than broaden the grant, we use each
+account's **primary** calendar only (its `calendarId` is the account email): `listGoogleCalendars`
+returns the primary synthetically (no API call), and connect defaults that primary into the shape set +
+write default. `events.list`/`events.insert` on the primary work with the scope we have. To offer a
+non-primary picker later, add `calendar.calendarlist.readonly` and restore the gateway's `listCalendars`
+(still on the interface) — at the cost of re-consent + a consent-screen scope addition.
+
 ## Data model
 
 - `Task` + `gcalAccountId | gcalCalendarId | gcalEventId` (all null-default) — the pointer to a created
