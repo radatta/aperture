@@ -42,7 +42,7 @@ The Lambda mints a presigned PUT (upload) / GET (download); the browser transfer
 *Rejected:* proxying uploads through the Lambda (base64 body). Simpler client, but caps file size at ~4.5 MB, doubles egress cost, and puts bytes in a place that only needed to sign a URL.
 
 **D2 — Any file type, not photos-only.**
-Any MIME type is accepted; `image/*` renders an inline thumbnail, everything else a generic file chip.
+Any MIME type is accepted; a **web-renderable** image (`isImage`: jpeg/png/gif/webp/avif) renders a thumbnail, everything else — including images browsers can't decode (HEIC/HEIF/TIFF) — a generic file chip.
 *Why:* the real uses (PDF spec, receipt, screenshot) are mixed. Photos-only would force "print to image" workarounds.
 *Rejected:* an image allow-list. It would reject the most common artifact (a PDF) for no safety gain, since serving safety comes from D6, not from the stored type.
 
@@ -164,6 +164,7 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 
 - [x] **Phase 6 — polish (after dev validation)** — three small frontend-light changes once the round-trip was confirmed on dev:
   - **Inline viewing** — `viewableInline()` widens the GET disposition beyond images (D6). `text/xml`/`application/xml` are excluded alongside `+xml` (XSLT-via-PI can execute in some browsers).
+    - ↳ *Dev found a HEIC bug: `isImage` was "any `image/*`", so an iPhone `.heic` rendered a broken `<img>` (Firefox can't decode HEIC → `NS_ERROR_DOM_NETWORK_ERROR`) and inline-then-downloaded. `isImage` is now a web-renderable allow-list (jpeg/png/gif/webp/avif); HEIC/HEIF/TIFF → file chip + clean forced-download. Viewing HEIC in-browser isn't fixable (no Firefox codec).*
   - **Mint-on-click** — the download URL is now minted **fresh at click time**, not reused from mount; fixes a real dev bug where a panel open >5 min opened an expired presigned GET (`Request has expired`). `useAttachmentUrl` is now **thumbnail-only** (passed `enabled = isImage`, so a panel of PDFs mints zero GETs on mount).
     - ↳ *`window.open(url, '_blank', 'noopener')` returns **null** by spec, which would have routed every click to the fallback. Fixed: open `window.open('', '_blank')` (no `noopener`), set `tab.opener = null`, then redirect after the presign resolves. If a blocker still eats the pre-opened tab, `window.location.href` downloads in place (attachment types) or navigates (inline) — rare.*
   - **Drag-and-drop** — the panel is a drop zone (`onDragOver`/`onDrop` → the existing `onFiles`, so the cap pre-check is shared); `relatedTarget` containment stops the highlight flickering over child rows. No dependency.
