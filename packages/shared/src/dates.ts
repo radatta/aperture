@@ -52,6 +52,14 @@ export function daysBetween(a: string, b: string): number {
   return Math.round((keyToNoon(b).getTime() - keyToNoon(a).getTime()) / MS_PER_DAY);
 }
 
+// True iff `s` is a real, zero-padded YYYY-MM-DD calendar date. The shape check rejects unpadded
+// (2026-2-5) and garbage; the round-trip rejects impossible dates (2026-02-30 rolls to Mar 2, so the
+// re-keyed value differs). This is the one gate for a `due:` token — raw ISO never reaches a component.
+export function isDayKey(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  return keyOf(keyToNoon(s)) === s;
+}
+
 // 0 = Sunday … 6 = Saturday (JS convention), for weekly recurrence rules.
 export function weekdayOf(key: string): number {
   return keyToNoon(key).getDay();

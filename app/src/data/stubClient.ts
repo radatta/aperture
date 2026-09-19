@@ -191,9 +191,33 @@ class StubClient implements ApiClient {
   };
 
   // --- helpers -------------------------------------------------------------
-  private base(): BaseEntity {
-    const t = this.now();
+  private baseAt(t: number): BaseEntity {
     return { id: this.ulid(), userId: USER_ID, createdAt: t, updatedAt: t, deletedAt: null };
+  }
+  private base(): BaseEntity {
+    return this.baseAt(this.now());
+  }
+  // Shared task literal for createTask + createTasks. A batch passes one `t` for every task so they
+  // tie on createdAt and render as a block in ULID (paste) order (listTasks sorts createdAt desc, stable).
+  private newTask(input: CreateTaskInput, t: number): Task {
+    return {
+      ...this.baseAt(t),
+      title: input.title,
+      status: 'backlog',
+      categoryId: input.categoryId ?? null,
+      dueDay: input.dueDay ?? null,
+      seriesId: null,
+      estimateMin: input.estimateMin ?? null,
+      bufferMin: input.bufferMin ?? null,
+      estimateLockedMin: null,
+      actualAccruedMin: 0,
+      startedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+    };
   }
   private alive<T extends BaseEntity>(coll: T[]): T[] {
     return coll.filter((x) => x.deletedAt === null);
@@ -355,24 +379,11 @@ class StubClient implements ApiClient {
     return this.find(this.store.tasks, id) ?? null;
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
-    return this.writes.insert(this.store.tasks, {
-      ...this.base(),
-      title: input.title,
-      status: 'backlog',
-      categoryId: input.categoryId ?? null,
-      dueDay: null,
-      seriesId: null,
-      estimateMin: input.estimateMin ?? null,
-      bufferMin: input.bufferMin ?? null,
-      estimateLockedMin: null,
-      actualAccruedMin: 0,
-      startedAt: null,
-      completedAt: null,
-      cancelledAt: null,
-      gcalAccountId: null,
-      gcalCalendarId: null,
-      gcalEventId: null,
-    });
+    return this.writes.insert(this.store.tasks, this.newTask(input, this.now()));
+  }
+  async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
+    const t = this.now();
+    return inputs.map((input) => this.writes.insert(this.store.tasks, this.newTask(input, t)));
   }
   async setTaskEstimate(
     id: string,

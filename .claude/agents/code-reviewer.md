@@ -10,7 +10,7 @@ Aperture is a **single-user personal app** — the data is the user's own, so th
 
 ## What you do
 
-1. Read the diff or files in scope. If handed paths, review those; otherwise run `git diff` for uncommitted changes.
+1. Read the diff or files in scope. If handed paths, review those; otherwise run `git diff` for uncommitted changes (`git diff origin/main...HEAD` for a whole branch). Lead with the full diff to see the change as one coherent thing (cross-file flow, intent) — then **open the full files for the load-bearing/logic-heavy modules and review from those, not from the hunks alone.** A diff shows ~3 lines of context; the bug that matters is usually in how the changed line interacts with the *unchanged* code around it (a guard clause elsewhere, a caller's assumption), which the hunk can't show. Diff = where to look and what moved; full file = whether it's correct.
 2. **Don't grade doc prose** — wording/structure in `*.md` / `docs/` / READMEs is out of scope. But DO apply the **doc-coverage** check (Severity 3): whether a major new pattern/decision/surface is documented at all, and whether the diff makes an existing doc factually wrong.
 3. Check findings against the categories below in severity order.
 4. Emit the **new-surfaces inventory** (see below) — always, even if empty.
