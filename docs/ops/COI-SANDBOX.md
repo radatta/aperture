@@ -527,6 +527,16 @@ limactl stop incus
 container, which forces a `--resume` next time, which **forks the session** and adds another
 `(N)` entry to your picker (see §1). Leave the container running and reattach instead.
 
+**Stepping away without ending? DETACH, don't exit.** If you run your own tmux around the session,
+`Ctrl+B` then `D` detaches it — Claude Code, `coi shell`, every pane and the container stay alive and
+frozen; reattach later with `tmux attach` (or `coi attach`). Nothing exits, nothing forks. This is the
+routine nightly move: the `exit` in step 2 *closes* the pane you'd detach from, which is exactly what
+you don't want overnight. The tradeoff is that a detach does **not** end `coi shell`, so **no fresh
+export snapshot is written** — you're relying on the container surviving. Before anything risky (a VM
+change, a Mac reboot), run the step-1/2 exit first to force a snapshot, then come back with
+`coi shell --resume`. *(The no-snapshot-on-detach point is inferred from the export firing on `coi shell`
+exit, not raced empirically; the export-on-exit mechanism itself is verified — see below.)*
+
 **Exiting `coi shell` is the save. `coi shutdown` is the delete.** They are two different programs
 doing two different jobs, and this doc had it backwards until 2026-09-07:
 
