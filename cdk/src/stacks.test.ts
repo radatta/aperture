@@ -10,12 +10,17 @@ import { ApertureBillingStack } from './lib/billing-stack';
 function templates() {
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
   const env = { account: '111111111111', region: 'us-west-1' };
-  const data = new ApertureDataStack(app, 'ApertureData-dev', { stage: 'dev', env });
+  const data = new ApertureDataStack(app, 'ApertureData-dev', {
+    stage: 'dev',
+    env,
+    allowedOrigins: ['*'],
+  });
   const appStack = new ApertureAppStack(app, 'ApertureApp-dev', {
     stage: 'dev',
     env,
     table: data.table,
     userPool: data.userPool,
+    filesBucket: data.filesBucket,
     originSecret: 'test-origin-secret',
     deviceToken: 'test-device-token',
     deviceUserId: 'test-device-user',
@@ -42,6 +47,24 @@ describe('ApertureDataStack', () => {
     });
     data.hasResource('AWS::Cognito::UserPool', { DeletionPolicy: 'Retain' });
     data.resourceCountIs('AWS::Cognito::UserPoolDomain', 1);
+  });
+
+  it('provisions a private, versioned, RETAINed files bucket with CORS for presigned PUT', () => {
+    data.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: { Status: 'Enabled' },
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+      CorsConfiguration: {
+        CorsRules: Match.arrayWith([Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) })]),
+      },
+    });
+    // The one bucket in the precious stack is never auto-deleted.
+    data.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
+    data.resourceCountIs('AWS::S3::Bucket', 1);
   });
 });
 
@@ -82,6 +105,20 @@ describe('ApertureAppStack', () => {
             },
           }),
           Match.objectLike({ Action: Match.arrayWith(['ssm:PutParameter', 'ssm:DeleteParameter']) }),
+        ]),
+      },
+    });
+  });
+
+  it('grants the BFF object-scoped access to the files bucket and wires FILES_BUCKET', () => {
+    app.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: Match.objectLike({ FILES_BUCKET: Match.anyValue() }) },
+    });
+    // PutObject/GetObject only, scoped to the u/* object prefix — no bucket-level or List permission.
+    app.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({ Action: Match.arrayWith(['s3:PutObject', 's3:GetObject']) }),
         ]),
       },
     });
@@ -168,12 +205,17 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
   const env = { account: '111111111111', region: 'us-west-1' };
   const certArn = 'arn:aws:acm:us-east-1:111111111111:certificate/abcd-1234';
-  const data = new ApertureDataStack(app, 'ApertureData-dev', { stage: 'dev', env });
+  const data = new ApertureDataStack(app, 'ApertureData-dev', {
+    stage: 'dev',
+    env,
+    allowedOrigins: ['https://dev.aperture.rahuldatta.dev'],
+  });
   const appStack = new ApertureAppStack(app, 'ApertureApp-dev', {
     stage: 'dev',
     env,
     table: data.table,
     userPool: data.userPool,
+    filesBucket: data.filesBucket,
     originSecret: 'test-origin-secret',
     deviceToken: 'test-device-token',
     domainName: 'dev.aperture.rahuldatta.dev',
@@ -209,12 +251,17 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
   const build = (stage: string) => {
     const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
-    const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env });
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
+      stage,
+      env,
+      allowedOrigins: ['*'],
+    });
     const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
       stage,
       env,
       table: data.table,
       userPool: data.userPool,
+      filesBucket: data.filesBucket,
       originSecret: 'test-origin-secret',
       deviceToken: 'test-device-token',
     });

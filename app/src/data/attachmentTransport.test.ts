@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest';
+import { resolveViewUrl, uploadTo } from './attachmentTransport';
+
+// The stub path is the one exercised in-app (page-first). The XHR path is covered on dev against real S3.
+describe('attachment transport (stub path)', () => {
+  it('stores the blob for a stub url and resolves it back to an object url', async () => {
+    const file = new File(['hi'], 'x.png', { type: 'image/png' });
+    let progress = 0;
+    await uploadTo('stub:abc', file, 'image/png', (f) => (progress = f));
+    expect(progress).toBe(1); // stub upload completes immediately
+
+    const orig = URL.createObjectURL;
+    URL.createObjectURL = () => 'blob:abc'; // jsdom lacks it
+    try {
+      expect(resolveViewUrl('stub:abc')).toBe('blob:abc');
+    } finally {
+      URL.createObjectURL = orig;
+    }
+  });
+
+  it('returns null for an unknown stub id and passes real urls through', () => {
+    expect(resolveViewUrl('stub:missing')).toBeNull();
+    expect(resolveViewUrl('https://s3.example.com/obj?sig=x')).toBe('https://s3.example.com/obj?sig=x');
+  });
+});

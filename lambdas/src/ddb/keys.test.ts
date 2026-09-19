@@ -16,6 +16,11 @@ describe('single-table keys', () => {
     expect(sk.lc('2026-08-04', 'x').startsWith(sk.lcAllPrefix())).toBe(true);
     expect(sk.story('abc')).toBe('story#abc');
     expect(sk.story('abc').startsWith(sk.storyPrefix())).toBe(true);
+    expect(sk.attach('t1', 'a1')).toBe('attach#t1#a1');
+    expect(sk.attach('t1', 'a1').startsWith(sk.attachTaskPrefix('t1'))).toBe(true);
+    expect(sk.attach('t1', 'a1').startsWith(sk.attachAllPrefix())).toBe(true);
+    // Task-scoped prefix isolates one task's files from another's under the shared attach# space.
+    expect(sk.attach('t2', 'a1').startsWith(sk.attachTaskPrefix('t1'))).toBe(false);
   });
 
   it('pads plan order so lexical SK order matches numeric order', () => {

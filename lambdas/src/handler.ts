@@ -5,6 +5,7 @@ import { liveWrites, noopWrites } from './ddb/writes';
 import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
+import type { Presigner } from './s3/presigner';
 
 export interface RpcCall {
   userId: string;
@@ -16,10 +17,16 @@ export interface RpcCall {
   stateSecret?: string; // OAuth state HMAC key (ORIGIN_SECRET)
 }
 
+// Injected dependencies that outlive a single call (the S3 presigner is built once at cold start). Kept
+// separate from RpcCall so the contract suite can supply a fake without a per-call field.
+export interface RpcDeps {
+  presigner?: Presigner;
+}
+
 // Transport-agnostic RPC core: validate the method against the shared allowlist, build a BackendClient
 // (live writes, or write-free for a smoke call), and invoke it. The AWS handler and the httpClient's
 // in-process test harness both go through here, so there's one dispatch path to trust.
-export async function handleRpc(doc: DocClient, call: RpcCall): Promise<unknown> {
+export async function handleRpc(doc: DocClient, call: RpcCall, deps: RpcDeps = {}): Promise<unknown> {
   if (!isApiMethod(call.method)) throw new Error(`Unknown method: ${call.method}`);
   const writes = call.testMode ? noopWrites() : liveWrites(doc);
   // testMode forces the inert gateway too — a smoke run reads no SSM token and makes no Google fetch.
@@ -29,6 +36,7 @@ export async function handleRpc(doc: DocClient, call: RpcCall): Promise<unknown>
     now: call.now,
     google,
     stateSecret: call.stateSecret,
+    presigner: deps.presigner,
   });
   const fn = (
     backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>

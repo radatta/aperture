@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   Category,
   Day,
   Habit,
@@ -157,6 +158,30 @@ export class Repo {
   async putStory(s: Story): Promise<Story> {
     await this.writes.put(entityItem(this.userId, sk.story(s.id), s));
     return s;
+  }
+
+  // --- Task attachments (metadata; bytes live in S3) ---
+  async listAttachmentsForTask(taskId: string): Promise<Attachment[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.attachTaskPrefix(taskId))).map((i) =>
+        toEntity<Attachment>(i),
+      ),
+    );
+  }
+  async listAllAttachments(): Promise<Attachment[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.attachAllPrefix())).map((i) => toEntity<Attachment>(i)),
+    );
+  }
+  // getStory-style (re-filter tombstones → null) so confirm/download on a deleted attachment throws.
+  async findAttachment(id: string): Promise<Attachment | null> {
+    const it = await this.scanById(sk.attachAllPrefix(), id);
+    const a = it ? toEntity<Attachment>(it) : null;
+    return a && a.deletedAt === null ? a : null;
+  }
+  async putAttachment(a: Attachment): Promise<Attachment> {
+    await this.writes.put(entityItem(this.userId, sk.attach(a.taskId, a.id), a));
+    return a;
   }
 
   // --- Sessions ---

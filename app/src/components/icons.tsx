@@ -141,3 +141,12 @@ export function PlusIcon(p: IconProps) {
     </Svg>
   );
 }
+
+// Attachments — a paperclip, the universal "a file rides along" mark.
+export function PaperclipIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M21 11.5 12 20.5a5.5 5.5 0 0 1-7.8-7.8l9-9a3.5 3.5 0 0 1 5 5l-9 9a1.5 1.5 0 0 1-2.2-2.2l8.3-8.3" />
+    </Svg>
+  );
+}

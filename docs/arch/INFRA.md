@@ -35,8 +35,8 @@ Two isolated copies of everything, so changes can be tested before touching real
 
 ## 3. CDK stacks — split stateful from replaceable
 
-- **`ApertureData-<env>`** — DynamoDB table + Cognito User Pool. `removalPolicy: RETAIN`, deployed rarely, protected from teardown. *(Precious: your data + your identity.)*
-- **`ApertureApp-<env>`** — Lambda + Function URL + S3 + CloudFront (+ ACM cert reference, added at domain step). Redeploys freely; nothing precious.
+- **`ApertureData-<env>`** — DynamoDB table + Cognito User Pool + the **Files bucket** (user-uploaded task attachments). `removalPolicy: RETAIN`, deployed rarely, protected from teardown. *(Precious: your data + your identity.)* The Files bucket is versioned, `BLOCK_ALL`-private, and reached only via short-lived **presigned URLs** (browser↔S3 directly, no CloudFront); its CORS `allowedOrigins` is the stage's app domain. Distinct from the app stack's Site bucket, which is `DESTROY`/re-syncable — user bytes never go there. See `areas/tasks/attachments.md`.
+- **`ApertureApp-<env>`** — Lambda + Function URL + S3 (Site) + CloudFront (+ ACM cert reference, added at domain step). Redeploys freely; nothing precious. The BFF Lambda gets an object-scoped (`u/*`) `s3:PutObject/GetObject` grant on the data stack's Files bucket to sign presigns.
 
 Rationale: never let an app redeploy endanger the stateful resources.
 
@@ -47,7 +47,7 @@ Rationale: never let an app redeploy endanger the stateful resources.
 - **One multi-route BFF Lambda** per env (all routes in a single handler). Node 22 runtime, esbuild-bundled via CDK.
 - **Lambda Function URL**, auth type `AWS_IAM`, fronted by **CloudFront OAC** → the raw URL can't be called directly, only through CloudFront.
 - **Auth:** validate the Cognito JWT **in-handler** (JWKS signature + issuer/expiry), extract `sub` → `userId` scoping every DynamoDB item.
-- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `USER_POOL_ID`, `USER_POOL_CLIENT_ID`, `STAGE`.
+- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `USER_POOL_CLIENT_ID`, `STAGE`.
 - **Writes-object pattern** enforced (single audit point for all side effects; guarantees no writes during smoke tests).
 - **Recurrence generation: lazy on read** — when a day loads, materialize any due `taskSeries` occurrences. No cron/EventBridge.
 

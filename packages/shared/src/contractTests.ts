@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient } from './api';
+import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 
 // ONE behavior suite, run against every ApiClient implementation — the in-memory stub, the in-process
 // Lambda (BackendClient over an in-memory table), and any future transport. If the swap is faithful,
@@ -110,6 +111,101 @@ export function runApiContract(
       await api.deleteStory(b.id);
       expect((await api.listStories()).map((s) => s.id)).toEqual([a.id]);
       await expect(api.updateStory(b.id, { title: 'nope' })).rejects.toThrow();
+    });
+
+    it('attachments: presign→confirm lists the file, normalizes name/type, and soft-delete removes it', async () => {
+      const task = await api.createTask({ title: 'has files' });
+      const { attachment, uploadUrl } = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'shot.png',
+        contentType: 'image/png',
+        size: 1234,
+      });
+      expect(uploadUrl).toBeTruthy();
+      expect(attachment.status).toBe('pending');
+      expect(attachment.s3Key).toContain(task.id); // scoped by user + task, not the filename
+      expect(attachment.s3Key).not.toContain('shot.png');
+
+      // A pending row is not listed until the browser confirms the PUT.
+      expect(await api.listAttachments(task.id)).toHaveLength(0);
+
+      const ready = await api.confirmAttachment(attachment.id);
+      expect(ready.status).toBe('ready');
+      const list = await api.listAttachments(task.id);
+      expect(list.map((a) => a.id)).toEqual([attachment.id]);
+      expect(list[0]!.filename).toBe('shot.png');
+      expect(list[0]!.contentType).toBe('image/png');
+
+      // A download URL is mintable while ready; the no-arg list spans all tasks.
+      expect(await api.getAttachmentDownloadUrl(attachment.id)).toBeTruthy();
+      expect((await api.listAttachments()).map((a) => a.id)).toContain(attachment.id);
+
+      // Name is sanitized (path separators → _) and an unusable type collapses to octet-stream.
+      const messy = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'a/b\\c .png',
+        contentType: 'not a type',
+        size: 5,
+      });
+      expect(messy.attachment.filename).toBe('a_b_c .png');
+      expect(messy.attachment.contentType).toBe('application/octet-stream');
+
+      // Soft-delete drops it from the list, and minting/confirming a deleted one throws for every impl.
+      await api.deleteAttachment(attachment.id);
+      expect((await api.listAttachments(task.id)).map((a) => a.id)).not.toContain(attachment.id);
+      await expect(api.getAttachmentDownloadUrl(attachment.id)).rejects.toThrow();
+      await expect(api.confirmAttachment(attachment.id)).rejects.toThrow();
+    });
+
+    it('attachments: enforces the size cap, the per-task count cap, and expiry of pending rows', async () => {
+      const task = await api.createTask({ title: 'capped' });
+      await expect(
+        api.createAttachmentUploadUrl({
+          taskId: task.id,
+          filename: 'big',
+          contentType: 'application/pdf',
+          size: ATTACHMENT_MAX_BYTES + 1,
+        }),
+      ).rejects.toThrow();
+
+      // Fill the last-but-one slots with confirmed rows, then take the final slot with a PENDING row.
+      for (let i = 0; i < ATTACHMENTS_PER_TASK - 1; i++) {
+        const { attachment } = await api.createAttachmentUploadUrl({
+          taskId: task.id,
+          filename: `f${i}`,
+          contentType: 'application/pdf',
+          size: 10,
+        });
+        await api.confirmAttachment(attachment.id);
+      }
+      const { attachment: stale } = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'pending',
+        contentType: 'application/pdf',
+        size: 10,
+      });
+      // A fresh pending row still counts, so the cap is full.
+      await expect(
+        api.createAttachmentUploadUrl({
+          taskId: task.id,
+          filename: 'blocked',
+          contentType: 'application/pdf',
+          size: 10,
+        }),
+      ).rejects.toThrow();
+
+      // Once its upload URL expires the pending row can never become ready, so it frees its slot...
+      advance(UPLOAD_URL_TTL_MS + 1);
+      const ok = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'now-fits',
+        contentType: 'application/pdf',
+        size: 10,
+      });
+      expect(ok.attachment.status).toBe('pending');
+      // ...and confirming that expired row is rejected — otherwise it would resurrect a discounted slot
+      // (cap bypass) and mark a byte-less object ready.
+      await expect(api.confirmAttachment(stale.id)).rejects.toThrow();
     });
 
     it('tasks: estimate freezes on start of work and yields a calibration point when done', async () => {
@@ -325,9 +421,17 @@ export function runApiContract(
         lang: 'python3',
       });
       const story = await api.createStory({ title: 'exportable story' });
+      const { attachment } = await api.createAttachmentUploadUrl({
+        taskId: t.id,
+        filename: 'e.png',
+        contentType: 'image/png',
+        size: 10,
+      });
+      await api.confirmAttachment(attachment.id);
       const data = await api.exportData();
       expect(Object.keys(data).sort()).toEqual(
         [
+          'attachments',
           'categories',
           'days',
           'exportedAt',
@@ -348,6 +452,7 @@ export function runApiContract(
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
       expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
       expect(data.stories.map((x) => x.id)).toContain(story.id);
+      expect(data.attachments.map((x) => x.id)).toContain(attachment.id); // ready rows only
       // Materialised, never the stub's nullable storage state — nothing in this test triggers
       // ensureSettings() beforehand, so a stub that exported store.settings raw would fail here.
       expect(data.settings).toBeTruthy();
@@ -373,11 +478,30 @@ export function runApiContract(
       });
       await api.removePlan(plan.id);
 
+      // A confirmed-then-deleted attachment is a tombstone; a never-confirmed one is pending. Neither
+      // belongs in the export (ready + alive only).
+      const { attachment: goneAtt } = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'gone.png',
+        contentType: 'image/png',
+        size: 10,
+      });
+      await api.confirmAttachment(goneAtt.id);
+      await api.deleteAttachment(goneAtt.id);
+      const { attachment: pendingAtt } = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'pending.png',
+        contentType: 'image/png',
+        size: 10,
+      });
+
       const data = await api.exportData();
       expect(data.categories.map((c) => c.id)).toContain(kept.id);
       expect(data.categories.map((c) => c.id)).not.toContain(gone.id);
       expect(data.plans.map((p) => p.id)).not.toContain(plan.id);
       expect(data.tasks.map((t) => t.id)).toContain(task.id); // the task itself survives
+      expect(data.attachments.map((a) => a.id)).not.toContain(goneAtt.id); // tombstoned
+      expect(data.attachments.map((a) => a.id)).not.toContain(pendingAtt.id); // never confirmed
     });
   });
 }

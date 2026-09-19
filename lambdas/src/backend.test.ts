@@ -4,6 +4,9 @@ import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { sk } from './ddb/keys';
 import { BackendClient } from './backend';
+import { handleRpc } from './handler';
+import { fakePresigner } from './s3/presigner';
+import type { Presigner } from './s3/presigner';
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -29,5 +32,131 @@ describe('backend story soft-delete', () => {
 
     // But filtered out of the live list.
     expect((await backend.listStories()).map((x) => x.id)).not.toContain(s.id);
+  });
+});
+
+describe('backend attachments', () => {
+  const setup = (userId = 'local') => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), userId), {
+      userId,
+      now: () => clock,
+      presigner: fakePresigner(),
+    });
+    return { doc, backend, tick: (ms: number) => (clock += ms) };
+  };
+
+  it('keys the S3 object by user + task + id, never the filename', async () => {
+    const { backend } = setup();
+    const task = await backend.createTask({ title: 'has a file' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'secret quarterly report.pdf',
+      contentType: 'application/pdf',
+      size: 100,
+    });
+    expect(attachment.s3Key).toBe(`u/local/${task.id}/${attachment.id}`);
+    expect(attachment.s3Key).not.toContain('secret');
+  });
+
+  it('tombstones on delete — kept in the table, gone from the list', async () => {
+    const { doc, backend, tick } = setup();
+    const task = await backend.createTask({ title: 't' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await backend.confirmAttachment(attachment.id);
+    tick(1000);
+    await backend.deleteAttachment(attachment.id);
+
+    const raw = await doc.get('u#local', sk.attach(task.id, attachment.id));
+    expect(raw).toBeTruthy(); // still physically present (bytes orphaned, metadata recoverable)
+    expect(raw!.deletedAt).not.toBeNull();
+    expect(await backend.listAttachments(task.id)).toHaveLength(0);
+  });
+
+  it('keeps a task’s attachments after the task is cancelled (cancel ≠ delete)', async () => {
+    const { backend } = setup();
+    const task = await backend.createTask({ title: 'to cancel' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await backend.confirmAttachment(attachment.id);
+    await backend.transitionTask(task.id, 'cancelled');
+    // A cancelled task is still a record; its files stay attached. A future deleteTask is what would
+    // cascade-tombstone them — see localNotes/pr2-delete-task.md.
+    expect((await backend.listAttachments(task.id)).map((a) => a.id)).toEqual([attachment.id]);
+  });
+
+  it('does not leak an attachment across users (confirm on another user’s id 404s)', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const alice = new BackendClient(new Repo(doc, liveWrites(doc), 'alice'), {
+      userId: 'alice',
+      now,
+      presigner: fakePresigner(),
+    });
+    const task = await alice.createTask({ title: 'alice task' });
+    const { attachment } = await alice.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await alice.confirmAttachment(attachment.id);
+
+    // Bob goes through the real RPC dispatch against the same table but his own partition → not found.
+    await expect(
+      handleRpc(
+        doc,
+        { userId: 'bob', method: 'confirmAttachment', args: [attachment.id], now },
+        { presigner: fakePresigner() },
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('signs inline disposition for viewable types and a download for the rest', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const seen: string[] = [];
+    const presigner: Presigner = {
+      putUrl: async (k) => `fake://put/${k}`,
+      getUrl: async (k, _t, d) => {
+        seen.push(d);
+        return `fake://get/${k}`;
+      },
+    };
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+      presigner,
+    });
+    const task = await backend.createTask({ title: 'files' });
+    const md = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'notes.md',
+      contentType: 'text/markdown',
+      size: 10,
+    });
+    await backend.confirmAttachment(md.attachment.id);
+    const svg = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'logo.svg',
+      contentType: 'image/svg+xml',
+      size: 10,
+    });
+    await backend.confirmAttachment(svg.attachment.id);
+
+    await backend.getAttachmentDownloadUrl(md.attachment.id);
+    await backend.getAttachmentDownloadUrl(svg.attachment.id);
+    expect(seen[0]).toBe('inline'); // text/markdown renders in the tab
+    expect(seen[1]).toMatch(/^attachment; filename\*=UTF-8''/); // svg is forced to download
   });
 });

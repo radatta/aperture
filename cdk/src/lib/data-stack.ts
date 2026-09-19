@@ -1,22 +1,30 @@
-import { CfnOutput, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
 export interface DataStackProps extends StackProps {
   stage: string;
+  // Origins allowed to PUT/GET the files bucket directly (presigned uploads/downloads bypass CloudFront).
+  // The custom domain when the stage has one, else '*' (the presigned URL is the real credential; CORS is
+  // a browser courtesy). Lives here, not the app stack, because app depends on data — the reverse edge
+  // would be a stack cycle.
+  allowedOrigins: string[];
 }
 
 // The PRECIOUS stack (INFRA §3): your data + your identity. RETAIN on everything, PITR on, deployed
-// rarely — an app redeploy can never touch it. The app stack references the table + pool from here.
+// rarely — an app redeploy can never touch it. The app stack references the table + pool + files bucket
+// from here.
 export class ApertureDataStack extends Stack {
   readonly table: dynamodb.Table;
   readonly userPool: cognito.UserPool;
+  readonly filesBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
-    const { stage } = props;
+    const { stage, allowedOrigins } = props;
 
     // Single table (TECH §2.4): PK/SK strings, on-demand, PITR (35-day backup), RETAIN.
     this.table = new dynamodb.Table(this, 'Table', {
@@ -50,6 +58,33 @@ export class ApertureDataStack extends Stack {
       (this.node.tryGetContext('cognitoPrefix') as string | undefined) ?? `aperture-${stage}-${this.account}`;
     this.userPool.addDomain('HostedUi', { cognitoDomain: { domainPrefix: prefix } });
 
+    // User-uploaded task attachments. Unlike the app stack's Site bucket (DESTROY, re-syncable assets),
+    // this is precious: RETAIN + versioned (the undo for an overwritten/deleted object), fully private —
+    // the browser only ever reaches it through short-lived presigned URLs. CORS is required because those
+    // presigned PUT/GET go straight to S3, not through CloudFront.
+    this.filesBucket = new s3.Bucket(this, 'Files', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: true,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_ENFORCED,
+      removalPolicy: RemovalPolicy.RETAIN, // and deliberately NO autoDeleteObjects
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+          allowedOrigins,
+          allowedHeaders: ['*'],
+          exposedHeaders: ['ETag'],
+          maxAge: 3600,
+        },
+      ],
+      lifecycleRules: [
+        { abortIncompleteMultipartUploadAfter: Duration.days(1) },
+        { noncurrentVersionExpiration: Duration.days(30) }, // bound the cost of versioning
+      ],
+    });
+
+    new CfnOutput(this, 'FilesBucket', { value: this.filesBucket.bucketName });
     new CfnOutput(this, 'TableName', { value: this.table.tableName });
     new CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
     new CfnOutput(this, 'Region', { value: this.region });

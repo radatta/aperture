@@ -9,7 +9,9 @@ import { Menu } from '../../components/Menu';
 import type { MenuItem } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
+import { PaperclipIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
+import { useAttachments } from '../../data/hooks/useAttachments';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useSetActual, useSetDueDay, useSplitTask, useTransitionTask } from '../../data/hooks/useTasks';
 import {
@@ -18,11 +20,12 @@ import {
   useInsertCalendarEvent,
 } from '../../data/hooks/useCalendar';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
+import { AttachmentsPanel } from './AttachmentsPanel';
 import { CategoryTag } from './CategoryTag';
 import { ScopePanel } from './ScopePanel';
 import { remainingMin } from './taskMath';
 
-type Panel = null | 'scope' | 'split' | 'done' | 'due' | 'calendar';
+type Panel = null | 'scope' | 'split' | 'done' | 'due' | 'calendar' | 'files';
 
 // One task, with the lifecycle actions its status allows. `actions` is an optional slot for
 // context-specific buttons (add-to-today / remove-from-plan) supplied by the section.
@@ -41,6 +44,8 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
   // Note "Drop": the row action that abandons a task used to be called "Cancel", one row away from
   // the "Cancel" that closes a panel. Same stored status, an unambiguous label.
   const overflow: MenuItem[] = [];
+  // Files are welcome at every status — a receipt on a done task, a spec on a backlog one.
+  overflow.push({ label: 'Files…', onSelect: () => toggle('files') });
   if (task.status !== 'done' && task.status !== 'cancelled')
     overflow.push({ label: 'Split…', onSelect: () => toggle('split') });
   if (task.status === 'in_progress')
@@ -110,6 +115,7 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
       {panel === 'done' && <DoneForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'due' && <DueDayForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'calendar' && <AddToCalendarForm task={task} onDone={() => setPanel(null)} />}
+      {panel === 'files' && <AttachmentsPanel taskId={task.id} />}
     </Card>
   );
 }
@@ -119,7 +125,9 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
 // shown by absence; the Scope button already says what's missing.
 function TaskMeta({ task }: { task: Task }) {
   const { data: settings } = useSettings();
+  const { data: attachments = [] } = useAttachments();
   const today = todayKey(settings?.dayStartHour ?? 4);
+  const fileCount = attachments.filter((a) => a.taskId === task.id).length;
   const bits: string[] = [];
   if (task.status === 'in_progress') {
     const hasEstimate = task.estimateLockedMin != null || task.estimateMin != null;
@@ -149,6 +157,11 @@ function TaskMeta({ task }: { task: Task }) {
       {task.gcalEventId && (
         <Text size="xs" tone="teal">
           on calendar
+        </Text>
+      )}
+      {fileCount > 0 && (
+        <Text size="xs" tone="subtle" className="inline-flex items-center gap-0.5">
+          <PaperclipIcon size={12} /> {fileCount}
         </Text>
       )}
     </div>

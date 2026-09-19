@@ -21,6 +21,8 @@ export const SMOKE_CALLS: SmokeCall[] = [
   { method: 'getCalibration', args: [] },
   // Calendar read: proves the gated gateway no-ops under testMode (no SSM token read, no Google fetch).
   { method: 'getGoogleStatus', args: [] },
+  // Also proves the S3 SDK loaded at cold start (listAttachments is a plain read; no presign, no bytes).
+  { method: 'listAttachments', args: [] },
 ];
 
 // The direct-invoke event shape the handler understands (no requestContext.http → skips the origin gate).

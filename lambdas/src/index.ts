@@ -11,10 +11,15 @@ import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
+import { createS3Presigner } from './s3/presigner';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
 const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
+
+// Built once at cold start. Construction never touches the network, so an empty FILES_BUCKET (local /
+// tests) is fine — only an actual attachment call would then fail.
+const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
 
 // Verifier is wired only when the pool env is present (deployed). Locally it's null → dev userId.
 // clientId is optional (single-client pool) and left unset to avoid a deploy dependency cycle.
@@ -125,14 +130,18 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       : method === INGEST_METHOD
         ? resolveDeviceUserId(authHeader, process.env.DEVICE_TOKEN, process.env.DEVICE_USER_ID)
         : await resolveUserId(authHeader, verifier); // JWT `sub`, or dev user locally
-    const result = await handleRpc(doc, {
-      userId,
-      method,
-      args: body.args ?? [],
-      testMode: body.testMode,
-      google,
-      stateSecret: process.env.ORIGIN_SECRET,
-    });
+    const result = await handleRpc(
+      doc,
+      {
+        userId,
+        method,
+        args: body.args ?? [],
+        testMode: body.testMode,
+        google,
+        stateSecret: process.env.ORIGIN_SECRET,
+      },
+      { presigner },
+    );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'error';

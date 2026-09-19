@@ -6,27 +6,34 @@
 //   - LAZY recurrence: due series occurrences materialize on getDay(), exactly like the Lambda will.
 
 import {
+  assertAttachmentAllowed,
   assertCategoryDeletable,
   completeSession,
+  countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
   discardSession,
   heartbeatSession,
+  normalizeContentType,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
+  sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
   taskTransition,
+  UPLOAD_URL_TTL_MS,
   withEstimate,
 } from '@aperture/shared';
 import type {
   ApiClient,
+  Attachment,
   BaseEntity,
   CalendarBusy,
   CalibrationPoint,
   Category,
+  CreateAttachmentInput,
   CreateTaskInput,
   DateRange,
   GetCalendarBusyInput,
@@ -76,6 +83,7 @@ export interface Store {
   categories: Category[];
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
+  attachments: Attachment[];
   settings: Settings | null;
 }
 
@@ -93,6 +101,7 @@ export function emptyStore(): Store {
     categories: [],
     leetcodeAttempts: [],
     stories: [],
+    attachments: [],
     settings: null,
   };
 }
@@ -285,6 +294,52 @@ class StubClient implements ApiClient {
   }
   async deleteStory(id: string): Promise<void> {
     this.writes.softDelete(this.store.stories, id);
+  }
+
+  // --- Task attachments ----------------------------------------------------
+  // The stub never touches bytes: uploadUrl/downloadUrl are `stub:<id>` sentinels the transport module
+  // resolves against an in-memory Blob map. Everything else — caps, pending→ready, tombstones — mirrors
+  // the backend exactly so the page-first build validates the real behavior.
+  async createAttachmentUploadUrl(
+    input: CreateAttachmentInput,
+  ): Promise<{ attachment: Attachment; uploadUrl: string }> {
+    this.mustFind(this.store.tasks, input.taskId); // task must exist under this user
+    const now = this.now();
+    const liveCount = this.store.attachments.filter(
+      (a) => a.taskId === input.taskId && countsTowardCap(a, now),
+    ).length;
+    assertAttachmentAllowed(input.size, liveCount);
+    const b = this.base();
+    const attachment = this.writes.insert(this.store.attachments, {
+      ...b,
+      taskId: input.taskId,
+      filename: sanitizeFilename(input.filename),
+      contentType: normalizeContentType(input.contentType),
+      size: input.size,
+      s3Key: `u/${USER_ID}/${input.taskId}/${b.id}`,
+      status: 'pending' as const,
+    });
+    return { attachment, uploadUrl: `stub:${attachment.id}` };
+  }
+  async confirmAttachment(id: string): Promise<Attachment> {
+    const existing = this.mustFind(this.store.attachments, id); // throws on missing/tombstoned
+    if (existing.status === 'ready') return existing; // idempotent
+    // Past the upload TTL the row has been discounted from the cap; confirming would bypass it (see backend).
+    if (this.now() - existing.createdAt >= UPLOAD_URL_TTL_MS)
+      throw new Error('Upload window expired; start the upload again.');
+    return this.writes.patch(this.store.attachments, id, { status: 'ready' });
+  }
+  async listAttachments(taskId?: string): Promise<Attachment[]> {
+    return this.alive(this.store.attachments)
+      .filter((a) => a.status === 'ready' && (taskId === undefined || a.taskId === taskId))
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }
+  async getAttachmentDownloadUrl(id: string): Promise<string> {
+    this.mustFind(this.store.attachments, id); // throws on missing/tombstoned
+    return `stub:${id}`;
+  }
+  async deleteAttachment(id: string): Promise<void> {
+    this.writes.softDelete(this.store.attachments, id);
   }
 
   // --- Tasks ---------------------------------------------------------------
@@ -792,6 +847,7 @@ class StubClient implements ApiClient {
       categories: this.alive(this.store.categories),
       leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
       stories: this.alive(this.store.stories),
+      attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
       settings: this.ensureSettings(),
     };
     // Store is the source of truth for what a full snapshot holds, so this is where a new collection

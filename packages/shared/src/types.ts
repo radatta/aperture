@@ -2,6 +2,7 @@
 // shared by the stub (app) and the eventual Lambda. Physical DynamoDB keys are derived
 // from these later; nothing here assumes DynamoDB.
 
+import type { AttachmentStatus } from './attachments';
 import type { CompetencyTag } from './stories';
 
 // Every stored item carries these. `deletedAt` is a soft-delete tombstone — we never hard-delete.
@@ -205,4 +206,17 @@ export interface Story extends BaseEntity {
   situation: string;
   action: string;
   result: string;
+}
+
+// --- Task attachments ------------------------------------------------------
+// A file attached to a task. The bytes live in S3 (never DynamoDB); this is metadata + the pointer.
+// `status` is pending at presign and flips to ready once the browser confirms the PUT — a row is never
+// listed until its bytes exist. The filename is a display value only; it is NOT part of `s3Key`.
+export interface Attachment extends BaseEntity {
+  taskId: string;
+  filename: string; // sanitized display name
+  contentType: string; // normalized; set on the object and forced on the GET response
+  size: number; // bytes; signed into the PUT (content-length), so the cap can't be exceeded
+  s3Key: string; // u/<userId>/<taskId>/<id>
+  status: AttachmentStatus;
 }
