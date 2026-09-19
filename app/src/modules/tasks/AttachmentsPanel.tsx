@@ -4,7 +4,10 @@ import type { Attachment } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { PaperclipIcon } from '../../components/icons';
+import { cx } from '../../lib/cx';
 import { fmtBytes } from '../../lib/format';
+import { useApi } from '../../data/api-context';
+import { resolveViewUrl } from '../../data/attachmentTransport';
 import {
   useAttachments,
   useAttachmentUrl,
@@ -22,6 +25,7 @@ export function AttachmentsPanel({ taskId }: { taskId: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, number>>({}); // filename → 0..1
+  const [dragging, setDragging] = useState(false);
 
   async function onFiles(list: FileList | null) {
     if (!list) return;
@@ -60,10 +64,30 @@ export function AttachmentsPanel({ taskId }: { taskId: string }) {
   const uploading = Object.entries(progress);
 
   return (
-    <div className="mt-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
+    <div
+      role="group"
+      aria-label="Task files"
+      onDragOver={(e) => {
+        e.preventDefault(); // required for onDrop to fire
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        // Ignore the dragleave that fires when the cursor crosses a child row.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        void onFiles(e.dataTransfer?.files ?? null);
+      }}
+      className={cx(
+        'mt-3 flex flex-col gap-3 rounded-xl border bg-surface p-3',
+        dragging ? 'border-teal bg-panel-2' : 'border-line',
+      )}
+    >
       <div className="flex items-center justify-between gap-2">
         <Text size="sm" tone="muted">
-          {files.length}/{ATTACHMENTS_PER_TASK} files
+          {dragging ? 'Drop to attach' : `${files.length}/${ATTACHMENTS_PER_TASK} files`}
         </Text>
         <Button
           variant="ghost"
@@ -126,19 +150,43 @@ export function AttachmentsPanel({ taskId }: { taskId: string }) {
 }
 
 function AttachmentRow({ attachment }: { attachment: Attachment }) {
+  const api = useApi();
   const del = useDeleteAttachment();
   const [confirming, setConfirming] = useState(false);
-  const url = useAttachmentUrl(attachment.id);
+  const [note, setNote] = useState<string | null>(null);
   const image = isImage(attachment.contentType);
+  // Mount-time mint is thumbnail-only (an already-drawn <img> is unaffected if its link expires); the
+  // click path mints its own fresh URL, so a long-open panel never opens an expired link.
+  const url = useAttachmentUrl(attachment.id, image);
+
+  // Mint a FRESH presigned URL at click time (the mount-time one may be >5 min stale). Open the tab
+  // synchronously first — after an await the popup blocker would eat it — then point it at the URL.
+  async function openFile() {
+    setNote(null); // clear a stale error so a transient failure stays retryable
+    const tab = window.open('', '_blank'); // NOT 'noopener' — that returns null and defeats the redirect
+    if (tab) tab.opener = null;
+    try {
+      const resolved = resolveViewUrl(await api.getAttachmentDownloadUrl(attachment.id));
+      if (!resolved) {
+        tab?.close();
+        setNote('Not available — the stub copy was lost on reload.');
+        return;
+      }
+      if (tab) tab.location.href = resolved;
+      else window.location.href = resolved; // blocker ate the tab: navigate/download in place
+    } catch (e) {
+      tab?.close();
+      setNote((e as Error).message);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={() => url.data && window.open(url.data, '_blank', 'noopener')}
-          disabled={!url.data}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line p-1.5 text-left hover:bg-panel-2 disabled:opacity-60 disabled:hover:bg-transparent"
+          onClick={openFile}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line p-1.5 text-left hover:bg-panel-2"
         >
           {image && url.data ? (
             <img
@@ -169,6 +217,12 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
           ✕
         </Button>
       </div>
+
+      {note && (
+        <Text size="xs" tone="danger">
+          {note}
+        </Text>
+      )}
 
       {confirming && (
         <div

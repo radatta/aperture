@@ -6,6 +6,7 @@ import { sk } from './ddb/keys';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
+import type { Presigner } from './s3/presigner';
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -119,5 +120,43 @@ describe('backend attachments', () => {
         { presigner: fakePresigner() },
       ),
     ).rejects.toThrow();
+  });
+
+  it('signs inline disposition for viewable types and a download for the rest', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const seen: string[] = [];
+    const presigner: Presigner = {
+      putUrl: async (k) => `fake://put/${k}`,
+      getUrl: async (k, _t, d) => {
+        seen.push(d);
+        return `fake://get/${k}`;
+      },
+    };
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+      presigner,
+    });
+    const task = await backend.createTask({ title: 'files' });
+    const md = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'notes.md',
+      contentType: 'text/markdown',
+      size: 10,
+    });
+    await backend.confirmAttachment(md.attachment.id);
+    const svg = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'logo.svg',
+      contentType: 'image/svg+xml',
+      size: 10,
+    });
+    await backend.confirmAttachment(svg.attachment.id);
+
+    await backend.getAttachmentDownloadUrl(md.attachment.id);
+    await backend.getAttachmentDownloadUrl(svg.attachment.id);
+    expect(seen[0]).toBe('inline'); // text/markdown renders in the tab
+    expect(seen[1]).toMatch(/^attachment; filename\*=UTF-8''/); // svg is forced to download
   });
 });

@@ -8,7 +8,6 @@ import {
   dayKeyForOffset,
   discardSession,
   heartbeatSession,
-  isImage,
   normalizeContentType,
   normalizeVerdict,
   resolveStaleSession,
@@ -18,6 +17,7 @@ import {
   splitFollowUp,
   taskTransition,
   UPLOAD_URL_TTL_MS,
+  viewableInline,
   withEstimate,
 } from '@aperture/shared';
 import type {
@@ -275,8 +275,9 @@ export class BackendClient implements ApiClient {
   }
   async getAttachmentDownloadUrl(id: string): Promise<string> {
     const a = await this.mustAttachment(id);
-    // SVG/HTML/PDF-with-JS must never render inline from the S3 origin → force a download for non-images.
-    const disposition = isImage(a.contentType)
+    // Browser-renderable, script-free types (image/PDF/text/audio/video) open inline; HTML, SVG/+xml,
+    // and unknown binaries are forced to a download so nothing active runs from the S3 origin.
+    const disposition = viewableInline(a.contentType)
       ? 'inline'
       : `attachment; filename*=UTF-8''${encodeURIComponent(a.filename)}`;
     return this.presigner.getUrl(a.s3Key, a.contentType, disposition);

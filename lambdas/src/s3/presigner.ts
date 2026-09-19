@@ -11,8 +11,8 @@ export interface Presigner {
   // content-type is set on the object but is NOT part of the signature; serving safety instead comes from
   // the forced ResponseContentType/ResponseContentDisposition on the GET (non-images → attachment).
   putUrl(key: string, contentType: string, size: number): Promise<string>;
-  // Forces the response content-type + disposition (inline for images, attachment otherwise), so active
-  // content never renders from the S3 origin.
+  // Forces the response content-type + disposition (inline only for `viewableInline` types, attachment
+  // otherwise), so active content never renders from the S3 origin.
   getUrl(key: string, contentType: string, disposition: string): Promise<string>;
 }
 

@@ -63,7 +63,7 @@ Metadata is written at **presign time** (so the server owns size/type and can ve
 *Rejected:* reusing the Site bucket (data loss on the next app-stack destroy); a bucket in the app stack (a deploy could delete it).
 
 **D6 — Object-scoped IAM; size signed; serving forced.**
-The Lambda gets `s3:PutObject/GetObject` on `arnForObjects('u/*')` only — never bucket-level, never List. The presigned PUT signs **content-length** (the size cap is cryptographic — a client can't lie about size). The presigned GET forces `ResponseContentType` + `ResponseContentDisposition` (`inline` for images, `attachment; filename*=…` otherwise).
+The Lambda gets `s3:PutObject/GetObject` on `arnForObjects('u/*')` only — never bucket-level, never List. The presigned PUT signs **content-length** (the size cap is cryptographic — a client can't lie about size). The presigned GET forces `ResponseContentType` + `ResponseContentDisposition`: **`inline` for browser-renderable, script-free types** (`viewableInline` — image, PDF, `text/*`, audio, video), and **`attachment; filename*=…` for `text/html`, SVG / anything `xml`, and unknown binaries**. So markdown/PDF/images open in the tab, while active content is forced to a download — even though bytes serve from a separate S3 origin with no app session, that carve-out is cheap defense-in-depth.
 *Why:* a presigned URL acts with the *signer's* permissions, so the IAM scope is the blast radius of a leaked URL — bounded to object keys under `u/`. Forcing the download disposition means SVG/HTML/PDF-with-JS never render inline from the S3 origin, so a malicious upload can't run as script.
 *↳ Reality check (found in build):* the AWS SDK signs **content-length but NOT content-type** into the PUT (verified in `presigner.test.ts` — `SignedHeaders` is `content-length;host`). So the *size* is cryptographically fixed; the content-type is set on the object but not signature-bound. That's fine: serving safety comes from the forced `ResponseContentType`/`Disposition` on the GET (server-controlled), not from the stored type. The plan had claimed both were signed; corrected here.
 
@@ -137,7 +137,7 @@ The upload is a three-step dance the client orchestrates: **presign** (RPC) → 
 Ordered, page-first. Each phase names the files it touches; `↳` notes record divergences from the plan. Built 2026-09-17. ~38 files — the count is driven by the infra (a new bucket, IAM, stack tests) and the double-entry contract, not by the UI.
 
 - [x] **Phase 0 — shared contract** (one atomic set; the tree is intentionally red until the stub lands)
-  - `packages/shared/src/attachments.ts` — caps + `AttachmentStatus` + `normalizeContentType`/`sanitizeFilename`/`isImage`/`assertAttachmentAllowed`/`countsTowardCap`.
+  - `packages/shared/src/attachments.ts` — caps + `AttachmentStatus` + `normalizeContentType`/`sanitizeFilename`/`isImage`/`viewableInline`/`assertAttachmentAllowed`/`countsTowardCap`.
   - `types.ts` (`Attachment`), `api.ts` (`CreateAttachmentInput`, 5 methods, `ExportBundle.attachments`), `rpc.ts`, `index.ts`, `contractTests.ts` (lifecycle + caps tests, `attachments` in the export key-set, a tombstoned + a pending row excluded).
     - ↳ *The existing "excludes soft-deleted rows" test only covered categories + plans; extended it to attachments (tombstoned AND never-confirmed both absent from the export).*
 
@@ -161,6 +161,12 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 
 - [x] **Phase 5 — docs + gate**
   - `docs/areas/tasks/attachments.md` (this doc), `docs/index.md`, `docs/arch/TECH.md` (entity + key line), `docs/arch/INFRA.md` (the files bucket in the data stack).
+
+- [x] **Phase 6 — polish (after dev validation)** — three small frontend-light changes once the round-trip was confirmed on dev:
+  - **Inline viewing** — `viewableInline()` widens the GET disposition beyond images (D6). `text/xml`/`application/xml` are excluded alongside `+xml` (XSLT-via-PI can execute in some browsers).
+  - **Mint-on-click** — the download URL is now minted **fresh at click time**, not reused from mount; fixes a real dev bug where a panel open >5 min opened an expired presigned GET (`Request has expired`). `useAttachmentUrl` is now **thumbnail-only** (passed `enabled = isImage`, so a panel of PDFs mints zero GETs on mount).
+    - ↳ *`window.open(url, '_blank', 'noopener')` returns **null** by spec, which would have routed every click to the fallback. Fixed: open `window.open('', '_blank')` (no `noopener`), set `tab.opener = null`, then redirect after the presign resolves. If a blocker still eats the pre-opened tab, `window.location.href` downloads in place (attachment types) or navigates (inline) — rare.*
+  - **Drag-and-drop** — the panel is a drop zone (`onDragOver`/`onDrop` → the existing `onFiles`, so the cap pre-check is shared); `relatedTarget` containment stops the highlight flickering over child rows. No dependency.
 
 ## 8. Deferred / out of scope
 

@@ -11,8 +11,9 @@ export function useAttachments() {
   return useQuery({ queryKey: qk.attachments(), queryFn: () => api.listAttachments() });
 }
 
-// A viewable/downloadable URL for one attachment, minted on demand. staleTime is kept below the server's
-// download TTL so a mounted thumbnail never points at an expired link; a remount past that re-mints.
+// The THUMBNAIL URL for one image attachment (pass enabled=false for non-images so a file chip mints
+// nothing). Minted at mount; once the <img> has drawn, an expired link is harmless. The click-to-open
+// path does NOT use this — it mints its own fresh URL so a long-open panel never opens a stale link.
 export function useAttachmentUrl(id: string, enabled = true) {
   const api = useApi();
   return useQuery({
