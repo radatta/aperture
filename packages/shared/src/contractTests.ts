@@ -244,6 +244,29 @@ export function runApiContract(
       );
     });
 
+    it('tasks: createTasks creates every input as an unlocked backlog task, in paste order, with fields', async () => {
+      const created = await api.createTasks([
+        { title: 'first', estimateMin: 30, dueDay: '2026-09-25' },
+        { title: 'second', categoryId: null },
+        { title: 'third' },
+      ]);
+      expect(created.map((t) => t.title)).toEqual(['first', 'second', 'third']);
+      expect(created.every((t) => t.status === 'backlog' && t.estimateLockedMin === null)).toBe(true);
+      expect(created[0]!.estimateMin).toBe(30);
+      expect(created[0]!.dueDay).toBe('2026-09-25'); // dueDay from input round-trips
+      // One createdAt stamp for the batch → they sort together, newest-first, in paste order.
+      expect(created.every((t) => t.createdAt === created[0]!.createdAt)).toBe(true);
+      const backlog = (await api.listBacklog()).filter((t) =>
+        ['first', 'second', 'third'].includes(t.title),
+      );
+      expect(backlog.map((t) => t.title)).toEqual(['first', 'second', 'third']);
+    });
+
+    it('tasks: createTasks with no inputs writes nothing', async () => {
+      expect(await api.createTasks([])).toEqual([]);
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
     it('tasks: due day defaults null, is settable at any status without touching the lock, and clears', async () => {
       const t = await api.createTask({ title: 'has a deadline' });
       expect(t.dueDay).toBeNull(); // created undated

@@ -11,6 +11,7 @@ import {
   fmtMonthShortDay,
   fmtWeekday,
   fmtWeekdayShort,
+  isDayKey,
   isoWeekKey,
   todayKey,
   weekdayOf,
@@ -113,5 +114,27 @@ describe('dayKeyForOffset (foreign-client bucketing, e.g. the LeetCode extension
     expect(dayKeyForOffset(Date.UTC(2026, 7, 5, 9, 0, 0), 300, 4)).toBe('2026-08-05');
     // East of UTC: 5am JST Aug 5 (UTC+9, offset -540) → Aug 5.
     expect(dayKeyForOffset(Date.UTC(2026, 7, 4, 20, 0, 0), -540, 4)).toBe('2026-08-05');
+  });
+});
+
+describe('isDayKey', () => {
+  it('accepts a real zero-padded date', () => {
+    expect(isDayKey('2026-09-25')).toBe(true);
+    expect(isDayKey('2026-01-01')).toBe(true);
+    expect(isDayKey('2024-02-29')).toBe(true); // leap day
+  });
+  it('rejects impossible calendar dates via the round-trip', () => {
+    expect(isDayKey('2026-02-30')).toBe(false);
+    expect(isDayKey('2026-13-01')).toBe(false);
+    expect(isDayKey('2025-02-29')).toBe(false); // 2025 is not a leap year
+  });
+  it('rejects unpadded and malformed shapes', () => {
+    expect(isDayKey('2026-2-5')).toBe(false);
+    expect(isDayKey('2026-09-5')).toBe(false);
+    expect(isDayKey('26-09-25')).toBe(false);
+    expect(isDayKey('2026/09/25')).toBe(false);
+    expect(isDayKey('garbage')).toBe(false);
+    expect(isDayKey('')).toBe(false);
+    expect(isDayKey('2026-09-25 ')).toBe(false);
   });
 });

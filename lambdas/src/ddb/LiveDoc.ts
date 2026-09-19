@@ -61,10 +61,20 @@ export function createLiveDoc(tableName: string): DocClient {
     },
     async batchPut(items) {
       for (let i = 0; i < items.length; i += 25) {
-        const chunk = items.slice(i, i + 25);
-        await doc.batchWrite({
-          RequestItems: { [tableName]: chunk.map((Item) => ({ PutRequest: { Item } })) },
-        });
+        // BatchWriteItem is best-effort per item: under throttling it returns the rejected writes in
+        // UnprocessedItems rather than erroring. Retry those (capped, backed off) so a batch never
+        // silently loses rows — the difference between "best-effort" and "quietly lossy".
+        let requests: { PutRequest: { Item: Item } }[] = items
+          .slice(i, i + 25)
+          .map((Item) => ({ PutRequest: { Item } }));
+        for (let attempt = 0; requests.length > 0; attempt++) {
+          const res = await doc.batchWrite({ RequestItems: { [tableName]: requests } });
+          requests = (res.UnprocessedItems?.[tableName] ?? []) as typeof requests;
+          if (requests.length === 0) break;
+          if (attempt >= 7)
+            throw new Error(`batchPut: ${requests.length} items unprocessed after retries`);
+          await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
+        }
       }
     },
   };

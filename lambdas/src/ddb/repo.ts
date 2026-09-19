@@ -96,6 +96,10 @@ export class Repo {
     await this.writes.put(taskItem(this.userId, t));
     return t;
   }
+  async putTasks(tasks: Task[]): Promise<Task[]> {
+    await this.writes.batchPut(tasks.map((t) => taskItem(this.userId, t)));
+    return tasks;
+  }
   async doneTasksInWindow(fromMs: number, toMs: number): Promise<Task[]> {
     const rows = await this.doc.queryIndex(gsi1.donePk(this.userId), { from: fromMs, to: toMs });
     return alive(rows.map((i) => toEntity<Task>(i)));

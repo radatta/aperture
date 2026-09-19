@@ -109,9 +109,33 @@ export class BackendClient implements ApiClient {
     this.presigner = opts.presigner ?? unconfiguredPresigner;
   }
 
-  private base(): BaseEntity {
-    const t = this.now();
+  private baseAt(t: number): BaseEntity {
     return { id: this.ulid(), userId: this.userId, createdAt: t, updatedAt: t, deletedAt: null };
+  }
+  private base(): BaseEntity {
+    return this.baseAt(this.now());
+  }
+  // The task literal, shared by createTask and createTasks. `t` is the createdAt stamp — a batch passes
+  // one value for every task so they tie on createdAt and render as a block in ULID (paste) order.
+  private newTask(input: CreateTaskInput, t: number): Task {
+    return {
+      ...this.baseAt(t),
+      title: input.title,
+      status: 'backlog',
+      categoryId: input.categoryId ?? null,
+      dueDay: input.dueDay ?? null,
+      seriesId: null,
+      estimateMin: input.estimateMin ?? null,
+      bufferMin: input.bufferMin ?? null,
+      estimateLockedMin: null,
+      actualAccruedMin: 0,
+      startedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+    };
   }
   private async ensureSettings(): Promise<Settings> {
     const def: Settings = {
@@ -301,24 +325,13 @@ export class BackendClient implements ApiClient {
     return this.repo.getTask(id);
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
-    return this.repo.putTask({
-      ...this.base(),
-      title: input.title,
-      status: 'backlog',
-      categoryId: input.categoryId ?? null,
-      dueDay: null,
-      seriesId: null,
-      estimateMin: input.estimateMin ?? null,
-      bufferMin: input.bufferMin ?? null,
-      estimateLockedMin: null,
-      actualAccruedMin: 0,
-      startedAt: null,
-      completedAt: null,
-      cancelledAt: null,
-      gcalAccountId: null,
-      gcalCalendarId: null,
-      gcalEventId: null,
-    });
+    return this.repo.putTask(this.newTask(input, this.now()));
+  }
+  async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
+    if (inputs.length === 0) return [];
+    const t = this.now();
+    const tasks = inputs.map((input) => this.newTask(input, t));
+    return this.repo.putTasks(tasks);
   }
   async setTaskEstimate(
     id: string,

@@ -34,6 +34,7 @@ export interface TextProps {
   size?: Size;
   weight?: Weight;
   tabular?: boolean; // tabular-nums for data that shouldn't jitter
+  id?: string; // so an aria-describedby/labelledby target can be a Text node
   className?: string;
   children: ReactNode;
 }
@@ -45,11 +46,13 @@ export function Text({
   size = 'base',
   weight = 'normal',
   tabular = false,
+  id,
   className,
   children,
 }: TextProps) {
   return (
     <Tag
+      id={id}
       className={cx(
         toneClass[tone],
         sizeClass[size],

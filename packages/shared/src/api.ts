@@ -34,6 +34,7 @@ export interface CreateTaskInput {
   categoryId?: string | null;
   estimateMin?: number | null;
   bufferMin?: number | null;
+  dueDay?: string | null; // day-granular deadline; bulk-add sets it, single create leaves it null
 }
 
 export interface UpsertPlanInput {
@@ -220,6 +221,9 @@ export interface ApiClient {
   listTasks(): Promise<Task[]>;
   getTask(id: string): Promise<Task | null>;
   createTask(input: CreateTaskInput): Promise<Task>;
+  // Bulk create — every input lands as an unlocked backlog task, in the given order (one createdAt
+  // stamp for the batch so they sort together). Best-effort over batchPut; empty input writes nothing.
+  createTasks(inputs: CreateTaskInput[]): Promise<Task[]>;
   setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task>;
   // Category can change any time — labels resolve live and wasWork is snapshotted on sessions, so
   // there's no freeze constraint here (unlike the estimate).

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { TaskStatus } from '@aperture/shared';
+import type { CreateTaskInput, TaskStatus } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { invalidateTaskData } from './invalidate';
@@ -17,6 +17,17 @@ export function useCreateTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (title: string) => api.createTask({ title }),
+    onSettled: () => invalidateTaskData(qc),
+  });
+}
+
+// Bulk add — the plan-pass surface (PRODUCT §2: batch entry is the morning plan, not capture). Inputs
+// come pre-parsed from the bulk grammar; every one lands as an unlocked backlog task.
+export function useCreateTasks() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (inputs: CreateTaskInput[]) => api.createTasks(inputs),
     onSettled: () => invalidateTaskData(qc),
   });
 }

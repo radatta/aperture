@@ -1,9 +1,11 @@
-import type { TextareaHTMLAttributes } from 'react';
+import type { Ref, TextareaHTMLAttributes } from 'react';
 import { cx } from '../../lib/cx';
 import { Text } from '../Text';
 
 export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string;
+  // React 19 takes ref as a plain prop; bulk-add focuses the textarea when its modal opens.
+  ref?: Ref<HTMLTextAreaElement>;
 }
 
 // The multi-line sibling of Field — same box treatment, vertically resizable. The story editor needs
