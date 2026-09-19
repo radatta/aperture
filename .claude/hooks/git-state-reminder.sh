@@ -9,8 +9,7 @@ set -u
 
 INPUT=$(cat)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null || echo "unknown")
-REPO="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-cd "$REPO" 2>/dev/null || exit 0
+source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 
 g() { git "$@" 2>/dev/null; }
 

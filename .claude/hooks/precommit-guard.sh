@@ -10,7 +10,8 @@
   COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
   [[ "$COMMAND" != *"git commit"* ]] && exit 0
 
-  COMMIT_BRANCH=$(cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
+  COMMIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   case "$COMMIT_BRANCH" in
     main|master|dev)
       jq -n --arg branch "$COMMIT_BRANCH" '{
@@ -20,7 +21,7 @@
       exit 0 ;;
   esac
 
-  DIFF=$(cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" && git diff --cached 2>/dev/null || echo "")
+  DIFF=$(git diff --cached 2>/dev/null || echo "")
   SECRET_PATTERNS='(sk-[a-zA-Z0-9]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|AKIA[0-9A-Z]{16}|aws_secret_access_key[[:space:]]*=[[:space:]]*["'\'']?[A-Za-z0-9/+=]{20,}|BEGIN[[:space:]]+(RSA[[:space:]
   ]+)?PRIVATE[[:space:]]+KEY|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})'
   if echo "$DIFF" | grep -qE "$SECRET_PATTERNS"; then

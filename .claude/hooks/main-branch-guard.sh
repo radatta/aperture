@@ -12,8 +12,8 @@ INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')
 [ -z "$FILE_PATH" ] && exit 0
 
-REPO_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-BRANCH=$(cd "$REPO_ROOT" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 [ -z "$BRANCH" ] && exit 0
 
 case "$BRANCH" in
@@ -22,7 +22,7 @@ case "$BRANCH" in
 esac
 
 # Only guard files inside the repo — leave scratchpad / tmp edits alone.
-TOPLEVEL=$(cd "$REPO_ROOT" && git rev-parse --show-toplevel 2>/dev/null || echo "$REPO_ROOT")
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
 case "$FILE_PATH" in
   "$TOPLEVEL"/*) ;;
   *) exit 0 ;;
