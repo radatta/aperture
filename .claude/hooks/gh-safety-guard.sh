@@ -19,7 +19,6 @@ set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
-source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 
 deny() {
   jq -n --arg reason "$1" '{
@@ -68,6 +67,9 @@ if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+push\b'; then
   if echo "$COMMAND" | grep -qE '(:|[[:space:]]|/)(main|master|dev)\b'; then
     deny "Pushing to \`main\`/\`master\`/\`dev\` is blocked — these are deploy branches (a push there deploys). Push a feature branch and open a PR; merges to main happen via PR, not a direct push."
   fi
+  # Only the current-branch resolution needs the repo dir — resolve cwd here, NOT above the string-match
+  # deny blocks (a cd failure must never fail-open rm -rf / force-push / reset --hard).
+  source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   case "$CURRENT_BRANCH" in
     main|master|dev)
