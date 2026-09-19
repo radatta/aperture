@@ -29,7 +29,8 @@
 
 set -uo pipefail  # deliberately NOT -e: a failing probe must not kill the hook
 
-cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" 2>/dev/null || exit 0
+INPUT=$(cat)
+source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")

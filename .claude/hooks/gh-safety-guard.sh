@@ -67,7 +67,10 @@ if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+push\b'; then
   if echo "$COMMAND" | grep -qE '(:|[[:space:]]|/)(main|master|dev)\b'; then
     deny "Pushing to \`main\`/\`master\`/\`dev\` is blocked — these are deploy branches (a push there deploys). Push a feature branch and open a PR; merges to main happen via PR, not a direct push."
   fi
-  CURRENT_BRANCH=$(cd "${CLAUDE_PROJECT_DIR:-$(pwd)}" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  # Only the current-branch resolution needs the repo dir — resolve cwd here, NOT above the string-match
+  # deny blocks (a cd failure must never fail-open rm -rf / force-push / reset --hard).
+  source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   case "$CURRENT_BRANCH" in
     main|master|dev)
       deny "\`git push\` from \`$CURRENT_BRANCH\` is blocked — it's a protected/deploy branch. Create a feature branch first: \`git switch -c feature/<name>\`, then \`git push -u origin HEAD\`." ;;

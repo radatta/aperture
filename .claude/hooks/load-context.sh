@@ -7,8 +7,9 @@
 
 set -u
 
-REPO="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-INDEX="$REPO/docs/index.md"
+INPUT=$(cat)
+source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
+INDEX="$PWD/docs/index.md"
 
 CONTENT=""
 if [ -f "$INDEX" ]; then
@@ -21,7 +22,6 @@ fi
 # check can't abort the hook. ---
 BRIEF=$(
   set +e
-  cd "$REPO" 2>/dev/null || exit 0
   command -v git >/dev/null 2>&1 || exit 0
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
   B=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
