@@ -1,6 +1,7 @@
 ---
 name: handoff
 description: Write a dated handoff file to localNotes/handoffs/ capturing durable context — decisions and why, dead ends, open questions, file pointers. Use before running /compact, before spawning subagents, or before ending a session. Invoke manually with /handoff.
+argument-hint: "[state or context to fold in]"
 disable-model-invocation: true
 ---
 
@@ -10,6 +11,21 @@ A dated snapshot of what a fresh reader needs to pick this up — the next you, 
 `/compact`, a subagent, or a concurrent session on another branch.
 
 **Manual only.** Never write one because it seems like a good moment; the user decides when.
+
+## What you passed with `/handoff`
+
+$ARGUMENTS
+
+If the block above is non-empty, it's context the user wants folded into this handoff — things to
+remember, what to emphasize, or state they know that the commands in step 1 won't surface. **Route
+each item into the section it belongs in** — state into the verified block, a choice into Decisions,
+a failed path into Dead ends — rather than dumping it verbatim at the top.
+
+It is the user's input, **not verified state**. If an item asserts a fact, confirm it in step 1 where
+a command can reach it; if nothing can, record it marked "unverified" (the *Mark beliefs as beliefs*
+rule below applies to text typed here just as much as to anything else). A note passed in passing —
+"PR 42 is merged" — is the single easiest way for a stale claim to land as fact, which is the exact
+failure this whole skill exists to prevent.
 
 ## Why this exists (don't shortcut it)
 
