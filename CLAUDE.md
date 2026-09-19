@@ -4,12 +4,6 @@ A personal life-OS PWA — one place for everything digital about me. Web-first,
 
 Product is the source of truth: `docs/product/PRODUCT.md`. Full doc map: `docs/index.md`.
 
-> **⚠️ Rahul — fix this!!** The git-aware hooks are **worktree-blind**: they read `/workspace` (the main
-> checkout) instead of the worktree the session runs in, so in a worktree session `precommit-guard`'s
-> secret-scan checks the wrong staged diff and `main-branch-guard` can block or wave through edits on the
-> wrong branch. Full write-up + fix in the tech-debt ledger (`docs/arch/TECH.md` → **Worktree-blind git
-> hooks**, action item #1). It's a ~15-min mechanical fix but touches 6 hook files (trips the Plan rule).
-
 ## Project structure
 
 pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
