@@ -91,6 +91,24 @@ describe('bulk add', () => {
     expect(area().value).toBe('');
   });
 
+  it('blocks submit while categories are still loading, if the paste uses #labels', async () => {
+    const api = await apiWithAdmin();
+    // Category list never resolves → an #Admin would silently miss; submit must wait.
+    vi.spyOn(api, 'listCategories').mockImplementation(() => new Promise<never>(() => {}));
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await open(user);
+
+    await user.paste('write memo | #Admin');
+    expect(screen.getByText(/Loading categories/)).toBeTruthy();
+    expect(addBtn().disabled).toBe(true);
+
+    // A title-only paste is unaffected — no #label to resolve.
+    await user.clear(area());
+    await user.paste('write memo');
+    await waitFor(() => expect(addBtn().disabled).toBe(false));
+  });
+
   it('a failed write keeps the dialog open with the text intact', async () => {
     const api = await apiWithAdmin();
     vi.spyOn(api, 'createTasks').mockRejectedValue(new Error('network'));

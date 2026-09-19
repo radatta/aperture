@@ -33,7 +33,9 @@ export function Modal({ open, onClose, label, children }: ModalProps) {
         onClose();
       }}
       className={cx(
-        'w-[min(100vw-2rem,42rem)] max-h-[85vh] overflow-auto rounded-2xl',
+        // m-auto restores the UA `dialog:modal { margin:auto }` that Tailwind Preflight's universal
+        // `margin:0` zeroes — without it the fixed-width box pins to the top-left instead of centering.
+        'm-auto w-[min(100vw-2rem,42rem)] max-h-[85vh] overflow-auto rounded-2xl',
         'border border-line bg-panel p-5 text-ink shadow-xl',
         'backdrop:bg-ink/40',
       )}

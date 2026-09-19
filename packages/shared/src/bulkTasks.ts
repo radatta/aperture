@@ -127,12 +127,13 @@ function parseLine(
       if (tok.startsWith('#"')) {
         if (tok.length < 3 || !tok.endsWith('"'))
           out.errors.push(`unterminated quote in category '${tok}' — use #"Label"`);
-        else label = tok.slice(2, -1);
+        else label = tok.slice(2, -1); // may be '' for #"" — caught below, same as bare #
       } else {
         label = tok.slice(1);
-        if (label === '') out.errors.push("empty category label — use #Label or #\"Two Words\"");
       }
-      if (label !== null && label !== '') {
+      if (label === '') {
+        out.errors.push('empty category label — use #Label or #"Two Words"');
+      } else if (label !== null) {
         out.categoryLabel = label;
         const m = matchCategory(label, categories);
         if (m.ambiguous) out.errors.push(`ambiguous category '${label}' — it matches more than one`);

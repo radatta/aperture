@@ -95,8 +95,9 @@ describe('parseBulkTasks — category resolution', () => {
   it('an unterminated quote is a hard error', () => {
     expect(only('t | #"Deep Work').errors.length).toBeGreaterThan(0);
   });
-  it('an empty label is a hard error', () => {
-    expect(only('t | #').errors.length).toBeGreaterThan(0);
+  it('an empty label is a hard error, bare or quoted', () => {
+    expect(only('t | #').errors.some((e) => /empty category label/.test(e))).toBe(true);
+    expect(only('t | #""').errors.some((e) => /empty category label/.test(e))).toBe(true);
   });
 });
 

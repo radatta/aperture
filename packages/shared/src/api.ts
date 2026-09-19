@@ -34,7 +34,7 @@ export interface CreateTaskInput {
   categoryId?: string | null;
   estimateMin?: number | null;
   bufferMin?: number | null;
-  dueDay?: string | null; // day-granular deadline; bulk-add sets it, single create leaves it null
+  dueDay?: string | null; // day-granular deadline; honored by both creates — bulk-add sets it, no single-create caller does yet
 }
 
 export interface UpsertPlanInput {

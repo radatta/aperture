@@ -25,7 +25,7 @@ export function BulkAddDialog({
   onClose: () => void;
   onAdded: (count: number) => void;
 }) {
-  const { data: categories = [] } = useCategories();
+  const { data: categories = [], isSuccess: categoriesLoaded } = useCategories();
   const { data: tasks = [] } = useAllTasks();
   const createTasks = useCreateTasks();
   const [text, setText] = useState('');
@@ -56,9 +56,14 @@ export function BulkAddDialog({
     [text, catRefs, existingTitles],
   );
   const n = parse.lines.length;
+  // If a paste references categories but the list hasn't loaded yet (or errored), a real #label would
+  // silently miss — the parser sees an empty set → a gold "no category" warning → an uncategorised task.
+  // Block submit until categories are in, but only when it actually matters (title-only pastes still go).
+  const awaitingCategories = !categoriesLoaded && parse.lines.some((l) => l.categoryLabel !== null);
+  const blocked = !parse.canSubmit || createTasks.isPending || awaitingCategories;
 
   const submit = () => {
-    if (!parse.canSubmit || createTasks.isPending) return;
+    if (blocked) return;
     const inputs = toCreateInputs(parse);
     setFailed(false);
     createTasks.mutate(inputs, {
@@ -153,6 +158,12 @@ export function BulkAddDialog({
           </Text>
         )}
 
+        {awaitingCategories && (
+          <Text size="sm" tone="muted">
+            Loading categories… hold on so your #labels resolve.
+          </Text>
+        )}
+
         <div className="flex items-center justify-between gap-3">
           <Text id="bulk-add-summary" size="sm" tone={parse.errorCount > 0 ? 'danger' : 'muted'}>
             {summary}
@@ -161,7 +172,7 @@ export function BulkAddDialog({
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button onClick={submit} disabled={!parse.canSubmit || createTasks.isPending}>
+            <Button onClick={submit} disabled={blocked}>
               Add {n} task{n === 1 ? '' : 's'}
             </Button>
           </div>
