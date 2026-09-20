@@ -8,7 +8,7 @@ export function CategoryTag({ categoryId }: { categoryId: string | null }) {
   const label = categoryId ? cats.find((c) => c.id === categoryId)?.label : null;
   if (!label) return null;
   return (
-    <span className="rounded-full border border-line px-2 py-0.5 text-xs text-ink-muted">
+    <span className="shrink-0 whitespace-nowrap rounded-full border border-line px-2 py-0.5 text-xs text-ink-muted">
       {label}
     </span>
   );

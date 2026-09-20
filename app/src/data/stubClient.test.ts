@@ -49,7 +49,8 @@ describe('stub — task lifecycle enforces the estimate freeze', () => {
 
 describe('stub — lazy recurrence', () => {
   it('materializes a due series once per day on getDay', async () => {
-    const api = client();
+    // seed:false isolates recurrence from the seeded today-plan (the Right-Now hero seed).
+    const api = createStubClient({ now: () => FIXED, storageKey: `rec.${FIXED}`, seed: false });
     await api.upsertSeries({
       title: 'daily standup',
       categoryId: null,

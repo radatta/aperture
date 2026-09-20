@@ -22,10 +22,12 @@ describe('home mode switch', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });
 
-  it('pins Daytime → shows the do layout', async () => {
+  it('pins Daytime → shows the do layout (Right now + Coming up + budget)', async () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(screen.getByText('Right now')).toBeTruthy();
+    expect(screen.getByText('Coming up')).toBeTruthy();
     expect(screen.getByText('Time budget')).toBeTruthy();
   });
 });
