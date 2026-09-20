@@ -7,6 +7,7 @@ export interface RunningTimer {
   paused: boolean;
   remaining: number; // seconds left in the current block (0 once done)
   done: boolean; // reached target — holding for stop/extend (no auto-break)
+  activeSec: number; // live active seconds worked (count-up), incl. time since the last heartbeat
 }
 
 export interface StartFocusInput {
@@ -22,7 +23,7 @@ export interface PomodoroContextValue {
   pause: (id: string) => void;
   resume: (id: string) => void;
   extend: (id: string) => void; // give a done timer one more block
-  stop: (id: string, status?: 'completed' | 'discarded') => void;
+  stop: (id: string, status?: 'completed' | 'discarded') => Promise<void>; // resolves after accrual persists
   keepStale: (id: string) => void;
   discardStale: (id: string) => void;
 }
