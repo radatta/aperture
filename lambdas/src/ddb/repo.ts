@@ -8,6 +8,7 @@ import type {
   LeetcodeAttempt,
   LogEntry,
   PomodoroSession,
+  Roll,
   Settings,
   Story,
   Task,
@@ -162,6 +163,21 @@ export class Repo {
   async putStory(s: Story): Promise<Story> {
     await this.writes.put(entityItem(this.userId, sk.story(s.id), s));
     return s;
+  }
+
+  // --- Rolls ---
+  async listRolls(): Promise<Roll[]> {
+    return alive((await this.doc.query(this.p(), sk.rollPrefix())).map((i) => toEntity<Roll>(i)));
+  }
+  // getStory-style (re-filter tombstones → null) so upsert on a deleted roll throws — stub parity.
+  async getRoll(id: string): Promise<Roll | null> {
+    const it = await this.doc.get(this.p(), sk.roll(id));
+    const r = it ? toEntity<Roll>(it) : null;
+    return r && r.deletedAt === null ? r : null;
+  }
+  async putRoll(r: Roll): Promise<Roll> {
+    await this.writes.put(entityItem(this.userId, sk.roll(r.id), r));
+    return r;
   }
 
   // --- Task attachments (metadata; bytes live in S3) ---

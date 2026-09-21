@@ -18,6 +18,7 @@ import type {
   LogEntry,
   PomodoroSession,
   RecurrenceRule,
+  Roll,
   SessionKind,
   Settings,
   Story,
@@ -68,6 +69,16 @@ export interface UpsertHabitInput {
   name: string;
   categoryId: string | null;
   cadencePerWeek: number;
+  active?: boolean;
+}
+
+// Rolls: create/edit/archive in one call (mirrors upsertHabit). estimateMin is required in the form but
+// nullable in the type (series parity); archive is active:false.
+export interface UpsertRollInput {
+  id?: string;
+  name: string;
+  categoryId: string | null;
+  estimateMin: number | null;
   active?: boolean;
 }
 
@@ -146,6 +157,7 @@ export interface ExportBundle {
   ideas: Idea[];
   habits: Habit[];
   habitChecks: HabitCheck[];
+  rolls: Roll[];
   sessions: PomodoroSession[];
   days: Day[];
   categories: Category[];
@@ -275,6 +287,14 @@ export interface ApiClient {
   checkHabit(habitId: string, date: string): Promise<HabitCheck>;
   uncheckHabit(habitId: string, date: string): Promise<void>;
   listHabitChecks(range: DateRange): Promise<HabitCheck[]>;
+
+  // Rolls (deadline-free ongoing efforts). list includes archived (UI filters, like habits). Picking a
+  // roll for `day` creates a planned rep task tagged with the roll and puts it on that day's plan — if a
+  // live rep already exists it's reused + ensured on the plan (never duplicated). `day` is the client's
+  // local day-key (the server is UTC). The rep flows into the daytime home; completing it IS the rep.
+  listRolls(): Promise<Roll[]>;
+  upsertRoll(input: UpsertRollInput): Promise<Roll>;
+  pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }>;
 
   // Ideas (inbox)
   listIdeas(status?: IdeaStatus): Promise<Idea[]>;

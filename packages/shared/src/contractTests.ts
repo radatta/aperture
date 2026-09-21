@@ -428,6 +428,71 @@ export function runApiContract(
       expect(await api.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toHaveLength(0);
     });
 
+    it('rolls: upsert lists, archive flags, and category-delete reassigns', async () => {
+      const r = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
+      expect(r.active).toBe(true);
+      expect((await api.listRolls()).map((x) => x.id)).toContain(r.id);
+
+      // Edit via id (rename + estimate), then archive — archived stays in the list, flagged inactive.
+      const renamed = await api.upsertRoll({
+        id: r.id,
+        name: 'LeetCode daily',
+        categoryId: null,
+        estimateMin: 45,
+      });
+      expect(renamed.name).toBe('LeetCode daily');
+      expect(renamed.estimateMin).toBe(45);
+      const archived = await api.upsertRoll({
+        id: r.id,
+        name: renamed.name,
+        categoryId: null,
+        estimateMin: 45,
+        active: false,
+      });
+      expect(archived.active).toBe(false);
+      expect((await api.listRolls()).find((x) => x.id === r.id)?.active).toBe(false);
+
+      // A roll's category is reassigned when that category is deleted (like tasks/habits/series).
+      const cat = await api.upsertCategory({ label: 'Learning', isWork: true });
+      const target = await api.upsertCategory({ label: 'Other', isWork: true });
+      const tagged = await api.upsertRoll({ name: 'Study', categoryId: cat.id, estimateMin: 20 });
+      await api.deleteCategory(cat.id, target.id);
+      expect((await api.listRolls()).find((x) => x.id === tagged.id)?.categoryId).toBe(target.id);
+
+      // The created roll rides the export.
+      expect((await api.exportData()).rolls.map((x) => x.id)).toContain(tagged.id);
+    });
+
+    it('rolls: picking creates a planned rep on the plan, dedups per day, and re-picks after done', async () => {
+      const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
+
+      // Pick for a day → a planned rep task tagged with the roll, appended to that day's plan.
+      const first = await api.pickRollToday(roll.id, '2026-08-04');
+      expect(first.task.rollId).toBe(roll.id);
+      expect(first.task.status).toBe('planned');
+      expect(first.task.estimateMin).toBe(30); // inherits the roll's estimate
+      expect(first.plan.plannedMinutes).toBe(30);
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).toContain(first.plan.id);
+
+      // Picking the same roll again the same day reuses the open rep — one task, one plan row.
+      const again = await api.pickRollToday(roll.id, '2026-08-04');
+      expect(again.task.id).toBe(first.task.id);
+      expect(again.plan.id).toBe(first.plan.id);
+      expect(await api.listPlansForDay('2026-08-04')).toHaveLength(1);
+
+      // Picking on the NEXT day while the rep is still open re-plans the SAME task onto that day.
+      const nextDay = await api.pickRollToday(roll.id, '2026-08-05');
+      expect(nextDay.task.id).toBe(first.task.id);
+      expect((await api.listPlansForDay('2026-08-05')).map((p) => p.taskId)).toContain(first.task.id);
+
+      // Once the rep is done, picking again spawns a FRESH task (a second rep is honest).
+      await api.transitionTask(first.task.id, 'in_progress');
+      await api.transitionTask(first.task.id, 'done');
+      const fresh = await api.pickRollToday(roll.id, '2026-08-05');
+      expect(fresh.task.id).not.toBe(first.task.id);
+      expect(fresh.task.status).toBe('planned');
+    });
+
     it('ideas: triage moves an idea between status buckets', async () => {
       const idea = await api.createIdea('a thought');
       expect((await api.listIdeas('open')).map((i) => i.id)).toContain(idea.id);
@@ -536,6 +601,7 @@ export function runApiContract(
           'leetcodeAttempts',
           'logEntries',
           'plans',
+          'rolls',
           'series',
           'sessions',
           'settings',

@@ -7,11 +7,14 @@ import {
   dayKey,
   dayKeyForOffset,
   discardSession,
+  findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
+  ROLL_PLAN_FALLBACK_MIN,
+  rollRepFields,
   sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
@@ -45,6 +48,7 @@ import type {
   LogEntry,
   PomodoroSession,
   RecordLeetcodeAttemptInput,
+  Roll,
   Settings,
   SettingsPatch,
   StartSessionInput,
@@ -58,6 +62,7 @@ import type {
   UpsertCategoryInput,
   UpsertHabitInput,
   UpsertPlanInput,
+  UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
 import type { Repo } from './ddb/repo';
@@ -562,6 +567,49 @@ export class BackendClient implements ApiClient {
     return this.repo.listChecks(range.from, range.to);
   }
 
+  // --- Rolls ---
+  async listRolls(): Promise<Roll[]> {
+    return (await this.repo.listRolls()).sort((a, b) => a.createdAt - b.createdAt);
+  }
+  async upsertRoll(input: UpsertRollInput): Promise<Roll> {
+    const fields = {
+      name: input.name,
+      categoryId: input.categoryId,
+      estimateMin: input.estimateMin,
+      active: input.active ?? true,
+    };
+    if (input.id) {
+      const existing = await this.repo.getRoll(input.id);
+      if (!existing) throw new Error(`Not found: ${input.id}`);
+      return this.repo.putRoll({ ...existing, ...fields, updatedAt: this.now() });
+    }
+    return this.repo.putRoll({ ...this.base(), ...fields });
+  }
+  // Reuse the open rep if one exists (re-planning a rolled-back backlog one), else spawn a fresh planned
+  // rep; then ensure it sits on `day`'s plan, appended like addToDay. Mirrors the stub exactly.
+  async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
+    const roll = await this.repo.getRoll(rollId);
+    if (!roll) throw new Error(`Not found: ${rollId}`);
+    const existing = findOpenRollTask(await this.repo.listTasks(), rollId);
+    const task = existing
+      ? existing.status === 'backlog'
+        ? await this.repo.putTask(taskTransition(existing, 'planned', this.now()))
+        : existing
+      : await this.repo.putTask({ ...this.base(), ...rollRepFields(roll) });
+    const dayPlans = await this.repo.listPlans(day);
+    const existingPlan = dayPlans.find((p) => p.taskId === task.id);
+    const plan =
+      existingPlan ??
+      (await this.repo.putPlan({
+        ...this.base(),
+        taskId: task.id,
+        day,
+        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+        order: dayPlans.length,
+      }));
+    return { task, plan };
+  }
+
   // --- Ideas ---
   async listIdeas(status?: IdeaStatus): Promise<Idea[]> {
     return (await this.repo.listIdeas())
@@ -695,13 +743,19 @@ export class BackendClient implements ApiClient {
     const tasks = (await this.repo.listTasks()).filter((t) => t.categoryId === id);
     const habits = (await this.repo.listHabits()).filter((h) => h.categoryId === id);
     const series = (await this.repo.listSeries()).filter((s) => s.categoryId === id);
-    assertCategoryDeletable(tasks.length + habits.length + series.length, reassignToId);
+    const rolls = (await this.repo.listRolls()).filter((r) => r.categoryId === id);
+    assertCategoryDeletable(
+      tasks.length + habits.length + series.length + rolls.length,
+      reassignToId,
+    );
     for (const t of tasks)
       await this.repo.putTask({ ...t, categoryId: reassignToId, updatedAt: this.now() });
     for (const h of habits)
       await this.repo.putHabit({ ...h, categoryId: reassignToId, updatedAt: this.now() });
     for (const s of series)
       await this.repo.putSeries({ ...s, categoryId: reassignToId, updatedAt: this.now() });
+    for (const r of rolls)
+      await this.repo.putRoll({ ...r, categoryId: reassignToId, updatedAt: this.now() });
     const cat = await this.repo.getCategory(id);
     if (cat) await this.repo.putCategory({ ...cat, deletedAt: this.now(), updatedAt: this.now() });
   }
@@ -898,6 +952,7 @@ export class BackendClient implements ApiClient {
       ideas: await this.repo.listIdeas(),
       habits: await this.repo.listHabits(),
       habitChecks: await this.repo.listAllChecks(),
+      rolls: await this.repo.listRolls(),
       sessions: await this.repo.listAllSessions(),
       days: await this.repo.listAllDays(),
       categories: await this.repo.listCategories(),

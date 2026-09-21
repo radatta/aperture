@@ -14,11 +14,14 @@ import {
   dayKey,
   dayKeyForOffset,
   discardSession,
+  findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
+  ROLL_PLAN_FALLBACK_MIN,
+  rollRepFields,
   sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
@@ -50,6 +53,7 @@ import type {
   LogEntry,
   PomodoroSession,
   RecordLeetcodeAttemptInput,
+  Roll,
   Settings,
   SettingsPatch,
   StartSessionInput,
@@ -63,6 +67,7 @@ import type {
   UpsertCategoryInput,
   UpsertHabitInput,
   UpsertPlanInput,
+  UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
 import { seedStore } from './seed';
@@ -78,6 +83,7 @@ export interface Store {
   ideas: Idea[];
   habits: Habit[];
   habitChecks: HabitCheck[];
+  rolls: Roll[];
   sessions: PomodoroSession[];
   days: Day[];
   categories: Category[];
@@ -96,6 +102,7 @@ export function emptyStore(): Store {
     ideas: [],
     habits: [],
     habitChecks: [],
+    rolls: [],
     sessions: [],
     days: [],
     categories: [],
@@ -620,6 +627,52 @@ class StubClient implements ApiClient {
     );
   }
 
+  // --- Rolls ---------------------------------------------------------------
+  async listRolls(): Promise<Roll[]> {
+    return this.alive(this.store.rolls).sort((a, b) => a.createdAt - b.createdAt);
+  }
+  async upsertRoll(input: UpsertRollInput): Promise<Roll> {
+    if (input.id) {
+      return this.writes.patch(this.store.rolls, input.id, {
+        name: input.name,
+        categoryId: input.categoryId,
+        estimateMin: input.estimateMin,
+        active: input.active ?? true,
+      });
+    }
+    return this.writes.insert(this.store.rolls, {
+      ...this.base(),
+      name: input.name,
+      categoryId: input.categoryId,
+      estimateMin: input.estimateMin,
+      active: input.active ?? true,
+    });
+  }
+  // Pick a roll for `day`: reuse the open rep if one exists (re-planning a rolled-back backlog one),
+  // else spawn a fresh planned rep; then ensure it sits on that day's plan, appended like addToDay.
+  async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
+    const roll = this.mustFind(this.store.rolls, rollId);
+    const existing = findOpenRollTask(this.alive(this.store.tasks), rollId);
+    const task = existing
+      ? existing.status === 'backlog'
+        ? this.writes.put(this.store.tasks, taskTransition(existing, 'planned', this.now()))
+        : existing
+      : this.writes.insert(this.store.tasks, { ...this.base(), ...rollRepFields(roll) });
+    const existingPlan = this.alive(this.store.plans).find(
+      (p) => p.taskId === task.id && p.day === day,
+    );
+    const plan =
+      existingPlan ??
+      this.writes.insert(this.store.plans, {
+        ...this.base(),
+        taskId: task.id,
+        day,
+        plannedMinutes: roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN,
+        order: this.alive(this.store.plans).filter((p) => p.day === day).length,
+      });
+    return { task, plan };
+  }
+
   // --- Ideas ---------------------------------------------------------------
   async listIdeas(status?: IdeaStatus): Promise<Idea[]> {
     return this.alive(this.store.ideas)
@@ -739,6 +792,7 @@ class StubClient implements ApiClient {
       ...this.alive(this.store.tasks).filter((t) => t.categoryId === id),
       ...this.alive(this.store.habits).filter((h) => h.categoryId === id),
       ...this.alive(this.store.series).filter((s) => s.categoryId === id),
+      ...this.alive(this.store.rolls).filter((r) => r.categoryId === id),
     ];
     assertCategoryDeletable(referrers.length, reassignToId);
     for (const t of this.alive(this.store.tasks).filter((x) => x.categoryId === id)) {
@@ -749,6 +803,9 @@ class StubClient implements ApiClient {
     }
     for (const s of this.alive(this.store.series).filter((x) => x.categoryId === id)) {
       this.writes.patch(this.store.series, s.id, { categoryId: reassignToId });
+    }
+    for (const r of this.alive(this.store.rolls).filter((x) => x.categoryId === id)) {
+      this.writes.patch(this.store.rolls, r.id, { categoryId: reassignToId });
     }
     this.writes.softDelete(this.store.categories, id);
   }
@@ -871,6 +928,7 @@ class StubClient implements ApiClient {
       ideas: this.alive(this.store.ideas),
       habits: this.alive(this.store.habits),
       habitChecks: this.alive(this.store.habitChecks),
+      rolls: this.alive(this.store.rolls),
       sessions: this.alive(this.store.sessions),
       days: this.alive(this.store.days),
       categories: this.alive(this.store.categories),

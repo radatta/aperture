@@ -2,7 +2,7 @@
 // have something honest to render. Without this, page-first validation would judge every data view
 // against an empty store. Values are index-derived (not random) so the seed is reproducible.
 
-import { addDays, dayKey } from '@aperture/shared';
+import { addDays, dayKey, rollRepFields } from '@aperture/shared';
 import type {
   BaseEntity,
   Category,
@@ -10,6 +10,7 @@ import type {
   Habit,
   LeetcodeVerdict,
   PomodoroSession,
+  Roll,
   Task,
 } from '@aperture/shared';
 import type { Store } from './stubClient';
@@ -256,6 +257,79 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   [1, 3, 5, 8, 10, 12].forEach((d) => check(read, d));
   [2, 5, 9, 12].forEach((d) => check(workout, d));
   check(call, 6);
+
+  // --- Rolls — deadline-free ongoing efforts, with a backdated "contact sheet" of reps so the grid
+  // isn't empty on first load. A rep is a done task tagged with the roll; momentum is DERIVED from these.
+  const leetcode: Roll = {
+    ...mk(nowMs - 25 * DAY),
+    name: 'LeetCode daily',
+    categoryId: byLabel('Learning').id,
+    estimateMin: 30,
+    active: true,
+  };
+  const study: Roll = {
+    ...mk(nowMs - 25 * DAY),
+    name: 'Study systems design',
+    categoryId: byLabel('Learning').id,
+    estimateMin: 45,
+    active: true,
+  };
+  const build: Roll = {
+    ...mk(nowMs - 25 * DAY),
+    name: 'Work on Aperture',
+    categoryId: byLabel('Deep Work').id,
+    estimateMin: 60,
+    active: true,
+  };
+  store.rolls.push(leetcode, study, build);
+
+  // One done rep = one filled cell. `seq` offsets a second rep on the same day so a cell can read "2".
+  const rep = (roll: Roll, dAgo: number, seq = 0) => {
+    const completedAt = nowMs - dAgo * DAY - (2 + seq) * HOUR;
+    const est = roll.estimateMin ?? 30;
+    const actual = Math.round(est * factors[dAgo % factors.length]!);
+    const startedAt = completedAt - actual * 60_000;
+    store.tasks.push({
+      ...mk(startedAt),
+      title: roll.name,
+      status: 'done',
+      categoryId: roll.categoryId,
+      dueDay: null,
+      seriesId: null,
+      rollId: roll.id,
+      estimateMin: est,
+      bufferMin: null,
+      estimateLockedMin: est,
+      actualAccruedMin: actual,
+      startedAt,
+      completedAt,
+      cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+    });
+  };
+  // Frequent-but-gappy for LeetCode (with two two-a-day cells), sparser for the others — a lived-in sheet.
+  [1, 2, 4, 5, 6, 8, 9, 11, 13, 15, 16, 18, 20, 22, 23, 25, 27, 29, 31, 34].forEach((d) =>
+    rep(leetcode, d),
+  );
+  [2, 6].forEach((d) => rep(leetcode, d, 1));
+  [3, 7, 12, 17, 21, 28, 33].forEach((d) => rep(study, d));
+  [4, 10, 18, 25, 32].forEach((d) => rep(build, d));
+
+  // LeetCode already picked for today — a planned rep appended after the plan seeds, so it lands in the
+  // daytime "Also today" lane (where completing it becomes today's rep). Built via the SAME shared helper
+  // pickRollToday uses, so the seed can't drift from the real pick.
+  const pickedAt = nowMs - 15 * 60_000;
+  const pickedRep: Task = { ...mk(pickedAt), ...rollRepFields(leetcode) };
+  store.tasks.push(pickedRep);
+  store.plans.push({
+    ...mk(pickedAt),
+    taskId: pickedRep.id,
+    day: today,
+    plannedMinutes: leetcode.estimateMin ?? 30,
+    order: planSeeds.length,
+  });
 
   // LeetCode attempts — a few backdated, with wrong→accepted arcs so the derived attempt-count reads > 1.
   const lc = (
