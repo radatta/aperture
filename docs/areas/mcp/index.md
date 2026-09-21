@@ -3,7 +3,7 @@
 An MCP (Model Context Protocol) server that lets **Claude Code** read and write the user's Aperture data
 during coding sessions — tasks, calibration, LeetCode history, calendar events, attachments — so the task
 list is always in sync with the assistant helping work it. One hosted endpoint (`/mcp`); **claude.ai
-(web + phone)** connects to the same endpoint via OAuth in a later phase.
+(web + phone)** connects to the same endpoint via a Cognito OAuth path (the metadata-façade section below).
 
 The operator is Claude, not the user's thumbs, so the tool grammar is strict and concrete (ISO dates,
 minutes, category **ids** from `list_categories`) — the same posture as [bulk-add](../tasks/bulk-add.md).
@@ -12,7 +12,7 @@ minutes, category **ids** from `list_categories`) — the same posture as [bulk-
 
 ```
 Claude Code   --x-aperture-agent-token-->  CloudFront /mcp  -->  aperture-mcp Lambda
-claude.ai     --OAuth (Cognito), phase 2->                       ├─ MCP JSON-RPC (hand-rolled, stateless)
+claude.ai     --OAuth bearer (Cognito)--->                       ├─ MCP JSON-RPC (hand-rolled, stateless)
                                                                  ├─ resolve credential → userId (your sub)
                                                                  └─ tools/call → handleRpc(userId, …)
                                                                                      ↓
@@ -32,10 +32,10 @@ var from a gitignored file / `APERTURE_AGENT_TOKEN` in CI, NOT Secrets Manager),
 kept **distinct** from the device token so the two revoke independently.
 
 The token is **unscoped by method** (`*`) — it's a full app session — so the edge disambiguates by
-**credential, not method**: the agent header present → validate it, never fall through; else (phase 2) a
-Cognito bearer; else 401. This is the reverse of the recruiting seam (which keys on the single ingest
-method name), and the reason is the same `*` decision that keeps tool-adds free: a new tool never touches
-auth.
+**credential, not method**: the agent header present → validate it, never fall through; else a Cognito
+bearer (claude.ai — see the OAuth façade below); else 401. This is the reverse of the recruiting seam
+(which keys on the single ingest method name), and the reason is the same `*` decision that keeps
+tool-adds free: a new tool never touches auth.
 
 ### The agent token is a full app session — with a bounded ceiling
 
@@ -97,14 +97,21 @@ transport. See `lambdas/src/mcp/protocol.ts`.
 - `lambdas/src/mcp/tools.ts` — the tool table; each `run` dispatches through `ctx.dispatch` (= `handleRpc`).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
   become `isError` results the model self-corrects from).
-- `lambdas/src/mcp/index.ts` — the AWS/HTTP + auth edge (origin gate, credential, dispatch, upload).
-- `lambdas/src/auth/verify.ts` — `resolveAgentUserId` (beside `resolveDeviceUserId`).
+- `lambdas/src/mcp/index.ts` — the AWS/HTTP + auth edge (origin gate, well-known routes, credential fork,
+  dispatch, upload).
+- `lambdas/src/mcp/wellKnown.ts` — the phase-2 OAuth metadata façade (pure builders, zero I/O).
+- `lambdas/src/auth/verify.ts` — `resolveAgentUserId`, the client-bound `createCognitoVerifier` (the MCP
+  bearer path), and `assertClientAllowed` (the BFF's D14 deny).
 - `packages/shared/src/rpc.ts` — `AGENT_TOKEN_HEADER`, and `setTaskTitle` in `API_METHODS`.
 - `cdk/src/lib/app-stack.ts` — the `aperture-mcp-<stage>` function, its Function URL, the `/mcp` CloudFront
-  behavior + origin-request policy (forwards `x-aperture-agent-token`), the shared `grantBackendData` /
-  `ackLambdaIam` helpers (MCP gets SSM read-only), and the `McpUrl` output.
+  behavior + origin-request policy (forwards `x-aperture-agent-token`) + the `McpCachePolicy` that forwards
+  `authorization`, the three well-known behaviors, the `aperture-claude-<stage>` app client + MCP resource
+  server, the shared `grantBackendData` / `ackLambdaIam` helpers (MCP gets SSM read-only), and the `McpUrl`
+  / `McpClientId` outputs.
+- `cdk/src/config/claudeConnector.ts` — claude.ai's connector callback URLs (committed constants).
 - `cdk/src/bin/aperture.ts` — `agentTokenFor(stage)` (cloned from `deviceTokenFor`).
-- `scripts/aws/health-check.mjs` — the post-deploy `/mcp` probe (401 without a token, 405 on GET).
+- `scripts/aws/health-check.mjs` — the post-deploy `/mcp` probe (401 without a token, 405 on GET, the
+  façade's S256 metadata, and the bearer-→-401-with-`WWW-Authenticate` R7 check).
 
 ## Operator checklist (phase 1)
 
@@ -138,18 +145,72 @@ Claude Code has a bug history of not sending custom headers on the initial hands
 - **Only a deployed stage** proves: CloudFront forwarding the custom header, Claude Code actually sending
   it, and `DEVICE_USER_ID` = your `sub` (a wrong value writes tasks under `u#local`).
 
-## Phase 2 — claude.ai (deferred, designed)
+## claude.ai — the OAuth façade (built)
 
-Same endpoint, adds an OAuth path for claude.ai's custom connector. Verified: DCR is not required (paste a
-pre-registered client id); but Cognito's `openid-configuration` omits `code_challenge_methods_supported`
-(confirmed live), so the MCP Lambda must serve a thin **metadata façade** — its own
-`/.well-known/oauth-protected-resource` + a corrected `/.well-known/oauth-authorization-server` that
-proxies Cognito but injects the missing PKCE field — plus a Cognito app client for claude.ai and
-audience validation in the Lambda. Full detail lives with the phase-2 work.
+The same `/mcp` endpoint accepts a **Cognito bearer** for claude.ai's custom connector, alongside the
+agent-token path (which is unchanged). Two verified facts shaped it:
+
+- **DCR is not required** — you paste a pre-registered client id into the connector's OAuth settings, so
+  Cognito's lack of Dynamic Client Registration is irrelevant.
+- **Cognito's `openid-configuration` omits `code_challenge_methods_supported`** (confirmed `null` live),
+  and per the MCP auth spec a client MUST refuse PKCE when that field is absent.
+
+So the Lambda serves a thin **metadata façade** (`wellKnown.ts`, pure builders, zero outbound calls) at
+three GET routes behind the origin gate, ahead of the POST-only gate:
+
+- `/.well-known/oauth-protected-resource` (+ the RFC 9728 `/mcp`-suffixed form) — points claude.ai at us
+  as the resource and at our origin as the authorization server.
+- `/.well-known/oauth-authorization-server` (+ `/.well-known/openid-configuration`) — **`issuer` is OUR
+  origin** (RFC 8414 §3.3 — the client checks issuer against the metadata URL it fetched, not the token),
+  the `authorization`/`token` endpoints point at Cognito's hosted UI, and it **injects
+  `code_challenge_methods_supported: ["S256"]`** — the one field Cognito omits. No `registration_endpoint`.
+
+A 401 carries `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"` so
+claude.ai can discover the metadata. Cognito stays the real authorization server for the login + token
+exchange; the façade only publishes correct metadata from our origin.
+
+**Decisions:**
+
+- **Client-bound verifier.** The MCP bearer path verifies against the `aperture-claude-<stage>` app
+  client id (`createCognitoVerifier(poolId, clientId)`), so a token minted for the SPA app-client is
+  rejected here. Safe from the deploy cycle that keeps the BFF verifier un-bound, because the claude
+  client has no CloudFront dependency (its callbacks are constants, its resource identifier is
+  domain-literal). An unconfigured stage (no `MCP_CLIENT_ID`) **rejects** a bearer rather than falling
+  back to the `local` dev user — a public OAuth endpoint must not treat "unconfigured" as "anyone".
+- **D14 — cross-client replay denied.** The BFF verifier is deliberately not client-bound, so a
+  claude.ai-minted token would otherwise be a valid full `/api/*` token. The BFF now **denies** tokens
+  carrying the claude client id (`assertClientAllowed`), keeping "claude.ai can only do what `/mcp`
+  exposes" true by construction.
+- **D13 — 30-day refresh token** for the claude client (vs the SPA client's 7). Its refresh token lives
+  in claude.ai's server-side store, not a browser, and expiry means re-running the connector OAuth dance
+  on web *and* phone; the localStorage-leak reasoning behind the 7-day SPA ceiling doesn't apply.
+- **`Authorization` forwards via a cache policy, not the origin-request policy.** CloudFront strips
+  `Authorization` by default, and CDK's L2 origin-request policy *refuses* it (throws at synth) — so a
+  zero-TTL `McpCachePolicy` carries it in the cache key (AWS's documented path; the header in the key
+  means a response is never shared across tokens). The origin-request policy still forwards the
+  agent-token + MCP headers.
+
+Spec-revision note: the handshake advertises MCP `2025-06-18`, but the PKCE-metadata refusal rule and the
+dual well-known probing are from the `2025-11-25` revision, which is what Anthropic documents its client
+against — the façade is built to those semantics. `2026-07-28` adds an RFC 9207 `iss`-echo check; whether
+claude.ai's live client enforces it yet is unconfirmed (cheap forward-compat, not built).
+
+### Operator checklist (phase 2)
+
+0. No new GitHub secrets (the client id is not a secret). Re-confirm the connector callback URLs in
+   `cdk/src/config/claudeConnector.ts` against Anthropic's docs.
+1. Deploy; read `McpClientId` from the stack outputs (or Cognito → App clients, region us-west-1).
+2. **R7 curl, before any claude.ai UI:** `POST …/mcp` with `Authorization: Bearer x` → expect **401 with
+   `WWW-Authenticate`** (proves the header reached the Lambda). If the CloudWatch `mcp_auth` line reads
+   `credential:"none"`, the Function URL ate the header → add a CloudFront viewer-request Function that
+   copies `authorization` → `x-aperture-authorization` (the Lambda already reads that fallback; no Lambda
+   change). The health check automates this probe + the S256-metadata check.
+3. claude.ai → Connectors → Add custom connector → URL `…/mcp`, Advanced → **OAuth Client ID =
+   `McpClientId`**, secret blank → Connect → hosted-UI login → tools list → `list_categories`, one write.
+4. After merge to `main`: repeat for prod with the prod client id. Phone inherits the connector.
 
 ## Deferred
 
-- claude.ai OAuth (phase 2, above).
 - A rename does not sync to a linked calendar event (edit-sync — a pre-existing calendar gap).
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
