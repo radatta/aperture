@@ -8,7 +8,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { invalidateTaskData } from '../../data/hooks/invalidate';
 import { PomodoroContext } from './pomodoro-context';
 import type { RunningTimer, StartFocusInput } from './pomodoro-context';
-import { isStale, remainingSec, targetSecFor } from './pomodoro';
+import { activeSec, isStale, remainingSec, targetSecFor } from './pomodoro';
 
 // The timer engine (PRODUCT §4b, TECH §2.3.3). Owns ALL concurrently-running timers — you run
 // several at once (parallel focus, e.g. multiple sessions), each with its own label, heartbeat, and
@@ -88,7 +88,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       sessions.map((session) => {
         const paused = pausedIds.has(session.id);
         const remaining = remainingSec(session, targetFor(session), paused, now);
-        return { session, paused, remaining, done: remaining <= 0 };
+        return { session, paused, remaining, done: remaining <= 0, activeSec: activeSec(session, paused, now) };
       }),
     [sessions, pausedIds, now, targetFor],
   );
@@ -210,12 +210,11 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   );
 
   const stop = useCallback(
-    (id: string, status: 'completed' | 'discarded' = 'completed') => {
+    (id: string, status: 'completed' | 'discarded' = 'completed') =>
       api.stopSession(id, status).then(() => {
         invalidateTaskData(qc);
         remove(id);
-      });
-    },
+      }),
     [api, qc, remove],
   );
 

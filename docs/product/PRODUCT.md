@@ -71,8 +71,8 @@ Capture **never** asks for structure. No estimate, no due date, no category at c
 
 ### ⚙️ Daytime — do + capture (light now, grows at school)
 1. Capture bar (prominent)
-2. Today's tasks — what's left, planned vs elapsed
-3. Pomodoro — active timer, tied to the current task
+2. **Right now** — the **Big 3** (top of today's plan) with the in-progress task as a **hero** showing a calm **count-up vs its estimate**; the rest of today falls to a lighter "Also today" lane. Pomodoro focus starts from the hero. Finishing returns a gentle "what's next?", never an auto-advance.
+3. **Coming up** — a capped, soonest-first **deadline radar** (from due dates), flat and quiet — you plan *from* it, it never scolds. (The full grouped this-week's-dues view is a later, deep view.)
 4. Time-budget glance — hours spent vs planned (running calibration)
 
 ### 🌙 Night — log + reflect (the honest mirror)

@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router';
 import { Card } from '../../components/Card';
 import { Text } from '../../components/Text';
+import { ChevronRightIcon } from '../../components/icons';
 
 // A home slot. Title row is quiet uppercase; `aside` is an optional right-aligned action/link.
 export function HomeCard({
@@ -22,6 +24,18 @@ export function HomeCard({
       </div>
       {children}
     </Card>
+  );
+}
+
+// A quiet "go to the deep view" affordance — teal text + a chevron (SVG, so no tofu glyph).
+export function CardLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="flex items-center gap-0.5 text-teal">
+      <Text size="xs" tone="teal">
+        {children}
+      </Text>
+      <ChevronRightIcon size={13} />
+    </Link>
   );
 }
 

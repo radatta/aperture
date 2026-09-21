@@ -157,6 +157,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     { title: 'Draft the project proposal', dueOffset: 2 },
     { title: 'Fix the flaky CI test', dueOffset: -1 },
     { title: 'Reply to advisor email', dueOffset: null },
+    { title: 'Submit the lab report', dueOffset: 4 },
+    { title: 'Prep for the quiz', dueOffset: 5 },
     { title: 'Outline the reading notes', dueOffset: 12 },
     { title: 'Book dentist appointment', dueOffset: null },
   ];
@@ -178,6 +180,46 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+    });
+  });
+
+  // Today's plan — a few tasks pulled in and ordered, so the daytime "Right now" hero + Big 3 render
+  // on first load. The 2nd is in progress (the hero to glance); the rest are ready to start, and the
+  // tail spills into "Also today" (where "Focus this" is exercisable).
+  const planSeeds: { title: string; cat: string; est: number; inProgress?: boolean }[] = [
+    { title: 'Finish the problem set', cat: 'Deep Work', est: 60 },
+    { title: 'Rewrite the onboarding section', cat: 'Deep Work', est: 45, inProgress: true },
+    { title: 'Clear the email backlog', cat: 'Admin', est: 20 },
+    { title: 'Skim the lecture notes', cat: 'Learning', est: 30 },
+    { title: 'Tidy the desk', cat: 'Admin', est: 10 },
+  ];
+  planSeeds.forEach(({ title, cat, est, inProgress }, i) => {
+    const at = nowMs - (i + 1) * 30 * 60_000;
+    const task: Task = {
+      ...mk(at),
+      title,
+      status: inProgress ? 'in_progress' : 'planned',
+      categoryId: byLabel(cat).id,
+      dueDay: null,
+      seriesId: null,
+      estimateMin: est,
+      bufferMin: Math.round(est * 0.25),
+      estimateLockedMin: inProgress ? est : null,
+      actualAccruedMin: inProgress ? 12 : 0,
+      startedAt: inProgress ? nowMs - 20 * 60_000 : null,
+      completedAt: null,
+      cancelledAt: null,
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+    };
+    store.tasks.push(task);
+    store.plans.push({
+      ...mk(at),
+      taskId: task.id,
+      day: today,
+      plannedMinutes: est + Math.round(est * 0.25),
+      order: i,
     });
   });
 
