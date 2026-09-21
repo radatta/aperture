@@ -151,7 +151,7 @@ export function PlanSection() {
                     )}
                   </div>
                 </div>
-                <Button size="sm" onClick={() => addToDay(task.id)}>
+                <Button size="sm" className="shrink-0" onClick={() => addToDay(task.id)}>
                   Add to today
                 </Button>
               </div>
