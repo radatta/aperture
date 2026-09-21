@@ -13,12 +13,14 @@ import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { Monitoring } from './monitoring';
+import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
 
 export interface AppStackProps extends StackProps {
   stage: string;
   table: dynamodb.Table;
   userPool: cognito.UserPool;
   filesBucket: s3.IBucket; // precious user-uploads bucket from the data stack (attachments live here)
+  cognitoDomain: string; // hosted-UI host from the data stack — the MCP OAuth façade's /oauth2 base (phase 2)
   originSecret: string; // CloudFront→Lambda origin-lockdown token (anti-abuse; JWT is the real gate)
   domainName?: string; // custom-domain alias for CloudFront (Phase 14). Unset → CloudFront default domain only.
   certificateArn?: string; // us-east-1 ACM cert ARN for domainName; required whenever domainName is set.
@@ -97,7 +99,7 @@ function grantBackendData(
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
-    const { stage, table, userPool, filesBucket, originSecret, domainName, certificateArn, deviceToken, deviceUserId, agentToken } =
+    const { stage, table, userPool, filesBucket, cognitoDomain, originSecret, domainName, certificateArn, deviceToken, deviceUserId, agentToken } =
       props;
     // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,
     // so deploys never touch DNS/certs. Absent until the domain step is done → CloudFront default domain.
@@ -105,6 +107,35 @@ export class ApertureAppStack extends Stack {
       domainName && certificateArn
         ? acm.Certificate.fromCertificateArn(this, 'SiteCert', certificateArn)
         : undefined;
+
+    // claude.ai MCP OAuth client + its resource server (phase 2). Declared HERE — ahead of both Lambdas —
+    // because their env carries MCP_CLIENT_ID (the MCP fn BINDS its verifier to it; the BFF DENIES it, D14).
+    // It has NO CloudFront dependency: callbacks are committed constants and the resource identifier is
+    // gated on domainName (a literal), not the distribution domain (a token) — so a Lambda referencing the
+    // client id forms no deploy cycle. The identifier matches what the /mcp façade computes from APP_URL.
+    const mcpResourceIdentifier = domainName ? `https://${domainName}/mcp` : `aperture-mcp-${stage}`;
+    const mcpScope = new cognito.ResourceServerScope({ scopeName: 'access', scopeDescription: 'Full MCP access (act as the user)' });
+    const mcpResourceServer = new cognito.UserPoolResourceServer(this, 'McpResourceServer', {
+      userPool,
+      identifier: mcpResourceIdentifier,
+      scopes: [mcpScope],
+    });
+    const claudeClient = new cognito.UserPoolClient(this, 'ClaudeClient', {
+      userPool,
+      userPoolClientName: `aperture-claude-${stage}`,
+      generateSecret: false,
+      authFlows: {}, // hosted-UI authorization-code flow only — no SRP/password
+      preventUserExistenceErrors: true,
+      // 30 days (vs the SPA client's 7): the refresh token lives in claude.ai's server-side store, not a
+      // browser, and its expiry means re-doing the connector OAuth dance on BOTH web and phone. The
+      // localStorage-leak reasoning that set the SPA ceiling doesn't apply here. (D13.)
+      refreshTokenValidity: Duration.days(30),
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.resourceServer(mcpResourceServer, mcpScope)],
+        callbackUrls: CLAUDE_CONNECTOR_CALLBACK_URLS,
+      },
+    });
 
     // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
     const fnTimeout = Duration.seconds(15); // shared with the Monitoring duration alarm below
@@ -119,6 +150,7 @@ export class ApertureAppStack extends Stack {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,
         USER_POOL_ID: userPool.userPoolId,
+        MCP_CLIENT_ID: claudeClient.userPoolClientId, // D14: the BFF verifier DENIES tokens from this client
         STAGE: stage,
         ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
         DEVICE_TOKEN: deviceToken, // extension ingest auth (resolveDeviceUserId), scoped to recordLeetcodeAttempt
@@ -154,6 +186,11 @@ export class ApertureAppStack extends Stack {
         STAGE: stage,
         ORIGIN_SECRET: originSecret,
         AGENT_TOKEN: agentToken, // static agent-token auth (resolveAgentUserId), any method
+        // Phase 2 (claude.ai): the Cognito bearer path + the OAuth metadata façade. The façade only serves
+        // when APP_URL is set (a stage with a custom domain), so on a domain-less stage /mcp stays agent-only.
+        USER_POOL_ID: userPool.userPoolId,
+        MCP_CLIENT_ID: claudeClient.userPoolClientId, // the bearer verifier binds to this claude client
+        COGNITO_DOMAIN: cognitoDomain, // the façade's /oauth2 authorize+token base
         ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}), // same Cognito sub the ingest writes attribute to
         ...(domainName ? { APP_URL: `https://${domainName}` } : {}),
       },
@@ -183,7 +220,8 @@ export class ApertureAppStack extends Stack {
 
     // /mcp forwards the agent-token header + the MCP content/negotiation headers. CloudFront STRIPS any
     // header not on this list, so a missing entry here is an invisible 401 that only shows on a deployed
-    // stage — phase 2 adds `authorization` here for the Cognito path.
+    // stage. NB: phase 2's `authorization` is NOT here — CDK's origin-request-policy L2 refuses it (throws
+    // at synth); it rides via the cache policy on the /mcp behavior instead (AWS's documented path).
     const mcpOrp = new cloudfront.OriginRequestPolicy(this, 'McpOriginPolicy', {
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
         AGENT_TOKEN_HEADER,
@@ -194,6 +232,31 @@ export class ApertureAppStack extends Stack {
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.none(),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
     });
+
+    // Shared MCP origin — reused by /mcp AND the phase-2 well-known metadata behaviors, so all carry the
+    // same origin-secret stamp (the façade routes sit behind the same gate).
+    const mcpOrigin = new origins.FunctionUrlOrigin(mcpUrl, {
+      customHeaders: { [ORIGIN_SECRET_HEADER]: originSecret },
+    });
+    // CloudFront strips Authorization from origin requests by default, and CDK's origin-request-policy L2
+    // refuses it — so /mcp forwards it via the CACHE key instead (the documented mechanism). All-zero TTL
+    // keeps caching disabled; the header being in the key means a response is never shared across tokens.
+    const mcpCachePolicy = new cloudfront.CachePolicy(this, 'McpCachePolicy', {
+      minTtl: Duration.seconds(0),
+      maxTtl: Duration.seconds(0),
+      defaultTtl: Duration.seconds(0),
+      headerBehavior: cloudfront.CacheHeaderBehavior.allowList('authorization'),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+    });
+    // The OAuth metadata façade (phase 2): public GET/HEAD, never cached, no header forwarding needed (the
+    // Lambda builds the doc from env). Scoped NARROWLY — never `/.well-known/*` (the PWA may want that).
+    const wellKnownBehavior = {
+      origin: mcpOrigin,
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+      cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+    };
 
     const distribution = new cloudfront.Distribution(this, 'Cdn', {
       defaultRootObject: 'index.html',
@@ -216,16 +279,20 @@ export class ApertureAppStack extends Stack {
           originRequestPolicy: apiOrp,
         },
         // The MCP server (exact path — Claude Code / claude.ai use the URL verbatim). Its own Function URL
-        // origin, the same origin-secret stamp, POST-only in practice, never cached.
+        // origin, the same origin-secret stamp, POST-only in practice, never cached. The cache policy
+        // forwards Authorization (phase-2 Cognito bearer); mcpOrp forwards the agent-token + MCP headers.
         '/mcp': {
-          origin: new origins.FunctionUrlOrigin(mcpUrl, {
-            customHeaders: { [ORIGIN_SECRET_HEADER]: originSecret },
-          }),
+          origin: mcpOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          cachePolicy: mcpCachePolicy,
           originRequestPolicy: mcpOrp,
         },
+        // Phase-2 OAuth discovery — claude.ai fetches these to learn the (façade) authorization server.
+        // `*` on the first two serves both the root and the RFC 9728 `/mcp`-suffixed path forms.
+        '/.well-known/oauth-protected-resource*': wellKnownBehavior,
+        '/.well-known/oauth-authorization-server*': wellKnownBehavior,
+        '/.well-known/openid-configuration': wellKnownBehavior,
       },
       // SPA fallback: client-side routes 403/404 from S3 → serve index.html (INFRA §7).
       errorResponses: [
@@ -282,6 +349,7 @@ export class ApertureAppStack extends Stack {
     // rejects a headerless request (through CloudFront the viewer can't set/unset that header).
     new CfnOutput(this, 'FunctionUrl', { value: fnUrl.url });
     new CfnOutput(this, 'McpUrl', { value: `${appUrl}/mcp` }); // the URL to register in Claude Code / claude.ai
+    new CfnOutput(this, 'McpClientId', { value: claudeClient.userPoolClientId }); // paste into claude.ai's connector OAuth Client ID
 
     // Runtime watch on the BFF, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't

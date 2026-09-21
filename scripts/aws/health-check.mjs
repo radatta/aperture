@@ -78,6 +78,31 @@ await check('MCP edge: GET /mcp → 405 (POST only)', async () => {
   expect(r.status === 405, `expected 405 for GET, got ${r.status}`);
 });
 
+// Phase 2 (claude.ai OAuth): the metadata façade must advertise the PKCE field Cognito omits and name OUR
+// origin as issuer; and a bearer token must reach the Lambda (R7) — proven by the 401 carrying the RFC
+// 9728 discovery pointer (if CloudFront ate the Authorization header, the Lambda logs credential:"none").
+await check('MCP façade: /.well-known/oauth-authorization-server advertises S256 + our issuer', async () => {
+  const r = await fetch(`${appUrl}/.well-known/oauth-authorization-server`);
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+  const body = await r.json();
+  expect(
+    Array.isArray(body?.code_challenge_methods_supported) && body.code_challenge_methods_supported.includes('S256'),
+    `code_challenge_methods_supported was ${JSON.stringify(body?.code_challenge_methods_supported)}`,
+  );
+  expect(body?.issuer === appUrl, `issuer was "${body?.issuer}", expected "${appUrl}"`);
+});
+
+await check('MCP edge: POST /mcp with a bearer token → 401 + WWW-Authenticate (proves Authorization arrives)', async () => {
+  const r = await fetch(`${appUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-real-jwt' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+  });
+  expect(r.status === 401, `expected 401, got ${r.status}`);
+  const wwwAuth = r.headers.get('www-authenticate') ?? '';
+  expect(wwwAuth.includes('resource_metadata'), `WWW-Authenticate was "${wwwAuth}"`);
+});
+
 if (failures) {
   console.error(`\n✗ health check FAILED: ${failures} check(s)\n`);
   process.exit(1);

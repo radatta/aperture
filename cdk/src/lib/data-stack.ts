@@ -21,6 +21,10 @@ export class ApertureDataStack extends Stack {
   readonly table: dynamodb.Table;
   readonly userPool: cognito.UserPool;
   readonly filesBucket: s3.Bucket;
+  // The hosted-UI host (no scheme), e.g. aperture-dev-<acct>.auth.us-west-1.amazoncognito.com. The app
+  // stack's MCP OAuth façade builds Cognito's /oauth2 endpoints from it. `<acct>` is a token when the
+  // account isn't pinned — fine as a Lambda env value (CloudFormation resolves it at deploy).
+  readonly cognitoDomain: string;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
@@ -57,6 +61,7 @@ export class ApertureDataStack extends Stack {
     const prefix =
       (this.node.tryGetContext('cognitoPrefix') as string | undefined) ?? `aperture-${stage}-${this.account}`;
     this.userPool.addDomain('HostedUi', { cognitoDomain: { domainPrefix: prefix } });
+    this.cognitoDomain = `${prefix}.auth.${this.region}.amazoncognito.com`;
 
     // User-uploaded task attachments. Unlike the app stack's Site bucket (DESTROY, re-syncable assets),
     // this is precious: RETAIN + versioned (the undo for an overwritten/deleted object), fully private —
