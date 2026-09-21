@@ -402,6 +402,11 @@ class StubClient implements ApiClient {
   async setTaskDueDay(id: string, dueDay: string | null): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { dueDay });
   }
+  async setTaskTitle(id: string, title: string): Promise<Task> {
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error('Title is required');
+    return this.writes.patch(this.store.tasks, id, { title: trimmed });
+  }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
     const next = this.writes.put(this.store.tasks, taskTransition(task, to, this.now()));

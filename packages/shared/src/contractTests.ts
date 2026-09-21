@@ -343,6 +343,23 @@ export function runApiContract(
       expect((await api.listTasks()).find((x) => x.id === t.id)?.dueDay).toBeNull();
     });
 
+    it('tasks: title renames at any status, trims, rejects empty, and never touches the lock', async () => {
+      const t = await api.createTask({ title: 'draft name', estimateMin: 30, bufferMin: 0 });
+
+      const renamed = await api.setTaskTitle(t.id, '  Real name  ');
+      expect(renamed.title).toBe('Real name'); // trimmed
+      expect((await api.getTask(t.id))?.title).toBe('Real name'); // survives read-back
+
+      // Rename after work starts, and it never touches the frozen estimate baseline.
+      const started = await api.transitionTask(t.id, 'in_progress');
+      expect(started.estimateLockedMin).toBe(30);
+      const again = await api.setTaskTitle(t.id, 'Renamed mid-flight');
+      expect(again.title).toBe('Renamed mid-flight');
+      expect(again.estimateLockedMin).toBe(30); // rename ≠ scope change
+
+      await expect(api.setTaskTitle(t.id, '   ')).rejects.toThrow(); // empty/whitespace rejected
+    });
+
     it('sessions: several run at once, a task dedups, and work time accrues to the task', async () => {
       const a = await api.startSession({
         taskId: null,

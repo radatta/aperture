@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveDeviceUserId, resolveUserId } from './verify';
+import { resolveAgentUserId, resolveDeviceUserId, resolveUserId } from './verify';
 import type { Verifier } from './verify';
 
 const okVerifier: Verifier = {
@@ -47,5 +47,25 @@ describe('resolveDeviceUserId', () => {
     expect(() => resolveDeviceUserId(undefined, 'tok', 'sub-1')).toThrow(/Unauthorized/);
     expect(() => resolveDeviceUserId('Bearer nope', 'tok', 'sub-1')).toThrow(/Unauthorized/);
     expect(() => resolveDeviceUserId('Bearer toke', 'tok', 'sub-1')).toThrow(/Unauthorized/); // length differs
+  });
+});
+
+describe('resolveAgentUserId', () => {
+  it('falls back to local when no agent token is configured (dev)', () => {
+    expect(resolveAgentUserId(undefined, undefined, undefined)).toBe('local');
+    expect(resolveAgentUserId('whatever', undefined, 'sub-1')).toBe('local');
+  });
+
+  it('returns the configured agent user when the RAW header token matches (no Bearer prefix)', () => {
+    expect(resolveAgentUserId('tok', 'tok', 'sub-1')).toBe('sub-1');
+    expect(resolveAgentUserId('  tok  ', 'tok', 'sub-1')).toBe('sub-1'); // trims surrounding whitespace
+    expect(resolveAgentUserId('tok', 'tok', undefined)).toBe('local'); // no owner → local
+  });
+
+  it('rejects a missing or wrong agent token as Unauthorized', () => {
+    expect(() => resolveAgentUserId(undefined, 'tok', 'sub-1')).toThrow(/Unauthorized/);
+    expect(() => resolveAgentUserId('nope', 'tok', 'sub-1')).toThrow(/Unauthorized/);
+    expect(() => resolveAgentUserId('toke', 'tok', 'sub-1')).toThrow(/Unauthorized/); // length differs
+    expect(() => resolveAgentUserId('Bearer tok', 'tok', 'sub-1')).toThrow(/Unauthorized/); // raw token, not Bearer-wrapped
   });
 });

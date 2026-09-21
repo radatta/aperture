@@ -83,6 +83,7 @@ jobs:
     secrets:
       origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
+      agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
 
   deploy-prod:
     needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode` output
@@ -101,6 +102,7 @@ jobs:
     secrets:
       origin_secret: ${{ secrets.ORIGIN_SECRET_PROD }}
       device_token: ${{ secrets.DEVICE_TOKEN_PROD }}
+      agent_token: ${{ secrets.AGENT_TOKEN_PROD }}
 
   # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
   # signal without watching the Actions tab. Runs for both main and dev pushes. Failure = high priority

@@ -15,6 +15,7 @@ export const API_METHODS = [
   'setTaskEstimate',
   'setTaskCategory',
   'setTaskDueDay',
+  'setTaskTitle',
   'transitionTask',
   'setTaskActual',
   'splitTask',
@@ -86,6 +87,13 @@ export interface RpcRequest {
 // The JWT rides in a CUSTOM header, not Authorization: kept distinct so nothing downstream mistakes it
 // for a SigV4 credential. Client sends this, handler reads it (shared name → the two halves can't drift).
 export const AUTH_HEADER = 'x-aperture-authorization';
+
+// The MCP server's static agent-token header. A long-lived personal key (like DEVICE_TOKEN, same class
+// and delivery as ORIGIN_SECRET) that authenticates Claude Code → /mcp for ANY method — the agent token
+// is a full app session, so the /mcp edge disambiguates by credential (this header present → the agent),
+// not by method. Distinct from AUTH_HEADER so the token revokes independently and never collides with a
+// browser JWT. Its value is NOT prefixed with "Bearer" — the client sends the raw token as this header.
+export const AGENT_TOKEN_HEADER = 'x-aperture-agent-token';
 
 // Origin-lockdown secret. The Lambda Function URL is public (auth NONE — OAC can't SigV4-sign POST
 // bodies to a Function URL), so CloudFront stamps this shared secret on every origin request and the

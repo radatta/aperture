@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { CfnOutput, Duration, RemovalPolicy, Stack, Validations } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
-import { AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
+import { AGENT_TOKEN_HEADER, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -24,9 +24,70 @@ export interface AppStackProps extends StackProps {
   certificateArn?: string; // us-east-1 ACM cert ARN for domainName; required whenever domainName is set.
   deviceToken: string; // device-token auth for the extension's ingest endpoint (same class as originSecret)
   deviceUserId?: string; // Cognito sub device-token writes attribute to; unset → handler 'local' fallback
+  agentToken: string; // static agent-token auth for the MCP server (Claude Code); same class as deviceToken
 }
 
 const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', import.meta.url));
+const MCP_ENTRY = fileURLToPath(new URL('../../../lambdas/src/mcp/index.ts', import.meta.url));
+
+// cdk-nag granular IAM acks. WORKAROUND for the open cdk-nag v3 bug (cdklabs/cdk-nag#2359/#2351):
+// Validations.acknowledge() splits the rule id on `::` and rejects the granular finding ids (which embed
+// ARNs containing `::`), so we write the metadata cdk-nag itself reads (isAcknowledged) directly. Ids MUST
+// match synth's "Acknowledge with '...'" hint verbatim; the IAM5 ids embed the cross-stack table/bucket
+// exports (their logical-id hashes) — if the data stack's Table/Files construct ids change, synth re-flags
+// and these must be updated from the hint. Both the BFF and the MCP function carry the SAME per-resource
+// ids (the id embeds the resource, not the function), so one helper serves both; only the token-WRITE ack
+// differs — the BFF connects/disconnects Google accounts, the MCP function never writes SSM. See #2 in
+// docs/arch/CICD_HARDENING.md. Reason text is free; only the id (the key) must match.
+function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: { ssmWrite: boolean }): void {
+  const acks: Record<string, string> = {
+    'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
+      'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
+    [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttTableCD117FA1ArnE2C8C204/index/*]`]:
+      'grantReadWriteData needs index/* to query the single-table GSI; the table itself is scoped.',
+    [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${region}:<AWS::AccountId>:parameter/aperture/${stage}/google/*]`]:
+      'Reads Google client creds + per-account refresh tokens under /aperture/<stage>/google/*; the dynamic <sub> segment needs a path-scoped wildcard.',
+    [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttFiles8E6940B8ArnD8EE6C03/u/*]`]:
+      'Attachments need object read/write under the per-user u/ prefix; the bucket itself is not granted.',
+  };
+  if (opts.ssmWrite) {
+    acks[
+      `AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${region}:<AWS::AccountId>:parameter/aperture/${stage}/google/tokens/*]`
+    ] =
+      'Per-account refresh tokens are written/deleted at connect/disconnect under .../google/tokens/<sub>; the dynamic <sub> requires the trailing wildcard.';
+  }
+  fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, acks);
+}
+
+// The DynamoDB + SSM(read) + S3(object) grants shared by the BFF and the MCP function. The MCP function
+// deliberately gets the READ ssm grant only (no PutParameter/DeleteParameter): it never connects or
+// disconnects a Google account (that's the browser-only OAuth callback), so a write grant would be dead
+// permission. This is the ceiling on what the agent token can reach — DynamoDB + calendar events + the
+// user's own attachments, and nothing else.
+function grantBackendData(
+  fn: NodejsFunction,
+  table: dynamodb.Table,
+  filesBucket: s3.IBucket,
+  ssmBase: string,
+  opts: { ssmWrite: boolean },
+): void {
+  table.grantReadWriteData(fn);
+  fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${ssmBase}/*`] }));
+  if (opts.ssmWrite) {
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
+        resources: [`${ssmBase}/tokens/*`],
+      }),
+    );
+  }
+  fn.addToRolePolicy(
+    new iam.PolicyStatement({
+      actions: ['s3:PutObject', 's3:GetObject'],
+      resources: [filesBucket.arnForObjects('u/*')],
+    }),
+  );
+}
 
 // The REPLACEABLE stack (INFRA §3/§4/§7): Lambda BFF + Function URL, S3 + CloudFront. Redeploys freely;
 // nothing precious lives here. CloudFront OAC keeps the S3 bucket private. The Lambda Function URL is
@@ -36,7 +97,7 @@ const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', impo
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
-    const { stage, table, userPool, filesBucket, originSecret, domainName, certificateArn, deviceToken, deviceUserId } =
+    const { stage, table, userPool, filesBucket, originSecret, domainName, certificateArn, deviceToken, deviceUserId, agentToken } =
       props;
     // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,
     // so deploys never touch DNS/certs. Absent until the domain step is done → CloudFront default domain.
@@ -68,60 +129,39 @@ export class ApertureAppStack extends Stack {
       },
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] }, // v3 SDK is in the runtime
     });
-    table.grantReadWriteData(fn);
-
-    // Google Calendar SSM access, path-scoped: READ client creds + per-account refresh tokens under
-    // /aperture/<stage>/google/*; WRITE (+ delete) only the per-account tokens under .../tokens/* (the
-    // connect/disconnect path). The <sub> segment is dynamic, so the token path needs a trailing wildcard.
+    // DynamoDB + Google-SSM(read+write) + S3(object) grants and their cdk-nag acks (see the helpers). The
+    // BFF gets the SSM write grant (it connects/disconnects Google accounts via the browser callback).
     const ssmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/google`;
-    fn.addToRolePolicy(
-      new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${ssmBase}/*`] }),
-    );
-    fn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
-        resources: [`${ssmBase}/tokens/*`],
-      }),
-    );
-    // Attachments: object-level read/write under the per-user `u/` prefix ONLY (never bucket-level list or
-    // config). A presigned URL acts with this function's permissions, so this is also the ceiling on what a
-    // leaked URL can touch. Explicit statement rather than grantRead/grantPut — those add s3:List*/GetBucket*.
-    fn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['s3:PutObject', 's3:GetObject'],
-        resources: [filesBucket.arnForObjects('u/*')],
-      }),
-    );
-    // cdk-nag granular IAM suppressions (IAM4: the standard CloudWatch Logs managed exec policy; IAM5:
-    // grantReadWriteData's index/* wildcard, which the single-table GSI query needs — the table is scoped).
-    // WORKAROUND for an open cdk-nag v3 bug (cdklabs/cdk-nag#2359/#2351): `Validations.of(x).acknowledge()`
-    // splits the rule id on `::` and rejects the granular finding ids, which embed ARNs containing `::`.
-    // Until that's fixed upstream, write the acknowledgment metadata cdk-nag itself reads (isAcknowledged)
-    // directly. The ids must match synth's "Acknowledge with '...'" hint verbatim; the IAM5 id embeds the
-    // cross-stack table export (hence `ApertureData-${stage}` + the table's logical-id hash) — if the data
-    // stack's table construct id changes, synth re-flags IAM5 and this must be updated. Revisit when #2359
-    // lands a real fix. See docs/arch/CICD_HARDENING.md #2.
-    fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
-      'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
-        'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy for the BFF.',
-      [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttTableCD117FA1ArnE2C8C204/index/*]`]:
-        'grantReadWriteData needs index/* to query the single-table GSI; the table itself is scoped.',
-      // Google Calendar SSM access is path-scoped to /aperture/<stage>/google/*; the per-account <sub>
-      // segment is dynamic, so a trailing wildcard is unavoidable. Region resolves per-stack; partition
-      // + account render as pseudo-tokens (must match synth's "Acknowledge with '...'" hint verbatim).
-      [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${Stack.of(this).region}:<AWS::AccountId>:parameter/aperture/${stage}/google/*]`]:
-        'The BFF reads Google client creds + per-account refresh tokens under /aperture/<stage>/google/*; the <sub> segment is dynamic, so the read is path-scoped with a wildcard.',
-      [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${Stack.of(this).region}:<AWS::AccountId>:parameter/aperture/${stage}/google/tokens/*]`]:
-        'Per-account refresh tokens are written/deleted at connect/disconnect under .../google/tokens/<sub>; the dynamic <sub> requires the trailing wildcard.',
-      // The attachments grant is object-scoped to the per-user `u/` prefix; the `/*` is over object keys
-      // within that prefix (one user's files), never bucket-level. Same brittleness as the table id above:
-      // if the data stack's Files bucket construct id changes, synth re-flags this and the hash must be
-      // updated from the "Acknowledge with '...'" hint.
-      [`AwsSolutions-IAM5[Resource::ApertureData-${stage}:ExportsOutputFnGetAttFiles8E6940B8ArnD8EE6C03/u/*]`]:
-        'Attachments need object read/write under the per-user u/ prefix; the bucket itself is not granted.',
-    });
+    grantBackendData(fn, table, filesBucket, ssmBase, { ssmWrite: true });
+    ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true });
+
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
     const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
+
+    // MCP server Lambda (aperture-mcp-<stage>) — a SECOND function so the agent token's blast radius is
+    // this function's IAM (full parity with the BFF: DynamoDB + calendar events + the user's attachments,
+    // but SSM read-only — the agent never connects/disconnects an account). Same bundling as the BFF.
+    const mcpFn = new NodejsFunction(this, 'Mcp', {
+      functionName: `aperture-mcp-${stage}`,
+      entry: MCP_ENTRY,
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      timeout: fnTimeout,
+      memorySize: 512,
+      environment: {
+        TABLE_NAME: table.tableName,
+        FILES_BUCKET: filesBucket.bucketName,
+        STAGE: stage,
+        ORIGIN_SECRET: originSecret,
+        AGENT_TOKEN: agentToken, // static agent-token auth (resolveAgentUserId), any method
+        ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}), // same Cognito sub the ingest writes attribute to
+        ...(domainName ? { APP_URL: `https://${domainName}` } : {}),
+      },
+      bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] },
+    });
+    grantBackendData(mcpFn, table, filesBucket, ssmBase, { ssmWrite: false });
+    ackLambdaIam(mcpFn, stage, Stack.of(this).region, { ssmWrite: false });
+    const mcpUrl = mcpFn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
 
     // Private site bucket — assets are synced post-build (not by CDK), so infra ≠ app deploy.
     const bucket = new s3.Bucket(this, 'Site', {
@@ -138,6 +178,20 @@ export class ApertureAppStack extends Stack {
       // Forward the OAuth callback params — without this CloudFront strips the query string on /api/*,
       // and /api/google/callback arrives with no code/state (invisible locally, breaks connect on deploy).
       queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.allowList('code', 'state', 'error'),
+      cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
+    });
+
+    // /mcp forwards the agent-token header + the MCP content/negotiation headers. CloudFront STRIPS any
+    // header not on this list, so a missing entry here is an invisible 401 that only shows on a deployed
+    // stage — phase 2 adds `authorization` here for the Cognito path.
+    const mcpOrp = new cloudfront.OriginRequestPolicy(this, 'McpOriginPolicy', {
+      headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(
+        AGENT_TOKEN_HEADER,
+        'content-type',
+        'accept',
+        'mcp-protocol-version',
+      ),
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.none(),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
     });
 
@@ -160,6 +214,17 @@ export class ApertureAppStack extends Stack {
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL, // POST for RPC
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // data is network-only (TECH §1)
           originRequestPolicy: apiOrp,
+        },
+        // The MCP server (exact path — Claude Code / claude.ai use the URL verbatim). Its own Function URL
+        // origin, the same origin-secret stamp, POST-only in practice, never cached.
+        '/mcp': {
+          origin: new origins.FunctionUrlOrigin(mcpUrl, {
+            customHeaders: { [ORIGIN_SECRET_HEADER]: originSecret },
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: mcpOrp,
         },
       },
       // SPA fallback: client-side routes 403/404 from S3 → serve index.html (INFRA §7).
@@ -216,6 +281,7 @@ export class ApertureAppStack extends Stack {
     // Direct Function URL — the post-deploy synthetic check hits this to prove the origin-secret gate
     // rejects a headerless request (through CloudFront the viewer can't set/unset that header).
     new CfnOutput(this, 'FunctionUrl', { value: fnUrl.url });
+    new CfnOutput(this, 'McpUrl', { value: `${appUrl}/mcp` }); // the URL to register in Claude Code / claude.ai
 
     // Runtime watch on the BFF, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
