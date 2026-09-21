@@ -239,6 +239,10 @@ export interface ApiClient {
     finishStatus: 'done' | 'cancelled',
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }>;
+  // Permanent delete (distinct from cancel, which keeps the row as history). Tombstones the task, its
+  // plan rows, and its attachment metadata; hard-deletes the calendar event via the cancel path; S3
+  // bytes are orphaned. No-op if the task is absent/already gone.
+  deleteTask(id: string): Promise<void>;
 
   // Plans (scheduling)
   listPlansForDay(day: string): Promise<TaskPlan[]>;

@@ -95,6 +95,30 @@ describe('Menu', () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  // An item that opens an inline confirm autofocuses the confirm's button; the menu must not yank
+  // focus back to the trigger a frame later and defeat it.
+  it('leaves focus where the action placed it (inline-confirm autofocus)', async () => {
+    const user = userEvent.setup();
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <Menu items={[{ label: 'Delete…', tone: 'danger', onSelect: () => setOpen(true) }]} />
+          {open && (
+            <button type="button" autoFocus>
+              Confirm delete
+            </button>
+          )}
+        </>
+      );
+    }
+    render(<Host />);
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    const confirm = screen.getByRole('button', { name: 'Confirm delete' });
+    await waitFor(() => expect(document.activeElement).toBe(confirm)); // not the trigger
+  });
+
   it('closes on an outside click without stealing focus back', async () => {
     const { user, trigger } = setup();
     await user.click(trigger);

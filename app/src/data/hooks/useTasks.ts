@@ -97,3 +97,17 @@ export function useSplitTask() {
     onSettled: () => invalidateTaskData(qc),
   });
 }
+
+// Permanent delete (distinct from cancel). Cascade-tombstones the task's plans + attachment metadata,
+// so also refresh the attachments key — invalidateTaskData doesn't cover it.
+export function useDeleteTask() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteTask(id),
+    onSettled: () => {
+      invalidateTaskData(qc);
+      qc.invalidateQueries({ queryKey: qk.attachments() });
+    },
+  });
+}

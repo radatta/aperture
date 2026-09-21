@@ -68,9 +68,9 @@ The Lambda gets `s3:PutObject/GetObject` on `arnForObjects('u/*')` only — neve
 *↳ Reality check (found in build):* the AWS SDK signs **content-length but NOT content-type** into the PUT (verified in `presigner.test.ts` — `SignedHeaders` is `content-length;host`). So the *size* is cryptographically fixed; the content-type is set on the object but not signature-bound. That's fine: serving safety comes from the forced `ResponseContentType`/`Disposition` on the GET (server-controlled), not from the stored type. The plan had claimed both were signed; corrected here.
 
 **D7 — On task delete: tombstone metadata, orphan bytes. And cancel ≠ delete.**
-When a task is deleted (future `deleteTask`, PR2), its attachment *metadata* is tombstoned; the S3 objects are left in place (no sweeper). **Cancelling** a task (`transitionTask → 'cancelled'`) does **not** touch attachments — a cancelled task is still a record.
+When a task is deleted (`deleteTask`), its attachment *metadata* is tombstoned; the S3 objects are left in place (no sweeper). **Cancelling** a task (`transitionTask → 'cancelled'`) does **not** touch attachments — a cancelled task is still a record.
 *Why:* orphaned bytes cost pennies and a sweeper is real complexity + a destructive code path we don't need yet. Cancel is a lifecycle state, not a deletion, so its files stay.
-*Note:* there is no `deleteTask` in this PR, so this rule has no code to hook yet — it's written here as the contract PR2 must honor, and pinned by a backend test (`cancel ≠ delete`). See `localNotes/pr2-delete-task.md`.
+*Landed:* `deleteTask` now honors this — it tombstones the task's attachment metadata (via `repo.listAttachmentsForTask`) alongside its plan rows, orphaning the bytes. Pinned by `backend.test.ts` (`backend task delete` tombstones metadata; `cancel ≠ delete` covers the other side). See [TECH.md §2.2 tasks](../../arch/TECH.md#22-entities).
 *Deferred (not rejected):* a bytes-cleanup sweeper (a scheduled job over tombstoned/pending keys).
 
 **D8 — Export carries metadata only, never bytes.**
@@ -172,7 +172,7 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 ## 8. Deferred / out of scope
 
 - **Bytes-cleanup sweeper** — a scheduled job to delete orphaned S3 objects (tombstoned metadata, expired-pending uploads). Bytes cost pennies; skip until it matters.
-- **`deleteTask` cascade** — tombstoning a task's attachment metadata lands with PR2 (`localNotes/pr2-delete-task.md`); the rule is D7, the code hook doesn't exist yet.
+- **`deleteTask` cascade** — ✅ landed: tombstoning a task's attachment metadata (D7) ships with `deleteTask`. Bytes are still orphaned (the sweeper above stays deferred).
 - **HEAD-on-confirm** — `confirmAttachment` trusts the client that the PUT succeeded; a HEAD to verify the object exists would be the Lambda's first S3 call. Low value at single-user scale.
 - **Multipart / resumable uploads** — a single XHR PUT is fine at 20 MB; revisit only if the cap rises to large video.
 - **Bytes in the export** — metadata only for now (D8).

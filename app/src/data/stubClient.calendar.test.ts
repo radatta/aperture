@@ -94,6 +94,22 @@ describe('stub Google Calendar parity', () => {
     expect(cancelled.gcalEventId).toBeNull();
   });
 
+  it('deleteTask hard-deletes the calendar event (parity with cancel)', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'doomed' });
+    await api.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'seed-personal',
+      calendarId: 'you@gmail.com',
+      title: 'doomed',
+      startMs: 1000,
+      endMs: 2000,
+    });
+    await api.deleteTask(t.id);
+    expect(await api.getTask(t.id)).toBeNull(); // task gone
+    await expect(api.deleteCalendarEvent(t.id)).rejects.toThrow(); // event pointers cleared → mustFind 404s
+  });
+
   it('disconnect prunes the account, its shape refs, and a write-default pointing at it', async () => {
     const api = stub();
     await api.disconnectGoogleAccount('seed-personal');

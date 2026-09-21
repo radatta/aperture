@@ -121,11 +121,16 @@ export function Menu({ items, label = 'More actions' }: { items: MenuItem[]; lab
               onClick={() => {
                 setOpen(false);
                 it.onSelect();
-                // Take focus back only if the trigger survived. Destructive items ("Drop task",
-                // "Archive habit") remove the very row this menu lives in, so focusing the trigger
-                // unconditionally would aim at a node React is about to unmount — landing focus on
-                // <body>, the exact failure this component exists to avoid.
+                // Rescue focus back to the trigger only when it was actually dropped. Two cases the
+                // naive "refocus the trigger" gets wrong: a destructive item ("Drop task", "Archive
+                // habit") removes the row this menu lives in, so the trigger is gone — but an item that
+                // opens an inline confirm ("Delete task…") mounts a dialog that autofocuses its own
+                // button, and stealing focus back would defeat that. So: if the action already parked
+                // focus on a live element, leave it; only reclaim when focus fell to <body> or a
+                // detached node — the failure this component exists to prevent.
                 requestAnimationFrame(() => {
+                  const active = document.activeElement as HTMLElement | null;
+                  if (active && active !== document.body && active.isConnected) return;
                   if (triggerRef.current?.isConnected) triggerRef.current.focus();
                 });
               }}

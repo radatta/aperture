@@ -92,8 +92,12 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
 - **Event write**: `insertCalendarEvent` routes to the target account, stores the pointers; one live event
   per task (a second insert throws). Time feeds the event only — never denormalized onto the task.
 - **Delete-on-cancel**: dropping a task (`transitionTask → cancelled`) or `deleteCalendarEvent` removes the
-  event via its owning account and clears the pointers. Edit-sync (a moved `dueDay`) is a **named,
-  deferred gap** — the event does not move.
+  event via its owning account and clears the pointers. **`deleteTask` reuses the same path** (permanent
+  delete hard-deletes the event, then tombstones the task) — so a failed Google call is swallowed there
+  too, leaving the same silent orphan (expired token → the event stays, the pointer clears, no retry). Note
+  `deleteTask` builds its tombstone from the task **returned** by `deleteCalendarEvent`, whose pointers are
+  already nulled, so it can't re-write stale pointers. Edit-sync (a moved `dueDay`) is a **named, deferred
+  gap** — the event does not move.
 
 ## Resilience (the Cognito model, per account)
 

@@ -13,7 +13,13 @@ import { PaperclipIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
 import { useAttachments } from '../../data/hooks/useAttachments';
 import { useSettings } from '../../data/hooks/useSettings';
-import { useSetActual, useSetDueDay, useSplitTask, useTransitionTask } from '../../data/hooks/useTasks';
+import {
+  useDeleteTask,
+  useSetActual,
+  useSetDueDay,
+  useSplitTask,
+  useTransitionTask,
+} from '../../data/hooks/useTasks';
 import {
   useDeleteCalendarEvent,
   useGoogleCalendars,
@@ -25,7 +31,7 @@ import { CategoryTag } from './CategoryTag';
 import { ScopePanel } from './ScopePanel';
 import { remainingMin } from './taskMath';
 
-type Panel = null | 'scope' | 'split' | 'done' | 'due' | 'calendar' | 'files';
+type Panel = null | 'scope' | 'split' | 'done' | 'due' | 'calendar' | 'files' | 'delete';
 
 // One task, with the lifecycle actions its status allows. `actions` is an optional slot for
 // context-specific buttons (add-to-today / remove-from-plan) supplied by the section.
@@ -68,6 +74,15 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
       label: 'Drop task',
       tone: 'danger',
       onSelect: () => transition.mutate({ id: task.id, to: 'cancelled' }),
+    });
+  // Permanent delete, distinct from Drop (which keeps the row as history). Hidden on a recurring
+  // occurrence: materializeDueSeries would just respawn it next getDay, so Drop is the right tool
+  // there and deactivateSeries stops the whole series.
+  if (task.seriesId === null)
+    overflow.push({
+      label: 'Delete task…',
+      tone: 'danger',
+      onSelect: () => toggle('delete'),
     });
 
   return (
@@ -116,7 +131,42 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
       {panel === 'due' && <DueDayForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'calendar' && <AddToCalendarForm task={task} onDone={() => setPanel(null)} />}
       {panel === 'files' && <AttachmentsPanel taskId={task.id} />}
+      {panel === 'delete' && <DeleteConfirm task={task} onCancel={() => setPanel(null)} />}
     </Card>
+  );
+}
+
+// Permanent delete — a real destructive action, so it asks first (mirrors the Habits archive strip:
+// alertdialog + autoFocus, since the confirm renders at the bottom of the card while focus is still
+// on the menu trigger at the top). The copy warns when there's logged time (calibration) and when a
+// calendar event will go with it. No onDone: a successful delete unmounts this whole card.
+function DeleteConfirm({ task, onCancel }: { task: Task; onCancel: () => void }) {
+  const del = useDeleteTask();
+  return (
+    <div
+      role="alertdialog"
+      aria-label={`Delete ${task.title}?`}
+      className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
+    >
+      <Text size="sm" tone="danger">
+        Delete “{task.title}”? It disappears from every list and can’t be undone.
+        {task.actualAccruedMin > 0 &&
+          ` The ${fmtDuration(task.actualAccruedMin)} logged won’t count toward calibration.`}
+        {task.gcalEventId && ' Its calendar event will be removed too.'}
+      </Text>
+      <Button
+        autoFocus
+        variant="gold"
+        size="sm"
+        disabled={del.isPending || del.isSuccess}
+        onClick={() => del.mutate(task.id)}
+      >
+        Delete
+      </Button>
+      <Button variant="quiet" size="sm" onClick={onCancel}>
+        Cancel
+      </Button>
+    </div>
   );
 }
 
