@@ -57,6 +57,7 @@ otherwise:
 - **Global capture bar** — always present, frictionless in.
 - **Tasks + calibration** — the signature module. Estimate freezes when work starts; calibration is `actual` vs `frozen estimate`. Multi-day scheduling, recurrence, categories.
 - **Pomodoro** — persistent heartbeat-backed timer that follows you across views; pauses excluded; only work sessions accrue.
+- **Rolls** — deadline-free ongoing efforts with a forgiving momentum "contact sheet" (fills, never a resetting streak).
 - **Log / journal**, **habits**, **inbox** (idea triage), **settings**.
 
 ## Stack

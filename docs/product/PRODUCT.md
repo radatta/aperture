@@ -65,7 +65,7 @@ Capture **never** asks for structure. No estimate, no due date, no category at c
 
 ### ☀️ Morning — plan the day (the anti-overconfidence surface)
 1. Capture bar (Log default)
-2. **Plan today** — pull backlog tasks in, set estimate + buffer on each → shows **planned hours vs hours actually available** ("11h planned into a 6h day"). Under-scoping gets caught here, before it becomes stress.
+2. **Plan today** — pull backlog tasks in, set estimate + buffer on each → shows **planned hours vs hours actually available** ("11h planned into a 6h day"). Under-scoping gets caught here, before it becomes stress. Also holds the **Rolls picker** — pick 1–2 deadline-free efforts for today; each drops a rep onto the plan (see 4b).
 3. Habits due today
 4. One-line intent (optional, non-scored)
 
@@ -110,6 +110,7 @@ Capture **never** asks for structure. No estimate, no due date, no category at c
 - **Interstitial log** — timestamped, append-only, one day per page. Light edit allowed (fix a typo); **no backdating** in v1. The durable reflection substrate.
 - **Pomodoro** — configurable work/break (default 25/5), tied to the current task; sessions accrue time + category to the task and prefill its "actual." Minimal.
 - **Habits** — weekly-cadence ("3×/week"), calendar view, marked in the night check. **No consecutive-streak, no guilt** — a miss is just a miss, repair-friendly. **Habits may hold non-work items** ("call home 1×/week") — this is the gentle, non-policing way non-work life gets a presence (weekly + repair-friendly keeps it supportive, not a scold).
+- **Rolls** — deadline-free ongoing *efforts* you keep returning to (LeetCode daily, study, work on Aperture). Each has a **forgiving momentum "contact sheet"** — a dot grid that only fills; a gap is a fainter dot, **never a resetting streak, red, or score**. A "rep" is a completed *task* tagged to the roll (derived, never a stored counter), so calibration rides ongoing effort too. The morning picker drops a rep onto today's plan, where it flows into the daytime Right-now lane. Distinct from Habits (a *timed task* vs a *binary check*). Full design: **[home/rolls.md](../areas/home/rolls.md)**.
 - **Quick-capture inbox** — where Idea-mode captures land; triage each into task / log / note / discard.
 - **Recruiting** — a two-tab hub for interview prep.
   - *Attempts* — LeetCode attempt capture. Every submission is recorded, **accepted and wrong**, by a browser extension; there's no authoring here. The list shows a derived per-problem attempt count ("attempt 2 of 2"), so the wrong→accepted arc is the visible unit — the same estimate-vs-reality move as calibration, applied to problem-solving. **No streaks, and a wrong answer is never red** — accepted reads positive, everything else reads "attention." Full design: **[recruiting/](../areas/recruiting/index.md)**.
@@ -141,7 +142,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 ## 6. Non-goals for v1
 
-**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Single-device, local-first. That's it. The bar for v1 is: **it earns the morning + night ritual.**
+**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · rolls (deadline-free efforts, forgiving momentum) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Single-device, local-first. That's it. The bar for v1 is: **it earns the morning + night ritual.**
 
 **Parked for later (ordered by likely arrival):**
 1. **Weekly balance view** (work vs non-work split, gentle nudge) — v1.1, the *first* thing after v1. In v1, balance lives entirely through **habits** (the non-work-habit vehicle); the analytical weekly view comes once a week of category data exists.
