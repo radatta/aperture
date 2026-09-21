@@ -62,6 +62,22 @@ await check('origin-secret gate enforced: direct Function URL, no header → 403
   expect(r.status === 403, `expected 403 without the secret header, got ${r.status}`);
 });
 
+// MCP edge: proves the /mcp behavior routes to the second Lambda and its auth gate holds — WITHOUT
+// putting the agent token in CI logs (a credential-less POST must be refused, a GET method-rejected).
+await check('MCP edge: POST /mcp with no agent token → 401', async () => {
+  const r = await fetch(`${appUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+  });
+  expect(r.status === 401, `expected 401 without the agent token, got ${r.status}`);
+});
+
+await check('MCP edge: GET /mcp → 405 (POST only)', async () => {
+  const r = await fetch(`${appUrl}/mcp`);
+  expect(r.status === 405, `expected 405 for GET, got ${r.status}`);
+});
+
 if (failures) {
   console.error(`\n✗ health check FAILED: ${failures} check(s)\n`);
   process.exit(1);

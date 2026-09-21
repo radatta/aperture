@@ -36,6 +36,8 @@ on:
         required: true
       device_token:
         required: true # pin per stage, else each deploy rotates the extension token
+      agent_token:
+        required: true # pin per stage, else each deploy rotates the MCP agent token (Claude Code re-register)
 
 permissions:
   id-token: write # assume the AWS deploy role via OIDC
@@ -55,6 +57,7 @@ jobs:
       APERTURE_CERT_ARN: ${{ inputs.cert_arn }}
       APERTURE_DEVICE_TOKEN: ${{ secrets.device_token }}
       APERTURE_DEVICE_USER_ID: ${{ inputs.device_user_id }}
+      APERTURE_AGENT_TOKEN: ${{ secrets.agent_token }}
     steps:
       - name: Validate mode
         run: |

@@ -43,6 +43,23 @@ function deviceTokenFor(stage: string): string {
   return token;
 }
 
+// The MCP server's static agent token (Claude Code / claude.ai → /mcp). Same class + delivery as the
+// device token — a plain Lambda env var from a gitignored file (or APERTURE_AGENT_TOKEN in CI), NOT
+// Secrets Manager. Generated once per stage; `cat cdk/.secrets/agent-token.<stage>` to register it in
+// Claude Code. Kept DISTINCT from the device token so the two revoke independently. NB: CI MUST set the
+// AGENT_TOKEN_<STAGE> secret, else each deploy rotates it and the registered client stops matching.
+function agentTokenFor(stage: string): string {
+  const fromEnv = process.env.APERTURE_AGENT_TOKEN;
+  if (fromEnv) return fromEnv.trim();
+  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
+  const file = `${dir}/agent-token.${stage}`;
+  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+  mkdirSync(dir, { recursive: true });
+  const token = randomBytes(24).toString('hex');
+  writeFileSync(file, `${token}\n`);
+  return token;
+}
+
 // The Cognito `sub` device-token writes are attributed to, so captured attempts show under the
 // signed-in user. Not a secret, but account-specific → not committed: APERTURE_DEVICE_USER_ID (CI), else
 // a gitignored file, else undefined → the handler falls back to the 'local' dev user.
@@ -81,6 +98,7 @@ const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   ...(domain ? { domainName: domain.domainName, certificateArn: domain.certificateArn } : {}),
   deviceToken: deviceTokenFor(stage),
   deviceUserId: deviceUserIdFor(stage),
+  agentToken: agentTokenFor(stage),
 });
 
 // CI/CD roles — a one-off, account-wide stack (not per-stage). Only built when a repo is supplied, so

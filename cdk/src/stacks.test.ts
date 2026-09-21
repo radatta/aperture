@@ -24,6 +24,7 @@ function templates() {
     originSecret: 'test-origin-secret',
     deviceToken: 'test-device-token',
     deviceUserId: 'test-device-user',
+    agentToken: 'test-agent-token',
   });
   return { data: Template.fromStack(data), app: Template.fromStack(appStack) };
 }
@@ -130,6 +131,44 @@ describe('ApertureAppStack', () => {
     expect(bff?.Properties?.Environment?.Variables?.APP_URL).toBeUndefined();
   });
 
+  it('provisions a second aperture-mcp function carrying the agent token (never on the BFF)', () => {
+    const fns = app.findResources('AWS::Lambda::Function');
+    const mcp = Object.values(fns).find((f) => f.Properties?.FunctionName === 'aperture-mcp-dev');
+    const bff = Object.values(fns).find((f) => f.Properties?.FunctionName === 'aperture-bff-dev');
+    expect(mcp?.Properties?.Environment?.Variables?.AGENT_TOKEN).toBe('test-agent-token');
+    expect(mcp?.Properties?.Environment?.Variables?.DEVICE_USER_ID).toBe('test-device-user');
+    expect(bff?.Properties?.Environment?.Variables?.AGENT_TOKEN).toBeUndefined();
+  });
+
+  it('gives the MCP function its own Function URL (two total) and a /mcp behavior', () => {
+    app.resourceCountIs('AWS::Lambda::Url', 2);
+    app.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        CacheBehaviors: Match.arrayWith([Match.objectLike({ PathPattern: '/mcp' })]),
+      },
+    });
+  });
+
+  it('the /mcp origin policy forwards the agent-token header (CloudFront strips anything not listed)', () => {
+    app.hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
+      OriginRequestPolicyConfig: Match.objectLike({
+        HeadersConfig: Match.objectLike({
+          HeaderBehavior: 'whitelist',
+          Headers: Match.arrayWith(['x-aperture-agent-token']),
+        }),
+      }),
+    });
+  });
+
+  it('scopes the MCP function SSM to READ-only — only the BFF gets ssm:PutParameter', () => {
+    const policies = app.findResources('AWS::IAM::Policy');
+    const putCount = Object.values(policies).filter((p) => {
+      const stmts = (p.Properties?.PolicyDocument?.Statement ?? []) as { Action?: unknown }[];
+      return stmts.some((s) => Array.isArray(s.Action) && (s.Action as string[]).includes('ssm:PutParameter'));
+    }).length;
+    expect(putCount).toBe(1); // the BFF connects/disconnects Google accounts; the MCP function never writes SSM
+  });
+
   it('fronts the Lambda with a public Function URL gated by the origin-secret header', () => {
     // Auth NONE (OAC can't sign POST bodies to a Function URL); CloudFront stamps the shared secret and
     // the handler enforces it. Assert both halves are present.
@@ -218,6 +257,7 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     filesBucket: data.filesBucket,
     originSecret: 'test-origin-secret',
     deviceToken: 'test-device-token',
+    agentToken: 'test-agent-token',
     domainName: 'dev.aperture.rahuldatta.dev',
     certificateArn: certArn,
   });
@@ -264,6 +304,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       filesBucket: data.filesBucket,
       originSecret: 'test-origin-secret',
       deviceToken: 'test-device-token',
+      agentToken: 'test-agent-token',
     });
     return Template.fromStack(appStack);
   };
