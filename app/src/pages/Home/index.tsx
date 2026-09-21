@@ -13,6 +13,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { useDay, useSetIntent, useSetReflection } from '../../data/hooks/useDay';
 import { useHomeMode } from '../../modules/home/home-context';
+import { RollPicker } from '../../modules/rolls/RollPicker';
 import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
 import { HabitCheckList } from '../../modules/habits/HabitCheckList';
 import { reflectionPromptFor } from '../../modules/reflection/prompts';
@@ -139,6 +140,8 @@ function PlanTodayCard() {
   const { data: backlog = [] } = useBacklog();
   return (
     <HomeCard title="Plan today" aside={<CardLink to="/tasks">Plan</CardLink>}>
+      {/* The plan summary, then the roll picker: picking one drops a rep onto today's plan (and into
+          the daytime Right-now lane). The picker self-hides when there are no rolls. */}
       {pva.availableMin === null ? (
         <div className="flex flex-col items-start gap-2">
           <Text tone="muted" size="sm">
@@ -164,6 +167,7 @@ function PlanTodayCard() {
           </Text>
         </div>
       )}
+      <RollPicker className="mt-3 border-t border-line pt-3" />
     </HomeCard>
   );
 }

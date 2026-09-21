@@ -27,6 +27,7 @@ import {
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { AttachmentsPanel } from './AttachmentsPanel';
 import { CategoryTag } from './CategoryTag';
+import { RollTag } from '../rolls/RollTag';
 import { DoneForm } from './DoneForm';
 import { ScopePanel } from './ScopePanel';
 import { remainingMin } from './taskMath';
@@ -209,6 +210,7 @@ function TaskMeta({ task }: { task: Task }) {
           on calendar
         </Text>
       )}
+      <RollTag rollId={task.rollId} />
       {fileCount > 0 && (
         <Text size="xs" tone="subtle" className="inline-flex items-center gap-0.5">
           <PaperclipIcon size={12} /> {fileCount}
