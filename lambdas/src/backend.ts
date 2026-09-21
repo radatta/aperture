@@ -350,6 +350,12 @@ export class BackendClient implements ApiClient {
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, dueDay, updatedAt: this.now() });
   }
+  async setTaskTitle(id: string, title: string): Promise<Task> {
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error('Title is required');
+    const t = await this.mustTask(id);
+    return this.repo.putTask({ ...t, title: trimmed, updatedAt: this.now() });
+  }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
     const next = await this.repo.putTask(taskTransition(task, to, this.now()));

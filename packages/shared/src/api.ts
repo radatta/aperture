@@ -231,6 +231,10 @@ export interface ApiClient {
   // Deadline metadata (day-granular). Settable at ANY status — a moved deadline is not a scope
   // change, so this never touches estimateLockedMin.
   setTaskDueDay(id: string, dueDay: string | null): Promise<Task>;
+  // Rename. Display text, not part of the estimate lock or calibration (points carry taskId, not title)
+  // — so it's settable at ANY status, like the deadline. Trims; rejects an empty/whitespace title. Does
+  // not rename a linked calendar event (edit-sync is a deferred gap).
+  setTaskTitle(id: string, title: string): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
   setTaskActual(id: string, actualMin: number): Promise<Task>;
   // Scope change: finish/cancel the original and spawn a follow-up (never edit a locked estimate).
