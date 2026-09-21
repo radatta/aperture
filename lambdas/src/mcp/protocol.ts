@@ -1,0 +1,118 @@
+import { TOOLS } from './tools';
+import { RpcParamError } from './types';
+import type { ToolContext } from './types';
+
+// A hand-rolled MCP transport core — the STATELESS, tools-only subset of the spec (no sessions, no SSE,
+// no server-initiated messages), which is all a request/response Lambda needs. Pure and transport-
+// agnostic: one JSON-RPC message in, one response (or null for a notification) out. The full SDK drags in
+// two HTTP frameworks + jose + ajv for machinery we don't use — see docs/areas/mcp/index.md for the A/B.
+
+// We implement 2025-06-18; we also accept a client that speaks 2025-03-26 (identical for this subset).
+const PROTOCOL_VERSION = '2025-06-18';
+const SUPPORTED_VERSIONS = [PROTOCOL_VERSION, '2025-03-26'];
+const SERVER_INFO = { name: 'aperture', version: '0.1.0' };
+
+export interface JsonRpcResponse {
+  jsonrpc: '2.0';
+  id: string | number | null;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+const ok = (id: string | number | null, result: unknown): JsonRpcResponse => ({
+  jsonrpc: '2.0',
+  id,
+  result,
+});
+const fail = (id: string | number | null, code: number, message: string): JsonRpcResponse => ({
+  jsonrpc: '2.0',
+  id,
+  error: { code, message },
+});
+
+const toolSpec = (t: (typeof TOOLS)[number]) => ({
+  name: t.name,
+  description: t.description,
+  inputSchema: t.inputSchema,
+});
+
+// Handle one parsed JSON-RPC message. Returns the response, or null for a notification (no reply body).
+export async function handleMcpMessage(
+  msg: unknown,
+  ctx: ToolContext,
+): Promise<JsonRpcResponse | null> {
+  // The 2025-06-18 revision removed JSON-RPC batching — an array is an invalid request.
+  if (Array.isArray(msg)) return fail(null, -32600, 'Batch requests are not supported');
+  // A value that parsed but isn't a JSON-RPC object (e.g. 5, "x") is an Invalid Request, not a Parse
+  // error — the edge already returns -32700 for genuinely unparseable JSON before we get here.
+  if (typeof msg !== 'object' || msg === null) {
+    return fail(null, -32600, 'Invalid Request: expected a JSON-RPC object');
+  }
+  const req = msg as { jsonrpc?: unknown; id?: string | number | null; method?: unknown; params?: unknown };
+  if (req.jsonrpc !== '2.0' || typeof req.method !== 'string') {
+    return fail(req.id ?? null, -32600, 'Invalid Request');
+  }
+  // A JSON-RPC notification carries no id → no response. Covers notifications/initialized, .../cancelled.
+  if (req.id === undefined) return null;
+  const id = req.id;
+  const method = req.method;
+
+  try {
+    switch (method) {
+      case 'initialize':
+        return ok(id, initializeResult(req.params));
+      case 'ping':
+        return ok(id, {});
+      case 'tools/list':
+        return ok(id, { tools: TOOLS.map(toolSpec) });
+      case 'tools/call':
+        return ok(id, await callTool(req.params, ctx));
+      default:
+        return fail(id, -32601, `Method not found: ${method}`);
+    }
+  } catch (e) {
+    // Bad args / unknown tool are protocol errors (-32602); anything else is internal (-32603). A tool's
+    // EXECUTION error never reaches here — callTool turns it into an isError result the model can read.
+    if (e instanceof RpcParamError) return fail(id, -32602, e.message);
+    return fail(id, -32603, e instanceof Error ? e.message : 'Internal error');
+  }
+}
+
+function initializeResult(params: unknown): unknown {
+  const requested = (params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
+  const protocolVersion =
+    typeof requested === 'string' && SUPPORTED_VERSIONS.includes(requested)
+      ? requested
+      : PROTOCOL_VERSION;
+  return { protocolVersion, capabilities: { tools: {} }, serverInfo: SERVER_INFO };
+}
+
+interface ToolCallResult {
+  content: { type: 'text'; text: string }[];
+  isError?: boolean;
+}
+
+async function callTool(params: unknown, ctx: ToolContext): Promise<ToolCallResult> {
+  const p = (params ?? {}) as { name?: unknown; arguments?: unknown };
+  if (typeof p.name !== 'string') throw new RpcParamError('tools/call requires a string "name"');
+  const tool = TOOLS.find((t) => t.name === p.name);
+  if (!tool) throw new RpcParamError(`Unknown tool: ${p.name}`);
+  const args =
+    p.arguments === undefined || p.arguments === null
+      ? {}
+      : (p.arguments as Record<string, unknown>);
+  if (typeof args !== 'object' || Array.isArray(args)) {
+    throw new RpcParamError('tools/call "arguments" must be an object');
+  }
+  try {
+    const data = await tool.run(args, ctx);
+    return { content: [{ type: 'text', text: data === undefined ? 'ok' : JSON.stringify(data) }] };
+  } catch (e) {
+    if (e instanceof RpcParamError) throw e; // → -32602 (the model sent bad args)
+    // Execution error (e.g. "estimate is frozen", "Not found") → isError so the model can self-correct.
+    return {
+      content: [{ type: 'text', text: e instanceof Error ? e.message : 'error' }],
+      isError: true,
+    };
+  }
+}

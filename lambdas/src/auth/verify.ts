@@ -70,3 +70,26 @@ export function resolveDeviceUserId(
   }
   return deviceUserId ?? 'local';
 }
+
+// The MCP server's static AGENT TOKEN — the same class of credential as the device token, but for the
+// /mcp surface and unscoped by method (the agent token is a full app session). It arrives as the RAW
+// value of AGENT_TOKEN_HEADER (no "Bearer" prefix — the MCP client sends the token verbatim), compared
+// with timingSafeEqual against the env-configured secret. Distinct from resolveDeviceUserId so the two
+// tokens revoke independently and the recruiting one stays method-scoped. Dev (no token configured)
+// falls back to the 'local' user, mirroring resolveUserId / resolveDeviceUserId. The caller only invokes
+// this when the header is PRESENT, so an unconfigured server still rejects a stray header (see the edge).
+export function resolveAgentUserId(
+  headerValue: string | undefined,
+  expectedToken: string | undefined,
+  agentUserId: string | undefined,
+): string {
+  if (!expectedToken) return 'local'; // dev: no agent token wired → same 'local' user as JWT-less dev
+  const token = headerValue?.trim();
+  if (!token) throw new Error('Unauthorized: missing agent token');
+  const a = Buffer.from(token);
+  const b = Buffer.from(expectedToken);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    throw new Error('Unauthorized: invalid agent token');
+  }
+  return agentUserId ?? 'local';
+}

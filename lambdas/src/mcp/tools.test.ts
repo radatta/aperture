@@ -1,0 +1,223 @@
+import { describe, expect, it } from 'vitest';
+import type { ApiMethod, Attachment, Category, Task } from '@aperture/shared';
+import { InMemoryDoc } from '../ddb/DocClient';
+import { Repo } from '../ddb/repo';
+import { liveWrites } from '../ddb/writes';
+import { BackendClient } from '../backend';
+import { InMemoryGoogle } from '../google/gateway';
+import { fakePresigner } from '../s3/presigner';
+import { handleRpc } from '../handler';
+import { TOOLS } from './tools';
+import type { ToolContext } from './types';
+
+// A full environment: real backend over an in-memory table, the stateful Google fake, a fake presigner,
+// and a recording `upload`. `setup` is a direct BackendClient over the SAME doc + google, so we can
+// establish state (e.g. connect a calendar account) that no RPC method exposes.
+function makeEnv() {
+  const doc = new InMemoryDoc();
+  const google = new InMemoryGoogle();
+  const uploads: { url: string; bytes: Buffer; contentType: string }[] = [];
+  const now = () => 1_700_000_000_000;
+  const setup = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+    userId: 'local',
+    now,
+    google,
+    stateSecret: 'test',
+  });
+  const ctx: ToolContext = {
+    dispatch: (method: ApiMethod, args: unknown[]) =>
+      handleRpc(doc, { userId: 'local', method, args, now, google, stateSecret: 'test' }, { presigner: fakePresigner() }),
+    upload: async (url, bytes, contentType) => {
+      uploads.push({ url, bytes, contentType });
+    },
+  };
+  // async so a tool's SYNCHRONOUS validation throw (a non-async run) surfaces as a rejection — matching
+  // how protocol.ts's callTool catches it inside its try (both sync throw and async reject land the same).
+  const call = async (name: string, args: Record<string, unknown> = {}): Promise<unknown> => {
+    const tool = TOOLS.find((t) => t.name === name);
+    if (!tool) throw new Error(`no tool ${name}`);
+    return tool.run(args, ctx);
+  };
+  return { doc, google, uploads, setup, call };
+}
+
+describe('mcp tools — tasks', () => {
+  it('create → list, and status filter', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'from mcp', estimateMin: 30 })) as Task;
+    expect(t.title).toBe('from mcp');
+    expect(t.status).toBe('backlog');
+    expect(((await call('list_tasks')) as Task[]).map((x) => x.title)).toEqual(['from mcp']);
+    expect((await call('list_backlog')) as Task[]).toHaveLength(1);
+    expect((await call('list_tasks', { status: 'done' })) as Task[]).toHaveLength(0);
+  });
+
+  it('create_tasks lands every input in order', async () => {
+    const { call } = makeEnv();
+    const created = (await call('create_tasks', {
+      tasks: [{ title: 'a' }, { title: 'b', estimateMin: 15 }, { title: 'c' }],
+    })) as Task[];
+    expect(created.map((t) => t.title)).toEqual(['a', 'b', 'c']);
+    expect(created.every((t) => t.status === 'backlog' && t.estimateLockedMin === null)).toBe(true);
+  });
+
+  it('update_task renames at any status and reports applied fields on a later failure', async () => {
+    const { call } = makeEnv();
+    const cat = (await call('create_category', { label: 'Deep', isWork: true })) as Category;
+    const t = (await call('create_task', { title: 'draft', estimateMin: 30 })) as Task;
+
+    const renamed = (await call('update_task', { id: t.id, title: 'Real' })) as Task;
+    expect(renamed.title).toBe('Real');
+
+    // Freeze the estimate, then a fan-out that changes category (applies) then estimate (throws).
+    await call('update_task', { id: t.id, status: 'in_progress' });
+    await expect(call('update_task', { id: t.id, categoryId: cat.id, estimateMin: 99 })).rejects.toThrow(
+      /already applied: categoryId/,
+    );
+    // The category change DID land despite the estimate failure.
+    expect(((await call('list_tasks')) as Task[])[0]!.categoryId).toBe(cat.id);
+  });
+
+  it('update_task with no fields is a param error', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'x' })) as Task;
+    await expect(call('update_task', { id: t.id })).rejects.toThrow(/at least one field/);
+  });
+
+  it('complete_task chains to done, locks the estimate, records actual, echoes the previous', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'ship', estimateMin: 60 })) as Task;
+    const res = (await call('complete_task', { id: t.id, actualMin: 90 })) as {
+      task: Task;
+      previousActualMin: number;
+    };
+    expect(res.task.status).toBe('done');
+    expect(res.task.estimateLockedMin).toBe(60);
+    expect(res.task.actualAccruedMin).toBe(90);
+    expect(res.previousActualMin).toBe(0);
+    await expect(call('complete_task', { id: t.id, actualMin: 5 })).rejects.toThrow(/already done/);
+  });
+
+  it('complete_task requires actualMin', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'x' })) as Task;
+    await expect(call('complete_task', { id: t.id })).rejects.toThrow(/actualMin/);
+  });
+});
+
+describe('mcp tools — categories, calibration, leetcode', () => {
+  it('create_category then list_categories', async () => {
+    const { call } = makeEnv();
+    const cat = (await call('create_category', { label: 'LeetCode', isWork: true })) as Category;
+    expect(cat.label).toBe('LeetCode');
+    expect(((await call('list_categories')) as Category[]).map((c) => c.label)).toContain('LeetCode');
+  });
+
+  it('get_calibration validates the date range', async () => {
+    const { call } = makeEnv();
+    expect(await call('get_calibration', { from: '2026-09-01', to: '2026-09-30' })).toEqual([]);
+    await expect(call('get_calibration', { from: 'friday', to: '2026-09-30' })).rejects.toThrow(/ISO date/);
+  });
+
+  it('list_leetcode_attempts wants both dates or neither', async () => {
+    const { call } = makeEnv();
+    expect(await call('list_leetcode_attempts')).toEqual([]);
+    await expect(call('list_leetcode_attempts', { from: '2026-09-01' })).rejects.toThrow(/both/);
+  });
+});
+
+describe('mcp tools — calendar', () => {
+  it('lists connected accounts, creates a task-linked event on the write default, and deletes it', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A'); // registers account A (primary cal A@example.com)
+
+    const listed = (await call('list_calendars')) as {
+      accounts: { sub: string; isWriteDefault: boolean; calendars: { calendarId: string }[] }[];
+    };
+    expect(listed.accounts.map((a) => a.sub)).toContain('A');
+
+    const t = (await call('create_task', { title: 'meet' })) as Task;
+    const withEvent = (await call('create_calendar_event', {
+      taskId: t.id,
+      start: '2026-09-22T14:00:00-07:00',
+      durationMin: 60,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+    })) as Task;
+    expect(withEvent.gcalEventId).toBeTruthy();
+    expect(google.events.size).toBe(1);
+
+    const cleared = (await call('delete_calendar_event', { taskId: t.id })) as Task;
+    expect(cleared.gcalEventId).toBeNull();
+    expect(google.events.size).toBe(0);
+  });
+
+  it('create_calendar_event errors clearly with no target and no default', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'no cal' })) as Task;
+    await expect(
+      call('create_calendar_event', { taskId: t.id, start: '2026-09-22T14:00:00-07:00', durationMin: 30 }),
+    ).rejects.toThrow(/No calendar target/);
+  });
+
+  it('rejects a partial target (accountSub without calendarId) rather than mixing accounts', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'partial' })) as Task;
+    await expect(
+      call('create_calendar_event', { taskId: t.id, start: '2026-09-22T14:00:00-07:00', durationMin: 30, accountSub: 'A' }),
+    ).rejects.toThrow(/together/);
+  });
+
+  it('rejects a naive timestamp (no offset)', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'x' })) as Task;
+    await expect(
+      call('create_calendar_event', { taskId: t.id, start: '2026-09-22T14:00:00', durationMin: 30 }),
+    ).rejects.toThrow(/explicit offset/);
+  });
+});
+
+describe('mcp tools — attachments', () => {
+  it('attach_file signs, uploads via the injected uploader, and confirms (pending → ready)', async () => {
+    const { call, uploads } = makeEnv();
+    const t = (await call('create_task', { title: 'has notes' })) as Task;
+    const content = Buffer.from('# notes\nremember this').toString('base64');
+    const att = (await call('attach_file', {
+      taskId: t.id,
+      filename: 'notes.md',
+      contentType: 'text/markdown',
+      contentBase64: content,
+    })) as Attachment;
+    expect(att.status).toBe('ready');
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]!.contentType).toBe('text/markdown');
+    expect(((await call('list_attachments', { taskId: t.id })) as Attachment[])).toHaveLength(1);
+  });
+
+  it('attach_file rejects an over-cap payload BEFORE writing any pending row', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'big' })) as Task;
+    const tooBig = Buffer.alloc(64 * 1024 + 1, 0x61).toString('base64');
+    await expect(
+      call('attach_file', { taskId: t.id, filename: 'big.txt', contentType: 'text/plain', contentBase64: tooBig }),
+    ).rejects.toThrow(/capped/);
+    expect(((await call('list_attachments', { taskId: t.id })) as Attachment[])).toHaveLength(0);
+  });
+
+  it('create_attachment_upload returns a presigned URL + next-step, and confirm/delete round-trip', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'real file' })) as Task;
+    const up = (await call('create_attachment_upload', {
+      taskId: t.id,
+      filename: 'shot.png',
+      contentType: 'image/png',
+      size: 4096,
+    })) as { attachmentId: string; uploadUrl: string; next: string };
+    expect(up.uploadUrl).toMatch(/^fake:\/\/put\//);
+    expect(up.next).toMatch(/confirm_attachment/);
+    const confirmed = (await call('confirm_attachment', { id: up.attachmentId })) as Attachment;
+    expect(confirmed.status).toBe('ready');
+    expect(await call('get_attachment_download_url', { id: up.attachmentId })).toMatch(/^fake:\/\/get\//);
+    expect(await call('delete_attachment', { id: up.attachmentId })).toEqual({ deleted: up.attachmentId });
+  });
+});
