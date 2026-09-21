@@ -22,8 +22,13 @@ const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
 
 // Verifier is wired only when the pool env is present (deployed). Locally it's null → dev userId.
-// clientId is optional (single-client pool) and left unset to avoid a deploy dependency cycle.
-const verifier = process.env.USER_POOL_ID ? createCognitoVerifier(process.env.USER_POOL_ID) : null;
+// clientId is left unset (single-client pool, no deploy cycle), but a token minted for the claude.ai MCP
+// client is DENIED here (D14) — that client's ceiling is the /mcp tool surface, not the full BFF.
+const verifier = process.env.USER_POOL_ID
+  ? createCognitoVerifier(process.env.USER_POOL_ID, null, {
+      rejectClientIds: process.env.MCP_CLIENT_ID ? [process.env.MCP_CLIENT_ID] : [],
+    })
+  : null;
 
 // The live calendar gateway (real fetch + SSM). Constructed once; makes no call until a method runs, so
 // this is inert in local/test where APP_URL/SSM aren't set. testMode requests never reach it (handleRpc

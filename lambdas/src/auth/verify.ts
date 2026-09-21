@@ -7,15 +7,37 @@ export interface Verifier {
   verify(token: string): Promise<{ sub: string }>;
 }
 
+// D14 — the BFF verifier is deliberately NOT client-bound (clientId null), so a token minted for ANY
+// app client of the pool verifies here. The MCP claude.ai client is one such client, and its ceiling is
+// meant to be the /mcp tool surface — so on the BFF we DENY tokens carrying its client_id, keeping
+// "claude.ai can only do what /mcp exposes" true by construction rather than by accident. Pure + tested.
+export function assertClientAllowed(clientId: unknown, rejectClientIds?: string[]): void {
+  if (!rejectClientIds?.length) return;
+  if (typeof clientId === 'string' && rejectClientIds.includes(clientId)) {
+    throw new Error('Unauthorized: token minted for a client denied on this endpoint');
+  }
+}
+
 // clientId is optional: passing null verifies against the pool without binding to a specific app
 // client. For a single-client, invite-only pool that's sufficient (signature + issuer + expiry +
 // token_use=access are still enforced), and it avoids a Cognito↔CloudFront↔Lambda deploy cycle — the
 // Lambda would otherwise depend on the client, which depends on CloudFront, which depends on the Lambda.
+// The MCP bearer path DOES bind (passes the claude client id) — that client has no CloudFront edge, so
+// no cycle. `rejectClientIds` is the inverse: deny listed clients (D14, used by the BFF).
 export function createCognitoVerifier(
   userPoolId: string,
   clientId: string | null = null,
+  opts: { rejectClientIds?: string[] } = {},
 ): Verifier {
-  const verifier = CognitoJwtVerifier.create({ userPoolId, tokenUse: 'access', clientId });
+  const { rejectClientIds } = opts;
+  const verifier = CognitoJwtVerifier.create({
+    userPoolId,
+    tokenUse: 'access',
+    clientId,
+    ...(rejectClientIds?.length
+      ? { customJwtCheck: ({ payload }) => assertClientAllowed(payload.client_id, rejectClientIds) }
+      : {}),
+  });
   return {
     async verify(token: string) {
       const payload = await verifier.verify(token);
