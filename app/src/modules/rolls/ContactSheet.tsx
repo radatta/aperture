@@ -18,18 +18,17 @@ export function ContactSheet({
   name: string;
 }) {
   const { rows, total, lastRepDay } = contactSheet(reps, today);
+  const last = lastRepDay ? fmtLastRep(lastRepDay, today) : null;
   const caption =
     total === 0
       ? 'No reps yet — pick it for today to start the sheet.'
-      : `${total} ${total === 1 ? 'rep' : 'reps'} · last ${fmtLastRep(lastRepDay!, today)}`;
+      : `${total} ${total === 1 ? 'rep' : 'reps'} · last ${last}`;
 
   return (
     <div className="flex flex-col gap-1.5">
       <div
         role="img"
-        aria-label={
-          total === 0 ? `${name}: no reps yet` : `${name}: ${total} reps, last ${fmtLastRep(lastRepDay!, today)}`
-        }
+        aria-label={total === 0 ? `${name}: no reps yet` : `${name}: ${total} reps, last ${last}`}
         className="flex flex-col gap-1"
       >
         <div className="flex gap-1" aria-hidden="true">

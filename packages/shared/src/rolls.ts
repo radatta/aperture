@@ -34,10 +34,6 @@ export function rollRepFields(roll: Roll): Omit<Task, keyof BaseEntity> {
   };
 }
 
-export function isRep(task: Task, rollId: string): boolean {
-  return task.rollId === rollId;
-}
-
 // The live rep task for a roll, if one is already open (backlog|planned|in_progress). Picking reuses it
 // instead of spawning a duplicate — so yesterday's unfinished LeetCode re-plans onto today. Done and
 // cancelled reps are history and never block a fresh pick.

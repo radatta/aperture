@@ -5,7 +5,9 @@
 **Status: built 2026-09-21** (branch `rolls-momentum`, off `main` at #24 Right Now + Coming Up). Gate
 green: typecheck · lint · tests (app 262 · lambdas 114 · shared 88 · cdk 25 · scripts 12). Opus headless
 UI + workflow pass: **PASS-WITH-NITS** (one should-fix — the daytime lane's roll marker — fixed; nits
-recorded in §6). Opus code-review: run before merge. **Dev validation pending** (the
+recorded in §6). Opus code-review: **0 blocking, 0 should-fix, 4 nits** (3 cleaned up — dropped the unused
+`isRep`, de-duped `fmtLastRep`, documented re-plan-adds-not-moves; the 4th is the recorded picker nit).
+**Dev validation pending** (the
 pick→daytime→done→sheet loop wants a real day before we trust it). Part of the "Now / Focus / Rolls" epic
 (full context:
 `localNotes/now-focus-rolls-epic.md`); this is PR 3 of 3, and the only one with new backend.
@@ -97,6 +99,8 @@ collapse into one (see §6).
   it's contract-testable. It reuses the open rep if one exists (so yesterday's unfinished LeetCode
   re-plans onto today, never duplicates) and appends to the plan like `addToDay`. `day` is client-supplied
   (the server is UTC). Named `pick`, not `start` (which collides with `startSession`/`in_progress`).
+  Re-planning a still-open rep onto a later day *adds* a plan row for that day; it does **not** move the
+  prior day's row (past-day plan rows are inert in the no-auto-roll model, so a lingering one is harmless).
 - **D7 — Two reps a day are allowed.** Once a rep is done, picking again spawns a fresh task; the cell
   counts 2. Two problems in a day is honest, not a bug. Confirmed with Rahul.
 - **D8 — Rolls carry an estimate; the rep inherits it.** Calibration accrues on ongoing effort too. The

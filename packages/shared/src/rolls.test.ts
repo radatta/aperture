@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findOpenRollTask, isRep, repDays, rollRepFields } from './rolls';
+import { findOpenRollTask, repDays, rollRepFields } from './rolls';
 import type { Roll, Task } from './types';
 
 function baseRoll(over: Partial<Roll> = {}): Roll {
@@ -59,14 +59,6 @@ describe('rollRepFields', () => {
 
   it('carries a null estimate through (the plan applies its own fallback)', () => {
     expect(rollRepFields(baseRoll({ estimateMin: null })).estimateMin).toBeNull();
-  });
-});
-
-describe('isRep', () => {
-  it('matches only the task tagged with the roll', () => {
-    expect(isRep(baseTask({ rollId: 'r1' }), 'r1')).toBe(true);
-    expect(isRep(baseTask({ rollId: 'r2' }), 'r1')).toBe(false);
-    expect(isRep(baseTask({ rollId: null }), 'r1')).toBe(false);
   });
 });
 
