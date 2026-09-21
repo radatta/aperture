@@ -67,6 +67,7 @@ export function splitFollowUp(original: Task, followUpTitle: string): Omit<Task,
     categoryId: original.categoryId,
     dueDay: original.dueDay, // a split changes scope, not the deadline — carry it (like categoryId)
     seriesId: null,
+    rollId: original.rollId, // finishing the split-off remainder tomorrow is honestly a rep tomorrow
     estimateMin: original.estimateMin,
     bufferMin: original.bufferMin,
     estimateLockedMin: null,

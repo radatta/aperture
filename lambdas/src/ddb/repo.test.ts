@@ -16,6 +16,7 @@ const task = (over: Partial<Task>): Task => ({
   categoryId: null,
   dueDay: null,
   seriesId: null,
+  rollId: null,
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,

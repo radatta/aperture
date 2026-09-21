@@ -14,6 +14,7 @@ function mkTask(id: string, status: TaskStatus, over: Partial<Task> = {}): Task 
     status,
     categoryId: null,
     seriesId: null,
+    rollId: null,
     dueDay: null,
     estimateMin: 30,
     bufferMin: null,

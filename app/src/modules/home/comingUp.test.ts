@@ -16,6 +16,7 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
     status,
     categoryId: null,
     seriesId: null,
+    rollId: null,
     dueDay: dueOffset === null ? null : addDays(TODAY, dueOffset),
     estimateMin: null,
     bufferMin: null,
