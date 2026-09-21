@@ -7,6 +7,7 @@ import { RecruitingPage } from './pages/Recruiting';
 import { AttemptsSection } from './pages/Recruiting/AttemptsSection';
 import { StoryBank } from './pages/Recruiting/StoryBank';
 import { HabitsPage } from './pages/Habits';
+import { RollsPage } from './pages/Rolls';
 import { InboxPage } from './pages/Inbox';
 import { SettingsPage } from './pages/Settings';
 
@@ -29,6 +30,7 @@ export const routes: RouteObject[] = [
         ],
       },
       { path: 'habits', element: <HabitsPage /> },
+      { path: 'rolls', element: <RollsPage /> },
       { path: 'inbox', element: <InboxPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
