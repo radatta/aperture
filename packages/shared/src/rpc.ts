@@ -18,6 +18,7 @@ export const API_METHODS = [
   'transitionTask',
   'setTaskActual',
   'splitTask',
+  'deleteTask',
   'listPlansForDay',
   'upsertPlan',
   'removePlan',

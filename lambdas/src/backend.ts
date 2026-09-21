@@ -375,6 +375,20 @@ export class BackendClient implements ApiClient {
     });
     return { original, followUp };
   }
+  async deleteTask(id: string): Promise<void> {
+    const task = await this.repo.getTask(id);
+    if (!task) return; // idempotent — already tombstoned or never existed
+    // Calendar event FIRST (deleteCalendarEvent uses mustTask, so it must run before the tombstone).
+    // Build the tombstone from the RETURNED task: it has the gcal pointers nulled, so we don't re-put
+    // stale pointers onto the tombstone.
+    const cleared = task.gcalEventId ? await this.deleteCalendarEvent(id) : task;
+    const now = this.now();
+    for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === id))
+      await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
+    for (const a of await this.repo.listAttachmentsForTask(id))
+      await this.repo.putAttachment({ ...a, deletedAt: now, updatedAt: now });
+    await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
+  }
 
   // --- Plans ---
   async listPlansForDay(day: string): Promise<TaskPlan[]> {

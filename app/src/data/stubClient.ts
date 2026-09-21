@@ -428,6 +428,17 @@ class StubClient implements ApiClient {
     });
     return { original, followUp };
   }
+  async deleteTask(id: string): Promise<void> {
+    const task = this.find(this.store.tasks, id);
+    if (!task) return; // idempotent — already gone or never existed
+    // Calendar event before the tombstone: deleteCalendarEvent uses mustFind and clears the pointers.
+    if (task.gcalEventId) await this.deleteCalendarEvent(id);
+    for (const p of this.alive(this.store.plans).filter((p) => p.taskId === id))
+      this.writes.softDelete(this.store.plans, p.id);
+    for (const a of this.alive(this.store.attachments).filter((a) => a.taskId === id))
+      this.writes.softDelete(this.store.attachments, a.id);
+    this.writes.softDelete(this.store.tasks, id); // task last
+  }
 
   // --- Plans ---------------------------------------------------------------
   async listPlansForDay(day: string): Promise<TaskPlan[]> {
