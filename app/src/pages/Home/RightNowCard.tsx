@@ -10,6 +10,7 @@ import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
 import { usePomodoro } from '../../modules/pomodoro/pomodoro-context';
 import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
 import { CategoryTag } from '../../modules/tasks/CategoryTag';
+import { RollTag } from '../../modules/rolls/RollTag';
 import { DoneForm } from '../../modules/tasks/DoneForm';
 import { liveElapsedMin, promote, rightNow } from '../../modules/home/rightNow';
 import type { RightNowRow } from '../../modules/home/rightNow';
@@ -80,6 +81,7 @@ export function RightNowCard() {
             </Text>
             <div className="flex flex-wrap items-center gap-2">
               <CategoryTag categoryId={hero.categoryId} />
+              <RollTag rollId={hero.rollId} />
               {/* Count-UP vs the estimate, flat — no bar, no colour flip past 100%, no countdown. */}
               <Text size="sm" tone="muted" tabular>
                 {fmtDuration(heroElapsed)}
@@ -170,6 +172,7 @@ function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) =>
           {t.title}
         </Text>
         <CategoryTag categoryId={t.categoryId} />
+        <RollTag rollId={t.rollId} />
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'done' ? (
@@ -213,6 +216,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
           {t.title}
         </Text>
         <CategoryTag categoryId={t.categoryId} />
+        <RollTag rollId={t.rollId} />
         {row.unplanned && (
           <Text size="xs" tone="subtle">
             not planned today

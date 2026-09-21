@@ -4,7 +4,8 @@
 
 **Status: built 2026-09-21** (branch `rolls-momentum`, off `main` at #24 Right Now + Coming Up). Gate
 green: typecheck · lint · tests (app 262 · lambdas 114 · shared 88 · cdk 25 · scripts 12). Opus headless
-UI + workflow pass and opus code-review run before merge. **Dev validation pending** (the
+UI + workflow pass: **PASS-WITH-NITS** (one should-fix — the daytime lane's roll marker — fixed; nits
+recorded in §6). Opus code-review: run before merge. **Dev validation pending** (the
 pick→daytime→done→sheet loop wants a real day before we trust it). Part of the "Now / Focus / Rolls" epic
 (full context:
 `localNotes/now-focus-rolls-epic.md`); this is PR 3 of 3, and the only one with new backend.
@@ -146,6 +147,14 @@ Built page-first behind the stub, then the Lambda behind the same contract. Comm
 
 - **Revisit Rolls vs Habits after real use** (D3). If every habit you actually keep turns out to be timed
   work, narrow or retire Habits and let the two grids become one.
+- **Picker: "picked today" vs "already repped today" read alike** (recorded nit from the opus headless
+  pass). Both render teal + check; only the aria-label differs. Left as-is on purpose — a second rep in a
+  day is allowed, so a "done" chip must stay tappable and shouldn't look finished. Revisit if it confuses
+  in real use.
+- **Fixed via the headless pass:** the roll rep now carries the `roll` marker in the daytime Right-now
+  lane too (not just `/tasks`) — the surface where you actually act on it during the day.
+- Not-Rolls observations from the headless pass (pre-existing, out of scope here): the global CaptureBar
+  overlays bottom content, and `/tasks` metadata is cramped at 390px.
 - **`roll:` bulk-add token** — `CreateTaskInput` deliberately did NOT gain `rollId` this PR (keeps capture
   untouched); a bulk token could tag reps in a paste later.
 - **`listTasks` scale** — reps ride the full live-task scan, same posture as calibration; covered by the
