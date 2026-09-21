@@ -1,4 +1,30 @@
-import type { RecurrenceRule, Task } from '@aperture/shared';
+import type { RecurrenceRule, Task, TaskStatus } from '@aperture/shared';
+
+// Human label for a status. "Dropped" for cancelled — the product word for abandoning a task (the
+// row action is "Drop"), never "Cancelled".
+export function statusLabel(status: TaskStatus): string {
+  switch (status) {
+    case 'backlog':
+      return 'Backlog';
+    case 'planned':
+      return 'Planned';
+    case 'in_progress':
+      return 'In progress';
+    case 'done':
+      return 'Done';
+    case 'cancelled':
+      return 'Dropped';
+  }
+}
+
+// The details-edit affordance's label, matching what editing can still do: "Scope" when nothing is
+// scoped yet, "Rescope" when there's a working estimate but no frozen baseline, "Edit details" once
+// the calibration baseline is locked (editing can no longer move that number).
+export function scopeLabel(task: Task): string {
+  if (task.estimateMin == null) return 'Scope';
+  if (task.estimateLockedMin == null) return 'Rescope';
+  return 'Edit details';
+}
 
 // The flat v1 buffer nudge: +25% of the estimate (personalized-from-bias is parked to v1.1).
 export const BUFFER_PCT = 0.25;

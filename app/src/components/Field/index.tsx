@@ -1,9 +1,11 @@
-import type { InputHTMLAttributes } from 'react';
+import type { InputHTMLAttributes, Ref } from 'react';
 import { cx } from '../../lib/cx';
 import { Text } from '../Text';
 
 export interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
+  // React 19 takes ref as a plain prop; the task editor focuses a field when its dialog opens.
+  ref?: Ref<HTMLInputElement>;
 }
 
 export function Field({ label, className, ...rest }: FieldProps) {

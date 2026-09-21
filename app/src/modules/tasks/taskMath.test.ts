@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import type { Task } from '@aperture/shared';
-import { byDueHint, plannedDefault, remainingMin, ruleSummary, suggestedBuffer } from './taskMath';
+import {
+  byDueHint,
+  plannedDefault,
+  remainingMin,
+  ruleSummary,
+  scopeLabel,
+  statusLabel,
+  suggestedBuffer,
+} from './taskMath';
 
 const task = (over: Partial<Task>): Task => ({
   id: 't',
@@ -80,5 +88,23 @@ describe('ruleSummary', () => {
     expect(ruleSummary({ kind: 'weekdays' })).toBe('Weekdays');
     expect(ruleSummary({ kind: 'weekly', daysOfWeek: [1, 3, 5] })).toBe('Mon, Wed, Fri');
     expect(ruleSummary({ kind: 'everyN', interval: 3 })).toBe('Every 3 days');
+  });
+});
+
+describe('statusLabel', () => {
+  it('labels each status, "Dropped" for cancelled', () => {
+    expect(statusLabel('backlog')).toBe('Backlog');
+    expect(statusLabel('planned')).toBe('Planned');
+    expect(statusLabel('in_progress')).toBe('In progress');
+    expect(statusLabel('done')).toBe('Done');
+    expect(statusLabel('cancelled')).toBe('Dropped');
+  });
+});
+
+describe('scopeLabel', () => {
+  it('tracks how far scoping has progressed', () => {
+    expect(scopeLabel(task({ estimateMin: null }))).toBe('Scope');
+    expect(scopeLabel(task({ estimateMin: 30, estimateLockedMin: null }))).toBe('Rescope');
+    expect(scopeLabel(task({ estimateMin: 30, estimateLockedMin: 30 }))).toBe('Edit details');
   });
 });

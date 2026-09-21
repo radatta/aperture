@@ -6,6 +6,7 @@ import {
   daysBetween,
   fmtDayHeading,
   fmtDueDay,
+  localEpochFromDayTime,
   fmtMonthDay,
   fmtMonthDayYear,
   fmtMonthShortDay,
@@ -136,5 +137,14 @@ describe('isDayKey', () => {
     expect(isDayKey('garbage')).toBe(false);
     expect(isDayKey('')).toBe(false);
     expect(isDayKey('2026-09-25 ')).toBe(false);
+  });
+});
+
+describe('localEpochFromDayTime', () => {
+  it('builds a local wall-clock epoch from a day key + HH:mm', () => {
+    // Compared against a locally-constructed Date, so it holds in any runner timezone.
+    expect(localEpochFromDayTime('2026-10-01', '09:30')).toBe(
+      new Date(2026, 9, 1, 9, 30, 0, 0).getTime(),
+    );
   });
 });
