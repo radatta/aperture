@@ -267,6 +267,61 @@ export function runApiContract(
       expect(await api.listTasks()).toHaveLength(0);
     });
 
+    it('tasks: delete tombstones the task with its plans + attachments, and is idempotent', async () => {
+      const task = await api.createTask({ title: 'doomed', estimateMin: 30, bufferMin: 0 });
+      // Plans on two different days — the cascade must reach every day, not just one.
+      const plan1 = await api.upsertPlan({
+        taskId: task.id,
+        day: '2026-08-04',
+        plannedMinutes: 30,
+        order: 1,
+      });
+      const plan2 = await api.upsertPlan({
+        taskId: task.id,
+        day: '2026-08-05',
+        plannedMinutes: 15,
+        order: 1,
+      });
+      // One confirmed (ready) attachment and one still pending — both metadata rows must tombstone.
+      const { attachment } = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'doc.pdf',
+        contentType: 'application/pdf',
+        size: 100,
+      });
+      await api.confirmAttachment(attachment.id);
+      const { attachment: pending } = await api.createAttachmentUploadUrl({
+        taskId: task.id,
+        filename: 'wip.png',
+        contentType: 'image/png',
+        size: 50,
+      });
+
+      await api.deleteTask(task.id);
+
+      // Gone from every list + direct read.
+      expect((await api.listTasks()).map((x) => x.id)).not.toContain(task.id);
+      expect((await api.listBacklog()).map((x) => x.id)).not.toContain(task.id);
+      expect(await api.getTask(task.id)).toBeNull();
+      // Its plan rows (every day) and attachment metadata are tombstoned too.
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).not.toContain(plan1.id);
+      expect((await api.listPlansForDay('2026-08-05')).map((p) => p.id)).not.toContain(plan2.id);
+      expect(await api.listAttachments(task.id)).toHaveLength(0);
+      expect((await api.listAttachments()).map((a) => a.id)).not.toContain(attachment.id);
+      await expect(api.getAttachmentDownloadUrl(attachment.id)).rejects.toThrow();
+      // The pending row is gone too — confirming it now must fail (tombstoned).
+      await expect(api.confirmAttachment(pending.id)).rejects.toThrow();
+      // Excluded from the export.
+      const data = await api.exportData();
+      expect(data.tasks.map((t) => t.id)).not.toContain(task.id);
+      expect(data.plans.map((p) => p.id)).not.toContain(plan1.id);
+      expect(data.plans.map((p) => p.id)).not.toContain(plan2.id);
+      expect(data.attachments.map((a) => a.id)).not.toContain(attachment.id);
+      // A tombstoned task can't be transitioned, and a second delete is a no-op.
+      await expect(api.transitionTask(task.id, 'in_progress')).rejects.toThrow();
+      await expect(api.deleteTask(task.id)).resolves.toBeUndefined();
+    });
+
     it('tasks: due day defaults null, is settable at any status without touching the lock, and clears', async () => {
       const t = await api.createTask({ title: 'has a deadline' });
       expect(t.dueDay).toBeNull(); // created undated

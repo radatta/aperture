@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
-import { liveWrites } from './ddb/writes';
+import { liveWrites, noopWrites } from './ddb/writes';
 import { sk } from './ddb/keys';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
@@ -158,5 +158,74 @@ describe('backend attachments', () => {
     await backend.getAttachmentDownloadUrl(svg.attachment.id);
     expect(seen[0]).toBe('inline'); // text/markdown renders in the tab
     expect(seen[1]).toMatch(/^attachment; filename\*=UTF-8''/); // svg is forced to download
+  });
+});
+
+describe('backend task delete', () => {
+  const setup = (userId = 'local') => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), userId), {
+      userId,
+      now: () => clock,
+      presigner: fakePresigner(),
+    });
+    return { doc, backend, tick: (ms: number) => (clock += ms) };
+  };
+
+  it('tombstones the task, its plans, and its attachment metadata — kept in the table, gone from every list', async () => {
+    const { doc, backend, tick } = setup();
+    const task = await backend.createTask({ title: 'doomed' });
+    const plan = await backend.upsertPlan({
+      taskId: task.id,
+      day: '2026-08-04',
+      plannedMinutes: 30,
+      order: 1,
+    });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await backend.confirmAttachment(attachment.id);
+
+    const before = doc.size;
+    tick(1000);
+    await backend.deleteTask(task.id);
+
+    // Nothing hard-deleted: every row still physically present, now tombstoned.
+    expect(doc.size).toBe(before);
+    const rawTask = await doc.get('u#local', sk.task(task.id));
+    const rawPlan = await doc.get('u#local', sk.plan('2026-08-04', 1, plan.id));
+    const rawAttach = await doc.get('u#local', sk.attach(task.id, attachment.id));
+    expect(rawTask!.deletedAt).not.toBeNull();
+    expect(rawPlan!.deletedAt).not.toBeNull();
+    expect(rawAttach!.deletedAt).not.toBeNull();
+
+    // But gone from every live list + read.
+    expect(await backend.getTask(task.id)).toBeNull();
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
+    expect(await backend.listAttachments(task.id)).toHaveLength(0);
+  });
+
+  it('is a no-op on an unknown or already-deleted id', async () => {
+    const { backend } = setup();
+    await expect(backend.deleteTask('nope')).resolves.toBeUndefined();
+    const task = await backend.createTask({ title: 'once' });
+    await backend.deleteTask(task.id);
+    await expect(backend.deleteTask(task.id)).resolves.toBeUndefined(); // second delete idempotent
+  });
+
+  it('persists nothing under noopWrites (testMode safety)', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), { userId: 'local', now });
+    const task = await live.createTask({ title: 'survives' });
+
+    const noop = new BackendClient(new Repo(doc, noopWrites(), 'local'), { userId: 'local', now });
+    await noop.deleteTask(task.id);
+
+    expect(await live.getTask(task.id)).not.toBeNull(); // nothing tombstoned
   });
 });

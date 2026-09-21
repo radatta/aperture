@@ -161,6 +161,81 @@ describe('backend Google Calendar (multi-account)', () => {
   });
 });
 
+describe('deleteTask hard-deletes the calendar event (via the cancel path)', () => {
+  it('removes the event through its owning account, and leaves foreign events alone', async () => {
+    const g = new InMemoryGoogle();
+    const b = makeBackend(g);
+    await b.completeGoogleConnect('A');
+    g.events.set('foreign', {
+      sub: 'A',
+      calendarId: 'A@example.com',
+      title: 'real meeting',
+      startMs: 0,
+      endMs: 1,
+    });
+    const t = await b.createTask({ title: 'Interview' });
+    await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'Interview',
+      startMs: 1000,
+      endMs: 2000,
+    });
+    expect(g.events.size).toBe(2); // foreign + ours
+
+    await b.deleteTask(t.id);
+    expect(await b.getTask(t.id)).toBeNull(); // task tombstoned
+    expect(g.events.size).toBe(1); // only ours removed
+    expect(g.events.has('foreign')).toBe(true); // never touched
+  });
+
+  it('still tombstones the task when the calendar delete fails (the inherited silent orphan)', async () => {
+    const g = new InMemoryGoogle();
+    const b = makeBackend(g);
+    await b.completeGoogleConnect('A');
+    const t = await b.createTask({ title: 'doomed' });
+    await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'doomed',
+      startMs: 1000,
+      endMs: 2000,
+    });
+    g.markDead('A'); // expired token → deleteEvent throws, swallowed by deleteCalendarEvent
+
+    await b.deleteTask(t.id);
+    expect(await b.getTask(t.id)).toBeNull(); // local delete still succeeds…
+    expect(g.events.size).toBe(1); // …but the event is orphaned (parity with cancel; pinned, not fixed)
+  });
+
+  it('testMode routes deleteTask through both no-op seams — no Google call, nothing persisted', async () => {
+    const g = new InMemoryGoogle();
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const b = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+      google: g,
+    });
+    await b.completeGoogleConnect('A');
+    const t = await b.createTask({ title: 'kept' });
+    await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'kept',
+      startMs: 1000,
+      endMs: 2000,
+    });
+
+    await handleRpc(doc, { userId: 'local', method: 'deleteTask', args: [t.id], now, testMode: true, google: g });
+    expect(await b.getTask(t.id)).not.toBeNull(); // noopWrites → nothing tombstoned
+    expect(g.events.size).toBe(1); // noopGoogle → event untouched
+  });
+});
+
 // The gate: a testMode run of every calendar method uses noopGoogle — no SSM token read, no Google
 // fetch, no burned refresh token. Reads return empty; the connect URL is the disabled placeholder.
 describe('testMode makes zero external Google calls', () => {
