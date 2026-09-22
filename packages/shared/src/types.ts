@@ -29,6 +29,10 @@ export interface Task extends BaseEntity {
   status: TaskStatus;
   categoryId: string | null;
   seriesId: string | null; // set when spawned from a recurring series
+  // The Roll this task is a "rep" of, when picked from a Roll (see rolls.ts). Nullable — most tasks
+  // aren't reps, and pre-existing rows read back as undefined, so readers compare `=== id` / `!rollId`,
+  // never `=== null`. The contact-sheet momentum is DERIVED from done tasks carrying this (no counter).
+  rollId: string | null;
   // "YYYY-MM-DD" — when it's DUE, distinct from taskPlans.day (when I'll work it). Free metadata,
   // set in the scope pass, editable at any status, never part of the estimate lock.
   dueDay: string | null;
@@ -91,6 +95,18 @@ export interface Habit extends BaseEntity {
 export interface HabitCheck extends BaseEntity {
   habitId: string;
   date: string; // YYYY-MM-DD; unique per (habitId, date)
+}
+
+// --- Rolls -----------------------------------------------------------------
+// A deadline-free ongoing effort you keep returning to (LeetCode daily, study, work on Aperture) —
+// no finish line, no cadence target. Distinct from a Habit (a binary behavior you tap): a Roll is
+// timed WORK, and a "rep" is a completed Task tagged with the roll (so calibration rides it). Momentum
+// is the forgiving "contact sheet" — DERIVED from those done tasks, never a stored counter or streak.
+export interface Roll extends BaseEntity {
+  name: string;
+  categoryId: string | null; // the rep task inherits it → sessions snapshot wasWork, time budget works
+  estimateMin: number | null; // default estimate stamped on each rep task; the form requires it
+  active: boolean; // archive = active:false; hidden from pickers, history kept (habits parity)
 }
 
 // --- Pomodoro --------------------------------------------------------------

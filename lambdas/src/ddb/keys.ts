@@ -43,6 +43,11 @@ export const sk = {
   habit: (id: string) => `habit#${id}`,
   habitPrefix: () => `habit#`,
 
+  // Rolls — id-keyed like habits/series; list is a `roll#` begins-with scan (tiny N). Reps are DERIVED
+  // from tasks carrying rollId (no roll-owned check rows), so there's no per-day child prefix here.
+  roll: (id: string) => `roll#${id}`,
+  rollPrefix: () => `roll#`,
+
   cat: (id: string) => `cat#${id}`,
   catPrefix: () => `cat#`,
 

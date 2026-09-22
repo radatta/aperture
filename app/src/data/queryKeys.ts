@@ -14,6 +14,7 @@ export const qk = {
   attachmentUrl: (id: string) => ['attachmentUrl', id] as const,
   habits: () => ['habits'] as const,
   habitChecks: (from: string, to: string) => ['habitChecks', from, to] as const,
+  rolls: () => ['rolls'] as const,
   ideas: (status = 'all') => ['ideas', status] as const,
   day: (day: string) => ['day', day] as const,
   googleStatus: () => ['googleStatus'] as const,

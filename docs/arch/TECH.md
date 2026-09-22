@@ -57,7 +57,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **logEntries** — `id · createdAt · day · text`. Edit allowed; soft-delete allowed.
 
 **tasks** — the signature module.
-- `id · title · status · categoryId · seriesId? · dueDay? · createdAt · startedAt? · completedAt? · cancelledAt?`
+- `id · title · status · categoryId · seriesId? · rollId? · dueDay? · createdAt · startedAt? · completedAt? · cancelledAt?`
+- `rollId` (id | null) — set when the task is a **rep** of a [Roll](../areas/home/rolls.md). Required-nullable; readers compare `=== id` / `!rollId` (pre-existing rows read back `undefined`). The contact-sheet momentum is derived from done tasks carrying this — no counter.
 - `status`: `backlog | planned | in_progress | done | cancelled`.
 - `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (*when I'll work it*). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
 - **Estimate handling:** `estimateMin` + `bufferMin` are editable while `status ∈ {backlog, planned}`. On the **first transition out of planning** (→ `in_progress` or `done`), `estimateLockedMin` is snapshotted and frozen. **Calibration = `actualAccruedMin` vs `estimateLockedMin`.** Scope changes are handled by **splitting** (finish/cancel + spawn a follow-up), never by editing the locked estimate.
@@ -77,6 +78,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **habits** — `id · name · categoryId · cadencePerWeek · active`. (Recurring *behaviors*, binary, no estimate — distinct from recurring tasks.)
 **habitChecks** — `id · habitId · date`. Compound uniqueness on `(habitId, date)`.
+
+**rolls** — `id · name · categoryId · estimateMin · active`. Deadline-free ongoing *efforts* (LeetCode daily, study). A "rep" is a done **task** with `rollId` — momentum is **derived** from those (no stored counter, no streak). Picking one for a day creates a planned rep on that day's plan (`pickRollToday`, reuses an open rep). Distinct from habits (a timed task vs a binary check). Design: [areas/home/rolls.md](../areas/home/rolls.md).
 
 **pomodoroSessions**
 - `id · taskId? · categoryId · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt`
@@ -129,7 +132,7 @@ SK (type-prefixed range keys):
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)
   day#<date>                    day singleton (direct get)
   attach#<taskId>#<ulid>        a task's attachments        (begins_with attach#<taskId>)
-  habit#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
+  habit#<id> · roll#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
 ```
 - **One GSI** (calibration — done tasks by completion date): `GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`.
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
@@ -143,7 +146,7 @@ SK (type-prefixed range keys):
 
 **Routes (React Router):**
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /habits · /inbox · /settings` — the **deep views** (full backlog, browse past log days, manage habits, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /habits · /rolls · /inbox · /settings` — the **deep views** (full backlog, browse past log days, manage habits, manage rolls + their contact sheets, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route.
 
@@ -171,7 +174,7 @@ aperture/
   app/                 # React PWA (Vite)
     src/
       pages/           # Home, Log, Tasks, Recruiting, Habits, Inbox, Settings
-      modules/         # capture, pomodoro, tasks, habits, log, calibration
+      modules/         # capture, pomodoro, tasks, habits, rolls, log, calibration
       components/      # primitives: Card, Text, … (anti-generic token layer)
       data/            # React Query hooks + api client
       lib/             # ulid, dates, dayBoundary helpers

@@ -22,6 +22,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     categoryId: null,
     dueDay: null,
     seriesId: null,
+    rollId: null,
     estimateMin: 60,
     bufferMin: 15,
     estimateLockedMin: null,
