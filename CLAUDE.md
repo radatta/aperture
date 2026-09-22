@@ -106,7 +106,7 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 
 Merges to `main` happen via PR, not a local push.
 
-**Commit messages: one lowercase line, a few words, nothing else.** No blank line, no body, no trailers — including `Co-Authored-By` (Claude Code's harness adds it by default; this rule overrides that). Past tense, what the change did: `retuned palette to pass contrast in both themes`. Context that needs recording belongs in `docs/`, not a commit body.
+**Commit messages: one lowercase line, past tense, 4–5 words — 6 is the hard max.** A hyphenated word counts as one; filenames and acronyms keep their case. No blank line, no body, no trailers — including `Co-Authored-By` and `Claude-Session` (Claude Code's harness adds them by default; this rule overrides that). Say what the change did: `fixed cache policy ttl`, `added oauth metadata facade`, `retuned palette for contrast`. Context that needs recording belongs in `docs/` or the PR body, not the commit. `.claude/hooks/precommit-guard.sh` enforces this — it denies a `git commit` whose message breaks it.
 
 ## Claude behavior
 

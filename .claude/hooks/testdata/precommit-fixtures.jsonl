@@ -1,0 +1,21 @@
+{"expect":"allow","why":"4 words — the recommended length","cmd":"git commit -m \"fixed cache policy ttl\""}
+{"expect":"allow","why":"6 words — exactly the hard max","cmd":"git commit -m \"added oauth metadata facade and bearer\""}
+{"expect":"deny","why":"7 words — one over the hard max","cmd":"git commit -m \"added oauth metadata facade and cognito bearer\""}
+{"expect":"allow","why":"case is not checked — filenames keep theirs","cmd":"git commit -m \"documented mcp connector in CLAUDE.md\""}
+{"expect":"allow","why":"a hyphenated word counts as one","cmd":"git commit -m \"clarified aperture-dev is test-only\""}
+{"expect":"deny","why":"a second -m is a body, and here a trailer","cmd":"git commit -m \"fixed ttl\" -m \"Co-Authored-By: Claude <noreply@anthropic.com>\""}
+{"expect":"deny","why":"the harness's default heredoc style — body + trailer inside command substitution","cmd":"git commit -m \"$(cat <<'EOF'\nfixed ttl\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\""}
+{"expect":"deny","why":"a real newline inside one -m is a body","cmd":"git commit -m \"fixed ttl\n\nlonger explanation here\""}
+{"expect":"deny","why":"a message from a file can't be checked","cmd":"git commit -F msg.txt"}
+{"expect":"deny","why":"-qam cluster carries the message","cmd":"git commit -qam \"added a message that is clearly much too long\""}
+{"expect":"deny","why":"--message= form","cmd":"git commit --message=\"added a message that is clearly much too long\""}
+{"expect":"deny","why":"message glued onto -m","cmd":"git commit -m\"added a message that is clearly much too long\""}
+{"expect":"deny","why":"the SECOND commit in a chain breaks the rule","cmd":"git commit -m \"fixed ttl\" && git add b.ts && git commit -m \"added a message that is clearly much too long\""}
+{"expect":"allow","why":"a compliant commit chained between other commands","cmd":"cd /tmp && git add a.ts && git commit -q -m \"fixed health check auth header\" && git log --oneline -1"}
+{"expect":"allow","why":"amend without a new message is never checked","cmd":"git commit --amend --no-edit"}
+{"expect":"allow","why":"WIP commits are exempt","cmd":"git commit -m \"WIP: saving work before the rebase in case anything breaks\""}
+{"expect":"allow","why":"not a commit at all","cmd":"git status"}
+{"expect":"allow","why":"'git commit' only inside another command's argument — no false block","cmd":"git log --grep=\"git commit -m one two three four five six seven\""}
+{"expect":"deny","why":"staged AWS key — the scan that was silently dead from a wrapped regex","stage":"aws_key = {FAKE_AWS_KEY}","cmd":"git commit -m \"added config\""}
+{"expect":"allow","why":"clean staged diff passes the scan","stage":"const answer = 42;","cmd":"git commit -m \"added the answer\""}
+{"expect":"deny","why":"a commit on a deploy branch is blocked before anything else","branch":"main","cmd":"git commit -m \"fixed ttl\""}
