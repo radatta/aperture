@@ -185,10 +185,13 @@ exchange; the façade only publishes correct metadata from our origin.
   in claude.ai's server-side store, not a browser, and expiry means re-running the connector OAuth dance
   on web *and* phone; the localStorage-leak reasoning behind the 7-day SPA ceiling doesn't apply.
 - **`Authorization` forwards via a cache policy, not the origin-request policy.** CloudFront strips
-  `Authorization` by default, and CDK's L2 origin-request policy *refuses* it (throws at synth) — so a
-  zero-TTL `McpCachePolicy` carries it in the cache key (AWS's documented path; the header in the key
-  means a response is never shared across tokens). The origin-request policy still forwards the
-  agent-token + MCP headers.
+  `Authorization` by default, and CDK's L2 origin-request policy *refuses* it (throws at synth) — so the
+  `McpCachePolicy` carries it in the cache key (AWS's documented path; the header in the key means a
+  response is never shared across tokens). The origin-request policy still forwards the agent-token + MCP
+  headers. **Gotcha (found on the first dev deploy, invisible to synth/cdk-nag):** the cache policy's
+  `maxTtl` is **1s, not 0** — an all-zero TTL is "caching disabled", and CloudFront rejects a
+  `HeaderBehavior` on a disabled policy with a runtime 400. POST is never cached anyway, so `/mcp` still
+  effectively doesn't cache.
 
 Spec-revision note: the handshake advertises MCP `2025-06-18`, but the PKCE-metadata refusal rule and the
 dual well-known probing are from the `2025-11-25` revision, which is what Anthropic documents its client

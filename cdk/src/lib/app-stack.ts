@@ -239,11 +239,14 @@ export class ApertureAppStack extends Stack {
       customHeaders: { [ORIGIN_SECRET_HEADER]: originSecret },
     });
     // CloudFront strips Authorization from origin requests by default, and CDK's origin-request-policy L2
-    // refuses it — so /mcp forwards it via the CACHE key instead (the documented mechanism). All-zero TTL
-    // keeps caching disabled; the header being in the key means a response is never shared across tokens.
+    // refuses it — so /mcp forwards it via the CACHE key instead (the documented mechanism). maxTtl is 1s,
+    // NOT 0: an all-zero-TTL policy counts as "caching disabled", and CloudFront rejects a HeaderBehavior on
+    // a disabled policy (a deploy-time 400, invisible to synth/cdk-nag). POST is never cached regardless, so
+    // /mcp still effectively doesn't cache; the header in the key means a response is never shared across
+    // credentials.
     const mcpCachePolicy = new cloudfront.CachePolicy(this, 'McpCachePolicy', {
       minTtl: Duration.seconds(0),
-      maxTtl: Duration.seconds(0),
+      maxTtl: Duration.seconds(1),
       defaultTtl: Duration.seconds(0),
       headerBehavior: cloudfront.CacheHeaderBehavior.allowList('authorization'),
       queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),

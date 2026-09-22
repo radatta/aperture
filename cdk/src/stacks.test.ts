@@ -276,7 +276,7 @@ describe('ApertureAppStack', () => {
     app.hasResourceProperties('AWS::CloudFront::CachePolicy', {
       CachePolicyConfig: Match.objectLike({
         MinTTL: 0,
-        MaxTTL: 0,
+        MaxTTL: 1, // NOT 0 — an all-zero TTL is "caching disabled", which CloudFront won't accept with a HeaderBehavior
         DefaultTTL: 0,
         ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
           HeadersConfig: Match.objectLike({
