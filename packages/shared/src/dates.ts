@@ -151,3 +151,12 @@ export function fmtMonthShortDay(key: string): string {
   const p = key.split('-');
   return `${MONTHS[Number(p[1]) - 1]} ${Number(p[2])}`;
 }
+
+// Local wall-clock epoch from a day key ("YYYY-MM-DD") + "HH:mm" — the start a user picks for a
+// calendar event, in their own timezone. A calendar event owns its clock; this is never stored on the
+// task, so it's a plain local Date construction (not day-key math).
+export function localEpochFromDayTime(dayKey: string, hhmm: string): number {
+  const [y, m, d] = dayKey.split('-').map(Number) as [number, number, number];
+  const [hh, mm] = hhmm.split(':').map(Number) as [number, number];
+  return new Date(y, m - 1, d, hh, mm, 0, 0).getTime();
+}

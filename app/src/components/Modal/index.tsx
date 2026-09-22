@@ -6,16 +6,22 @@ import { cx } from '../../lib/cx';
 // layer (renders over the z-30 bottom dock with no z-index juggling), focus containment, Escape, and a
 // ::backdrop for free — a hand-rolled focus trap is exactly the "subtle correctness" we don't own.
 // React state stays the source of truth: `open` drives showModal()/close(), and onCancel (Escape) is
-// intercepted so the DOM and state never drift. No backdrop-click close — there's a paste inside.
+// intercepted so the DOM and state never drift. Backdrop-click close is opt-in (`closeOnBackdrop`) —
+// off by default so a paste-heavy dialog (bulk add) can't be dismissed by a stray click; the task
+// editor turns it on and guards it behind an unsaved-changes confirm.
 export interface ModalProps {
   open: boolean;
   onClose: () => void;
   label: string; // aria-label for the dialog
+  closeOnBackdrop?: boolean;
   children: ReactNode;
 }
 
-export function Modal({ open, onClose, label, children }: ModalProps) {
+export function Modal({ open, onClose, label, closeOnBackdrop = false, children }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Backdrop close fires only when BOTH the press and the release land on the dialog itself — so a
+  // text selection that starts inside a field and drags out to release on the backdrop never closes.
+  const pressedBackdrop = useRef(false);
 
   useEffect(() => {
     const el = ref.current;
@@ -32,6 +38,19 @@ export function Modal({ open, onClose, label, children }: ModalProps) {
         e.preventDefault(); // Escape → our close, so React state stays authoritative
         onClose();
       }}
+      onMouseDown={
+        closeOnBackdrop ? (e) => (pressedBackdrop.current = e.target === ref.current) : undefined
+      }
+      onClick={
+        closeOnBackdrop
+          ? (e) => {
+              // A click whose target is the <dialog> itself is the backdrop — content sits in inner
+              // elements, so their clicks have a different target. Require the press to have landed
+              // there too (see pressedBackdrop) so a drag-out release doesn't dismiss.
+              if (e.target === ref.current && pressedBackdrop.current) onClose();
+            }
+          : undefined
+      }
       className={cx(
         // m-auto restores the UA `dialog:modal { margin:auto }` that Tailwind Preflight's universal
         // `margin:0` zeroes — without it the fixed-width box pins to the top-left instead of centering.

@@ -1,3 +1,5 @@
+import { dayKey, fmtMonthShortDay } from '@aperture/shared';
+
 // UI formatters. Durations read as "45m" / "1h 18m"; the timer clock as "25:00".
 export function fmtDuration(min: number): string {
   const m = Math.round(min);
@@ -17,6 +19,12 @@ export function fmtClock(totalSeconds: number): string {
 // Time-of-day for a log timestamp, e.g. "9:42 AM" (local).
 export function fmtTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// A log timestamp as calendar day + time, e.g. "Sep 20 · 9:42 AM" (local). Calendar day (dayStartHour
+// 0), not the logical day — a 1 AM finish should read as today, not yesterday.
+export function fmtDateTime(epochMs: number): string {
+  return `${fmtMonthShortDay(dayKey(epochMs, 0))} · ${fmtTime(epochMs)}`;
 }
 
 // File sizes read as "12 B" / "834 KB" / "2.4 MB" — one decimal below 10, whole numbers above.
