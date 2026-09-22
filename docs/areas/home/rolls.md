@@ -7,9 +7,9 @@ green: typecheck · lint · tests (app 262 · lambdas 114 · shared 88 · cdk 25
 UI + workflow pass: **PASS-WITH-NITS** (one should-fix — the daytime lane's roll marker — fixed; nits
 recorded in §6). Opus code-review: **0 blocking, 0 should-fix, 4 nits** (3 cleaned up — dropped the unused
 `isRep`, de-duped `fmtLastRep`, documented re-plan-adds-not-moves; the 4th is the recorded picker nit).
-**Dev validation pending** (the
-pick→daytime→done→sheet loop wants a real day before we trust it). Part of the "Now / Focus / Rolls" epic
-(full context:
+**Dev-validated 2026-09-21** on the real Lambda + DynamoDB (create + persistence-across-refresh, the
+pick→daytime→done→sheet loop, two-reps-a-day, edit/archive, category-delete reassign — all passed). Part
+of the "Now / Focus / Rolls" epic (full context:
 `localNotes/now-focus-rolls-epic.md`); this is PR 3 of 3, and the only one with new backend.
 
 This is a permanent design-of-record — the design, the decision log, **and** the build record. §3 is the
@@ -145,7 +145,7 @@ Built page-first behind the stub, then the Lambda behind the same contract. Comm
   (pick/dedup/re-plan/after-done/archive/category-reassign), `Rolls.test.tsx` + `RollPick.test.tsx`
   (create, pick→plan, archive, and the morning→daytime→done→sheet loop). ✅
 - Headless UI + workflow pass (opus), code-review (opus): see the Status block.
-- **Dev validation:** pending.
+- **Dev validation:** passed 2026-09-21 (real Lambda + DynamoDB; see the Status block for coverage).
 
 ## 6. Deferred / follow-ups
 
