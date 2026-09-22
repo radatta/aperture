@@ -111,7 +111,8 @@ transport. See `lambdas/src/mcp/protocol.ts`.
 - `cdk/src/config/claudeConnector.ts` — claude.ai's connector callback URLs (committed constants).
 - `cdk/src/bin/aperture.ts` — `agentTokenFor(stage)` (cloned from `deviceTokenFor`).
 - `scripts/aws/health-check.mjs` — the post-deploy `/mcp` probe (401 without a token, 405 on GET, the
-  façade's S256 metadata, and the bearer-→-401-with-`WWW-Authenticate` R7 check).
+  façade's S256 metadata + the path-suffixed protected-resource doc, and the bearer-→-`"invalid token"`
+  R7 check).
 
 ## Operator checklist (phase 1)
 
@@ -165,8 +166,12 @@ three GET routes behind the origin gate, ahead of the POST-only gate:
   the `authorization`/`token` endpoints point at Cognito's hosted UI, and it **injects
   `code_challenge_methods_supported: ["S256"]`** — the one field Cognito omits. No `registration_endpoint`.
 
-A 401 carries `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"` so
-claude.ai can discover the metadata. Cognito stays the real authorization server for the login + token
+A 401 carries `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"` —
+**but a Lambda Function URL renames that header on every 401** to `x-amzn-remapped-www-authenticate` (AWS
+security behavior; verified on dev), so clients never see it under its real name. claude.ai therefore
+discovers the metadata by its documented fallback: probing `/.well-known/oauth-protected-resource/mcp`,
+then the root form — both served. (If claude.ai ever insists on the header, restore it with a CloudFront
+viewer-response Function that copies the remapped header back.) Cognito stays the real authorization server for the login + token
 exchange; the façade only publishes correct metadata from our origin.
 
 **Decisions:**
@@ -208,8 +213,8 @@ claude.ai's live client enforces it yet is unconfirmed (cheap forward-compat, no
    `cdk/src/config/claudeConnector.ts` against Anthropic's docs.
 1. Deploy; read `McpClientId` from the stack outputs (or Cognito → App clients, region us-west-1).
 2. **R7 curl, before any claude.ai UI:** `POST …/mcp` with `Authorization: Bearer x` → expect **401 with
-   `WWW-Authenticate`** (proves the header reached the Lambda). If the CloudWatch `mcp_auth` line reads
-   `credential:"none"`, the Function URL ate the header → add a CloudFront viewer-request Function that
+   body `"Unauthorized: invalid token"`** (the verifier ran, so the header reached the Lambda). If it reads
+   `"requires a credential"` (CloudWatch `mcp_auth`: `credential:"none"`), the header was dropped → add a CloudFront viewer-request Function that
    copies `authorization` → `x-aperture-authorization` (the Lambda already reads that fallback; no Lambda
    change). The health check automates this probe + the S256-metadata check.
 3. claude.ai → Connectors → Add custom connector → URL `…/mcp`, Advanced → **OAuth Client ID =

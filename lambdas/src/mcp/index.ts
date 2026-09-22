@@ -58,8 +58,10 @@ function requireMcpVerifier(): Verifier {
   return cachedMcpVerifier;
 }
 
-// RFC 9728 discovery pointer on a 401 — tells claude.ai where our protected-resource metadata lives (the
-// path-suffixed form, since the resource is <APP_URL>/mcp). Only on a stage with the façade (APP_URL set).
+// RFC 9728 discovery pointer on a 401 (the path-suffixed form, since the resource is <APP_URL>/mcp). Only on
+// a stage with the façade (APP_URL set). NB: a Lambda Function URL renames WWW-Authenticate on 401s to
+// x-amzn-remapped-www-authenticate (AWS security behavior), so clients never see it under its real name;
+// claude.ai falls back to probing the well-known paths, which we serve. Kept for spec-correctness.
 function wwwAuthenticate(): Record<string, string> {
   const appUrl = process.env.APP_URL;
   if (!appUrl) return {};
