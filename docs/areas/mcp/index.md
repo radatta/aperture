@@ -57,8 +57,8 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 | group | tools |
 | --- | --- |
-| tasks | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}` |
-| categories | `list_categories`, `create_category` |
+| tasks | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `delete_task {id}` |
+| categories | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?}` |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}` |
 | calendar | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy` |
 | attachments | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment` |
@@ -70,6 +70,17 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
 - **`update_task`** fan-out order is title → categoryId → dueDay → estimate → status; the estimate throws
   if frozen, and the error names which fields already applied.
+- **`update_category`** (rename / reorder / `isWork`) reads the current row and merges the patch over it —
+  on update `upsertCategory` replaces every field (`order` falls back to 0, `active` to true), so a bare
+  `{id, label}` would otherwise reset the order and reactivate a retired category. `active` is carried
+  through but **not settable**: nothing in `app/` honours it yet (pickers don't filter it, and Settings'
+  own rename/reorder resets it), so exposing "retire" would be a false promise. `isWork` here is
+  forward-only; the app's `setCategoryWork` (backfill past sessions) stays unexposed, as does
+  `deleteCategory` (reassign-everything).
+- **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
+  and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
+  is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
+  (`seriesId` set), matching the UI — `getDay` would respawn it; cancel it instead.
 - **Rename** is a new contract method, `setTaskTitle` (allowed at any status; it does NOT rename a linked
   calendar event — edit-sync is a deferred gap). Exposed as `update_task.title`.
 - **Calendar** events are created **from a task only** (the schema has nowhere to pin a standalone event).
