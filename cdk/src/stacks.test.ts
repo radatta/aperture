@@ -349,6 +349,14 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     });
   });
 
+  // Cognito validates Name against [\w\s+=,.@-]+ at deploy time (synth doesn't). On a domain stage the
+  // identifier is a URL, so CDK's default Name (= identifier) would fail — this pins the explicit name.
+  it('gives the MCP resource server a URL identifier but a Cognito-legal Name', () => {
+    const rs = Object.values(t.findResources('AWS::Cognito::UserPoolResourceServer'))[0];
+    expect(rs?.Properties?.Identifier).toBe('https://dev.aperture.rahuldatta.dev/mcp');
+    expect(rs?.Properties?.Name).toMatch(/^[\w\s+=,.@-]+$/);
+  });
+
   it('exposes APP_URL as the custom-domain base for the OAuth redirect', () => {
     t.hasResourceProperties('AWS::Lambda::Function', {
       Environment: {

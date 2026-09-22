@@ -117,6 +117,9 @@ export class ApertureAppStack extends Stack {
     const mcpScope = new cognito.ResourceServerScope({ scopeName: 'access', scopeDescription: 'Full MCP access (act as the user)' });
     const mcpResourceServer = new cognito.UserPoolResourceServer(this, 'McpResourceServer', {
       userPool,
+      // Explicit name: CDK defaults Name to the identifier, but Name must match [\w\s+=,.@-]+ (no `:` or
+      // `/`), so a URL identifier fails at deploy time. The identifier itself may be a URL.
+      userPoolResourceServerName: `aperture-mcp-${stage}`,
       identifier: mcpResourceIdentifier,
       scopes: [mcpScope],
     });
@@ -124,7 +127,7 @@ export class ApertureAppStack extends Stack {
       userPool,
       userPoolClientName: `aperture-claude-${stage}`,
       generateSecret: false,
-      authFlows: {}, // hosted-UI authorization-code flow only — no SRP/password
+      authFlows: {}, // none requested → Cognito's defaults (refresh/SRP/custom); claude.ai only uses the hosted-UI code flow
       preventUserExistenceErrors: true,
       // 30 days (vs the SPA client's 7): the refresh token lives in claude.ai's server-side store, not a
       // browser, and its expiry means re-doing the connector OAuth dance on BOTH web and phone. The

@@ -192,6 +192,10 @@ exchange; the façade only publishes correct metadata from our origin.
   `maxTtl` is **1s, not 0** — an all-zero TTL is "caching disabled", and CloudFront rejects a
   `HeaderBehavior` on a disabled policy with a runtime 400. POST is never cached anyway, so `/mcp` still
   effectively doesn't cache.
+- **Resource-server Name is explicit (`aperture-mcp-<stage>`).** CDK defaults Name to the identifier,
+  but Cognito validates Name against `[\w\s+=,.@-]+` — a URL identifier (every domain stage) fails at
+  deploy time. The identifier itself may be a URL. Found on the second dev deploy; pinned by a test that
+  runs against the custom-domain template.
 
 Spec-revision note: the handshake advertises MCP `2025-06-18`, but the PKCE-metadata refusal rule and the
 dual well-known probing are from the `2025-11-25` revision, which is what Anthropic documents its client
