@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAgentUserId, resolveDeviceUserId, resolveUserId } from './verify';
+import { assertClientAllowed, resolveAgentUserId, resolveDeviceUserId, resolveUserId } from './verify';
 import type { Verifier } from './verify';
 
 const okVerifier: Verifier = {
@@ -67,5 +67,25 @@ describe('resolveAgentUserId', () => {
     expect(() => resolveAgentUserId('nope', 'tok', 'sub-1')).toThrow(/Unauthorized/);
     expect(() => resolveAgentUserId('toke', 'tok', 'sub-1')).toThrow(/Unauthorized/); // length differs
     expect(() => resolveAgentUserId('Bearer tok', 'tok', 'sub-1')).toThrow(/Unauthorized/); // raw token, not Bearer-wrapped
+  });
+});
+
+describe('assertClientAllowed (D14 — deny a claude.ai token on the BFF)', () => {
+  it('no-ops when no reject list is configured', () => {
+    expect(() => assertClientAllowed('any-client', undefined)).not.toThrow();
+    expect(() => assertClientAllowed('any-client', [])).not.toThrow();
+  });
+
+  it('allows a client that is not on the reject list', () => {
+    expect(() => assertClientAllowed('spa-client', ['mcp-client'])).not.toThrow();
+  });
+
+  it('denies a client on the reject list as Unauthorized', () => {
+    expect(() => assertClientAllowed('mcp-client', ['mcp-client'])).toThrow(/Unauthorized/);
+  });
+
+  it('ignores a non-string / absent client_id claim', () => {
+    expect(() => assertClientAllowed(undefined, ['mcp-client'])).not.toThrow();
+    expect(() => assertClientAllowed(123, ['mcp-client'])).not.toThrow();
   });
 });

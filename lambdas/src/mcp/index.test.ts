@@ -1,20 +1,38 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The bearer (claude.ai) path builds a Cognito verifier via createCognitoVerifier — mock it to a fake so
+// the edge is testable offline (env-then-call ordering works because the edge builds it lazily). Only
+// createCognitoVerifier is replaced; resolveAgentUserId + resolveUserId stay real.
+vi.mock('../auth/verify', async (importActual) => {
+  const actual = await importActual<typeof import('../auth/verify')>();
+  const okVerifier = {
+    verify: async (t: string) => {
+      if (t === 'good') return { sub: 'cognito-sub-1' };
+      throw new Error('bad signature');
+    },
+  };
+  return { ...actual, createCognitoVerifier: () => okVerifier };
+});
+
 import { handler, runtime } from './index';
 
-// Edge behavior that returns before any DynamoDB access (origin gate, method, auth) — plus `initialize`,
-// which touches no table. Tool dispatch (which needs the live table) is covered in tools.test.ts.
+// Edge behavior that returns before any DynamoDB access (origin gate, method, auth, well-known) — plus
+// `initialize`, which touches no table. Tool dispatch (which needs the live table) is in tools.test.ts.
 const OK_ORIGIN = { 'x-aperture-origin-secret': 's3cr3t' };
 const init = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
 
 function post(headers: Record<string, string | undefined>, body = init) {
   return handler({ requestContext: { http: { method: 'POST', path: '/mcp' } }, headers, body });
 }
+function get(path: string, headers: Record<string, string | undefined> = OK_ORIGIN) {
+  return handler({ requestContext: { http: { method: 'GET', path } }, headers });
+}
 
 describe('mcp edge', () => {
   afterEach(() => {
-    delete process.env.ORIGIN_SECRET;
-    delete process.env.AGENT_TOKEN;
-    delete process.env.DEVICE_USER_ID;
+    for (const k of ['ORIGIN_SECRET', 'AGENT_TOKEN', 'DEVICE_USER_ID', 'USER_POOL_ID', 'MCP_CLIENT_ID', 'COGNITO_DOMAIN', 'APP_URL']) {
+      delete process.env[k];
+    }
   });
 
   it('resolves the shared package', () => {
@@ -32,7 +50,7 @@ describe('mcp edge', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('405s a non-POST method', async () => {
+  it('405s a non-POST method on /mcp', async () => {
     const res = await handler({
       requestContext: { http: { method: 'GET', path: '/mcp' } },
       headers: OK_ORIGIN,
@@ -55,11 +73,11 @@ describe('mcp edge', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('401s a bearer token (phase 1 accepts only the agent token)', async () => {
+  it('401s a bearer token when no claude.ai client is configured on the stage', async () => {
     process.env.ORIGIN_SECRET = 's3cr3t';
     process.env.AGENT_TOKEN = 'agent-secret';
-    const res = await post({ ...OK_ORIGIN, authorization: 'Bearer whatever' });
-    expect(res.statusCode).toBe(401);
+    const res = await post({ ...OK_ORIGIN, authorization: 'Bearer good' });
+    expect(res.statusCode).toBe(401); // no USER_POOL_ID/MCP_CLIENT_ID → bearer auth not configured
   });
 
   it('200s initialize with the right agent token, and the agent header wins over a stray authorization', async () => {
@@ -84,5 +102,70 @@ describe('mcp edge', () => {
     );
     expect(res.statusCode).toBe(202);
     expect(res.body).toBe('');
+  });
+
+  // Phase 2 — the OAuth bearer path + the metadata façade.
+  it('200s a valid Cognito bearer token when the claude.ai client is configured', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.USER_POOL_ID = 'us-west-1_ABC';
+    process.env.MCP_CLIENT_ID = 'claude-client-id';
+    const res = await post({ ...OK_ORIGIN, authorization: 'Bearer good' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).result.serverInfo.name).toBe('aperture');
+  });
+
+  it('401s an invalid bearer token and carries the RFC 9728 discovery pointer', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.USER_POOL_ID = 'us-west-1_ABC';
+    process.env.MCP_CLIENT_ID = 'claude-client-id';
+    process.env.APP_URL = 'https://dev.aperture.rahuldatta.dev';
+    const res = await post({ ...OK_ORIGIN, authorization: 'Bearer forged' });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['www-authenticate']).toContain('resource_metadata=');
+    expect(res.headers['www-authenticate']).toContain('/.well-known/oauth-protected-resource/mcp');
+  });
+
+  it('a no-credential 401 carries www-authenticate when the façade is configured', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.AGENT_TOKEN = 'agent-secret';
+    process.env.APP_URL = 'https://dev.aperture.rahuldatta.dev';
+    const res = await post({ ...OK_ORIGIN });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['www-authenticate']).toContain('resource_metadata=');
+  });
+
+  it('serves authorization-server metadata (GET) with the injected PKCE field', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.APP_URL = 'https://dev.aperture.rahuldatta.dev';
+    process.env.COGNITO_DOMAIN = 'aperture-dev-1.auth.us-west-1.amazoncognito.com';
+    process.env.USER_POOL_ID = 'us-west-1_ABC';
+    const res = await get('/.well-known/oauth-authorization-server');
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.issuer).toBe('https://dev.aperture.rahuldatta.dev');
+    expect(body.code_challenge_methods_supported).toEqual(['S256']);
+  });
+
+  it('serves protected-resource metadata (GET), including the path-suffixed RFC 9728 form', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.APP_URL = 'https://dev.aperture.rahuldatta.dev';
+    process.env.COGNITO_DOMAIN = 'aperture-dev-1.auth.us-west-1.amazoncognito.com';
+    process.env.USER_POOL_ID = 'us-west-1_ABC';
+    const res = await get('/.well-known/oauth-protected-resource/mcp');
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).resource).toBe('https://dev.aperture.rahuldatta.dev/mcp');
+  });
+
+  it('404s well-known metadata on a stage without the façade env (no APP_URL)', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    const res = await get('/.well-known/oauth-authorization-server');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('403s a well-known request missing the origin secret (still behind the gate)', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.APP_URL = 'https://dev.aperture.rahuldatta.dev';
+    const res = await get('/.well-known/oauth-authorization-server', {});
+    expect(res.statusCode).toBe(403);
   });
 });

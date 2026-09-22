@@ -59,12 +59,14 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 
 - **One User Pool per env.** Self-signup **OFF** (invite-only; you admin-create your own user). MFA optional.
 - **App client:** SPA type, PKCE, no secret. Callback URLs = the env's app URL (CloudFront default first, custom domain added later). **`refreshTokenValidity` is capped at 7 days** (Cognito defaults to 30) — it sets how often a password is actually typed, and the token persists in browser `localStorage`, so the ceiling is deliberately short. Access/ID tokens stay at the 1-hour default. Rationale and the renewal behaviour built on it: `TECH.md` §3.
-- **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-east-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional.
+- **Second app client — `aperture-claude-<env>`** — the claude.ai MCP connector (no secret, authorization-code flow, callback URLs = Anthropic's connector constants, **30-day** refresh since it lives in claude.ai's server store not a browser). Plus an **MCP resource server** (identifier `<app-url>/mcp`, one `access` scope). Both live in the **app** stack (not the precious data stack) — the MCP OAuth façade + the credential-not-method fork are in **[areas/mcp/index.md](../areas/mcp/index.md)**.
+- **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-east-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional. The MCP function reads this host (`COGNITO_DOMAIN`) to build the façade's `/oauth2` endpoints.
 - Frontend: `react-oidc-context` + Hosted UI.
 
 ## 7. Hosting & CDN
 
 - **S3** (private) + **CloudFront** per env. Default behavior → S3; `/api/*` → Function URL origin (OAC). **SPA fallback:** 403/404 → `/index.html` for client-side routing.
+- **`/mcp`** → the second (MCP) Function URL origin, plus three narrowly-scoped `/.well-known/oauth-*` GET behaviors on the same origin (the claude.ai OAuth metadata façade — **never** `/.well-known/*`). `/mcp` uses a zero-TTL cache policy that forwards `Authorization` (CloudFront strips it by default, and CDK's origin-request policy refuses it), while its origin-request policy forwards the agent-token + MCP headers. Design: **[areas/mcp/index.md](../areas/mcp/index.md)**.
 - **Build on the CloudFront default domain first** (`*.cloudfront.net`) — HTTPS + PWA install work immediately, zero DNS. Custom domain is the last step (§8).
 - **Publish discipline** (`scripts/aws/publish-frontend.mjs`, used by CI + local emergency publishes): **two-pass S3 sync** — hashed `assets/*` get `max-age=31536000,immutable`; everything else (`index.html`, `sw.js`, manifest, icons) gets `no-cache,no-store,must-revalidate` so a cached shell can't point at pruned asset hashes. **PWA files get explicit `--content-type`** (`manifest.webmanifest` → `application/manifest+json`, `sw.js` → `text/javascript`) because `s3 sync` guesses by extension and an octet-stream manifest silently blocks install.
 

@@ -78,6 +78,44 @@ await check('MCP edge: GET /mcp → 405 (POST only)', async () => {
   expect(r.status === 405, `expected 405 for GET, got ${r.status}`);
 });
 
+// Phase 2 (claude.ai OAuth): the metadata façade must advertise the PKCE field Cognito omits and name OUR
+// origin as issuer; the protected-resource doc must serve at the path-suffixed URL claude.ai probes first;
+// and a bearer token must reach the Lambda (R7).
+await check('MCP façade: /.well-known/oauth-authorization-server advertises S256 + our issuer', async () => {
+  const r = await fetch(`${appUrl}/.well-known/oauth-authorization-server`);
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+  const body = await r.json();
+  expect(
+    Array.isArray(body?.code_challenge_methods_supported) && body.code_challenge_methods_supported.includes('S256'),
+    `code_challenge_methods_supported was ${JSON.stringify(body?.code_challenge_methods_supported)}`,
+  );
+  expect(body?.issuer === appUrl, `issuer was "${body?.issuer}", expected "${appUrl}"`);
+});
+
+await check('MCP façade: /.well-known/oauth-protected-resource/mcp names /mcp as the resource', async () => {
+  const r = await fetch(`${appUrl}/.well-known/oauth-protected-resource/mcp`);
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+  const body = await r.json();
+  expect(body?.resource === `${appUrl}/mcp`, `resource was "${body?.resource}"`);
+});
+
+// "invalid token" is the proof Authorization arrived: the verifier ran and rejected the fake JWT. If
+// CloudFront dropped the header, the body reads "requires a credential" instead. The Lambda also sends
+// WWW-Authenticate, but a Function URL renames it on every 401 (AWS security behavior) to
+// x-amzn-remapped-www-authenticate — claude.ai then falls back to probing the well-known paths above.
+await check('MCP edge: POST /mcp with a bearer token → 401 "invalid token" (proves Authorization arrives)', async () => {
+  const r = await fetch(`${appUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-real-jwt' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+  });
+  expect(r.status === 401, `expected 401, got ${r.status}`);
+  const body = await r.json();
+  expect(body?.error === 'Unauthorized: invalid token', `body was ${JSON.stringify(body)}`);
+  const pointer = r.headers.get('x-amzn-remapped-www-authenticate') ?? '';
+  expect(pointer.includes('resource_metadata'), `x-amzn-remapped-www-authenticate was "${pointer}"`);
+});
+
 if (failures) {
   console.error(`\n✗ health check FAILED: ${failures} check(s)\n`);
   process.exit(1);

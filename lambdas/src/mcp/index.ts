@@ -6,11 +6,13 @@
 import { AGENT_TOKEN_HEADER, APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
 import type { ApiMethod } from '@aperture/shared';
 import { createLiveDoc } from '../ddb/LiveDoc';
-import { resolveAgentUserId } from '../auth/verify';
+import { createCognitoVerifier, resolveAgentUserId, resolveUserId } from '../auth/verify';
+import type { Verifier } from '../auth/verify';
 import { handleRpc } from '../handler';
 import { createLiveGoogle } from '../google/liveGoogle';
 import { createS3Presigner } from '../s3/presigner';
 import { handleMcpMessage } from './protocol';
+import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
 
 export const runtime = `${APERTURE}-mcp` as const;
@@ -38,8 +40,33 @@ const HEADERS: Record<string, string> = {
   'content-type': 'application/json',
   'access-control-allow-origin': '*',
   'access-control-allow-headers': `content-type,${AGENT_TOKEN_HEADER},authorization`,
-  'access-control-allow-methods': 'POST,OPTIONS',
+  'access-control-allow-methods': 'GET,POST,OPTIONS', // GET for the phase-2 well-known metadata
 };
+
+// Phase 2 (claude.ai). The MCP verifier IS client-bound (the claude app client id) — unlike the BFF's
+// deliberately un-bound verifier — because that client has no CloudFront dependency, so binding it here
+// forms no deploy cycle. Env is checked live each call (so an unconfigured stage 401s a bearer rather
+// than falling through); only the verifier INSTANCE (its JWKS cache) is memoized across warm invokes.
+let cachedMcpVerifier: Verifier | null = null;
+function requireMcpVerifier(): Verifier {
+  const poolId = process.env.USER_POOL_ID;
+  const clientId = process.env.MCP_CLIENT_ID;
+  // No 'local' fallback (unlike resolveAgentUserId): a public OAuth endpoint must never treat
+  // "unconfigured" as "anyone is the local user". Unconfigured → the bearer is simply rejected.
+  if (!poolId || !clientId) throw new Error('Unauthorized: bearer auth not configured on this stage');
+  if (!cachedMcpVerifier) cachedMcpVerifier = createCognitoVerifier(poolId, clientId);
+  return cachedMcpVerifier;
+}
+
+// RFC 9728 discovery pointer on a 401 (the path-suffixed form, since the resource is <APP_URL>/mcp). Only on
+// a stage with the façade (APP_URL set). NB: a Lambda Function URL renames WWW-Authenticate on 401s to
+// x-amzn-remapped-www-authenticate (AWS security behavior), so clients never see it under its real name;
+// claude.ai falls back to probing the well-known paths, which we serve. Kept for spec-correctness.
+function wwwAuthenticate(): Record<string, string> {
+  const appUrl = process.env.APP_URL;
+  if (!appUrl) return {};
+  return { 'www-authenticate': `Bearer resource_metadata="${appUrl}/.well-known/oauth-protected-resource/mcp"` };
+}
 
 // PUT bytes to a presigned URL — the only place the MCP server itself moves bytes (attach_file's small
 // artifacts). content-length must match what was signed, or S3 rejects the PUT.
@@ -54,38 +81,63 @@ async function uploadToPresigned(url: string, bytes: Buffer, contentType: string
 
 export async function handler(event: HttpEvent): Promise<HttpResult> {
   const httpMethod = event.requestContext?.http?.method;
+  const path = event.requestContext?.http?.path ?? '';
   const isHttp = event.requestContext?.http !== undefined; // false for direct (CI-cred'd) invokes
   if (httpMethod === 'OPTIONS') return { statusCode: 204, headers: HEADERS, body: '' };
 
   // Origin lockdown (HTTP only): the Function URL is public, so only CloudFront-stamped requests are
-  // honored. Direct invokes are AWS-cred-gated already. Same gate as the BFF.
+  // honored. Direct invokes are AWS-cred-gated already. Same gate as the BFF. The well-known metadata
+  // routes below sit BEHIND this gate too (their CloudFront behaviors share the origin-secret stamp).
   const originSecret = process.env.ORIGIN_SECRET;
   if (isHttp && originSecret && event.headers?.[ORIGIN_SECRET_HEADER] !== originSecret) {
     return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Forbidden' }) };
+  }
+
+  // Phase 2 — OAuth metadata façade (public, GET/HEAD). Served BEFORE the POST-only gate so claude.ai's
+  // discovery works; unauthenticated by design (metadata is public). Only a stage with the façade env
+  // (APP_URL etc — i.e. a custom domain) can serve it; otherwise 404. `GET /mcp` is NOT a well-known
+  // path, so it still falls through to the 405 below (the health check depends on that).
+  const wk = matchWellKnown(path);
+  if (wk) {
+    if (httpMethod && httpMethod !== 'GET' && httpMethod !== 'HEAD') {
+      return { statusCode: 405, headers: { ...HEADERS, allow: 'GET' }, body: JSON.stringify({ error: 'Method Not Allowed' }) };
+    }
+    const appUrl = process.env.APP_URL;
+    const cognitoDomain = process.env.COGNITO_DOMAIN;
+    const userPoolId = process.env.USER_POOL_ID;
+    if (!appUrl || !cognitoDomain || !userPoolId) {
+      return { statusCode: 404, headers: HEADERS, body: JSON.stringify({ error: 'OAuth metadata not configured on this stage' }) };
+    }
+    const wkEnv = { appUrl, cognitoDomain, userPoolId };
+    const metadata = wk === 'prm' ? protectedResource(wkEnv) : authorizationServer(wkEnv);
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify(metadata) };
   }
 
   if (httpMethod && httpMethod !== 'POST') {
     return { statusCode: 405, headers: { ...HEADERS, allow: 'POST' }, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
-  // Credential: the agent token (a custom header, raw value) is phase 1's only accepted auth. A bearer
-  // token is recognized so phase 2 can wire Cognito here; for now it 401s like a missing credential. We
-  // disambiguate by CREDENTIAL, not method (the agent token is unscoped — any method).
+  // Credential fork — disambiguate by CREDENTIAL, not method. The agent token (Claude Code, a raw custom
+  // header, unscoped) is checked first and never falls through. A Cognito bearer (claude.ai, phase 2) is
+  // verified against the client-bound MCP verifier. Neither present → 401 with the discovery pointer.
   const agentHeader = event.headers?.[AGENT_TOKEN_HEADER];
   const bearer = event.headers?.authorization ?? event.headers?.Authorization ?? event.headers?.[AUTH_HEADER];
   const credential = agentHeader !== undefined ? 'agent' : bearer ? 'bearer' : 'none';
   let userId: string;
   try {
-    if (credential !== 'agent') {
-      throw new Error('Unauthorized: /mcp requires the agent token');
+    if (credential === 'agent') {
+      userId = resolveAgentUserId(agentHeader, process.env.AGENT_TOKEN, process.env.DEVICE_USER_ID);
+    } else if (credential === 'bearer') {
+      userId = await resolveUserId(bearer, requireMcpVerifier());
+    } else {
+      throw new Error('Unauthorized: /mcp requires a credential');
     }
-    userId = resolveAgentUserId(agentHeader, process.env.AGENT_TOKEN, process.env.DEVICE_USER_ID);
     // One structured line per auth outcome — this is how a dropped header (Claude Code bug history) is
     // diagnosed from CloudWatch: an initialize that reads credential:"none" means the header never arrived.
     console.log(JSON.stringify({ event: 'mcp_auth', credential, ok: true }));
   } catch (err) {
     console.log(JSON.stringify({ event: 'mcp_auth', credential, ok: false }));
-    return { statusCode: 401, headers: HEADERS, body: JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }) };
+    return { statusCode: 401, headers: { ...HEADERS, ...wwwAuthenticate() }, body: JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }) };
   }
 
   let message: unknown;

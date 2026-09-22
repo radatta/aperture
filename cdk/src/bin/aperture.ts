@@ -94,6 +94,7 @@ const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   table: data.table,
   userPool: data.userPool,
   filesBucket: data.filesBucket,
+  cognitoDomain: data.cognitoDomain,
   originSecret: originSecretFor(stage),
   ...(domain ? { domainName: domain.domainName, certificateArn: domain.certificateArn } : {}),
   deviceToken: deviceTokenFor(stage),

@@ -30,3 +30,12 @@ hooks by absolute path (`${CLAUDE_PROJECT_DIR}/.claude/hooks/<name>.sh`), which 
 
 A hook that does no git and touches no repo paths (e.g. a pure command-pattern matcher) doesn't need it —
 but when in doubt, add it; it's fail-open and cheap.
+
+## Testing
+
+`python3 .claude/hooks/testdata/run-fixtures.py` runs every guard against its fixture file
+(`reverse-shell-fixtures.jsonl`, `precommit-fixtures.jsonl`) and exits non-zero on a mismatch. Run it after
+touching a guard. A guard can fail **silently** — `precommit-guard`'s secret scan never worked from the day it was
+added (#4, 2026-08-09) until the fixtures caught it: a hard-wrapped regex made `grep` error out, and the
+`if` read that as "no match" — so a guard change isn't done until a fixture proves both its deny and its
+allow.

@@ -21,6 +21,7 @@ function templates() {
     table: data.table,
     userPool: data.userPool,
     filesBucket: data.filesBucket,
+    cognitoDomain: data.cognitoDomain,
     originSecret: 'test-origin-secret',
     deviceToken: 'test-device-token',
     deviceUserId: 'test-device-user',
@@ -70,7 +71,7 @@ describe('ApertureDataStack', () => {
 });
 
 describe('ApertureAppStack', () => {
-  const { app } = templates();
+  const { app, data } = templates();
 
   it('runs the BFF on Node 22 with the table + pool env wired', () => {
     app.hasResourceProperties('AWS::Lambda::Function', {
@@ -223,18 +224,87 @@ describe('ApertureAppStack', () => {
 
   it('creates a secret-less SPA app client', () => {
     app.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ClientName: 'aperture-app-dev',
       GenerateSecret: false,
       AllowedOAuthFlows: ['code'],
     });
   });
 
   // The refresh token is the session's real ceiling — it's what the app renews with across relaunches,
-  // so this is what sets how often a password gets typed. CDK emits validity in minutes.
-  it('caps the refresh token at a week', () => {
+  // so this is what sets how often a password gets typed. CDK emits validity in minutes. Pinned to the
+  // SPA client by name so a longer-lived second client (the claude.ai one) can't mask a regression.
+  it('caps the SPA refresh token at a week', () => {
     app.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ClientName: 'aperture-app-dev',
       RefreshTokenValidity: 7 * 24 * 60,
       TokenValidityUnits: Match.objectLike({ RefreshToken: 'minutes' }),
     });
+  });
+
+  // Phase 2 — the claude.ai OAuth surface.
+  it('provisions the claude.ai MCP OAuth client (30-day refresh, code flow, connector callbacks)', () => {
+    app.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ClientName: 'aperture-claude-dev',
+      GenerateSecret: false,
+      AllowedOAuthFlows: ['code'],
+      RefreshTokenValidity: 30 * 24 * 60,
+      CallbackURLs: Match.arrayWith(['https://claude.ai/api/mcp/auth_callback']),
+    });
+  });
+
+  it('creates the MCP resource server in the app stack, NOT the precious data stack', () => {
+    app.resourceCountIs('AWS::Cognito::UserPoolResourceServer', 1);
+    data.resourceCountIs('AWS::Cognito::UserPoolResourceServer', 0);
+  });
+
+  it('wires the MCP function with the Cognito bearer env (pool id, client id, hosted-UI domain)', () => {
+    const fns = app.findResources('AWS::Lambda::Function');
+    const mcp = Object.values(fns).find((f) => f.Properties?.FunctionName === 'aperture-mcp-dev');
+    const vars = mcp?.Properties?.Environment?.Variables ?? {};
+    expect(vars.MCP_CLIENT_ID).toBeDefined();
+    expect(vars.COGNITO_DOMAIN).toBeDefined();
+    expect(vars.USER_POOL_ID).toBeDefined();
+  });
+
+  it('gives the BFF the MCP client id so it can DENY that client (D14)', () => {
+    const fns = app.findResources('AWS::Lambda::Function');
+    const bff = Object.values(fns).find((f) => f.Properties?.FunctionName === 'aperture-bff-dev');
+    expect(bff?.Properties?.Environment?.Variables?.MCP_CLIENT_ID).toBeDefined();
+  });
+
+  it('forwards Authorization to /mcp via a zero-TTL cache policy (CDK bars it from the origin policy)', () => {
+    app.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+      CachePolicyConfig: Match.objectLike({
+        MinTTL: 0,
+        MaxTTL: 1, // NOT 0 — an all-zero TTL is "caching disabled", which CloudFront won't accept with a HeaderBehavior
+        DefaultTTL: 0,
+        ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+          HeadersConfig: Match.objectLike({
+            HeaderBehavior: 'whitelist',
+            Headers: Match.arrayWith(['authorization']),
+          }),
+        }),
+      }),
+    });
+  });
+
+  it('serves three narrowly-scoped well-known OAuth behaviors (never /.well-known/*)', () => {
+    app.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/.well-known/oauth-protected-resource*',
+            AllowedMethods: Match.arrayWith(['GET', 'HEAD']),
+          }),
+          Match.objectLike({ PathPattern: '/.well-known/oauth-authorization-server*' }),
+          Match.objectLike({ PathPattern: '/.well-known/openid-configuration' }),
+        ]),
+      }),
+    });
+  });
+
+  it('outputs the MCP client id for the claude.ai connector', () => {
+    app.hasOutput('McpClientId', {});
   });
 });
 
@@ -255,6 +325,7 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     table: data.table,
     userPool: data.userPool,
     filesBucket: data.filesBucket,
+    cognitoDomain: data.cognitoDomain,
     originSecret: 'test-origin-secret',
     deviceToken: 'test-device-token',
     agentToken: 'test-agent-token',
@@ -276,6 +347,14 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       CallbackURLs: Match.arrayWith(['https://dev.aperture.rahuldatta.dev']),
     });
+  });
+
+  // Cognito validates Name against [\w\s+=,.@-]+ at deploy time (synth doesn't). On a domain stage the
+  // identifier is a URL, so CDK's default Name (= identifier) would fail — this pins the explicit name.
+  it('gives the MCP resource server a URL identifier but a Cognito-legal Name', () => {
+    const rs = Object.values(t.findResources('AWS::Cognito::UserPoolResourceServer'))[0];
+    expect(rs?.Properties?.Identifier).toBe('https://dev.aperture.rahuldatta.dev/mcp');
+    expect(rs?.Properties?.Name).toMatch(/^[\w\s+=,.@-]+$/);
   });
 
   it('exposes APP_URL as the custom-domain base for the OAuth redirect', () => {
@@ -302,6 +381,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       table: data.table,
       userPool: data.userPool,
       filesBucket: data.filesBucket,
+      cognitoDomain: data.cognitoDomain,
       originSecret: 'test-origin-secret',
       deviceToken: 'test-device-token',
       agentToken: 'test-agent-token',
