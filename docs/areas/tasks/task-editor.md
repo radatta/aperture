@@ -64,6 +64,14 @@ The card keeps only the actions you press without thinking. No overflow menu.
   but the jsdom test stub doesn't, and CONVENTIONS mandates `useDisclosure` — so the card holds one
   disclosure whose `triggerRef` is the title button; every opener (title/Scope/Done) returns focus
   there on close.
+- **Click-outside closes, but an unsaved edit confirms first.** The task modal opts into backdrop-close
+  (an opt-in `closeOnBackdrop` flag on the shared `Modal`, so paste-heavy dialogs like bulk-add stay
+  unaffected). Every *exit* path — Esc, backdrop, the Close button — routes through `requestClose`,
+  which pops a "Discard changes?" confirm (a second `<dialog>` stacked on top) when the details form is
+  dirty. A *real action* (Save / Mark done / Drop / Delete) closes without the prompt, since it isn't an
+  abandon. "Dirty" is the details form only (title/estimate/category/due); the Split/Calendar reveal
+  forms have their own Cancel. Backdrop-close requires press *and* release on the backdrop, so a
+  text-selection drag-out can't dismiss.
 
 ## Non-goals / deferred
 

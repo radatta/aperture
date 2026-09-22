@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
@@ -48,6 +48,76 @@ describe('TaskCard', () => {
     // Only the unscoped task carries a Scope button.
     const scopeButtons = screen.getAllByRole('button', { name: 'Scope' });
     expect(scopeButtons).toHaveLength(1);
+  });
+});
+
+describe('unsaved-changes guard', () => {
+  async function openAndEdit(user: ReturnType<typeof userEvent.setup>) {
+    const d = await openEditor(user, 'Editable', 'Backlog');
+    const title = d.getByLabelText('Title');
+    await user.clear(title);
+    await user.type(title, 'Changed but not saved');
+    return d;
+  }
+
+  it('confirms before discarding when the Close button is used on an edited task', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Editable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const d = await openAndEdit(user);
+    await user.click(d.getByRole('button', { name: 'Close' }));
+
+    expect(await screen.findByRole('dialog', { name: /Discard unsaved changes/ })).toBeTruthy();
+    expect((await api.listTasks()).map((t) => t.title)).toContain('Editable'); // nothing saved
+  });
+
+  it('confirms on a backdrop click too, and Keep editing dismisses it', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Editable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await openAndEdit(user);
+    // Press and release on the dialog itself = a backdrop click (both, so a drag-out wouldn't count).
+    const editorDialog = screen.getByRole('dialog', { name: 'Task: Editable' });
+    fireEvent.mouseDown(editorDialog);
+    fireEvent.click(editorDialog);
+    await screen.findByRole('dialog', { name: /Discard unsaved changes/ });
+
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.queryByRole('dialog', { name: /Discard unsaved changes/ })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Task: Editable' })).toBeTruthy(); // still editing
+  });
+
+  it('discards and closes both dialogs when confirmed', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Editable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const d = await openAndEdit(user);
+    await user.click(d.getByRole('button', { name: 'Close' }));
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect((await api.listTasks()).map((t) => t.title)).toContain('Editable'); // unchanged
+  });
+
+  it('closes directly with no prompt when nothing was edited', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Editable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const d = await openEditor(user, 'Editable', 'Backlog');
+    await user.click(d.getByRole('button', { name: 'Close' }));
+
+    expect(screen.queryByRole('dialog', { name: /Discard unsaved changes/ })).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Task: Editable' })).toBeNull(),
+    );
   });
 });
 

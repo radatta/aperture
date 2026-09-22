@@ -49,12 +49,16 @@ export function TaskEditor({
   task,
   intent,
   onClose,
+  onRequestClose,
+  onDirtyChange,
   estimateRef,
   actualRef,
 }: {
   task: Task;
   intent: TaskEditorIntent;
-  onClose: () => void;
+  onClose: () => void; // real close — after a Save/Drop/Delete, no guard
+  onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
+  onDirtyChange: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
   actualRef?: Ref<HTMLInputElement>;
 }) {
@@ -113,7 +117,12 @@ export function TaskEditor({
 
       {intent === 'finish' && finish}
 
-      <TaskDetailsForm task={task} onDone={onClose} estimateRef={estimateRef} />
+      <TaskDetailsForm
+        task={task}
+        onDone={onClose}
+        onDirtyChange={onDirtyChange}
+        estimateRef={estimateRef}
+      />
 
       {intent !== 'finish' && finish}
 
@@ -191,7 +200,7 @@ export function TaskEditor({
               Delete task…
             </Button>
           )}
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={onClose}>
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={onRequestClose}>
             Close
           </Button>
         </div>

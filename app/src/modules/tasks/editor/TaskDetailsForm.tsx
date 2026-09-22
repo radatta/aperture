@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Ref } from 'react';
 import { canEditEstimate, fmtMonthDayYear } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -25,10 +25,12 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 export function TaskDetailsForm({
   task,
   onDone,
+  onDirtyChange,
   estimateRef,
 }: {
   task: Task;
   onDone: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
   const { data: cats = [] } = useCategories();
@@ -58,6 +60,9 @@ export function TaskDetailsForm({
   const dirty = titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty;
   const pending =
     setTitle.isPending || setEstimate.isPending || setCategory.isPending || setDueDay.isPending;
+
+  // Bubble dirtiness up so the modal's exit paths (Esc/backdrop/Close) can confirm before discarding.
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
 
   async function save() {
     if (titleDirty) {

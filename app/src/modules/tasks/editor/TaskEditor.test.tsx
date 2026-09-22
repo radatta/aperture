@@ -13,7 +13,16 @@ function api(): ApiClient {
 
 function renderEditor(client: ApiClient, task: Task, intent: TaskEditorIntent = 'view') {
   const onClose = vi.fn();
-  renderWithProviders(<TaskEditor task={task} intent={intent} onClose={onClose} />, { api: client });
+  renderWithProviders(
+    <TaskEditor
+      task={task}
+      intent={intent}
+      onClose={onClose}
+      onRequestClose={vi.fn()}
+      onDirtyChange={vi.fn()}
+    />,
+    { api: client },
+  );
   return { onClose, user: userEvent.setup() };
 }
 
@@ -29,6 +38,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   categoryId: null,
   dueDay: null,
   seriesId: null,
+  rollId: null,
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,
