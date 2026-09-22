@@ -43,13 +43,37 @@ const mkTask = (over: Partial<Task>): Task => ({
 });
 
 describe('TaskEditor', () => {
-  it('renders the full title unclipped', async () => {
+  it('shows the full title in an editable field', async () => {
     const client = api();
     const t = await client.createTask({
       title: 'A very long task title that would truncate to one line inside a card row',
     });
     renderEditor(client, t);
-    expect(screen.getByRole('heading', { name: t.title })).toBeTruthy();
+    expect(screen.getByDisplayValue(t.title)).toBeTruthy(); // the Title textarea, unclipped
+  });
+
+  it('renames the task through Save', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Old name' });
+    const setTitle = vi.spyOn(client, 'setTaskTitle');
+    const { onClose, user } = renderEditor(client, t);
+
+    const field = screen.getByLabelText('Title');
+    await user.clear(field);
+    await user.type(field, 'New name');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(setTitle).toHaveBeenCalledWith(t.id, 'New name'); // trimmed
+    await waitFor(async () => expect((await client.getTask(t.id))?.title).toBe('New name'));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('disables Save when the title is blank', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Has a name' });
+    const { user } = renderEditor(client, t);
+    await user.clear(screen.getByLabelText('Title'));
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('saves only the changed field and closes', async () => {

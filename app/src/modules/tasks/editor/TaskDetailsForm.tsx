@@ -6,16 +6,22 @@ import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
 import { Select } from '../../../components/Select';
 import { Text } from '../../../components/Text';
+import { Textarea } from '../../../components/Textarea';
 import { useCategories } from '../../../data/hooks/useCategories';
-import { useSetCategory, useSetDueDay, useSetEstimate } from '../../../data/hooks/useTasks';
+import {
+  useSetCategory,
+  useSetDueDay,
+  useSetEstimate,
+  useSetTaskTitle,
+} from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 import { scopeLabel, suggestedBuffer } from '../taskMath';
 
 // The details editor inside the task modal — absorbs ScopePanel (estimate/buffer/category) and the
-// in_progress DueDayForm (due). Estimate + buffer edit only while backlog|planned; past that the
-// calibration baseline is frozen (canEditEstimate), so they show read-only. Category + due stay
-// editable at any status. Title is display-only for now — the editable field lands with setTaskTitle.
-// Save writes only what changed and closes; the modal's own Close is the cancel.
+// in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
+// Estimate + buffer edit only while backlog|planned; past that the calibration baseline is frozen
+// (canEditEstimate), so they show read-only. Category stays editable at any status; due locks once
+// finished. Save writes only what changed and closes; the modal's own Close is the cancel.
 export function TaskDetailsForm({
   task,
   onDone,
@@ -26,29 +32,37 @@ export function TaskDetailsForm({
   estimateRef?: Ref<HTMLInputElement>;
 }) {
   const { data: cats = [] } = useCategories();
+  const setTitle = useSetTaskTitle();
   const setEstimate = useSetEstimate();
   const setCategory = useSetCategory();
   const setDueDay = useSetDueDay();
 
   const editEstimate = canEditEstimate(task);
-  // A finished task is history: its due date is locked (re-dating it is meaningless). Category stays
-  // editable at every status — recategorizing a done task actually matters, since calibration
-  // aggregates by category.
+  // A finished task is history: its due date is locked (re-dating it is meaningless). Category and
+  // title stay editable at every status — recategorizing a done task matters (calibration aggregates
+  // by category), and a title is just display text.
   const isTerminal = task.status === 'done' || task.status === 'cancelled';
+  const [title, setTitle_] = useState<string>(task.title);
   const [estimate, setEstimate_] = useState<string>(task.estimateMin?.toString() ?? '');
   const [buffer, setBuffer] = useState<string>(task.bufferMin?.toString() ?? '');
   const [categoryId, setCategoryId] = useState<string>(task.categoryId ?? '');
   const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
 
   const estNum = estimate === '' ? null : Number(estimate);
+  const titleTrimmed = title.trim();
+  const titleDirty = titleTrimmed !== task.title;
   const estimateDirty =
     editEstimate &&
     (String(task.estimateMin ?? '') !== estimate || String(task.bufferMin ?? '') !== buffer);
   const dueDirty = !isTerminal && (task.dueDay ?? '') !== dueDay;
-  const dirty = estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty;
-  const pending = setEstimate.isPending || setCategory.isPending || setDueDay.isPending;
+  const dirty = titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty;
+  const pending =
+    setTitle.isPending || setEstimate.isPending || setCategory.isPending || setDueDay.isPending;
 
   async function save() {
+    if (titleDirty) {
+      await setTitle.mutateAsync({ id: task.id, title: titleTrimmed });
+    }
     // Never call setEstimate past planning — the machine throws on a frozen estimate.
     if (estimateDirty) {
       await setEstimate.mutateAsync({
@@ -68,6 +82,13 @@ export function TaskDetailsForm({
 
   return (
     <section className="flex flex-col gap-3">
+      <Textarea
+        label="Title"
+        rows={2}
+        value={title}
+        onChange={(e) => setTitle_(e.target.value)}
+        className="text-base"
+      />
       <Text as="h3" size="sm" weight="semibold" tone="muted">
         {scopeLabel(task)}
       </Text>
@@ -149,7 +170,7 @@ export function TaskDetailsForm({
         )}
       </div>
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={save} disabled={pending || !dirty}>
+        <Button size="sm" onClick={save} disabled={pending || !dirty || !titleTrimmed}>
           Save
         </Button>
         {dirty && (

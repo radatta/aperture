@@ -38,10 +38,12 @@ The card keeps only the actions you press without thinking. No overflow menu.
   trap would have re-owned exactly the "subtle correctness" the native element already handles.
 - **The card slims to lifecycle; the modal is the edit surface.** Start/Focus/Done stay on the card;
   scope/split/due/calendar/files/drop/delete all move into the modal. One editing context, not two.
-- **Title is shown full but read-only for now.** Editing the title needs a `setTaskTitle` contract
-  method that doesn't exist yet — it arrives via the `aperture-mcp` branch, and this branch rebases
-  onto it later. Keeping title read-only here means **zero backend/contract changes** (app-only), and
-  the read-only full title already fixes the truncation complaint. The editable field lands post-rebase.
+- **The full title is an editable field.** It's a `Textarea` at the top of the details form, so a long
+  title reads unclipped (the original complaint) *and* edits in place — settable at any status, since a
+  title is display text that never touches the calibration lock (`setTaskTitle`). Blank is rejected
+  (Save disables). This shipped in a second pass, after the branch rebased onto `#25` (the MCP server
+  merge) which brought the `setTaskTitle` contract to `main`; the first pass left the title read-only
+  to keep this change app-only until that method existed.
 - **Single diff-driven Save.** The details form writes only what changed, sequentially (the old
   `ScopePanel.save` pattern), then closes. Estimate + buffer are **read-only once work has started** —
   `canEditEstimate` (backlog|planned only), because the machine freezes the calibration baseline and
@@ -65,10 +67,8 @@ The card keeps only the actions you press without thinking. No overflow menu.
 
 ## Non-goals / deferred
 
-- **Editable title** — deferred to the `setTaskTitle` merge (see above).
-- **Rename sync** — when the title becomes editable, renaming a task will *not* rename its recurring
-  series template or its linked Google Calendar event. Calendar edit-sync is already a deferred gap
-  (`docs/areas/calendar/`).
+- **Rename sync** — renaming a task does *not* rename its recurring series template or its linked
+  Google Calendar event. Calendar edit-sync is already a deferred gap (`docs/areas/calendar/`).
 - **Home / PlanSection rows** are not yet wired to the modal. `TaskTitleButton` is the seam — those
   truncated title spots can adopt it later with no new plumbing.
 
@@ -77,7 +77,8 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - New: `modules/tasks/editor/` (`TaskEditor`, `TaskDetailsForm`, `SplitForm`, `AddToCalendarForm`,
   `DeleteConfirm` + `DropConfirm`), `TaskModal`, `TaskTitleButton`.
 - Changed: `TaskCard` (rewritten slim), `TaskMeta` ("not scoped" cue), `taskMath` (`statusLabel`,
-  `scopeLabel`), `format` (`fmtDateTime`), `Field` (ref prop), `DoneForm` (`actualRef`).
+  `scopeLabel`), `format` (`fmtDateTime`), `Field` (ref prop), `DoneForm` (`actualRef`),
+  `useTasks` (`useSetTaskTitle`), `dates` (`localEpochFromDayTime`).
 - Deleted: `ScopePanel` (absorbed into `TaskDetailsForm`).
 - Tests: `TaskEditor.test.tsx`, migrated `TaskCard.test.tsx` (menu flows → modal flows), plus
   `taskMath`/`format` helper tests. Full app suite green.

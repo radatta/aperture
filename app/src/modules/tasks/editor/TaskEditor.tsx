@@ -97,22 +97,18 @@ export function TaskEditor({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header — the full title, unclipped, read-only until setTaskTitle lands. */}
-      <div className="flex flex-col gap-1">
-        <Text as="h2" size="lg" weight="semibold" className="break-words">
-          {task.title}
+      {/* Header — the status line. The full title is the editable Title field in the details form
+          below, which is also where it reads unclipped. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Text size="sm" tone="muted">
+          {statusLabel(task.status)}
         </Text>
-        <div className="flex flex-wrap items-center gap-2">
-          <Text size="sm" tone="muted">
-            {statusLabel(task.status)}
+        <CategoryTag categoryId={task.categoryId} />
+        {series && (
+          <Text size="xs" tone="subtle">
+            Recurs · {ruleSummary(series.rule)}
           </Text>
-          <CategoryTag categoryId={task.categoryId} />
-          {series && (
-            <Text size="xs" tone="subtle">
-              Recurs · {ruleSummary(series.rule)}
-            </Text>
-          )}
-        </div>
+        )}
       </div>
 
       {intent === 'finish' && finish}

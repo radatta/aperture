@@ -65,6 +65,16 @@ export function useSetDueDay() {
   });
 }
 
+// Rename. Display text — settable at any status, never touches the estimate lock (see setTaskTitle).
+export function useSetTaskTitle() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; title: string }) => api.setTaskTitle(v.id, v.title),
+    onSettled: () => invalidateTaskData(qc),
+  });
+}
+
 // The lifecycle move. Crossing out of planning (→ in_progress|done) freezes estimateLockedMin inside
 // the shared machine — this hook doesn't need to know, it just calls it.
 export function useTransitionTask() {
