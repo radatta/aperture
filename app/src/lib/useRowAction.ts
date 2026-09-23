@@ -10,6 +10,7 @@ export function useRowAction(fallback: RefObject<HTMLElement | null>) {
   const [failed, setFailed] = useState(false);
 
   async function run(id: string, action: () => Promise<unknown>) {
+    const origin = document.activeElement;
     setFailed(false);
     setBusy((s) => new Set(s).add(id));
     try {
@@ -22,10 +23,19 @@ export function useRowAction(fallback: RefObject<HTMLElement | null>) {
         next.delete(id);
         return next;
       });
-      requestAnimationFrame(() => {
-        const el = document.activeElement;
-        if (!el || el === document.body) fallback.current?.focus();
-      });
+      // The row leaves when the list re-renders, which can land a few frames after the action
+      // resolves — watch the pressed control until it's gone (or clearly staying), then refocus.
+      let frames = 0;
+      const check = () => {
+        if (!(origin instanceof HTMLElement)) return;
+        const lost = !document.activeElement || document.activeElement === document.body;
+        if (!origin.isConnected) {
+          if (lost) fallback.current?.focus();
+        } else if (frames++ < 30) requestAnimationFrame(check);
+        // The row stayed (e.g. the write failed): give focus back to the re-enabled control.
+        else if (lost) origin.focus();
+      };
+      requestAnimationFrame(check);
     }
   }
 

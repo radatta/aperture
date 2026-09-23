@@ -178,3 +178,18 @@ describe('/tasks lenses', () => {
     expect(titles).toEqual(['dropped', 'finished']); // dropped last → first; open tasks absent
   });
 });
+
+describe('focus after a row leaves', () => {
+  it('"+ Today" moves the row out of Week and focus lands on the list, not <body>', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-focus-${Math.random()}` });
+    await api.createTask({ title: 'due soon', dueDay: addDays(todayKey(4), 1) });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=week' });
+
+    const add = await screen.findByRole('button', { name: 'Add due soon to today' });
+    add.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(add.isConnected).toBe(false));
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  });
+});

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -78,19 +79,34 @@ export function TaskListSection({
   const narrowing = isNarrowing(query);
   const planByTask = new Map(plans.map((p) => [p.taskId, p]));
 
+  // Every branch renders inside the same focusable wrapper: when the last row leaves, focus still
+  // has somewhere to land.
+  const wrap = (children: ReactNode) => (
+    <div ref={listRef} tabIndex={-1} className="flex flex-col gap-4 outline-none">
+      <div role="status">
+        {action.failed && (
+          <Text size="sm" tone="danger">
+            Couldn&apos;t save that — try again.
+          </Text>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+
   if (result.count === 0) {
     if (result.searching)
-      return (
+      return wrap(
         <EmptyState
           pending={pending}
           error={error}
           title={`Nothing matches “${query.text.trim()}”.`}
         >
           Search covers titles and category names.
-        </EmptyState>
+        </EmptyState>,
       );
     if (narrowing)
-      return (
+      return wrap(
         <EmptyState
           pending={pending}
           error={error}
@@ -106,13 +122,13 @@ export function TaskListSection({
           }
         >
           Try fewer filters.
-        </EmptyState>
+        </EmptyState>,
       );
     const empty = EMPTY[place === 'today' ? 'backlog' : place];
-    return (
+    return wrap(
       <EmptyState pending={pending} error={error} title={empty.title}>
         {empty.body}
-      </EmptyState>
+      </EmptyState>,
     );
   }
 
@@ -149,15 +165,8 @@ export function TaskListSection({
   const groups = place === 'done' ? capGroups(result.groups, limit) : result.groups;
   const shown = groups.reduce((n, g) => n + g.tasks.length, 0);
 
-  return (
-    <div ref={listRef} tabIndex={-1} className="flex flex-col gap-4 outline-none">
-      <div role="status">
-        {action.failed && (
-          <Text size="sm" tone="danger">
-            Couldn&apos;t save that — try again.
-          </Text>
-        )}
-      </div>
+  return wrap(
+    <>
       {groups.map((g) => {
         // Ungrouped: no header.
         if (g.key === 'all')
@@ -197,7 +206,7 @@ export function TaskListSection({
           Show {Math.min(DONE_PAGE, result.count - shown)} more
         </Button>
       )}
-    </div>
+    </>,
   );
 }
 
