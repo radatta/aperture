@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -109,15 +110,26 @@ function FilterPanel({
   const { data: active = [] } = useActiveCategories();
   // Status only splits history (every open task off Today is backlog or planned-for-later).
   const statuses: StatusChip[] = place === 'done' ? ['done', 'cancelled'] : [];
+  // Escape closes the panel wherever focus is — clicking panel text (or a chip, in Safari) leaves
+  // focus on <body>, out of reach of a handler on the panel itself. The search box keeps Escape
+  // for clearing, and an open dialog owns it.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('dialog[open]')) return;
+      if (e.target instanceof HTMLElement && e.target.getAttribute('aria-label') === 'Search tasks')
+        return;
+      onDone();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onDone]);
+
   const toggle = <T,>(list: T[], v: T) =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
   return (
-    <Card
-      id="task-filters"
-      className="flex flex-col gap-3"
-      onKeyDown={(e) => e.key === 'Escape' && onDone()}
-    >
+    <Card id="task-filters" className="flex flex-col gap-3">
       <Row label="Category">
         {active.map((c) => (
           <Chip

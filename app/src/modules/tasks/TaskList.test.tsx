@@ -194,3 +194,22 @@ describe('focus after a row leaves', () => {
     await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
   });
 });
+
+describe('filter panel', () => {
+  it('Escape closes it even after clicking plain panel text, and focus returns to Filter', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-esc-${Math.random()}` });
+    await api.createTask({ title: 'groceries' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=backlog' });
+
+    await user.click(await screen.findByRole('button', { name: 'Filter' }));
+    // The row's label text — not a control, so focus falls to <body>.
+    await user.click(within(screen.getByRole('group', { name: 'Category' })).getByText('Category'));
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('group', { name: 'Category' })).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Filter' })),
+    );
+  });
+});

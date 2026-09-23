@@ -62,8 +62,15 @@ export function useTaskQuery() {
     const s = read<Stored>('session', QUERY_KEY);
     return isStored(s) ? s : null;
   });
+  // A lens switch updates the stored query at once but the URL a beat later; for that render the
+  // lenses disagree. Keep the typed text across the gap (reset only the rest), or the list flashes
+  // its unsearched view between two searched ones.
   const query: TaskQuery =
-    stored && stored.day === today && stored.lens === place ? stored.query : LENS_PRESET[place];
+    stored && stored.day === today
+      ? stored.lens === place
+        ? stored.query
+        : resetToLens(stored.query, place)
+      : LENS_PRESET[place];
 
   const setQuery = useCallback(
     (next: TaskQuery) => {
