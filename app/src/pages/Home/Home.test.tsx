@@ -37,7 +37,7 @@ describe('routing', () => {
     const user = userEvent.setup();
     renderApp();
     await user.click(screen.getByRole('link', { name: 'Tasks' }));
-    // The real Tasks page opens on the Plan tab — capacity field is there synchronously.
+    // The Tasks page opens on the Today lens — the capacity field is there synchronously.
     expect(await screen.findByText('Hours available today')).toBeTruthy();
   });
 

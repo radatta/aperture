@@ -11,8 +11,8 @@ function freshApi() {
   return createStubClient({ seed: false, storageKey: `taskcard-${Math.random()}` });
 }
 
-// Open a task's editor modal by clicking its title. `tab` switches first (Backlog tasks) — the Plan
-// tab is the default, where a materialized series occurrence already shows.
+// Open a task's editor modal by clicking its title. `tab` switches lens first (Backlog tasks) — the
+// Today lens is the default, where a materialized series occurrence already shows.
 async function openEditor(
   user: ReturnType<typeof userEvent.setup>,
   title: string,
@@ -72,10 +72,15 @@ describe('row click', () => {
 });
 
 describe('stale planned sweep', () => {
-  it('shows a task left planned on a past day in the Backlog tab', async () => {
+  it('shows a task left planned on a past day in the Backlog lens', async () => {
     const api = freshApi();
     const t = await api.createTask({ title: 'Left behind' });
-    await api.upsertPlan({ taskId: t.id, day: addDays(todayKey(4), -1), plannedMinutes: 30, order: 1 });
+    await api.upsertPlan({
+      taskId: t.id,
+      day: addDays(todayKey(4), -1),
+      plannedMinutes: 30,
+      order: 1,
+    });
     await api.transitionTask(t.id, 'planned');
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
@@ -239,10 +244,10 @@ describe('deleting a task', () => {
       categoryId: null,
       defaultEstimateMin: 15,
       rule: { kind: 'daily' },
-      anchorDate: '2020-01-01', // due every day, including today → materializes on the Plan tab
+      anchorDate: '2020-01-01', // due every day, including today → materializes on the Today lens
     });
     const user = userEvent.setup();
-    renderApp({ api, path: '/tasks' }); // Plan is the default tab; useDay(today) materializes it
+    renderApp({ api, path: '/tasks' }); // Today is the default lens; useDay(today) materializes it
 
     const d = await openEditor(user, 'Daily standup');
     expect(d.getByRole('button', { name: /Drop task/ })).toBeTruthy();
