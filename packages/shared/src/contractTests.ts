@@ -554,6 +554,23 @@ export function runApiContract(
       expect((await api.getTask(task.id))?.categoryId).toBe(target.id);
     });
 
+    it('categories: update keeps order/active when omitted; retire and restore round-trip', async () => {
+      const cat = await api.upsertCategory({ label: 'Homework', isWork: true, order: 3 });
+      const renamed = await api.upsertCategory({ id: cat.id, label: 'HW', isWork: true });
+      expect(renamed.order).toBe(3);
+      expect(renamed.active).toBe(true);
+
+      const retired = await api.upsertCategory({ id: cat.id, label: 'HW', isWork: true, active: false });
+      expect(retired.active).toBe(false);
+      const renamedAgain = await api.upsertCategory({ id: cat.id, label: 'Homework', isWork: false });
+      expect(renamedAgain.active).toBe(false); // a rename never un-retires
+      expect(renamedAgain.order).toBe(3);
+      expect((await api.listCategories()).find((c) => c.id === cat.id)?.active).toBe(false); // still listed
+
+      const restored = await api.upsertCategory({ id: cat.id, label: 'Homework', isWork: false, active: true });
+      expect(restored.active).toBe(true);
+    });
+
     it('settings: sensible defaults, and patches persist', async () => {
       const s = await api.getSettings();
       expect(s.dayStartHour).toBe(4);

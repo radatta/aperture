@@ -82,6 +82,8 @@ export interface UpsertRollInput {
   active?: boolean;
 }
 
+// Create (no id): order defaults per impl, active to true. Update (id set): label/isWork replace;
+// order/active are patch-style — omitted keeps the current value (so a rename never un-retires).
 export interface UpsertCategoryInput {
   id?: string;
   label: string;

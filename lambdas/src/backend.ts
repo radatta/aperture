@@ -709,8 +709,8 @@ export class BackendClient implements ApiClient {
         ...existing,
         label: input.label,
         isWork: input.isWork,
-        order: input.order ?? 0,
-        active: input.active ?? true,
+        order: input.order ?? existing.order,
+        active: input.active ?? existing.active,
         updatedAt: this.now(),
       });
     }

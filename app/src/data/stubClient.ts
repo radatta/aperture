@@ -757,11 +757,12 @@ class StubClient implements ApiClient {
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.id) {
+      const existing = this.mustFind(this.store.categories, input.id);
       return this.writes.patch(this.store.categories, input.id, {
         label: input.label,
         isWork: input.isWork,
-        order: input.order ?? 0,
-        active: input.active ?? true,
+        order: input.order ?? existing.order,
+        active: input.active ?? existing.active,
       });
     }
     return this.writes.insert(this.store.categories, {
