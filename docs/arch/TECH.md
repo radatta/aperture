@@ -68,6 +68,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **taskPlans** — scheduling (the *when*), separate from the task (the *what*). Enables multi-day + ordering.
 - `id · taskId · day · plannedMinutes · order`. A task may have plan rows on several days. Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateLockedMin − actualAccruedMin`.
+- **Stale sweep (lazy rollover).** `getDay(today)` moves every `planned` task with no alive plan row on today or later back to `backlog` — a recurring occurrence already superseded by its series' copy today is dropped (`cancelled`) instead. Plan rows stay as history; `in_progress` is untouched. Rule: shared `stalePlannedMoves`. It runs on app open, not on a schedule (the server has no timezone), so MCP reads lag until the app loads today. `getDay` must only ever be called with the client's current day — a future day would sweep today's plan.
 
 **taskSeries** — recurrence template.
 - `id · title · categoryId · defaultEstimateMin · rule · active · anchorDate`.
@@ -92,6 +93,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **days** — per-day singleton: `date(pk) · capacityHours · intent · reflectionPrompt · reflectionText`.
 
 **categories** — `id · label · isWork · order · active`.
+- **Retire** = `active: false` (Settings → Retire…, or MCP `update_category`): hidden from every picker, sorted after active ones in Settings, but the label still resolves on existing tasks and an edit form shows the item's own retired category as "X (retired)". On update `order`/`active` are patch-style — omitted keeps the current value, so a rename never un-retires.
 - Referenced by **id**. **Labels resolve live** (renames propagate to display). **`isWork` is snapshotted** onto sessions (`wasWork`) so history is frozen. Flipping `isWork` prompts an **optional retroactive backfill** ("also reclassify N past records?"). **Deleting** forces reassignment of all referencing items to another category first, then soft-deletes the empty one.
 
 **leetcodeAttempts** — one row per LeetCode submission, accepted **and** wrong. Written by a browser extension, never by the app.

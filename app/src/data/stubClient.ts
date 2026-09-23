@@ -26,6 +26,7 @@ import {
   sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
+  stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
   withEstimate,
@@ -737,14 +738,12 @@ class StubClient implements ApiClient {
       });
     }
   }
-  // A planned task with no alive plan row on `day` or later was left behind — back to backlog.
-  // Plan rows stay as history. Monotone in `day`, so a past day never moves more than today would.
+  // Rule lives in the shared stalePlannedMoves (backend parity).
   private sweepStalePlanned(day: string): void {
-    const planned = this.alive(this.store.tasks).filter((t) => t.status === 'planned');
-    if (planned.length === 0) return;
-    const ahead = new Set(this.alive(this.store.plans).filter((p) => p.day >= day).map((p) => p.taskId));
-    for (const t of planned) {
-      if (!ahead.has(t.id)) this.writes.put(this.store.tasks, taskTransition(t, 'backlog', this.now()));
+    const tasks = this.alive(this.store.tasks);
+    if (!tasks.some((t) => t.status === 'planned')) return;
+    for (const { task, to } of stalePlannedMoves(tasks, this.alive(this.store.plans), day)) {
+      this.writes.put(this.store.tasks, taskTransition(task, to, this.now()));
     }
   }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {
@@ -904,7 +903,9 @@ class StubClient implements ApiClient {
       googleAccounts: current.googleAccounts.filter((a) => a.sub !== accountSub),
       calendarShapeRefs: current.calendarShapeRefs.filter((r) => r.accountSub !== accountSub),
       calendarWriteDefault:
-        current.calendarWriteDefault?.accountSub === accountSub ? null : current.calendarWriteDefault,
+        current.calendarWriteDefault?.accountSub === accountSub
+          ? null
+          : current.calendarWriteDefault,
       updatedAt: this.now(),
     };
     this.store.settings = next;

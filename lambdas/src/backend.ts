@@ -18,6 +18,7 @@ import {
   sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
+  stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
   viewableInline,
@@ -680,14 +681,16 @@ export class BackendClient implements ApiClient {
       });
     }
   }
-  // A planned task with no alive plan row on `day` or later was left behind — back to backlog.
-  // Plan rows stay as history. Monotone in `day`, so a past day never moves more than today would.
+  // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
+  // planned. Each move re-reads the task first: a sweep races the user's own writes (e.g. starting the
+  // task), and writing back the list-time copy would undo them.
   private async sweepStalePlanned(day: string): Promise<void> {
-    const planned = (await this.repo.listTasks()).filter((t) => t.status === 'planned');
-    if (planned.length === 0) return;
-    const ahead = new Set((await this.repo.listAllPlans()).filter((p) => p.day >= day).map((p) => p.taskId));
-    for (const t of planned) {
-      if (!ahead.has(t.id)) await this.repo.putTask(taskTransition(t, 'backlog', this.now()));
+    const tasks = await this.repo.listTasks();
+    if (!tasks.some((t) => t.status === 'planned')) return;
+    for (const { task, to } of stalePlannedMoves(tasks, await this.repo.listAllPlans(), day)) {
+      const fresh = await this.repo.getTask(task.id);
+      if (fresh?.status !== 'planned') continue;
+      await this.repo.putTask(taskTransition(fresh, to, this.now()));
     }
   }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {

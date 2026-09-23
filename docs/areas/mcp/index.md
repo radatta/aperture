@@ -76,6 +76,9 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   the app's pickers hide it, existing tasks keep the label — and `active:true` restores it (the same as
   Settings → Retire / Restore). `isWork` here is forward-only; the app's `setCategoryWork` (backfill past sessions) stays unexposed, as does
   `deleteCategory` (reassign-everything).
+- **Stale planned tasks lag.** The stale-planned sweep runs inside `getDay`, which no tool calls — so
+  `list_tasks status=planned` / `list_backlog` still show yesterday's leftovers as planned until the app is
+  opened that day ([TECH §taskPlans](../../arch/TECH.md)).
 - **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
   and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
