@@ -9,24 +9,30 @@ export function cycleMode(current: CaptureMode, dir: 1 | -1): CaptureMode {
 }
 
 // Deliberately no structure prompts — just an invitation to type.
-export function placeholderFor(mode: CaptureMode): string {
+export function placeholderFor(mode: CaptureMode, toToday = false): string {
   switch (mode) {
     case 'log':
       return 'What happened?';
     case 'task':
-      return 'New task…';
+      return toToday ? 'New task for today…' : 'New task…';
     case 'idea':
       return 'Capture an idea…';
   }
 }
 
 // The receipt shown after a submit. Capture is a trust exercise — you hand the app a thought and
-// it vanishes from the field — so every submit says where the thought went.
-export function receiptFor(mode: CaptureMode): { text: string; label: string } {
+// it vanishes from the field — so every submit says where the thought went. A "→ today" task that
+// was created but couldn't be planned says so: it's in the backlog, not on today.
+export function receiptFor(
+  mode: CaptureMode,
+  dest?: { today: boolean; planned: boolean },
+): { text: string; label: string } {
   switch (mode) {
     case 'log':
       return { text: 'Logged', label: 'today' };
     case 'task':
+      if (dest?.today)
+        return { text: 'Task added', label: dest.planned ? 'today' : 'backlog (couldn’t plan it)' };
       return { text: 'Task added', label: 'backlog' };
     case 'idea':
       return { text: 'Captured', label: 'inbox' };
