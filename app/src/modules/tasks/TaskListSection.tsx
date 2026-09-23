@@ -138,7 +138,9 @@ export function TaskListSection({
         aria-label={`Add ${task.title} to today`}
         onClick={() => action.run(task.id, () => addToDay(task))}
       >
-        <PlusIcon size={13} /> Today
+        <PlusIcon size={13} />
+        {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
+        <span className="max-sm:hidden">Today</span>
       </Button>
     ) : undefined;
     return <TaskCard key={task.id} task={task} actions={actions} />;
