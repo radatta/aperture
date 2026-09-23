@@ -37,6 +37,26 @@ describe('habit creation', () => {
     expect((screen.getByLabelText('New habit') as HTMLInputElement).value).toBe('');
   });
 
+  it('the category picker omits retired categories', async () => {
+    const api = freshApi();
+    const old = await api.upsertCategory({ label: 'Studying', isWork: true });
+    await api.upsertCategory({ id: old.id, label: 'Studying', isWork: true, active: false });
+    await api.upsertCategory({ label: 'SOCI 49', isWork: true });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/habits' });
+
+    await user.click(await screen.findByRole('button', { name: /New habit/ }));
+    const select = screen.getByLabelText('Category') as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.textContent)).toContain('SOCI 49'),
+    );
+    expect(
+      Array.from(select.options)
+        .map((o) => o.textContent)
+        .join(),
+    ).not.toMatch(/Studying/);
+  });
+
   it('creates one habit, not two, when Enter is hit twice quickly', async () => {
     const api = freshApi();
     const user = userEvent.setup();

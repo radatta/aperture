@@ -14,7 +14,8 @@ async function apiWithAdmin(): Promise<ApiClient> {
   return api;
 }
 
-const area = () => screen.getByRole('textbox', { name: 'Tasks, one per line' }) as HTMLTextAreaElement;
+const area = () =>
+  screen.getByRole('textbox', { name: 'Tasks, one per line' }) as HTMLTextAreaElement;
 const addBtn = () => screen.getByRole('button', { name: /Add \d+ task/ }) as HTMLButtonElement;
 
 async function open(user: ReturnType<typeof userEvent.setup>) {
@@ -72,6 +73,26 @@ describe('bulk add', () => {
     await waitFor(async () => {
       const [t] = await api.listBacklog();
       expect(t?.title).toBe('write memo');
+      expect(t?.categoryId).toBeNull();
+    });
+  });
+
+  it('a retired #label is unknown and missing from the hint — the task lands uncategorised', async () => {
+    const api = await apiWithAdmin();
+    const old = await api.upsertCategory({ label: 'Studying', isWork: true });
+    await api.upsertCategory({ id: old.id, label: 'Studying', isWork: true, active: false });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await open(user);
+
+    expect(screen.getByText(/Categories:/).textContent).not.toMatch(/Studying/);
+    await user.paste('read ch 3 | #Studying');
+    expect(screen.getByText(/no category 'Studying'/)).toBeTruthy();
+    await user.click(addBtn());
+
+    await waitFor(async () => {
+      const [t] = await api.listBacklog();
+      expect(t?.title).toBe('read ch 3');
       expect(t?.categoryId).toBeNull();
     });
   });

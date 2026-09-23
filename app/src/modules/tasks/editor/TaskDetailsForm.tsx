@@ -7,7 +7,7 @@ import { Field } from '../../../components/Field';
 import { Select } from '../../../components/Select';
 import { Text } from '../../../components/Text';
 import { Textarea } from '../../../components/Textarea';
-import { useCategories } from '../../../data/hooks/useCategories';
+import { useCategoryOptions } from '../../../data/hooks/useCategories';
 import {
   useSetCategory,
   useSetDueDay,
@@ -33,7 +33,7 @@ export function TaskDetailsForm({
   onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
-  const { data: cats = [] } = useCategories();
+  const categoryOptions = useCategoryOptions(task.categoryId);
   const setTitle = useSetTaskTitle();
   const setEstimate = useSetEstimate();
   const setCategory = useSetCategory();
@@ -154,7 +154,7 @@ export function TaskDetailsForm({
           placeholder="Uncategorized"
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          options={cats.map((c) => ({ value: c.id, label: c.label }))}
+          options={categoryOptions}
           className="w-40"
         />
         {isTerminal ? (

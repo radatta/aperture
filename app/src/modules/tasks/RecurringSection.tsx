@@ -7,7 +7,7 @@ import { Field } from '../../components/Field';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
-import { useCategories } from '../../data/hooks/useCategories';
+import { useCategoryOptions } from '../../data/hooks/useCategories';
 import { useDeactivateSeries, useSeries, useUpsertSeries } from '../../data/hooks/useSeries';
 import { useDisclosure } from '../../lib/useDisclosure';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -67,7 +67,7 @@ function SeriesRow({ series }: { series: TaskSeries }) {
 
 function SeriesForm() {
   const { data: settings } = useSettings();
-  const { data: cats = [] } = useCategories();
+  const categoryOptions = useCategoryOptions(null);
   const upsert = useUpsertSeries();
 
   const { open, triggerRef, onOpen, onClose } = useDisclosure();
@@ -170,7 +170,7 @@ function SeriesForm() {
             placeholder="Uncategorized"
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            options={cats.map((c) => ({ value: c.id, label: c.label }))}
+            options={categoryOptions}
             className="w-40"
           />
         </div>

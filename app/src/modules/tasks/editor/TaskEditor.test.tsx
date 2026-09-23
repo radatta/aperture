@@ -120,6 +120,25 @@ describe('TaskEditor', () => {
     expect(screen.getByLabelText('Category')).toBeTruthy(); // recategorizing a done task still matters
   });
 
+  it("keeps the task's own retired category as '(retired)' and hides other retired ones", async () => {
+    const client = api();
+    const hw = await client.upsertCategory({ label: 'Homework', isWork: true });
+    const st = await client.upsertCategory({ label: 'Studying', isWork: true });
+    await client.upsertCategory({ label: 'CSEN 146', isWork: true });
+    for (const c of [hw, st])
+      await client.upsertCategory({ id: c.id, label: c.label, isWork: true, active: false });
+    const t = await client.createTask({ title: 'pset', categoryId: hw.id });
+    renderEditor(client, t);
+
+    const select = (await screen.findByLabelText('Category')) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe(hw.id));
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(labels).toContain('Homework (retired)');
+    expect(labels).toContain('CSEN 146');
+    expect(labels).not.toContain('Studying');
+    expect(labels).not.toContain('Studying (retired)');
+  });
+
   it('hides Split on a finished task', async () => {
     const client = api();
     let t = await client.createTask({ title: 'Done', estimateMin: 30 });
