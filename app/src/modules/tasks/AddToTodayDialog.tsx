@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -45,17 +45,71 @@ export function AddToTodayButton() {
 
 // Pull something onto today without leaving Home: find an open task and add it, or — when nothing
 // matches what you typed — create it straight onto today. Stays open so you can add several.
+//
+// Same unsaved-changes guard as the task editor (TaskModal): Esc, a backdrop click and Close all go
+// through `requestClose`, which confirms first when something's typed in the box — likely a task
+// title you haven't added yet. Adding or creating clears the box, so a finished visit never prompts.
 export function AddToTodayDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [dirty, setDirty] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setDirty(false);
+      setConfirming(false);
+    }
+  }, [open]);
+
+  const requestClose = () => (dirty ? setConfirming(true) : onClose());
+
   // The body mounts only while open: a closed native <dialog> keeps its content in the DOM, and
   // remounting gives every visit a fresh search.
   return (
-    <Modal open={open} onClose={onClose} label="Add to today">
-      {open && <DialogBody onClose={onClose} />}
-    </Modal>
+    <>
+      <Modal open={open} onClose={requestClose} closeOnBackdrop label="Add to today">
+        {open && <DialogBody onClose={requestClose} onDirtyChange={setDirty} />}
+      </Modal>
+
+      {/* Stacks on top of the dialog (a second native dialog → higher in the top layer). */}
+      <Modal
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        label="Discard unsaved changes?"
+      >
+        <div className="flex flex-col gap-3">
+          <Text as="h2" size="lg" weight="semibold">
+            Discard what you typed?
+          </Text>
+          <Text size="sm" tone="muted">
+            It hasn’t been added. Leaving now loses it.
+          </Text>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setConfirming(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="gold"
+              onClick={() => {
+                setConfirming(false);
+                onClose();
+              }}
+            >
+              Discard
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 
-function DialogBody({ onClose }: { onClose: () => void }) {
+function DialogBody({
+  onClose,
+  onDirtyChange,
+}: {
+  onClose: () => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
   const { data: tasks = [] } = useAllTasks();
@@ -66,6 +120,8 @@ function DialogBody({ onClose }: { onClose: () => void }) {
   // Added this visit: they stay listed, marked "Added", instead of vanishing from under your thumb.
   const [added, setAdded] = useState<Set<string>>(() => new Set());
   const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => onDirtyChange(text.trim() !== ''), [text, onDirtyChange]);
 
   const labelOf = labelOfFrom(categories);
   const onToday = new Set(plans.map((p) => p.taskId));

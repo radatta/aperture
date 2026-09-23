@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { todayKey } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
@@ -70,5 +70,51 @@ describe('Home "+ Add" to today', () => {
     const { user, dialog, trigger } = await openFromMorning();
     await user.click(dialog.getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  describe('unsaved-changes guard', () => {
+    const addDialog = () => screen.queryByRole('dialog', { name: 'Add to today' });
+    const confirm = () => screen.queryByRole('dialog', { name: 'Discard unsaved changes?' });
+    // A backdrop click = press and release on the <dialog> itself.
+    const backdrop = () => {
+      fireEvent.mouseDown(addDialog()!);
+      fireEvent.click(addDialog()!);
+    };
+    // jsdom doesn't map Escape to <dialog>'s cancel event; fire it the way the browser does.
+    const escape = () => fireEvent(addDialog()!, new Event('cancel', { cancelable: true }));
+
+    it('closes straight away from a backdrop click when nothing is typed', async () => {
+      await openFromMorning();
+      backdrop();
+      await waitFor(() => expect(addDialog()).toBeNull());
+      expect(confirm()).toBeNull();
+    });
+
+    it('asks first on Escape when something is typed; Keep editing keeps it', async () => {
+      const { user, dialog } = await openFromMorning();
+      await user.type(dialog.getByLabelText('Find a task'), 'half a thought');
+      escape();
+
+      expect(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(confirm()).toBeNull();
+      expect((dialog.getByLabelText('Find a task') as HTMLInputElement).value).toBe(
+        'half a thought',
+      );
+    });
+
+    it('asks first on a backdrop click or Close when typed; Discard closes, focus returns', async () => {
+      const { user, dialog, trigger } = await openFromMorning();
+      await user.type(dialog.getByLabelText('Find a task'), 'half a thought');
+
+      backdrop();
+      await screen.findByRole('dialog', { name: 'Discard unsaved changes?' });
+      await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+
+      await user.click(dialog.getByRole('button', { name: 'Close' }));
+      await user.click(await screen.findByRole('button', { name: 'Discard' }));
+      await waitFor(() => expect(addDialog()).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(trigger));
+    });
   });
 });
