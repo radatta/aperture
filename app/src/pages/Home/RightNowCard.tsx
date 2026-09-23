@@ -14,6 +14,7 @@ import { RollTag } from '../../modules/rolls/RollTag';
 import { DoneForm } from '../../modules/tasks/DoneForm';
 import { liveElapsedMin, promote, rightNow } from '../../modules/home/rightNow';
 import type { RightNowRow } from '../../modules/home/rightNow';
+import { AddToTodayButton } from '../../modules/tasks/AddToTodayDialog';
 import { CardLink, HomeCard } from './HomeCard';
 
 // "Return to what's next" — a gentle prompt when nothing's running, never an auto-loaded next task.
@@ -51,7 +52,7 @@ export function RightNowCard() {
   // FocusCard owned (the timer dock only appears while something runs, so its entry lives here).
   if (!hero && rn.focus.length === 0 && rn.alsoToday.length === 0) {
     return (
-      <HomeCard title="Right now" aside={<CardLink to="/tasks">Plan</CardLink>}>
+      <HomeCard title="Right now" aside={<Asides />}>
         <div className="flex flex-col gap-3">
           <EmptyState
             pending={isPending}
@@ -72,7 +73,7 @@ export function RightNowCard() {
   }
 
   return (
-    <HomeCard title="Right now" aside={<CardLink to="/tasks">Plan</CardLink>}>
+    <HomeCard title="Right now" aside={<Asides />}>
       <div className="flex flex-col gap-3">
         {hero ? (
           <div className="flex flex-col gap-1">
@@ -235,6 +236,15 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+function Asides() {
+  return (
+    <div className="flex items-center gap-3">
+      <AddToTodayButton />
+      <CardLink to="/tasks">Plan</CardLink>
     </div>
   );
 }

@@ -61,11 +61,7 @@ export function TaskModal({
       </Modal>
 
       {/* Stacks on top of the editor (a second native dialog → higher in the top layer). */}
-      <Modal
-        open={confirming}
-        onClose={() => setConfirming(false)}
-        label="Discard unsaved changes?"
-      >
+      <Modal open={confirming} onClose={() => setConfirming(false)} label="Discard unsaved changes?">
         <div className="flex flex-col gap-3">
           <Text as="h2" size="lg" weight="semibold">
             Discard changes?

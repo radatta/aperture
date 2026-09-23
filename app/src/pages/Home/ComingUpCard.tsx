@@ -31,7 +31,7 @@ export function ComingUpCard() {
   return (
     <HomeCard
       title="Coming up"
-      aside={moreLabel ? <CardLink to="/tasks">{moreLabel}</CardLink> : undefined}
+      aside={moreLabel ? <CardLink to="/tasks?lens=week">{moreLabel}</CardLink> : undefined}
     >
       {cu.items.length === 0 ? (
         <EmptyState pending={isPending} error={isError} title="No deadlines on the radar.">
