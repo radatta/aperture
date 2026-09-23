@@ -52,6 +52,25 @@ describe('TaskCard', () => {
   });
 });
 
+describe('row click', () => {
+  it('opens the editor from anywhere on the row, but a button does only its own thing', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Clickable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    await user.click(await screen.findByText('not scoped'));
+    expect(await screen.findByRole('dialog', { name: 'Task: Clickable' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(async () => expect((await api.getTask(t.id))?.status).toBe('in_progress'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
 describe('stale planned sweep', () => {
   it('shows a task left planned on a past day in the Backlog tab', async () => {
     const api = freshApi();
