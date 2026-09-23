@@ -4,7 +4,7 @@ import {
   applyQuery,
   groupTasks,
   inDueBucket,
-  isFiltering,
+  isNarrowing,
   LENS_PRESET,
   matchesText,
   normalize,
@@ -249,13 +249,19 @@ describe('override chips', () => {
     ]);
     expect(chips[0]!.remove(query).categories).toEqual(['']);
     expect(chips[3]!.remove(query).sort).toBe('due');
-    expect(isFiltering(query, 'backlog', CATS)).toBe(true);
+    expect(isNarrowing(query)).toBe(true);
   });
 
-  it('the preset itself is not filtering, and text alone is', () => {
-    expect(isFiltering(LENS_PRESET.done, 'done', CATS)).toBe(false);
+  it('the preset hides nothing; text does; a sort or grouping change alone does not', () => {
+    expect(isNarrowing(LENS_PRESET.done)).toBe(false);
     expect(overrideChips(LENS_PRESET.week, 'week', CATS)).toEqual([]);
-    expect(isFiltering(q({ text: 'x' }), 'backlog', CATS)).toBe(true);
+    expect(isNarrowing(q({ text: 'x' }))).toBe(true);
+    expect(isNarrowing(q({ sort: 'title', groupBy: 'none' }))).toBe(false);
+  });
+
+  it('a task whose category was deleted matches the "No category" filter, like its group', () => {
+    const orphan = task({ id: 'o', categoryId: 'deleted-cat' });
+    expect(applyQuery([orphan], 'backlog', q({ categories: [''] }), ctx()).count).toBe(1);
   });
 
   it('reset keeps the search text', () => {

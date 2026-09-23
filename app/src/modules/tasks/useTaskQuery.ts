@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { todayKey } from '@aperture/shared';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -32,6 +32,21 @@ interface Stored {
   query: TaskQuery;
 }
 
+// Storage is outside our types — a hand-edited or older-shaped value must not crash the page.
+function isStored(s: Stored | null): s is Stored {
+  const q = s?.query;
+  return (
+    !!q &&
+    typeof s.day === 'string' &&
+    typeof q.text === 'string' &&
+    Array.isArray(q.categories) &&
+    Array.isArray(q.statuses) &&
+    typeof q.due === 'string' &&
+    typeof q.sort === 'string' &&
+    typeof q.groupBy === 'string'
+  );
+}
+
 // /tasks view state. The lens lives in the URL (?lens=, so Home can deep-link to Week); search and
 // filters live in sessionStorage, sticky for the session but reset each new day; which groups are
 // collapsed lives in localStorage.
@@ -43,7 +58,10 @@ export function useTaskQuery() {
   const lens: LensId = raw && LENSES.includes(raw) ? raw : 'today';
   const place: Place = isPlace(lens) ? lens : 'today';
 
-  const [stored, setStored] = useState<Stored | null>(() => read<Stored>('session', QUERY_KEY));
+  const [stored, setStored] = useState<Stored | null>(() => {
+    const s = read<Stored>('session', QUERY_KEY);
+    return isStored(s) ? s : null;
+  });
   const query: TaskQuery =
     stored && stored.day === today && stored.lens === place ? stored.query : LENS_PRESET[place];
 
@@ -73,17 +91,22 @@ export function useTaskQuery() {
 }
 
 // Collapsed groups, remembered per lens:group. A group with no remembered choice starts collapsed
-// only when it's big (≥ COLLAPSE_AT) — a short group hides nothing worth hiding.
+// only when it's big (≥ COLLAPSE_AT) — a short group hides nothing worth hiding. That default is
+// taken once, the first time the group is seen, so a group doesn't snap shut as it grows past 8.
 export function useCollapsedGroups() {
   const [map, setMap] = useState<Record<string, boolean>>(
     () => read<Record<string, boolean>>('local', COLLAPSE_KEY) ?? {},
   );
-  const isCollapsed = (key: string, size: number) => map[key] ?? size >= COLLAPSE_AT;
+  const firstSeen = useRef<Record<string, boolean>>({});
+  const isCollapsed = (key: string, size: number) =>
+    map[key] ?? (firstSeen.current[key] ??= size >= COLLAPSE_AT);
   const toggle = (key: string, size: number) =>
     setMap((m) => {
-      const next = { ...m, [key]: !(m[key] ?? size >= COLLAPSE_AT) };
+      const next = { ...m, [key]: !isCollapsedIn(m, key, size) };
       write('local', COLLAPSE_KEY, next);
       return next;
     });
+  const isCollapsedIn = (m: Record<string, boolean>, key: string, size: number) =>
+    m[key] ?? firstSeen.current[key] ?? size >= COLLAPSE_AT;
   return { isCollapsed, toggle };
 }

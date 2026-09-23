@@ -84,10 +84,13 @@ describe('/tasks lenses', () => {
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=week' });
 
+    await api.createTask({ title: 'laundry' });
     await user.type(await screen.findByLabelText('Search tasks'), 'groc');
     await user.click(pill('Backlog'));
     expect((screen.getByLabelText('Search tasks') as HTMLInputElement).value).toBe('groc');
+    // Still searching: without the text, Backlog would list laundry too.
     expect(await screen.findByRole('button', { name: 'groceries' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'laundry' })).toBeNull();
   });
 
   it('filters show as chips; zero results offer a reset', async () => {
@@ -104,7 +107,7 @@ describe('/tasks lenses', () => {
     expect(screen.getByRole('button', { name: 'Remove filter: CSEN 146' })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('button', { name: 'groceries' })).toBeNull());
 
-    await user.click(screen.getByRole('button', { name: 'Status: In progress' }));
+    await user.click(screen.getByRole('button', { name: 'Due: Dated' }));
     expect(await screen.findByText('Nothing matches.')).toBeTruthy();
     // The open panel has its own Reset; use the empty state's.
     await user.click(screen.getAllByRole('button', { name: 'Reset to lens' }).at(-1)!);
@@ -152,7 +155,13 @@ describe('/tasks lenses', () => {
   });
 
   it('Done lists finished and dropped history, newest first', async () => {
-    const { api } = await seeded();
+    // A ticking clock, so each finish has its own timestamp.
+    let clock = Date.now();
+    const api = createStubClient({
+      seed: false,
+      storageKey: `tasklist-done-${Math.random()}`,
+      now: () => (clock += 1000),
+    });
     const a = await api.createTask({ title: 'finished', estimateMin: 10 });
     await api.transitionTask(a.id, 'in_progress');
     await api.setTaskActual(a.id, 12);
@@ -162,8 +171,10 @@ describe('/tasks lenses', () => {
     await api.createTask({ title: 'still open' });
     renderApp({ api, path: '/tasks?lens=done' });
 
-    expect(await screen.findByRole('button', { name: 'finished' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'dropped' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'still open' })).toBeNull();
+    await screen.findByRole('button', { name: 'finished' });
+    const titles = screen
+      .getAllByRole('button', { name: /^(finished|dropped|still open)$/ })
+      .map((b) => b.textContent);
+    expect(titles).toEqual(['dropped', 'finished']); // dropped last → first; open tasks absent
   });
 });

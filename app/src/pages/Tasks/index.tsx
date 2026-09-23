@@ -32,8 +32,14 @@ export function TasksPage() {
   // Whichever lens opens first: getDay(today) materializes today's recurring occurrences and sweeps
   // stale planned tasks back to the backlog before any lens reads the list.
   useDay(today);
-  const { data: tasks = [], isPending, isError } = useAllTasks();
-  const { data: plans = [] } = usePlansForDay(today);
+  const tasksQ = useAllTasks();
+  const plansQ = usePlansForDay(today);
+  const tasks = tasksQ.data ?? [];
+  const plans = plansQ.data ?? [];
+  // Where a task lives depends on today's plan too: until both have loaded, placing tasks would put
+  // today's work under Week/Backlog. An error counts only when there's nothing to show.
+  const pending = tasksQ.isPending || plansQ.isPending;
+  const error = (tasksQ.isError && !tasksQ.data) || (plansQ.isError && !plansQ.data);
   const { data: categories = [] } = useCategories();
   const ctx: QueryCtx = {
     today,
@@ -41,10 +47,11 @@ export function TasksPage() {
     categories,
   };
   const counts = { today: 0, week: 0 };
-  for (const t of tasks) {
-    const p = placeOf(t, today, ctx.planOrder);
-    if (p === 'today' || p === 'week') counts[p]++;
-  }
+  if (!pending)
+    for (const t of tasks) {
+      const p = placeOf(t, today, ctx.planOrder);
+      if (p === 'today' || p === 'week') counts[p]++;
+    }
   const isList = lens === 'today' || lens === 'week' || lens === 'backlog' || lens === 'done';
   const searching = normalize(query.text) !== '';
 
@@ -86,11 +93,11 @@ export function TasksPage() {
           place={place}
           query={query}
           onQueryChange={setQuery}
-          tasks={tasks}
+          tasks={pending || error ? [] : tasks}
           plans={plans}
           ctx={ctx}
-          pending={isPending}
-          error={isError}
+          pending={pending}
+          error={error}
         />
       ) : null}
       {lens === 'recurring' && <RecurringSection />}

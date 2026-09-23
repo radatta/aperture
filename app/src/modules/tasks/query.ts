@@ -175,12 +175,15 @@ export interface QueryResult {
 // lens) regardless of place, grouped by where each one lives — typing searches everything.
 export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryCtx): QueryResult {
   const labelOf = labelOfFrom(ctx.categories);
+  const known = new Set(ctx.categories.map((c) => c.id));
+  // Same rule as the "No category" group: an id with no category behind it counts as none.
+  const catOf = (t: Task) => (t.categoryId && known.has(t.categoryId) ? t.categoryId : '');
   const searching = normalize(q.text) !== '';
   const place = (t: Task) => placeOf(t, ctx.today, ctx.planOrder);
   const matched = tasks.filter(
     (t) =>
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
-      (q.categories.length === 0 || q.categories.includes(t.categoryId ?? '')) &&
+      (q.categories.length === 0 || q.categories.includes(catOf(t))) &&
       matchesStatus(t, q.statuses) &&
       inDueBucket(t, q.due, ctx.today) &&
       matchesText(t, q.text, labelOf),
@@ -249,8 +252,9 @@ export function overrideChips(q: TaskQuery, lens: Place, categories: Category[])
   return chips;
 }
 
-export const isFiltering = (q: TaskQuery, lens: Place, categories: Category[]): boolean =>
-  normalize(q.text) !== '' || overrideChips(q, lens, categories).length > 0;
+// Does the query hide anything? Search or a filter does; a different sort or grouping doesn't.
+export const isNarrowing = (q: TaskQuery): boolean =>
+  normalize(q.text) !== '' || q.categories.length > 0 || q.statuses.length > 0 || q.due !== 'any';
 
 // Back to the lens's preset, keeping what's typed in the search box.
 export const resetToLens = (q: TaskQuery, lens: Place): TaskQuery => ({
