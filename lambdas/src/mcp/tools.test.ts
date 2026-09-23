@@ -103,6 +103,25 @@ describe('mcp tools — tasks', () => {
     const t = (await call('create_task', { title: 'x' })) as Task;
     await expect(call('complete_task', { id: t.id })).rejects.toThrow(/actualMin/);
   });
+
+  it('delete_task tombstones the task and its plans, and 404s an unknown or already-deleted id', async () => {
+    const { call, setup } = makeEnv();
+    const t = (await call('create_task', { title: 'gone' })) as Task;
+    await setup.upsertPlan({ taskId: t.id, day: '2026-09-22', plannedMinutes: 30, order: 0 });
+    expect(await call('delete_task', { id: t.id })).toEqual({ deleted: t.id });
+    expect((await call('list_tasks')) as Task[]).toHaveLength(0);
+    expect(await setup.listPlansForDay('2026-09-22')).toHaveLength(0);
+    await expect(call('delete_task', { id: t.id })).rejects.toThrow(/Not found/);
+    await expect(call('delete_task', { id: 'nope' })).rejects.toThrow(/Not found/);
+  });
+
+  it('delete_task refuses a recurring occurrence (the series would respawn it)', async () => {
+    const { call, doc } = makeEnv();
+    const t = (await call('create_task', { title: 'daily lc' })) as Task;
+    await new Repo(doc, liveWrites(doc), 'local').putTask({ ...t, seriesId: 'series-1' });
+    await expect(call('delete_task', { id: t.id })).rejects.toThrow(/Recurring occurrence/);
+    expect((await call('list_tasks')) as Task[]).toHaveLength(1);
+  });
 });
 
 describe('mcp tools — categories, calibration, leetcode', () => {
@@ -111,6 +130,26 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     const cat = (await call('create_category', { label: 'LeetCode', isWork: true })) as Category;
     expect(cat.label).toBe('LeetCode');
     expect(((await call('list_categories')) as Category[]).map((c) => c.label)).toContain('LeetCode');
+  });
+
+  it('update_category patches only what is sent — a rename keeps order and never reactivates', async () => {
+    const { call, setup } = makeEnv();
+    const hw = { label: 'Homework', isWork: true, order: 4 };
+    const cat = (await call('create_category', hw)) as Category;
+    await setup.upsertCategory({ ...hw, id: cat.id, active: false }); // retired outside the MCP
+    const renamed = (await call('update_category', { id: cat.id, label: 'CS 61B' })) as Category;
+    expect(renamed).toMatchObject({ label: 'CS 61B', isWork: true, order: 4, active: false });
+    const reordered = (await call('update_category', { id: cat.id, order: 1 })) as Category;
+    expect(reordered).toMatchObject({ label: 'CS 61B', order: 1 });
+  });
+
+  it('update_category rejects an empty patch and an unknown id', async () => {
+    const { call } = makeEnv();
+    const cat = (await call('create_category', { label: 'X', isWork: false })) as Category;
+    await expect(call('update_category', { id: cat.id })).rejects.toThrow(/at least one field/);
+    await expect(call('update_category', { id: cat.id, active: false })).rejects.toThrow(/at least one/);
+    const unknown = call('update_category', { id: 'nope', label: 'Y' });
+    await expect(unknown).rejects.toThrow(/Not found/);
   });
 
   it('get_calibration validates the date range', async () => {

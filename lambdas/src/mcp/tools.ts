@@ -8,6 +8,7 @@ import {
 import type {
   Attachment,
   CalendarBusy,
+  Category,
   CreateTaskInput,
   GoogleCalendar,
   GoogleStatus,
@@ -290,8 +291,32 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'delete_task',
+    description:
+      'Permanently delete a task (no restore tool). Also removes its day plans and attachments, DELETES its linked Google Calendar event if it has one, and its logged time stops counting toward calibration. Refused for a recurring occurrence (seriesId set) — the series would just respawn it. To abandon a task while keeping its history, use update_task status=cancelled instead.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const id = reqStr(args, 'id');
+      // deleteTask is idempotent (a bad id silently no-ops), so check first — a typo'd id should say so.
+      const task = (await ctx.dispatch('getTask', [id])) as Task | null;
+      if (!task) throw new Error(`Not found: ${id}`);
+      // Same guard as the UI (TaskEditor hides Delete): getDay would respawn a deleted occurrence.
+      if (task.seriesId !== null) {
+        throw new Error('Recurring occurrence — use update_task status=cancelled instead of deleting');
+      }
+      await ctx.dispatch('deleteTask', [id]);
+      return { deleted: id };
+    },
+  },
+  {
     name: 'list_categories',
-    description: 'List all categories (id, label, isWork). Use the id when creating/updating tasks.',
+    description:
+      'List all categories (id, label, isWork, order). Use the id when creating/updating tasks.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: (_args, ctx) => ctx.dispatch('listCategories', []),
   },
@@ -316,6 +341,41 @@ export const TOOLS: Tool[] = [
       };
       if (present(args, 'order')) input.order = reqInt(args, 'order');
       return ctx.dispatch('upsertCategory', [input]);
+    },
+  },
+  {
+    name: 'update_category',
+    description:
+      'Patch a category: label, isWork, order. Unsent fields keep their current value. isWork is forward-only here — past sessions keep their recorded work/personal split.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        label: { type: 'string' },
+        isWork: { type: 'boolean' },
+        order: { type: 'integer' },
+      },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const id = reqStr(args, 'id');
+      if (!['label', 'isWork', 'order'].some((f) => present(args, f))) {
+        throw new RpcParamError('update_category needs at least one field to change');
+      }
+      // upsertCategory REPLACES every field (order defaults to 0, active to true), so merge over the current row.
+      const cats = (await ctx.dispatch('listCategories', [])) as Category[];
+      const cat = cats.find((c) => c.id === id);
+      if (!cat) throw new Error(`Not found: ${id}`);
+      return ctx.dispatch('upsertCategory', [
+        {
+          id,
+          label: present(args, 'label') ? reqStr(args, 'label') : cat.label,
+          isWork: present(args, 'isWork') ? reqBool(args, 'isWork') : cat.isWork,
+          order: present(args, 'order') ? reqInt(args, 'order') : cat.order,
+          active: cat.active, // carried through, never set — the app doesn't honour active yet
+        },
+      ]);
     },
   },
   {
