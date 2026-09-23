@@ -22,6 +22,7 @@ import { CardLink, HomeCard } from './HomeCard';
 import { DayShapeCard } from './DayShapeCard';
 import { RightNowCard } from './RightNowCard';
 import { ComingUpCard } from './ComingUpCard';
+import { StillOpenSection } from './StillOpenSection';
 
 // The glanceable home. Auto morning/day/night (HomeModeProvider), ≤5 elements per mode — the global
 // capture bar is element 1 everywhere, so each mode adds ~3 cards. Phase 5 lit up the plan / tasks /
@@ -262,6 +263,7 @@ function ReviewCard({ today }: { today: string }) {
             ))}
           </div>
         )}
+        <StillOpenSection today={today} />
       </div>
     </HomeCard>
   );
