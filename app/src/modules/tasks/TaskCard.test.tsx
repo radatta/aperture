@@ -11,8 +11,8 @@ function freshApi() {
   return createStubClient({ seed: false, storageKey: `taskcard-${Math.random()}` });
 }
 
-// Open a task's editor modal by clicking its title. `tab` switches first (Backlog tasks) — the Plan
-// tab is the default, where a materialized series occurrence already shows.
+// Open a task's editor modal by clicking its title. `tab` switches lens first (Backlog tasks) — the
+// Today lens is the default, where a materialized series occurrence already shows.
 async function openEditor(
   user: ReturnType<typeof userEvent.setup>,
   title: string,
@@ -52,11 +52,35 @@ describe('TaskCard', () => {
   });
 });
 
+describe('row click', () => {
+  it('opens the editor from anywhere on the row, but a button does only its own thing', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Clickable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    await user.click(await screen.findByText('not scoped'));
+    expect(await screen.findByRole('dialog', { name: 'Task: Clickable' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(async () => expect((await api.getTask(t.id))?.status).toBe('in_progress'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
 describe('stale planned sweep', () => {
-  it('shows a task left planned on a past day in the Backlog tab', async () => {
+  it('shows a task left planned on a past day in the Backlog lens', async () => {
     const api = freshApi();
     const t = await api.createTask({ title: 'Left behind' });
-    await api.upsertPlan({ taskId: t.id, day: addDays(todayKey(4), -1), plannedMinutes: 30, order: 1 });
+    await api.upsertPlan({
+      taskId: t.id,
+      day: addDays(todayKey(4), -1),
+      plannedMinutes: 30,
+      order: 1,
+    });
     await api.transitionTask(t.id, 'planned');
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
@@ -220,10 +244,10 @@ describe('deleting a task', () => {
       categoryId: null,
       defaultEstimateMin: 15,
       rule: { kind: 'daily' },
-      anchorDate: '2020-01-01', // due every day, including today → materializes on the Plan tab
+      anchorDate: '2020-01-01', // due every day, including today → materializes on the Today lens
     });
     const user = userEvent.setup();
-    renderApp({ api, path: '/tasks' }); // Plan is the default tab; useDay(today) materializes it
+    renderApp({ api, path: '/tasks' }); // Today is the default lens; useDay(today) materializes it
 
     const d = await openEditor(user, 'Daily standup');
     expect(d.getByRole('button', { name: /Drop task/ })).toBeTruthy();

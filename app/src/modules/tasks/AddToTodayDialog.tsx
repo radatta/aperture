@@ -1,0 +1,241 @@
+import { useEffect, useRef, useState } from 'react';
+import { fmtDueDay, todayKey } from '@aperture/shared';
+import type { Task } from '@aperture/shared';
+import { Button } from '../../components/Button';
+import { Field } from '../../components/Field';
+import { Modal } from '../../components/Modal';
+import { Text } from '../../components/Text';
+import { PlusIcon } from '../../components/icons';
+import { useDisclosure } from '../../lib/useDisclosure';
+import { useAddToDay } from '../../data/hooks/useAddToDay';
+import { useCategories } from '../../data/hooks/useCategories';
+import { usePlansForDay } from '../../data/hooks/usePlans';
+import { useSettings } from '../../data/hooks/useSettings';
+import { useAllTasks } from '../../data/hooks/useTasks';
+import { CategoryTag } from './CategoryTag';
+import { labelOfFrom, matchesText, normalize } from './query';
+import { byDueHint } from './taskMath';
+
+// Enough to scan; past this, typing is faster than scrolling.
+const CAP = 30;
+const isOpen = (t: Task) =>
+  t.status === 'backlog' || t.status === 'planned' || t.status === 'in_progress';
+
+// Home's "+ Add": the quiet trigger for the dialog below. Focus returns here when it closes.
+export function AddToTodayButton() {
+  const d = useDisclosure();
+  return (
+    <>
+      <button
+        type="button"
+        ref={d.triggerRef}
+        onClick={d.onOpen}
+        aria-label="Add to today"
+        className="flex items-center gap-0.5 text-teal"
+      >
+        <PlusIcon size={13} />
+        <Text size="xs" tone="teal">
+          Add
+        </Text>
+      </button>
+      <AddToTodayDialog open={d.open} onClose={d.onClose} />
+    </>
+  );
+}
+
+// Pull something onto today without leaving Home: find an open task and add it, or — when nothing
+// matches what you typed — create it straight onto today. Stays open so you can add several.
+//
+// Same unsaved-changes guard as the task editor (TaskModal): Esc, a backdrop click and Close all go
+// through `requestClose`, which confirms first when something's typed in the box — likely a task
+// title you haven't added yet. Adding or creating clears the box, so a finished visit never prompts.
+export function AddToTodayDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [dirty, setDirty] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setDirty(false);
+      setConfirming(false);
+    }
+  }, [open]);
+
+  const requestClose = () => (dirty ? setConfirming(true) : onClose());
+
+  // The body mounts only while open: a closed native <dialog> keeps its content in the DOM, and
+  // remounting gives every visit a fresh search.
+  return (
+    <>
+      <Modal open={open} onClose={requestClose} closeOnBackdrop label="Add to today">
+        {open && <DialogBody onClose={requestClose} onDirtyChange={setDirty} />}
+      </Modal>
+
+      {/* Stacks on top of the dialog (a second native dialog → higher in the top layer). */}
+      <Modal
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        label="Discard unsaved changes?"
+      >
+        <div className="flex flex-col gap-3">
+          <Text as="h2" size="lg" weight="semibold">
+            Discard what you typed?
+          </Text>
+          <Text size="sm" tone="muted">
+            It hasn’t been added. Leaving now loses it.
+          </Text>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setConfirming(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="gold"
+              onClick={() => {
+                setConfirming(false);
+                onClose();
+              }}
+            >
+              Discard
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function DialogBody({
+  onClose,
+  onDirtyChange,
+}: {
+  onClose: () => void;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
+  const { data: settings } = useSettings();
+  const today = todayKey(settings?.dayStartHour ?? 4);
+  const { data: tasks = [] } = useAllTasks();
+  const { data: plans = [] } = usePlansForDay(today);
+  const { data: categories = [] } = useCategories();
+  const { addToDay, createToday } = useAddToDay();
+  const [text, setText] = useState('');
+  // Added this visit: they stay listed, marked "Added", instead of vanishing from under your thumb.
+  const [added, setAdded] = useState<Set<string>>(() => new Set());
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => onDirtyChange(text.trim() !== ''), [text, onDirtyChange]);
+
+  const labelOf = labelOfFrom(categories);
+  const onToday = new Set(plans.map((p) => p.taskId));
+  const matches = byDueHint(
+    tasks.filter(
+      (t) => isOpen(t) && (!onToday.has(t.id) || added.has(t.id)) && matchesText(t, text, labelOf),
+    ),
+  );
+  const typed = text.trim();
+  const exact =
+    typed !== '' && tasks.some((t) => isOpen(t) && normalize(t.title) === normalize(typed));
+  const markAdded = (id: string) => setAdded((s) => new Set(s).add(id));
+
+  async function add(task: Task) {
+    setNote(null);
+    try {
+      await addToDay(task);
+      markAdded(task.id);
+    } catch {
+      setNote('Couldn’t add that — try again.');
+    }
+  }
+
+  // Enter-then-click (or a double Enter) while the create is in flight must not make two tasks.
+  const creating = useRef(false);
+  async function create() {
+    if (creating.current || !typed) return;
+    creating.current = true;
+    const title = typed;
+    setText('');
+    setNote(null);
+    try {
+      const r = await createToday(title);
+      markAdded(r.task.id);
+      if (!r.planned) setNote('Created, but couldn’t plan it — it’s in the backlog.');
+    } catch {
+      setText((current) => (current === '' ? title : current));
+      setNote('Couldn’t create that — try again.');
+    } finally {
+      creating.current = false;
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Text as="h2" size="lg" weight="semibold">
+        Add to today
+      </Text>
+      <Field
+        aria-label="Find a task"
+        placeholder="Find a task…"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && typed && !exact && create()}
+      />
+      <div role="status">
+        {note && (
+          <Text size="sm" tone="danger">
+            {note}
+          </Text>
+        )}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {typed && !exact && (
+          <Button variant="ghost" size="sm" className="justify-start gap-1" onClick={create}>
+            <PlusIcon size={13} /> Add “{typed}” as a new task today
+          </Button>
+        )}
+        {matches.slice(0, CAP).map((t) => (
+          <div key={t.id} className="flex items-center justify-between gap-3 py-0.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <Text size="sm" className="min-w-0 truncate">
+                {t.title}
+              </Text>
+              <CategoryTag categoryId={t.categoryId} />
+              {t.dueDay && (
+                <Text size="xs" tone="subtle" className="shrink-0">
+                  {fmtDueDay(t.dueDay, today)}
+                </Text>
+              )}
+            </div>
+            {added.has(t.id) ? (
+              <Text size="xs" tone="teal" className="shrink-0 px-3">
+                Added
+              </Text>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0"
+                aria-label={`Add ${t.title} to today`}
+                onClick={() => add(t)}
+              >
+                Add
+              </Button>
+            )}
+          </div>
+        ))}
+        {matches.length > CAP && (
+          <Text size="xs" tone="muted">
+            {matches.length - CAP} more — narrow it down
+          </Text>
+        )}
+        {matches.length === 0 && !typed && (
+          <Text size="sm" tone="muted">
+            Nothing waiting — type a title to create one for today.
+          </Text>
+        )}
+      </div>
+      <div className="flex justify-end">
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+    </div>
+  );
+}

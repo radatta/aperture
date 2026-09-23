@@ -80,6 +80,48 @@ describe('CaptureBar', () => {
     expect(screen.getByLabelText('Capture task')).toBeTruthy();
   });
 
+  it('"→ today" plans the next task only, then resets', async () => {
+    const api = createStubClient({ seed: false, storageKey: `cap-today-${Math.random()}` });
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    const pill = screen.getByRole('button', { name: 'today' });
+    await user.click(pill);
+    expect(pill.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByPlaceholderText('New task for today…')).toBeTruthy();
+
+    await user.type(screen.getByLabelText('Capture task'), 'buy stamps');
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByText(/Task added → today/)).toBeTruthy();
+    const [row] = await api.listPlansForDay(todayKey(4));
+    expect((await api.getTask(row!.taskId))?.title).toBe('buy stamps');
+    expect(pill.getAttribute('aria-pressed')).toBe('false'); // one-shot
+
+    await user.type(screen.getByLabelText('Capture task'), 'next one');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks()).map((t) => t.title)).toContain('next one'),
+    );
+    expect(await api.listPlansForDay(todayKey(4))).toHaveLength(1); // not planned
+  });
+
+  it('says so when a "→ today" task was created but could not be planned', async () => {
+    const api = createStubClient({ seed: false, storageKey: `cap-today-fail-${Math.random()}` });
+    api.upsertPlan = () => Promise.reject(new Error('offline'));
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    await user.click(screen.getByRole('button', { name: 'today' }));
+    await user.type(screen.getByLabelText('Capture task'), 'call bank');
+    await user.keyboard('{Enter}');
+
+    expect(await screen.findByText(/backlog \(couldn’t plan it\)/)).toBeTruthy();
+    expect((await api.listTasks()).map((t) => t.title)).toContain('call bank');
+  });
+
   // Capture's whole premise is that it's safe to hand it a thought. The field clears optimistically,
   // so without an onError the write rolls back, the entry disappears, the box is already empty, and
   // nothing says so — the thought is just gone.

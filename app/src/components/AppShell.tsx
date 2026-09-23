@@ -3,7 +3,7 @@ import { Outlet } from 'react-router';
 import { AppHeader } from './AppHeader';
 import { AppNav } from './AppNav';
 import { CaptureBar } from '../modules/capture/CaptureBar';
-import { TimerBar } from '../modules/pomodoro/TimerBar';
+import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
 
 // The layout every route renders inside: header + deep-view nav + the routed page, above a single
 // fixed bottom dock.
@@ -52,11 +52,11 @@ export function AppShell() {
         className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-4 pb-safe"
       >
         {/* This column stays pointer-events-none and each PANEL opts back in. The timer stack is
-            only sm:w-80 and the idle starter is a single button, so an auto-everywhere column
-            would swallow clicks on the page showing through the transparent strip beside them. */}
+            only sm:w-80, so an auto-everywhere column would swallow clicks on the page showing
+            through the transparent strip beside it. */}
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
           <TimerBar />
-          <CaptureBar />
+          <CaptureBar trailing={<IdleFocus />} />
         </div>
       </div>
     </div>

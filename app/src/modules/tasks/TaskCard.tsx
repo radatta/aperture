@@ -19,6 +19,8 @@ import { TaskTitleButton } from './TaskTitleButton';
 import { remainingMin } from './taskMath';
 import type { TaskEditorIntent } from './editor/TaskEditor';
 
+const ROW_CONTROLS = 'button, a, input, select, textarea, label, dialog';
+
 // One task, slimmed to the lifecycle actions you press without thinking — Start, Focus, Done, plus the
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
 // calendar, files, drop, delete — lives in the modal the title (or Scope/Done) opens. No overflow menu.
@@ -37,7 +39,14 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
   };
 
   return (
-    <Card className="px-3.5 py-3">
+    // A click anywhere on the row opens the editor too — the title button stays the keyboard path,
+    // and clicks on controls (or inside the open dialog, a DOM child of this card) are left alone.
+    <Card
+      className="cursor-pointer px-3.5 py-3"
+      onClick={(e) => {
+        if (!(e.target as HTMLElement).closest(ROW_CONTROLS)) openAs('view');
+      }}
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <TaskTitleButton task={task} ref={modal.triggerRef} onOpen={() => openAs('view')} />

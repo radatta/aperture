@@ -15,12 +15,14 @@ import { useDay, useSetIntent, useSetReflection } from '../../data/hooks/useDay'
 import { useHomeMode } from '../../modules/home/home-context';
 import { RollPicker } from '../../modules/rolls/RollPicker';
 import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
+import { AddToTodayButton } from '../../modules/tasks/AddToTodayDialog';
 import { HabitCheckList } from '../../modules/habits/HabitCheckList';
 import { reflectionPromptFor } from '../../modules/reflection/prompts';
 import { CardLink, HomeCard } from './HomeCard';
 import { DayShapeCard } from './DayShapeCard';
 import { RightNowCard } from './RightNowCard';
 import { ComingUpCard } from './ComingUpCard';
+import { StillOpenSection } from './StillOpenSection';
 
 // The glanceable home. Auto morning/day/night (HomeModeProvider), ≤5 elements per mode — the global
 // capture bar is element 1 everywhere, so each mode adds ~3 cards. Phase 5 lit up the plan / tasks /
@@ -139,7 +141,15 @@ function PlanTodayCard() {
   const { plannedMin, totalCount, pva } = useTodayPlan();
   const { data: backlog = [] } = useBacklog();
   return (
-    <HomeCard title="Plan today" aside={<CardLink to="/tasks">Plan</CardLink>}>
+    <HomeCard
+      title="Plan today"
+      aside={
+        <div className="flex items-center gap-3">
+          <AddToTodayButton />
+          <CardLink to="/tasks">Plan</CardLink>
+        </div>
+      }
+    >
       {/* The plan summary, then the roll picker: picking one drops a rep onto today's plan (and into
           the daytime Right-now lane). The picker self-hides when there are no rolls. */}
       {pva.availableMin === null ? (
@@ -253,6 +263,7 @@ function ReviewCard({ today }: { today: string }) {
             ))}
           </div>
         )}
+        <StillOpenSection today={today} />
       </div>
     </HomeCard>
   );

@@ -179,8 +179,8 @@ Callable at any status; never touches `estimateLockedMin`. Setting `null` clears
 
   Weekday names alone are ambiguous past a week and read oddly at ±1, hence the tomorrow/yesterday and
   the ≥7-day month/day fallback.
-- **Shown in two places** (the pull list renders its own inline row, not `TaskCard`): `TaskCard`'s meta
-  line, and `PlanSection`'s backlog-pull row. Same subtle tone in both.
+- **Shown in two places:** `TaskCard`'s meta line, and the Home "+ Add" dialog's rows. Same subtle
+  tone in both. (`/tasks` lists are all `TaskCard` now — [lenses.md](lenses.md).)
 - **Dark theme:** a native date input's picker glyphs often need `color-scheme` set; if it looks wrong,
   fix with CSS, don't pull a picker dependency.
 
@@ -221,7 +221,7 @@ full-`Task` literal (the `Plan` pass's original "~5–7" missed that fan-out and
   - `app/src/modules/tasks/ScopePanel.tsx` — a `Due` date `Field`; writes only when changed.
   - `app/src/modules/tasks/TaskCard.tsx` — subtle `fmtDueDay` in `TaskMeta` (shown at every status, incl. done/cancelled); a `'due'` panel + an in-progress overflow **"Due day…"**.
     - ↳ *The second surface is forced, not cosmetic: `ScopePanel` is gated to backlog/planned and calls `setTaskEstimate` unconditionally (throws once frozen), so it can't edit an in-progress task's due date. "Editable at any status" (D3) is only real because of the overflow panel (D4).*
-  - `app/src/modules/tasks/PlanSection.tsx` — `byDueHint(backlog)` on the pull + the subtle phrase on its inline row.
+  - `app/src/modules/tasks/PlanSection.tsx` — `byDueHint(backlog)` on the pull + the subtle phrase on its inline row. *(Since removed by the task lenses: Week/Backlog sort with `byDueHint` via `query.ts`.)*
     - ↳ *The pull renders its own inline card, not `TaskCard`, so the due display is added in two places (D5).*
 
 - [x] **Phase 5 — headless UI pass** (`run-app`, both themes)

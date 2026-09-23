@@ -13,11 +13,11 @@ import type { RunningTimer } from './pomodoro-context';
 // The persistent pomodoro UI — one row per concurrent timer, plus stale keep/discard prompts,
 // stacked directly above the capture bar by AppShell (pomodoro is not a route).
 //
-// Idle, it collapses to a single icon button rather than the old floating "+ New focus | Break"
-// panel, which competed with capture for the same corner of vision on every screen. It can't
-// collapse to nothing: the Focus card that offers a cold start only renders in DAYTIME mode, so
-// dropping the idle control entirely left 18 hours of the day (morning and night) with no way to
-// start an ad-hoc block at all.
+// Idle, it renders nothing here: the cold-start control is IdleFocus, docked inside the capture
+// panel's top row. It used to float in a transparent row above the panel, where it sat over whatever
+// right-aligned content was scrolling underneath. It can't go away entirely: the Focus card that
+// offers a cold start only renders in DAYTIME mode, so dropping it left 18 hours of the day (morning
+// and night) with no way to start an ad-hoc block at all.
 export function TimerBar() {
   const {
     timers,
@@ -33,8 +33,7 @@ export function TimerBar() {
   } = usePomodoro();
   const { data: tasks = [] } = useAllTasks();
 
-  if (timers.length === 0 && stale.length === 0)
-    return <IdleStarter onStart={() => startFocus()} />;
+  if (timers.length === 0 && stale.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-2 sm:ml-auto sm:w-80">
@@ -63,22 +62,22 @@ export function TimerBar() {
   );
 }
 
-// One quiet control, right-aligned so it never sits where the capture text begins. Deliberately
-// icon+word and nothing else — a break from cold is a fringe intent and lives on the daytime
-// Focus card; once anything is running, the full controls appear below.
-function IdleStarter({ onStart }: { onStart: () => void }) {
+// The idle cold start, for the capture panel's top row (AppShell passes it in). Deliberately
+// icon+word and nothing else — a break from cold is a fringe intent and lives on the daytime Focus
+// card; once anything is running, TimerBar's full controls take over and this steps aside.
+export function IdleFocus() {
+  const { timers, stale, startFocus } = usePomodoro();
+  if (timers.length > 0 || stale.length > 0) return null;
   return (
-    <div className="flex justify-end">
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onStart}
-        title="Start a 25-minute focus block"
-        className="pointer-events-auto gap-1.5 bg-panel-2 shadow-[var(--shadow-dock)]"
-      >
-        <TimerIcon size={15} /> Focus
-      </Button>
-    </div>
+    <Button
+      variant="quiet"
+      size="sm"
+      onClick={() => startFocus()}
+      title="Start a 25-minute focus block"
+      className="shrink-0 gap-1.5 px-2"
+    >
+      <TimerIcon size={15} /> Focus
+    </Button>
   );
 }
 
