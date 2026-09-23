@@ -30,6 +30,10 @@ describe('categories: retire / restore', () => {
     await waitFor(async () =>
       expect((await api.listCategories()).find((c) => c.id === hw.id)?.active).toBe(false),
     );
+    // The confirm collapsed; focus goes back to the row's menu trigger, not <body>.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText('More actions for Homework')),
+    );
     expect(await screen.findByText('Retired')).toBeTruthy();
     expect(renameFields()).toEqual(['Courses', 'Homework']);
     expect(screen.queryByLabelText('Move Homework up')).toBeNull(); // arrows are for active rows
@@ -38,6 +42,10 @@ describe('categories: retire / restore', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Restore' }));
     await waitFor(async () =>
       expect((await api.listCategories()).find((c) => c.id === hw.id)?.active).toBe(true),
+    );
+    expect(await screen.findByLabelText('Move Homework up')).toBeTruthy(); // arrows are back
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText('More actions for Homework')),
     );
   });
 

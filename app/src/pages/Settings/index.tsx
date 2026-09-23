@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -6,6 +6,7 @@ import { Field } from '../../components/Field';
 import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
+import { cx } from '../../lib/cx';
 import { ArrowDownIcon, ArrowUpIcon } from '../../components/icons';
 import { useApi } from '../../data/api-context';
 import {
@@ -53,12 +54,20 @@ function CategoriesSection() {
         Categories
       </Text>
       <div className="flex flex-col gap-2">
-        {active.map((c, i) => (
-          <CategoryRow key={c.id} cat={c} cats={cats} siblings={active} index={i} />
-        ))}
-        {retired.map((c, i) => (
-          <CategoryRow key={c.id} cat={c} cats={cats} siblings={retired} index={i} />
-        ))}
+        {/* One list, not two maps: a row that retires/restores keeps its key, so it moves instead of
+            remounting — focus and any half-typed rename survive. */}
+        {[...active, ...retired].map((c) => {
+          const siblings = c.active ? active : retired;
+          return (
+            <CategoryRow
+              key={c.id}
+              cat={c}
+              cats={cats}
+              siblings={siblings}
+              index={siblings.indexOf(c)}
+            />
+          );
+        })}
       </div>
       <Card>
         <div className="flex flex-wrap items-end gap-3">
@@ -112,6 +121,15 @@ function CategoryRow({
   const setWork = useSetCategoryWork();
   const del = useDeleteCategory();
   const [panel, setPanel] = useState<RowPanel>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // A collapsing panel unmounts the button that had focus; hand it back to the row's menu trigger.
+  function closePanel() {
+    setPanel(null);
+    requestAnimationFrame(() =>
+      rowRef.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus(),
+    );
+  }
   const [label, setLabel] = useState(cat.label);
   const others = cats.filter((c) => c.id !== cat.id);
   const [reassignTo, setReassignTo] = useState(
@@ -138,21 +156,28 @@ function CategoryRow({
     });
   }
 
-  // Retire hides it from every picker; tasks keep the label. Restore brings it back.
-  function setActive(active: boolean) {
-    upsert.mutate({ id: cat.id, label: cat.label, isWork: cat.isWork, order: cat.order, active });
-    setPanel(null);
+  // Retire hides it from every picker; tasks keep the label. Restore brings it back. The row moves
+  // between groups once the list refetches, and a moved DOM node drops focus — so refocus after that.
+  async function setActive(active: boolean) {
+    await upsert.mutateAsync({
+      id: cat.id,
+      label: cat.label,
+      isWork: cat.isWork,
+      order: cat.order,
+      active,
+    });
+    closePanel();
   }
 
   async function flip(backfillPast: boolean) {
     const res = await setWork.mutateAsync({ id: cat.id, isWork: !cat.isWork, backfillPast });
     setBackfilled(backfillPast ? res.backfilled : null);
-    setPanel(null);
+    closePanel();
   }
 
   return (
     <Card className="px-3.5 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div ref={rowRef} className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
               form to fill in, but hover-only would leave the field unmarked on touch — and this is
@@ -172,7 +197,10 @@ function CategoryRow({
                 active: cat.active,
               })
             }
-            className={`w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface ${cat.active ? 'text-ink' : 'text-ink-muted'}`}
+            className={cx(
+              'w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
+              cat.active ? 'text-ink' : 'text-ink-muted',
+            )}
           />
           {cat.active ? (
             <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
@@ -219,7 +247,7 @@ function CategoryRow({
               },
               cat.active
                 ? { label: 'Retire…', onSelect: () => setPanel('retire') }
-                : { label: 'Restore', onSelect: () => setActive(true) },
+                : { label: 'Restore', onSelect: () => void setActive(true) },
               ...(others.length > 0
                 ? [
                     {
@@ -253,10 +281,10 @@ function CategoryRow({
           <Text size="sm" tone="muted">
             Retire {cat.label}? Its tasks keep the label; it leaves the pickers. Restore any time.
           </Text>
-          <Button size="sm" onClick={() => setActive(false)}>
+          <Button size="sm" autoFocus onClick={() => void setActive(false)}>
             Retire
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setPanel(null)}>
+          <Button variant="ghost" size="sm" onClick={() => closePanel()}>
             Cancel
           </Button>
         </div>
@@ -268,7 +296,10 @@ function CategoryRow({
             label="Move its items to"
             value={reassignTo}
             onChange={(e) => setReassignTo(e.target.value)}
-            options={others.map((c) => ({ value: c.id, label: c.label }))}
+            options={others.map((c) => ({
+              value: c.id,
+              label: c.active ? c.label : `${c.label} (retired)`,
+            }))}
             className="w-44"
           />
           <Button
@@ -282,7 +313,7 @@ function CategoryRow({
           >
             Delete
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setPanel(null)}>
+          <Button variant="ghost" size="sm" onClick={() => closePanel()}>
             Cancel
           </Button>
         </div>
