@@ -52,8 +52,10 @@ it a Today task.
   - dedupe: `upsertPlan` has none, so the hook reads that day's plan fresh and skips writing a row the
     task already has, and ignores a second call while the first is in flight. The status step still
     runs on that path, so retrying repairs a half-done add. Server-side dedupe is a follow-up.
-  - unplan = status **first** (read fresh), then remove the row (the reverse races the sweep). A task
-    also on the next day's plan keeps its status — only this row goes.
+  - unplan (today's row) = remove the row, then `getDay(today)`: the stale sweep moves the task to
+    backlog unless it has a row on a later day. The sweep owns that rule, so the client doesn't
+    re-derive it. A started task (night "Backlog") is moved explicitly first — the sweep never touches
+    in_progress.
   - Row buttons disable while their write runs, a failure shows "Couldn't save that", and focus moves
     to the list (not `<body>`) when the row leaves it.
   - `createToday` = create + add, not atomic: on a planning failure the task stays in the backlog and

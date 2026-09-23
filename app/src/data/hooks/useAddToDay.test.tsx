@@ -142,6 +142,20 @@ describe('useAddToDay', () => {
     expect((await api.getTask(t.id))?.status).toBe('planned');
   });
 
+  it('unplan leaves a task planned for any later day alone (the sweep decides)', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const day = todayKey(4);
+    const t = await api.createTask({ title: 'later too' });
+    const row = await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+    await api.upsertPlan({ taskId: t.id, day: addDays(day, 3), plannedMinutes: 30, order: 0 });
+    const planned = await api.transitionTask(t.id, 'planned');
+
+    await act(async () => void (await hook.result.current.unplan(row, planned)));
+
+    expect((await api.getTask(t.id))?.status).toBe('planned');
+  });
+
   it('createToday creates and plans; a failed plan still keeps the task', async () => {
     const { api, hook } = setup();
     await ready(hook);

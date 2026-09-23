@@ -36,16 +36,20 @@ function writeLeft(day: string, ids: Set<string>): void {
 // No count and no red: unfinished is information, not a verdict. Lives inside "Today in review".
 export function StillOpenSection({ today }: { today: string }) {
   const tomorrow = addDays(today, 1);
-  const { rows, isError: todayError } = useTodayPlan();
+  const { rows, isError: todayError, totalCount } = useTodayPlan();
   const tomorrowQ = usePlansForDay(tomorrow);
   const toTomorrow = useAddToDay(tomorrow);
   const { unplan } = useAddToDay();
   const { timers, stop } = usePomodoro();
   const [left, setLeft] = useState(() => readLeft(today));
+  // Once something's been answered, the section closes on a line instead of vanishing — focus needs
+  // somewhere to land when the last row goes.
+  const [answered, setAnswered] = useState(false);
   const headingRef = useRef<HTMLDivElement>(null);
   const action = useRowAction(headingRef);
 
-  if (todayError || tomorrowQ.isError)
+  // An error only matters with nothing in hand; a failed background refetch keeps the last answer.
+  if ((todayError && totalCount === 0) || (tomorrowQ.isError && !tomorrowQ.data))
     return (
       <Text size="sm" tone="danger" className="border-t border-line pt-3">
         Couldn&apos;t load today&apos;s plan to ask what&apos;s still open.
@@ -53,7 +57,15 @@ export function StillOpenSection({ today }: { today: string }) {
     );
   const open = stillOpen(rows, new Set((tomorrowQ.data ?? []).map((p) => p.taskId)), left);
   // Until tomorrow's plan loads we can't tell what's already headed there — show nothing yet.
-  if (!tomorrowQ.isSuccess || open.length === 0) return null;
+  if (!tomorrowQ.data) return null;
+  if (open.length === 0)
+    return answered ? (
+      <div ref={headingRef} tabIndex={-1} className="border-t border-line pt-3 outline-none">
+        <Text size="sm" tone="muted">
+          Everything open has a when.
+        </Text>
+      </div>
+    ) : null;
 
   // Backlog on a started task: stop its running focus first, so the session's minutes land now
   // instead of accruing onto a task that's no longer in play.
@@ -63,7 +75,13 @@ export function StillOpenSection({ today }: { today: string }) {
     await unplan(r.plan, r.task, { fromInProgress: true });
   }
 
+  const answer = (id: string, fn: () => Promise<unknown>) => {
+    setAnswered(true);
+    return action.run(id, fn);
+  };
+
   function leave(id: string) {
+    setAnswered(true);
     const next = new Set(left).add(id);
     setLeft(next);
     writeLeft(today, next);
@@ -86,9 +104,9 @@ export function StillOpenSection({ today }: { today: string }) {
           row={r}
           busy={action.isBusy(r.task.id)}
           // Tomorrow keeps today's row as history; a started task stays started.
-          onTomorrow={() => action.run(r.task.id, () => toTomorrow.addToDay(r.task))}
+          onTomorrow={() => answer(r.task.id, () => toTomorrow.addToDay(r.task))}
           // Backlog is a real rollover, started or not — the task keeps its locked estimate + time.
-          onBacklog={() => action.run(r.task.id, () => toBacklog(r))}
+          onBacklog={() => answer(r.task.id, () => toBacklog(r))}
           onLeave={() => leave(r.task.id)}
         />
       ))}

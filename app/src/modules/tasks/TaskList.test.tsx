@@ -190,6 +190,7 @@ describe('focus after a row leaves', () => {
     add.focus();
     await user.keyboard('{Enter}');
     await waitFor(() => expect(add.isConnected).toBe(false));
-    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    // The list wrapper (the one focusable non-control around the rows) takes it.
+    await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
   });
 });

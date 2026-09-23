@@ -62,6 +62,8 @@ describe('night: still open — when?', () => {
     expect((await api.getTask(essay.id))?.status).toBe('planned');
     expect((await api.getTask(lab.id))?.status).toBe('in_progress');
     expect(screen.queryByText('Still open — when?')).toBeNull(); // nothing left to ask
+    const done = screen.getByText('Everything open has a when.');
+    await waitFor(() => expect(document.activeElement).toBe(done.parentElement));
   });
 
   it('Backlog takes it off today — a started task too', async () => {

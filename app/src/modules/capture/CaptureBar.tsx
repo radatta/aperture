@@ -160,9 +160,9 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
             {receipt && <Receipt receipt={receipt} />}
           </div>
           {!receipt && <Hint />}
-          {/* Gives way to a receipt: on a phone the row can't hold both, and the receipt is the
-              one that's momentary. */}
-          {!receipt && trailing}
+          {/* On a phone the row can't hold both, so it gives way to a receipt there (a failure
+              notice stays until the next capture). Desktop has room for both. */}
+          <div className={cx('shrink-0', receipt && 'max-sm:hidden')}>{trailing}</div>
         </div>
       </div>
       <div className="flex items-end gap-2">

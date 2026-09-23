@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { addDays, todayKey } from '@aperture/shared';
+import { todayKey } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
@@ -78,26 +78,35 @@ export function useAddToDay(day?: string) {
     }
   }
 
-  // Take a row off its day. The task goes back to backlog when it was only planned — or, with
-  // `fromInProgress` (the night "Backlog"), when it was started too; its accrued time stays. A task
-  // that's also on tomorrow's plan (the night "Tomorrow") keeps its status: only this row goes.
+  // Take a row off its day. A planned task goes back to backlog unless it's still planned for a later
+  // day (the night "Tomorrow", or a row the MCP wrote) — the stale sweep owns that rule, so today's
+  // rows let it decide rather than re-deriving it here. With `fromInProgress` (the night "Backlog") a
+  // started task goes back too; its accrued time stays.
   async function unplan(plan: TaskPlan, task: Task, opts: { fromInProgress?: boolean } = {}) {
     if (inFlight.current.has(plan.id)) return;
     inFlight.current.add(plan.id);
     try {
-      // Fresh, not cached: the status decides the transition, and a stale "planned" could send a
-      // task started elsewhere back to the backlog.
+      // Fresh, not cached: a stale status could send a task started elsewhere back to the backlog.
       const fresh = (await api.getTask(task.id)) ?? task;
-      const next = await api.listPlansForDay(addDays(plan.day, 1));
-      const staysPlanned = next.some((p) => p.taskId === task.id);
-      // Status first: removing the row first refetches the day, whose stale sweep would move the
-      // task to backlog ahead of this transition (backlog → backlog throws).
-      if (
-        !staysPlanned &&
-        (fresh.status === 'planned' || (opts.fromInProgress && fresh.status === 'in_progress'))
-      )
+      // The sweep never touches in_progress, so that move is explicit (and safe to do first).
+      if (opts.fromInProgress && fresh.status === 'in_progress')
         await transition.mutateAsync({ id: task.id, to: 'backlog' });
-      await removePlan.mutateAsync(plan.id);
+      if (plan.day === (await resolveDay())) {
+        await removePlan.mutateAsync(plan.id);
+        // getDay(today) sweeps a planned task with no row today or later to backlog, and leaves one
+        // that's planned ahead alone.
+        await qc.fetchQuery({
+          queryKey: qk.day(plan.day),
+          queryFn: () => api.getDay(plan.day),
+          staleTime: 0,
+        });
+      } else {
+        // Not today's row, so no sweep to lean on: status first, since removing the row refetches
+        // today's getDay, whose sweep could move the task ahead of us (backlog → backlog throws).
+        if (fresh.status === 'planned')
+          await transition.mutateAsync({ id: task.id, to: 'backlog' });
+        await removePlan.mutateAsync(plan.id);
+      }
       await settled();
     } finally {
       inFlight.current.delete(plan.id);
