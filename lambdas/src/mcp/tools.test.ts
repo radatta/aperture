@@ -26,7 +26,11 @@ function makeEnv() {
   });
   const ctx: ToolContext = {
     dispatch: (method: ApiMethod, args: unknown[]) =>
-      handleRpc(doc, { userId: 'local', method, args, now, google, stateSecret: 'test' }, { presigner: fakePresigner() }),
+      handleRpc(
+        doc,
+        { userId: 'local', method, args, now, google, stateSecret: 'test' },
+        { presigner: fakePresigner() },
+      ),
     upload: async (url, bytes, contentType) => {
       uploads.push({ url, bytes, contentType });
     },
@@ -71,9 +75,9 @@ describe('mcp tools — tasks', () => {
 
     // Freeze the estimate, then a fan-out that changes category (applies) then estimate (throws).
     await call('update_task', { id: t.id, status: 'in_progress' });
-    await expect(call('update_task', { id: t.id, categoryId: cat.id, estimateMin: 99 })).rejects.toThrow(
-      /already applied: categoryId/,
-    );
+    await expect(
+      call('update_task', { id: t.id, categoryId: cat.id, estimateMin: 99 }),
+    ).rejects.toThrow(/already applied: categoryId/);
     // The category change DID land despite the estimate failure.
     expect(((await call('list_tasks')) as Task[])[0]!.categoryId).toBe(cat.id);
   });
@@ -129,7 +133,9 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     const { call } = makeEnv();
     const cat = (await call('create_category', { label: 'LeetCode', isWork: true })) as Category;
     expect(cat.label).toBe('LeetCode');
-    expect(((await call('list_categories')) as Category[]).map((c) => c.label)).toContain('LeetCode');
+    expect(((await call('list_categories')) as Category[]).map((c) => c.label)).toContain(
+      'LeetCode',
+    );
   });
 
   it('update_category patches only what is sent — a rename keeps order and never reactivates', async () => {
@@ -140,14 +146,22 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     const renamed = (await call('update_category', { id: cat.id, label: 'CS 61B' })) as Category;
     expect(renamed).toMatchObject({ label: 'CS 61B', isWork: true, order: 4, active: false });
     const reordered = (await call('update_category', { id: cat.id, order: 1 })) as Category;
-    expect(reordered).toMatchObject({ label: 'CS 61B', order: 1 });
+    expect(reordered).toMatchObject({ label: 'CS 61B', order: 1, active: false });
+  });
+
+  it('update_category retires and restores via active', async () => {
+    const { call } = makeEnv();
+    const cat = (await call('create_category', { label: 'Studying', isWork: true })) as Category;
+    const retired = (await call('update_category', { id: cat.id, active: false })) as Category;
+    expect(retired).toMatchObject({ label: 'Studying', isWork: true, active: false });
+    const restored = (await call('update_category', { id: cat.id, active: true })) as Category;
+    expect(restored.active).toBe(true);
   });
 
   it('update_category rejects an empty patch and an unknown id', async () => {
     const { call } = makeEnv();
     const cat = (await call('create_category', { label: 'X', isWork: false })) as Category;
     await expect(call('update_category', { id: cat.id })).rejects.toThrow(/at least one field/);
-    await expect(call('update_category', { id: cat.id, active: false })).rejects.toThrow(/at least one/);
     const unknown = call('update_category', { id: 'nope', label: 'Y' });
     await expect(unknown).rejects.toThrow(/Not found/);
   });
@@ -155,7 +169,9 @@ describe('mcp tools — categories, calibration, leetcode', () => {
   it('get_calibration validates the date range', async () => {
     const { call } = makeEnv();
     expect(await call('get_calibration', { from: '2026-09-01', to: '2026-09-30' })).toEqual([]);
-    await expect(call('get_calibration', { from: 'friday', to: '2026-09-30' })).rejects.toThrow(/ISO date/);
+    await expect(call('get_calibration', { from: 'friday', to: '2026-09-30' })).rejects.toThrow(
+      /ISO date/,
+    );
   });
 
   it('list_leetcode_attempts wants both dates or neither', async () => {
@@ -195,7 +211,11 @@ describe('mcp tools — calendar', () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'no cal' })) as Task;
     await expect(
-      call('create_calendar_event', { taskId: t.id, start: '2026-09-22T14:00:00-07:00', durationMin: 30 }),
+      call('create_calendar_event', {
+        taskId: t.id,
+        start: '2026-09-22T14:00:00-07:00',
+        durationMin: 30,
+      }),
     ).rejects.toThrow(/No calendar target/);
   });
 
@@ -203,7 +223,12 @@ describe('mcp tools — calendar', () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'partial' })) as Task;
     await expect(
-      call('create_calendar_event', { taskId: t.id, start: '2026-09-22T14:00:00-07:00', durationMin: 30, accountSub: 'A' }),
+      call('create_calendar_event', {
+        taskId: t.id,
+        start: '2026-09-22T14:00:00-07:00',
+        durationMin: 30,
+        accountSub: 'A',
+      }),
     ).rejects.toThrow(/together/);
   });
 
@@ -211,7 +236,11 @@ describe('mcp tools — calendar', () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'x' })) as Task;
     await expect(
-      call('create_calendar_event', { taskId: t.id, start: '2026-09-22T14:00:00', durationMin: 30 }),
+      call('create_calendar_event', {
+        taskId: t.id,
+        start: '2026-09-22T14:00:00',
+        durationMin: 30,
+      }),
     ).rejects.toThrow(/explicit offset/);
   });
 });
@@ -230,7 +259,7 @@ describe('mcp tools — attachments', () => {
     expect(att.status).toBe('ready');
     expect(uploads).toHaveLength(1);
     expect(uploads[0]!.contentType).toBe('text/markdown');
-    expect(((await call('list_attachments', { taskId: t.id })) as Attachment[])).toHaveLength(1);
+    expect((await call('list_attachments', { taskId: t.id })) as Attachment[]).toHaveLength(1);
   });
 
   it('attach_file rejects an over-cap payload BEFORE writing any pending row', async () => {
@@ -238,9 +267,14 @@ describe('mcp tools — attachments', () => {
     const t = (await call('create_task', { title: 'big' })) as Task;
     const tooBig = Buffer.alloc(64 * 1024 + 1, 0x61).toString('base64');
     await expect(
-      call('attach_file', { taskId: t.id, filename: 'big.txt', contentType: 'text/plain', contentBase64: tooBig }),
+      call('attach_file', {
+        taskId: t.id,
+        filename: 'big.txt',
+        contentType: 'text/plain',
+        contentBase64: tooBig,
+      }),
     ).rejects.toThrow(/capped/);
-    expect(((await call('list_attachments', { taskId: t.id })) as Attachment[])).toHaveLength(0);
+    expect((await call('list_attachments', { taskId: t.id })) as Attachment[]).toHaveLength(0);
   });
 
   it('create_attachment_upload returns a presigned URL + next-step, and confirm/delete round-trip', async () => {
@@ -256,7 +290,11 @@ describe('mcp tools — attachments', () => {
     expect(up.next).toMatch(/confirm_attachment/);
     const confirmed = (await call('confirm_attachment', { id: up.attachmentId })) as Attachment;
     expect(confirmed.status).toBe('ready');
-    expect(await call('get_attachment_download_url', { id: up.attachmentId })).toMatch(/^fake:\/\/get\//);
-    expect(await call('delete_attachment', { id: up.attachmentId })).toEqual({ deleted: up.attachmentId });
+    expect(await call('get_attachment_download_url', { id: up.attachmentId })).toMatch(
+      /^fake:\/\/get\//,
+    );
+    expect(await call('delete_attachment', { id: up.attachmentId })).toEqual({
+      deleted: up.attachmentId,
+    });
   });
 });
