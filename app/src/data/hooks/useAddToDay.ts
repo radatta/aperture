@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { todayKey } from '@aperture/shared';
+import { addDays, todayKey } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
@@ -37,6 +37,14 @@ export function useAddToDay(day?: string) {
     return todayKey(s.dayStartHour);
   }
 
+  // Resolve only once the lists have refetched, so a caller acting on "done" (moving focus off a row
+  // that just left its list) sees the new lists, not the old ones.
+  const settled = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: qk.tasks() }),
+      qc.invalidateQueries({ queryKey: ['plans'] }),
+    ]);
+
   async function addToDay(task: Task): Promise<AddResult> {
     const target = await resolveDay();
     const key = `${target}:${task.id}`;
@@ -49,31 +57,51 @@ export function useAddToDay(day?: string) {
         queryFn: () => api.listPlansForDay(target),
         staleTime: 0,
       });
-      if (plans.some((p) => p.taskId === task.id)) return 'already';
+      const exists = plans.some((p) => p.taskId === task.id);
       // Row first: a task moved to planned before its row exists is what the stale sweep moves back.
-      await upsertPlan.mutateAsync({
-        taskId: task.id,
-        day: target,
-        plannedMinutes: plannedDefault(task) || task.estimateMin || 30,
-        order: plans.length,
-      });
+      if (!exists)
+        await upsertPlan.mutateAsync({
+          taskId: task.id,
+          day: target,
+          plannedMinutes: plannedDefault(task) || task.estimateMin || 30,
+          order: plans.length,
+        });
       // Only backlog becomes planned: a planned task already is, and in_progress → planned is illegal.
+      // Runs on the "already" path too, so a retry repairs a half-done add (row written, transition
+      // lost) instead of leaving a backlog task sitting on the day's plan.
       const fresh = (await api.getTask(task.id)) ?? task;
       if (fresh.status === 'backlog') await transition.mutateAsync({ id: task.id, to: 'planned' });
-      return 'added';
+      await settled();
+      return exists ? 'already' : 'added';
     } finally {
       inFlight.current.delete(key);
     }
   }
 
   // Take a row off its day. The task goes back to backlog when it was only planned — or, with
-  // `fromInProgress` (the night "Backlog"), when it was started too; its accrued time stays.
+  // `fromInProgress` (the night "Backlog"), when it was started too; its accrued time stays. A task
+  // that's also on tomorrow's plan (the night "Tomorrow") keeps its status: only this row goes.
   async function unplan(plan: TaskPlan, task: Task, opts: { fromInProgress?: boolean } = {}) {
-    // Status first: removing the row first refetches the day, whose stale sweep would move the task
-    // to backlog ahead of this transition (backlog → backlog throws).
-    if (task.status === 'planned' || (opts.fromInProgress && task.status === 'in_progress'))
-      await transition.mutateAsync({ id: task.id, to: 'backlog' });
-    await removePlan.mutateAsync(plan.id);
+    if (inFlight.current.has(plan.id)) return;
+    inFlight.current.add(plan.id);
+    try {
+      // Fresh, not cached: the status decides the transition, and a stale "planned" could send a
+      // task started elsewhere back to the backlog.
+      const fresh = (await api.getTask(task.id)) ?? task;
+      const next = await api.listPlansForDay(addDays(plan.day, 1));
+      const staysPlanned = next.some((p) => p.taskId === task.id);
+      // Status first: removing the row first refetches the day, whose stale sweep would move the
+      // task to backlog ahead of this transition (backlog → backlog throws).
+      if (
+        !staysPlanned &&
+        (fresh.status === 'planned' || (opts.fromInProgress && fresh.status === 'in_progress'))
+      )
+        await transition.mutateAsync({ id: task.id, to: 'backlog' });
+      await removePlan.mutateAsync(plan.id);
+      await settled();
+    } finally {
+      inFlight.current.delete(plan.id);
+    }
   }
 
   // Create + plan in one gesture. Two writes, not atomic: if planning fails the task still exists

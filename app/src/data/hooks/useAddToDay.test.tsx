@@ -113,6 +113,35 @@ describe('useAddToDay', () => {
     expect(await plansFor(api, day)).toHaveLength(0);
   });
 
+  it('a retry repairs a half-done add: row written, transition lost', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const t = await api.createTask({ title: 'half' });
+    await api.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 30, order: 0 });
+
+    let res: string | undefined;
+    await act(async () => void (res = await hook.result.current.addToDay(t)));
+
+    expect(res).toBe('already');
+    expect(await plansFor(api, todayKey(4))).toHaveLength(1);
+    expect((await api.getTask(t.id))?.status).toBe('planned');
+  });
+
+  it('unplan keeps a task planned when it is also on tomorrow’s plan', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const day = todayKey(4);
+    const t = await api.createTask({ title: 'carried' });
+    const row = await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+    await api.upsertPlan({ taskId: t.id, day: addDays(day, 1), plannedMinutes: 30, order: 0 });
+    const planned = await api.transitionTask(t.id, 'planned');
+
+    await act(async () => void (await hook.result.current.unplan(row, planned)));
+
+    expect(await plansFor(api, day)).toHaveLength(0);
+    expect((await api.getTask(t.id))?.status).toBe('planned');
+  });
+
   it('createToday creates and plans; a failed plan still keeps the task', async () => {
     const { api, hook } = setup();
     await ready(hook);

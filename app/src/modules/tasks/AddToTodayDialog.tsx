@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -89,15 +89,23 @@ function DialogBody({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // Enter-then-click (or a double Enter) while the create is in flight must not make two tasks.
+  const creating = useRef(false);
   async function create() {
+    if (creating.current || !typed) return;
+    creating.current = true;
+    const title = typed;
+    setText('');
     setNote(null);
     try {
-      const r = await createToday(typed);
+      const r = await createToday(title);
       markAdded(r.task.id);
-      setText('');
       if (!r.planned) setNote('Created, but couldn’t plan it — it’s in the backlog.');
     } catch {
+      setText((current) => (current === '' ? title : current));
       setNote('Couldn’t create that — try again.');
+    } finally {
+      creating.current = false;
     }
   }
 

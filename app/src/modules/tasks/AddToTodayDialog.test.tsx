@@ -55,6 +55,17 @@ describe('Home "+ Add" to today', () => {
     expect(await dialog.findByText('Added')).toBeTruthy();
   });
 
+  it('a double Enter creates the task once', async () => {
+    const { api, user, dialog } = await openFromMorning();
+    await user.type(dialog.getByLabelText('Find a task'), 'call bank');
+    await user.keyboard('{Enter}{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks()).filter((t) => t.title === 'call bank')).toHaveLength(1),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await api.listTasks()).filter((t) => t.title === 'call bank')).toHaveLength(1);
+  });
+
   it('returns focus to the trigger on close', async () => {
     const { user, dialog, trigger } = await openFromMorning();
     await user.click(dialog.getByRole('button', { name: 'Close' }));

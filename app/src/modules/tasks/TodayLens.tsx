@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -8,6 +8,7 @@ import { MiniBar } from '../../components/MiniBar';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
+import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { useDay, useSetCapacity } from '../../data/hooks/useDay';
 import { TaskCard } from './TaskCard';
@@ -21,6 +22,8 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
   const { data: dayRec } = useDay(day);
   const setCapacity = useSetCapacity(day);
   const { addToDay, unplan } = useAddToDay();
+  const listRef = useRef<HTMLDivElement>(null);
+  const action = useRowAction(listRef);
 
   const onPlan = new Set(rows.map((r) => r.task.id));
   // Started but not on today's plan — still today's business, one tier down.
@@ -52,10 +55,17 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
         </div>
       </Card>
 
-      <div className="flex flex-col gap-2">
+      <div ref={listRef} tabIndex={-1} className="flex flex-col gap-2 outline-none">
         <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
           Planned today
         </Text>
+        <div role="status">
+          {action.failed && (
+            <Text size="sm" tone="danger">
+              Couldn&apos;t save that — try again.
+            </Text>
+          )}
+        </div>
         {rows.length === 0 ? (
           <EmptyState
             pending={isPending}
@@ -75,7 +85,12 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
               key={plan.id}
               task={task}
               actions={
-                <Button variant="quiet" size="sm" onClick={() => unplan(plan, task)}>
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  disabled={action.isBusy(task.id)}
+                  onClick={() => action.run(task.id, () => unplan(plan, task))}
+                >
                   Unplan
                 </Button>
               }
@@ -98,8 +113,9 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
                   variant="ghost"
                   size="sm"
                   className="gap-1"
+                  disabled={action.isBusy(task.id)}
                   aria-label={`Add ${task.title} to today`}
-                  onClick={() => addToDay(task)}
+                  onClick={() => action.run(task.id, () => addToDay(task))}
                 >
                   <PlusIcon size={13} /> Today
                 </Button>
