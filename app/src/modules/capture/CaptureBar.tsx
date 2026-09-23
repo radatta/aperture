@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { todayKey } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
@@ -22,7 +22,8 @@ const RECEIPT_MS = 1800;
 // The field is a growing textarea, not an input, and the mode toggle sits on its own row: on a
 // phone a segmented [Log|Task|Idea] plus a single-line input left ~22 characters of a sentence
 // visible, so you could never read back the thought you were mid-way through writing.
-export function CaptureBar() {
+// `trailing` sits at the right of the mode row — AppShell docks the idle Focus control there.
+export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
   const [mode, setMode] = useState<CaptureMode>('log');
@@ -154,10 +155,13 @@ export function CaptureBar() {
         {/* Live region wraps the receipt ONLY. With the hint inside it, the hint re-entered the
             region when the receipt expired and every capture ended with the keyboard hint being
             read aloud 1.8s later. */}
-        <div aria-live="polite" role="status" className="min-w-0">
-          {receipt && <Receipt receipt={receipt} />}
+        <div className="flex min-w-0 items-center gap-1">
+          <div aria-live="polite" role="status" className="min-w-0">
+            {receipt && <Receipt receipt={receipt} />}
+          </div>
+          {!receipt && <Hint />}
+          {trailing}
         </div>
-        {!receipt && <Hint />}
       </div>
       <div className="flex items-end gap-2">
         <textarea
@@ -212,13 +216,13 @@ function Receipt({
 }) {
   if (receipt.failed)
     return (
-      <Text size="xs" tone="danger" className="pr-1">
+      <Text size="xs" tone="danger" className="block truncate pr-1">
         Couldn&apos;t save — your text is back in the box.
       </Text>
     );
   const r = receiptFor(receipt.mode, receipt.dest);
   return (
-    <Text size="xs" tone="teal" className="pr-1">
+    <Text size="xs" tone="teal" className="block truncate pr-1">
       {r.text} → {r.label}
     </Text>
   );
