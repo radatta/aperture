@@ -4,6 +4,7 @@
 //   - the WRITES-OBJECT seam: every mutation funnels through `writes` (single audit point), mirroring
 //     the Lambda rule that guarantees no stray side effects.
 //   - LAZY recurrence: due series occurrences materialize on getDay(), exactly like the Lambda will.
+//   - LAZY stale sweep: getDay() also returns planned tasks with no plan row on/after the day to backlog.
 
 import {
   assertAttachmentAllowed,
@@ -686,9 +687,10 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.ideas, id, { status });
   }
 
-  // --- Day (lazy recurrence on read) ---------------------------------------
+  // --- Day (lazy recurrence + stale sweep on read) --------------------------
   async getDay(day: string): Promise<Day> {
     this.materializeDueSeries(day);
+    this.sweepStalePlanned(day);
     const existing = this.alive(this.store.days).find((d) => d.date === day);
     if (existing) return existing;
     return this.writes.insert(this.store.days, {
@@ -733,6 +735,16 @@ class StubClient implements ApiClient {
         plannedMinutes: series.defaultEstimateMin ?? 0,
         order: 1000,
       });
+    }
+  }
+  // A planned task with no alive plan row on `day` or later was left behind — back to backlog.
+  // Plan rows stay as history. Monotone in `day`, so a past day never moves more than today would.
+  private sweepStalePlanned(day: string): void {
+    const planned = this.alive(this.store.tasks).filter((t) => t.status === 'planned');
+    if (planned.length === 0) return;
+    const ahead = new Set(this.alive(this.store.plans).filter((p) => p.day >= day).map((p) => p.taskId));
+    for (const t of planned) {
+      if (!ahead.has(t.id)) this.writes.put(this.store.tasks, taskTransition(t, 'backlog', this.now()));
     }
   }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {

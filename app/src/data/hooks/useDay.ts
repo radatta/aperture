@@ -3,10 +3,20 @@ import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { invalidateTaskData } from './invalidate';
 
-// getDay lazily materializes any due recurring-series occurrences for the day (stub + Lambda both).
+// getDay lazily materializes due recurring occurrences and sweeps stale planned tasks back to backlog
+// (stub + Lambda both). Sibling task queries may have resolved before those writes landed, so refetch
+// them once the day comes back — once per real fetch, not per mounted consumer.
 export function useDay(day: string) {
   const api = useApi();
-  return useQuery({ queryKey: qk.day(day), queryFn: () => api.getDay(day) });
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: qk.day(day),
+    queryFn: async () => {
+      const d = await api.getDay(day);
+      for (const key of [qk.tasks(), qk.backlog(), qk.plans(day)]) qc.invalidateQueries({ queryKey: key });
+      return d;
+    },
+  });
 }
 
 export function useSetCapacity(day: string) {

@@ -625,9 +625,10 @@ export class BackendClient implements ApiClient {
     return this.repo.putIdea({ ...existing, status, updatedAt: this.now() });
   }
 
-  // --- Day (lazy recurrence on read) ---
+  // --- Day (lazy recurrence + stale sweep on read) ---
   async getDay(day: string): Promise<Day> {
     await this.materializeDueSeries(day);
+    await this.sweepStalePlanned(day);
     const existing = await this.repo.getDayRow(day);
     if (existing) return existing;
     return this.repo.putDay({
@@ -677,6 +678,16 @@ export class BackendClient implements ApiClient {
         plannedMinutes: series.defaultEstimateMin ?? 0,
         order: 1000,
       });
+    }
+  }
+  // A planned task with no alive plan row on `day` or later was left behind — back to backlog.
+  // Plan rows stay as history. Monotone in `day`, so a past day never moves more than today would.
+  private async sweepStalePlanned(day: string): Promise<void> {
+    const planned = (await this.repo.listTasks()).filter((t) => t.status === 'planned');
+    if (planned.length === 0) return;
+    const ahead = new Set((await this.repo.listAllPlans()).filter((p) => p.day >= day).map((p) => p.taskId));
+    for (const t of planned) {
+      if (!ahead.has(t.id)) await this.repo.putTask(taskTransition(t, 'backlog', this.now()));
     }
   }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {

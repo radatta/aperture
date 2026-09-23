@@ -520,6 +520,51 @@ export function runApiContract(
 
       await api.getDay('2026-08-04'); // again → no duplicate occurrence
       expect(await api.listPlansForDay('2026-08-04')).toHaveLength(1);
+
+      // Next day: the undone occurrence is swept to backlog and a fresh one is planned.
+      await api.getDay('2026-08-05');
+      expect((await api.getTask(task!.id))?.status).toBe('backlog');
+      const plans2 = await api.listPlansForDay('2026-08-05');
+      expect(plans2).toHaveLength(1);
+      expect(plans2[0]!.taskId).not.toBe(task!.id);
+      expect((await api.getTask(plans2[0]!.taskId))?.status).toBe('planned');
+    });
+
+    it('day: getDay sweeps stale planned tasks to backlog and leaves the rest', async () => {
+      const plan = async (title: string, days: string[], status: 'planned' | 'in_progress' = 'planned') => {
+        const t = await api.createTask({ title });
+        const rows = [];
+        for (const day of days) rows.push(await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 1 }));
+        await api.transitionTask(t.id, 'planned');
+        if (status === 'in_progress') await api.transitionTask(t.id, 'in_progress');
+        return { id: t.id, rows };
+      };
+      const a = await plan('yesterday only', ['2026-08-03']);
+      const b = await plan('yesterday and later', ['2026-08-03', '2026-08-05']);
+      const c = await plan('today', ['2026-08-04']);
+      const d = await plan('started yesterday', ['2026-08-03'], 'in_progress');
+      const e = await plan('unplanned row', ['2026-08-04']);
+      await api.removePlan(e.rows[0]!.id); // tombstoned rows don't count
+      const f = await plan('no rows', []);
+      const status = async (id: string) => (await api.getTask(id))?.status;
+
+      await api.getDay('2026-08-03'); // a past day moves nothing today's sweep wouldn't
+      expect(await status(a.id)).toBe('planned');
+      expect(await status(b.id)).toBe('planned');
+      expect(await status(c.id)).toBe('planned');
+
+      await api.getDay('2026-08-04');
+      expect(await status(a.id)).toBe('backlog');
+      expect(await status(e.id)).toBe('backlog');
+      expect(await status(f.id)).toBe('backlog');
+      expect(await status(b.id)).toBe('planned');
+      expect(await status(c.id)).toBe('planned');
+      expect(await status(d.id)).toBe('in_progress');
+      expect((await api.listPlansForDay('2026-08-03')).map((p) => p.taskId)).toContain(a.id); // history kept
+      expect((await api.listBacklog()).map((t) => t.id)).toEqual(expect.arrayContaining([a.id, e.id, f.id]));
+
+      await api.getDay('2026-08-04'); // idempotent
+      expect(await status(c.id)).toBe('planned');
     });
 
     it('day: intent persists on the singleton', async () => {

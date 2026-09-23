@@ -303,7 +303,9 @@ export interface ApiClient {
   createIdea(text: string): Promise<Idea>;
   triageIdea(id: string, status: IdeaStatus): Promise<Idea>;
 
-  // Day (singleton per date; getDay lazily materializes due recurrence)
+  // Day (singleton per date). `day` is the client's CURRENT day: getDay lazily materializes due
+  // recurrence and sweeps stale planned tasks (no plan row on/after `day`) back to backlog — both
+  // relative to it. Never call it with a future day; read another day's plan with listPlansForDay.
   getDay(day: string): Promise<Day>;
   setDayCapacity(day: string, capacityHours: number | null): Promise<Day>;
   setDayIntent(day: string, intent: string): Promise<Day>;
