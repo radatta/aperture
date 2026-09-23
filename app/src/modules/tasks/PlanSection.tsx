@@ -108,9 +108,11 @@ export function PlanSection() {
                   variant="quiet"
                   size="sm"
                   onClick={async () => {
-                    await removePlan.mutateAsync(plan.id);
+                    // Status first: removing the row first refetches the day, whose stale sweep would
+                    // move the task to backlog ahead of this transition (backlog → backlog throws).
                     if (task.status === 'planned')
                       await transition.mutateAsync({ id: task.id, to: 'backlog' });
+                    await removePlan.mutateAsync(plan.id);
                   }}
                 >
                   Unplan

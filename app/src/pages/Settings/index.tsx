@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -6,6 +6,7 @@ import { Field } from '../../components/Field';
 import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
+import { cx } from '../../lib/cx';
 import { ArrowDownIcon, ArrowUpIcon } from '../../components/icons';
 import { useApi } from '../../data/api-context';
 import {
@@ -40,6 +41,9 @@ export function SettingsPage() {
 
 function CategoriesSection() {
   const { data: cats = [] } = useCategories();
+  // Retired categories sort after the active ones; arrows reorder within a group only.
+  const active = cats.filter((c) => c.active);
+  const retired = cats.filter((c) => !c.active);
   const upsert = useUpsertCategory();
   const [label, setLabel] = useState('');
   const [isWork, setIsWork] = useState(true);
@@ -50,9 +54,20 @@ function CategoriesSection() {
         Categories
       </Text>
       <div className="flex flex-col gap-2">
-        {cats.map((c, i) => (
-          <CategoryRow key={c.id} cat={c} cats={cats} index={i} />
-        ))}
+        {/* One list, not two maps: a row that retires/restores keeps its key, so it moves instead of
+            remounting — focus and any half-typed rename survive. */}
+        {[...active, ...retired].map((c) => {
+          const siblings = c.active ? active : retired;
+          return (
+            <CategoryRow
+              key={c.id}
+              cat={c}
+              cats={cats}
+              siblings={siblings}
+              index={siblings.indexOf(c)}
+            />
+          );
+        })}
       </div>
       <Card>
         <div className="flex flex-wrap items-end gap-3">
@@ -89,34 +104,76 @@ function CategoriesSection() {
   );
 }
 
-type RowPanel = null | 'work' | 'delete';
+type RowPanel = null | 'work' | 'delete' | 'retire';
 
-function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; index: number }) {
+function CategoryRow({
+  cat,
+  cats,
+  siblings,
+  index,
+}: {
+  cat: Category;
+  cats: Category[];
+  siblings: Category[];
+  index: number;
+}) {
   const upsert = useUpsertCategory();
   const setWork = useSetCategoryWork();
   const del = useDeleteCategory();
   const [panel, setPanel] = useState<RowPanel>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // A collapsing panel unmounts the button that had focus; hand it back to the row's menu trigger.
+  function closePanel() {
+    setPanel(null);
+    requestAnimationFrame(() =>
+      rowRef.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus(),
+    );
+  }
   const [label, setLabel] = useState(cat.label);
   const others = cats.filter((c) => c.id !== cat.id);
-  const [reassignTo, setReassignTo] = useState(others[0]?.id ?? '');
+  const [reassignTo, setReassignTo] = useState(
+    (others.find((c) => c.active) ?? others[0])?.id ?? '',
+  );
   const [backfilled, setBackfilled] = useState<number | null>(null);
 
   function move(dir: -1 | 1) {
-    const swap = cats[index + dir];
+    const swap = siblings[index + dir];
     if (!swap) return;
-    upsert.mutate({ id: cat.id, label: cat.label, isWork: cat.isWork, order: swap.order });
-    upsert.mutate({ id: swap.id, label: swap.label, isWork: swap.isWork, order: cat.order });
+    upsert.mutate({
+      id: cat.id,
+      label: cat.label,
+      isWork: cat.isWork,
+      order: swap.order,
+      active: cat.active,
+    });
+    upsert.mutate({
+      id: swap.id,
+      label: swap.label,
+      isWork: swap.isWork,
+      order: cat.order,
+      active: swap.active,
+    });
+  }
+
+  // Retire hides it from every picker; tasks keep the label. Restore brings it back. The row moves
+  // between groups once the list refetches, and a moved DOM node drops focus — so refocus after that.
+  function setActive(active: boolean) {
+    upsert.mutate(
+      { id: cat.id, label: cat.label, isWork: cat.isWork, order: cat.order, active },
+      { onSuccess: closePanel },
+    );
   }
 
   async function flip(backfillPast: boolean) {
     const res = await setWork.mutateAsync({ id: cat.id, isWork: !cat.isWork, backfillPast });
     setBackfilled(backfillPast ? res.backfilled : null);
-    setPanel(null);
+    closePanel();
   }
 
   return (
     <Card className="px-3.5 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div ref={rowRef} className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
               form to fill in, but hover-only would leave the field unmarked on touch — and this is
@@ -133,36 +190,50 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
                 label: label.trim(),
                 isWork: cat.isWork,
                 order: cat.order,
+                active: cat.active,
               })
             }
-            className="w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 text-ink outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface"
+            className={cx(
+              'w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
+              cat.active ? 'text-ink' : 'text-ink-muted',
+            )}
           />
-          <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
-            {cat.isWork ? 'Work' : 'Non-work'}
-          </Text>
+          {cat.active ? (
+            <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
+              {cat.isWork ? 'Work' : 'Non-work'}
+            </Text>
+          ) : (
+            <Text size="xs" tone="muted">
+              Retired
+            </Text>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           {/* Arrows, not the words "Up"/"Down" — reordering is a nudge, not a sentence. */}
-          <Button
-            variant="quiet"
-            size="sm"
-            aria-label={`Move ${cat.label} up`}
-            disabled={index === 0}
-            onClick={() => move(-1)}
-            className="h-9 w-9 px-0"
-          >
-            <ArrowUpIcon size={15} />
-          </Button>
-          <Button
-            variant="quiet"
-            size="sm"
-            aria-label={`Move ${cat.label} down`}
-            disabled={index === cats.length - 1}
-            onClick={() => move(1)}
-            className="h-9 w-9 px-0"
-          >
-            <ArrowDownIcon size={15} />
-          </Button>
+          {cat.active && (
+            <>
+              <Button
+                variant="quiet"
+                size="sm"
+                aria-label={`Move ${cat.label} up`}
+                disabled={index === 0}
+                onClick={() => move(-1)}
+                className="h-9 w-9 px-0"
+              >
+                <ArrowUpIcon size={15} />
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                aria-label={`Move ${cat.label} down`}
+                disabled={index === siblings.length - 1}
+                onClick={() => move(1)}
+                className="h-9 w-9 px-0"
+              >
+                <ArrowDownIcon size={15} />
+              </Button>
+            </>
+          )}
           <Menu
             label={`More actions for ${cat.label}`}
             items={[
@@ -170,6 +241,9 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
                 label: `Make ${cat.isWork ? 'non-work' : 'work'}…`,
                 onSelect: () => setPanel('work'),
               },
+              cat.active
+                ? { label: 'Retire…', onSelect: () => setPanel('retire') }
+                : { label: 'Restore', onSelect: () => setActive(true) },
               ...(others.length > 0
                 ? [
                     {
@@ -198,13 +272,30 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
         </div>
       )}
 
+      {panel === 'retire' && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3">
+          <Text size="sm" tone="muted">
+            Retire {cat.label}? Its tasks keep the label; it leaves the pickers. Restore any time.
+          </Text>
+          <Button size="sm" autoFocus onClick={() => setActive(false)}>
+            Retire
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => closePanel()}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
       {panel === 'delete' && (
         <div className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-line bg-surface p-3">
           <Select
             label="Move its items to"
             value={reassignTo}
             onChange={(e) => setReassignTo(e.target.value)}
-            options={others.map((c) => ({ value: c.id, label: c.label }))}
+            options={others.map((c) => ({
+              value: c.id,
+              label: c.active ? c.label : `${c.label} (retired)`,
+            }))}
             className="w-44"
           />
           <Button
@@ -218,10 +309,16 @@ function CategoryRow({ cat, cats, index }: { cat: Category; cats: Category[]; in
           >
             Delete
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setPanel(null)}>
+          <Button variant="ghost" size="sm" onClick={() => closePanel()}>
             Cancel
           </Button>
         </div>
+      )}
+
+      {upsert.isError && (
+        <Text size="xs" tone="danger" className="mt-2">
+          Couldn't save that change — try again.
+        </Text>
       )}
 
       {backfilled !== null && (

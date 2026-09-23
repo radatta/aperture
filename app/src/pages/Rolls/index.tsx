@@ -10,7 +10,7 @@ import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
-import { useCategories } from '../../data/hooks/useCategories';
+import { useCategoryOptions } from '../../data/hooks/useCategories';
 import { useRolls, useUpsertRoll } from '../../data/hooks/useRolls';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
@@ -40,8 +40,8 @@ export function RollsPage() {
       <div className="flex flex-col gap-3">
         {active.length === 0 ? (
           <EmptyState pending={isPending} error={isError} title="No rolls yet.">
-            Start one with “New roll” — a thing you keep returning to, no deadline. Pick it for a day and
-            the sheet fills. A gap is just a gap.
+            Start one with “New roll” — a thing you keep returning to, no deadline. Pick it for a
+            day and the sheet fills. A gap is just a gap.
           </EmptyState>
         ) : (
           active.map((roll) => (
@@ -148,10 +148,12 @@ function NewRoll() {
 // Shared by create + edit. Estimate is required (B8): a roll carries a default estimate its reps inherit,
 // so calibration rides ongoing effort too.
 function RollForm({ roll, onClose }: { roll?: Roll; onClose: () => void }) {
-  const { data: cats = [] } = useCategories();
+  const categoryOptions = useCategoryOptions(roll?.categoryId);
   const upsert = useUpsertRoll();
   const [name, setName] = useState(roll?.name ?? '');
-  const [estimate, setEstimate] = useState(roll?.estimateMin != null ? String(roll.estimateMin) : '30');
+  const [estimate, setEstimate] = useState(
+    roll?.estimateMin != null ? String(roll.estimateMin) : '30',
+  );
   const [categoryId, setCategoryId] = useState(roll?.categoryId ?? '');
   const valid = name.trim() !== '' && Number(estimate) > 0;
 
@@ -200,7 +202,7 @@ function RollForm({ roll, onClose }: { roll?: Roll; onClose: () => void }) {
         placeholder="Uncategorized"
         value={categoryId}
         onChange={(e) => setCategoryId(e.target.value)}
-        options={cats.map((c) => ({ value: c.id, label: c.label }))}
+        options={categoryOptions}
         className="w-40"
       />
       <Button size="sm" onClick={save} disabled={!valid || upsert.isPending}>

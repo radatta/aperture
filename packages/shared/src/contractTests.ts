@@ -83,7 +83,10 @@ export function runApiContract(
     });
 
     it('stories: create defaults empty S/A/R, lists updatedAt-desc, patches, and soft-deletes', async () => {
-      const a = await api.createStory({ title: 'Led the migration', competencyTags: ['leadership'] });
+      const a = await api.createStory({
+        title: 'Led the migration',
+        competencyTags: ['leadership'],
+      });
       // Empty S/A/R default to '' — a title-only stub is valid (start ugly, tighten later).
       expect(a.situation).toBe('');
       expect(a.action).toBe('');
@@ -251,7 +254,9 @@ export function runApiContract(
         { title: 'third' },
       ]);
       expect(created.map((t) => t.title)).toEqual(['first', 'second', 'third']);
-      expect(created.every((t) => t.status === 'backlog' && t.estimateLockedMin === null)).toBe(true);
+      expect(created.every((t) => t.status === 'backlog' && t.estimateLockedMin === null)).toBe(
+        true,
+      );
       expect(created[0]!.estimateMin).toBe(30);
       expect(created[0]!.dueDay).toBe('2026-09-25'); // dueDay from input round-trips
       // One createdAt stamp for the batch → they sort together, newest-first, in paste order.
@@ -483,7 +488,9 @@ export function runApiContract(
       // Picking on the NEXT day while the rep is still open re-plans the SAME task onto that day.
       const nextDay = await api.pickRollToday(roll.id, '2026-08-05');
       expect(nextDay.task.id).toBe(first.task.id);
-      expect((await api.listPlansForDay('2026-08-05')).map((p) => p.taskId)).toContain(first.task.id);
+      expect((await api.listPlansForDay('2026-08-05')).map((p) => p.taskId)).toContain(
+        first.task.id,
+      );
 
       // Once the rep is done, picking again spawns a FRESH task (a second rep is honest).
       await api.transitionTask(first.task.id, 'in_progress');
@@ -520,6 +527,76 @@ export function runApiContract(
 
       await api.getDay('2026-08-04'); // again → no duplicate occurrence
       expect(await api.listPlansForDay('2026-08-04')).toHaveLength(1);
+
+      // Next day: a fresh occurrence is planned, and it supersedes the undone one — dropped, not
+      // piled into backlog.
+      await api.getDay('2026-08-05');
+      expect((await api.getTask(task!.id))?.status).toBe('cancelled');
+      const plans2 = await api.listPlansForDay('2026-08-05');
+      expect(plans2).toHaveLength(1);
+      expect(plans2[0]!.taskId).not.toBe(task!.id);
+      expect((await api.getTask(plans2[0]!.taskId))?.status).toBe('planned');
+    });
+
+    it('day: a missed occurrence the series does not replace today goes to backlog', async () => {
+      await api.upsertSeries({
+        title: 'Laundry',
+        categoryId: null,
+        defaultEstimateMin: 45,
+        rule: { kind: 'weekly', daysOfWeek: [2] }, // Tuesdays; 2026-08-04 is a Tuesday
+        anchorDate: '2026-08-01',
+      });
+      await api.getDay('2026-08-04');
+      const [plan] = await api.listPlansForDay('2026-08-04');
+      await api.getDay('2026-08-05'); // Wednesday: not due, nothing supersedes it
+      expect((await api.getTask(plan!.taskId))?.status).toBe('backlog');
+      expect(await api.listPlansForDay('2026-08-05')).toHaveLength(0);
+    });
+
+    it('day: getDay sweeps stale planned tasks to backlog and leaves the rest', async () => {
+      const plan = async (
+        title: string,
+        days: string[],
+        status: 'planned' | 'in_progress' = 'planned',
+      ) => {
+        const t = await api.createTask({ title });
+        const rows = [];
+        for (const day of days)
+          rows.push(await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 1 }));
+        await api.transitionTask(t.id, 'planned');
+        if (status === 'in_progress') await api.transitionTask(t.id, 'in_progress');
+        return { id: t.id, rows };
+      };
+      const a = await plan('yesterday only', ['2026-08-03']);
+      const b = await plan('yesterday and later', ['2026-08-03', '2026-08-05']);
+      const c = await plan('today', ['2026-08-04']);
+      const g = await plan('tomorrow only', ['2026-08-05']);
+      const d = await plan('started yesterday', ['2026-08-03'], 'in_progress');
+      const e = await plan('unplanned row', ['2026-08-04']);
+      await api.removePlan(e.rows[0]!.id); // tombstoned rows don't count
+      const f = await plan('no rows', []);
+      const status = async (id: string) => (await api.getTask(id))?.status;
+
+      await api.getDay('2026-08-03'); // a past day moves nothing today's sweep wouldn't
+      expect(await status(a.id)).toBe('planned');
+      expect(await status(b.id)).toBe('planned');
+      expect(await status(c.id)).toBe('planned');
+
+      await api.getDay('2026-08-04');
+      expect(await status(a.id)).toBe('backlog');
+      expect(await status(e.id)).toBe('backlog');
+      expect(await status(f.id)).toBe('backlog');
+      expect(await status(b.id)).toBe('planned');
+      expect(await status(c.id)).toBe('planned');
+      expect(await status(g.id)).toBe('planned');
+      expect(await status(d.id)).toBe('in_progress');
+      expect((await api.listPlansForDay('2026-08-03')).map((p) => p.taskId)).toContain(a.id); // history kept
+      expect((await api.listBacklog()).map((t) => t.id)).toEqual(
+        expect.arrayContaining([a.id, e.id, f.id]),
+      );
+
+      await api.getDay('2026-08-04'); // idempotent
+      expect(await status(c.id)).toBe('planned');
     });
 
     it('day: intent persists on the singleton', async () => {
@@ -552,6 +629,37 @@ export function runApiContract(
       await expect(api.deleteCategory(cat.id, null)).rejects.toThrow(); // referenced → needs a target
       await api.deleteCategory(cat.id, target.id);
       expect((await api.getTask(task.id))?.categoryId).toBe(target.id);
+    });
+
+    it('categories: update keeps order/active when omitted; retire and restore round-trip', async () => {
+      const cat = await api.upsertCategory({ label: 'Homework', isWork: true, order: 3 });
+      const renamed = await api.upsertCategory({ id: cat.id, label: 'HW', isWork: true });
+      expect(renamed.order).toBe(3);
+      expect(renamed.active).toBe(true);
+
+      const retired = await api.upsertCategory({
+        id: cat.id,
+        label: 'HW',
+        isWork: true,
+        active: false,
+      });
+      expect(retired.active).toBe(false);
+      const renamedAgain = await api.upsertCategory({
+        id: cat.id,
+        label: 'Homework',
+        isWork: false,
+      });
+      expect(renamedAgain.active).toBe(false); // a rename never un-retires
+      expect(renamedAgain.order).toBe(3);
+      expect((await api.listCategories()).find((c) => c.id === cat.id)?.active).toBe(false); // still listed
+
+      const restored = await api.upsertCategory({
+        id: cat.id,
+        label: 'Homework',
+        isWork: false,
+        active: true,
+      });
+      expect(restored.active).toBe(true);
     });
 
     it('settings: sensible defaults, and patches persist', async () => {

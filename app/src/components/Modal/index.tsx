@@ -54,7 +54,9 @@ export function Modal({ open, onClose, label, closeOnBackdrop = false, children 
       className={cx(
         // m-auto restores the UA `dialog:modal { margin:auto }` that Tailwind Preflight's universal
         // `margin:0` zeroes — without it the fixed-width box pins to the top-left instead of centering.
-        'm-auto w-[min(100vw-2rem,42rem)] max-h-[85vh] overflow-auto rounded-2xl',
+        // dvh, not vh: mobile vh is the toolbar-collapsed height, so 85vh runs under the browser chrome;
+        // overscroll-contain keeps a scroll at the dialog's edge from rubber-banding the page behind.
+        'm-auto w-[min(100vw-2rem,42rem)] max-h-[85dvh] overflow-auto overscroll-contain rounded-2xl',
         'border border-line bg-panel p-5 text-ink shadow-xl',
         'backdrop:bg-ink/40',
       )}

@@ -18,6 +18,7 @@ import {
   sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
+  stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
   viewableInline,
@@ -625,9 +626,10 @@ export class BackendClient implements ApiClient {
     return this.repo.putIdea({ ...existing, status, updatedAt: this.now() });
   }
 
-  // --- Day (lazy recurrence on read) ---
+  // --- Day (lazy recurrence + stale sweep on read) ---
   async getDay(day: string): Promise<Day> {
     await this.materializeDueSeries(day);
+    await this.sweepStalePlanned(day);
     const existing = await this.repo.getDayRow(day);
     if (existing) return existing;
     return this.repo.putDay({
@@ -679,6 +681,21 @@ export class BackendClient implements ApiClient {
       });
     }
   }
+  // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
+  // planned. Each move re-reads the task first: a sweep races the user's own writes (e.g. starting the
+  // task), and writing back the list-time copy would undo them.
+  private async sweepStalePlanned(day: string): Promise<void> {
+    const tasks = await this.repo.listTasks();
+    if (!tasks.some((t) => t.status === 'planned')) return;
+    for (const { task, to } of stalePlannedMoves(tasks, await this.repo.listAllPlans(), day)) {
+      const fresh = await this.repo.getTask(task.id);
+      if (fresh?.status !== 'planned') continue;
+      // Gained a calendar event since the list read → backlog, never an orphaned event.
+      await this.repo.putTask(
+        taskTransition(fresh, fresh.gcalEventId ? 'backlog' : to, this.now()),
+      );
+    }
+  }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {
     const d = await this.getDay(day);
     return this.repo.putDay({ ...d, capacityHours, updatedAt: this.now() });
@@ -709,8 +726,8 @@ export class BackendClient implements ApiClient {
         ...existing,
         label: input.label,
         isWork: input.isWork,
-        order: input.order ?? 0,
-        active: input.active ?? true,
+        order: input.order ?? existing.order,
+        active: input.active ?? existing.active,
         updatedAt: this.now(),
       });
     }

@@ -16,6 +16,26 @@ describe('Rolls page', () => {
     expect(await screen.findByText('No rolls yet.')).toBeTruthy();
   });
 
+  it('the new-roll picker omits retired categories', async () => {
+    const api = freshApi();
+    const old = await api.upsertCategory({ label: 'Studying', isWork: true });
+    await api.upsertCategory({ id: old.id, label: 'Studying', isWork: true, active: false });
+    await api.upsertCategory({ label: 'ECEN 21', isWork: true });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/rolls' });
+
+    await user.click(await screen.findByRole('button', { name: /New roll/ }));
+    const select = screen.getByLabelText('Category') as HTMLSelectElement;
+    await waitFor(() =>
+      expect(Array.from(select.options).map((o) => o.textContent)).toContain('ECEN 21'),
+    );
+    expect(
+      Array.from(select.options)
+        .map((o) => o.textContent)
+        .join(),
+    ).not.toMatch(/Studying/);
+  });
+
   it('creates a roll from the collapsed form (estimate required, defaulted)', async () => {
     const api = freshApi();
     const user = userEvent.setup();

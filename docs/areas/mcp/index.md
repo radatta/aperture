@@ -55,13 +55,13 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 ## Tools (v1)
 
-| group | tools |
-| --- | --- |
-| tasks | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `delete_task {id}` |
-| categories | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?}` |
-| calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}` |
-| calendar | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy` |
-| attachments | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment` |
+| group            | tools                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `delete_task {id}` |
+| categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
+| calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
+| calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy`                                                                  |
+| attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`            |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -70,13 +70,15 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
 - **`update_task`** fan-out order is title → categoryId → dueDay → estimate → status; the estimate throws
   if frozen, and the error names which fields already applied.
-- **`update_category`** (rename / reorder / `isWork`) reads the current row and merges the patch over it —
-  on update `upsertCategory` replaces every field (`order` falls back to 0, `active` to true), so a bare
-  `{id, label}` would otherwise reset the order and reactivate a retired category. `active` is carried
-  through but **not settable**: nothing in `app/` honours it yet (pickers don't filter it, and Settings'
-  own rename/reorder resets it), so exposing "retire" would be a false promise. `isWork` here is
-  forward-only; the app's `setCategoryWork` (backfill past sessions) stays unexposed, as does
+- **`update_category`** (rename / reorder / `isWork` / retire) merges `label` + `isWork` over the current
+  row, since `upsertCategory` requires both; `order` and `active` are patch-style in the contract (omitted
+  keeps the current value), so they're sent only when given. `active:false` **retires** the category —
+  the app's pickers hide it, existing tasks keep the label — and `active:true` restores it (the same as
+  Settings → Retire / Restore). `isWork` here is forward-only; the app's `setCategoryWork` (backfill past sessions) stays unexposed, as does
   `deleteCategory` (reassign-everything).
+- **Stale planned tasks lag.** The stale-planned sweep runs inside `getDay`, which no tool calls — so
+  `list_tasks status=planned` / `list_backlog` still show yesterday's leftovers as planned until the app is
+  opened that day ([TECH §taskPlans](../../arch/TECH.md)).
 - **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
   and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
@@ -199,9 +201,9 @@ exchange; the façade only publishes correct metadata from our origin.
   exposes" true by construction.
 - **D13 — 30-day refresh token** for the claude client (vs the SPA client's 7). Its refresh token lives
   in claude.ai's server-side store, not a browser, and expiry means re-running the connector OAuth dance
-  on web *and* phone; the localStorage-leak reasoning behind the 7-day SPA ceiling doesn't apply.
+  on web _and_ phone; the localStorage-leak reasoning behind the 7-day SPA ceiling doesn't apply.
 - **`Authorization` forwards via a cache policy, not the origin-request policy.** CloudFront strips
-  `Authorization` by default, and CDK's L2 origin-request policy *refuses* it (throws at synth) — so the
+  `Authorization` by default, and CDK's L2 origin-request policy _refuses_ it (throws at synth) — so the
   `McpCachePolicy` carries it in the cache key (AWS's documented path; the header in the key means a
   response is never shared across tokens). The origin-request policy still forwards the agent-token + MCP
   headers. **Gotcha (found on the first dev deploy, invisible to synth/cdk-nag):** the cache policy's

@@ -5,10 +5,11 @@ import {
   heartbeatSession,
   resolveStaleSession,
   resumeSession,
+  stalePlannedMoves,
   taskTransition,
   withEstimate,
 } from './machines';
-import type { PomodoroSession, Task } from './types';
+import type { PomodoroSession, Task, TaskPlan } from './types';
 
 function baseTask(over: Partial<Task> = {}): Task {
   return {
@@ -124,5 +125,39 @@ describe('sessions — heartbeat lifecycle', () => {
     // Work 5 more min: only post-resume time counts.
     const after = heartbeatSession(resumed, 45 * 60_000);
     expect(after.activeMinutes).toBe(15);
+  });
+});
+
+describe('stalePlannedMoves', () => {
+  const plan = (taskId: string, day: string): TaskPlan => ({
+    id: `p-${taskId}-${day}`,
+    userId: 'u',
+    createdAt: 0,
+    updatedAt: 0,
+    deletedAt: null,
+    taskId,
+    day,
+    plannedMinutes: 30,
+    order: 1,
+  });
+
+  it('drops a superseded occurrence, but backlogs one that carries a calendar event', () => {
+    const old = baseTask({ id: 'old', seriesId: 's' });
+    const oldWithEvent = baseTask({ id: 'ev', seriesId: 's', gcalEventId: 'e1' });
+    const fresh = baseTask({ id: 'new', seriesId: 's' });
+    const moves = stalePlannedMoves(
+      [old, oldWithEvent, fresh],
+      [plan('old', '2026-08-03'), plan('ev', '2026-08-03'), plan('new', '2026-08-04')],
+      '2026-08-04',
+    );
+    expect(moves.map((m) => [m.task.id, m.to])).toEqual([
+      ['old', 'cancelled'],
+      ['ev', 'backlog'],
+    ]);
+  });
+
+  it('ignores anything not planned', () => {
+    const started = baseTask({ id: 'x', status: 'in_progress' });
+    expect(stalePlannedMoves([started], [], '2026-08-04')).toEqual([]);
   });
 });

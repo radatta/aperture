@@ -96,7 +96,7 @@ function TaskMeta({ task }: { task: Task }) {
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <CategoryTag categoryId={task.categoryId} />
       {task.estimateMin == null && canScope && (
         <Text size="xs" tone="muted">

@@ -15,6 +15,7 @@ import type {
   Settings,
   Task,
   TaskStatus,
+  UpsertCategoryInput,
 } from '@aperture/shared';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
@@ -58,7 +59,8 @@ function nullableStr(args: Record<string, unknown>, key: string): string | null 
 function reqInt(args: Record<string, unknown>, key: string, min?: number): number {
   const v = args[key];
   if (v === undefined || v === null) throw new RpcParamError(`"${key}" is required`);
-  if (typeof v !== 'number' || !Number.isInteger(v)) throw new RpcParamError(`"${key}" must be an integer`);
+  if (typeof v !== 'number' || !Number.isInteger(v))
+    throw new RpcParamError(`"${key}" must be an integer`);
   if (min !== undefined && v < min) throw new RpcParamError(`"${key}" must be >= ${min}`);
   return v;
 }
@@ -307,7 +309,9 @@ export const TOOLS: Tool[] = [
       if (!task) throw new Error(`Not found: ${id}`);
       // Same guard as the UI (TaskEditor hides Delete): getDay would respawn a deleted occurrence.
       if (task.seriesId !== null) {
-        throw new Error('Recurring occurrence — use update_task status=cancelled instead of deleting');
+        throw new Error(
+          'Recurring occurrence — use update_task status=cancelled instead of deleting',
+        );
       }
       await ctx.dispatch('deleteTask', [id]);
       return { deleted: id };
@@ -346,7 +350,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_category',
     description:
-      'Patch a category: label, isWork, order. Unsent fields keep their current value. isWork is forward-only here — past sessions keep their recorded work/personal split.',
+      'Patch a category: label, isWork, order, active. Unsent fields keep their current value. active:false retires it (hidden from pickers; existing tasks keep the label), active:true restores it. isWork is forward-only here — past sessions keep their recorded work/personal split.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -354,28 +358,29 @@ export const TOOLS: Tool[] = [
         label: { type: 'string' },
         isWork: { type: 'boolean' },
         order: { type: 'integer' },
+        active: { type: 'boolean' },
       },
       required: ['id'],
       additionalProperties: false,
     },
     async run(args, ctx) {
       const id = reqStr(args, 'id');
-      if (!['label', 'isWork', 'order'].some((f) => present(args, f))) {
+      if (!['label', 'isWork', 'order', 'active'].some((f) => present(args, f))) {
         throw new RpcParamError('update_category needs at least one field to change');
       }
-      // upsertCategory REPLACES every field (order defaults to 0, active to true), so merge over the current row.
+      // upsertCategory requires label + isWork, so those merge over the current row; order/active are
+      // patch-style in the contract (omitted keeps the current value), so they're sent only when given.
       const cats = (await ctx.dispatch('listCategories', [])) as Category[];
       const cat = cats.find((c) => c.id === id);
       if (!cat) throw new Error(`Not found: ${id}`);
-      return ctx.dispatch('upsertCategory', [
-        {
-          id,
-          label: present(args, 'label') ? reqStr(args, 'label') : cat.label,
-          isWork: present(args, 'isWork') ? reqBool(args, 'isWork') : cat.isWork,
-          order: present(args, 'order') ? reqInt(args, 'order') : cat.order,
-          active: cat.active, // carried through, never set — the app doesn't honour active yet
-        },
-      ]);
+      const input: UpsertCategoryInput = {
+        id,
+        label: present(args, 'label') ? reqStr(args, 'label') : cat.label,
+        isWork: present(args, 'isWork') ? reqBool(args, 'isWork') : cat.isWork,
+      };
+      if (present(args, 'order')) input.order = reqInt(args, 'order');
+      if (present(args, 'active')) input.active = reqBool(args, 'active');
+      return ctx.dispatch('upsertCategory', [input]);
     },
   },
   {
@@ -389,7 +394,9 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     run(args, ctx) {
-      return ctx.dispatch('getCalibration', [{ from: reqDay(args, 'from'), to: reqDay(args, 'to') }]);
+      return ctx.dispatch('getCalibration', [
+        { from: reqDay(args, 'from'), to: reqDay(args, 'to') },
+      ]);
     },
   },
   {
@@ -407,7 +414,8 @@ export const TOOLS: Tool[] = [
       if ((from === undefined) !== (to === undefined)) {
         throw new RpcParamError('pass both "from" and "to", or neither');
       }
-      const range = from !== undefined ? [{ from: reqDay(args, 'from'), to: reqDay(args, 'to') }] : [];
+      const range =
+        from !== undefined ? [{ from: reqDay(args, 'from'), to: reqDay(args, 'to') }] : [];
       return ctx.dispatch('listLeetcodeAttempts', range);
     },
   },
@@ -444,7 +452,10 @@ export const TOOLS: Tool[] = [
       type: 'object',
       properties: {
         taskId: { type: 'string' },
-        start: { type: 'string', description: 'ISO 8601 with offset, e.g. 2026-09-22T14:00:00-07:00' },
+        start: {
+          type: 'string',
+          description: 'ISO 8601 with offset, e.g. 2026-09-22T14:00:00-07:00',
+        },
         end: { type: 'string', description: 'ISO 8601 with offset' },
         durationMin: { type: 'integer', minimum: 1 },
         title: { type: 'string' },
@@ -459,7 +470,8 @@ export const TOOLS: Tool[] = [
       const startMs = reqTime(args, 'start');
       let endMs: number;
       if (present(args, 'end')) endMs = reqTime(args, 'end');
-      else if (present(args, 'durationMin')) endMs = startMs + reqInt(args, 'durationMin', 1) * 60_000;
+      else if (present(args, 'durationMin'))
+        endMs = startMs + reqInt(args, 'durationMin', 1) * 60_000;
       else throw new RpcParamError('provide either "end" (ISO) or "durationMin"');
       if (endMs <= startMs) throw new RpcParamError('the event must end after it starts');
 
@@ -470,7 +482,9 @@ export const TOOLS: Tool[] = [
       let calendarId = optStr(args, 'calendarId');
       if (accountSub || calendarId) {
         if (!accountSub || !calendarId) {
-          throw new RpcParamError('pass accountSub and calendarId together, or neither (to use the write default)');
+          throw new RpcParamError(
+            'pass accountSub and calendarId together, or neither (to use the write default)',
+          );
         }
       } else {
         const wd = ((await ctx.dispatch('getSettings', [])) as Settings).calendarWriteDefault;
@@ -488,13 +502,15 @@ export const TOOLS: Tool[] = [
         if (!task) throw new Error(`Not found: ${taskId}`);
         title = task.title;
       }
-      return ctx.dispatch('insertCalendarEvent', [{ taskId, accountSub, calendarId, title, startMs, endMs }]);
+      return ctx.dispatch('insertCalendarEvent', [
+        { taskId, accountSub, calendarId, title, startMs, endMs },
+      ]);
     },
   },
   {
     name: 'delete_calendar_event',
     description:
-      "Delete the Google Calendar event linked to a task. This is a REAL delete in Google Calendar, but only ever of an event Aperture created for this task — it cannot touch any other calendar event.",
+      'Delete the Google Calendar event linked to a task. This is a REAL delete in Google Calendar, but only ever of an event Aperture created for this task — it cannot touch any other calendar event.',
     inputSchema: {
       type: 'object',
       properties: { taskId: { type: 'string' } },
@@ -529,7 +545,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'list_attachments',
-    description: 'List ready attachments (metadata) for a task, or across all tasks when taskId is omitted.',
+    description:
+      'List ready attachments (metadata) for a task, or across all tasks when taskId is omitted.',
     inputSchema: {
       type: 'object',
       properties: { taskId: { type: 'string' } },

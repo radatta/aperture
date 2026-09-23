@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { addDays, todayKey } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -48,6 +49,21 @@ describe('TaskCard', () => {
     // Only the unscoped task carries a Scope button.
     const scopeButtons = screen.getAllByRole('button', { name: 'Scope' });
     expect(scopeButtons).toHaveLength(1);
+  });
+});
+
+describe('stale planned sweep', () => {
+  it('shows a task left planned on a past day in the Backlog tab', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Left behind' });
+    await api.upsertPlan({ taskId: t.id, day: addDays(todayKey(4), -1), plannedMinutes: 30, order: 1 });
+    await api.transitionTask(t.id, 'planned');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    expect(await screen.findByRole('button', { name: 'Left behind' })).toBeTruthy();
+    expect((await api.getTask(t.id))?.status).toBe('backlog');
   });
 });
 

@@ -2,7 +2,7 @@
 // SAME rules. These never touch storage; they take an entity + inputs and return the next entity
 // (or throw on an illegal move). This is where the calibration integrity actually lives.
 
-import type { BaseEntity, PomodoroSession, Task, TaskStatus } from './types';
+import type { BaseEntity, PomodoroSession, Task, TaskPlan, TaskStatus } from './types';
 
 // --- Tasks -----------------------------------------------------------------
 
@@ -34,6 +34,36 @@ export function taskTransition(task: Task, to: TaskStatus, now: number): Task {
   if (to === 'done') next.completedAt = now;
   if (to === 'cancelled') next.cancelledAt = now;
   return next;
+}
+
+// Stale-planned sweep (getDay's lazy rollover): a planned task with no alive plan row on `day` or later
+// was left behind. It goes back to backlog — unless it's a recurring occurrence already superseded by
+// its series' copy on `day`, which is dropped instead (a missed daily would otherwise pile up one
+// backlog copy per day). An occurrence carrying a calendar event goes to backlog: a background read
+// never deletes external events. Plan rows are history and stay. Pass alive rows only.
+// Monotone in `day`: a past day never moves more than today would; a FUTURE day would sweep today's plan.
+export function stalePlannedMoves(
+  tasks: Task[],
+  plans: TaskPlan[],
+  day: string,
+): { task: Task; to: 'backlog' | 'cancelled' }[] {
+  const planned = tasks.filter((t) => t.status === 'planned');
+  if (planned.length === 0) return [];
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const ahead = new Set<string>();
+  const seriesToday = new Set<string>();
+  for (const p of plans) {
+    if (p.day >= day) ahead.add(p.taskId);
+    const seriesId = p.day === day ? byId.get(p.taskId)?.seriesId : null;
+    if (seriesId) seriesToday.add(seriesId);
+  }
+  return planned
+    .filter((t) => !ahead.has(t.id))
+    .map((task) => {
+      const superseded =
+        task.seriesId !== null && seriesToday.has(task.seriesId) && !task.gcalEventId;
+      return { task, to: superseded ? 'cancelled' : 'backlog' };
+    });
 }
 
 export function canEditEstimate(task: Task): boolean {

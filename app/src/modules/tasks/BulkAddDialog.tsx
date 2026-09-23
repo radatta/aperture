@@ -5,7 +5,7 @@ import { Text } from '../../components/Text';
 import { Button } from '../../components/Button';
 import { Textarea } from '../../components/Textarea';
 import { fmtDuration } from '../../lib/format';
-import { useCategories } from '../../data/hooks/useCategories';
+import { useActiveCategories } from '../../data/hooks/useCategories';
 import { useAllTasks, useCreateTasks } from '../../data/hooks/useTasks';
 
 const PLACEHOLDER = `email coach
@@ -25,7 +25,7 @@ export function BulkAddDialog({
   onClose: () => void;
   onAdded: (count: number) => void;
 }) {
-  const { data: categories = [], isSuccess: categoriesLoaded } = useCategories();
+  const { data: categories = [], isSuccess: categoriesLoaded } = useActiveCategories();
   const { data: tasks = [] } = useAllTasks();
   const createTasks = useCreateTasks();
   const [text, setText] = useState('');
@@ -50,7 +50,10 @@ export function BulkAddDialog({
       ),
     [tasks],
   );
-  const catRefs = useMemo(() => categories.map((c) => ({ id: c.id, label: c.label })), [categories]);
+  const catRefs = useMemo(
+    () => categories.map((c) => ({ id: c.id, label: c.label })),
+    [categories],
+  );
   const parse = useMemo(
     () => parseBulkTasks(text, catRefs, existingTitles),
     [text, catRefs, existingTitles],
@@ -90,7 +93,8 @@ export function BulkAddDialog({
             Bulk add tasks
           </Text>
           <Text size="sm" tone="muted">
-            One line each — <code>title | ~30 #Admin due:2026-09-25</code> (estimate, category, due date).
+            One line each — <code>title | ~30 #Admin due:2026-09-25</code> (estimate, category, due
+            date).
           </Text>
           {categories.length > 0 && (
             <Text size="xs" tone="subtle">
@@ -154,7 +158,8 @@ export function BulkAddDialog({
 
         {failed && (
           <Text size="sm" tone="danger">
-            Couldn’t save — your text is intact. Any that landed show as “already exists”; try again.
+            Couldn’t save — your text is intact. Any that landed show as “already exists”; try
+            again.
           </Text>
         )}
 

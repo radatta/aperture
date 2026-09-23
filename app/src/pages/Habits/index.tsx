@@ -10,7 +10,7 @@ import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
-import { useCategories } from '../../data/hooks/useCategories';
+import { useCategoryOptions } from '../../data/hooks/useCategories';
 import {
   useCheckHabit,
   useHabitChecks,
@@ -204,7 +204,7 @@ function HabitCard({
 // Collapsed by default. Adding a habit is a once-a-month act; the page's real job is the daily
 // check-off, and a permanently-open three-field form was the first thing on it.
 function HabitForm() {
-  const { data: cats = [] } = useCategories();
+  const categoryOptions = useCategoryOptions(null);
   const upsert = useUpsertHabit();
   const { open, triggerRef, onOpen, onClose } = useDisclosure();
   const [name, setName] = useState('');
@@ -267,7 +267,7 @@ function HabitForm() {
           placeholder="Uncategorized"
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          options={cats.map((c) => ({ value: c.id, label: c.label }))}
+          options={categoryOptions}
           className="w-40"
         />
         <Button size="sm" onClick={create} disabled={!name.trim() || upsert.isPending}>

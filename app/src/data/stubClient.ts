@@ -4,6 +4,7 @@
 //   - the WRITES-OBJECT seam: every mutation funnels through `writes` (single audit point), mirroring
 //     the Lambda rule that guarantees no stray side effects.
 //   - LAZY recurrence: due series occurrences materialize on getDay(), exactly like the Lambda will.
+//   - LAZY stale sweep: getDay() also returns planned tasks with no plan row on/after the day to backlog.
 
 import {
   assertAttachmentAllowed,
@@ -25,6 +26,7 @@ import {
   sanitizeFilename,
   seriesDueOn,
   splitFollowUp,
+  stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
   withEstimate,
@@ -686,9 +688,10 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.ideas, id, { status });
   }
 
-  // --- Day (lazy recurrence on read) ---------------------------------------
+  // --- Day (lazy recurrence + stale sweep on read) --------------------------
   async getDay(day: string): Promise<Day> {
     this.materializeDueSeries(day);
+    this.sweepStalePlanned(day);
     const existing = this.alive(this.store.days).find((d) => d.date === day);
     if (existing) return existing;
     return this.writes.insert(this.store.days, {
@@ -735,6 +738,14 @@ class StubClient implements ApiClient {
       });
     }
   }
+  // Rule lives in the shared stalePlannedMoves (backend parity).
+  private sweepStalePlanned(day: string): void {
+    const tasks = this.alive(this.store.tasks);
+    if (!tasks.some((t) => t.status === 'planned')) return;
+    for (const { task, to } of stalePlannedMoves(tasks, this.alive(this.store.plans), day)) {
+      this.writes.put(this.store.tasks, taskTransition(task, to, this.now()));
+    }
+  }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {
     const d = await this.getDay(day);
     return this.writes.patch(this.store.days, d.id, { capacityHours });
@@ -757,11 +768,12 @@ class StubClient implements ApiClient {
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.id) {
+      const existing = this.mustFind(this.store.categories, input.id);
       return this.writes.patch(this.store.categories, input.id, {
         label: input.label,
         isWork: input.isWork,
-        order: input.order ?? 0,
-        active: input.active ?? true,
+        order: input.order ?? existing.order,
+        active: input.active ?? existing.active,
       });
     }
     return this.writes.insert(this.store.categories, {
@@ -891,7 +903,9 @@ class StubClient implements ApiClient {
       googleAccounts: current.googleAccounts.filter((a) => a.sub !== accountSub),
       calendarShapeRefs: current.calendarShapeRefs.filter((r) => r.accountSub !== accountSub),
       calendarWriteDefault:
-        current.calendarWriteDefault?.accountSub === accountSub ? null : current.calendarWriteDefault,
+        current.calendarWriteDefault?.accountSub === accountSub
+          ? null
+          : current.calendarWriteDefault,
       updatedAt: this.now(),
     };
     this.store.settings = next;
