@@ -164,12 +164,11 @@ past 5 elements.
 
 ## 6. Deferred / follow-ups (found, not built here)
 
-- A `planned` task whose plan row is on a **past** day appears nowhere (`BacklogSection` filters
-  backlog|in_progress; `PlanSection` shows only today). "Misses never carry guilt" currently means they
-  *vanish* — a rollover on `getDay`, or a "left from yesterday" line, is its own PR.
+- ~~A `planned` task whose plan row is on a past day appears nowhere.~~ Resolved: `getDay` sweeps it
+  back to the backlog, and the night "Still open — when?" step asks first
+  ([tasks/lenses.md](../tasks/lenses.md) D8).
 - `useTodayPlan.spentMin` is not live either; `liveElapsedMin` could feed `TimeBudgetCard` later.
-- The radar's "+N more this week" links to `/tasks` for now; its real target is pr-d's this-week's-dues
-  deep view.
+- ~~The radar's "+N more this week" links to `/tasks` for now.~~ It links to `/tasks?lens=week`.
 - **Non-hero in-progress tasks have no inline Done/Focus** — only the hero is actionable (D2: "the one
   you act on"), so finishing a *second* concurrent in-progress task means a trip to `/tasks`. Deliberate
   and fine for the common single-task case; surfacing a Done on non-hero in-progress rows is a later

@@ -77,8 +77,9 @@ The card keeps only the actions you press without thinking. No overflow menu.
 
 - **Rename sync** — renaming a task does *not* rename its recurring series template or its linked
   Google Calendar event. Calendar edit-sync is already a deferred gap (`docs/areas/calendar/`).
-- **Home / PlanSection rows** are not yet wired to the modal. `TaskTitleButton` is the seam — those
-  truncated title spots can adopt it later with no new plumbing.
+- **Home rows** are not yet wired to the modal. `TaskTitleButton` is the seam — those truncated title
+  spots can adopt it later with no new plumbing. (On `/tasks` every row is a `TaskCard`, and a click
+  anywhere on the row opens the modal.)
 
 ## Build record
 
