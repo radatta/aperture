@@ -690,7 +690,10 @@ export class BackendClient implements ApiClient {
     for (const { task, to } of stalePlannedMoves(tasks, await this.repo.listAllPlans(), day)) {
       const fresh = await this.repo.getTask(task.id);
       if (fresh?.status !== 'planned') continue;
-      await this.repo.putTask(taskTransition(fresh, to, this.now()));
+      // Gained a calendar event since the list read → backlog, never an orphaned event.
+      await this.repo.putTask(
+        taskTransition(fresh, fresh.gcalEventId ? 'backlog' : to, this.now()),
+      );
     }
   }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {

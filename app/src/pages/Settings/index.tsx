@@ -158,15 +158,11 @@ function CategoryRow({
 
   // Retire hides it from every picker; tasks keep the label. Restore brings it back. The row moves
   // between groups once the list refetches, and a moved DOM node drops focus — so refocus after that.
-  async function setActive(active: boolean) {
-    await upsert.mutateAsync({
-      id: cat.id,
-      label: cat.label,
-      isWork: cat.isWork,
-      order: cat.order,
-      active,
-    });
-    closePanel();
+  function setActive(active: boolean) {
+    upsert.mutate(
+      { id: cat.id, label: cat.label, isWork: cat.isWork, order: cat.order, active },
+      { onSuccess: closePanel },
+    );
   }
 
   async function flip(backfillPast: boolean) {
@@ -247,7 +243,7 @@ function CategoryRow({
               },
               cat.active
                 ? { label: 'Retire…', onSelect: () => setPanel('retire') }
-                : { label: 'Restore', onSelect: () => void setActive(true) },
+                : { label: 'Restore', onSelect: () => setActive(true) },
               ...(others.length > 0
                 ? [
                     {
@@ -281,7 +277,7 @@ function CategoryRow({
           <Text size="sm" tone="muted">
             Retire {cat.label}? Its tasks keep the label; it leaves the pickers. Restore any time.
           </Text>
-          <Button size="sm" autoFocus onClick={() => void setActive(false)}>
+          <Button size="sm" autoFocus onClick={() => setActive(false)}>
             Retire
           </Button>
           <Button variant="ghost" size="sm" onClick={() => closePanel()}>
@@ -317,6 +313,12 @@ function CategoryRow({
             Cancel
           </Button>
         </div>
+      )}
+
+      {upsert.isError && (
+        <Text size="xs" tone="danger" className="mt-2">
+          Couldn't save that change — try again.
+        </Text>
       )}
 
       {backfilled !== null && (
