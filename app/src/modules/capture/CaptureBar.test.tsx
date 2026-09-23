@@ -86,7 +86,7 @@ describe('CaptureBar', () => {
     renderWithProviders(<CaptureBar />, { api });
 
     await user.click(screen.getByRole('button', { name: 'Task' }));
-    const pill = screen.getByRole('button', { name: '→ today' });
+    const pill = screen.getByRole('button', { name: 'today' });
     await user.click(pill);
     expect(pill.getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByPlaceholderText('New task for today…')).toBeTruthy();
@@ -114,7 +114,7 @@ describe('CaptureBar', () => {
     renderWithProviders(<CaptureBar />, { api });
 
     await user.click(screen.getByRole('button', { name: 'Task' }));
-    await user.click(screen.getByRole('button', { name: '→ today' }));
+    await user.click(screen.getByRole('button', { name: 'today' }));
     await user.type(screen.getByLabelText('Capture task'), 'call bank');
     await user.keyboard('{Enter}');
 

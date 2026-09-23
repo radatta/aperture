@@ -146,7 +146,7 @@ function PlanTodayCard() {
       aside={
         <div className="flex items-center gap-3">
           <AddToTodayButton />
-          <CardLink to="/tasks?lens=week">Plan</CardLink>
+          <CardLink to="/tasks">Plan</CardLink>
         </div>
       }
     >

@@ -75,7 +75,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     const value = text.trim();
     if (!value) return;
     const submitted = mode;
-    const today = submitted === 'task' && toToday;
+    const goesToday = submitted === 'task' && toToday;
     // The field clears optimistically so capture stays instant — which means a failed write would
     // otherwise destroy the thought outright: the creates roll back, the entry disappears from the
     // list, and the text is already gone from the field. Capture is the #1 mechanic and the whole
@@ -85,11 +85,11 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
       onError: () => {
         setText((current) => (current === '' ? value : current));
         setMode(submitted);
-        if (today) setToToday(true); // the retry should go where the first attempt was headed
+        if (goesToday) setToToday(true); // the retry should go where the first attempt was headed
         setReceipt({ mode: submitted, failed: true, at: Date.now() });
       },
     };
-    if (today)
+    if (goesToday)
       createToday(value).then(
         (r) =>
           setReceipt({
@@ -148,7 +148,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
                   : 'border-line text-ink-muted hover:text-ink',
               )}
             >
-              → today
+              <span aria-hidden>→ </span>today
             </button>
           )}
         </div>
@@ -160,7 +160,9 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
             {receipt && <Receipt receipt={receipt} />}
           </div>
           {!receipt && <Hint />}
-          {trailing}
+          {/* Gives way to a receipt: on a phone the row can't hold both, and the receipt is the
+              one that's momentary. */}
+          {!receipt && trailing}
         </div>
       </div>
       <div className="flex items-end gap-2">

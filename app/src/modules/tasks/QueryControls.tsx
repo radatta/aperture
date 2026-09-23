@@ -9,13 +9,20 @@ import { useActiveCategories, useCategories } from '../../data/hooks/useCategori
 import { overrideChips, resetToLens, SORT_LABEL, STATUS_LABEL } from './query';
 import type { DueBucket, Place, SortKey, StatusChip, TaskQuery } from './query';
 
-const DUE_OPTIONS: { value: DueBucket; label: string }[] = [
-  { value: 'any', label: 'Any' },
-  { value: 'today', label: 'Today' },
-  { value: 'week', label: 'This week' },
-  { value: 'dated', label: 'Dated' },
-  { value: 'undated', label: 'No date' },
-];
+const DUE_LABEL: Record<DueBucket, string> = {
+  any: 'Any',
+  today: 'Today',
+  week: 'This week',
+  dated: 'Dated',
+  undated: 'No date',
+};
+// Only the options that can match on each lens: every Week task is due this week, no Backlog task is.
+const DUE_OPTIONS: Record<Place, DueBucket[]> = {
+  today: [],
+  week: ['any', 'today'],
+  backlog: ['any', 'dated', 'undated'],
+  done: ['any', 'dated', 'undated'],
+};
 
 // Search box + "Filter" disclosure + the chips for whatever differs from the lens preset. On Today
 // it's search only: the plan's order is the point there, so there's nothing to sort or group.
@@ -55,7 +62,7 @@ export function QueryControls({
             className="shrink-0"
             ref={panel.triggerRef}
             aria-expanded={panel.open}
-            aria-controls="task-filters"
+            aria-controls={panel.open ? 'task-filters' : undefined}
             onClick={panel.open ? panel.onClose : panel.onOpen}
           >
             {chips.length ? `Filter · ${chips.length}` : 'Filter'}
@@ -70,7 +77,7 @@ export function QueryControls({
               type="button"
               aria-label={`Remove filter: ${c.label}`}
               onClick={() => onChange(c.remove(query))}
-              className="rounded-full border border-line px-2.5 py-0.5 text-xs text-ink-muted transition hover:text-ink"
+              className="rounded-full border border-line px-2.5 py-1 text-xs text-ink-muted transition hover:text-ink"
             >
               {c.label} ×
             </button>
@@ -100,13 +107,17 @@ function FilterPanel({
   onDone: () => void;
 }) {
   const { data: active = [] } = useActiveCategories();
-  const statuses: StatusChip[] =
-    place === 'done' ? ['done', 'cancelled'] : ['backlog', 'in_progress'];
+  // Status only splits history (every open task off Today is backlog or planned-for-later).
+  const statuses: StatusChip[] = place === 'done' ? ['done', 'cancelled'] : [];
   const toggle = <T,>(list: T[], v: T) =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
   return (
-    <Card id="task-filters" className="flex flex-col gap-3">
+    <Card
+      id="task-filters"
+      className="flex flex-col gap-3"
+      onKeyDown={(e) => e.key === 'Escape' && onDone()}
+    >
       <Row label="Category">
         {active.map((c) => (
           <Chip
@@ -125,30 +136,32 @@ function FilterPanel({
         </Chip>
       </Row>
       <Row label="Due">
-        {DUE_OPTIONS.map((o) => (
+        {DUE_OPTIONS[place].map((d) => (
           <Chip
-            key={o.value}
-            on={query.due === o.value}
-            ariaLabel={`Due: ${o.label}`}
-            onClick={() => onChange({ ...query, due: o.value })}
+            key={d}
+            on={query.due === d}
+            ariaLabel={`Due: ${DUE_LABEL[d]}`}
+            onClick={() => onChange({ ...query, due: d })}
           >
-            {o.label}
+            {DUE_LABEL[d]}
           </Chip>
         ))}
       </Row>
-      <Row label="Status">
-        {statuses.map((s) => (
-          <Chip
-            key={s}
-            on={query.statuses.includes(s)}
-            // "Status: …" keeps the accessible name distinct from the lens pill of the same word.
-            ariaLabel={`Status: ${STATUS_LABEL[s]}`}
-            onClick={() => onChange({ ...query, statuses: toggle(query.statuses, s) })}
-          >
-            {STATUS_LABEL[s]}
-          </Chip>
-        ))}
-      </Row>
+      {statuses.length > 0 && (
+        <Row label="Status">
+          {statuses.map((s) => (
+            <Chip
+              key={s}
+              on={query.statuses.includes(s)}
+              // "Status: …" keeps the accessible name distinct from the lens pill of the same word.
+              ariaLabel={`Status: ${STATUS_LABEL[s]}`}
+              onClick={() => onChange({ ...query, statuses: toggle(query.statuses, s) })}
+            >
+              {STATUS_LABEL[s]}
+            </Chip>
+          ))}
+        </Row>
+      )}
       <div className="flex flex-wrap gap-3">
         <Select
           label="Sort"

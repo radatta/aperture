@@ -39,26 +39,35 @@ it a Today task.
 - **D4 — state.** The lens is in the URL (`?lens=week`, so Home links straight to Week). Search +
   filters are in sessionStorage (`aperture.tasks.query`), stamped with the day — sticky for a session,
   reset each new day. Switching lens keeps the search text and resets the filters to that lens's preset.
-  Collapsed groups are in localStorage (`aperture.tasks.collapsed`); a group of 8+ starts collapsed. A
-  search or filter shows every group open.
+  Collapsed groups are in localStorage (`aperture.tasks.collapsed`); a group of 8+ starts collapsed
+  (decided once, the first time the group is seen, so it doesn't snap shut as it grows). A search or a
+  narrowing filter (category, due, status) opens every group; a different sort or grouping doesn't.
+  The filter panel offers only options that can match on that lens (Week: due today; Backlog/Done:
+  dated or not; status only on Done). Group headers carry a count (`CSEN 146 · 4`) — per-course sizes
+  are what you plan from; it's the whole-backlog tally the lens pill leaves out.
 - **D5 — one write path.** `useAddToDay(day?)` is the only code that puts a task on a day or takes it
   off:
   - add = plan row **first**, then backlog → planned (a planned task without a row is what the stale
     sweep moves back). A planned task stays planned; an in-progress task keeps its status.
-  - dedupe: `upsertPlan` has none, so the hook reads that day's plan fresh and skips a task already on
-    it, and ignores a second call while the first is in flight. Server-side dedupe is a follow-up.
-  - unplan = status **first**, then remove the row (the reverse races the sweep).
+  - dedupe: `upsertPlan` has none, so the hook reads that day's plan fresh and skips writing a row the
+    task already has, and ignores a second call while the first is in flight. The status step still
+    runs on that path, so retrying repairs a half-done add. Server-side dedupe is a follow-up.
+  - unplan = status **first** (read fresh), then remove the row (the reverse races the sweep). A task
+    also on the next day's plan keeps its status — only this row goes.
+  - Row buttons disable while their write runs, a failure shows "Couldn't save that", and focus moves
+    to the list (not `<body>`) when the row leaves it.
   - `createToday` = create + add, not atomic: on a planning failure the task stays in the backlog and
     the caller says so.
-- **D6 — "Backlog" stays a unique button name.** The lens pill is "Backlog"; the filter chip's
-  accessible name is "Status: Backlog". The Backlog status chip covers planned-for-another-day tasks.
+- **D6 — status filters only split history.** The Done lens offers Done · Dropped (accessible names
+  "Status: …"). Off Today, every open task is backlog or planned-for-another-day, so a status filter
+  there could never narrow anything and isn't offered.
 - **D7 — capture "→ today" is one-shot.** It applies to the next task only and resets after every
   submit, so it can't silently keep filling today's plan.
 - **D8 — night "Still open — when?"** Inside "Today in review": each unfinished task on today's plan
   with no row tomorrow. **Tomorrow** adds a row for tomorrow (today's stays as history; a started task
   stays started). **Backlog** takes it off today, started or not (the locked estimate and logged time
-  stay). **Leave** hides it for the session; the next morning's stale sweep handles it. No count, no
-  red.
+  stay; a running focus timer on it is stopped first). **Leave** hides it for the session; the next
+  morning's stale sweep handles it. No count, no red.
 - **D9 — the idle Focus control docks in the capture panel.** It used to float above the panel and sit
   over right-aligned content while scrolling.
 

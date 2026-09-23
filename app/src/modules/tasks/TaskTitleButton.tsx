@@ -6,7 +6,7 @@ import { Text } from '../../components/Text';
 // The task title as the trigger that opens the editor. Truncates in the row, but its accessible name
 // is the FULL title (so it's findable and a screen reader gets the whole thing); the modal shows it
 // unclipped. Ref-forwarding so useDisclosure can return focus here on close. The seam other truncated
-// title spots (Home, PlanSection) can adopt later.
+// title spots (Home) can adopt later.
 export function TaskTitleButton({
   task,
   onOpen,

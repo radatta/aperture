@@ -8,7 +8,7 @@
 import type { BaseEntity, Roll, Task } from './types';
 import { dayKey } from './dates';
 
-// A picked Roll with no estimate still needs a plannable duration — the same fallback PlanSection uses.
+// A picked Roll with no estimate still needs a plannable duration — the same fallback useAddToDay uses.
 export const ROLL_PLAN_FALLBACK_MIN = 30;
 
 // The non-identity fields of a fresh rep task for a roll — a planned, unlocked task carrying the roll's
