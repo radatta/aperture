@@ -137,6 +137,8 @@ describe('TaskEditor', () => {
     expect(labels).toContain('CSEN 146');
     expect(labels).not.toContain('Studying');
     expect(labels).not.toContain('Studying (retired)');
+    // The retired option is the saved value, so the form opens clean.
+    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('hides Split on a finished task', async () => {
