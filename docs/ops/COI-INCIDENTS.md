@@ -16,6 +16,7 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 | D | VM rebuilt from scratch; sessions and `coi` profiles gone | 2026-09-06 | A stray `-` in `limactl edit`'s `mounts:` block; `~/.coi/` was VM-local, so the rebuild deleted it |
 | E | Container froze on a HIGH threat verdict 2 min into a session | 2026-09-06 | False positive: session-start read I/O tripped `file_read_rate_mb_per_sec`; `coi audit` then failed to surface the event it had on disk |
 | F | Container **killed** three times mid-session, CRITICAL "reverse shell" | 2026-09-07 | False positive: a hardcoded pattern list flags `python3 -c`, gated only on "the command contains a `:`". Routine JSON one-liners match |
+| G | 2026-09-07 config-iteration afternoon: session forks on every `--resume`; container-local dotfiles (git identity, mise shadowing) | 2026-09-07 | `--fork-session` on every resume (not COI's doing); `~/.gitconfig` + mise pins live on the rootfs and evaporate per container |
 
 ---
 
@@ -251,17 +252,15 @@ is ever hit again — the number costs nothing, but a change that doesn't land i
       correctness-of-config item, not a live failure.
 - [ ] Bake the service trim + chromium into a `coi-aperture` image — one job, closes two parked items
       (COI-SANDBOX.md → *Deferred / to-do*)
-- [ ] Add the pids check to the session-start ritual, since the failure mode is silent
+- [x] Add the pids check to the session-start ritual, since the failure mode is silent — done
+      (COI-SANDBOX.md → *Run* → "First command in a new container", and *One-time setup* step 11)
 - [ ] Trim MCP servers per-session — they multiply N×M with no dedup
 
 ---
 
 # Incident B — a 13-hour unattended run died, and left the terminal broken
 
-Written up after a 2026-08-21/22 debugging session that cost several hours. Everything here is
-**log-backed where a log line is quoted; inferences are labelled as such** — the distinction
-matters, because the point of this page is to still be trustworthy months from now. Dead ends are
-recorded deliberately so they aren't re-explored. Applies to **any** COI project, not just Aperture.
+Written up after a 2026-08-21/22 debugging session that cost several hours.
 
 ### The invariant (this is the whole thing)
 
@@ -350,12 +349,8 @@ tail -50 ~/.coi/audit/<container-name>.jsonl        # per-poll telemetry, whole 
 grep '"level":"high"' ~/.coi/audit/<container-name>.jsonl
 coi audit -f <container-name>                        # live follow only
 ```
-> ⚠️ **Corrected 2026-09-06 — an earlier version of this line said `coi audit` is live-only with no
-> persisted history. Wrong.** `~/.coi/audit/<name>.jsonl` holds complete per-poll telemetry for the
-> container's whole lifetime, so "did the monitor pause or kill it?" **is** answerable. What's
-> broken is the CLI read path: `coi audit <name>` returned empty for a container whose file was
-> fully populated. Go to the file first. See *Incident E* and `COI-SANDBOX.md` →
-> *Container frozen — find out what tripped it*.
+> Corrected 2026-09-06: the file holds complete per-poll history; only the `coi audit <name>` read
+> path is broken — see *Incident E* (dead end + root cause 2).
 
 **On the Mac:**
 ```bash
@@ -419,7 +414,7 @@ mounts:
 ```
 
 > **Which file held it is genuinely unresolved, and it matters.** That syntax is YAML and is
-> character-for-character the **Lima** form from *One-time setup → step 3* (`limactl edit incus`).
+> character-for-character the **Lima** form from *One-time setup → step 1* (`limactl edit incus`).
 > Aperture's `.coi/config.toml` is TOML (`[[ports.map]]`, `location = "…"`) and could not hold it.
 > The operator recalls editing a project `.coi/config.toml`. Both can't be literally true. **Check
 > `limactl edit incus` and the project's `.coi/config.toml` side by side before trusting either
@@ -476,7 +471,7 @@ Supporting evidence:
 | --- | --- | --- |
 | OOM kill | **Unproven — NOT "no"** | The grep came back empty, but it ran against the **post-incident boot** (VM cold-booted 16:55:15), so it could not have contained the incident. Re-run as `journalctl -k -b -1`, and only if `/var/log/journal` exists. |
 | `max_duration` / `auto_stop` | **No** | Not set on the daytime profile; container still `RUNNING` after |
-| nft monitor auto-pause/kill | **Unprovable** | `auto_kill_on_critical=true` *was* live (daytime profile), but `coi audit` keeps no history. Container was `RUNNING` and auto-pause pauses rather than kills, so unlikely. |
+| nft monitor auto-pause/kill | **Unprovable** | `auto_kill_on_critical=true` *was* live (daytime profile). Not checked at the time, under the wrong belief that `coi audit` keeps no history; `~/.coi/audit/<name>.jsonl` would have answered it, but `~/.coi/` was lost in the 2026-09-06 rebuild (Incident D). Container was `RUNNING` and auto-pause pauses rather than kills, so unlikely. |
 | VM suspend/resume tearing the VM down | **No** (but on other evidence) | Same defect as above: "only fresh-boot lines" is the *expected* `journalctl -k` output on a fresh boot regardless. The real evidence is positive: the Mac was in ordinary DarkWake cycling with RAM powered 09:11→16:53, so the VM was paused, not destroyed. |
 | Aggressive standby config | **No — red herring** | see below |
 | `caffeinate` would have prevented it | **No** | see below |
@@ -507,7 +502,7 @@ not Amphetamine. **Unattended runs must be on AC.** Full stop.
 
 Four "ephemeral" containers were alive simultaneously (`coi-d2220571-1/-2/-3`, `coi-88cded0c-1`);
 `-3` alone held **2.93 GiB** and 205 processes. Not because anything crashed — because ephemeral
-destroy (and the `--resume` session write) happen **only** on a graceful `coi shutdown`, and none of
+destroy (and the `--resume` session write) happen **only** on the `coi shell` teardown, and none of
 these sessions got one.
 
 ```bash
@@ -589,7 +584,7 @@ mounts:
   writable: true
 ```
 
-**COI-SANDBOX's *One-time setup* step 3 already showed it correctly.** The runbook was right; the
+**COI-SANDBOX's *One-time setup* step 1 already showed it correctly.** The runbook was right; the
 edit deviated from it. That is the argument for `scripts/coi-vm-setup.sh` existing at all —
 knowledge that lives only as prose does not survive contact with a live `limactl edit`.
 
@@ -624,8 +619,8 @@ This is the part worth internalising, and the part the original write-up got wro
 
 Destroyed by the rebuild:
 
-- **Session transcripts `94ef8ba6` and `12279d4a`** — both correctly exported by `coi shutdown`,
-  both unrecoverable.
+- **Session transcripts `94ef8ba6` and `12279d4a`** — both correctly exported at `coi shell`
+  teardown, both unrecoverable.
 - **The `aperture-night` profile** (`~/.coi/profiles/aperture-night/config.toml`) — the unattended
   overnight rig config. Its absence is silent until the next overnight run needs it.
 - `~/.coi/config.toml`, aliases, trust state.
@@ -661,10 +656,12 @@ files before, 468 after:
 
 Three separate facts:
 
-1. **Export works.** `coi shutdown` writes the complete `~/.claude` tree. `metadata.json` appears in
-   that directory at container *start*; the rest lands at teardown.
+1. **Export works.** The `coi shell` teardown (which the `coi shutdown` forced) writes the complete
+   `~/.claude` tree. `metadata.json` appears in that directory at container *start*; the rest lands
+   at teardown.
 2. **Restore does not.** The next container starts with an empty `~/.claude/projects/-workspace/`.
    Nothing reads the export back in, so `--resume` never offers the old session. COI defect.
+   (Superseded — see *Fix → Correction, 2026-09-07*.)
 3. **The export target is VM-local** — per the table above.
 
 Fact 3 is what actually cost the sessions. The feature worked; the storage location defeated it.
@@ -729,26 +726,40 @@ VM half still exists.
 | `scripts/coi-vm-setup.sh` | Lima VM | `~/.coi/sessions-claude` + `~/.coi/profiles` survive a VM rebuild |
 | ~~`scripts/coi-container-setup.sh`~~ | container | **Deleted 2026-09-07** — see the correction below. It symlinked `~/.claude/projects` to the Mac, which made COI skip that directory at export time |
 
-> **Correction, 2026-09-07 — "the export is not a restore" was wrong.** `coi shell --resume` reads
-> `~/.coi/sessions-claude/<id>/` back into a fresh container: measured across a real
-> destroy/restore cycle, every transcript returned byte-identical along with `history.jsonl`,
-> `settings.json`, `session-env/`, `file-history/` and `.credentials.json`, and `claude --resume`
-> opened them with full context.
+> **Correction, 2026-09-07 — "the export is not a restore" was wrong.** The teardown writes the
+> complete `~/.claude` tree to `~/.coi/sessions-claude/<session-id>/`, and `coi shell --resume`
+> reads it back into a fresh container. Measured across a real destroy/restore cycle: `incus list`
+> empty, new container at `up 0 minutes`, and every transcript back byte-identical
+> (`189,441 → 189,441`, `192,343 → 192,343`), plus `history.jsonl` (your `↑` prompt history),
+> `settings.json`, `session-env/`, `file-history/` and `.credentials.json`. `claude --resume`
+> offered the sessions and opened them with full context.
 >
 > The original conclusion came from a test that defined success as `claude --resume` working and
-> never checked whether COI had its own resume. It survived scrutiny because the workaround built
-> to fix it — the `projects` symlink — **caused** the symptom: COI does not follow that symlink at
-> export time, so the restore could not be observed while the fix was installed. `coi --help` would
-> have settled it at the start. Same lesson as `findmnt` and `incus info` elsewhere in this file:
-> **check the tool's own surface before concluding a capability is missing.**
+> never checked whether COI had its own resume; everything downstream was built on that. It
+> survived scrutiny because the workaround built to fix it — a symlink from `~/.claude/projects`
+> onto the repo mount — **caused** the symptom: COI does not follow that symlink at export time, so
+> the restore could not be observed while the fix was installed. Deleting the symlink was the
+> entire fix. `coi --help` would have settled it at the start. Same lesson as `findmnt` and
+> `incus info` elsewhere in this file: **check the tool's own surface before concluding a
+> capability is missing.**
+>
+> Two things the restore does not carry — `~/.claude.json` (comes back reset) and, untested,
+> memory files — are logged in `COI-SANDBOX.md` → *Deferred / to-do* → *Session-restore leftovers*.
+>
+> A container here was also observed **frozen and unfrozen** between 00:28 and 11:19 on
+> 2026-09-07, keeping its rootfs and a live transcript across the gap. Alive / deleted is not the
+> whole set of states — check `uptime -p` before concluding a container is new.
 >
 > `scripts/coi-vm-setup.sh` is unaffected and matters more now — `~/.coi/` is VM-local, so it
-> protects the store that `--resume` depends on. Details: `docs/ops/COI-SANDBOX.md` →
+> protects the store that `--resume` depends on. Procedure: `docs/ops/COI-SANDBOX.md` →
 > *Run → Ending a session*.
 
 The now-deleted second script existed because of a follow-on finding that still holds: **the export
 only fires on `coi` teardown.** The Run 2 snapshot was taken after `Ctrl+D` and before
-`coi shutdown`, and held only `metadata.json`; all 463 files appeared across the shutdown. So
+`coi shutdown`, and held only `metadata.json`; all 463 files appeared across the shutdown. The
+original reading — "the export fires on `coi shutdown`" — was wrong: `Ctrl+D` only leaves Claude
+Code, so `coi shell` was still running and no teardown had fired; the shutdown then killed the
+container, which ended `coi shell`, which ran the teardown. Same observation, correct cause. So
 exiting the TUI exports nothing, and neither does `limactl stop`, a Mac reboot, clamshell sleep
 (Incident B), or a dropped terminal. **There is still no continuous backup** — that part was never
 wrong. What was wrong was the remedy: the symlink cost more than the gap it covered. Current
@@ -765,11 +776,9 @@ Wired into COI-SANDBOX *One-time setup* as step 10. Step 12 was the container ha
   can't see the export because it happens at the `coi` level, outside the container.
 - **Mounting `~/.claude/projects` out of the container.** Unnecessary — COI already exports it.
   Capture was never the problem; durability was.
-- **`persistent = true` as *the* fix.** A working stopgap — the container isn't destroyed, so
-  `--resume` finds the transcript in place — but container state is also on the VM disk, so the next
-  rebuild takes it too. **Updated 2026-09-07:** it doesn't reliably preserve the container rootfs
-  either, and `coi shell --resume` restores a destroyed container anyway, so reverting to
-  `persistent = false` is close to free. Not load-bearing in either direction.
+- **`persistent = true` as *the* fix.** A stopgap only; container state is also on the VM disk, so
+  the next rebuild takes it too, and it does not reliably preserve the rootfs either. Not
+  load-bearing in either direction — see *Open follow-ups* (the answered `persistent = true` bullet).
 - **"No data loss occurred."** The original write-up's headline, based on assuming `~/.coi/` was on
   the Mac. It wasn't.
 
@@ -881,21 +890,9 @@ followed immediately by the same event with `"action":"paused"`.
    trains you to reflexively unfreeze, which is how a real one gets waved through. Tune it or add
    the grace period; "expect a freeze on launch" is the wrong fix.
 
-   **Read of COI source, 2026-09-07** (`localNotes/code-on-incus` @ `d304121`), after the same
-   detector froze a session on `pnpm install`:
-   - Those two keys drive the **write** detector as well — `NewDetector` copies them into
-     `fileWriteThresholdMB` / `fileWriteRateMBPerSec` (`internal/monitor/detector.go:21-29`). There
-     is no `file_write_*` key and no setter to override them.
-   - 50 and 10 are COI's shipped defaults (`internal/config/embedded/default_config.toml:107-115`),
-     which is why write verdicts appeared to echo hardcoded constants. We had copied the defaults.
-   - The burst and rate checks are **the same measurement** — one per-poll cgroup `io.stat` delta,
-     with `rate = burst / poll_interval_sec` (`internal/monitor/filesystem.go:50-66`). The lower
-     threshold always binds.
-   - It counts **all container block I/O**; "workspace" in the title is a hardcoded label with no
-     path filtering behind it (`internal/monitor/cgroup.go:224-237`).
-   - No grace period, no process or path exemption, and `enabled = false` is all-or-nothing.
-
-   Tuning guidance and the ruled-out levers: `COI-SANDBOX.md` →
+   The same detector froze a later session on `pnpm install`; the source findings (the two keys
+   also drive the **write** detector), ceiling measurements and the levers that do not exist are
+   under *Second freeze — `pnpm install`, 2026-09-07* below. Tuning config: `COI-SANDBOX.md` →
    *Container frozen — find out what tripped it*.
 2. **`coi audit <name>` does not reliably surface events that are present in
    `~/.coi/audit/<name>.jsonl`.** A genuine CLI defect, and more specific than the runbook's older,
@@ -913,6 +910,154 @@ grep '"level":"high"' ~/.coi/audit/<container>.jsonl
 
 Use `coi audit <name> -f` for *live* monitoring only — not as the first tool for investigating a
 pause that already happened.
+
+## Second freeze — `pnpm install`, 2026-09-07
+
+The same detector froze a later session the moment `pnpm install` ran. Reading the `processes`
+list embedded in the audit record (the procedure in `COI-SANDBOX.md` → *Container frozen — find out
+what tripped it*) named `CI=true corepack pnpm install` — not the agent work it was blamed on.
+Attribute before you theorise. The verdicts:
+
+```
+Large workspace write detected: Write 127.54 MB at 61.30 MB/sec (threshold: 50.00 MB)   → paused
+Large workspace write detected: Write  26.43 MB at 13.21 MB/sec (threshold: 10.00 MB)   → logged (already paused)
+```
+
+### Five things read from source
+
+Not obvious from the log — all read out of COI's source (`localNotes/code-on-incus`, commit
+`d304121`) on 2026-09-07:
+
+**"workspace" in the title is a hardcoded string, and it is wrong.** The measurement is cgroup v2
+`io.stat` `wbytes` read at the container's *top-level* cgroup (`internal/monitor/cgroup.go:224-237`),
+so it counts **all block I/O by every process in the container**. There is no path filtering
+anywhere in the detection path — `WorkspacePath` is set on the snapshot and read by nothing. A
+`docker build`, an `apt-get install`, or heavy swap writeback trips it exactly the same way.
+
+**The write detector has no config keys — it borrows the read ones.**
+`internal/monitor/detector.go:21-29`:
+
+```go
+func NewDetector(fileReadThresholdMB, fileReadRateMBPerSec float64) *Detector {
+	return &Detector{
+		fileReadThresholdMB:   fileReadThresholdMB,
+		fileReadRateMBPerSec:  fileReadRateMBPerSec,
+		fileWriteThresholdMB:  fileReadThresholdMB,  // Default: same as read threshold
+		fileWriteRateMBPerSec: fileReadRateMBPerSec, // Default: same as read rate threshold
+```
+
+`NewDetector` copies the two read keys into `fileWriteThresholdMB` / `fileWriteRateMBPerSec`; there
+is no `file_write_*` key. The comment says "Default:", implying an override. **There is none** — no
+`WithFileWriteThreshold` setter exists, though `WithProcessCountThreshold` and `WithProcessSpawnRateThreshold` do. The
+`FileWriteThresholdMB` / `FileWriteRateMBPerSec` fields on `DaemonConfig`
+(`internal/monitor/types.go:229-230`) are vestigial: never written, never read. Don't chase them.
+
+**50 and 10 are COI's shipped defaults**, in `internal/config/embedded/default_config.toml:107-115`.
+Our config sets the same numbers, which is why the write verdicts looked like they were echoing
+hardcoded constants. They weren't — we had copied the defaults.
+
+**The two thresholds are the same check.** Both derive from one per-poll delta
+(`internal/monitor/filesystem.go:50-66`): `TotalWriteMB` is bytes since the last poll, and
+`WriteRateMBPerSec` is that same delta over measured elapsed time. So
+`rate = burst / poll_interval_sec` — they are perfectly correlated, and **whichever threshold is
+lower always binds while the other never fires.** You are really picking one number:
+
+```
+file_read_rate_mb_per_sec = <MB/s ceiling>
+file_read_threshold_mb    = <ceiling> × poll_interval_sec
+```
+
+Only one verdict fires per poll (`DetectLargeWrites`, `filesystem.go:142-166`, returns early). The
+burst branch reports `duration: "current interval"`; the rate branch reports `"sustained"` — and on
+that branch the JSON field named `threshold_mb` is carrying a **MB/sec** value. Misnomer in the
+log, not a bug in your reading. Also: **raising `poll_interval_sec` makes the burst check worse**, a
+longer window accumulating more MB against the same MB bar.
+
+**No grace period, no process or path exemption, and `enabled = false` is all-or-nothing** — the
+full list of levers checked is at the end of this section.
+
+### Write ceiling — can the detector fire at all?
+
+**A threshold above the container's real write ceiling can never fire — that is
+`enabled = false` with extra steps.** Measured on this rig, 2026-09-07, **inside the container**
+(`/tmp` is the rootfs; `/workspace` is virtiofs to the Mac):
+
+| Target | Path | Speed |
+| --- | --- | --- |
+| container rootfs | `/tmp` (ext4, `/dev/vda1`) | **2.6 GB/s** |
+| virtiofs to the Mac | `/workspace/localNotes` | **1.2 GB/s** |
+
+```bash
+# keep count under file_read_threshold_mb or the test freezes you — 300 against a 500 bar
+dd if=/dev/zero of=/tmp/wtest bs=1M count=300 conv=fdatasync; rm -f /tmp/wtest
+```
+
+Both are upper bounds — `conv=fdatasync` flushes the guest's view but the Mac's page cache still
+buffers underneath. Good enough for the question that matters: the ceiling is 5–10x the 250 MB/s
+threshold, so the detector can actually fire. For scale: `pnpm install` runs at **61 MB/s**, far
+under the raw ceiling, because it is network-bound and writes thousands of small files rather
+than a sequential stream.
+
+### Writes to `/workspace` are invisible to this detector
+
+Measured 2026-09-07: two 300 MB writes seconds apart, one to `/tmp` (rootfs) and one to
+`/workspace/localNotes` (virtiofs). Only **one** 300 MB spike appears in the audit log. Since rootfs
+writes provably count — a 2 GB `/tmp` write produced a verdict — the one that vanished is the
+virtiofs write. Confirmed with a second 400 MB virtiofs write that also left no trace.
+
+The mechanism fits: the detector reads cgroup v2 `io.stat` `wbytes`, which counts **block-device**
+I/O. Writes to `/workspace` cross virtiofs to the host, where the actual block I/O happens on the
+Mac. Editing files, `vite build`, and `node_modules` itself are free — they can never trip it. And
+whatever `pnpm install` writes into `/workspace` is invisible too.
+
+> **Corrected 2026-09-07 (same day).** An earlier version of this paragraph blamed the freeze on
+> "pnpm's content-addressable store on the rootfs." That was asserted without checking, and it is
+> wrong on both halves: `pnpm store path` resolves to **`/workspace/.pnpm-store/v11`**
+> (`pnpm config get store-dir` prints `undefined` on pnpm 11.18.0), `dev=45` — virtiofs, i.e.
+> exactly the filesystem that is invisible here. The store is not the source and never was.
+>
+> What *is* on the rootfs during an install: `TMPDIR` is unset, so pnpm extracts tarballs through
+> **`/tmp`** (`dev=64769`), and corepack caches package-manager downloads in `~/.cache/node/corepack`
+> (also rootfs). Temp extraction is the strongest candidate for the counted I/O — **inference from
+> the filesystem layout, not a measurement.** If it matters, the way to settle it is to set `TMPDIR`
+> to a `/workspace` path and see whether the write volume vanishes from the audit log.
+>
+> Related, and worth knowing separately: on this mount pnpm's files are **copies, not hardlinks**
+> into the store (sampled link counts are all `1`, and store + `node_modules` ≈ 452M + 479M). It is
+> not a virtiofs limitation — hardlinks tested fine there directly. So an install moves the full
+> byte volume rather than just linking, which is why it registers at all.
+
+This makes the "Large workspace write detected" title doubly wrong: not only is it a hardcoded
+label with no path filtering behind it, the workspace is the one thing it cannot observe.
+
+### Config-change readback
+
+Tripping the detector deliberately (the 2000 MB `dd` in `COI-SANDBOX.md` → *Container frozen*)
+after raising 50 → 500, observed 2026-09-07:
+`"description":"Write 2000.00 MB at 989.50 MB/sec (threshold: 500.00 MB)"` — the verdict echoes
+**500**, so the edit landed. Still `50` would mean it hadn't. Note `2000 / 989.50 = 2.02s`, exactly
+one `poll_interval_sec`, confirming the delta-per-poll model. Then `coi unfreeze <name>`.
+
+### Levers that do not exist
+
+Checked, so nobody re-derives them:
+
+| Idea | Reality |
+| --- | --- |
+| Set the keys to `0` to disable | `internal/config/merge.go:144-149` treats zero as "not set", so the 50/10 defaults win |
+| Exempt `pnpm install` by process or path | No allowlist, no path exemption, no startup grace period on this detector. (The 30s grace in `filewatcher.go:183-185` belongs to the inotify secret-file watcher — different component) |
+| Disable just the filesystem detector | `enabled = false` is all-or-nothing (`internal/cli/monitoring.go:34`) — kills process, network, log and file watchers with it. No per-category switch exists |
+| An env var or CLI flag | None. The config layer reads only `COI_CONFIG` (a path); `coi monitor` has no threshold flags |
+| Validation blocking a big value | The `>10GB` check is a soft health-report warning; `internal/config/validate.go` has no monitoring validation at all |
+| `[limits.disk]` read/write | A different mechanism — a cgroup blkio *throttle*, not the detector. Capping writes below 10 MB/s to dodge the alert would make installs take minutes |
+
+### Why the second verdict said `logged (already paused)`
+
+`r.paused` is set true at `responder.go:191,199` and **never reset**. After `coi unfreeze`, that
+daemon still believes the container is paused, so further HIGH threats are logged rather than
+acted on — convenient for finishing the session, but a fresh `coi shell` starts a fresh responder
+with `paused = false` and will freeze you again on the next big install. Fix the config; don't
+rely on this.
 
 ## What went right (both incidents)
 
@@ -944,14 +1089,22 @@ against, because the patterns were on the bash command line rather than in a fil
 
 ## Mechanism
 
-- `internal/monitor/process.go:249-290` — a **hardcoded** pattern list (`python -c`, `python3 -c`,
-  `perl -e`, `php -r`, `ruby -e`, `bash -i`, `sh -i`, `nc -e`, `socat`, `/dev/tcp/`, …). No config
-  key edits it; `coi schema profile` exposes nothing for it.
-- `process.go:298-302` — the false-positive gate is
-  `strings.Contains(cmdLower, ":") || "sock" || "tcp" || "udp" || IP-pattern`. **Any colon anywhere.**
-  A dict, a Python slice (`v[-5:]`), a URL, a timestamp. `bash -i` / `sh -i` bypass the gate and
-  always fire.
-- `internal/monitor/responder.go:137-147` — CRITICAL + `auto_kill_on_critical` → `killContainer()`.
+- `internal/monitor/process.go:249-290` — a **hardcoded** pattern list (full list:
+  `COI-SANDBOX.md` → *Container killed — the CRITICAL path is a different animal*). No config key
+  edits it; `coi schema profile` exposes nothing for it.
+- `process.go:298-302` — the false-positive gate:
+
+  ```go
+  isNetworkRelated := strings.Contains(cmdLower, ":") ||
+      strings.Contains(cmdLower, "sock") || strings.Contains(cmdLower, "tcp") || ...
+  if isNetworkRelated || pattern.pattern == "bash -i" || pattern.pattern == "sh -i" {
+  ```
+
+  (the elided tail is `"udp"` and an IP pattern). **Any colon anywhere.** A dict, a Python slice
+  (`v[-5:]`, `s[11:19]`), a URL, a timestamp. Every realistic JSON one-liner matches. `bash -i` /
+  `sh -i` bypass the gate and always fire.
+- `internal/monitor/responder.go:137-147` — `ThreatLevelCritical` + `auto_kill_on_critical` →
+  `killContainer()`.
   **No dedupe latch**, unlike HIGH's `r.paused`, so it recurs on every match.
 - Sampling is per `poll_interval_sec` (2s). Fast one-liners often slip between samples; ones blocked
   on a slow pipe (`gh api`, `npm view`) are reliably caught. Prior successes were timing, not safety.
@@ -973,9 +1126,7 @@ point, and it would also disarm the network CRITICALs that matter. The pattern l
 so there is nothing to tune. So:
 
 1. **`.claude/hooks/coi-reverse-shell-guard.sh`** — `PreToolUse` on Bash, denies these shapes before
-   they run. No-ops outside a `coi-*` host. Matches the literal text *anywhere* in the command,
-   including fixtures and documentation text — deliberate over-blocking, since the failure mode is
-   container death. File content mentioning these strings goes through the Write/Edit tools instead.
+   they run (behaviour and the substitution table: `COI-SANDBOX.md` → *Container killed*).
 2. **A `CLAUDE.md` rule**, so the constraint survives the hook being unregistered: use
    `python3 - <<'PY' … PY` (runs as `python3 -`, unmatched) or `jq`.
 
@@ -990,3 +1141,62 @@ Two defects, both narrow:
   a loop kills the container repeatedly.
 
 Unrelated to the `coi audit` read-path defect in Incident E; both stand.
+
+---
+
+# Incident G — 2026-09-07: forks on every resume; dotfiles that evaporate
+
+**2026-09-07, afternoon.** An afternoon of `.coi/config.toml` iteration, each change needing a new
+container, surfaced two container-lifecycle costs that had been misattributed. Neither is a COI
+defect. The procedures live in `COI-SANDBOX.md` → *Start here → 1*; the evidence is here.
+
+## G.1 Session forks
+
+**Every resume forks the session.** Claude Code's background-session daemon relaunches with
+`--fork-session --resume <transcript>`, minting a **new session id** rather than continuing the old
+one. The old id stays in the `claude --resume` picker forever, and since the forks share an
+ai-title the picker disambiguates them `(1)`, `(2)`, `(3)`… Worse, several forks stay live under
+the same daemon, so one message fans out to all of them and you have to stop the extras by hand.
+
+Seven accumulated here on 2026-09-07 during an afternoon of `.coi/config.toml` iteration, purely
+because each config change needed a new container. **COI is not the cause** — `--fork-session`
+appears nowhere in its source; `internal/tool/tool.go:133-135` emits a plain `claude --resume`.
+Using `coi attach` avoids the resume, and so avoids the fork.
+
+To clean up an existing pile, move the stale transcripts out of
+`~/.claude/projects/-workspace/` (the picker lists that directory). Identify the live one by
+**content**, not by `ps`: an `--agent` sidecar shows a `--session-id` with no transcript at all
+and will mislead you. Grep the candidates for your most recent message and check each stale
+transcript's final message is already contained in the survivor.
+
+## G.2 Container-local dotfiles
+
+The export is exactly `~/.claude/` plus `metadata.json` — verified by listing the export trees;
+nothing else from `$HOME` is in there — so anything configured in a container-local dotfile
+evaporates with the container. Two instances, same day:
+
+**Git identity — bit twice on 2026-09-07.** The image ships `~/.gitconfig` with
+`useConfigOnly = true` and no name/email (deliberate — it stops an agent committing as
+`code@coi-88cded0c-1`), so commits fail until an identity is set, and a `--global` fix inside the
+container dies with it. The fix is repo-local (`git config --local user.name` / `user.email`, run
+on the Mac because `.git/config` is a read-only mount in the container). Verified by pointing
+`GIT_CONFIG_GLOBAL` at a bare image-default gitconfig: identity still resolves, and stripping
+`[user]` from the repo makes it fail — so the repo file is genuinely carrying it.
+
+**mise shadowing the repo's toolchain.** `~/.config/mise/` and `~/.local/share/mise/` are on the
+rootfs, and the image ships mise configured with `"npm:pnpm" = "latest"` — which shadows corepack
+on `PATH`, and "latest" is a different major from the `packageManager` field CI reads. The image
+ships the same conflict three times; `typescript` and `tsx` were shadowed too. Resolved 2026-09-07
+by uninstalling all three, leaving mise owning only what the repo *doesn't* declare:
+
+| | Repo declares | mise shipped | now resolves to |
+| --- | --- | --- | --- |
+| `pnpm` | `packageManager` → 11.18.0 | "latest" → 12.3.4 | corepack, 11.18.0 |
+| `typescript` | 6.0.3, root + all 5 packages | "latest" → **7.0.2** (a major apart) | repo, 6.0.3 |
+| `tsx` | 4.23.5, cdk + scripts | "latest" → 4.23.13 | repo, 4.23.5 |
+| `python` | *nothing* | 3.x | mise — correctly |
+
+Bare `tsc` and `tsx` stop existing, which is the point — nothing should invoke them outside a
+project. Verified nothing did: `scripts/package.json` runs `tsx src/smoke.ts` as a pnpm script and
+`deploy.yml` uses `pnpm --filter @aperture/scripts exec tsx`, both resolving via
+`node_modules/.bin`.

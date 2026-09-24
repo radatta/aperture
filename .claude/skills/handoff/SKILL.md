@@ -16,28 +16,18 @@ A dated snapshot of what a fresh reader needs to pick this up — the next you, 
 
 $ARGUMENTS
 
-If the block above is non-empty, it's context the user wants folded into this handoff — things to
-remember, what to emphasize, or state they know that the commands in step 1 won't surface. **Route
-each item into the section it belongs in** — state into the verified block, a choice into Decisions,
-a failed path into Dead ends — rather than dumping it verbatim at the top.
-
-It is the user's input, **not verified state**. If an item asserts a fact, confirm it in step 1 where
-a command can reach it; if nothing can, record it marked "unverified" (the *Mark beliefs as beliefs*
-rule below applies to text typed here just as much as to anything else). A note passed in passing —
-"PR 42 is merged" — is the single easiest way for a stale claim to land as fact, which is the exact
-failure this whole skill exists to prevent.
+If the block above is non-empty, it's context the user wants folded in. **Route each item into the
+section it belongs in** — state into the verified block, a choice into Decisions, a failed path into
+Dead ends — rather than dumping it verbatim at the top. It is the user's input, **not verified
+state**: confirm each factual claim in step 1 where a command can reach it, otherwise record it marked
+"unverified" (*Mark beliefs as beliefs* applies here too). "PR 42 is merged", passed in passing, is
+the single easiest way for a stale claim to land as fact.
 
 ## Why this exists (don't shortcut it)
 
-- **Subagents start with a completely fresh context** — no conversation history, no compacted summary,
-  none of the files the parent read. A file is the only way to brief one without restating everything
-  in every prompt.
-- **`/compact` is lossy and occasionally generative.** There is a filed, JSONL-verified case of a
-  compact summary *fabricating a user instruction that never existed*, which the post-compact session
-  then executed (anthropics/claude-code#46602). A file written deliberately is ground truth in a way
-  the summary is not.
-- Compaction keeps the arc and drops the dead ends. Dead ends are the expensive part — they're what
-  stops the next reader re-walking a path already known to fail.
+- **Subagents start with a completely fresh context** — a file is the only way to brief one without restating everything in every prompt.
+- **`/compact` is lossy and occasionally generative** — a filed, JSONL-verified case of a summary fabricating a user instruction that the post-compact session then executed (anthropics/claude-code#46602).
+- **Compaction keeps the arc and drops the dead ends** — the expensive part, since they stop the next reader re-walking a known-failed path.
 
 ## Steps
 
@@ -125,10 +115,9 @@ One concrete step, not a list of everything remaining.
   of truth (CLAUDE.md). If something surfaces that the project should know permanently — a convention,
   a gotcha, a resolved architecture question — say so and offer to write it to `docs/` instead. A
   handoff that accumulates project knowledge is a doc-rot vector.
-- **Narrate the arc, not the transcript.** `/compact` also summarizes the conversation, but its
-  summary **does not travel** — subagents never see it, it dies with the session, and it can
-  fabricate. So the arc belongs here too, compressed to one line per exchange. What does *not* belong
-  is blow-by-blow: individual tool calls, what was read in what order, or anything a reader wouldn't
+- **Narrate the arc, not the transcript.** The arc belongs here, compressed to one line per exchange
+  (*Why this exists* covers why `/compact`'s summary is not enough). What does *not* belong is
+  blow-by-blow: individual tool calls, what was read in what order, or anything a reader wouldn't
   act on.
 - **Mark beliefs as beliefs.** If something wasn't actually verified this session, write "believed" or
   "unverified," never as a flat fact. The next reader will treat anything unqualified as contractual.
@@ -137,12 +126,9 @@ One concrete step, not a list of everything remaining.
 
 ## Length
 
-**Soft guidance: ~500 lines.** That is a ceiling to stay under, *not a target* — most handoffs should
-land far below it, and a good one is often 40 lines. Never pad to fill space.
-
-If you're approaching 500, that's a smell to investigate, not a limit to trim to. Ask: is this
-narration (belongs in `/compact`'s summary) or durable project knowledge (belongs in `docs/`)? Both
-answers mean content should move, not be deleted.
+**Soft guidance: ~500 lines** — a ceiling, *not a target*; a good handoff is often 40 lines. Never pad.
+Approaching 500 is a smell, not a limit to trim to: narration belongs in `/compact`'s summary, durable
+project knowledge in `docs/` — either way the content moves, it isn't deleted.
 
 ## After writing
 

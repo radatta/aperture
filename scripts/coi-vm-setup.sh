@@ -7,19 +7,17 @@
 # made the restore look broken. See docs/ops/COI-SANDBOX.md → One-time setup step 12.
 #
 # Why: `~` in the Lima VM is /home/<user>.guest — VM-local. COI writes its own state there,
-# including the Claude Code session it exports on `coi shutdown`
+# including the Claude Code session it exports when `coi shell` exits
 # (~/.coi/sessions-claude/<id>/.claude/, transcript included). A VM rebuild destroys all of it.
 # That is not hypothetical: a one-character YAML error in `limactl edit` wiped two session
 # transcripts and the aperture-night profile. See docs/ops/COI-INCIDENTS.md → Incident D.
 #
-# This is the load-bearing step. `coi shell --resume` restores a destroyed container FROM
-# ~/.coi/sessions-claude/ — verified 2026-09-07, transcripts back byte-identical along with
-# history.jsonl, settings, session-env and credentials. So this script protects the mechanism the
-# whole workflow depends on.
+# This is the load-bearing step: `coi shell --resume` restores a destroyed container FROM
+# ~/.coi/sessions-claude/ (verified 2026-09-07 — docs/ops/COI-INCIDENTS.md → Incident D → Correction).
 #
-# Scope: it protects what `coi shutdown` exports. It does NOT help when there is no graceful
-# shutdown (Mac reboot, clamshell sleep, `limactl stop` on its own, a dropped terminal) — nothing
-# is exported at all in those cases. Shut down at every real break to keep that window small.
+# Scope: it protects what the `coi shell` teardown exports. It does NOT help when there is no
+# teardown (Mac reboot, clamshell sleep, `limactl stop` on its own, a dropped terminal) — nothing
+# is exported at all in those cases. Exit `coi shell` at every real break to keep that window small.
 
 set -euo pipefail
 
