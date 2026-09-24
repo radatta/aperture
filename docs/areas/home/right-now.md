@@ -13,10 +13,8 @@ A daytime home that answers **"what's happening right now?"** at a glance, and s
 that make today a win. Replaces the old `TodayTasksCard` + `FocusCard`. Part of the "Now / Focus /
 Rolls" epic (full context: `localNotes/now-focus-rolls-epic.md`); this is PR 2 of 3.
 
-This is a permanent design-of-record — the design, the decision log, **and** the build record. §3 is the
-decision log: every product decision, why, and what we rejected, so a future reader doesn't re-litigate
-settled ground. §5 is the build record. Where this doc and the code disagree, fix whichever is wrong and
-say so here.
+Permanent design-of-record: §3 is the decision log, §5 the build record. Where this doc and the code
+disagree, fix whichever is wrong and say so here.
 
 ---
 

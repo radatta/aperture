@@ -4,18 +4,15 @@
 
 **Status: built 2026-09-21** (branch `rolls-momentum`, off `main` at #24 Right Now + Coming Up). Gate
 green: typecheck · lint · tests (app 262 · lambdas 114 · shared 88 · cdk 25 · scripts 12). Opus headless
-UI + workflow pass: **PASS-WITH-NITS** (one should-fix — the daytime lane's roll marker — fixed; nits
-recorded in §6). Opus code-review: **0 blocking, 0 should-fix, 4 nits** (3 cleaned up — dropped the unused
+UI + workflow pass: **PASS-WITH-NITS** (one should-fix, fixed — §6; nits recorded there). Opus code-review: **0 blocking, 0 should-fix, 4 nits** (3 cleaned up — dropped the unused
 `isRep`, de-duped `fmtLastRep`, documented re-plan-adds-not-moves; the 4th is the recorded picker nit).
 **Dev-validated 2026-09-21** on the real Lambda + DynamoDB (create + persistence-across-refresh, the
 pick→daytime→done→sheet loop, two-reps-a-day, edit/archive, category-delete reassign — all passed). Part
 of the "Now / Focus / Rolls" epic (full context:
 `localNotes/now-focus-rolls-epic.md`); this is PR 3 of 3, and the only one with new backend.
 
-This is a permanent design-of-record — the design, the decision log, **and** the build record. §3 is the
-decision log: every product decision, why, and what we rejected, so a future reader doesn't re-litigate
-settled ground. §5 is the build record. Where this doc and the code disagree, fix whichever is wrong and
-say so here.
+Permanent design-of-record: §3 is the decision log, §5 the build record. Where this doc and the code
+disagree, fix whichever is wrong and say so here.
 
 ---
 

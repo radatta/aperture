@@ -3,14 +3,12 @@
 // traffic regardless of which transport LeetCode uses. It NEVER blocks or alters the real request/
 // response, NEVER issues its own requests, and NEVER throws into the page.
 //
-// It is 100% passive: every byte it reads is a response to a request the page made because you were
-// solving normally. There is no automated/scraping call.
+// Why it is passive, and why metadata comes from the DOM: docs/areas/recruiting/index.md → Design decisions.
 //
 // Flow:
 //   1. On a submit call (POST /problems/<slug>/submit/) we remember submission_id -> {slug, lang, question_id}.
 //   2. On a result poll (GET /submissions/detail/<id>/v2/check/) whose state === "SUCCESS", we fire once,
-//      read problem metadata (title/difficulty/topicTags) straight from the RENDERED PAGE (LeetCode
-//      server-renders it — there is no client questionData request to intercept), and dispatch a
+//      read problem metadata (title/difficulty/topicTags) straight from the RENDERED PAGE, and dispatch a
 //      CustomEvent that the ISOLATED-world relay (content-relay.js) forwards to the background script.
 //
 // The background script adds tzOffsetMinutes and performs the actual POST to the Aperture backend.

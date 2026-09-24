@@ -2,7 +2,7 @@
 
 Seven additions to the pipeline + runtime ops, chosen from a wider research pass as the ones worth doing for a **single-operator, cost-sensitive** personal project. Everything here is **$0 at single-user scale** (see cost table). This doc is the implementation plan — grounded in the current repo — to be executed item by item.
 
-> Scope note: Aperture is a personal project. Nothing here references any other project, and no real email address is committed — every recipient is a `<FILL: personal email>` placeholder to be filled at wiring time.
+> Scope note: Aperture is a personal project. Nothing here references any other project. The recipient email was a `<FILL: personal email>` placeholder at planning time, filled 2026-08-10 with the personal address (see Open items).
 
 ## Decisions (locked)
 
@@ -14,8 +14,8 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 - **Batch 1 wired (2026-08-10):** #3 gitleaks (`.github/workflows/gitleaks.yml`), #4 Dependabot (`.github/dependabot.yml`), #1 ntfy notify job (`.github/workflows/deploy.yml`). `gitleaks-action` tag confirmed **`v3`** (v3.0.0). The ntfy job **no-ops until `NTFY_TOPIC` is set** — activates once the operator creates the topic + adds the secret (done: secret set, subscribed on desktop).
 - **Batch 2 wired (2026-08-10):** #6 health check (`/api/health` route + `FunctionUrl` output + `publish-frontend.mjs` invalidation-wait + `health-check.mjs` + deploy.yml steps), #5 CloudWatch alarms (`monitoring.ts`, prod-only, **Option B** — Lambda alarms only, no CloudFront), #7 billing stack (`billing-stack.ts`, hand-deploy), #2 cdk-nag (`cdk-nag@3.0.2`, AwsSolutions pack, wired in `bin/aperture.ts`; suppressions + two enforce-SSL fixes; see the workaround note in item 2). All synth clean on dev+prod; tests + typecheck + lint green.
-- **Still needs the operator (manual):** confirm the **one** SNS **email** subscription — the prod alarm topic (`monitoring.ts`), which fires its confirmation on the first prod deploy — to `rahul3datta@gmail.com`. The budget (`billing-stack.ts`) uses a **direct** `EMAIL` subscriber, **not** SNS, so it needs **no** confirmation and emails on threshold. Flip the AWS **root billing toggle** then `cdk deploy ApertureBilling -c billing=true`.
-- **Billing stack fix (2026-08-10):** first hand-deploy hit `AlreadyExists` on the CE anomaly monitor (AWS default SERVICE monitor already exists; one per dimension). Dropped both CE resources — budget is the sole guard. See item 7.
+- **Operator manual steps:** all done 2026-08-10 — the list and its closure are under *Open items*.
+- **Billing stack fix (2026-08-10):** anomaly monitor dropped after `AlreadyExists` — see item 7.
 
 ## Cost — all $0
 
@@ -33,6 +33,8 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 ## Repo realities discovered (deviations from the naive plan)
 
+*As found at planning time (2026-08-10); items 2–4 were resolved by item 6.*
+
 1. **Region split breaks a single shared SNS topic.** Stacks pin `region: 'us-west-1'` (`cdk/src/bin/aperture.ts:29`), so the BFF Lambda's metrics are in us-west-1, but **CloudFront metrics publish only in us-east-1**. An alarm can only evaluate metrics in its own region and only publish to an SNS topic in its own region. → the CloudFront 5xx alarm cannot share the Lambda alarms' topic. See item 5's decision.
 2. **No `/health` route exists.** `lambdas/src/index.ts` dispatches only `/api/<method>` via `handleRpc`, gated by the shared allowlist (`packages/shared/src/rpc.ts` `isApiMethod`); a JWT-less non-testMode call 401s at `resolveUserId`. Item 6 adds a short-circuit **after** the origin-secret gate and **before** `resolveUserId`.
 3. **The Lambda Function URL is not a `CfnOutput`.** `app-stack.ts` outputs `AppUrl`, `CloudFrontDomain`, `SiteBucket`, `DistributionId`, `UserPoolClientId` — not `fnUrl.url`. Item 6's negative-gate test must hit the Function URL **directly** (through CloudFront the viewer can't set `x-aperture-origin-secret` — the origin policy forwards only the auth + content-type headers and CloudFront injects the secret), so a `FunctionUrl` output must be added.
@@ -41,7 +43,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 6. **`deploy.yml` triggers on `push` only** (not `pull_request`), so Dependabot's restricted-secret context is a non-issue (#4). Prod is `if: github.ref == 'refs/heads/main'`, so it is **skipped** on dev-branch pushes — item 1's notify job must treat `skipped` as not-a-failure.
 7. **Versions:** `cdk-nag` latest is **3.0.2** (confirmed via `npm show`) — the v3 **validation-plugin** API, not the classic `Aspects.of(app).add(...)`; confirm the exact call in the current README before writing. `gitleaks/gitleaks-action` current tag confirmed **`v3`** (v3.0.0, Node 24) via the GitHub releases API — pinned.
 
-## Manual prerequisites (operator, by hand)
+## Manual prerequisites (operator, by hand — all done 2026-08-10, see Open items)
 
 - [ ] Create an ntfy topic (a long, unguessable name) and subscribe to it in a desktop browser at `https://ntfy.sh/<topic>`.
 - [ ] Add GitHub repo **secret** `NTFY_TOPIC` = the topic name (it's the only access control on the public instance → secret, not a var).
@@ -49,7 +51,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 - [ ] Flip the AWS **root**-user "IAM access to Billing and Cost Management" toggle **before** deploying the billing stack (item 7). Independent of IAM policy — the OIDC roles cannot do this.
 - [ ] Hand-deploy the billing stack once: `cdk deploy ApertureBilling -c billing=true` (mirrors the one-off `ApertureCicd` deploy; the pipeline never touches it).
 
-**Unrelated to the seven items, but on the same "CI needs this by hand" list** — the LeetCode-capture extension needs GitHub **secrets** `DEVICE_TOKEN_DEV` / `DEVICE_TOKEN_PROD` and **vars** `DEVICE_USER_ID_DEV` / `DEVICE_USER_ID_PROD`. Unset, the token rotates on every deploy and captured rows land under the wrong user — both fail silently. Checklist + why: **[recruiting/](../areas/recruiting/index.md) → Operator setup**.
+**Unrelated to the seven, same by-hand list:** the LeetCode-capture extension needs GitHub **secrets** `DEVICE_TOKEN_DEV` / `DEVICE_TOKEN_PROD` and **vars** `DEVICE_USER_ID_DEV` / `DEVICE_USER_ID_PROD` — why, and how each fails silently when unset: **[recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup)**.
 
 ## Implementation order
 
@@ -81,8 +83,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 - **⚠️ Granular IAM4/IAM5 suppression — upstream bug workaround.** `acknowledge()` splits the id on `::` and rejects granular finding ids that embed an ARN (IAM4 managed-policy ARN, IAM5 resource ARN) — an open cdk-nag v3 bug ([cdklabs/cdk-nag#2359](https://github.com/cdklabs/cdk-nag/issues/2359), [#2351](https://github.com/cdklabs/cdk-nag/issues/2351)). Base rule ids are *accepted but don't suppress* granular findings. Workaround (in `app-stack.ts`): write the acknowledgment metadata cdk-nag reads directly — `fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, { '<exact finding id from synth>': reason })`. The IAM5 id embeds the cross-stack table export (`ApertureData-${stage}:ExportsOutput…TableCD117FA1…/index/*`) so it's stage-interpolated and drifts if the table construct id changes (synth re-flags → update). Revisit when #2359 lands a fix. Pinned `cdk-nag` exact (`3.0.2`) so a patch can't silently change the metadata contract.
 - **Suppressions (~11) + 2 fixes:** suppressed fine-by-design — COG1/COG2/COG8 (single-user pool), IAM4/IAM5 (above), L1 (Node 22 LTS target), S1/CFR1/CFR2/CFR3 (no access logs/WAF/geo), CFR4 (default cert only in pre-domain synth). **Fixed rather than suppressed:** S10 (`enforceSSL` on the S3 bucket) and SNS3 (`enforceSSL` on the alarm topic) — genuine cheap hardening. OAC + PITR pass already → the regression guards we wanted.
 - Runs inside the existing `cdk synth` step in both deploy jobs — no workflow change.
-- Expected ~8–12 one-time suppressions, each with a real reason string: no WAF on CloudFront, no Cognito MFA/advanced security, S3 access-logging off, default viewer cert pre-domain, Lambda no-DLQ/basic-exec-role, Function URL `authType: NONE` (origin-secret gate), and the `grantReadWriteData` IAM wildcard on index ARNs (real — suppress with justification or scope down).
-- OAC ✓ and PITR ✓ should already pass — those are the regression guards worth having.
+- Planned ~8–12 one-time suppressions, each with a real reason string (the planning list also anticipated Lambda no-DLQ, Function URL `authType: NONE` behind the origin-secret gate, and the `grantReadWriteData` wildcard on index ARNs); the actual set is above.
 
 ## Item 3 — gitleaks
 

@@ -6,18 +6,20 @@ Product is the source of truth; where this plan and product disagree, product wi
 **How to read:** ordered phases → milestones → tasks. Each phase states its goal, tasks,
 key files it creates, dependencies, and the spec sections it implements. Build order is
 **page-first**: workspace → stub contract → validate home/capture/calibration UX against the
-stub → real Lambda + DynamoDB → auth → CI/infra → custom domain LAST.
+stub → real Lambda + DynamoDB → auth → CI/infra → custom domain LAST. This doc is the plan as
+written plus the per-phase as-built record — not the roadmap of what exists (the `areas/` docs are)
+and not a second copy of the spec: each milestone keeps its module/file names and citations, and the
+rule text lives at the cited section. Key-file paths are plan-time; the tree is authoritative (e.g.
+`app/data/` became `app/src/data/`, `cdk/lib/` is `cdk/src/lib/`, there is no `lambdas/src/routes/`).
 
-**Build status (2026-08-11):** Phases **0–14 ✅ built** — every phase's code artifacts are in the
-repo and all six packages are green (236 tests). Verified against the tree, not from memory; the
-per-phase evidence is in the "as built" note under each phase heading where one exists.
+**Build status:** Phases **0–14 ✅ built** (first verified against the tree 2026-08-11, at 236 tests; the
+live count and what's open are in [`index.md`](index.md)). Not from memory — the per-phase evidence is
+in the "as built" note under each phase heading where one exists.
 
-**Open, and deliberately not claimed as done** — neither is code, so neither can be verified here:
+**Open, and deliberately not claimed as done** — not code, so not verifiable here:
 
 - **9.2 — the stub-validation gate.** "Dogfood against the stub for a real morning + night" before
   trusting the backend. This is a human gate; only the author knows whether it happened.
-- **Prod / custom domain actually live.** The CDK wiring (14.1–14.4) is in `cdk/`, but a successful
-  deploy is not an artifact in the repo. Confirm against the AWS console / a live fetch.
 
 Shipped **beyond** this plan (see `arch/CICD_HARDENING.md`): cdk-nag, billing + CloudWatch alarms,
 health check, gitleaks, Dependabot, deploy notifications.
@@ -26,55 +28,40 @@ health check, gitleaks, Dependabot, deploy notifications.
 
 ## A. Order-sensitive decisions — build these in from day one
 
-These are cheap to encode at the start and expensive-to-impossible to retrofit. They live in the
-**shared types + the API contract** (Phase 1), so the stub and the eventual Lambda both honor them.
-Encoding them once, in the contract, is what lets the page-first stub be a faithful stand-in.
+Cheap to encode at the start and expensive-to-impossible to retrofit. They live in the **shared types +
+the API contract** (Phase 1), so the stub and the eventual Lambda both honor them — encoding them once,
+in the contract, is what lets the page-first stub be a faithful stand-in. The rule text lives at each
+citation; only the retrofit cost is kept here.
 
-1. **ULIDs, client-generated** — every entity id is a ULID (time-sortable, collision-free across
-   devices). Never an auto-increment or server id. Sort keys depend on ULID lexical ordering. (TECH §2.1)
-2. **`userId` scoping on every item** — every read/write is scoped to `userId`. Single-user today,
-   but the partition key (`u#<userId>`) and every query filter assume it. Bake into the contract so
-   no endpoint is ever written unscoped. (TECH §2.1, §2.4)
-3. **Soft-delete everywhere** — every entity carries `createdAt · updatedAt · deletedAt`. Nothing
-   is ever hard-deleted; every read filters tombstones. Add `deletedAt` to the base type now, not
-   per-entity later. (TECH §2.1, §2.3.4)
-4. **Configurable day-start offset** — `settings.dayStartHour` (default **4am**). Every `day`/`date`
-   bucket is computed through one helper (`dayBoundary`), never `new Date().toISOString().slice(0,10)`.
-   Late-night work must land on the right day. One choke point = retrofit-proof. (TECH §2.1, §2.3.6)
-5. **Estimate freeze at start-of-work** — `estimateMin`/`bufferMin` are editable only while
-   `status ∈ {backlog, planned}`. On first transition to `in_progress`/`done`, snapshot
-   `estimateLockedMin`. Calibration = `actualAccruedMin` vs `estimateLockedMin`. Scope changes ⇒
-   **split**, never edit the locked value. The state machine must enforce this from the first task
-   written, or early data is uncalibratable. (PRODUCT §4a, TECH §2.2, §2.3.1)
-6. **Snapshotted `wasWork` on sessions** — a pomodoro session copies the category's `isWork` at
-   write time into `wasWork` (immutable). Category labels resolve live; `isWork` history is frozen.
-   Retrofitting a snapshot after sessions exist is guesswork. (TECH §2.2, §2.3.2–3)
-7. **Session heartbeat lifecycle** — running sessions persist with `lastHeartbeatAt`; `activeMinutes`
-   accrues only un-paused time; on next open a stale running session prompts **keep (capped at last
-   heartbeat) / discard**. No orphans. The heartbeat field and status machine must exist from the
-   first timer. (TECH §2.2, §2.3.3)
-8. **`taskPlans` / `taskSeries` split** — scheduling (the *when*: `taskPlans`, multi-day + `order`)
-   is a separate entity from the task (the *what*), and recurrence (`taskSeries`) spawns real task
-   instances each with `seriesId`. Collapsing these into `task` blocks multi-day scheduling and
+1. **ULIDs, client-generated** — never an auto-increment or server id; sort keys depend on ULID lexical
+   ordering. (TECH §2.1)
+2. **`userId` scoping on every item** — the partition key (`u#<userId>`) and every query filter assume
+   it; bake it into the contract so no endpoint is ever written unscoped. (TECH §2.1, §2.4)
+3. **Soft-delete everywhere** — add `deletedAt` to the base type now, not per-entity later. (TECH §2.1, §2.3.4)
+4. **Configurable day-start offset** — every `day`/`date` bucket goes through one helper (`dayBoundary`),
+   never `new Date().toISOString().slice(0,10)`; one choke point = retrofit-proof. (TECH §2.1, §2.3.6)
+5. **Estimate freeze at start-of-work** — the state machine must enforce it from the first task written,
+   or early data is uncalibratable. (PRODUCT §4a, TECH §2.2, §2.3.1)
+6. **Snapshotted `wasWork` on sessions** — retrofitting a snapshot after sessions exist is guesswork.
+   (TECH §2.2, §2.3.2–3)
+7. **Session heartbeat lifecycle** — the heartbeat field and status machine must exist from the first
+   timer. (TECH §2.2, §2.3.3)
+8. **`taskPlans` / `taskSeries` split** — collapsing these into `task` blocks multi-day scheduling and
    per-occurrence calibration and is a full remodel to undo. (PRODUCT §4a, TECH §2.2)
-9. **Writes-object pattern (Lambda)** — all side effects funnel through one writes object → single
-   audit point + guarantees smoke tests do no writes. Introduce the seam in the stub's mutation layer
-   so the real Lambda inherits it. (TECH §4, INFRA §4, §9)
-10. **Lazy-on-read recurrence generation** — due `taskSeries` occurrences materialize when a day
-    loads (no cron). The generation call site exists in the day-load path from the stub onward. (INFRA §4)
-11. **`updatedAt` last-write-wins** — the multi-device conflict story is LWW on `updatedAt`. Every
-    mutation stamps it. (TECH §2.3.5)
-12. **Categories: id-referenced, live labels, reassign-on-delete** — items reference `categoryId`;
-    labels resolve at display; deleting a category forces reassignment first, then soft-deletes the
-    empty one; flipping `isWork` offers opt-in retroactive backfill. (TECH §2.2, §2.3.2)
+9. **Writes-object pattern (Lambda)** — introduce the seam in the stub's mutation layer so the real
+   Lambda inherits it. (TECH §4, INFRA §4, §9)
+10. **Lazy-on-read recurrence generation** — the generation call site exists in the day-load path from
+    the stub onward. (INFRA §4)
+11. **`updatedAt` last-write-wins** — every mutation stamps it. (TECH §2.3.5)
+12. **Categories: id-referenced, live labels, reassign-on-delete** — items reference `categoryId` from
+    the first row. (TECH §2.2, §2.3.2)
 
 ---
 
 ## B. Dependency ledger — first-principles discipline (CONVENTIONS)
 
-Default is **roll our own**. A dep is added only under (A) substantial hard-to-own logic or
-(B) security-critical / subtle-correctness / standards edge cases — justified explicitly, footprint
-noted. "It's popular" is not a reason. Every tempting point is flagged here so it can't sneak in.
+Default is **roll our own**; a dep needs an explicit (A)/(B) case per `product/CONVENTIONS.md`. Every
+tempting point is flagged here so it can't sneak in.
 
 | Candidate | Verdict | Rationale |
 |---|---|---|
@@ -84,7 +71,7 @@ noted. "It's popular" is not a reason. Every tempting point is flagged here so i
 | `aws-jwt-verify` (Lambda) | **Add — (B)** | Cognito JWT signature + issuer/expiry verification against JWKS is security-critical; AWS-maintained, zero-dep. Beats hand-rolling JWKS/RS256. INFRA §4. |
 | `@aws-sdk/client-dynamodb` + `lib-dynamodb` (Lambda) | **Add — necessary** | AWS-provided DDB access. Bundled out of the Node 22 Lambda by esbuild if needed. |
 | `aws-cdk-lib` + `constructs` (cdk/) | **Add — necessary** | IaC per INFRA. |
-| **ULID generation** | **Roll our own — decide-at-need** | ~50 lines: Crockford base32 + monotonic factory (same-ms increment) seeded from `crypto.getRandomValues`. Correctness (monotonicity/entropy) is subtle → **cover with Vitest property tests**. Fall back to the `ulid` npm pkg *only* if monotonicity proves fiddly. CONVENTIONS worked-call. |
+| **ULID generation** | **Rolled our own** (`packages/shared/src/ulid.ts`) | ~50 lines: Crockford base32 + monotonic factory (same-ms increment) seeded from `crypto.getRandomValues`. Correctness (monotonicity/entropy) is subtle → **covered with Vitest property tests**. Fall back to the `ulid` npm pkg *only* if monotonicity proves fiddly. CONVENTIONS worked-call. |
 | **Date helpers** | **Roll our own** | `dayBoundary`, ISO-week, add/format are small and targeted (TECH §1). Reach for a date lib *only* if DST edges prove genuinely gnarly — flag before adding. |
 | **Charts / viz** | **No dep — roll our own** | v1 viz (planned-vs-available bar, estimate-vs-actual, habit calendar) is hand-rolled CSS/SVG. Charts deferred entirely. TECH §1. |
 | State mgmt lib (Redux/Zustand/etc.) | **No dep** | UI/session state = React Context + hooks; server state = React Query. TECH §3. |
@@ -123,12 +110,12 @@ runner later — the whole point of the pnpm/Vitest call.
 - **TS pinned to 6, not 7:** `typescript-eslint@8.65` peers `typescript <6.1.0`, so TS 7 (the
   native-compiler rewrite) breaks type-aware lint. Bump when typescript-eslint supports TS 7.
 - **Node 22, not 24:** matches the dev environment and the Lambda runtime; keeps dev == deploy target.
-- **Internal packages resolve from source:** `@aperture/shared` exports `./src/index.ts`; `app`/`lambdas`
-  import it directly and their bundler transpiles it — **no build step in the dev/test loop**. `shared`
-  emits a gitignored `dist/` only to satisfy TS project references (a *referenced* composite project
-  can't be `noEmit` — TS6310). Nothing imports that `dist/`.
-- **Structure:** typecheck = one root `tsc -b` (project references); lint = one root `eslint .` (flat
-  config); `test`/`build` fan out per-package (`pnpm -r`). Dual Vitest envs — jsdom (`app`), node (rest).
+- **Internal packages resolve from source; command shape; dual Vitest envs** — as recorded in
+  `product/CONVENTIONS.md` → *Monorepo*: `@aperture/shared` exports `./src/index.ts` and consumers
+  transpile it (**no build step in the dev/test loop**); `shared` emits a gitignored `dist/` only for
+  TS project references (a *referenced* composite project can't be `noEmit` — TS6310; nothing imports
+  it); typecheck = one root `tsc -b`, lint = one root `eslint .` (flat config), `test`/`build` fan out
+  per-package (`pnpm -r`); jsdom (`app`), node (rest).
 
 ---
 
@@ -141,23 +128,20 @@ interface; swapping is one module.
 
 **Milestones & tasks**
 - **1.1 Entity types** — in `packages/shared/src/types.ts`: `LogEntry, Task, TaskPlan, TaskSeries,
-  Idea, Habit, HabitCheck, PomodoroSession, Day, Category, Settings`. A `BaseEntity` mixes in
-  `id · createdAt · updatedAt · deletedAt · userId`. Encode the order-sensitive fields from §A:
-  `estimateLockedMin`, `wasWork`, `lastHeartbeatAt`, `status` unions, `rule` union, etc.
-- **1.2 State machines & invariants** — pure helpers in shared: `taskTransition()` (enforces
-  estimate-freeze on exit-from-planning), `sessionTransition()` (running→completed/discarded,
-  heartbeat cap), category-delete reassignment guard. These are shared so stub and Lambda share one
-  source of truth for the rules.
+  Idea, Habit, HabitCheck, PomodoroSession, Day, Category, Settings` on a `BaseEntity`
+  (`id · createdAt · updatedAt · deletedAt · userId`), encoding the order-sensitive fields from §A
+  (`estimateLockedMin`, `wasWork`, `lastHeartbeatAt`, `status` unions, `rule` union, etc.).
+- **1.2 State machines & invariants** — pure helpers in shared: `taskTransition()`,
+  `sessionTransition()`, category-delete reassignment guard — one source of truth for stub and Lambda.
 - **1.3 `ApiClient` contract** — `packages/shared/src/api.ts`: one method per access pattern
   (`listLogEntries(day)`, `createLogEntry`, `listBacklog`, `scopeTask`, `startTask`, `completeTask`,
   `listPlansForDay`, `upsertPlan`, `startSession`/`heartbeat`/`stopSession`, `listHabits`,
   `checkHabit`, `listIdeas`, `triageIdea`, `getDay`/`setCapacity`/`setIntent`/`setReflection`,
   `listCategories`/`upsertCategory`, `getSettings`/`updateSettings`, `getCalibration(range)`).
   Mirrors TECH §2.4 prefix reads + the calibration GSI.
-- **1.4 Stub implementation** — `app/data/stubClient.ts`: implements `ApiClient` over an in-memory
-  store persisted to `localStorage`, with the **writes-object pattern** (§A.9) at the mutation seam
-  and **lazy recurrence materialization** (§A.10) in `getDay`. Uses the real `ulid`/`dayBoundary`
-  helpers so bucketing is exercised for real.
+- **1.4 Stub implementation** — `app/data/stubClient.ts`: `ApiClient` over an in-memory store
+  persisted to `localStorage`, with the **writes-object** seam (§A.9) and **lazy recurrence** (§A.10)
+  in `getDay`. Uses the real `ulid`/`dayBoundary` helpers so bucketing is exercised for real.
 - **1.5 Seed dataset** — `app/data/seed.ts`: a few weeks of backdated `logEntries`, done tasks with
   `estimateLockedMin`/`actualAccruedMin` spread, sessions, habit checks. **Critical for validation:**
   calibration/night-review can't be judged against an empty store.
@@ -181,12 +165,11 @@ would defer the hard modeling questions to the expensive phase — exactly what 
 (PRODUCT §2.2, §5) — every page is built on these tokens, so they come before pages.
 
 **Milestones & tasks**
-- **2.1 Theme tokens** — derive the palette from `localNotes/preview.webp`: dusky teal-green ground,
-  soft off-white text, translucent teal active states, one warm **gold/amber** accent. Encode as CSS
-  custom properties (`--surface`, `--fg`, `--accent-gold`, …) in `app/src/styles/` with a light and a
-  dark set; **auto-theme is a one-line data-attribute flip** driven later by home mode. (TECH §1, PRODUCT §5)
-- **2.2 Type + density** — pick + self-host a quality neutral sans with slight warmth (not
-  system-default); set the airy-overall / crisp-data-blocks density scale. (PRODUCT §5 locked commitments)
+- **2.1 Theme tokens** — the PRODUCT §5 palette (from `localNotes/preview.webp`) as CSS custom
+  properties (`--surface`, `--fg`, `--accent-gold`, …) in `app/src/styles/`, light + dark sets;
+  **auto-theme is a one-line data-attribute flip** driven later by home mode. (TECH §1, PRODUCT §5)
+- **2.2 Type + density** — pick + self-host a sans per PRODUCT §5's locked commitments; set the
+  airy-overall / crisp-data-blocks density scale.
 - **2.3 Primitive components** — `components/`: `Card, Text, Button, Field, ModeToggle, Menu`
   (row overflow), `DeltaBar` (estimate/actual), `MiniBar` (planned-vs-available), `TimerPill`.
   Semantic token layer, not raw utilities scattered. Snapshot/interaction tests where cheap.
@@ -206,14 +189,14 @@ would defer the hard modeling questions to the expensive phase — exactly what 
 below memory cost.
 
 **Milestones & tasks**
-- **3.1 Global capture bar** — `modules/capture/CaptureBar.tsx`: always-present, `[ Log | Task | Idea ]`
-  toggle (click or **Tab**-cycle, **Enter** submits), global focus hotkey (web), bottom-fixed thumb-reach
-  layout on narrow viewports. **Default = Log; after submit, stays focused and snaps back to Log.**
-  **Hard rule enforced: capture never asks for structure** — no estimate/due/category field exists here. (PRODUCT §2)
+- **3.1 Global capture bar** — `modules/capture/CaptureBar.tsx`: the always-present
+  `[ Log | Task | Idea ]` bar (global focus hotkey on web, bottom-fixed thumb-reach layout on narrow
+  viewports), behaving exactly as PRODUCT §2 specifies — Log default, snap-back after submit, never
+  asks for structure.
 - **3.2 Routing** — mode dispatch: Log → `createLogEntry`, Task → title-only backlog `createTask`,
   Idea → `createIdea`. Optimistic mutations via React Query.
-- **3.3 Interstitial log view** — `modules/log/` + `pages/Log.tsx`: timestamped, append-only,
-  one-day-per-page, light edit (typo fix), **no backdating** in v1. Browse past days via `dayBoundary`.
+- **3.3 Interstitial log view** — `modules/log/` + `pages/Log.tsx`: one-day-per-page timeline per
+  PRODUCT §4b (append-only, light edit, no backdating); browse past days via `dayBoundary`.
 - **3.4 React Query wiring** — hooks in `app/data/hooks/` bound to `stubClient`; query keys per access
   pattern; optimistic + rollback.
 
@@ -232,10 +215,9 @@ per mode, glanceable in ~2s. This is a primary validation target.
 **Milestones & tasks**
 - **4.1 Home-mode context** — `modules/home/HomeModeProvider.tsx`: derives mode from clock via
   `dayBoundary`-aware windows; manual override; drives ThemeProvider (light morning/day, dark night).
-- **4.2 Mode layouts** — `pages/Home.tsx` with three composed layouts, each ≤5 elements:
-  - **☀️ Morning:** capture bar · Plan-today (Phase 5) · habits due · one-line intent (optional, non-scored).
-  - **⚙️ Daytime:** capture bar (prominent) · today's tasks (planned vs elapsed) · pomodoro · time-budget glance.
-  - **🌙 Night:** capture bar (Log) · Today-in-review · habits check · one rotating reflection prompt (skippable).
+- **4.2 Mode layouts** — `pages/Home.tsx` with the three PRODUCT §3 layouts composed, each ≤5
+  elements (☀️ capture · Plan-today (Phase 5) · habits due · intent; ⚙️ capture · today's tasks ·
+  pomodoro · time-budget; 🌙 capture · Today-in-review · habits check · reflection prompt).
 - **4.3 Deep-view routes** — `/log · /tasks · /habits · /inbox · /settings` route shells; home = glance,
   deep views = work.
 
@@ -255,24 +237,19 @@ validation target.
 
 **Milestones & tasks**
 - **5.1 Task lifecycle** — `modules/tasks/`: `backlog → planned → in_progress → done` (+ `cancelled`),
-  driven by shared `taskTransition()`. **Estimate/buffer editable only in backlog/planned;
-  `estimateLockedMin` snapshots on first exit.** Scope change ⇒ **split** (finish/cancel + spawn
-  follow-up), never edit locked. (PRODUCT §4a, §A.5)
+  driven by shared `taskTransition()`, with the estimate lock + split-not-edit rule. (PRODUCT §4a, §A.5)
 - **5.2 Morning plan pass** — `modules/calibration/PlanToday.tsx`: pull backlog tasks in, set estimate
-  + buffer + category, write `taskPlans` rows (multi-day, manual `order`). Live **planned hours vs
-  hours available** from `day.capacityHours` ("11h planned into a 6h day"). Under-scoping caught here. (PRODUCT §3 ☀️, §4a)
+  + buffer + category, write `taskPlans` rows (multi-day, manual `order`); live **planned hours vs
+  hours available** from `day.capacityHours`. (PRODUCT §3 ☀️, §4a)
 - **5.3 Buffer nudge** — flat **+25%** suggestion in v1 (personalized-from-bias is parked). (PRODUCT §4a)
-- **5.4 Actual-time capture** — on "done," prompt one number **prefilled from tracked pomodoro time,
-  editable** (works with no timer). Records `actualAccruedMin`; `cancelled` excluded from calibration. (PRODUCT §4a, §A.5)
-- **5.5 Rollover** — unfinished planned task rolls to backlog, no penalty; repeated rollovers stay
-  visible as an honest signal, never a scold. (PRODUCT §4a)
-- **5.6 Recurring tasks** — `taskSeries` with simple `rule` (daily/weekdays/weekly/everyN); occurrences
-  are real tasks with `seriesId` (own estimate/actual/calibration); **lazy materialization on day load**.
-  Edit-one vs edit-series semantics. (PRODUCT §4a, TECH §2.2, §A.8/§A.10)
-- **5.7 Calibration surfaces** — `modules/calibration/`: per-task estimate-vs-actual delta drawn as a
-  bar (night review, hand-rolled `DeltaBar`/`MiniBar`) so the gap is seen rather than subtracted;
-  simple aggregate estimate/actual ratio + trend, **honestly sparse early**. No charts dep.
-  (PRODUCT §4a, §6.4)
+- **5.4 Actual-time capture** — on "done," the hybrid prompt (one number, pomodoro-prefilled, editable);
+  records `actualAccruedMin`. (PRODUCT §4a, §A.5)
+- **5.5 Rollover** — unfinished planned task rolls to backlog, no penalty, visible as an honest signal. (PRODUCT §4a)
+- **5.6 Recurring tasks** — `taskSeries` with simple `rule`; occurrences are real tasks with `seriesId`;
+  **lazy materialization on day load**; edit-one vs edit-series semantics. (PRODUCT §4a, TECH §2.2, §A.8/§A.10)
+- **5.7 Calibration surfaces** — `modules/calibration/`: per-task delta as a hand-rolled bar
+  (`DeltaBar`/`MiniBar`) in the night review, plus the simple aggregate ratio + trend, **honestly
+  sparse early**. No charts dep. (PRODUCT §4a, §6.4)
 - **5.8 Backlog deep view** — `pages/Tasks.tsx`: full backlog, filter, split, cancel, series management.
 
 **Key files:** `app/src/modules/tasks/*`, `app/src/modules/calibration/*`, `app/src/pages/Tasks.tsx`,
@@ -290,12 +267,10 @@ whole integrity of the calibration — "so hindsight can't launder the calibrati
 **Goal:** minimal timer that feeds calibration, with a robust orphan story.
 
 **Milestones & tasks**
-- **6.1 Timer engine** — `modules/pomodoro/`: configurable work/break (default 25/5), `kind: work|break`;
-  **only `work` accrues** to `task.actualAccruedMin` + time-budget. Tied to current task;
-  `categoryId` **follows the task** (manual only for taskless focus); `wasWork` **snapshotted** at write. (PRODUCT §4b, §A.6)
-- **6.2 Persistence + heartbeat** — running session persisted with `lastHeartbeatAt`; `activeMinutes`
-  accrues only un-paused time (**pauses excluded**). On open, a stale running session prompts
-  **keep (capped at last heartbeat) / discard** — no orphans. Via shared `sessionTransition()`. (§A.7)
+- **6.1 Timer engine** — `modules/pomodoro/`: configurable work/break (default 25/5), `kind: work|break`
+  with the accrual, category-follows-task and `wasWork` rules of TECH §2.2. (PRODUCT §4b, §A.6)
+- **6.2 Persistence + heartbeat** — running session persisted with `lastHeartbeatAt`; pauses excluded;
+  stale-session **keep / discard** via shared `sessionTransition()`. (§A.7)
 - **6.3 Persistent UI** — `TimerPill` follows across views (pomodoro is **not a route**). (TECH §3)
 - **6.4 Accrual on close** — work session close bumps denormalized `task.actualAccruedMin` and prefills
   the task's "actual." (TECH §2.2/§2.4)
@@ -313,9 +288,8 @@ double-counts work sessions poisons the one signal v1 exists to produce.
 **Goal:** the supportive, non-policing modules — the only v1 vehicle for non-work balance.
 
 **Milestones & tasks**
-- **7.1 Habits** — `modules/habits/`: weekly-cadence (`cadencePerWeek`, e.g. "3×/week"), calendar view,
-  marked in the night check; `habitChecks` unique on `(habitId, date)`. **No streaks, no guilt** — a
-  miss is a miss, repair-friendly. Habits may hold non-work items (e.g. "call home 1×/week"). (PRODUCT §4b, §3 🌙)
+- **7.1 Habits** — `modules/habits/`: weekly-cadence (`cadencePerWeek`), calendar view, night check;
+  `habitChecks` unique on `(habitId, date)`; no streaks, may hold non-work items. (PRODUCT §4b, §3 🌙)
 - **7.2 Habits deep view** — `pages/Habits.tsx`: create/edit habits, calendar history.
 - **7.3 Inbox** — `modules/inbox/` + `pages/Inbox.tsx`: Idea captures land here; triage each into
   task / log / note / discard. (PRODUCT §2, §4b)
@@ -334,10 +308,8 @@ guilt-nag the identity forbids.
 **Goal:** the config the above modules read. (Partly built earlier as stubs; this phase completes it.)
 
 **Milestones & tasks**
-- **8.1 Categories manager** — `pages/Settings.tsx`: starting set (**deep work · admin · learning ·
-  health · people**), editable, `order`, `isWork`. **Id-referenced, live labels; delete forces
-  reassignment then soft-delete; `isWork` flip offers opt-in retroactive backfill** ("also reclassify
-  N past records?"). Collapsible to just work/non-work. (PRODUCT §4 categories, TECH §2.2, §A.12)
+- **8.1 Categories manager** — `pages/Settings.tsx`: the PRODUCT §4 starting set, editable, `order`,
+  `isWork`; the id-referenced / reassign-on-delete / backfill-on-flip rules of §A.12. (TECH §2.2)
 - **8.2 Day capacity + intent + reflection** — `days` singleton editors: `capacityHours` (manual —
   v1 "hours available" is a number, not calendar-derived), `intent`, rotating `reflectionPrompt` +
   `reflectionText`. (PRODUCT §3, §6.6)
@@ -376,15 +348,13 @@ the product is wrong against a stub than against real infra."
 `stubClient` → `httpClient`; UI unchanged.
 
 **Milestones & tasks**
-- **10.1 Single-table mapping** — `lambdas/src/ddb/`: keys per TECH §2.4 (`PK=u#<userId>`;
-  `log#<day>#<ulid>`, `task#<ulid>`, `plan#<day>#<order>#<ulid>`, `sess#<day>#<ulid>`,
-  `hcheck#<date>#<habitId>`, `day#<date>`, `habit#/cat#/idea#/series#/settings`) + **GSI1**
-  (`u#<userId>#done` / `<completedAt>`) for calibration. Denormalized `task.actualAccruedMin`.
+- **10.1 Single-table mapping** — `lambdas/src/ddb/`: keys per TECH §2.4 (`PK=u#<userId>`, the
+  type-prefixed SKs) + **GSI1** (`u#<userId>#done` / `<completedAt>`) for calibration. Denormalized
+  `task.actualAccruedMin`.
 - **10.2 Route handlers** — `lambdas/src/routes/`: one handler per `ApiClient` method; prefix reads +
-  the one GSI; balance/time-budget aggregated **in the Lambda** over the range (no extra GSI). Reuse
-  the **shared** `machines.ts` so lifecycle rules are identical to the stub.
-- **10.3 Writes-object** — `lambdas/src/writes.ts`: all side effects funnel through it (single audit
-  point; smoke-test no-write guarantee). (INFRA §4/§9, §A.9)
+  the one GSI; balance/time-budget aggregated **in the Lambda** (no extra GSI). Reuse the **shared**
+  `machines.ts` so lifecycle rules are identical to the stub.
+- **10.3 Writes-object** — `lambdas/src/writes.ts`: the single audit point. (INFRA §4/§9, §A.9)
 - **10.4 Lazy recurrence** — materialize due `taskSeries` occurrences on day-load. (INFRA §4, §A.10)
 - **10.5 HTTP client** — `app/data/httpClient.ts` implementing `ApiClient` over `fetch` to `/api/*`;
   feature-flag stub↔http. **Contract tests run both clients against the same suite** (shared in
@@ -406,8 +376,7 @@ the product is wrong against a stub than against real infra."
 **Milestones & tasks**
 - **11.1 App auth** — `app/auth/`: `react-oidc-context` + Cognito Hosted UI (PKCE SPA client, no
   secret); AuthProvider context; attach JWT to `httpClient`; protected routes; silent refresh. (§B, TECH §3, INFRA §6)
-- **11.2 In-handler JWT validation** — Lambda verifies the Cognito JWT (JWKS signature + issuer +
-  expiry) via `aws-jwt-verify`, extracts `sub` → `userId`. (INFRA §4, §B)
+- **11.2 In-handler JWT validation** — `aws-jwt-verify` in the Lambda, `sub` → `userId`. (INFRA §4, §B)
 - **11.3 Wire scoping** — replace the fixed dev `userId` with `sub` end-to-end; confirm every read/write
   is scoped.
 
@@ -429,11 +398,15 @@ data. No custom domain yet.
 - **12.1 Stack split** — `cdk/`: **`ApertureData-<env>`** = DynamoDB (single table, on-demand, **PITR
   on**, `RETAIN`) + Cognito User Pool (`RETAIN`); **`ApertureApp-<env>`** = Lambda + Function URL
   (`AWS_IAM`) + S3 (private) + CloudFront (OAC; default→S3, `/api/*`→Function URL; **403/404→`/index.html`**
-  SPA fallback). Stateful never endangered by app redeploys. (INFRA §3/§4/§5/§7)
+  SPA fallback). Stateful never endangered by app redeploys. (INFRA §3/§4/§5/§7) *(As built: the
+  Function URL is auth `NONE` behind a CloudFront-stamped origin-secret header, OAC fronts only S3 —
+  INFRA §4.)*
 - **12.2 Lambda packaging** — esbuild-via-CDK `NodejsFunction`, Node 22, ~15s / 512MB, no warming;
-  env `TABLE_NAME · USER_POOL_ID · USER_POOL_CLIENT_ID · STAGE`. (INFRA §4)
+  env `TABLE_NAME · USER_POOL_ID · USER_POOL_CLIENT_ID · STAGE`. (INFRA §4) *(As built: the env var
+  list is in INFRA §4.)*
 - **12.3 Config wiring** — app build consumes CDK outputs (pool id, client id, CloudFront/api base).
 - **12.4 Region** — everything in `us-east-1` (also where the CloudFront ACM cert must live later). (INFRA intro)
+  *(As built: `us-west-1`; only the ACM certs and the billing stack are in `us-east-1` — INFRA intro/§8.)*
 - **12.5 Deploy dev + smoke** — `cdk deploy` both dev stacks; invoke Lambda with a `testMode` payload
   (writes-object guarantees no side effects); Vite build → S3 sync → CloudFront invalidate; verify on
   the CloudFront default domain + PWA install with zero DNS. (INFRA §7/§9)
@@ -442,7 +415,8 @@ data. No custom domain yet.
 **Depends on:** Phases 10–11. **Implements:** INFRA §1–7, §9 (smoke).
 **Critical files:** `cdk/lib/data-stack.ts`, `cdk/lib/app-stack.ts`.
 **Trade-off:** Function URL + CloudFront OAC over API Gateway = no per-request cost; the raw URL can't
-be called directly. Locked by INFRA §4.
+be called directly. Locked by INFRA §4. *(As built: it is the origin-secret header, not OAC, that makes
+the raw URL useless — INFRA §4.)*
 
 ---
 
@@ -452,26 +426,29 @@ be called directly. Locked by INFRA §4.
 
 **Milestones & tasks**
 - **13.1 OIDC roles** — GitHub OIDC trust: dev role ← `refs/heads/dev`, prod role ← `main`. **No static
-  keys.** (INFRA §9)
+  keys.** (INFRA §9) *(As built: the trust subs are `environment:dev` / `environment:prod`; the cutover
+  `refs/heads/*` subs were pruned 2026-08 — INFRA §9.)*
 - **13.2 PR workflow** — feature branch → PR runs **lint + typecheck + test only** (pnpm + Vitest);
   squash to `main`. (INFRA §9)
 - **13.3 main pipeline** — lint/typecheck/test → `cdk deploy ApertureData-dev` + `ApertureApp-dev` →
   smoke dev → build app (env from CDK outputs) → S3 sync + invalidate → **manual approval** → same for
-  prod. `dev` branch → one-off dev deploy. (INFRA §9)
+  prod. `dev` branch → one-off dev deploy. (INFRA §9) *(As built: no approval pause — prod follows dev
+  automatically; INFRA §9 caveat.)*
 
 **Key files:** `.github/workflows/pr.yml`, `.github/workflows/deploy.yml`, `scripts/src/smoke.ts`,
 `cdk/lib/cicd-stack.ts`.
 **Depends on:** Phase 12. **Implements:** INFRA §9, CONVENTIONS (pnpm/Vitest in CI).
 **Trade-off:** manual approval before prod is the guardrail on the `RETAIN` data stack — an app bug
-can't silently reach real data.
+can't silently reach real data. *(As built: the `required_deployments:[dev]` merge gate is the guardrail
+instead — INFRA §9.)*
 **Status: LIVE (2026-08).** Roles (assume-bootstrap-roles), workflows, and smoke runner built + green;
 dev + prod deployed. Prod trust bound to the `prod` GitHub environment (scopes the prod role to
 `environment:prod` jobs). Account/GitHub setup done: `ApertureCicd` deployed, repo vars (role ARNs,
 region) + secrets (`ORIGIN_SECRET_DEV/PROD`) set, `prod` environment created.
-**⚠️ No approval pause on this repo:** required-reviewer protection needs a public repo or Pro/Team/
-Enterprise — unavailable on a free private repo — so deploy-prod runs automatically after deploy-dev on a
-`main` push. Use the **`dev` branch** as the practical gate (dev-only deploy → validate → then push
-`main`). See INFRA §9 "Approval-gate caveat." Revisit if the repo goes public / onto a paid plan.
+**⚠️ No approval pause on this repo** — deploy-prod runs automatically after deploy-dev on a `main`
+push; use the **`dev` branch** as the practical gate (dev-only deploy → validate → then push `main`).
+The premise first recorded here (that a required reviewer needs a public repo or a paid plan) was wrong —
+the account is on Pro; the current state and the untested option are in INFRA §9 "Approval-gate caveat."
 
 ---
 
@@ -543,18 +520,7 @@ scoping*, and **earning the morning + night ritual**):
 
 ## D. Explicitly out of v1 — post-v1 backlog (do NOT build now)
 
-Parked per PRODUCT §6, ordered by likely arrival:
-1. **Weekly balance view** (work vs non-work split + gentle nudge) — v1.1, first after v1. In v1 balance
-   lives entirely through habits.
-2. **Resurfacing** a past entry at night — needs weeks of data.
-3. **AI reflection** — server-side-only Lambda→Claude; the seam exists (reads existing access patterns,
-   reserved `reflections` entity), nothing built (TECH §5). Model key → Secrets Manager (INFRA §10).
-4. **Richer calibration** — personalized buffer from measured bias, trend analytics.
-5. **Quarterly / annual cadence.**
-6. **Calendar integration** (v1 capacity is a manual number).
-7. **Offline data editing** + sync-on-reconnect write queue (v1 is online-first; DDB is SoR so
-   multi-device sync is already automatic).
-8. **Deeper reflection modules** (decision journal, commonplace book, intentions-as-module, values,
-   future-self letters).
-
-**Never:** XP / badges / levels · guilt-streaks · daily policing of non-work life · mood-as-a-number.
+The ordered parked-for-later list is PRODUCT §6 (item 6, calendar integration, has since shipped —
+`areas/calendar/`). One addition to item 3 there (AI reflection): the seam exists — reads over existing
+access patterns + the reserved `reflections` entity (TECH §5), model key → Secrets Manager (INFRA §10) —
+and nothing is built.

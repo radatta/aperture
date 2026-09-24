@@ -27,9 +27,8 @@ const alive = <T extends Deletable>(rows: T[]): T[] => rows.filter((r) => r.dele
 // through `writes` (the single audit point). Entities keyed as `type#<id>` get a direct read; the few
 // that bucket day/order into the SK (log, plan, session) fall back to a prefix scan to resolve an id.
 //
-// TODO(scale, pre-deploy): `findSessionById` scans the whole `sess#` prefix, which the pomodoro
-// heartbeat hits often. Fine at single-user volume for Phase 10 (in-memory), but before the Phase 12
-// deploy, move running sessions under a `sess#running#` prefix so the hot path is a direct read.
+// Running sessions are a direct read under `sess#running#` (the heartbeat's hot path); day-bucketed
+// session history is a prefix scan.
 export class Repo {
   constructor(
     private readonly doc: DocClient,
@@ -71,7 +70,7 @@ export class Repo {
       (await this.doc.query(this.p(), sk.lcAllPrefix())).map((i) => toEntity<LeetcodeAttempt>(i)),
     );
   }
-  // TODO(scale, pre-deploy): prefix scan for dedup — matches findLog/findPlan single-user tolerance.
+  // TODO(scale): prefix scan for dedup — matches findLog/findPlan single-user tolerance.
   // Before a high-volume deploy, add a `lcsub#<id>` pointer item so this is a direct read.
   async findLeetcodeBySubmissionId(submissionId: string): Promise<LeetcodeAttempt | null> {
     return (

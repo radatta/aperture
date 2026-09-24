@@ -49,7 +49,7 @@ background.js           [extension event page]
   ▼
 CloudFront  (stamps ORIGIN_SECRET)
   ▼
-Lambda Function URL (OAC) — lambdas/src/index.ts
+Lambda Function URL (auth NONE; origin-secret header) — lambdas/src/index.ts
   • origin-secret check → 403 on miss
   • method === 'recordLeetcodeAttempt' ?  YES → resolveDeviceUserId()  [timingSafeEqual]
                                           NO  → resolveUserId()        [Cognito JWT]
@@ -170,20 +170,14 @@ the identity seam, and the reason signing is worth the one-time effort.
 have separate extension storage, so there's no ID collision with the signed copy and no chance of your
 real practice landing in dev. This is where the four ingest checks get run.
 
-**3. Extension code iteration — temporary add-on, no endpoint needed.**
-`background.js` logs every outcome (`recorded attempt … -> 200`, `backend rejected attempt … <status>`,
-`failed to POST attempt …`), and everything upstream of the POST runs regardless. This is how the capture
-half was verified on 2026-08-09.
+**3. Extension code iteration — temporary add-on, no endpoint needed.** See *Testing* → "Extension
+against no live endpoint" (the log strings, and how the capture half was verified on 2026-08-09).
 
 ### Loading a temporary add-on (layers 2 and 3)
 
-Firefox 128+ (needs `content_scripts` `world: "MAIN"`).
-
-1. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `extension/manifest.json`.
-2. Open its **options** page and set **API origin** (scheme + host, no path) and **Device token**.
-3. Accept the optional host-permission prompt for that origin — the POST can't be sent without it.
-
-Temporary add-ons don't survive a Firefox restart; re-add each time. Acceptable for validation work,
+Steps, the Firefox 128+ requirement, and the options + host-permission setup: `extension/README.md` →
+*Load it in Firefox* + *Configure*. For layer 2, do it in a **separate Firefox profile** (above).
+Temporary add-ons don't survive a Firefox restart; re-add each time — acceptable for validation work,
 not for the daily driver.
 
 ### Signing for permanent install (layer 1, one-time)
@@ -326,8 +320,7 @@ largest line item in this project.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
   same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale, pre-deploy)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
-- ~~Not signed yet.~~ **Done 2026-09-08** — signed via AMO unlisted, permanently installed, and
-  confirmed to survive a Firefox restart. The feature is complete and in daily use.
+- ~~Not signed yet.~~ **Done 2026-09-08** (*Signing for permanent install* → Status); in daily use.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
   fallback, but neither has been run.
 - **No aggregate views.** No per-topic breakdown, no difficulty mix, no time-to-solve. V2, and per

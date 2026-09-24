@@ -1,8 +1,7 @@
 # Aperture — Product Spec
 
 Personal life-OS PWA. Web-first, installable to phone. One codebase, both surfaces.
-Status: **Phase 1 (Product) — in progress.** Tech spec is deferred until this is locked.
-Started: 2026-08-02.
+Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
 
 ---
 
@@ -142,7 +141,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 ## 6. Non-goals for v1
 
-**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · rolls (deadline-free efforts, forgiving momentum) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Single-device, local-first. That's it. The bar for v1 is: **it earns the morning + night ritual.**
+**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · rolls (deadline-free efforts, forgiving momentum) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Online-first, multi-device (item 7 below). That's it. The bar for v1 is: **it earns the morning + night ritual.**
 
 **Parked for later (ordered by likely arrival):**
 1. **Weekly balance view** (work vs non-work split, gentle nudge) — v1.1, the *first* thing after v1. In v1, balance lives entirely through **habits** (the non-work-habit vehicle); the analytical weekly view comes once a week of category data exists.
@@ -150,7 +149,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 3. **AI reflection** — boundary-triggered LLM that reads across entries and asks one good question. AI is greenlit, just not day one.
 4. **Richer calibration** — personalized buffer from measured bias, trend analytics. v1 keeps per-task delta + a simple aggregate ratio.
 5. **Quarterly / annual cadence** — v1 has the daily loop only.
-6. **Calendar integration** — v1's "hours available" is a manual daily capacity number, not calendar-derived.
+6. **Calendar integration** — v1's "hours available" was a manual daily capacity number, not calendar-derived. Since built: **[calendar/](../areas/calendar/index.md)**.
 7. **Offline data editing** — v1 is online-first (DynamoDB is the source of truth, so multi-device sync is automatic — laptop + phone share one store). Full offline editing + a sync-on-reconnect write queue is deferred.
 8. **Deeper reflection modules** — decision journal, commonplace book, intentions-as-module, values, future-self letters. The task-estimation calibration already delivers the "data about my own overconfidence" hit in v1.
 

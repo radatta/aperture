@@ -51,7 +51,7 @@ it a Today task.
     sweep moves back). A planned task stays planned; an in-progress task keeps its status.
   - dedupe: `upsertPlan` has none, so the hook reads that day's plan fresh and skips writing a row the
     task already has, and ignores a second call while the first is in flight. The status step still
-    runs on that path, so retrying repairs a half-done add. Server-side dedupe is a follow-up.
+    runs on that path, so retrying repairs a half-done add. Server-side dedupe is a follow-up (§3).
   - unplan (today's row) = remove the row, then `getDay(today)`: the stale sweep moves the task to
     backlog unless it has a row on a later day. The sweep owns that rule, so the client doesn't
     re-derive it. A started task (night "Backlog") is moved explicitly first — the sweep never touches

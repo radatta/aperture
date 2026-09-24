@@ -12,10 +12,6 @@ export interface MenuItem {
 // -click + Escape to close, and arrow-key navigation — a headless-UI dependency for that is not the
 // trade CONVENTIONS asks for.
 //
-// Rows used to carry every lifecycle action as a full button (Scope / Start / Split / Cancel), so a
-// five-task backlog was a wall of twenty equally-loud controls. The one you'd actually press stays
-// visible; the rest live in here.
-//
 // role="menu" is a promise to assistive tech that Up/Down/Home/End work, so they do: focus lands on
 // the first item when the menu opens, arrows move between items, and closing — by Escape, by
 // selecting, or by clicking away — always hands focus back to the trigger. These actions used to be

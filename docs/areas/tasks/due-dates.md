@@ -4,20 +4,15 @@
 
 **Status: built 2026-09-15** (branch `task-due-dates`, rebased onto `main` after story-bank #12). Validated
 on dev — set / clear / relative display / soonest-due sort verified against real Cognito → Lambda →
-DynamoDB, including the in-progress overflow surface and split-carries-the-deadline. Pending merge to
-`main` (lands before PR-C, which rebases onto it). Gate green: typecheck · lint · tests (app 193 ·
-lambdas 69 · shared 33 · cdk 18 · scripts 6) · headless UI pass · code-review (0 Sev-1/2).
+DynamoDB, including the in-progress overflow surface and split-carries-the-deadline. Merged as #13
+(PR-C rebased onto it). Gate green (counts in §7 Phase 8) · headless UI pass · code-review (0 Sev-1/2).
 
 A day-granular **due date** on a task — *when it's due*, distinct from *when I'll work it*. The task
 model had scheduling (`taskPlans.day`) and estimates, but no deadline concept. This adds one, as free
 metadata, without turning the app into a nag.
 
-This is a permanent design-of-record — the design, the decision log, **and** the build record, all
-kept. §3 is the decision log: every product decision we actually made, why, and what we rejected —
-that's the part that stops a future reader (or a future us) from re-litigating settled ground or
-"fixing" something that was a deliberate choice. §7 is the build record: it stays after merge as the
-account of how the first cut was built, not a disposable ticket. Where this doc and the code disagree,
-fix whichever is wrong and say so here.
+Permanent design-of-record: §3 is the decision log, §7 the build record. Where this doc and the code
+disagree, fix whichever is wrong and say so here.
 
 ---
 
@@ -87,6 +82,9 @@ surface physically cannot edit an in-progress task. D3 says the deadline is edit
 makes that real in the UI.
 *Rejected:* (a) API-only editing for in-progress tasks — a real capability with no button is a lie in
 the design; (b) ungating `ScopePanel` — it would try to re-lock the estimate and throw.
+*Since superseded:* the task editor modal ([task-editor.md](task-editor.md)) deleted `ScopePanel` and the
+overflow menu; category + due are edited there at any status. D3 still holds; D4 is the decision as made
+at the time.
 
 **D5 — Flat, subtle display; no aggregate, ever.**
 Relative phrasing at the `ink-subtle` tone. **No** countdown, **no** `danger`/red, **no**
@@ -162,9 +160,9 @@ Callable at any status; never touches `estimateLockedMin`. Setting `null` clears
 
 ## 6. UX surfaces & display
 
-- **Set it** in `ScopePanel` (backlog/planned enrichment) via a native `<input type="date">` —
-  roll-our-own, no date-picker dependency. For **in-progress** tasks, a "Due day…" item in the card's
-  overflow menu opens a small `DueDayForm`.
+- **Set it** — now in the task editor modal at any status ([task-editor.md](task-editor.md)); originally
+  `ScopePanel` (backlog/planned) plus an in-progress overflow "Due day…" → `DueDayForm` (D4). Either way
+  a native `<input type="date">` — roll-our-own, no date-picker dependency.
 - **Display** as relative phrasing at `ink-subtle`, computed by `fmtDueDay(dueDay, today)`:
 
   | days from today | phrase |
@@ -177,8 +175,7 @@ Callable at any status; never touches `estimateLockedMin`. Setting `null` clears
   | −2 … −6 | `was due Tue` (weekday) |
   | ≤ −7 | `was due Jun 8` (month + day) |
 
-  Weekday names alone are ambiguous past a week and read oddly at ±1, hence the tomorrow/yesterday and
-  the ≥7-day month/day fallback.
+  (Why this shape: D8.)
 - **Shown in two places:** `TaskCard`'s meta line, and the Home "+ Add" dialog's rows. Same subtle
   tone in both. (`/tasks` lists are all `TaskCard` now — [lenses.md](lenses.md).)
 - **Dark theme:** a native date input's picker glyphs often need `color-scheme` set; if it looks wrong,
@@ -220,7 +217,7 @@ full-`Task` literal (the `Plan` pass's original "~5–7" missed that fan-out and
     - ↳ *Falsy `dueDay` folds to undated — that includes the `undefined` pre-existing rows read back as, so old tasks sort last and never crash. Verified in dev against real rows that predate the field.*
   - `app/src/modules/tasks/ScopePanel.tsx` — a `Due` date `Field`; writes only when changed.
   - `app/src/modules/tasks/TaskCard.tsx` — subtle `fmtDueDay` in `TaskMeta` (shown at every status, incl. done/cancelled); a `'due'` panel + an in-progress overflow **"Due day…"**.
-    - ↳ *The second surface is forced, not cosmetic: `ScopePanel` is gated to backlog/planned and calls `setTaskEstimate` unconditionally (throws once frozen), so it can't edit an in-progress task's due date. "Editable at any status" (D3) is only real because of the overflow panel (D4).*
+    - ↳ *The second surface is forced, not cosmetic — D4 has the why.*
   - `app/src/modules/tasks/PlanSection.tsx` — `byDueHint(backlog)` on the pull + the subtle phrase on its inline row. *(Since removed by the task lenses: Week/Backlog sort with `byDueHint` via `query.ts`.)*
     - ↳ *The pull renders its own inline card, not `TaskCard`, so the due display is added in two places (D5).*
 

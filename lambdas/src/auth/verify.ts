@@ -73,10 +73,9 @@ export async function resolveUserId(
 }
 
 // The browser extension authenticates the ingest endpoint with a static DEVICE TOKEN, not a Cognito JWT
-// (a long-lived personal key for a single-user, minimal-power write). Scoped by the caller to ONLY the
-// ingest method. The token reaches us as a plain Lambda env var — same class and same delivery as
-// ORIGIN_SECRET, deliberately NOT Secrets Manager (INFRA §10). Dev (no token configured) falls back to
-// the 'local' user, mirroring resolveUserId's no-verifier path.
+// (a long-lived personal key for a single-user, minimal-power write; credential class: INFRA §10). Scoped
+// by the caller to ONLY the ingest method. Dev (no token configured) falls back to the 'local' user,
+// mirroring resolveUserId's no-verifier path.
 export function resolveDeviceUserId(
   authHeader: string | undefined,
   expectedToken: string | undefined,
