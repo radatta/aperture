@@ -257,8 +257,8 @@ the model as the only UI — so:
   existing case).
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
-timezone; each capture is a claude.ai conversation; the D13 refresh token is 30 days from issuance, not
-sliding (no rotation configured), so the connector needs re-auth roughly monthly — the first thing to
+timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation
+configured), so the connector needs re-auth roughly monthly — the first thing to
 check if voice capture suddenly fails.
 
 ## Deferred
