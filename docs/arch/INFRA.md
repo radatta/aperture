@@ -1,6 +1,6 @@
 # Aperture — Infrastructure
 
-The AWS blueprint behind `TECH.md`. All IaC via **CDK**. Region: **`us-east-1`** everywhere (also where the CloudFront ACM cert must live — avoids cross-region cert wiring).
+The AWS blueprint behind `TECH.md`. All IaC via **CDK**. Region: **`us-west-1`** for the data + app stacks. **`us-east-1`** only where AWS requires it: the CloudFront ACM certs (§8) and the billing stack (Cost Explorer / anomaly data lives there).
 
 ---
 
@@ -45,9 +45,9 @@ Rationale: never let an app redeploy endanger the stateful resources.
 ## 4. Compute & API
 
 - **One multi-route BFF Lambda** per env (all routes in a single handler). Node 22 runtime, esbuild-bundled via CDK.
-- **Lambda Function URL**, auth type `AWS_IAM`, fronted by **CloudFront OAC** → the raw URL can't be called directly, only through CloudFront.
+- **Lambda Function URL**, auth type **`NONE`**, fronted by CloudFront. Not OAC: CloudFront OAC can't SigV4-sign POST bodies to a Function URL. Instead CloudFront stamps a shared **origin-secret header** (`ORIGIN_SECRET`) on every origin request and the handler 403s anything without it, so the raw URL is useless directly. Defense-in-depth only — the in-handler Cognito JWT check is the real auth gate. The MCP Lambda's URL works the same way. (`cdk/src/lib/app-stack.ts` class comment.)
 - **Auth:** validate the Cognito JWT **in-handler** (JWKS signature + issuer/expiry), extract `sub` → `userId` scoping every DynamoDB item.
-- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `USER_POOL_CLIENT_ID`, `STAGE`.
+- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `MCP_CLIENT_ID`, `STAGE`, `ORIGIN_SECRET`, `DEVICE_TOKEN` (+ optional `DEVICE_USER_ID`). The BFF verifier is deliberately **not** bound to one app client (D14) — `MCP_CLIENT_ID` is the claude.ai MCP client, and the BFF **rejects** tokens minted for it (the MCP Lambda does the opposite: it accepts only that client).
 - **Writes-object pattern** enforced (single audit point for all side effects; guarantees no writes during smoke tests).
 - **Recurrence generation: lazy on read** — when a day loads, materialize any due `taskSeries` occurrences. No cron/EventBridge.
 
@@ -60,12 +60,12 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 - **One User Pool per env.** Self-signup **OFF** (invite-only; you admin-create your own user). MFA optional.
 - **App client:** SPA type, PKCE, no secret. Callback URLs = the env's app URL (CloudFront default first, custom domain added later). **`refreshTokenValidity` is capped at 7 days** (Cognito defaults to 30) — it sets how often a password is actually typed, and the token persists in browser `localStorage`, so the ceiling is deliberately short. Access/ID tokens stay at the 1-hour default. Rationale and the renewal behaviour built on it: `TECH.md` §3.
 - **Second app client — `aperture-claude-<env>`** — the claude.ai MCP connector (no secret, authorization-code flow, callback URLs = Anthropic's connector constants, **30-day** refresh since it lives in claude.ai's server store not a browser). Plus an **MCP resource server** (identifier `<app-url>/mcp`, one `access` scope). Both live in the **app** stack (not the precious data stack) — the MCP OAuth façade + the credential-not-method fork are in **[areas/mcp/index.md](../areas/mcp/index.md)**.
-- **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-east-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional. The MCP function reads this host (`COGNITO_DOMAIN`) to build the façade's `/oauth2` endpoints.
+- **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-west-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional. The MCP function reads this host (`COGNITO_DOMAIN`) to build the façade's `/oauth2` endpoints.
 - Frontend: `react-oidc-context` + Hosted UI.
 
 ## 7. Hosting & CDN
 
-- **S3** (private) + **CloudFront** per env. Default behavior → S3; `/api/*` → Function URL origin (OAC). **SPA fallback:** 403/404 → `/index.html` for client-side routing.
+- **S3** (private) + **CloudFront** per env. Default behavior → S3 (OAC); `/api/*` → Function URL origin (origin-secret header, §4). **SPA fallback:** 403/404 → `/index.html` for client-side routing.
 - **`/mcp`** → the second (MCP) Function URL origin, plus three narrowly-scoped `/.well-known/oauth-*` GET behaviors on the same origin (the claude.ai OAuth metadata façade — **never** `/.well-known/*`). `/mcp` uses a zero-TTL cache policy that forwards `Authorization` (CloudFront strips it by default, and CDK's origin-request policy refuses it), while its origin-request policy forwards the agent-token + MCP headers. Design: **[areas/mcp/index.md](../areas/mcp/index.md)**.
 - **Build on the CloudFront default domain first** (`*.cloudfront.net`) — HTTPS + PWA install work immediately, zero DNS. Custom domain is the last step (§8).
 - **Publish discipline** (`scripts/aws/publish-frontend.mjs`, used by CI + local emergency publishes): **two-pass S3 sync** — hashed `assets/*` get `max-age=31536000,immutable`; everything else (`index.html`, `sw.js`, manifest, icons) gets `no-cache,no-store,must-revalidate` so a cached shell can't point at pruned asset hashes. **PWA files get explicit `--content-type`** (`manifest.webmanifest` → `application/manifest+json`, `sw.js` → `text/javascript`) because `s3 sync` guesses by extension and an octet-stream manifest silently blocks install.
@@ -91,7 +91,7 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 
 No static credentials — OIDC role assumption. GitHub Flow, simplified:
 - Feature branch → PR (lint + test only) → squash to `main`.
-- `main` pipeline: lint/typecheck/test (pnpm + Vitest) → `cdk deploy ApertureData-dev` + `ApertureApp-dev` → smoke dev → build app (Vite, env from CDK outputs) → S3 sync + CloudFront invalidate → **manual approval (see caveat below)** → same for prod.
+- `main` pipeline: lint/typecheck/test (pnpm + Vitest) → `cdk deploy ApertureData-dev` + `ApertureApp-dev` → smoke dev → build app (Vite, env from CDK outputs) → S3 sync + CloudFront invalidate → same for prod, **automatically — no approval pause** (see the caveat below).
 - `dev` branch → one-off dev deploy (not a promotion step).
 - **`dev` is a scratch deploy target, and force-pushing it is the norm.** It exists to get an arbitrary branch onto real infrastructure quickly — `git push -f origin HEAD:dev` is the intended operation, not an emergency. It is **not** an integration branch: nothing merges *from* it, its history is disposable, and whatever it points at is simply what's deployed to dev right now. So don't merge into it, don't rebase onto it, and don't build a temporary worktree to get a branch onto it — just overwrite it.
   - The one real consequence: **force-pushing `dev` overwrites whoever deployed there last.** Their commits survive on their own branch (a force-push only moves a pointer), and any GitHub deployment already recorded against their SHA still satisfies the `main` merge gate. What they lose is the *deployed dev stack* — so if someone is mid-validation on dev, tell them.
