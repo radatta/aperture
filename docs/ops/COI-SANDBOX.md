@@ -272,7 +272,8 @@ The verdict echoes the new number (still `50` would mean the edit hadn't landed)
 readback is in Incident E → *Config-change readback*. Then `coi unfreeze <name>`.
 
 **Keep `auto_pause_on_high = true`** — `internal/monitor/responder.go:121-136` shows turning it off
-disarms auto-pause for **network** HIGH threats too; raise the thresholds instead.
+disarms auto-pause for **network** HIGH threats too — unexpected outbound connections, the ones
+actually worth freezing on. Raise the thresholds instead; that is the targeted fix.
 
 **Levers that do not exist:** no zero-to-disable, no process/path exemption, no per-category switch,
 no env/CLI override, and `[limits.disk]` is a throttle, not the detector — the checked list is
@@ -502,7 +503,8 @@ optional. Steps 1–2 are on the Mac, 3–11 inside the Lima VM (`limactl shell 
 retained only as a do-not-do note. Budget ~20 minutes, most of it `coi build`.
 
 This is also the **rebuild procedure**, reconstructed the hard way after a `limactl edit` typo wiped
-the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)).
+the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this section jumped from
+"Incus required" straight to `coi shell` and could not actually get you there.
 
 ### On the Mac
 
@@ -519,8 +521,9 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)).
 
    > **Get the indentation right.** `writable` belongs *under* `location`, no dash. A stray `-`
    > makes it `mounts[1]` — a second entry with no path — and Lima rejects the buffer with
-   > `field 'mounts[1].location' must be an absolute path, got '.'`. Mount changes also restart the
-   > VM (Incident B.1), so make them **before** starting a long run, never during one.
+   > `field 'mounts[1].location' must be an absolute path, got '.'`. Recovering from that rejection
+   > is what destroyed this VM once already (Incident D). Mount changes also restart the VM
+   > (Incident B.1), so make them **before** starting a long run, never during one.
 
    virtiofs perf is fine (~30s cold `pnpm install`).
 

@@ -36,7 +36,7 @@ Two isolated copies of everything, so changes can be tested before touching real
 ## 3. CDK stacks — split stateful from replaceable
 
 - **`ApertureData-<env>`** — DynamoDB table + Cognito User Pool + the **Files bucket** (task attachments; `RETAIN`, presigned-only, CORS = the stage's app domain — design: `areas/tasks/attachments.md` D5/D9). `removalPolicy: RETAIN`, deployed rarely, protected from teardown. *(Precious: your data + your identity.)*
-- **`ApertureApp-<env>`** — Lambda + Function URL + S3 (Site) + CloudFront (+ ACM cert reference, added at domain step). Redeploys freely; nothing precious. The BFF Lambda gets an object-scoped (`u/*`) `s3:PutObject/GetObject` grant on the data stack's Files bucket to sign presigns.
+- **`ApertureApp-<env>`** — Lambda + Function URL + S3 (Site) + CloudFront (+ ACM cert reference, since the domain step, §8). Redeploys freely; nothing precious. The BFF Lambda gets an object-scoped (`u/*`) `s3:PutObject/GetObject` grant on the data stack's Files bucket to sign presigns.
 
 Rationale: never let an app redeploy endanger the stateful resources.
 
@@ -58,7 +58,7 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 ## 6. Auth — Cognito
 
 - **One User Pool per env.** Self-signup **OFF** (invite-only; you admin-create your own user). MFA optional.
-- **App client:** SPA type, PKCE, no secret. Callback URLs = the env's app URL (CloudFront default first, custom domain added later). **`refreshTokenValidity` is capped at 7 days** (Cognito default 30); access/ID tokens stay at the 1-hour default. Why, and the renewal behaviour built on it: `TECH.md` §3.
+- **App client:** SPA type, PKCE, no secret. Callback URLs = the env's app URL (CloudFront default first; the custom domain from §8 was added when it went live). **`refreshTokenValidity` is capped at 7 days** (Cognito default 30) — it sets how often a password is actually typed; access/ID tokens stay at the 1-hour default. Why, and the renewal behaviour built on it: `TECH.md` §3.
 - **Second app client — `aperture-claude-<env>`** — the claude.ai MCP connector (no secret, authorization-code flow, callback URLs = Anthropic's connector constants, **30-day** refresh — why: `areas/mcp/index.md` D13). Plus an **MCP resource server** (identifier `<app-url>/mcp`, one `access` scope). Both live in the **app** stack (not the precious data stack) — the MCP OAuth façade + the credential-not-method fork are in **[areas/mcp/index.md](../areas/mcp/index.md)**.
 - **Hosted UI** on a Cognito domain prefix (e.g. `aperture-dev.auth.us-west-1.amazoncognito.com`) — free, independent of the app's custom domain. Google IdP optional. The MCP function reads this host (`COGNITO_DOMAIN`) to build the façade's `/oauth2` endpoints.
 - Frontend: `react-oidc-context` + Hosted UI.
@@ -66,8 +66,8 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 ## 7. Hosting & CDN
 
 - **S3** (private) + **CloudFront** per env. Default behavior → S3 (OAC); `/api/*` → Function URL origin (origin-secret header, §4). **SPA fallback:** 403/404 → `/index.html` for client-side routing.
-- **`/mcp`** → the second (MCP) Function URL origin, plus three narrowly-scoped `/.well-known/oauth-*` GET behaviors on the same origin (the claude.ai OAuth metadata façade — **never** `/.well-known/*`). `/mcp` uses a **1 s-max-TTL** cache policy (not zero — the mechanism and why are in `areas/mcp/index.md` → Decisions) that carries `Authorization` in the cache key, while its origin-request policy forwards the agent-token + MCP headers. Design: **[areas/mcp/index.md](../areas/mcp/index.md)**.
-- **Build on the CloudFront default domain first** (`*.cloudfront.net`) — HTTPS + PWA install work immediately, zero DNS. Custom domain is the last step (§8).
+- **`/mcp`** → the second (MCP) Function URL origin, plus three narrowly-scoped `/.well-known/oauth-*` GET behaviors on the same origin (the claude.ai OAuth metadata façade — **never** `/.well-known/*`). `/mcp` uses a **1 s-max-TTL** cache policy (not zero — the mechanism and why are in `areas/mcp/index.md` → *claude.ai — the OAuth façade* → Decisions) that carries `Authorization` in the cache key, while its origin-request policy forwards the agent-token + MCP headers. Design: **[areas/mcp/index.md](../areas/mcp/index.md)**.
+- **Build on the CloudFront default domain first** (`*.cloudfront.net`) — HTTPS + PWA install work immediately, zero DNS. The custom domain was the last step, and is live (§8).
 - **Publish discipline** (`scripts/aws/publish-frontend.mjs`, used by CI + local emergency publishes): **two-pass S3 sync** — hashed `assets/*` get `max-age=31536000,immutable`; everything else (`index.html`, `sw.js`, manifest, icons) gets `no-cache,no-store,must-revalidate` so a cached shell can't point at pruned asset hashes. **PWA files get explicit `--content-type`** (`manifest.webmanifest` → `application/manifest+json`, `sw.js` → `text/javascript`) because `s3 sync` guesses by extension and an octet-stream manifest silently blocks install.
 
 ## 8. Custom domain — LIVE

@@ -16,7 +16,8 @@ A dated snapshot of what a fresh reader needs to pick this up — the next you, 
 
 $ARGUMENTS
 
-If the block above is non-empty, it's context the user wants folded in. **Route each item into the
+If the block above is non-empty, it's context the user wants folded in — things to remember, what to
+emphasize, or state they know that the commands in step 1 won't surface. **Route each item into the
 section it belongs in** — state into the verified block, a choice into Decisions, a failed path into
 Dead ends — rather than dumping it verbatim at the top. It is the user's input, **not verified
 state**: confirm each factual claim in step 1 where a command can reach it, otherwise record it marked
@@ -25,8 +26,8 @@ the single easiest way for a stale claim to land as fact.
 
 ## Why this exists (don't shortcut it)
 
-- **Subagents start with a completely fresh context** — a file is the only way to brief one without restating everything in every prompt.
-- **`/compact` is lossy and occasionally generative** — a filed, JSONL-verified case of a summary fabricating a user instruction that the post-compact session then executed (anthropics/claude-code#46602).
+- **Subagents start with a completely fresh context** — no conversation history, no compacted summary, none of the files the parent read. A file is the only way to brief one without restating everything in every prompt.
+- **`/compact` is lossy and occasionally generative** — its summary dies with the session, and there is a filed, JSONL-verified case of one fabricating a user instruction that the post-compact session then executed (anthropics/claude-code#46602).
 - **Compaction keeps the arc and drops the dead ends** — the expensive part, since they stop the next reader re-walking a known-failed path.
 
 ## Steps

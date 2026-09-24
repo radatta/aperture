@@ -471,7 +471,7 @@ Supporting evidence:
 | --- | --- | --- |
 | OOM kill | **Unproven — NOT "no"** | The grep came back empty, but it ran against the **post-incident boot** (VM cold-booted 16:55:15), so it could not have contained the incident. Re-run as `journalctl -k -b -1`, and only if `/var/log/journal` exists. |
 | `max_duration` / `auto_stop` | **No** | Not set on the daytime profile; container still `RUNNING` after |
-| nft monitor auto-pause/kill | **Unprovable** | `auto_kill_on_critical=true` *was* live (daytime profile). Not checked at the time, under the wrong belief that `coi audit` keeps no history; `~/.coi/audit/<name>.jsonl` would have answered it, but `~/.coi/` was lost in the 2026-09-06 rebuild (Incident D). Container was `RUNNING` and auto-pause pauses rather than kills, so unlikely. |
+| nft monitor auto-pause/kill | **Unprovable** | `auto_kill_on_critical=true` *was* live (daytime profile). Not checked at the time, under the belief that `coi audit` keeps no history (superseded 2026-09-06: the file exists, the CLI read path failed — Incident E). Container was `RUNNING` and auto-pause pauses rather than kills, so unlikely. |
 | VM suspend/resume tearing the VM down | **No** (but on other evidence) | Same defect as above: "only fresh-boot lines" is the *expected* `journalctl -k` output on a fresh boot regardless. The real evidence is positive: the Mac was in ordinary DarkWake cycling with RAM powered 09:11→16:53, so the VM was paused, not destroyed. |
 | Aggressive standby config | **No — red herring** | see below |
 | `caffeinate` would have prevented it | **No** | see below |
@@ -1089,7 +1089,8 @@ against, because the patterns were on the bash command line rather than in a fil
 
 ## Mechanism
 
-- `internal/monitor/process.go:249-290` — a **hardcoded** pattern list (full list:
+- `internal/monitor/process.go:249-290` — a **hardcoded** pattern list, matched with
+  `strings.Contains` against each process's lowercased command line (full list:
   `COI-SANDBOX.md` → *Container killed — the CRITICAL path is a different animal*). No config key
   edits it; `coi schema profile` exposes nothing for it.
 - `process.go:298-302` — the false-positive gate:

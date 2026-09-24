@@ -216,8 +216,8 @@ per mode, glanceable in ~2s. This is a primary validation target.
 - **4.1 Home-mode context** — `modules/home/HomeModeProvider.tsx`: derives mode from clock via
   `dayBoundary`-aware windows; manual override; drives ThemeProvider (light morning/day, dark night).
 - **4.2 Mode layouts** — `pages/Home.tsx` with the three PRODUCT §3 layouts composed, each ≤5
-  elements (☀️ capture · Plan-today (Phase 5) · habits due · intent; ⚙️ capture · today's tasks ·
-  pomodoro · time-budget; 🌙 capture · Today-in-review · habits check · reflection prompt).
+  elements (☀️ capture · Plan-today (Phase 5) · habits due · intent; ⚙️ capture · today's tasks
+  (planned vs elapsed) · pomodoro · time-budget; 🌙 capture · Today-in-review · habits check · reflection prompt).
 - **4.3 Deep-view routes** — `/log · /tasks · /habits · /inbox · /settings` route shells; home = glance,
   deep views = work.
 
@@ -248,8 +248,8 @@ validation target.
 - **5.6 Recurring tasks** — `taskSeries` with simple `rule`; occurrences are real tasks with `seriesId`;
   **lazy materialization on day load**; edit-one vs edit-series semantics. (PRODUCT §4a, TECH §2.2, §A.8/§A.10)
 - **5.7 Calibration surfaces** — `modules/calibration/`: per-task delta as a hand-rolled bar
-  (`DeltaBar`/`MiniBar`) in the night review, plus the simple aggregate ratio + trend, **honestly
-  sparse early**. No charts dep. (PRODUCT §4a, §6.4)
+  (`DeltaBar`/`MiniBar`) in the night review so the gap is seen rather than subtracted, plus the
+  simple aggregate ratio + trend, **honestly sparse early**. No charts dep. (PRODUCT §4a, §6.4)
 - **5.8 Backlog deep view** — `pages/Tasks.tsx`: full backlog, filter, split, cancel, series management.
 
 **Key files:** `app/src/modules/tasks/*`, `app/src/modules/calibration/*`, `app/src/pages/Tasks.tsx`,

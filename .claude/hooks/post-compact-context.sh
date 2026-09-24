@@ -10,7 +10,8 @@
 #
 # Motivation: on 2026-09-07 deployment history and branch state were asserted from stale `origin/*`
 # refs, confidently and wrongly, three separate times — see docs/ops/COI-SANDBOX.md → GitHub access
-# inside the container.
+# inside the container. Compaction makes it worse: the summary carries forward whatever was believed,
+# detached from how it was learned.
 #
 # Everything here is READ-ONLY and best-effort. Any command may fail (no network, no `gh` auth, not a
 # repo); each is guarded so the hook always exits 0. A hook that errors on a plane is worse than one

@@ -318,7 +318,7 @@ largest line item in this project.
   `EmptyState`'s reach, so it would have kept asserting a total while the query was still loading or had
   failed. Revisit if a zero-state summary ever earns its place.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
-  same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale, pre-deploy)` in `repo.ts`. A
+  same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
 - ~~Not signed yet.~~ **Done 2026-09-08** (*Signing for permanent install* → Status); in daily use.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`

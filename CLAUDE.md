@@ -34,7 +34,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 - **Never put a reverse-shell literal on a Bash command line — it kills the container.** COI's monitor
   matches a hardcoded list: `python -c` / `python3 -c`, `perl -e`, `php -r`, `ruby -e`, `bash -i`,
   `sh -i`, `nc -e`, `socat`, `/dev/tcp/`. A match is **CRITICAL**, and `auto_kill_on_critical` kills
-  the whole container. For the interpreter one-liners the "is this network related?" gate is satisfied
+  the whole container (no latch — it repeats; `docs/ops/COI-INCIDENTS.md` → Incident F). For the interpreter one-liners the "is this network related?" gate is satisfied
   by **any `:` in the command** (a dict, a slice like `v[-5:]`, a URL, a timestamp — every JSON
   one-liner). Use `python3 - <<'PY' … PY` (runs as `python3 -`, not on the list) or `jq`. **This
   applies to the literal text anywhere in the command**, including test fixtures and echoed strings —
@@ -59,7 +59,7 @@ Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts)
 
 Full detail in `docs/product/CONVENTIONS.md`. The load-bearing ones:
 
-- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager (CI — `.github/workflows/ci.yml` — resolves it from that field).
+- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: CI (`.github/workflows/ci.yml`) resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI (the mise trap: `docs/ops/COI-SANDBOX.md` → *Start here → 1*).
 - **First-principles dependency discipline.** Default to rolling our own. Only propose a dependency when EITHER (A) it's substantial hard-to-own logic, OR (B) it's security-critical / subtle-correctness / hard cross-platform edges we shouldn't hand-roll. When proposing one, justify against A/B explicitly, note its footprint + transitive deps, and state the roll-our-own alternative. **"It's popular" is not a reason.**
 - **Build order: page-first, backend-second.** Build `app/` against a stubbed API and validate the UX in-hand *before* wiring the Lambda + DynamoDB behind the same contract.
 - **Workspace packages resolve from source.** `packages/shared` exports `./src/index.ts`; app and lambdas import it directly and their bundler transpiles it — no build step in the dev/test loop. (`shared` still emits a gitignored `dist/` only to satisfy TS project references; nothing imports it.)

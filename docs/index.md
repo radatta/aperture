@@ -2,7 +2,7 @@
 
 Personal life-OS PWA. Web-first, installable. AWS-native serverless.
 
-**Build status (2026-09-23):** V1_PLAN phases **0–14 built**, all five packages green — **687 tests** in 83 files (app 361 · lambdas 187 · shared 90 · cdk 37 · scripts 12; earlier snapshots: 236 on 2026-08-11, 260 on 2026-09-07). Custom domains **live on both stages** since 2026-08 (arch/INFRA §8). Recruiting/LeetCode capture is merged (#2/#10, 2026-08) and in daily use since the signed extension install on 2026-09-08 ([recruiting/](areas/recruiting/index.md)). The one open item that isn't code is the **9.2 stub-validation gate** — dogfood a real morning + night (V1_PLAN header).
+**Build status (2026-09-23):** V1_PLAN phases **0–14 built**, all five packages green — **687 tests** in 83 files (app 361 · lambdas 187 · shared 90 · cdk 37 · scripts 12; earlier snapshots: 236 on 2026-08-11, 260 on 2026-09-07). Custom domains **live on both stages** since 2026-08 (arch/INFRA §8). Recruiting/LeetCode capture is merged (#2 on 2026-09-07, #10 on 2026-09-08) and in daily use since the signed extension install on 2026-09-08 ([recruiting/](areas/recruiting/index.md)). The one open item that isn't code is the **9.2 stub-validation gate** — dogfood a real morning + night (V1_PLAN header).
 
 Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built), **areas/** (per-domain design docs — the map of what exists), **ops/** (sandbox runbooks). `V1_PLAN.md` stays at the top level as the plan as written plus the per-phase as-built record — not a roadmap of what exists and not a second copy of the spec.
 
@@ -28,7 +28,7 @@ Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built),
 - **[areas/recruiting/story-bank.md](areas/recruiting/story-bank.md)** — the **Behavioral Story Bank**: a `stories` entity + tab at `/recruiting/stories` for competency-tagged STAR stories. Design record + build record.
 - **[areas/calendar/index.md](areas/calendar/index.md)** — **Google Calendar integration** (multi-account): a morning "day shape" (longest free stretch + fragment count) and real events from tasks. The as-built design record — the gated `GoogleGateway`, token scheme, callback/CDK gotchas, delete-on-cancel.
 - **[areas/calendar/research.md](areas/calendar/research.md)** — **the pre-build research** behind the calendar work: the finding that moved the intervention to estimate time, the four-piece vision (two shipped, two are PR-D), the statistical trap, and the "don't build" list. Reconciled against index.md.
-- **[areas/mcp/index.md](areas/mcp/index.md)** — the **MCP server** (`/mcp`): one endpoint for **Claude Code** (static agent token) and **claude.ai** (Cognito OAuth façade) to read+write Aperture. Design record — the credential-not-method auth fork, the tool surface, the hand-rolled protocol, the façade decisions (D13/D14). Read before touching the MCP surface or generating tool calls.
+- **[areas/mcp/index.md](areas/mcp/index.md)** — the **MCP server** (`/mcp`): one endpoint for **Claude Code** (static agent token) and **claude.ai** (Cognito OAuth façade) to read+write Aperture. Design record — the credential-not-method auth fork, the ~22-tool surface, the hand-rolled protocol, the façade decisions (D13/D14). Read before touching the MCP surface or generating tool calls.
 - **areas/calibration/** — (planned) per-course & intent-vs-actual calibration, exam-prep spacing, this-week's-dues. Design doc lands with that work.
 
 ## Roadmap
