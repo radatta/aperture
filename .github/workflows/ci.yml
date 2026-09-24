@@ -18,6 +18,24 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Incremental caches: tsc -b's .tsbuildinfo (TS re-hashes any input newer than its buildinfo, and a
+      # checkout stamps every file newer than the restored cache) plus shared's emitted d.ts they vouch
+      # for, and ESLint's content-keyed cache (safe only while no lint rule is type-aware). Keyed per
+      # commit, restored from the most recent matching entry — a miss is a cold run, never a wrong answer.
+      # package.json files are in the prefix because tsc -b doesn't record them in its buildinfo, so a
+      # resolution change there (exports/types) with no source change would otherwise read as up to date.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            app/node_modules/.tmp
+            cdk/node_modules/.tmp
+            lambdas/node_modules/.tmp
+            scripts/node_modules/.tmp
+            packages/shared/node_modules/.tmp
+            packages/shared/dist
+            node_modules/.cache/eslint
+          key: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', '**/package.json', '!**/node_modules/**') }}-${{ github.sha }}
+          restore-keys: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', '**/package.json', '!**/node_modules/**') }}-
       - run: pnpm lint
       # !cancelled() so a lint failure doesn't mask whether typecheck/test would pass — the job still
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
