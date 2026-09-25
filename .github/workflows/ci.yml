@@ -24,6 +24,9 @@ jobs:
       # commit, restored from the most recent matching entry — a miss is a cold run, never a wrong answer.
       # package.json files are in the prefix because tsc -b doesn't record them in its buildinfo, so a
       # resolution change there (exports/types) with no source change would otherwise read as up to date.
+      # They're listed, not globbed: hashFiles walks everything a `**` pattern could reach before applying
+      # excludes, and after install that's node_modules — measured 8s per evaluation, paid twice (restore
+      # and the post-job save).
       - uses: actions/cache@v6
         with:
           path: |
@@ -34,8 +37,8 @@ jobs:
             packages/shared/node_modules/.tmp
             packages/shared/dist
             node_modules/.cache/eslint
-          key: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', '**/package.json', '!**/node_modules/**') }}-${{ github.sha }}
-          restore-keys: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', '**/package.json', '!**/node_modules/**') }}-
+          key: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'app/package.json', 'cdk/package.json', 'lambdas/package.json', 'scripts/package.json', 'packages/*/package.json') }}-${{ github.sha }}
+          restore-keys: incremental-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'app/package.json', 'cdk/package.json', 'lambdas/package.json', 'scripts/package.json', 'packages/*/package.json') }}-
       - run: pnpm lint
       # !cancelled() so a lint failure doesn't mask whether typecheck/test would pass — the job still
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
