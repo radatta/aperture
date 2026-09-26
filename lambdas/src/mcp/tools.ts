@@ -97,7 +97,7 @@ function nullableNotes(args: Record<string, unknown>, key: string): string | nul
     throw new RpcParamError(`"${key}": ${e instanceof Error ? e.message : 'invalid'}`);
   }
 }
-const NOTES_SCHEMA_DESC = `light markdown (**bold**, *italic*, \`code\`, - bullets, 1. lists, [text](https://…), bare URLs; newlines kept), max ${TASK_NOTES_MAX} chars`;
+const NOTES_SCHEMA_DESC = `light markdown (**bold**, *italic*, \`code\`, - bullets, 1. lists, [text](https://…), bare URLs; newlines kept), at most ${TASK_NOTES_MAX} characters after trimming (the server checks)`;
 
 function enumArg<T extends string>(args: Record<string, unknown>, key: string, allowed: T[]): T {
   const s = reqStr(args, key);
@@ -166,7 +166,7 @@ export const TOOLS: Tool[] = [
         estimateMin: { type: 'integer', minimum: 0 },
         bufferMin: { type: 'integer', minimum: 0 },
         dueDay: { type: 'string', description: 'ISO date YYYY-MM-DD' },
-        notes: { type: 'string', maxLength: TASK_NOTES_MAX, description: NOTES_SCHEMA_DESC },
+        notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
       },
       required: ['title'],
       additionalProperties: false,
@@ -198,7 +198,7 @@ export const TOOLS: Tool[] = [
               estimateMin: { type: 'integer', minimum: 0 },
               bufferMin: { type: 'integer', minimum: 0 },
               dueDay: { type: 'string' },
-              notes: { type: 'string', maxLength: TASK_NOTES_MAX },
+              notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
             },
             required: ['title'],
           },
@@ -239,7 +239,6 @@ export const TOOLS: Tool[] = [
         dueDay: { type: ['string', 'null'], description: 'ISO date YYYY-MM-DD, or null to clear' },
         notes: {
           type: ['string', 'null'],
-          maxLength: TASK_NOTES_MAX,
           description: `${NOTES_SCHEMA_DESC}; replaces the whole note, null clears`,
         },
         estimateMin: { type: 'integer', minimum: 0 },

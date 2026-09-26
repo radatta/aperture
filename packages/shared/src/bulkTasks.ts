@@ -8,8 +8,8 @@
 //   token  := '~' <digits>                   -- estimateMin, whole minutes >= 1
 //           | '#' <word> | '#"' <text> '"'   -- Category.label, case-insensitive exact match
 //           | 'due:' YYYY-MM-DD              -- dueDay, real calendar date, lowercase keyword
-//           | 'notes:"' <text> '"'           -- notes; '\n' is the only escape (a newline), no '"'
-//                                               inside, at most TASK_NOTES_MAX chars after unescaping
+//           | 'notes:"' <text> '"'           -- notes; escapes '\n' (newline) and '\\' (backslash)
+//                                               only, no '"' inside, <= TASK_NOTES_MAX after unescaping
 //
 // errors[] are RED (blocking — gate submit); warnings[] are YELLOW (non-blocking — the task is still
 // created). A token that declares intent but can't be parsed is red; one that parses but doesn't match
@@ -111,6 +111,9 @@ function parseLine(
   if (idx !== -1 && region.trim() === '')
     out.errors.push("nothing after ' | ' — add a token or drop the separator");
   if (out.title === '') out.errors.push('empty title');
+  // Legal (titles are literal), but almost always a notes token that lost its ' | '.
+  else if (/notes:"/i.test(out.title))
+    out.warnings.push("'notes:\"' is in the title — tokens go after ' | '");
 
   type Kind = 'estimate' | 'category' | 'due' | 'notes';
   const seen = new Set<Kind>();
@@ -170,7 +173,11 @@ function parseLine(
         out.errors.push(`notes can't contain '"' — reword it, or use ' instead`);
         continue;
       }
-      const value = tok.slice(7, -1).replace(/\\n/g, '\n').trim();
+      // `\n` is a newline and `\\` a literal backslash, so `\\nabla` survives as `\nabla`.
+      const value = tok
+        .slice(7, -1)
+        .replace(/\\([\\n])/g, (_, c: string) => (c === 'n' ? '\n' : '\\'))
+        .trim();
       if (value === '') out.errors.push('empty notes — drop the token or add text');
       else if (value.length > TASK_NOTES_MAX)
         out.errors.push(

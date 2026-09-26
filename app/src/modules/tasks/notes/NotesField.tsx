@@ -50,7 +50,13 @@ export function NotesField({
             Notes
           </Text>
           {saved && (
-            <Button variant="quiet" size="sm" onClick={onEdit} aria-label="Edit notes">
+            <Button
+              variant="quiet"
+              size="sm"
+              className="-mr-3"
+              onClick={onEdit}
+              aria-label="Edit notes"
+            >
               Edit
             </Button>
           )}
@@ -91,6 +97,10 @@ export function NotesField({
           {over && ' · too long to save'}
         </Text>
       )}
+      {/* Announces only the crossing, not every keystroke the counter ticks through. */}
+      <span role="status" className="sr-only">
+        {over ? `Notes are over ${fmt(TASK_NOTES_MAX)} characters — too long to save` : ''}
+      </span>
     </div>
   );
 }

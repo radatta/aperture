@@ -18,6 +18,28 @@ describe('parseNotes blocks', () => {
     ]);
   });
 
+  it('lets only `1.` start a list mid-paragraph', () => {
+    expect(parseNotes('Recap\n2026. was a good year').map((b) => b.kind)).toEqual(['p']);
+    expect(parseNotes('Steps\n1. a\n2. b').map((b) => b.kind)).toEqual(['p', 'ol']);
+  });
+
+  it('parses a 5,000-char adversarial note quickly', () => {
+    const inputs = [
+      '(http://['.repeat(250) + ')'.repeat(2750),
+      '(http://%'.repeat(100) + ')'.repeat(4000),
+      'https://x.io/' + ')'.repeat(4987),
+      '*'.repeat(5000),
+      '_a'.repeat(2500),
+      '[x'.repeat(2500),
+      '**a '.repeat(1250),
+    ];
+    for (const src of inputs) {
+      const t0 = performance.now();
+      parseNotes(src);
+      expect(performance.now() - t0).toBeLessThan(250);
+    }
+  });
+
   it('starts a new block when the kind changes without a blank line', () => {
     expect(parseNotes('intro\n- a\nafter').map((b) => b.kind)).toEqual(['p', 'ul', 'p']);
   });
@@ -98,6 +120,11 @@ describe('parseInline', () => {
       href: 'https://en.wikipedia.org/wiki/Foo_(bar)',
       text: 'https://en.wikipedia.org/wiki/Foo_(bar)',
     });
+  });
+
+  it('keeps a trailing underscore in a bare URL, and leaves an unparseable one as text', () => {
+    expect(parseInline('https://a.com/x_y_')[0]).toMatchObject({ href: 'https://a.com/x_y_' });
+    expect(parseInline('see http://[ here')).toEqual([text('see http://[ here')]);
   });
 
   it('does not autolink a URL glued to a word', () => {

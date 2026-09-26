@@ -116,7 +116,10 @@ describe('mcp tools — tasks', () => {
     await expect(
       call('create_tasks', { tasks: [{ title: 'fine' }, { title: 'too long', notes: long }] }),
     ).rejects.toThrow(/5,000/);
-    expect((await call('list_tasks')) as Task[]).toHaveLength(1); // none of the batch landed
+    await expect(
+      call('create_tasks', { tasks: [{ title: 'fine' }, { title: 'bad type', notes: 42 }] }),
+    ).rejects.toThrow(/string or null/);
+    expect((await call('list_tasks')) as Task[]).toHaveLength(1); // none of either batch landed
     await expect(call('update_task', { id: t.id, notes: 42 })).rejects.toThrow(/string or null/);
   });
 

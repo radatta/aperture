@@ -36,11 +36,12 @@ capture rule; it's the plan pass wearing a keyboard.
 - **Red gates, gold doesn't.** A token that declares intent but can't be parsed (`due:garbage`, `~30m`)
   is red and blocks the whole submit. A token that parses but doesn't match (`#unknown`) is gold and
   submits. Duplicate titles (in-paste, or against a live task) are gold — safe re-submit after a failure.
-- **Notes are one quoted token, `notes:"…"`, with `\n` as the only escape.** A paste is one line per
-  task, so a multi-line note needs an escape; `\n` is the one Claude already emits. No `"` inside
-  (reword, or use `'`) — a second escape (`\"`) buys little and doubles the ways to get it wrong. Over
-  the 5,000-character cap is red here, before submit, and the server rejects the whole batch anyway
-  ([notes.md](notes.md)).
+- **Notes are one quoted token, `notes:"…"`, with two escapes: `\n` and `\\`.** A paste is one line
+  per task, so a multi-line note needs `\n` (the one Claude already emits). `\\` is a literal
+  backslash — without it `\nabla` or `C:\new` would silently become a newline. No `"` inside (reword,
+  or use `'`) — a `\"` escape buys little and doubles the ways to get it wrong. Over the
+  5,000-character cap is red here, before submit, and the server rejects the whole batch anyway
+  ([notes.md](notes.md)). A `notes:"` in the *title* (the ` | ` was forgotten) is legal but gold.
 - **One `createdAt` stamp per batch.** `listTasks` sorts `createdAt` desc, stably; a shared stamp + the
   monotonic ULID factory makes the batch render as one top block in paste order.
 - **Best-effort batch write, not a transaction.** `createTasks` goes through the existing `writes.batchPut`
@@ -80,8 +81,10 @@ One task per line. A line is:   <title>[ | <tokens>]
 ```
 
 The `notes:"…"` value is the task's notes (light markdown — see [notes.md](notes.md)). Inside the
-quotes everything is literal: `~30`, `#Admin`, `due:…`, even ` | `. The only escape is `\n`, which
-becomes a newline; the value is trimmed, and must be at most 5,000 characters after unescaping.
+quotes everything is literal: `~30`, `#Admin`, `due:…`, even ` | `. Two escapes: `\n` becomes a
+newline and `\\` a literal backslash — so write LaTeX and Windows paths with doubled backslashes
+(`\\nabla`, `C:\\new`), or a `\n` inside them turns into a line break. The value is trimmed, and must
+be at most 5,000 characters after unescaping.
 
 Rules that produce a **red error** (blocks the entire submit — fix or remove):
 - empty title; a leading list marker (`- `, `* `, `1. `); a `|` in the title; ` | ` with nothing after it
@@ -93,6 +96,7 @@ Rules that produce a **red error** (blocks the entire submit — fix or remove):
   notes; notes over 5,000 characters; a capitalized `Notes:`
 
 Rules that produce a **gold warning** (task still created):
+- a `notes:"` inside the title — the ` | ` before it was probably forgotten
 - `#label` matches no category → created uncategorised
 - a title duplicated within the paste, or already held by a live task
 

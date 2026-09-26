@@ -24,7 +24,8 @@ const ROW_CONTROLS = 'button, a, input, select, textarea, label, dialog';
 // One task, slimmed to the lifecycle actions you press without thinking — Start, Focus, Done, plus the
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
 // calendar, files, drop, delete — lives in the modal the title (or Scope/Done) opens. No overflow menu.
-// `notesHit` marks a search result that matched only through its notes, so the row says why it's here.
+// `notesHit` marks a search result the title and category alone don't explain, so the row says why
+// it's here.
 export function TaskCard({
   task,
   actions,
@@ -149,6 +150,7 @@ function TaskMeta({ task, notesHit }: { task: Task; notesHit: boolean }) {
       {fileCount > 0 && (
         <Text size="xs" tone="subtle" className="inline-flex items-center gap-0.5">
           <PaperclipIcon size={12} /> {fileCount}
+          <span className="sr-only">{fileCount === 1 ? 'file' : 'files'}</span>
         </Text>
       )}
     </div>

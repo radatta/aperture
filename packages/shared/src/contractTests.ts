@@ -384,6 +384,12 @@ export function runApiContract(
       const done = await api.transitionTask(t.id, 'done');
       expect((await api.setTaskNotes(done.id, 'after the fact')).notes).toBe('after the fact');
 
+      expect((await api.setTaskNotes(t.id, 'a\r\nb\rc')).notes).toBe('a\nb\nc'); // CRLF → LF
+      // A call that lost its second argument (JSON has no undefined) is an error, never a silent clear.
+      const setMissing = api.setTaskNotes as (id: string) => Promise<unknown>;
+      await expect(setMissing(t.id)).rejects.toThrow();
+      expect((await api.getTask(t.id))?.notes).toBe('a\nb\nc');
+
       expect((await api.setTaskNotes(t.id, null)).notes).toBeNull();
       await api.setTaskNotes(t.id, 'back');
       expect((await api.setTaskNotes(t.id, '')).notes).toBeNull();

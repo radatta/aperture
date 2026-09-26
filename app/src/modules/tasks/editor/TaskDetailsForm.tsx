@@ -65,7 +65,9 @@ export function TaskDetailsForm({
     (String(task.estimateMin ?? '') !== estimate || String(task.bufferMin ?? '') !== buffer);
   const dueDirty = !isTerminal && (task.dueDay ?? '') !== dueDay;
   const notesTrimmed = notesValue(notes);
-  const notesDirty = notesTrimmed !== (task.notes ?? '');
+  // Only a draft being edited counts: in view mode the field shows the live task.notes, so a stale draft
+  // must never read as a change (or be saved back over a newer note).
+  const notesDirty = editingNotes && notesTrimmed !== (task.notes ?? '');
   const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
   const dirty =
     titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;

@@ -29,7 +29,7 @@ it a Today task.
 - **D1 — typing searches everything open.** With search text, the lens's place is ignored and results
   come back grouped by place (Today · This week · Backlog), Today in plan order. The Done lens searches
   history only. Search matches every word against the title + category label + notes (case and
-  accents ignored); a row matched only through its notes says "in notes" ([notes.md](notes.md)).
+  accents ignored); a row the title and category alone don't explain says "in notes" ([notes.md](notes.md)).
   The add-to-today picker searches title + category only. Why: "find the thing" shouldn't depend on guessing which lens it's in.
 - **D2 — presets carry sort + group only.** Which tasks a lens shows is `placeOf`'s job, so a filter or
   a search can never be clipped by a lens's window. Week/Backlog group by category (Settings order,

@@ -223,9 +223,16 @@ describe('parseBulkTasks — notes token', () => {
     expect(only(`t | notes:"${'x'.repeat(5000)}\\n"`).errors).toEqual([]); // trailing \n trimmed
     expect(only(`t | notes:"${'x'.repeat(5001)}"`).errors[0]).toMatch(/5,001 characters/);
   });
-  it('a notes: before the separator is part of the title', () => {
+  it('a notes: before the separator is part of the title, with a warning', () => {
     const l = only('read notes:"ch 4"');
     expect(l.title).toBe('read notes:"ch 4"');
     expect(l.notes).toBeNull();
+    expect(l.errors).toEqual([]);
+    expect(l.warnings[0]).toMatch(/tokens go after ' \| '/);
+  });
+  it('\\\\ is a literal backslash, so LaTeX and paths survive', () => {
+    expect(only('t | notes:"show \\\\nabla f \\\\neq 0"').notes).toBe('show \\nabla f \\neq 0');
+    expect(only('t | notes:"C:\\\\\\\\new"').notes).toBe('C:\\\\new');
+    expect(only('t | notes:"a\\\\\\nb"').notes).toBe('a\\\nb'); // \\ then \n
   });
 });

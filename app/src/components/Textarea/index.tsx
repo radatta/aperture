@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import type { Ref, TextareaHTMLAttributes } from 'react';
 import { cx } from '../../lib/cx';
 import { Text } from '../Text';
@@ -7,7 +7,8 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
   label?: string;
   // React 19 takes ref as a plain prop; bulk-add focuses the textarea when its modal opens.
   ref?: Ref<HTMLTextAreaElement>;
-  // Grow with the text instead of scrolling inside a fixed box, up to 40dvh (then it scrolls).
+  // Grow with the text instead of scrolling inside a fixed box, up to 40dvh (30dvh on a phone, so Save
+  // stays in reach), then scroll.
   autogrow?: boolean;
 }
 
@@ -16,11 +17,15 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
 // become a primitive.
 export function Textarea({ label, className, rows = 4, autogrow, ref, ...rest }: TextareaProps) {
   const inner = useRef<HTMLTextAreaElement | null>(null);
-  const setRef = (el: HTMLTextAreaElement | null) => {
-    inner.current = el;
-    if (typeof ref === 'function') ref(el);
-    else if (ref) ref.current = el;
-  };
+  // Stable per `ref`, so React doesn't detach and reattach the caller's ref on every render.
+  const setRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      inner.current = el;
+      if (typeof ref === 'function') ref(el);
+      else if (ref) ref.current = el;
+    },
+    [ref],
+  );
 
   // Height follows content: collapse to auto, then take scrollHeight (padding included) plus the
   // border, since the box is border-box. Runs before paint, so there's no one-frame jump.
@@ -45,7 +50,7 @@ export function Textarea({ label, className, rows = 4, autogrow, ref, ...rest }:
           'rounded-xl border border-line bg-surface px-3 py-2 text-ink',
           'placeholder:text-ink-muted outline-none transition',
           'focus:border-teal focus:bg-panel',
-          autogrow ? 'max-h-[40dvh] resize-none overflow-y-auto' : 'resize-y',
+          autogrow ? 'max-h-[30dvh] resize-none overflow-y-auto sm:max-h-[40dvh]' : 'resize-y',
           className,
         )}
         {...rest}

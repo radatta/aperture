@@ -26,6 +26,7 @@ import {
   rollRepFields,
   sanitizeFilename,
   seriesDueOn,
+  setNotesArg,
   splitFollowUp,
   stalePlannedMoves,
   taskTransition,
@@ -421,7 +422,7 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.tasks, id, { title: trimmed });
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
-    return this.writes.patch(this.store.tasks, id, { notes: normalizeNotes(notes) });
+    return this.writes.patch(this.store.tasks, id, { notes: setNotesArg(notes) });
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);

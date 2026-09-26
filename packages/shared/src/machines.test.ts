@@ -5,6 +5,7 @@ import {
   heartbeatSession,
   resolveStaleSession,
   resumeSession,
+  splitFollowUp,
   stalePlannedMoves,
   taskTransition,
   withEstimate,
@@ -160,5 +161,14 @@ describe('stalePlannedMoves', () => {
   it('ignores anything not planned', () => {
     const started = baseTask({ id: 'x', status: 'in_progress' });
     expect(stalePlannedMoves([started], [], '2026-08-04')).toEqual([]);
+  });
+});
+
+describe('splitFollowUp notes', () => {
+  it('carries the notes, and turns a legacy row with no notes field into null', () => {
+    expect(splitFollowUp(baseTask({ notes: 'context' }), 'part 2').notes).toBe('context');
+    const legacy = baseTask();
+    delete (legacy as { notes?: unknown }).notes;
+    expect(splitFollowUp(legacy, 'part 2').notes).toBeNull();
   });
 });

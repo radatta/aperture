@@ -37,19 +37,33 @@ export function safeHref(raw: string): string | null {
 
 const BULLET = /^\s*- +(.*)$/;
 const NUMBERED = /^\s*(\d{1,9})\. +(.*)$/;
-const LINK = /^\[([^\]\n]+)\]\(([^()\s]+)\)/;
-const BARE_URL = /^https?:\/\/[^\s<>]+/;
+// Sticky, so each is tried at one position of the line without slicing off the rest of it.
+const LINK = /\[([^\]\n]+)\]\(([^()\s]+)\)/y;
+const BARE_URL = /https?:\/\/[^\s<>]+/y;
 const WORD = /[\p{L}\p{N}]/u;
 
-// Bare URLs end before trailing sentence punctuation, and before a `)` that closes an outer paren.
+const matchAt = (re: RegExp, s: string, i: number) => {
+  re.lastIndex = i;
+  return re.exec(s);
+};
+
+// Bare URLs end before trailing sentence punctuation (or the `*` closing emphasis around them), and
+// before a `)` that closes an outer paren. Parens are counted once, so this stays linear.
 function trimUrl(url: string): string {
+  let open = 0;
+  let close = 0;
+  for (const ch of url) {
+    if (ch === '(') open++;
+    else if (ch === ')') close++;
+  }
   let end = url.length;
-  for (;;) {
+  while (end > 0) {
     const c = url[end - 1]!;
-    const body = url.slice(0, end);
-    if ('.,;:!?\'"*_'.includes(c)) end--;
-    else if (c === ')' && body.split('(').length < body.split(')').length) end--;
-    else break;
+    if ('.,;:!?\'"*'.includes(c)) end--;
+    else if (c === ')' && open < close) {
+      end--;
+      close--;
+    } else break;
   }
   return url.slice(0, end);
 }
@@ -80,7 +94,6 @@ export function parseInline(s: string): Inline[] {
   let i = 0;
   while (i < s.length) {
     const c = s[i]!;
-    const rest = s.slice(i);
     const prev = s[i - 1] ?? '';
 
     if (c === '`') {
@@ -94,7 +107,7 @@ export function parseInline(s: string): Inline[] {
     }
 
     if (c === '[') {
-      const m = LINK.exec(rest);
+      const m = matchAt(LINK, s, i);
       if (m) {
         const href = safeHref(m[2]!);
         if (href) {
@@ -107,12 +120,14 @@ export function parseInline(s: string): Inline[] {
     }
 
     if (c === 'h' && !WORD.test(prev) && prev !== '/') {
-      const m = BARE_URL.exec(rest);
-      const url = m && trimUrl(m[0]);
-      const href = url && safeHref(url);
-      if (url && href) {
-        flush();
-        out.push({ kind: 'link', href, text: url });
+      const m = matchAt(BARE_URL, s, i);
+      const url = m ? trimUrl(m[0]) : '';
+      if (url) {
+        const href = safeHref(url);
+        if (href) {
+          flush();
+          out.push({ kind: 'link', href, text: url });
+        } else buf += url; // unparseable (e.g. `http://[`) → text, and never re-scanned
         i += url.length;
         continue;
       }
@@ -157,7 +172,9 @@ export function parseNotes(src: string): Block[] {
     }
     const prev = open ? blocks[blocks.length - 1] : undefined;
     const bullet = BULLET.exec(line);
-    const numbered = bullet ? null : NUMBERED.exec(line);
+    // Mid-paragraph, only `1.` starts a list, so a line like "2026. was a good year" stays prose.
+    const n = bullet ? null : NUMBERED.exec(line);
+    const numbered = n && (prev?.kind !== 'p' || n[1] === '1') ? n : null;
     if (bullet) {
       const item = parseInline(bullet[1]!);
       if (prev?.kind === 'ul') prev.items.push(item);

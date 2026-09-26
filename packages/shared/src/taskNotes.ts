@@ -12,3 +12,10 @@ export function normalizeNotes(notes: string | null | undefined): string | null 
     throw new Error(`Notes are limited to ${TASK_NOTES_MAX.toLocaleString('en-US')} characters`);
   return trimmed;
 }
+
+// setTaskNotes' argument: like normalizeNotes, but a MISSING value is an error, not a clear — a call that
+// dropped its second argument (JSON has no undefined) must never silently wipe a note. null clears.
+export function setNotesArg(notes: string | null | undefined): string | null {
+  if (notes === undefined) throw new Error('Notes are required — pass null to clear them');
+  return normalizeNotes(notes);
+}

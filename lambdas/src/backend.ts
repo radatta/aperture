@@ -18,6 +18,7 @@ import {
   rollRepFields,
   sanitizeFilename,
   seriesDueOn,
+  setNotesArg,
   splitFollowUp,
   stalePlannedMoves,
   taskTransition,
@@ -363,7 +364,7 @@ export class BackendClient implements ApiClient {
     return this.repo.putTask({ ...t, title: trimmed, updatedAt: this.now() });
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
-    const normalized = normalizeNotes(notes); // throws over the cap before any read or write
+    const normalized = setNotesArg(notes); // throws (missing, over the cap) before any read or write
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, notes: normalized, updatedAt: this.now() });
   }
