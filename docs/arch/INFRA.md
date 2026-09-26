@@ -90,8 +90,9 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 ## 9. CI/CD — GitHub Actions, OIDC
 
 No static credentials — OIDC role assumption. GitHub Flow, simplified:
-- Feature branch → PR (lint + test only) → squash to `main`.
+- Feature branch → PR (lint + typecheck + test — the same reusable `ci.yml` check the pipeline runs) → squash to `main`.
 - `main` pipeline: lint/typecheck/test (pnpm + Vitest) → `cdk deploy ApertureData-dev` + `ApertureApp-dev` → smoke dev → build app (Vite, env from CDK outputs) → S3 sync + CloudFront invalidate → same for prod, **automatically — no approval pause** (see the caveat below).
+- **The check job is tuned for the 2-vCPU private-repo runner** (Vitest gets one worker): app tests share one jsdom instead of one per file, and lint + typecheck results are cached across runs (`actions/cache`, keyed per commit). The test-side rules live in `product/CONVENTIONS.md` (*Command shape*); why the cache can't false-pass is in the comment above the cache step in `.github/workflows/ci.yml`.
 - `dev` branch → one-off dev deploy (not a promotion step).
 - **`dev` is a scratch deploy target, and force-pushing it is the norm.** It exists to get an arbitrary branch onto real infrastructure quickly — `git push -f origin HEAD:dev` is the intended operation, not an emergency. It is **not** an integration branch: nothing merges *from* it, its history is disposable, and whatever it points at is simply what's deployed to dev right now. So don't merge into it, don't rebase onto it, and don't build a temporary worktree to get a branch onto it — just overwrite it.
   - The one real consequence: **force-pushing `dev` overwrites whoever deployed there last.** Their commits survive on their own branch (a force-push only moves a pointer), and any GitHub deployment already recorded against their SHA still satisfies the `main` merge gate. What they lose is the *deployed dev stack* — so if someone is mid-validation on dev, tell them.
