@@ -307,13 +307,15 @@ largest line item in this project.
 
 ## Open items
 
-- **Verified end-to-end on dev 2026-09-07; prod has never run it.** Also validated on dev in 2026-08,
+- **Verified end-to-end on dev 2026-09-07, and on prod the same day** (three attempts ingested
+  2026-09-07; confirmed 2026-09-26). Also validated on dev in 2026-08,
   after which `dev` was force-moved onto another feature branch — so **the branch pointer retains no
   trace of that; GitHub Actions run history is the only record.** Don't re-derive deployment history
   from `git log origin/dev`; it will tell you this never happened.
-- **Prod's secrets are unexercised.** `DEVICE_TOKEN_PROD` and `DEVICE_USER_ID_PROD` were set 2026-09-07
-  but no prod deploy has read them. Repeat the extension check against `aperture.rahuldatta.dev` after
-  the first prod deploy — a wrong `DEVICE_USER_ID_PROD` renders an empty page and errors nowhere.
+- **Prod's secrets were exercised by that 2026-09-07 ingest.** `DEVICE_TOKEN_PROD` and
+  `DEVICE_USER_ID_PROD` were set the same day. Repeat the extension check against
+  `aperture.rahuldatta.dev` after any rotation — a wrong `DEVICE_USER_ID_PROD` renders an empty page and
+  errors nowhere.
 - **The summary line is hidden until there's data.** `0 solved · 0 problems · 0 attempts` sits outside
   `EmptyState`'s reach, so it would have kept asserting a total while the query was still loading or had
   failed. Revisit if a zero-state summary ever earns its place.

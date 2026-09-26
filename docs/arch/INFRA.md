@@ -72,7 +72,7 @@ Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-
 
 ## 8. Custom domain — LIVE
 
-- **Status (2026-08): LIVE.** Both stages serve on their custom domains — prod `aperture.rahuldatta.dev`,
+- **Status (2026-08): LIVE** (re-verified 2026-09-26: `dig NS rahuldatta.dev` → `dns1–4.p03.nsone.net`; `curl -sI aperture.rahuldatta.dev` answers from CloudFront). Both stages serve on their custom domains — prod `aperture.rahuldatta.dev`,
   dev `dev.aperture.rahuldatta.dev` — on us-east-1 ACM certs (DNS-validated via Netlify/NS1 DNS, not
   Porkbun: rahuldatta.dev is registered at Porkbun but its nameservers are delegated to Netlify), referenced by ARN through the
   `CERT_ARN_*` GitHub vars. Login round-trips on both (Cognito callbacks registered for each origin).

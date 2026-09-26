@@ -378,7 +378,7 @@ your terminal broken; see *Ending a session*.
 ## Stack
 
 ```
-Mac  →  raw Lima VM (name: incus)  →  Incus 7.3 (LXC) system container  →  Claude Code
+Mac  →  raw Lima VM (name: incus)  →  Incus 7.4 (LXC) system container  →  Claude Code
 ```
 
 `limactl` runs on the Mac; `coi` / `incus` run inside the VM. The repo is a host mount, so the
@@ -492,8 +492,9 @@ never `stty sane`.
 > and its *Open follow-ups*. Alive / deleted is not the whole set of container states — check
 > `uptime -p` before calling a container new.
 
-> **`coi shutdown` verified on COI 7.4** (2026-09-06) — it exists; it deletes, and exports nothing
-> (above). On another COI version, check `coi --help`: the *ritual* (exit TUI → tear down container
+> **`coi shutdown` verified 2026-09-06** (the rig is COI v0.12.0 on Incus 7.4 as of 2026-09-26; "COI
+> 7.4" in older notes was the Incus version) — it exists; it deletes, and exports nothing (above). On
+> another COI version, check `coi --help`: the *ritual* (exit TUI → tear down container
 > → stop VM) is what matters, not the spelling.
 
 ## One-time setup
@@ -545,7 +546,7 @@ the VM ([COI-INCIDENTS.md → Incident D](COI-INCIDENTS.md)). Before that, this 
 
    ```bash
    curl -fsSL https://pkgs.zabbly.com/get/incus-stable | sudo sh
-   incus version        # pin what you got here — this rig has run 7.3 and 7.4
+   incus version        # pin what you got here — this rig has run 7.3 and 7.4 (7.4 as of 2026-09-26)
    ```
 
 4. **Group membership.**
