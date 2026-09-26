@@ -6,6 +6,9 @@
 const STUB = 'stub:';
 const stubBlobs = new Map<string, Blob>();
 
+// Test hook: stub uploads live only in this map, so the suite empties it between tests.
+export const forgetStubBlobs = (): void => stubBlobs.clear();
+
 // PUT the bytes to the presigned URL. `contentType` MUST be the server-signed value (the presigned PUT
 // signs content-type; sending a different one fails S3's signature check). fetch can't report upload
 // progress, so this uses XMLHttpRequest.

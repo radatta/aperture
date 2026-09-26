@@ -51,6 +51,20 @@ emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it
 `eslint .` (flat config). `test` and `build` fan out per-package (`pnpm -r`). Vitest runs two envs —
 **jsdom** for `app`, **node** for everything else (Lambda runtime parity).
 
+**App test files share one jsdom and one module graph** (`isolate: false` — a fresh jsdom per file was
+most of CI's runtime on its single worker). So:
+
+- **New module-level state in `app/src`** (a singleton, cache, or `let`) needs a reset in
+  `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file.
+- **A test file that uses `vi.resetModules` / `vi.doMock`** belongs in the `isolated` project in
+  `app/vitest.config.ts`.
+- **File order is shuffled every run.** A failure that comes and goes is order-dependence; the seed is
+  printed — reproduce with `--sequence.seed=<n>`.
+
+Lint and typecheck are cached (ESLint `--cache-strategy content`, `tsc -b`'s `.tsbuildinfo`, restored in
+CI). The ESLint cache is only safe because no rule is type-aware — enabling `recommendedTypeChecked`
+means dropping `--cache`.
+
 ## UI: colour tiers, one dock, and the focus-return contract
 
 These are cross-cutting rules for `app/` — they were paid for once and are easy to undo by accident.

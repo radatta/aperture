@@ -1,8 +1,31 @@
-import { afterEach } from 'vitest';
+import { afterAll, afterEach, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { queryClient } from '../data/queryClient';
+import { setAuthToken, setReauthHandler } from '../auth/tokenStore';
+import { forgetStubBlobs } from '../data/attachmentTransport';
 
-// Unmount React trees between tests (RTL auto-cleanup without enabling vitest globals).
-afterEach(() => cleanup());
+// Files share one jsdom and one module graph (isolate: false), so whatever a test leaves behind is the
+// next file's starting state. One hook, not several: after-hooks run in reverse, and the unmount (RTL
+// cleanup, without vitest globals) must come before the resets.
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  queryClient.clear();
+  setAuthToken(null);
+  setReauthHandler(null);
+  forgetStubBlobs();
+  localStorage.clear();
+  sessionStorage.clear();
+  document.documentElement.removeAttribute('data-theme');
+  window.history.replaceState(null, '', '/');
+});
+
+// TanStack delivers observer updates on a setTimeout(0), so a test's last update can still be queued
+// after it unmounts. Drain one macrotask per file so it lands while jsdom is alive — after the last file
+// the shared jsdom is torn down immediately, and the straggler hits React with no `window`. Covers one
+// hop only — a straggler that schedules another timer, or a longer timer left running, isn't drained.
+afterAll(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
 // jsdom doesn't implement ResizeObserver, and AppShell uses one to size the bottom dock's content
 // reserve. A no-op stub is the honest shape here: jsdom has no layout engine, so a real

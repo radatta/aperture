@@ -12,8 +12,8 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "tsc -b",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/.eslintcache --cache-strategy content",
+    "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/.eslintcache --cache-strategy content",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
