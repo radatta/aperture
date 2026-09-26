@@ -36,6 +36,9 @@ export interface Task extends BaseEntity {
   // "YYYY-MM-DD" — when it's DUE, distinct from taskPlans.day (when I'll work it). Free metadata,
   // set in the scope pass, editable at any status, never part of the estimate lock.
   dueDay: string | null;
+  // Free-form light markdown (see taskNotes.ts), capped at TASK_NOTES_MAX. Editable at any status, never
+  // part of the estimate lock. Empty is null; pre-existing rows read back undefined, so readers use `!notes`.
+  notes: string | null;
   // estimateMin / bufferMin are editable ONLY while backlog|planned.
   estimateMin: number | null;
   bufferMin: number | null;

@@ -36,6 +36,7 @@ export interface CreateTaskInput {
   estimateMin?: number | null;
   bufferMin?: number | null;
   dueDay?: string | null; // day-granular deadline; honored by both creates — bulk-add sets it, no single-create caller does yet
+  notes?: string | null; // normalized like setTaskNotes; createTasks rejects the whole batch if any is over the cap
 }
 
 export interface UpsertPlanInput {
@@ -249,6 +250,9 @@ export interface ApiClient {
   // — so it's settable at ANY status, like the deadline. Trims; rejects an empty/whitespace title. Does
   // not rename a linked calendar event (edit-sync is a deferred gap).
   setTaskTitle(id: string, title: string): Promise<Task>;
+  // Notes (light markdown). Like the title, settable at ANY status and never touches the estimate lock.
+  // Trims; empty/whitespace or null clears to null; over TASK_NOTES_MAX rejects and writes nothing.
+  setTaskNotes(id: string, notes: string | null): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
   setTaskActual(id: string, actualMin: number): Promise<Task>;
   // Scope change: finish/cancel the original and spawn a follow-up (never edit a locked estimate).

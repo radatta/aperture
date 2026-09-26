@@ -18,6 +18,7 @@ import {
   findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
+  normalizeNotes,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
@@ -215,6 +216,7 @@ class StubClient implements ApiClient {
       status: 'backlog',
       categoryId: input.categoryId ?? null,
       dueDay: input.dueDay ?? null,
+      notes: normalizeNotes(input.notes),
       seriesId: null,
       rollId: null,
       estimateMin: input.estimateMin ?? null,
@@ -393,7 +395,8 @@ class StubClient implements ApiClient {
   }
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     const t = this.now();
-    return inputs.map((input) => this.writes.insert(this.store.tasks, this.newTask(input, t)));
+    const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
+    return tasks.map((task) => this.writes.insert(this.store.tasks, task));
   }
   async setTaskEstimate(
     id: string,
@@ -416,6 +419,9 @@ class StubClient implements ApiClient {
     const trimmed = title.trim();
     if (!trimmed) throw new Error('Title is required');
     return this.writes.patch(this.store.tasks, id, { title: trimmed });
+  }
+  async setTaskNotes(id: string, notes: string | null): Promise<Task> {
+    return this.writes.patch(this.store.tasks, id, { notes: normalizeNotes(notes) });
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
@@ -716,6 +722,7 @@ class StubClient implements ApiClient {
         status: 'planned',
         categoryId: series.categoryId,
         dueDay: null,
+        notes: null,
         seriesId: series.id,
         rollId: null,
         estimateMin: series.defaultEstimateMin,

@@ -22,6 +22,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     status: 'planned',
     categoryId: null,
     dueDay: null,
+    notes: null,
     seriesId: null,
     rollId: null,
     estimateMin: 60,

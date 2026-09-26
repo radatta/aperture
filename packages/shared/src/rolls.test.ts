@@ -30,6 +30,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     seriesId: null,
     rollId: 'r1',
     dueDay: null,
+    notes: null,
     estimateMin: 30,
     bufferMin: null,
     estimateLockedMin: 30,

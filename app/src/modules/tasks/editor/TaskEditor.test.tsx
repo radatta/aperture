@@ -37,6 +37,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   status: 'backlog',
   categoryId: null,
   dueDay: null,
+  notes: null,
   seriesId: null,
   rollId: null,
   estimateMin: null,

@@ -16,6 +16,7 @@ export const API_METHODS = [
   'setTaskCategory',
   'setTaskDueDay',
   'setTaskTitle',
+  'setTaskNotes',
   'transitionTask',
   'setTaskActual',
   'splitTask',

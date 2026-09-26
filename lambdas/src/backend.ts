@@ -10,6 +10,7 @@ import {
   findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
+  normalizeNotes,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
@@ -130,6 +131,7 @@ export class BackendClient implements ApiClient {
       status: 'backlog',
       categoryId: input.categoryId ?? null,
       dueDay: input.dueDay ?? null,
+      notes: normalizeNotes(input.notes),
       seriesId: null,
       rollId: null,
       estimateMin: input.estimateMin ?? null,
@@ -334,7 +336,7 @@ export class BackendClient implements ApiClient {
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     if (inputs.length === 0) return [];
     const t = this.now();
-    const tasks = inputs.map((input) => this.newTask(input, t));
+    const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     return this.repo.putTasks(tasks);
   }
   async setTaskEstimate(
@@ -359,6 +361,11 @@ export class BackendClient implements ApiClient {
     if (!trimmed) throw new Error('Title is required');
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, title: trimmed, updatedAt: this.now() });
+  }
+  async setTaskNotes(id: string, notes: string | null): Promise<Task> {
+    const normalized = normalizeNotes(notes); // throws over the cap before any read or write
+    const t = await this.mustTask(id);
+    return this.repo.putTask({ ...t, notes: normalized, updatedAt: this.now() });
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
@@ -656,6 +663,7 @@ export class BackendClient implements ApiClient {
         status: 'planned',
         categoryId: series.categoryId,
         dueDay: null,
+        notes: null,
         seriesId: series.id,
         rollId: null,
         estimateMin: series.defaultEstimateMin,
