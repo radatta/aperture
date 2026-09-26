@@ -82,6 +82,44 @@ describe('mcp tools — tasks', () => {
     expect(((await call('list_tasks')) as Task[])[0]!.categoryId).toBe(cat.id);
   });
 
+  it('notes: create sets them, lists return them, update replaces and clears at any status', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'noted', notes: '  ch. 4\n- q6  ' })) as Task;
+    expect(t.notes).toBe('ch. 4\n- q6');
+    expect(((await call('list_tasks')) as Task[])[0]!.notes).toBe('ch. 4\n- q6');
+    expect(((await call('list_backlog')) as Task[])[0]!.notes).toBe('ch. 4\n- q6');
+
+    await call('complete_task', { id: t.id, actualMin: 20 });
+    const replaced = (await call('update_task', { id: t.id, notes: 'after the fact' })) as Task;
+    expect(replaced.notes).toBe('after the fact'); // editable on a done task
+    expect(((await call('update_task', { id: t.id, notes: null })) as Task).notes).toBeNull();
+
+    const bulk = (await call('create_tasks', {
+      tasks: [{ title: 'a', notes: 'first' }, { title: 'b' }],
+    })) as Task[];
+    expect(bulk.map((x) => x.notes)).toEqual(['first', null]);
+  });
+
+  it('notes over the cap are a param error that applies nothing', async () => {
+    const { call } = makeEnv();
+    const long = 'x'.repeat(5001);
+    const t = (await call('create_task', { title: 'orig', notes: 'keep' })) as Task;
+
+    await expect(call('update_task', { id: t.id, title: 'renamed', notes: long })).rejects.toThrow(
+      /"notes": Notes are limited to 5,000 characters/,
+    );
+    const after = ((await call('list_tasks')) as Task[])[0]!;
+    expect(after.title).toBe('orig'); // the title before it in the patch did NOT land
+    expect(after.notes).toBe('keep');
+
+    await expect(call('create_task', { title: 'too long', notes: long })).rejects.toThrow(/5,000/);
+    await expect(
+      call('create_tasks', { tasks: [{ title: 'fine' }, { title: 'too long', notes: long }] }),
+    ).rejects.toThrow(/5,000/);
+    expect((await call('list_tasks')) as Task[]).toHaveLength(1); // none of the batch landed
+    await expect(call('update_task', { id: t.id, notes: 42 })).rejects.toThrow(/string or null/);
+  });
+
   it('update_task with no fields is a param error', async () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'x' })) as Task;
