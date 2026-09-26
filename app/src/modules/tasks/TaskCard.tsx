@@ -5,7 +5,7 @@ import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Text } from '../../components/Text';
-import { PaperclipIcon } from '../../components/icons';
+import { NoteIcon, PaperclipIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
 import { useDisclosure } from '../../lib/useDisclosure';
 import { useAttachments } from '../../data/hooks/useAttachments';
@@ -24,7 +24,16 @@ const ROW_CONTROLS = 'button, a, input, select, textarea, label, dialog';
 // One task, slimmed to the lifecycle actions you press without thinking — Start, Focus, Done, plus the
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
 // calendar, files, drop, delete — lives in the modal the title (or Scope/Done) opens. No overflow menu.
-export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode }) {
+// `notesHit` marks a search result that matched only through its notes, so the row says why it's here.
+export function TaskCard({
+  task,
+  actions,
+  notesHit = false,
+}: {
+  task: Task;
+  actions?: ReactNode;
+  notesHit?: boolean;
+}) {
   const transition = useTransitionTask();
   const pomodoro = usePomodoro();
   const modal = useDisclosure();
@@ -50,7 +59,7 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <TaskTitleButton task={task} ref={modal.triggerRef} onOpen={() => openAs('view')} />
-          <TaskMeta task={task} />
+          <TaskMeta task={task} notesHit={notesHit} />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {actions}
@@ -87,7 +96,7 @@ export function TaskCard({ task, actions }: { task: Task; actions?: ReactNode })
 
 // One quiet metadata line. Absence is shown by absence — except that an unscoped backlog task now says
 // so, since the always-visible Scope button that used to carry that signal is gone from the card.
-function TaskMeta({ task }: { task: Task }) {
+function TaskMeta({ task, notesHit }: { task: Task; notesHit: boolean }) {
   const { data: settings } = useSettings();
   const { data: attachments = [] } = useAttachments();
   const today = todayKey(settings?.dayStartHour ?? 4);
@@ -130,6 +139,13 @@ function TaskMeta({ task }: { task: Task }) {
         </Text>
       )}
       <RollTag rollId={task.rollId} />
+      {/* Notes: a quiet mark, never a snippet — the text lives in the editor. */}
+      {task.notes && (
+        <Text size="xs" tone="subtle" className="inline-flex items-center gap-0.5">
+          <NoteIcon size={12} />
+          {notesHit ? 'in notes' : <span className="sr-only">Has notes</span>}
+        </Text>
+      )}
       {fileCount > 0 && (
         <Text size="xs" tone="subtle" className="inline-flex items-center gap-0.5">
           <PaperclipIcon size={12} /> {fileCount}

@@ -78,6 +78,34 @@ describe('/tasks lenses', () => {
     expect(await screen.findByText('Nothing matches “zzz”.')).toBeTruthy();
   });
 
+  it('search finds a word only in the notes, and the row says "in notes"', async () => {
+    const { api } = await seeded();
+    await api.createTask({ title: 'pset 4', notes: 'q6: use the lemma from lecture' });
+    await api.createTask({ title: 'lemma review' });
+    await api.createTask({ title: 'groceries' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=backlog' });
+
+    await user.type(await screen.findByLabelText('Search tasks'), 'lemma');
+
+    expect(await screen.findByRole('button', { name: 'lemma review' })).toBeTruthy();
+    expect(screen.getAllByText('in notes')).toHaveLength(1); // the title match needs no hint
+    // The hint sits in pset 4's own title + meta column.
+    const column = screen.getByText('in notes').closest('.min-w-0') as HTMLElement;
+    expect(within(column).getByRole('button', { name: 'pset 4' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'groceries' })).toBeNull();
+  });
+
+  it('a task with notes carries a quiet marker, never a snippet', async () => {
+    const { api } = await seeded();
+    await api.createTask({ title: 'with notes', notes: 'secret detail here' });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+
+    expect(await screen.findByRole('button', { name: 'with notes' })).toBeTruthy();
+    expect(screen.getByText('Has notes')).toBeTruthy(); // screen-reader text for the icon
+    expect(screen.queryByText(/secret detail/)).toBeNull();
+  });
+
   it('switching lens keeps the search text', async () => {
     const { api } = await seeded();
     await api.createTask({ title: 'groceries' });
