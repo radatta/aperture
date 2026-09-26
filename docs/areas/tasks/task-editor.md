@@ -22,7 +22,7 @@ card (lifecycle only)                     modal (everything else)
 ──────────────────────                    ──────────────────────────────
 title ── opens ──▶ ┐                       full title (read-only for now)
 Scope (if unscoped)┤                       status · category · recurs
-Start / Focus / Done ┘                     Details  — estimate/buffer/category/due (Save)
+Start / Focus / Done ┘                     Details  — estimate/buffer/category/due, notes (Save)
 + section actions slot                     Time     — logged/remaining/locked/timestamps/Δ (read-only)
                                            Files · Calendar
                                            Manage   — Split / Drop / Delete
@@ -71,9 +71,12 @@ The card keeps only the actions you press without thinking. No overflow menu.
   unaffected). Every *exit* path — Esc, backdrop, the Close button — routes through `requestClose`,
   which pops a "Discard changes?" confirm (a second `<dialog>` stacked on top) when the details form is
   dirty. A *real action* (Save / Mark done / Drop / Delete) closes without the prompt, since it isn't an
-  abandon. "Dirty" is the details form only (title/estimate/category/due); the Split/Calendar reveal
+  abandon. "Dirty" is the details form only (title/estimate/category/due/notes); the Split/Calendar reveal
   forms have their own Cancel. Backdrop-close requires press *and* release on the backdrop, so a
   text-selection drag-out can't dismiss.
+
+- **Notes live in the details form** ([notes.md](notes.md)): rendered, with Edit / "Add notes…";
+  once editing, a textarea until Save or Close. Editable at any status, like the title.
 
 ## Non-goals / deferred
 
