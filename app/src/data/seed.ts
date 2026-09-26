@@ -156,8 +156,14 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   const today = dayKey(nowMs, START_HOUR);
   // Mixed due days so the morning pull's soonest-due sort and the relative phrasing are both visible
   // on first load: a couple dated (one overdue, one far out), the rest undated.
-  const backlogSeeds: { title: string; dueOffset: number | null }[] = [
-    { title: 'Draft the project proposal', dueOffset: 2 },
+  // Two carry notes, so the rendered markdown and the row's notes marker show on first load.
+  const backlogSeeds: { title: string; dueOffset: number | null; notes?: string }[] = [
+    {
+      title: 'Draft the project proposal',
+      dueOffset: 2,
+      notes:
+        'Aim for **two pages**, and keep the scope *honest*.\n\n- Problem + why now\n- Prior work (see [the brief](https://example.com/brief))\n- Timeline',
+    },
     { title: 'Fix the flaky CI test', dueOffset: -1 },
     { title: 'Reply to advisor email', dueOffset: null },
     { title: 'Submit the lab report', dueOffset: 4 },
@@ -165,14 +171,14 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     { title: 'Outline the reading notes', dueOffset: 12 },
     { title: 'Book dentist appointment', dueOffset: null },
   ];
-  backlogSeeds.forEach(({ title, dueOffset }, i) => {
+  backlogSeeds.forEach(({ title, dueOffset, notes }, i) => {
     store.tasks.push({
       ...mk(nowMs - (i + 1) * HOUR),
       title,
       status: 'backlog',
       categoryId: null,
       dueDay: dueOffset === null ? null : addDays(today, dueOffset),
-      notes: null,
+      notes: notes ?? null,
       seriesId: null,
       rollId: null,
       estimateMin: null,
@@ -191,14 +197,26 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   // Today's plan — a few tasks pulled in and ordered, so the daytime "Right now" hero + Big 3 render
   // on first load. The 2nd is in progress (the hero to glance); the rest are ready to start, and the
   // tail spills into "Also today" (where "Focus this" is exercisable).
-  const planSeeds: { title: string; cat: string; est: number; inProgress?: boolean }[] = [
-    { title: 'Finish the problem set', cat: 'Deep Work', est: 60 },
+  const planSeeds: {
+    title: string;
+    cat: string;
+    est: number;
+    inProgress?: boolean;
+    notes?: string;
+  }[] = [
+    {
+      title: 'Finish the problem set',
+      cat: 'Deep Work',
+      est: 60,
+      notes:
+        'Ch. 4, q1–8. Office hours Thu.\n\n1. q1–5 are warm-ups\n2. q6: use the `lemma` from lecture\n3. q8 is the long one\n\nhttps://example.edu/pset4',
+    },
     { title: 'Rewrite the onboarding section', cat: 'Deep Work', est: 45, inProgress: true },
     { title: 'Clear the email backlog', cat: 'Admin', est: 20 },
     { title: 'Skim the lecture notes', cat: 'Learning', est: 30 },
     { title: 'Tidy the desk', cat: 'Admin', est: 10 },
   ];
-  planSeeds.forEach(({ title, cat, est, inProgress }, i) => {
+  planSeeds.forEach(({ title, cat, est, inProgress, notes }, i) => {
     const at = nowMs - (i + 1) * 30 * 60_000;
     const task: Task = {
       ...mk(at),
@@ -206,7 +224,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       status: inProgress ? 'in_progress' : 'planned',
       categoryId: byLabel(cat).id,
       dueDay: null,
-      notes: null,
+      notes: notes ?? null,
       seriesId: null,
       rollId: null,
       estimateMin: est,

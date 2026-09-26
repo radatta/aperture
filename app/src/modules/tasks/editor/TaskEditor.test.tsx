@@ -13,17 +13,18 @@ function api(): ApiClient {
 
 function renderEditor(client: ApiClient, task: Task, intent: TaskEditorIntent = 'view') {
   const onClose = vi.fn();
+  const onDirtyChange = vi.fn();
   renderWithProviders(
     <TaskEditor
       task={task}
       intent={intent}
       onClose={onClose}
       onRequestClose={vi.fn()}
-      onDirtyChange={vi.fn()}
+      onDirtyChange={onDirtyChange}
     />,
     { api: client },
   );
-  return { onClose, user: userEvent.setup() };
+  return { onClose, onDirtyChange, user: userEvent.setup() };
 }
 
 // A synthetic task for pure-render assertions that don't touch the store.
@@ -193,5 +194,104 @@ describe('TaskEditor', () => {
     dated = await client2.setTaskDueDay(dated.id, '2026-10-01');
     renderEditor(client2, dated);
     expect(screen.getByRole('button', { name: /Add to calendar/ })).toBeTruthy();
+  });
+
+  describe('notes', () => {
+    it('renders saved notes as light markdown, with links opening a new tab', async () => {
+      const client = api();
+      const t = await client.createTask({
+        title: 'Noted',
+        notes:
+          '**Bold** start\n- one\n- two\n\n[brief](https://example.com/b) [x](javascript:alert(1))',
+      });
+      renderEditor(client, t);
+      expect(screen.getByText('Bold').tagName).toBe('STRONG');
+      expect(screen.getAllByRole('listitem')).toHaveLength(2);
+      const link = screen.getByRole('link', { name: 'brief' });
+      expect(link.getAttribute('href')).toBe('https://example.com/b');
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+      expect(screen.getAllByRole('link')).toHaveLength(1); // the javascript: link stays text
+      expect(screen.getByText(/\[x\]\(javascript:alert\(1\)\)/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Edit notes' })).toBeTruthy();
+    });
+
+    it('offers "Add notes…" when empty, including a legacy row with no notes field', async () => {
+      const legacy = mkTask({});
+      delete (legacy as { notes?: unknown }).notes;
+      renderEditor(api(), legacy);
+      expect(screen.getByRole('button', { name: 'Add notes…' })).toBeTruthy();
+      expect(screen.queryByLabelText('Notes')).toBeNull();
+    });
+
+    it('adds notes through Save, trimmed, and marks the form dirty while editing', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Plain' });
+      const setNotes = vi.spyOn(client, 'setTaskNotes');
+      const { onClose, onDirtyChange, user } = renderEditor(client, t);
+
+      await user.click(screen.getByRole('button', { name: 'Add notes…' }));
+      const field = screen.getByLabelText('Notes');
+      expect(document.activeElement).toBe(field);
+      await user.type(field, '  ch. 4 q1-8  ');
+      expect(onDirtyChange).toHaveBeenLastCalledWith(true); // Close/Esc/backdrop now confirm
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(setNotes).toHaveBeenCalledWith(t.id, 'ch. 4 q1-8');
+      await waitFor(async () => expect((await client.getTask(t.id))?.notes).toBe('ch. 4 q1-8'));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+
+    it('leaves notes alone when only another field changed', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Has notes', notes: 'keep' });
+      const setNotes = vi.spyOn(client, 'setTaskNotes');
+      const first = renderEditor(client, t);
+      fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
+      await first.user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(first.onClose).toHaveBeenCalled());
+      expect(setNotes).not.toHaveBeenCalled();
+    });
+
+    it('saves a cleared note as null', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Has notes', notes: 'drop me' });
+      const setNotes = vi.spyOn(client, 'setTaskNotes');
+      const { user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Edit notes' }));
+      await user.clear(screen.getByLabelText('Notes'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      expect(setNotes).toHaveBeenCalledWith(t.id, null);
+    });
+
+    it('stays editable on a finished task', async () => {
+      const client = api();
+      let t = await client.createTask({ title: 'Done', estimateMin: 30 });
+      t = await client.transitionTask(t.id, 'in_progress');
+      t = await client.transitionTask(t.id, 'done');
+      renderEditor(client, t);
+      expect(screen.getByRole('button', { name: 'Add notes…' })).toBeTruthy();
+    });
+
+    it('shows the counter near the cap and disables Save over it, without truncating', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Long' });
+      const { user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Add notes…' }));
+      const field = screen.getByLabelText('Notes');
+
+      fireEvent.change(field, { target: { value: 'x'.repeat(4400) } });
+      expect(screen.queryByText(/\/ 5,000/)).toBeNull(); // quiet until close to the cap
+
+      fireEvent.change(field, { target: { value: 'x'.repeat(5000) } });
+      expect(screen.getByText('5,000 / 5,000')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(false);
+
+      fireEvent.change(field, { target: { value: 'x'.repeat(5100) } });
+      expect(screen.getByText(/5,100 \/ 5,000/)).toBeTruthy();
+      expect(field.getAttribute('aria-invalid')).toBe('true');
+      expect((field as HTMLTextAreaElement).value).toHaveLength(5100); // never silently truncated
+      expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
+    });
   });
 });

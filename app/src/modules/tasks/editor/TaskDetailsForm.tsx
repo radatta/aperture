@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Ref } from 'react';
-import { canEditEstimate, fmtMonthDayYear } from '@aperture/shared';
+import { canEditEstimate, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -12,16 +12,20 @@ import {
   useSetCategory,
   useSetDueDay,
   useSetEstimate,
+  useSetTaskNotes,
   useSetTaskTitle,
 } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
+import { NotesField } from '../notes/NotesField';
+import { notesValue } from '../notes/parseNotes';
 import { scopeLabel, suggestedBuffer } from '../taskMath';
 
 // The details editor inside the task modal — absorbs ScopePanel (estimate/buffer/category) and the
 // in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
 // Estimate + buffer edit only while backlog|planned; past that the calibration baseline is frozen
 // (canEditEstimate), so they show read-only. Category stays editable at any status; due locks once
-// finished. Save writes only what changed and closes; the modal's own Close is the cancel.
+// finished. Notes edit at any status too. Save writes only what changed and closes; the modal's own
+// Close is the cancel.
 export function TaskDetailsForm({
   task,
   onDone,
@@ -38,6 +42,7 @@ export function TaskDetailsForm({
   const setEstimate = useSetEstimate();
   const setCategory = useSetCategory();
   const setDueDay = useSetDueDay();
+  const setNotes = useSetTaskNotes();
 
   const editEstimate = canEditEstimate(task);
   // A finished task is history: its due date is locked (re-dating it is meaningless). Category and
@@ -49,6 +54,8 @@ export function TaskDetailsForm({
   const [buffer, setBuffer] = useState<string>(task.bufferMin?.toString() ?? '');
   const [categoryId, setCategoryId] = useState<string>(task.categoryId ?? '');
   const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
+  const [notes, setNotes_] = useState<string>(task.notes ?? '');
+  const [editingNotes, setEditingNotes] = useState(false);
 
   const estNum = estimate === '' ? null : Number(estimate);
   const titleTrimmed = title.trim();
@@ -57,9 +64,17 @@ export function TaskDetailsForm({
     editEstimate &&
     (String(task.estimateMin ?? '') !== estimate || String(task.bufferMin ?? '') !== buffer);
   const dueDirty = !isTerminal && (task.dueDay ?? '') !== dueDay;
-  const dirty = titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty;
+  const notesTrimmed = notesValue(notes);
+  const notesDirty = notesTrimmed !== (task.notes ?? '');
+  const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
+  const dirty =
+    titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;
   const pending =
-    setTitle.isPending || setEstimate.isPending || setCategory.isPending || setDueDay.isPending;
+    setTitle.isPending ||
+    setEstimate.isPending ||
+    setCategory.isPending ||
+    setDueDay.isPending ||
+    setNotes.isPending;
 
   // Bubble dirtiness up so the modal's exit paths (Esc/backdrop/Close) can confirm before discarding.
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
@@ -81,6 +96,9 @@ export function TaskDetailsForm({
     }
     if (dueDirty) {
       await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
+    }
+    if (notesDirty) {
+      await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
     }
     onDone();
   }
@@ -174,8 +192,15 @@ export function TaskDetailsForm({
           />
         )}
       </div>
+      <NotesField
+        saved={task.notes}
+        value={notes}
+        editing={editingNotes}
+        onEdit={() => setEditingNotes(true)}
+        onChange={setNotes_}
+      />
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={save} disabled={pending || !dirty || !titleTrimmed}>
+        <Button size="sm" onClick={save} disabled={pending || !dirty || !titleTrimmed || notesOver}>
           Save
         </Button>
         {dirty && (

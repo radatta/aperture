@@ -142,6 +142,16 @@ export function PlusIcon(p: IconProps) {
   );
 }
 
+// Notes — a page with lines of text, the "there's more written here" mark.
+export function NoteIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6 3h9l4 4v14H6Z" />
+      <path d="M9.5 11h6M9.5 14.5h6M9.5 18h3.5" />
+    </Svg>
+  );
+}
+
 // Attachments — a paperclip, the universal "a file rides along" mark.
 export function PaperclipIcon(p: IconProps) {
   return (
