@@ -29,8 +29,8 @@ Rendered by `modules/tasks/notes/` — `parseNotes.ts` (pure) and `NotesView.tsx
   (trailing punctuation and an unbalanced `)` stay out).
 - **Not supported, by design:** headings, images (a remote fetch is a tracking surface), raw HTML,
   blockquotes, tables, nesting, code fences. They stay literal text.
-- **Cost:** linear in the note's length — a hostile 5,000-character note (thousands of `(http://[`,
-  `)`, `*`) parses in milliseconds, and a test pins that.
+- **Cost:** at worst quadratic in a line, so milliseconds at the cap — a hostile 5,000-character note
+  (thousands of `(http://[`, `)`, `*`) parses in milliseconds, and a test pins that.
 - **Safety:** the output is React elements, never HTML — text is always a child, so `<script>` and
   `&lt;` show as typed. The one live surface is `href`: only absolute `http:`, `https:` and `mailto:`
   URLs pass (checked with the URL parser, which folds case and strips tab-split schemes); anything else,

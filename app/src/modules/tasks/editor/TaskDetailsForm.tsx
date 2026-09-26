@@ -198,7 +198,10 @@ export function TaskDetailsForm({
         saved={task.notes}
         value={notes}
         editing={editingNotes}
-        onEdit={() => setEditingNotes(true)}
+        onEdit={() => {
+          setNotes_(task.notes ?? ''); // start from the live note, not the one seen at mount
+          setEditingNotes(true);
+        }}
         onChange={setNotes_}
       />
       <div className="flex items-center gap-2">

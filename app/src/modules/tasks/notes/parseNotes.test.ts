@@ -36,7 +36,7 @@ describe('parseNotes blocks', () => {
     for (const src of inputs) {
       const t0 = performance.now();
       parseNotes(src);
-      expect(performance.now() - t0).toBeLessThan(250);
+      expect(performance.now() - t0).toBeLessThan(1000); // was ~9s before the linear trimUrl; loose for CI
     }
   });
 

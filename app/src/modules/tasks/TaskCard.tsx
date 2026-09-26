@@ -150,7 +150,7 @@ function TaskMeta({ task, notesHit }: { task: Task; notesHit: boolean }) {
       {fileCount > 0 && (
         <Text size="xs" tone="subtle" className="inline-flex items-center gap-0.5">
           <PaperclipIcon size={12} /> {fileCount}
-          <span className="sr-only">{fileCount === 1 ? 'file' : 'files'}</span>
+          <span className="sr-only">{fileCount === 1 ? ' file' : ' files'}</span>
         </Text>
       )}
     </div>
