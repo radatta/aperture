@@ -1,7 +1,7 @@
 # Bulk Add Tasks
 
 A "Bulk add" button on the Tasks-page header opens a modal: paste many lines, one task per line, each
-line optionally carrying inline tokens (`~estimate #category due:date`). A live preview parses as you
+line optionally carrying inline tokens (`~estimate #category due:date notes:"…"`). A live preview parses as you
 type — red errors gate submit, gold warnings don't. All lines commit in one batch as `backlog` tasks.
 
 **The operator is Claude, not thumbs.** Rahul asks Claude to generate the paste; he does not hand-type
@@ -36,6 +36,11 @@ capture rule; it's the plan pass wearing a keyboard.
 - **Red gates, gold doesn't.** A token that declares intent but can't be parsed (`due:garbage`, `~30m`)
   is red and blocks the whole submit. A token that parses but doesn't match (`#unknown`) is gold and
   submits. Duplicate titles (in-paste, or against a live task) are gold — safe re-submit after a failure.
+- **Notes are one quoted token, `notes:"…"`, with `\n` as the only escape.** A paste is one line per
+  task, so a multi-line note needs an escape; `\n` is the one Claude already emits. No `"` inside
+  (reword, or use `'`) — a second escape (`\"`) buys little and doubles the ways to get it wrong. Over
+  the 5,000-character cap is red here, before submit, and the server rejects the whole batch anyway
+  ([notes.md](notes.md)).
 - **One `createdAt` stamp per batch.** `listTasks` sorts `createdAt` desc, stably; a shared stamp + the
   monotonic ULID factory makes the batch render as one top block in paste order.
 - **Best-effort batch write, not a transaction.** `createTasks` goes through the existing `writes.batchPut`
@@ -48,7 +53,8 @@ capture rule; it's the plan pass wearing a keyboard.
 
 ## 3. Data / RPC
 
-- `CreateTaskInput` grew `dueDay?: string | null` (single create still passes null). No change to `Task`.
+- `CreateTaskInput` grew `dueDay?: string | null` (single create still passes null), and later
+  `notes?: string | null` (see [notes.md](notes.md)).
 - New RPC `createTasks(inputs: CreateTaskInput[]) → Task[]`, inserted after `createTask` in `API_METHODS`.
 - `repo.putTasks` → `writes.batchPut`. `noopWrites.batchPut` already no-ops, so a testMode/smoke run
   writes nothing.
@@ -70,7 +76,12 @@ One task per line. A line is:   <title>[ | <tokens>]
              #<label>          single word               e.g. #Admin
              #"<label>"        multi-word, quoted        e.g. #"Deep Work"
              due:<YYYY-MM-DD>  real calendar date, ISO   e.g. due:2026-09-25
+             notes:"<text>"    quoted; \n = a newline    e.g. notes:"Ch. 4\nq6: use the lemma"
 ```
+
+The `notes:"…"` value is the task's notes (light markdown — see [notes.md](notes.md)). Inside the
+quotes everything is literal: `~30`, `#Admin`, `due:…`, even ` | `. The only escape is `\n`, which
+becomes a newline; the value is trimmed, and must be at most 5,000 characters after unescaping.
 
 Rules that produce a **red error** (blocks the entire submit — fix or remove):
 - empty title; a leading list marker (`- `, `* `, `1. `); a `|` in the title; ` | ` with nothing after it
@@ -78,6 +89,8 @@ Rules that produce a **red error** (blocks the entire submit — fix or remove):
 - `due:` that isn't a real ISO date (`due:2026-02-30`, `due:2026-2-5`); a capitalized `Due:`
 - an unterminated `#"quote`; a label that matches two categories; any unrecognized token
 - the same kind of token twice on one line
+- `notes:` without quotes; an unterminated `notes:"…`; empty notes (`notes:""`); a `"` inside the
+  notes; notes over 5,000 characters; a capitalized `Notes:`
 
 Rules that produce a **gold warning** (task still created):
 - `#label` matches no category → created uncategorised
@@ -89,6 +102,7 @@ email coach
 finish 214 pset | ~90 #"Deep Work" due:2026-09-25
 book flight | due:2026-10-02
 review the RFC | ~45 #Admin
+read ch. 4 | ~30 notes:"q1–8\n- q6: use the lemma\nhttps://example.edu/pset4"
 ```
 
 The category labels are shown live in the dialog header — read the valid set off the screen.
@@ -115,4 +129,5 @@ cancel-drops-draft + focus-return, failure-keeps-text).
 - A formal `{created, failed}` per-line failure report (additive to `createTasks` if partial failures
   ever show up in practice).
 - Setting `bufferMin` from a token (bulk sets estimate only).
+- A `\"` escape inside `notes:"…"` (reword, or use `'`).
 - Per-line editing in the preview (fix the textarea instead — it's a paste, re-pasting is free).

@@ -8,12 +8,15 @@
 //   token  := '~' <digits>                   -- estimateMin, whole minutes >= 1
 //           | '#' <word> | '#"' <text> '"'   -- Category.label, case-insensitive exact match
 //           | 'due:' YYYY-MM-DD              -- dueDay, real calendar date, lowercase keyword
+//           | 'notes:"' <text> '"'           -- notes; '\n' is the only escape (a newline), no '"'
+//                                               inside, at most TASK_NOTES_MAX chars after unescaping
 //
 // errors[] are RED (blocking — gate submit); warnings[] are YELLOW (non-blocking — the task is still
 // created). A token that declares intent but can't be parsed is red; one that parses but doesn't match
 // (an unknown #label) is yellow. Titles are NEVER rewritten — a list marker or stray '|' is an error.
 
 import { isDayKey } from './dates';
+import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
 
@@ -25,6 +28,7 @@ export interface BulkLine {
   categoryLabel: string | null; // as written, for the preview (present even when unmatched)
   categoryId: string | null; // resolved match, or null
   dueDay: string | null;
+  notes: string | null; // unescaped + trimmed
   errors: string[]; // red — blocking
   warnings: string[]; // yellow — non-blocking
 }
@@ -37,9 +41,11 @@ export interface BulkParse {
 
 const SEP = ' | ';
 const LIST_MARKER = /^([-*+•]|\d+[.)])\s/;
+const NOTES_OPEN = /^notes:"/i; // case-insensitive here so `Notes:` gets its own error, not "unrecognized"
 
-// Split the token region into raw token strings, keeping a #"quoted label" (which contains spaces)
-// whole. A '#"' with no closing quote runs to the end of the region and is flagged at classify time.
+// Split the token region into raw token strings, keeping a #"quoted label" or notes:"…" (both contain
+// spaces) whole. An unclosed quote runs to the end of the region and is flagged at classify time.
+// Text glued to a notes closing quote stays in the token, so an embedded '"' is reported as one.
 function scanTokens(region: string): string[] {
   const out: string[] = [];
   const n = region.length;
@@ -48,10 +54,12 @@ function scanTokens(region: string): string[] {
     while (i < n && /\s/.test(region[i]!)) i++;
     if (i >= n) break;
     const start = i;
-    if (region[i] === '#' && region[i + 1] === '"') {
-      i += 2;
+    const notes = NOTES_OPEN.test(region.slice(i, i + 7));
+    if ((region[i] === '#' && region[i + 1] === '"') || notes) {
+      i += notes ? 7 : 2;
       while (i < n && region[i] !== '"') i++;
       if (i < n) i++; // consume the closing quote
+      if (notes) while (i < n && !/\s/.test(region[i]!)) i++;
     } else {
       while (i < n && !/\s/.test(region[i]!)) i++;
     }
@@ -83,6 +91,7 @@ function parseLine(
     categoryLabel: null,
     categoryId: null,
     dueDay: null,
+    notes: null,
     errors: [],
     warnings: [],
   };
@@ -103,8 +112,9 @@ function parseLine(
     out.errors.push("nothing after ' | ' — add a token or drop the separator");
   if (out.title === '') out.errors.push('empty title');
 
-  const seen = new Set<'estimate' | 'category' | 'due'>();
-  const once = (kind: 'estimate' | 'category' | 'due', label: string): boolean => {
+  type Kind = 'estimate' | 'category' | 'due' | 'notes';
+  const seen = new Set<Kind>();
+  const once = (kind: Kind, label: string): boolean => {
     if (seen.has(kind)) {
       out.errors.push(`duplicate ${label} token — each is allowed once`);
       return false;
@@ -136,17 +146,46 @@ function parseLine(
       } else if (label !== null) {
         out.categoryLabel = label;
         const m = matchCategory(label, categories);
-        if (m.ambiguous) out.errors.push(`ambiguous category '${label}' — it matches more than one`);
+        if (m.ambiguous)
+          out.errors.push(`ambiguous category '${label}' — it matches more than one`);
         else if (m.unknown) out.warnings.push(`no category '${label}' — created without one`);
         else out.categoryId = m.id;
       }
+    } else if (/^notes:/i.test(tok)) {
+      if (!once('notes', 'notes')) continue;
+      if (!tok.startsWith('notes:')) {
+        out.errors.push(`use lowercase 'notes:' — got '${tok.slice(0, 6)}'`);
+        continue;
+      }
+      if (!tok.startsWith('notes:"')) {
+        out.errors.push('notes need quotes — use notes:"your text"');
+        continue;
+      }
+      const close = tok.indexOf('"', 7);
+      if (close === -1) {
+        out.errors.push('unterminated notes — close the quote: notes:"…"');
+        continue;
+      }
+      if (close !== tok.length - 1) {
+        out.errors.push(`notes can't contain '"' — reword it, or use ' instead`);
+        continue;
+      }
+      const value = tok.slice(7, -1).replace(/\\n/g, '\n').trim();
+      if (value === '') out.errors.push('empty notes — drop the token or add text');
+      else if (value.length > TASK_NOTES_MAX)
+        out.errors.push(
+          `notes are ${value.length.toLocaleString('en-US')} characters — the limit is ${TASK_NOTES_MAX.toLocaleString('en-US')}`,
+        );
+      else out.notes = value;
     } else if (tok.startsWith('due:')) {
       if (!once('due', 'due')) continue;
       const rest = tok.slice(4);
       if (!isDayKey(rest)) out.errors.push(`invalid due date '${tok}' — use due:YYYY-MM-DD`);
       else out.dueDay = rest;
     } else {
-      out.errors.push(`unrecognized token '${tok}' — expected ~<min>, #<label>, or due:YYYY-MM-DD`);
+      out.errors.push(
+        `unrecognized token '${tok}' — expected ~<min>, #<label>, due:YYYY-MM-DD, or notes:"…"`,
+      );
     }
   }
 
@@ -186,5 +225,6 @@ export function toCreateInputs(parse: BulkParse): CreateTaskInput[] {
     categoryId: l.categoryId,
     estimateMin: l.estimateMin,
     dueDay: l.dueDay,
+    notes: l.notes,
   }));
 }

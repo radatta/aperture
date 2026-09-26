@@ -172,11 +172,60 @@ describe('toCreateInputs', () => {
     const p = parse('first | ~30 #Admin due:2026-09-25\nsecond');
     const inputs = toCreateInputs(p);
     expect(inputs).toEqual([
-      { title: 'first', categoryId: 'c1', estimateMin: 30, dueDay: '2026-09-25' },
-      { title: 'second', categoryId: null, estimateMin: null, dueDay: null },
+      { title: 'first', categoryId: 'c1', estimateMin: 30, dueDay: '2026-09-25', notes: null },
+      { title: 'second', categoryId: null, estimateMin: null, dueDay: null, notes: null },
     ]);
   });
   it('leaves categoryId null for an unmatched label', () => {
     expect(toCreateInputs(parse('t | #Nope'))[0]!.categoryId).toBeNull();
+  });
+});
+
+describe('parseBulkTasks — notes token', () => {
+  it('parses notes in any position, with \\n as a newline', () => {
+    const l = only(
+      'finish 214 pset | ~90 #"Deep Work" due:2026-09-25 notes:"Ch. 4 q1-8\\n- q6 hint: use the lemma\\nhttps://example.edu/pset4"',
+    );
+    expect(l.errors).toEqual([]);
+    expect(l.estimateMin).toBe(90);
+    expect(l.categoryId).toBe('c2');
+    expect(l.notes).toBe('Ch. 4 q1-8\n- q6 hint: use the lemma\nhttps://example.edu/pset4');
+    const first = only('t | notes:"a b" ~15');
+    expect(first.notes).toBe('a b');
+    expect(first.estimateMin).toBe(15);
+  });
+  it('keeps tokens inside the quotes literal, and trims the value', () => {
+    const l = only('t | notes:"  ~30 #Admin due:2026-01-01 | x  "');
+    expect(l.errors).toEqual([]);
+    expect(l.notes).toBe('~30 #Admin due:2026-01-01 | x');
+    expect(l.estimateMin).toBeNull();
+    expect(l.categoryId).toBeNull();
+  });
+  it('flows into the create inputs', () => {
+    expect(toCreateInputs(parse('t | notes:"hi"'))[0]!.notes).toBe('hi');
+  });
+  it.each([
+    ['t | notes:"never closed', /unterminated notes/],
+    ['t | notes:""', /empty notes/],
+    ['t | notes:"  \\n "', /empty notes/],
+    ['t | notes:"say "hi" ok"', /can't contain '"'/],
+    ['t | notes:"a" notes:"b"', /duplicate notes/],
+    ['t | Notes:"a"', /lowercase 'notes:'/],
+    ['t | NOTES:"a"', /lowercase 'notes:'/],
+    ['t | notes:bare', /need quotes/],
+  ])('%j is red', (line, err) => {
+    const l = only(line);
+    expect(l.errors.some((e) => err.test(e))).toBe(true);
+  });
+  it('rejects notes over the cap after unescaping, and accepts exactly the cap', () => {
+    expect(only(`t | notes:"${'x'.repeat(4998)}\\ny"`).errors).toEqual([]); // \n counts as one
+    expect(only(`t | notes:"${'x'.repeat(5000)}"`).errors).toEqual([]);
+    expect(only(`t | notes:"${'x'.repeat(5000)}\\n"`).errors).toEqual([]); // trailing \n trimmed
+    expect(only(`t | notes:"${'x'.repeat(5001)}"`).errors[0]).toMatch(/5,001 characters/);
+  });
+  it('a notes: before the separator is part of the title', () => {
+    const l = only('read notes:"ch 4"');
+    expect(l.title).toBe('read notes:"ch 4"');
+    expect(l.notes).toBeNull();
   });
 });
