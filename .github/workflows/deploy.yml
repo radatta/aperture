@@ -1,7 +1,7 @@
 name: Deploy
 
-# GitHub Flow: push to main → dev then prod (both auto — no approval pause; the dev-deployment gate on
-# the main ruleset is the safety valve). Push to dev → one-off dev deploy.
+# GitHub Flow: push to main → dev then prod (both auto — no approval pause, and no merge-time deploy gate:
+# the PR's required checks are the only gate before main — INFRA §9). Push to dev → one-off dev deploy.
 # Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
 # changes → deploy each stage at the resulting tier. Exception: an app-only push to dev deploys straight
@@ -35,11 +35,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need history to diff the push and to check ancestry against main
-      # On any non-main push (i.e. dev), require the branch to already contain main. This is the
-      # chokepoint for the merge gate: you push here to record the dev deployment that
-      # `required_deployments:[dev]` needs, then PR that same SHA to main — so if it's current with main
-      # now, the PR is inherently up to date. A stale branch fails here → no dev deployment recorded →
-      # the gate stays closed. No-op on main pushes (HEAD already is main).
+      # On any non-main push (i.e. dev), require the branch to already contain main: dev should only ever run
+      # code that already has main in it, so what you validate there is what a squash-merge would produce. A
+      # stale branch fails here → deploy-dev (needs: changes) is skipped. No-op on main pushes (HEAD already
+      # is main). (Until 2026-09-10 this also kept the since-retired `required_deployments:[dev]` merge gate
+      # closed — INFRA §9.)
       - name: Branch is up to date with main
         if: github.ref != 'refs/heads/main'
         run: |
@@ -47,9 +47,10 @@ jobs:
           git merge-base --is-ancestor origin/main HEAD || {
             echo "::error::dev is behind main — merge/rebase main in before pushing"; exit 1
           }
-      # docs-only → none (deploy job still runs in its environment, so the deployment is still recorded
-      # for the merge gate — nothing is actually deployed). app/** only → app. Anything else, or an
-      # indeterminate base → full. The rule is a tested module, not an inline regex (see the classifier).
+      # docs-only → none (nothing is built or deployed; the deploy job still runs in its environment, so GitHub
+      # records a deployment that deploys nothing — a vestige of the retired required_deployments gate, INFRA §9).
+      # app/** only → app. Anything else, or an indeterminate base → full. The rule is a tested module, not an
+      # inline regex (see the classifier).
       # No pnpm/setup-node/install (~20s): the classifier imports only node:fs, and the runner image's
       # default Node (22.23.2 on ubuntu-24.04) strips TypeScript types natively. The constraints that puts
       # on the classifier are in its header. `node --version` makes a runner-image Node change diagnosable.

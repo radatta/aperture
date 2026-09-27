@@ -114,10 +114,9 @@ export class ApertureCicdStack extends Stack {
       return role;
     };
 
-    // dev: the `deploy-dev` job always runs in the `dev` GitHub environment (so it records a deployment for
-    // the `required_deployments: [dev]` branch ruleset), which makes its OIDC sub `…:environment:dev` on
-    // BOTH the `dev`- and `main`-branch pushes. That's the only path that assumes this role, so the trust is
-    // scoped to the environment alone. (The old `ref:refs/heads/{dev,main}` subs were a cutover superset,
+    // dev: the `deploy-dev` job always runs in the `dev` GitHub environment, which makes its OIDC sub
+    // `…:environment:dev` on BOTH the `dev`- and `main`-branch pushes. That's the only path that assumes
+    // this role, so the trust is scoped to the environment alone. (The old `ref:refs/heads/{dev,main}` subs were a cutover superset,
     // pruned 2026-08 once every deploy-dev run was confirmed environment-scoped.) The `dev` environment must
     // allow the `dev` AND `main` branches, since deploy-dev runs from both.
     const devRole = makeRole(
@@ -126,7 +125,8 @@ export class ApertureCicdStack extends Stack {
       [`repo:${githubSubject}:environment:dev`],
       'dev',
     );
-    // prod: environment-based — only a job running in the approval-gated `prod` environment gets this sub.
+    // prod: environment-based — only a job running in the `prod` environment gets this sub (no
+    // required reviewers are configured on it today — INFRA §9 caveat).
     const prodRole = makeRole(
       'DeployProd',
       'aperture-github-deploy-prod',

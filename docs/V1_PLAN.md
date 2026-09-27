@@ -439,8 +439,8 @@ the raw URL useless — INFRA §4.)*
 `cdk/lib/cicd-stack.ts`.
 **Depends on:** Phase 12. **Implements:** INFRA §9, CONVENTIONS (pnpm/Vitest in CI).
 **Trade-off:** manual approval before prod is the guardrail on the `RETAIN` data stack — an app bug
-can't silently reach real data. *(As built: the `required_deployments:[dev]` merge gate is the guardrail
-instead — INFRA §9.)*
+can't silently reach real data. *(As built: no manual approval. A `required_deployments:[dev]` merge gate stood in for it until it was
+switched off 2026-09-10, so now the PR's required checks are the only gate and dev → prod is automatic. INFRA §9.)*
 **Status: LIVE (2026-08).** Roles (assume-bootstrap-roles), workflows, and smoke runner built + green;
 dev + prod deployed. Prod trust bound to the `prod` GitHub environment (scopes the prod role to
 `environment:prod` jobs). Account/GitHub setup done: `ApertureCicd` deployed, repo vars (role ARNs,

@@ -100,7 +100,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 - **`github-actions`** ecosystem, `directory: "/"`, weekly, one group matching `"*"` → all action bumps in a single weekly PR (keeps `aws-actions/configure-aws-credentials`, `pnpm/action-setup`, `actions/*` current).
 - **`npm`** ecosystem, `directory: "/"`, `open-pull-requests-limit: 0` → suppresses routine version updates so **only security PRs** come through (security updates ignore the limit). Dependabot's npm updater handles the pnpm workspace / `pnpm-lock.yaml`.
-- **Merge workflow for a Dependabot PR** (the real friction, from the `required_deployments:[dev]` ruleset): Dependabot can't push to `dev` to record the required dev deployment, so — (a) push the PR's SHA to `dev` first (triggers `deploy-dev`, records the deployment, must pass the "Branch is up to date with main" step in deploy.yml's `changes` job), then (b) merge to main. No restricted-secret concern (deploy is push-triggered).
+- **Merge workflow for a Dependabot PR:** merge normally once the required checks pass. (While the `required_deployments:[dev]` rule was enforced — retired 2026-09-10, INFRA §9 — Dependabot couldn't record the dev deployment itself, so the PR's SHA had to be pushed to `dev` first, passing the "Branch is up to date with main" step in deploy.yml's `changes` job; that is now optional, useful only to validate an action bump on real infra.) No restricted-secret concern (deploy is push-triggered).
 
 ## Item 5 — CloudWatch alarms (prod-only)
 
