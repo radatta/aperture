@@ -51,6 +51,8 @@ export function RulesSection() {
             const name = FINANCE_BUCKET_LABELS[bucket];
             if (existing && existing.bucket === bucket && existing.active) {
               setNote(`“${key}” already sorts into ${name}.`);
+              patternRef.current?.select(); // like a save: back in the field, ready to retype
+              patternRef.current?.focus();
               return;
             }
             upsert.mutate(
@@ -87,7 +89,10 @@ export function RulesSection() {
           <Select
             label="Sort into"
             value={bucket}
-            onChange={(e) => setBucket(e.target.value as FinanceBucket)}
+            onChange={(e) => {
+              setBucket(e.target.value as FinanceBucket);
+              setNote(null);
+            }}
             options={BUCKET_OPTIONS}
             className="w-36"
           />
@@ -100,13 +105,14 @@ export function RulesSection() {
           >
             Add rule
           </Button>
-          {note && (
-            <div role="status" className="basis-full">
+          {/* Always mounted: a live region announces text added to it, not a region that appears. */}
+          <div role="status" className="basis-full empty:hidden">
+            {note && (
               <Text size="sm" tone="muted">
                 {note}
               </Text>
-            </div>
-          )}
+            )}
+          </div>
           {upsert.isError && (
             <Text size="sm" tone="danger" className="basis-full">
               Couldn&apos;t save the rule — try again.

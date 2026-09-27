@@ -565,7 +565,9 @@ describe('Finances page', () => {
     await user.selectOptions(screen.getByLabelText('Sort into'), 'i_pay');
     await user.click(screen.getByRole('button', { name: 'Add rule' }));
     expect(await screen.findByText('“netflix” already sorts into I pay.')).toBeTruthy();
+    expect(document.activeElement).toBe(input);
     await user.selectOptions(screen.getByLabelText('Sort into'), 'budget');
+    expect(screen.queryByText(/already sorts/)).toBeNull(); // the note no longer describes the form
     await user.click(screen.getByRole('button', { name: 'Add rule' }));
     expect(await screen.findByText('Updated “netflix”: Budget (was I pay).')).toBeTruthy();
     expect((await api.listFinanceRules()).map((r) => r.bucket)).toEqual(['budget']);
