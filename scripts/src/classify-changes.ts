@@ -7,7 +7,10 @@
 // The rule only ever executed in a real deploy, so nothing caught it. Living here, `pnpm test`
 // exercises it on every PR.
 //
-// Run: `tsx src/classify-changes.ts` — reads newline-separated paths on stdin, prints the tier.
+// Run: `node scripts/src/classify-changes.ts` (what CI does — the runner's Node 22 strips types natively,
+// no install) or `tsx src/classify-changes.ts`. Reads newline-separated paths on stdin, prints the tier.
+// Because CI runs it without tsx: erasable syntax only (enforced by `erasableSyntaxOnly` in
+// scripts/tsconfig.json) and node: builtins only — no workspace or npm imports.
 import { readFileSync } from 'node:fs';
 
 export type Tier = 'none' | 'app' | 'full';
