@@ -32,7 +32,6 @@ import type {
 import type { Repo } from '../ddb/repo';
 import type { PlaidGateway } from '../plaid/gateway';
 import type { FinanceSyncInvoker } from './invoker';
-import { upsertAccounts } from './sync';
 
 export interface FinanceServiceDeps {
   repo: Repo;
@@ -60,8 +59,9 @@ export class FinanceService {
   private txnUpdate(
     id: string,
     fn: (t: FinanceTransaction) => FinanceTransaction | null,
+    opts: { allowDeleted?: boolean } = {},
   ): Promise<FinanceTransaction> {
-    return this.repo.casUpdate(this.repo.finTxnShape(id), id, fn, this.d.now());
+    return this.repo.casUpdate(this.repo.finTxnShape(id), id, fn, this.d.now(), opts);
   }
 
   async getFinanceOverview(input: { today: string }): Promise<FinanceOverview> {
@@ -99,21 +99,31 @@ export class FinanceService {
     for (const id of input.ids)
       if (found.get(id)?.deletedAt !== null) throw new Error(`Not found: ${id}`);
     const changed = new Map<string, FinanceTransaction>();
+    // A row a sync tombstoned since the check above (a pending charge that posted) is skipped, not an
+    // error halfway through — its posted replacement carries the old row's fields anyway.
     const set = await this.repo.casMany(input.ids, (id) =>
-      this.txnUpdate(id, (t) => ({
-        ...t,
-        bucket: input.bucket,
-        bucketSetBy: input.bucket ? 'user' : null,
-        refundOfId: null, // sorting a refund yourself unlinks it
-      })),
+      this.txnUpdate(
+        id,
+        (t) =>
+          t.deletedAt !== null
+            ? null
+            : {
+                ...t,
+                bucket: input.bucket,
+                bucketSetBy: input.bucket ? 'user' : null,
+                refundOfId: null, // sorting a refund yourself unlinks it
+              },
+        { allowDeleted: true },
+      ),
     );
-    for (const t of set) changed.set(t.id, t);
+    for (const t of set) if (t.deletedAt === null) changed.set(t.id, t);
     if (input.rule && input.bucket) {
       const rule = await this.upsertFinanceRule({
         pattern: input.rule.pattern,
         bucket: input.bucket,
       });
       const sweepable = (x: FinanceTransaction) =>
+        x.deletedAt === null &&
         x.bucket === null &&
         x.refundOfId === null &&
         !x.startsPeriod &&
@@ -124,12 +134,16 @@ export class FinanceService {
       // Re-checked on the fresh row: a row sorted meanwhile is left alone (and not reported).
       const wrote = new Set<string>();
       const swept = await this.repo.casMany(targets, (x) =>
-        this.txnUpdate(x.id, (t) => {
-          const ok = sweepable(t);
-          if (ok) wrote.add(t.id);
-          else wrote.delete(t.id);
-          return ok ? { ...t, bucket: rule.bucket, bucketSetBy: 'rule' } : null;
-        }),
+        this.txnUpdate(
+          x.id,
+          (t) => {
+            const ok = sweepable(t);
+            if (ok) wrote.add(t.id);
+            else wrote.delete(t.id);
+            return ok ? { ...t, bucket: rule.bucket, bucketSetBy: 'rule' } : null;
+          },
+          { allowDeleted: true },
+        ),
       );
       for (const t of swept) if (wrote.has(t.id)) changed.set(t.id, t);
     }
@@ -253,14 +267,16 @@ export class FinanceService {
 
   async createPlaidLinkToken(input: CreateLinkTokenInput): Promise<LinkTokenResult> {
     if (input.mode === 'update') await this.mustItem(input.itemId);
-    const linkToken = await this.d.plaid.createLinkToken({ userId: this.d.userId, ...input });
+    // The caller's user id always wins — an RPC argument can't pick whose Plaid user this is.
+    const linkToken = await this.d.plaid.createLinkToken({ ...input, userId: this.d.userId });
     return { linkToken, environment: this.d.plaid.environment };
   }
 
   // The duplicate guard runs BEFORE the exchange: a Trial slot never comes back. Right after the
-  // exchange the item row is written, so a later failure leaves a visible, removable item — never an
-  // orphaned Plaid login. The sync state is stamped (`syncRequestedAt`) before the invoke, so the page
-  // reads `syncing` until the first run reports.
+  // exchange the item row and a fresh, stamped sync state are written — nothing else can fail in
+  // between — so the login is visible, removable and Refresh-able whatever happens next, and the page
+  // reads `syncing` until the first run reports. Accounts come from that first sync (it reads them
+  // before any transaction), not from here: one less Plaid call inside the BFF's 15 s.
   async exchangePlaidPublicToken(input: ExchangePublicTokenInput): Promise<FinanceItem> {
     const [items, accounts] = await Promise.all([
       this.repo.listFinanceItems(),
@@ -293,13 +309,6 @@ export class FinanceService {
       t,
       { allowDeleted: true, create: () => item },
     );
-    await upsertAccounts(
-      this.repo,
-      this.d.userId,
-      itemId,
-      await this.d.plaid.accountsGet(itemId),
-      t,
-    );
     // A connect always starts from a clean state (no cursor) — also when re-linking a removed login.
     const fresh = this.freshState(itemId, t);
     await this.repo.casUpdate(
@@ -313,18 +322,11 @@ export class FinanceService {
     return (await this.repo.getFinanceItem(itemId)) ?? saved;
   }
 
-  // Update mode finished: re-read the roster (an account added or dropped in Link), the item's health,
-  // then sync — stamped first, like a connect.
+  // Update mode finished: the login works again; sync — stamped first, like a connect. The sync re-reads
+  // the roster (an account added or dropped in Link) and the item's health before any transaction.
   async completePlaidUpdate(itemId: string): Promise<FinanceItem> {
     await this.mustItem(itemId);
     const t = this.d.now();
-    await upsertAccounts(
-      this.repo,
-      this.d.userId,
-      itemId,
-      await this.d.plaid.accountsGet(itemId),
-      t,
-    );
     await this.repo.casUpdate(
       this.repo.finItemShape(itemId),
       itemId,
@@ -345,7 +347,13 @@ export class FinanceService {
     const t = this.d.now();
     const accounts = (await this.repo.listFinanceAccounts()).filter((a) => a.itemId === itemId);
     await this.repo.casMany(accounts, (a) =>
-      this.repo.casUpdate(this.repo.finAcctShape(a.id), a.id, (x) => ({ ...x, deletedAt: t }), t),
+      this.repo.casUpdate(
+        this.repo.finAcctShape(a.id),
+        a.id,
+        (x) => (x.deletedAt !== null ? null : { ...x, deletedAt: t }),
+        t,
+        { allowDeleted: true },
+      ),
     );
     if (await this.repo.getFinanceSyncState(itemId))
       await this.repo.casUpdate(
@@ -363,17 +371,20 @@ export class FinanceService {
     );
   }
 
+  // Based on the linked banks, not their sync rows: a bank whose state row is missing (a failure right
+  // after connecting) gets one here, so Refresh can always recover it.
   async requestFinanceSync(input: { refresh: boolean }): Promise<RequestFinanceSyncResult> {
     const t = this.d.now();
-    const states = await this.repo.listFinanceSyncStates();
-    if (states.length === 0) return { accepted: false, nextAllowedAt: null };
+    const items = await this.repo.listFinanceItems();
+    if (items.length === 0) return { accepted: false, nextAllowedAt: null };
     if (input.refresh) {
+      const states = await this.repo.listFinanceSyncStates();
       const last = Math.max(...states.map((s) => s.refreshRequestedAt ?? -Infinity));
       if (t - last < FINANCE_REFRESH_COOLDOWN_MS)
         return { accepted: false, nextAllowedAt: last + FINANCE_REFRESH_COOLDOWN_MS };
     }
     await this.stampRequest(
-      states.map((s) => s.itemId),
+      items.map((i) => i.id),
       t,
       input.refresh,
     );
@@ -416,6 +427,12 @@ export class FinanceService {
           refreshRequestedAt: refresh ? t : s.refreshRequestedAt,
         }),
         t,
+        {
+          create: () => ({
+            ...this.freshState(itemId, t),
+            refreshRequestedAt: refresh ? t : null,
+          }),
+        },
       ),
     );
   }

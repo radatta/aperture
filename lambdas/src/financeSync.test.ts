@@ -82,6 +82,35 @@ describe('finance sync Lambda edge', () => {
     expect(clock).toBeLessThanOrEqual(deadline);
   });
 
+  it('testMode after real data: a scheduled run reads nothing from Plaid and writes nothing', async () => {
+    const doc = new InMemoryDoc();
+    const plaid = new InMemoryPlaid({ today: () => '2026-09-26' });
+    await plaid.exchangePublicToken('p');
+    await doc.put(
+      entityItem('u1', sk.finItem(FIXTURE_ITEM_ID), {
+        id: FIXTURE_ITEM_ID,
+        userId: 'u1',
+        createdAt: 1,
+        updatedAt: 1,
+        deletedAt: null,
+        institutionId: 'ins',
+        institutionName: 'Bank',
+        status: 'ok',
+        errorCode: null,
+        consentExpiresAt: null,
+        lastSuccessfulUpdateAt: null,
+        lastFailedUpdateAt: null,
+        consentedProducts: ['transactions'],
+      }),
+    );
+    await handleFinanceSync(doc, plaid, { userId: 'u1', mode: 'scheduled' });
+    const before = doc.snapshot();
+    plaid.calls.length = 0;
+    await handleFinanceSync(doc, plaid, { userId: 'u1', mode: 'scheduled', testMode: true });
+    expect(plaid.calls).toEqual([]);
+    expect(doc.snapshot()).toEqual(before);
+  });
+
   it('testMode: no Plaid, no writes', async () => {
     const doc = new InMemoryDoc();
     const plaid = new InMemoryPlaid({ today: () => '2026-09-26' });

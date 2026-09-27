@@ -9,11 +9,12 @@ import {
 import type { FinanceAccountPatch } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { pk, sk } from './ddb/keys';
+import { financeTxnItem } from './ddb/mapping';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
-import { inlineInvoker } from './finance/invoker';
+import { inlineInvoker, noopInvoker } from './finance/invoker';
 import type { FinanceSyncEvent } from './finance/sync';
 import { runFinanceSync } from './finance/sync';
 import { InMemoryPlaid } from './plaid/gateway';
@@ -75,13 +76,75 @@ describe('finance backend', () => {
     expect(methods().filter((m) => m === 'exchangePublicToken').length).toBe(exchanges);
   });
 
-  it('a failure right after the exchange leaves a visible, removable item', async () => {
-    plaid.failNext('accountsGet', 'INTERNAL_SERVER_ERROR');
-    await expect(connect()).rejects.toThrow();
-    const o = await api.getFinanceOverview({ today: todayKey(4, now()) });
+  it('connect makes no Plaid call past the exchange — the sync reads the accounts', async () => {
+    const quiet = new BackendClient(new Repo(doc, liveWrites(doc), U), {
+      userId: U,
+      now,
+      plaid,
+      financeInvoker: noopInvoker(),
+    });
+    await quiet.exchangePlaidPublicToken({
+      publicToken: 'public-1',
+      institution: FIXTURE_INSTITUTION,
+      accounts: FIXTURE_LINK_ACCOUNTS,
+    });
+    expect(methods()).toEqual(['exchangePublicToken']);
+    const o = await quiet.getFinanceOverview({ today: todayKey(4, now()) });
     expect(o.items.map((i) => i.id)).toEqual([FIXTURE_ITEM_ID]);
-    await api.removePlaidItem(FIXTURE_ITEM_ID);
-    expect(plaid.tokens.size).toBe(0);
+    expect(o.sync.syncing).toBe(true); // stamped before the invoke
+  });
+
+  it('a first sync that fails right after connecting leaves a bank Refresh can fix', async () => {
+    plaid.failNext('accountsGet', 'INTERNAL_SERVER_ERROR');
+    const item = await connect(); // the sync failed inside; the connect itself succeeded
+    expect(item.id).toBe(FIXTURE_ITEM_ID);
+    const today = todayKey(4, now());
+    expect((await api.getFinanceOverview({ today })).sync.items[0]).toMatchObject({
+      lastError: 'INTERNAL_SERVER_ERROR',
+    });
+    expect((await api.requestFinanceSync({ refresh: false })).accepted).toBe(true);
+    const o = await api.getFinanceOverview({ today });
+    expect(o.sync.items[0]).toMatchObject({ lastError: null });
+    expect(o.accounts).toHaveLength(3);
+  });
+
+  it('Refresh recovers a bank whose sync state row is missing', async () => {
+    await connect();
+    await doc.delete(pk(U), sk.finSync(FIXTURE_ITEM_ID));
+    expect((await api.requestFinanceSync({ refresh: false })).accepted).toBe(true);
+    const o = await api.getFinanceOverview({ today: todayKey(4, now()) });
+    expect(o.sync.items).toHaveLength(1);
+    expect(o.sync.lastSyncedAt).not.toBeNull();
+  });
+
+  it('an "Always" sort skips a row a sync tombstoned meanwhile instead of failing halfway', async () => {
+    await connect();
+    const today = todayKey(4, now());
+    const txns = await api.listFinanceTransactions({ from: '2000-01-01', to: today });
+    const uber = txns.filter((t) => t.merchantName === 'Uber');
+    const victim = uber[1]!;
+    // A sync tombstones one sweep target between the list and the write.
+    const row = (await new Repo(doc, liveWrites(doc), U).getFinanceTxn(victim.id))!;
+    doc.interceptNextPutIf(pk(U), sk.finTxn(victim.id), () =>
+      doc.putNow(financeTxnItem(U, { ...row, deletedAt: 5, updatedAt: row.updatedAt + 1 })),
+    );
+    const changed = await api.setFinanceBucket({
+      ids: [uber[0]!.id],
+      bucket: 'i_pay',
+      rule: { pattern: 'uber' },
+    });
+    expect(changed.map((t) => t.id)).not.toContain(victim.id);
+    expect((await api.listFinanceRules()).map((r) => r.pattern)).toEqual(['uber']);
+    const after = await new Repo(doc, liveWrites(doc), U).getFinanceTxn(victim.id);
+    expect(after!.deletedAt).toBe(5); // not revived
+  });
+
+  it('the link token is always for the caller, whatever the RPC args say', async () => {
+    await api.createPlaidLinkToken({ mode: 'connect', userId: 'evil' } as unknown as Parameters<
+      typeof api.createPlaidLinkToken
+    >[0]);
+    const call = plaid.calls.find((c) => c.method === 'createLinkToken')!;
+    expect((call.detail as { userId: string }).userId).toBe(U);
   });
 
   it('remove revokes at Plaid and tombstones; an unknown or removed id makes no Plaid call', async () => {
@@ -160,6 +223,32 @@ describe('finance backend', () => {
     expect([s.financeBudgetCents, s.financePaymentDay]).toEqual([60000, 20]);
     const o = await api.getFinanceOverview({ today: todayKey(4, now()) });
     expect(o.leftCents).toBe(60000);
+  });
+
+  it('testMode on REAL data: nothing reaches Plaid, nothing is written, nothing is invoked', async () => {
+    await connect();
+    const today = todayKey(4, now());
+    const [first] = await api.listFinanceTransactions({ from: '2000-01-01', to: today });
+    const before = doc.snapshot();
+    plaid.calls.length = 0;
+    invoked = [];
+    const call = (method: string, args: unknown[]) =>
+      handleRpc(
+        doc,
+        { userId: U, method, args, now, testMode: true },
+        { plaid, financeInvoker: inlineInvoker(async (e) => void invoked.push(e)) },
+      );
+    await call('requestFinanceSync', [{ refresh: true }]);
+    await call('completePlaidUpdate', [FIXTURE_ITEM_ID]).catch(() => {});
+    await call('setFinanceBucket', [
+      { ids: [first!.id], bucket: 'budget', rule: { pattern: 'x' } },
+    ]);
+    await call('updateFinanceAccount', [FIXTURE_ACCOUNT_IDS.card, { hidden: true }]);
+    await call('setFinancePeriodStart', [first!.id, false]);
+    await call('removePlaidItem', [FIXTURE_ITEM_ID]);
+    expect(plaid.calls).toEqual([]);
+    expect(invoked).toEqual([]);
+    expect(doc.snapshot()).toEqual(before);
   });
 
   it('testMode: finance calls reach no Plaid and write nothing', async () => {
