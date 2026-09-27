@@ -9,7 +9,7 @@ import {
 import type { FinanceAccountPatch } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { pk, sk } from './ddb/keys';
-import { financeTxnItem } from './ddb/mapping';
+import { entityItem, financeTxnItem } from './ddb/mapping';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { BackendClient } from './backend';
@@ -110,6 +110,39 @@ describe('finance backend', () => {
     const o = await api.getFinanceOverview({ today });
     expect(o.sync.items[0]).toMatchObject({ lastError: null });
     expect(o.accounts).toHaveLength(3);
+  });
+
+  it('Refresh with a tombstoned sync row (a half-done remove) skips it instead of failing', async () => {
+    await connect();
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const row = (await repo.getFinanceSyncState(FIXTURE_ITEM_ID))!;
+    doc.putNow(
+      entityItem(U, sk.finSync(FIXTURE_ITEM_ID), {
+        ...row,
+        deletedAt: 5,
+        updatedAt: row.updatedAt + 1,
+      }),
+    );
+    invoked.length = 0;
+    expect((await api.requestFinanceSync({ refresh: false })).accepted).toBe(true);
+    expect(invoked).toHaveLength(1);
+  });
+
+  it('removing a bank again sweeps accounts a half-done remove left alive, with no Plaid call', async () => {
+    await connect();
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const item = (await repo.getFinanceItem(FIXTURE_ITEM_ID))!;
+    doc.putNow(
+      entityItem(U, sk.finItem(FIXTURE_ITEM_ID), {
+        ...item,
+        deletedAt: 5,
+        updatedAt: item.updatedAt + 1,
+      }),
+    );
+    plaid.calls.length = 0;
+    await api.removePlaidItem(FIXTURE_ITEM_ID);
+    expect(plaid.calls).toEqual([]);
+    expect(await repo.listFinanceAccounts()).toEqual([]);
   });
 
   it('Refresh recovers a bank whose sync state row is missing', async () => {

@@ -32,6 +32,7 @@ import type {
 import type { Repo } from '../ddb/repo';
 import type { PlaidGateway } from '../plaid/gateway';
 import type { FinanceSyncInvoker } from './invoker';
+import { buryAccounts } from './sync';
 
 export interface FinanceServiceDeps {
   repo: Repo;
@@ -338,37 +339,33 @@ export class FinanceService {
     return this.mustItem(itemId);
   }
 
-  // Unknown or already-removed → a no-op with no Plaid call. Otherwise revoke at Plaid FIRST (it's
-  // idempotent), then tombstone the rows — a failed revoke leaves the item visible to retry.
+  // Unknown → a no-op; already removed → no Plaid call, only a sweep of accounts a half-done remove
+  // left. Otherwise revoke at Plaid FIRST (it's idempotent), then tombstone — a failed revoke leaves
+  // the item visible to retry. Order: sync state (kills the lock), item, accounts LAST — so a sync
+  // that upserts accounts after this sweep finishes after the state tombstone too, sees "removed",
+  // and buries them itself (sync.ts buryAccounts).
   async removePlaidItem(itemId: string): Promise<void> {
     const item = await this.repo.getFinanceItem(itemId);
-    if (!item || item.deletedAt !== null) return;
-    await this.d.plaid.itemRemove(itemId);
-    const t = this.d.now();
-    const accounts = (await this.repo.listFinanceAccounts()).filter((a) => a.itemId === itemId);
-    await this.repo.casMany(accounts, (a) =>
-      this.repo.casUpdate(
-        this.repo.finAcctShape(a.id),
-        a.id,
-        (x) => (x.deletedAt !== null ? null : { ...x, deletedAt: t }),
-        t,
-        { allowDeleted: true },
-      ),
-    );
-    if (await this.repo.getFinanceSyncState(itemId))
+    if (!item) return;
+    if (item.deletedAt === null) {
+      await this.d.plaid.itemRemove(itemId);
+      const t = this.d.now();
+      if (await this.repo.getFinanceSyncState(itemId))
+        await this.repo.casUpdate(
+          this.repo.finSyncShape(itemId),
+          itemId,
+          (s) => ({ ...s, deletedAt: t, lockedUntil: null }),
+          t,
+          { allowDeleted: true },
+        );
       await this.repo.casUpdate(
-        this.repo.finSyncShape(itemId),
+        this.repo.finItemShape(itemId),
         itemId,
-        (s) => ({ ...s, deletedAt: t, lockedUntil: null }),
+        (i) => ({ ...i, deletedAt: t }),
         t,
-        { allowDeleted: true },
       );
-    await this.repo.casUpdate(
-      this.repo.finItemShape(itemId),
-      itemId,
-      (i) => ({ ...i, deletedAt: t }),
-      t,
-    );
+    }
+    await buryAccounts(this.repo, itemId, this.d.now());
   }
 
   // Based on the linked banks, not their sync rows: a bank whose state row is missing (a failure right
@@ -421,13 +418,19 @@ export class FinanceService {
       this.repo.casUpdate(
         this.repo.finSyncShape(itemId),
         itemId,
-        (s) => ({
-          ...s,
-          syncRequestedAt: t,
-          refreshRequestedAt: refresh ? t : s.refreshRequestedAt,
-        }),
+        // A tombstoned row (a remove half-done, or a stale item list) is skipped, not an error that
+        // would stop the other banks' stamps and the invoke.
+        (s) =>
+          s.deletedAt !== null
+            ? null
+            : {
+                ...s,
+                syncRequestedAt: t,
+                refreshRequestedAt: refresh ? t : s.refreshRequestedAt,
+              },
         t,
         {
+          allowDeleted: true,
           create: () => ({
             ...this.freshState(itemId, t),
             refreshRequestedAt: refresh ? t : null,

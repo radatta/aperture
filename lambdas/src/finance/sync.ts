@@ -213,6 +213,7 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
   const renew = () => renewLock(ctx, itemId, lock);
   let passStart = t;
   let refresh = claim;
+  const wroteAccounts = new Set<string>();
 
   for (;;) {
     report.passes++;
@@ -223,7 +224,7 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       const item = await repo.getFinanceItem(itemId, { consistent: true });
       if (!item || item.deletedAt !== null) throw new RemovedError();
       guard(ctx, itemId, 'accounts');
-      const before = await refreshAccountsAndHealth(ctx, itemId, passStart);
+      const before = await refreshAccountsAndHealth(ctx, itemId, passStart, wroteAccounts);
       if (refresh) {
         try {
           guard(ctx, itemId, 'refresh');
@@ -264,7 +265,10 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       if (pass.status === 'NOT_READY') throw new PlaidApiError('PRODUCT_NOT_READY');
       result = { ok: true };
     } catch (err) {
-      if (err instanceof RemovedError) return { ...report, outcome: 'removed' };
+      if (err instanceof RemovedError) {
+        await buryAccounts(repo, itemId, now(), wroteAccounts);
+        return { ...report, outcome: 'removed' };
+      }
       if (err instanceof LockLostError) return { ...report, outcome: 'error', code: 'LOCK_LOST' };
       const code = codeOf(err);
       result = { ok: false, code };
@@ -383,7 +387,10 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
           reason: report.passes >= MAX_PASSES ? 'cap' : 'deadline',
         }),
       );
-    if (fin.decision === 'removed') return { ...report, outcome: 'removed' };
+    if (fin.decision === 'removed') {
+      await buryAccounts(repo, itemId, now(), wroteAccounts);
+      return { ...report, outcome: 'removed' };
+    }
     if (fin.decision === 'lost') return { ...report, outcome: 'error', code: 'LOCK_LOST' };
     if (fin.decision === 'rerun') {
       passStart = fin.nextStart;
@@ -419,16 +426,19 @@ function blankState(userId: string, itemId: string, t: number): FinanceSyncState
 async function renewLock(ctx: Ctx, itemId: string, lock: { token: number }): Promise<void> {
   const t = ctx.now();
   let lost = false;
+  let removed = false;
   const out = await ctx.repo.casUpdate(
     ctx.repo.finSyncShape(itemId),
     itemId,
     (fresh) => {
-      lost = fresh.deletedAt !== null || fresh.lockedUntil !== lock.token;
+      removed = fresh.deletedAt !== null;
+      lost = removed || fresh.lockedUntil !== lock.token;
       return lost ? null : { ...fresh, lockedUntil: t + FINANCE_SYNC_LOCK_MS };
     },
     t,
     { consistent: true, allowDeleted: true },
   );
+  if (removed) throw new RemovedError();
   if (lost) throw new LockLostError();
   lock.token = out.lockedUntil!;
 }
@@ -578,11 +588,13 @@ async function refreshAccountsAndHealth(
   ctx: Ctx,
   itemId: string,
   since: number,
+  wrote: Set<string>,
 ): Promise<PlaidItemHealth> {
   const [accounts, health] = await Promise.all([
     ctx.plaid.accountsGet(itemId),
     ctx.plaid.itemGet(itemId),
   ]);
+  for (const a of accounts) wrote.add(a.account_id); // before the writes: a failure midway still counts
   await upsertAccounts(ctx.repo, ctx.userId, itemId, accounts, since, { since });
   await applyItemHealth(ctx.repo, itemId, health, since);
   return health;
@@ -648,6 +660,30 @@ export async function upsertAccounts(
       (fresh) => (fresh.deletedAt !== null ? null : { ...fresh, deletedAt: t }),
       t,
       { allowDeleted: true },
+    ),
+  );
+}
+
+// A bank removed while this run wrote its accounts: tombstone whatever it left alive. The remove
+// tombstones accounts last, so any upsert that beat that sweep is caught here (the finish saw the
+// state tombstone, which the remove writes first). `wrote`: the ids this run upserted — read
+// consistently, since the list query may not see a write this fresh.
+export async function buryAccounts(
+  repo: Repo,
+  itemId: string,
+  t: number,
+  wrote: Iterable<string> = [],
+): Promise<void> {
+  const listed = (await repo.listFinanceAccounts()).filter((a) => a.itemId === itemId);
+  const ids = [...new Set([...listed.map((a) => a.id), ...wrote])];
+  await repo.casMany(ids, (id) =>
+    repo.casUpdate(
+      repo.finAcctShape(id),
+      id,
+      (fresh) =>
+        fresh.deletedAt !== null || fresh.itemId !== itemId ? null : { ...fresh, deletedAt: t },
+      t,
+      { allowDeleted: true, consistent: true },
     ),
   );
 }

@@ -490,6 +490,28 @@ describe('runFinanceSync — the review findings', () => {
     expect(count('transactionsSync')).toBe(2); // the first run's two pages; none after the removal
   });
 
+  it('A10: a remove whose tombstones predate the pass still leaves no account revived', async () => {
+    await link();
+    await run();
+    const real = plaid.accountsGet.bind(plaid);
+    plaid.accountsGet = async (id) => {
+      const accounts = await real(id);
+      // The remove's writes carry an older clock than this pass's start (skew, or a slow remove).
+      for (const row of doc.snapshot())
+        if (/^fin#(item|sync|acct)#/.test(row.SK))
+          doc.putNow({
+            ...row,
+            deletedAt: clock - 1000,
+            ...(row.SK.startsWith('fin#sync#') ? { lockedUntil: null } : {}),
+            updatedAt: (row.updatedAt as number) + 1,
+          } as Item);
+      return accounts;
+    };
+    const [r] = await run();
+    expect(r!.outcome).toBe('removed');
+    expect(await repo.listFinanceAccounts()).toEqual([]);
+  });
+
   it('a run that lost its lock stops and writes nothing more', async () => {
     await link();
     await run();
