@@ -7,7 +7,7 @@ name: Deploy stage
 # `mode` gates the work:
 #   none → record the deployment only (the job still runs in `environment:`, satisfying the main
 #          ruleset's required_deployments; nothing is built or deployed — the docs-only fast-path)
-#   app  → frontend only: fetch stack outputs, build, S3 sync, invalidate, health check. No CDK.
+#   app  → frontend only: fetch stack outputs, build, S3 sync, invalidate (not awaited), health check. No CDK.
 #   full → everything: cdk synth/diff/deploy (writes the outputs file) + smoke, then publish + health.
 on:
   workflow_call:
@@ -49,6 +49,13 @@ jobs:
     # Records a GitHub deployment against this stage → satisfies `required_deployments: [dev]` on main,
     # AND scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to).
     environment: ${{ inputs.stage }}
+    # One deploy per STAGE at a time, across refs. The caller's workflow-level group is per ref, so a main
+    # push (which deploys dev first) and a dev push could otherwise hit the dev stack at once. Queue, never
+    # cancel — a half-applied stack is worse than a wait. At most two jobs contend (one main run, one dev
+    # run — the per-ref group caps each), so GitHub's one-pending-per-group cancellation can't trigger.
+    concurrency:
+      group: deploy-stage-${{ inputs.stage }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -88,12 +95,18 @@ jobs:
       - name: CDK synth
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/cdk exec cdk synth ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} -c stage=${{ inputs.stage }} --no-lookups --output cdk.out
+      # --method=template compares the synthesized template with the deployed one (lookup role) instead of
+      # creating a CloudFormation change set — the diff then built a change set and the deploy built a
+      # second, identical one. Property-level "requires replacement" still comes from the resource spec;
+      # what's lost is CloudFormation's own change-set analysis.
       - name: CDK diff (informational) # no approval pause — this is the visible record of what's changing
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --method=change-set
+        run: pnpm --filter @aperture/cdk exec cdk diff --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --method=template
+      # --method=direct: UpdateStack without a change set. Same rollback-on-failure from CloudFormation, less
+      # per-resource progress in the log; unchanged stacks still no-op.
       - name: Deploy stacks # --outputs-file is what publish/health-check read downstream
         if: inputs.mode == 'full'
-        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --require-approval never --outputs-file cdk-outputs.${{ inputs.stage }}.json
+        run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --method=direct --require-approval never --outputs-file cdk-outputs.${{ inputs.stage }}.json
       - name: Smoke
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts ${{ inputs.stage }}
@@ -105,6 +118,8 @@ jobs:
       - name: Publish frontend
         if: inputs.mode != 'none'
         run: node scripts/aws/publish-frontend.mjs ${{ inputs.stage }}
-      - name: Post-deploy health check # curls the real public URLs — proves edge wiring + origin-secret gate
+      # Polls the edge until it serves the shell publish just built, then curls the real public URLs —
+      # proves edge wiring + origin-secret gate.
+      - name: Post-deploy health check
         if: inputs.mode != 'none'
         run: node scripts/aws/health-check.mjs ${{ inputs.stage }}
