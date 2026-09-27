@@ -68,6 +68,19 @@ export const sk = {
   attachAllPrefix: () => `attach#`,
 
   settings: () => `settings`,
+
+  // Finances. Plaid owns the ids of items/accounts/transactions (not ULIDs); rules are ours. Each kind
+  // is its own prefix so a begins_with pulls exactly one. Transactions are also on GSI1 by date.
+  finItem: (itemId: string) => `fin#item#${itemId}`,
+  finItemPrefix: () => `fin#item#`,
+  finSync: (itemId: string) => `fin#sync#${itemId}`,
+  finSyncPrefix: () => `fin#sync#`,
+  finAcct: (accountId: string) => `fin#acct#${accountId}`,
+  finAcctPrefix: () => `fin#acct#`,
+  finTxn: (txnId: string) => `fin#txn#${txnId}`,
+  finTxnPrefix: () => `fin#txn#`,
+  finRule: (id: string) => `fin#rule#${id}`,
+  finRulePrefix: () => `fin#rule#`,
 } as const;
 
 // GSI1 — done tasks by completion time, the one index (calibration reads by range instead of scanning
@@ -75,4 +88,11 @@ export const sk = {
 export const gsi1 = {
   donePk: (userId: string) => `u#${userId}#done`,
   doneSk: (completedAt: number) => completedAt,
+  // Finance transactions by date (the overview's window read). The sort key is the date's UTC-midnight
+  // epoch ms — parsed from the YYYY-MM-DD string, never `new Date(str)` (local-time parsing).
+  finTxnPk: (userId: string) => `u#${userId}#fintxn`,
+  finTxnSk: (date: string) => {
+    const [y, m, d] = date.split('-').map(Number);
+    return Date.UTC(y!, m! - 1, d!);
+  },
 } as const;

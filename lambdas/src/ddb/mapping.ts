@@ -1,4 +1,4 @@
-import type { Task } from '@aperture/shared';
+import type { FinanceSyncState, FinanceTransaction, Task } from '@aperture/shared';
 import type { Item } from './DocClient';
 import { gsi1, pk, sk } from './keys';
 
@@ -27,4 +27,24 @@ export function taskItem(userId: string, task: Task): Item {
     item.GSI1SK = gsi1.doneSk(task.completedAt);
   }
   return item;
+}
+
+// Finance transactions are on GSI1 by date — tombstones included, so a row never drops out of the index
+// mid-life; reads filter them. Coalescing on read is defensive: rows written before a field existed.
+export function financeTxnItem(userId: string, t: FinanceTransaction): Item {
+  return {
+    PK: pk(userId),
+    SK: sk.finTxn(t.id),
+    GSI1PK: gsi1.finTxnPk(userId),
+    GSI1SK: gsi1.finTxnSk(t.date),
+    ...t,
+  };
+}
+export function toFinanceTxn(item: Item): FinanceTransaction {
+  const t = toEntity<FinanceTransaction>(item);
+  return { ...t, refundOfId: t.refundOfId ?? null, startsPeriod: t.startsPeriod ?? false };
+}
+export function toFinanceSyncState(item: Item): FinanceSyncState {
+  const s = toEntity<FinanceSyncState>(item);
+  return { ...s, lastSyncErrorAt: s.lastSyncErrorAt ?? null };
 }

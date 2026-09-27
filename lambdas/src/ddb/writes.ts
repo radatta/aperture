@@ -6,6 +6,7 @@ import type { DocClient, Item } from './DocClient';
 // doc.put/delete directly — they only touch `writes`, so there is exactly one place side effects happen.
 export interface Writes {
   put(item: Item): Promise<void>;
+  putIf(item: Item, expectedUpdatedAt: number | null): Promise<void>; // see DocClient.putIf
   delete(pk: string, sk: string): Promise<void>;
   batchPut(items: Item[]): Promise<void>;
 }
@@ -13,6 +14,7 @@ export interface Writes {
 export function liveWrites(doc: DocClient): Writes {
   return {
     put: (item) => doc.put(item),
+    putIf: (item, expected) => doc.putIf(item, expected),
     delete: (pk, sk) => doc.delete(pk, sk),
     batchPut: (items) => doc.batchPut(items),
   };
@@ -21,6 +23,7 @@ export function liveWrites(doc: DocClient): Writes {
 export function noopWrites(): Writes {
   return {
     put: async () => {},
+    putIf: async () => {},
     delete: async () => {},
     batchPut: async () => {},
   };
