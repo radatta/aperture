@@ -210,8 +210,9 @@ export type InternalMoves = Map<string, 'transfer' | 'card_payment'>;
 // Card payments and own-account transfers, found by pairing a depository outflow with an inflow of
 // the same size on another linked account within PAYMENT_MATCH_WINDOW_DAYS (nearest date wins). A
 // pair needs at least one side whose PFC says payment/transfer — otherwise a $25 Venmo and a $25
-// card refund two days apart would pair up as a payment. An unpaired row whose PFC says credit-card
-// payment still counts as one — the "hint". Returns every id involved (both sides of a pair). None of
+// card refund two days apart would pair up as a payment. A card credit you marked as the period's
+// payment passes that gate too, so its checking side stops reading as a charge. An unpaired row whose
+// PFC says credit-card payment still counts as one — the "hint". Returns every id involved (both sides of a pair). None of
 // this sets the billing period — you mark that payment; this only suggests it.
 export function detectInternalMoves(
   txns: FinanceTransaction[],
@@ -237,7 +238,8 @@ export function detectInternalMoves(
     for (const inn of ins) {
       if (used.has(inn.id) || inn.accountId === out.accountId) continue;
       if (-amountOf(inn, byId.get(inn.accountId)) !== size) continue;
-      if (!isMovePfc(out) && !isMovePfc(inn)) continue;
+      if (!isMovePfc(out) && !isMovePfc(inn) && !isPeriodStart(inn, byId.get(inn.accountId)))
+        continue;
       const gap = Math.abs(daysBetween(out.date, inn.date));
       if (gap > PAYMENT_MATCH_WINDOW_DAYS || gap >= bestGap) continue;
       best = inn;
@@ -370,7 +372,9 @@ export function computeFinancePeriod(input: {
 }
 
 // The newest unmarked payment the page recognises (the card side of a detected payment) dated after
-// `after` and on or before today — offered as a one-click mark, never applied on its own.
+// `after` and on or before today — offered as a one-click mark, never applied on its own. A payment
+// within PAYMENT_MATCH_WINDOW_DAYS of the last mark is that same payment seen twice (a posted copy
+// whose pending row carried no link), not a new cycle.
 export function suggestPeriodStart(input: {
   txns: FinanceTransaction[];
   accounts: FinanceAccount[];
@@ -385,7 +389,8 @@ export function suggestPeriodStart(input: {
     const account = byId.get(t.accountId);
     if (t.startsPeriod || moves.get(t.id) !== 'card_payment') continue;
     if (periodStartError(t, account) !== null) continue;
-    if (t.date > today || (after !== null && t.date <= after)) continue;
+    if (t.date > today) continue;
+    if (after !== null && daysBetween(after, t.date) <= PAYMENT_MATCH_WINDOW_DAYS) continue;
     if (!best || t.date > best.date || (t.date === best.date && t.id > best.id)) best = t;
   }
   return best;
@@ -513,9 +518,8 @@ export function suggestRefundMatches(input: {
   const scored = txns
     .filter(
       (c) =>
-        c.deletedAt === null &&
         c.id !== refund.id &&
-        classifyTransaction(c, byId.get(c.accountId), moves) === 'expense' &&
+        chargeSideError(c, byId.get(c.accountId), moves) === null &&
         (anyMerchant || merchantKey(c) === key) &&
         c.date <= addDays(refund.date, REFUND_DATE_SLACK_DAYS) &&
         daysBetween(c.date, refund.date) <= REFUND_MATCH_WINDOW_DAYS,
@@ -538,11 +542,49 @@ export function suggestRefundMatches(input: {
     .map((x) => x.c);
 }
 
-// Structural checks both ApiClient impls run before linking; the error text, or null when valid. Both
-// sides must be on visible, live card or bank accounts (a hidden account's rows never resolve), and
-// neither may be a payment/transfer — by PFC, a detected move (`moves`, when the caller has it) or a
-// period mark. The charge may post up to REFUND_DATE_SLACK_DAYS after its refund, no later.
-// "Remaining unrefunded" is the suggestion list's job — the server only caps at the full charge.
+const shownAccount = (a: FinanceAccount | undefined) =>
+  a !== undefined && a.deletedAt === null && !a.hidden;
+const moneyAccount = (a: FinanceAccount | undefined) =>
+  a?.type === 'credit' || a?.type === 'depository';
+const isMoveOrMark = (t: FinanceTransaction, moves: InternalMoves | undefined) =>
+  isMovePfc(t) || t.startsPeriod || (moves?.has(t.id) ?? false);
+
+// Why this row can't be the refund side of a link, or null: it must be alive money coming in on a
+// shown card or bank account, and not a payment, transfer or period mark (a flipped card's dormant
+// mark still counts — unmark it first). `moves`, when the caller has it, also rules out detected moves.
+// The page uses this to decide whether to offer linking at all.
+export function refundSideError(
+  refund: FinanceTransaction,
+  account: FinanceAccount | undefined,
+  moves?: InternalMoves,
+): string | null {
+  if (refund.deletedAt !== null) return 'That transaction is gone';
+  if (!shownAccount(account)) return 'Both need to be on an account that’s shown in your totals';
+  if (!moneyAccount(account) || amountOf(refund, account) >= 0)
+    return 'Only money coming in — a card credit or a deposit — can be linked as a refund';
+  if (refund.startsPeriod) return 'That’s the card payment that starts your period';
+  if (isMoveOrMark(refund, moves)) return 'A card payment or transfer isn’t a refund';
+  return null;
+}
+
+// The charge side: alive money going out on a shown card or bank account, not a payment, transfer or
+// period mark. suggestRefundMatches filters with this, so it never offers a link the server refuses.
+export function chargeSideError(
+  charge: FinanceTransaction,
+  account: FinanceAccount | undefined,
+  moves?: InternalMoves,
+): string | null {
+  if (charge.deletedAt !== null) return 'That transaction is gone';
+  if (!shownAccount(account)) return 'Both need to be on an account that’s shown in your totals';
+  if (!moneyAccount(account) || amountOf(charge, account) <= 0 || isMoveOrMark(charge, moves))
+    return 'A refund can only reverse a charge — not a payment or transfer';
+  return null;
+}
+
+// Structural checks both ApiClient impls run before linking; the error text, or null when valid: each
+// side's own check, the charge dated at most REFUND_DATE_SLACK_DAYS after its refund, and the refund
+// no larger than the charge. "Remaining unrefunded" is the suggestion list's job — the server only
+// caps at the full charge.
 export function refundLinkError(input: {
   refund: FinanceTransaction;
   refundAccount: FinanceAccount | undefined;
@@ -551,25 +593,10 @@ export function refundLinkError(input: {
   moves?: InternalMoves;
 }): string | null {
   const { refund, refundAccount, charge, chargeAccount, moves } = input;
-  if (refund.deletedAt !== null || charge.deletedAt !== null) return 'That transaction is gone';
   if (refund.id === charge.id) return 'A refund can’t reverse itself';
-  const usable = (a: FinanceAccount | undefined) => a && a.deletedAt === null && !a.hidden;
-  if (!usable(refundAccount) || !usable(chargeAccount))
-    return 'Both need to be on an account that’s shown in your totals';
-  const moneyAccount = (a: FinanceAccount | undefined) =>
-    a?.type === 'credit' || a?.type === 'depository';
-  const isMove = (t: FinanceTransaction) => isMovePfc(t) || (moves?.has(t.id) ?? false);
-  if (!moneyAccount(refundAccount) || amountOf(refund, refundAccount) >= 0)
-    return 'Only money coming in — a card credit or a deposit — can be linked as a refund';
-  if (refund.startsPeriod) return 'That’s the card payment that starts your period';
-  if (isMove(refund)) return 'A card payment or transfer isn’t a refund';
-  if (
-    !moneyAccount(chargeAccount) ||
-    amountOf(charge, chargeAccount) <= 0 ||
-    charge.startsPeriod ||
-    isMove(charge)
-  )
-    return 'A refund can only reverse a charge — not a payment or transfer';
+  const error =
+    refundSideError(refund, refundAccount, moves) ?? chargeSideError(charge, chargeAccount, moves);
+  if (error) return error;
   if (charge.date > addDays(refund.date, REFUND_DATE_SLACK_DAYS))
     return 'The charge has to come before its refund';
   if (-amountOf(refund, refundAccount) > amountOf(charge, chargeAccount))

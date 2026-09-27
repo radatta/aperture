@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Link } from 'react-router';
 import {
   FINANCE_BUCKET_LABELS,
@@ -46,6 +47,7 @@ export function PeriodHeader({
     overview;
   const today = useFinanceToday();
   const paymentDay = useSettings().data?.financePaymentDay ?? FINANCE_DEFAULT_PAYMENT_DAY;
+  const lineRef = useRef<HTMLDivElement>(null);
   const pct = budgetCents > 0 ? Math.min(100, (spentCents / budgetCents) * 100) : 100;
   const over = leftCents < 0;
   return (
@@ -57,10 +59,20 @@ export function PeriodHeader({
           </Text>
           <Text tone="muted">of {fmtMoneyWhole(budgetCents)} budget</Text>
         </div>
-        <Text size="sm" tone="muted">
-          {periodLine(period, today, paymentDay)}
-        </Text>
-        {view && <PeriodNudge period={period} view={view} today={today} />}
+        {/* Focus lands here after the nudge marks a payment — its button is gone by then. */}
+        <div ref={lineRef} tabIndex={-1} className="outline-none">
+          <Text size="sm" tone="muted">
+            {periodLine(period, today, paymentDay)}
+          </Text>
+        </div>
+        {view && (
+          <PeriodNudge
+            period={period}
+            view={view}
+            today={today}
+            onMarked={() => lineRef.current?.focus()}
+          />
+        )}
       </div>
       <div
         className="h-2 overflow-hidden rounded-full bg-panel-2"
@@ -113,10 +125,12 @@ function PeriodNudge({
   period,
   view,
   today,
+  onMarked,
 }: {
   period: FinancePeriod;
   view: FinanceView;
   today: string;
+  onMarked: () => void;
 }) {
   const mark = useSetFinancePeriodStart();
   const next = suggestPeriodStart({
@@ -127,7 +141,8 @@ function PeriodNudge({
     today,
   });
   const marked = period.source === 'marked';
-  if (!next && marked) return null;
+  const hasCard = [...view.accounts.values()].some((a) => a.type === 'credit');
+  if (!next && (marked || !hasCard)) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <Text size="sm" tone="muted" className="min-w-0 flex-1">
@@ -140,7 +155,7 @@ function PeriodNudge({
           size="sm"
           variant="ghost"
           disabled={mark.isPending}
-          onClick={() => mark.mutate({ id: next.id, marked: true })}
+          onClick={() => mark.mutate({ id: next.id, marked: true }, { onSuccess: onMarked })}
         >
           {marked ? 'Start a new period there' : 'Start the period there'}
         </Button>

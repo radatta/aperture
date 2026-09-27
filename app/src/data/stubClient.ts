@@ -1187,12 +1187,15 @@ class StubClient implements ApiClient {
       return this.writes.patch(this.store.financeTransactions, refundId, { refundOfId: null });
     const charge = this.mustFind(this.store.financeTransactions, chargeId);
     const accounts = this.alive(this.store.financeAccounts);
+    // Moves over the same window the overview reads, so pairing at the edge matches the page.
+    const from = addDays(this.finToday(), -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+    const recent = this.alive(this.store.financeTransactions).filter((x) => x.date >= from);
     const error = refundLinkError({
       refund,
       refundAccount: accounts.find((a) => a.id === refund.accountId),
       charge,
       chargeAccount: accounts.find((a) => a.id === charge.accountId),
-      moves: detectInternalMoves(this.alive(this.store.financeTransactions), accounts),
+      moves: detectInternalMoves(recent, accounts),
     });
     if (error) throw new Error(error);
     return this.writes.patch(this.store.financeTransactions, refundId, {

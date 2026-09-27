@@ -23,6 +23,8 @@ import {
   suggestPeriodStart,
   suggestRefundMatches,
   bucketOf,
+  chargeSideError,
+  refundSideError,
   isUnsorted,
   summarizePeriod,
   toCents,
@@ -173,6 +175,12 @@ describe('detectInternalMoves', () => {
     );
     expect(r.size).toBe(0);
   });
+  it('a marked card credit pairs with its checking outflow even without a PFC', () => {
+    const rows = [tx('a', 'chk', '2026-09-16', 74518), tx('b', 'card', '2026-09-17', -74518)];
+    expect(detectInternalMoves(rows, [chk, card]).size).toBe(0);
+    const marked = [rows[0]!, { ...rows[1]!, startsPeriod: true }];
+    expect(detectInternalMoves(marked, [chk, card]).get('a')).toBe('card_payment');
+  });
   it('honours a flipped card', () => {
     const flipped = acct('card', 'credit', { signOverride: 'flip' });
     const r = detectInternalMoves(
@@ -241,6 +249,29 @@ describe('period marks', () => {
     expect(suggestPeriodStart({ ...args, after: '2026-08-18' })?.id).toBe('i2');
     expect(suggestPeriodStart({ ...args, after: null })?.id).toBe('i2');
     expect(suggestPeriodStart({ ...args, after: '2026-09-17' })).toBeNull();
+    // A copy within the match window of the last mark is the same payment, not a new cycle.
+    const copy = [
+      ...rows,
+      tx('i1b', 'card', '2026-08-19', -5000, { pfcDetailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' }),
+    ];
+    expect(
+      suggestPeriodStart({
+        ...args,
+        txns: copy,
+        moves: detectInternalMoves(copy, [chk, card]),
+        after: '2026-08-18',
+        today: '2026-09-01',
+      }),
+    ).toBeNull();
+    expect(
+      suggestPeriodStart({
+        ...args,
+        txns: copy,
+        moves: detectInternalMoves(copy, [chk, card]),
+        after: '2026-08-14',
+        today: '2026-09-01',
+      })?.id,
+    ).toBe('i1b'); // outside the window it would be offered
     const allMarked = rows.map((t) => (t.id === 'i2' ? { ...t, ...MARK } : t));
     expect(suggestPeriodStart({ ...args, txns: allMarked, after: null })).toBeNull();
   });
@@ -830,6 +861,24 @@ describe('refund links', () => {
     const refund = tx('r', 'chk', '2026-09-24', -3861, { refundOfId: 'c' });
     const flipped = acct('chk', 'depository', { signOverride: 'flip' });
     expect(resolveRefundLinks([charge, refund], (t) => amountOf(t, flipped)).has('r')).toBe(false);
+  });
+
+  it('suggestions and the per-side checks agree: no transfers, moves or marks', () => {
+    const refund = tx('r', 'chk', '2026-09-24', -2500);
+    const txns = [
+      refund,
+      tx('venmo', 'chk', '2026-09-20', 2500, { pfcPrimary: 'TRANSFER_OUT' }),
+      tx('dormant', 'card', '2026-09-20', 2500, MARK), // a mark on what now reads as a charge
+      tx('real', 'card', '2026-09-19', 2500),
+    ];
+    const args = { refund, txns, accounts: [chk, card], moves: new Map(), links: new Map() };
+    expect(suggestRefundMatches({ ...args, anyMerchant: true }).map((t) => t.id)).toEqual(['real']);
+    expect(chargeSideError(txns[1]!, chk)).toMatch(/not a payment/);
+    expect(chargeSideError(txns[2]!, card)).toMatch(/not a payment/);
+    expect(refundSideError({ ...refund, pfcPrimary: 'TRANSFER_IN' }, chk)).toMatch(
+      /isn’t a refund/,
+    );
+    expect(refundSideError(refund, chk)).toBeNull();
   });
 
   it('suggestRefundMatches offers the same-account checking charge first', () => {

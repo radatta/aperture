@@ -16,6 +16,7 @@ import type {
   FinanceTxnKind,
 } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
+import { useFinanceToday } from '../../data/hooks/useFinances';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { BucketTag } from './BucketTag';
@@ -54,6 +55,7 @@ export function TransactionList({
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [openId, setOpenId] = useState<string | null>(null);
+  const today = useFinanceToday();
   if (!view)
     return <EmptyState pending={pending && !error} error={error} title="No transactions yet." />;
 
@@ -66,7 +68,11 @@ export function TransactionList({
   const sections = [
     {
       key: 'current',
-      title: `This period · ${fmtMonthShortDay(overview.period.start)} – today`,
+      // Marked today → the new period hasn't begun yet.
+      title:
+        overview.period.start > today
+          ? `This period · from ${fmtMonthShortDay(overview.period.start)}`
+          : `This period · ${fmtMonthShortDay(overview.period.start)} – today`,
       rows: shown.filter((t) => periodOf(t, overview.period, view.links) === 'current'),
     },
     {

@@ -230,6 +230,26 @@ describe('Finances page', () => {
     expect(await screen.findByText(/refunded \$38\.61/)).toBeTruthy();
   });
 
+  it('a card credit can be marked as the period start from its detail, and unmarked', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await screen.findAllByRole('button', { name: /Amazon.*\+\$34\.99/ }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click(
+      within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
+    );
+    const unmark = await within(dialog).findByRole('button', { name: 'Unmark' });
+    await waitFor(() => expect(document.activeElement).toBe(unmark));
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
+    expect(await screen.findByText(/since your .* payment/)).toBeTruthy();
+    await user.click(unmark);
+    // Unmarked, it's a card credit again: the refund controls and the mark option come back.
+    expect(
+      await within(dialog).findByRole('button', { name: /card payment — start the period here/ }),
+    ).toBeTruthy();
+    expect(within(dialog).getByRole('radiogroup', { name: 'Bucket' })).toBeTruthy();
+  });
+
   it('a linked refund leaves the sort queue and nets its group', async () => {
     const api = await linked();
     await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');

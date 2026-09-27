@@ -24,7 +24,6 @@ export interface FinanceView {
   txns: FinanceTransaction[]; // alive, inside the current or previous window, date desc
   allTxns: FinanceTransaction[]; // the whole loaded range — refund suggestions look back further
   sortable: FinanceTransaction[]; // allTxns on shown accounts, charges + refunds only
-  linkable: FinanceTransaction[]; // sortable + deposits — what a refund link can touch
   amount: (t: FinanceTransaction) => number; // normalised: positive = money out
   kindOf: (t: FinanceTransaction) => FinanceTxnKind;
   links: RefundLinks; // refund id → the charge it reverses
@@ -53,7 +52,6 @@ export function useFinanceData() {
       moves,
       allTxns,
       sortable,
-      linkable,
       txns: allTxns.filter((t) => periodOf(t, overview.period, links) !== null),
       amount,
       kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),

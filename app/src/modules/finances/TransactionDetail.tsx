@@ -7,6 +7,7 @@ import {
   isPeriodStart,
   periodOf,
   REFUND_MATCH_WINDOW_DAYS,
+  refundSideError,
   suggestRefundMatches,
 } from '@aperture/shared';
 import type {
@@ -69,6 +70,8 @@ export function TransactionDetail({
   const cents = view.amount(txn);
   const acct = view.accounts.get(txn.accountId);
   const markable = acct?.type === 'credit' && cents < 0;
+  // Money in that could be a refund at all — a Venmo cash-out or a transfer never is.
+  const linkableIncome = isIncome && refundSideError(txn, acct, view.moves) === null;
   // Focus follows a link/unlink/mark (the clicked button unmounts) — but never on first open, where
   // a focused Link button would make a stray Enter link the refund.
   const [acted, setActed] = useState(false);
@@ -132,8 +135,8 @@ export function TransactionDetail({
         {dangling && (
           <div className="flex flex-wrap items-center gap-3">
             <Text size="sm" tone="muted" className="flex-1">
-              Linked to an earlier charge that isn&apos;t shown here any more, so it counts as{' '}
-              {isIncome ? 'money in' : 'unsorted'}.
+              Linked to a charge that isn&apos;t shown here any more, so it counts as{' '}
+              {isRefund ? 'unsorted' : isIncome ? 'money in' : 'a transfer, outside the budget'}.
             </Text>
             <Button
               size="sm"
@@ -155,7 +158,7 @@ export function TransactionDetail({
             onLink={(chargeId) => setLink(chargeId)}
           />
         )}
-        {isIncome &&
+        {linkableIncome &&
           !txn.refundOfId &&
           (incomeLink.open ? (
             <RefundSuggestions
@@ -165,6 +168,7 @@ export function TransactionDetail({
               focus
               fallback="Nothing it could reverse — it stays money in, outside the budget."
               onLink={(chargeId) => setLink(chargeId)}
+              onCancel={incomeLink.onClose}
             />
           ) : (
             <div className="flex flex-col gap-1">
@@ -183,10 +187,11 @@ export function TransactionDetail({
             </div>
           ))}
         {kind === 'expense' && <RefundsAgainst charge={txn} view={view} />}
-        {kind === 'card_payment' && markable && (
+        {((kind === 'card_payment' && markable) || txn.startsPeriod) && (
           <PeriodMark
             txn={txn}
-            marked={isPeriodStart(txn, acct)}
+            marked={txn.startsPeriod}
+            dormant={txn.startsPeriod && !isPeriodStart(txn, acct)}
             busy={mark.isPending}
             focus={acted}
             onMark={setMark}
@@ -220,7 +225,7 @@ export function TransactionDetail({
             disabled={mark.isPending}
             onClick={() => setMark(true)}
           >
-            Not a refund? It&apos;s a card payment — start the period here
+            It&apos;s a card payment — start the period here
           </Button>
         )}
         {mark.isError && (
@@ -307,6 +312,7 @@ function RefundSuggestions({
   focus,
   fallback,
   onLink,
+  onCancel,
 }: {
   refund: FinanceTransaction;
   view: FinanceView;
@@ -314,6 +320,7 @@ function RefundSuggestions({
   focus: boolean;
   fallback: string;
   onLink: (chargeId: string) => void;
+  onCancel?: () => void; // a collapsible list gets a way back (and a focus target when it's empty)
 }) {
   // Charges on shown accounts only — a hidden account's rows never resolve as a link target.
   const suggest = (anyMerchant: boolean) =>
@@ -332,11 +339,13 @@ function RefundSuggestions({
   const labelId = `refund-of-${refund.id}`;
   return (
     <div className="flex flex-col gap-1.5">
-      <Text id={labelId} size="sm" tone="muted">
-        {sameMerchant.length
-          ? `Refund of which ${merchant} charge?`
-          : `No ${merchant} charge found from the ${REFUND_MATCH_WINDOW_DAYS} days before it. Other charges it could be:`}
-      </Text>
+      {matches.length > 0 && (
+        <Text id={labelId} size="sm" tone="muted">
+          {sameMerchant.length
+            ? `Refund of which ${merchant} charge?`
+            : `No ${merchant} charge found from the ${REFUND_MATCH_WINDOW_DAYS} days before it. Other charges it could be:`}
+        </Text>
+      )}
       {matches.length === 0 ? (
         <Text size="sm" tone="muted">
           {fallback}
@@ -376,6 +385,17 @@ function RefundSuggestions({
           })}
         </ul>
       )}
+      {onCancel && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="self-start"
+          autoFocus={focus && matches.length === 0}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      )}
     </div>
   );
 }
@@ -384,12 +404,14 @@ function RefundSuggestions({
 function PeriodMark({
   txn,
   marked,
+  dormant,
   busy,
   focus,
   onMark,
 }: {
   txn: FinanceTransaction;
   marked: boolean;
+  dormant: boolean; // marked, but no longer money in on a card (e.g. the card was flipped)
   busy: boolean;
   focus: boolean;
   onMark: (marked: boolean) => void;
@@ -398,9 +420,11 @@ function PeriodMark({
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
       <Text size="sm" className="min-w-0 flex-1">
-        {marked
-          ? `This payment starts a period — the one from ${starts}.`
-          : `A card payment. Mark it to start a new period on ${starts}.`}
+        {dormant
+          ? 'Marked as a period start, but it no longer reads as a card payment, so it’s ignored.'
+          : marked
+            ? `This payment starts a period — the one from ${starts}.`
+            : `A card payment. Mark it to start a new period on ${starts}.`}
       </Text>
       <Button
         size="sm"
