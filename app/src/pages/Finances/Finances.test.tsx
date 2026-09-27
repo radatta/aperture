@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS, todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
@@ -376,6 +377,53 @@ describe('Finances page', () => {
     expect((await api.listFinanceTransactions(range)).find((t) => t.id === id)?.note).toBe(
       'from elsewhere',
     );
+  });
+
+  // Re-render the list the way a poll or window refocus does: refetch after a change on the server.
+  async function refetchAfter(api: ApiClient, change: () => Promise<unknown>) {
+    const list = vi.spyOn(api, 'listFinanceTransactions');
+    await change();
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(list).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    focusManager.setFocused(undefined);
+  }
+
+  it('after closing, a tap elsewhere ends the row’s claim on focus (Safari focuses nothing)', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    renderApp({ api, path: '/finances/all' });
+    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    await user.click(row);
+    const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    fireEvent.pointerDown(document.body);
+    act(() => row.blur());
+    const other = (await screen.findAllByRole('button', { name: /Uber/ }))[0]!;
+    await refetchAfter(api, () => api.setFinanceNote(other.getAttribute('data-txn-id')!, 'x'));
+    expect(document.activeElement).not.toBe(row);
+  });
+
+  it('a return-to row that can’t take focus hands it to the list', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    renderApp({ api, path: '/finances/all' });
+    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    await user.click(row);
+    const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    act(() => {
+      row.blur(); // no tap: the row still claims focus back
+      row.setAttribute('disabled', ''); // as when a change makes it a transfer
+    });
+    const other = (await screen.findAllByRole('button', { name: /Uber/ }))[0]!;
+    await refetchAfter(api, () => api.setFinanceNote(other.getAttribute('data-txn-id')!, 'x'));
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Transactions' }));
   });
 
   it('the detail opens on the checked bucket, and arrow keys move and select', async () => {

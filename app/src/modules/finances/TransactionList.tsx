@@ -59,7 +59,9 @@ export function TransactionList({
   const today = useFinanceToday();
   // Closing the detail hands focus back to the row it opened from — found by id, because the row can
   // re-render in the other section a moment later (a "Counts in" change). Sticky until focus goes
-  // anywhere else; if the row left the list (filtered, or moved out of both periods), the list itself.
+  // anywhere else or you tap anywhere (Safari/iOS focus nothing on a tap, so a later refetch would
+  // otherwise yank focus and scroll back); if the row left the list (filtered, or moved out of both
+  // periods) or can't take focus (turned disabled), the list itself.
   const rootRef = useRef<HTMLDivElement>(null);
   const returnTo = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -68,18 +70,26 @@ export function TransactionList({
     const row = [...(rootRef.current?.querySelectorAll<HTMLElement>('[data-txn-id]') ?? [])].find(
       (el) => el.dataset.txnId === id,
     );
-    if (!row) {
+    if (row && document.activeElement !== row) revealFocus(row);
+    if (!row || document.activeElement !== row) {
       returnTo.current = null;
       revealFocus(rootRef.current);
-    } else if (document.activeElement !== row) revealFocus(row);
+    }
   });
   useEffect(() => {
     const onFocusIn = (e: FocusEvent) => {
       const id = returnTo.current;
       if (id !== null && (e.target as HTMLElement).dataset?.txnId !== id) returnTo.current = null;
     };
+    const onPointerDown = () => {
+      returnTo.current = null;
+    };
     document.addEventListener('focusin', onFocusIn);
-    return () => document.removeEventListener('focusin', onFocusIn);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
   }, []);
   if (!view)
     return <EmptyState pending={pending && !error} error={error} title="No transactions yet." />;
@@ -113,6 +123,7 @@ export function TransactionList({
     <div
       ref={rootRef}
       tabIndex={-1}
+      role="region"
       aria-label="Transactions"
       className="flex flex-col gap-4 outline-none"
     >
