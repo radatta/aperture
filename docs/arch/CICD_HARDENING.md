@@ -77,6 +77,10 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 ## Item 2 — cdk-nag (AwsSolutions pack only)
 
+> **Note (2026-09, finances):** acknowledgements match by id across the whole app, not per construct — the
+> Plaid `items/*` IAM5 ack sits on both the BFF and the finance-sync function, and either alone would pass
+> synth. The IAM statements do the scoping, not the acks.
+
 **Files:** `cdk/package.json` (add `cdk-nag` devDep — **dependency to justify first**), `cdk/src/bin/aperture.ts` (wire at the `App` created ~line 27), inline `NagSuppressions` in `app-stack.ts` / data stack / the new monitoring construct.
 
 - **API (confirmed, v3.0.2):** `Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }))` (v3 dropped the classic `Aspects.of().add()`), suppress with `Validations.of(construct).acknowledge({ id, reason })`. Base rule ids work for non-granular findings.

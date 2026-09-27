@@ -573,7 +573,7 @@ function FinancesSection() {
       <Card>
         <div className="flex flex-wrap items-end gap-4">
           <Field
-            label="Budget per cycle ($)"
+            label="Budget per period ($)"
             inputMode="decimal"
             defaultValue={(settings.financeBudgetCents / 100).toFixed(2)}
             onBlur={(e) => {

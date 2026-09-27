@@ -81,7 +81,7 @@ describe('finances settings', () => {
     expect((day as HTMLInputElement).value).toBe('40');
     expect((await api.getSettings()).financePaymentDay).toBe(20);
 
-    const budget = screen.getByLabelText('Budget per cycle ($)');
+    const budget = screen.getByLabelText('Budget per period ($)');
     await user.clear(budget);
     await user.type(budget, '-5');
     await user.tab();

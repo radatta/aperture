@@ -68,6 +68,8 @@ Capture **never** asks for structure. No estimate, no due date, no category at c
 3. Habits due today
 4. One-line intent (optional, non-scored)
 
+Plus, once a bank is connected, a single **finance line** (budget left · N to sort) — a line, not an element (see 4b).
+
 ### ⚙️ Daytime — do + capture (light now, grows at school)
 1. Capture bar (prominent)
 2. **Right now** — the **Big 3** (top of today's plan) with the in-progress task as a **hero** showing a calm **count-up vs its estimate**; the rest of today falls to a lighter "Also today" lane. Pomodoro focus starts from the hero. Finishing returns a gentle "what's next?", never an auto-advance.
@@ -79,6 +81,8 @@ Capture **never** asks for structure. No estimate, no due date, no category at c
 2. **Today in review** — log timeline, tasks done vs planned, **estimate vs actual** side by side
 3. Habits check — mark today's
 4. One reflection prompt — single rotating question, non-cringe, fully skippable
+
+Plus the **finance line** only while charges wait to be sorted ("N charges to sort", see 4b).
 
 ### Deliberately kept off the daily home
 - **Balance / non-work life** lives on a **weekly cadence, not the daily home.** A gentle weekly look ("this week ran 90% work — worth a nudge?"), never a daily checkbox — that would be the guilt-nag the identity forbids.

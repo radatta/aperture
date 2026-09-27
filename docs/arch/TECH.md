@@ -45,7 +45,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 Logical entities below are **storage-agnostic**; the physical DynamoDB shape is §2.4 (single-table, as built).
 
 ### 2.1 Global conventions
-- **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
+- **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items and their sync states, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
 - **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. One live violation — see **[Tech debt](#tech-debt)**.

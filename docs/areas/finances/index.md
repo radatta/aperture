@@ -10,12 +10,12 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - **Page:** `/finances` with tabs **Sort** (the batch queue), **All** (the ledger of the current and
   previous period) and **Rules** — real routes, like Recruiting. It's an AppNav link, not a dock item (one
   dock, [CONVENTIONS](../../product/CONVENTIONS.md)).
-- **Home:** one line, never a card — Morning is at its ≤5-element cap. Morning: "$X left of $600 · N to
-  sort"; Night: "N charges to sort", only when non-zero (`pages/Home/FinanceGlance.tsx`). Nothing until a
-  bank is connected.
+- **Home:** one line, never a card (why: [PRODUCT §4b](../../product/PRODUCT.md#4b-the-lighter-modules)).
+  Morning: "$X left of $600 · N to sort"; Night: "N charges to sort", only when non-zero
+  (`pages/Home/FinanceGlance.tsx`). Nothing until a bank is connected.
 - **Settings:** budget per period (default $600) and card payment day (default 20).
-- **Header:** left of the budget, the period and its day, and a nudge to mark the last card payment when
-  the period is on the payment-day fallback.
+- **Header:** budget left, the period and its day, and a nudge to mark a detected card payment — a newer
+  payment on a marked period, or on the payment-day fallback the last one (when a card is linked).
 
 ## 2. Buckets and money
 
@@ -23,12 +23,14 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   counts against the budget; the other two are tracked, not limited.
 - **Sign:** `rawAmountCents` stores Plaid's number, **positive = money out**. Normalisation is read-time:
   `amountOf` applies the account's `signOverride` (`flip`), so flipping an account changes nothing stored.
+- **To sort** counts unsorted charges in the current **and** previous period (both are sortable).
 - **Kinds** (`classifyTransaction`): `expense` (a charge), `refund` (money into a card), `income` (money
   into checking/savings), `transfer` (between your own accounts), `card_payment`. Only expenses and
   refunds are sortable; a deposit counts only once linked as a refund.
 - **Internal moves** (`detectInternalMoves`) pair a depository outflow with an equal inflow on another of
   your accounts within `PAYMENT_MATCH_WINDOW_DAYS` (3), nearest date first, needing a transfer/loan-payment
-  Plaid category (or a period mark) on one side.
+  Plaid category (or a period mark) on one side. An unpaired row whose Plaid category is
+  `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT` still counts as a card payment (the "hint").
 - **Hidden accounts** are listed but excluded from every total, the sort queue and refund links. A hidden
   card's period marks still count.
 
@@ -48,11 +50,13 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - A refund (card credit, or a checking/savings deposit) is linked to the charge it reverses; it then takes
   the charge's bucket and period, nets against it, and leaves the sort queue. An unlinked deposit is
   income, outside the budget.
-- `refundLinkError` (shared by the suggestions and the server, so the page never offers a link the server
-  refuses): both sides on shown accounts, no payment or transfer, the refund no larger than the charge, and
-  the charge dated no more than `REFUND_DATE_SLACK_DAYS` (3) after the refund.
+- `refundLinkError` (run by both the stub and the server; the suggestions filter with its
+  `chargeSideError`, so the page never offers a link the server refuses): both sides on shown accounts, no
+  payment or transfer, the refund no larger than the charge, and the charge dated no more than
+  `REFUND_DATE_SLACK_DAYS` (3) after the refund.
 - Suggestions (`suggestRefundMatches`) look back `REFUND_MATCH_WINDOW_DAYS` (90): same-merchant charges
-  first, otherwise any merchant, top five; ranking is in the function.
+  first, otherwise any merchant, top five — ranked same account → smallest leftover (an exact match
+  first) → nearest date → posted before pending → id.
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
   loaded range reads as unlinked. Over-refunding one charge via two refunds isn't blocked (accepted).
 
@@ -60,13 +64,14 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 
 "Always put *pattern* in *bucket*": a case-insensitive substring of the merchant; the longest active
 pattern wins (`applyRules`, also matched against the digit-stripped `merchantKey`). New rows get rules at
-sync time. Ticking **Always** while sorting saves the rule and sorts every currently-unsorted match. A rule
-never re-sorts a charge you sorted by hand.
+sync time. Ticking **Always** while sorting saves the rule and sorts every currently-unsorted match (skipping
+linked refunds and period marks). A rule never re-sorts a charge you sorted by hand.
 
 ## 6. Sync
 
 One Lambda, `aperture-finance-sync-<stage>` (`lambdas/src/financeSync.ts` → `finance/sync.ts`), invoked
-async by the BFF after Refresh / connect / reconnect and by EventBridge Scheduler at **5:15a, 3:15p and
+async by the BFF after a sync request (Refresh, or the popup's Try again), connect or reconnect, and by
+EventBridge Scheduler at **5:15a, 3:15p and
 8:15p Pacific**. Items run in parallel under one deadline. Per item:
 
 1. **Lock:** a CAS on the item's sync-state row; the `lockedUntil` value is the owner token, checked on
@@ -88,7 +93,7 @@ async by the BFF after Refresh / connect / reconnect and by EventBridge Schedule
 Right after a link, a not-ready Plaid is polled until history arrives; never ready ends as
 `PRODUCT_NOT_READY` rather than "synced with nothing".
 
-**Timing** (the one home for these numbers):
+**Timing budget** (the one home for these numbers):
 - Lambda timeout 300 s − `RUN_SAFETY_MS` 10 s = the 290 s deadline, capped at `RUN_BUDGET_MS` 290 s, under
   the 300 s lock.
 - One Plaid call's worst case `PLAID_CALL_MAX_MS` = 3 × 10 s + backoff = 31.5 s → `STEP_MAX_MS` 35 s; no
@@ -101,12 +106,14 @@ Right after a link, a not-ready Plaid is polled until history arrives; never rea
 
 **Tried and dropped:** a `refresh` flag on the event (a scheduled run holding the lock dropped it);
 polling for "rows > 0" after a refresh (a quiet day polled the full window, and two banks overran the
-Lambda); items in series; the popup deciding on `lastSyncedAt` changing (it's a min across banks).
+Lambda); items in series; the popup deciding on `lastSyncedAt` changing (it's a min across banks);
+trusting stub-only tests for async sync UX (the stub syncs inline, so `syncing` is never observed).
 
 ## 7. Sync-status contract
 
-The page's "Syncing…", error banners and the failure popup read only these stamps (per item, in
-`overview.sync.items`; the overview's own fields summarise them):
+The stamps live on each item's `fin#sync#` row. The page reads them as `overview.sync.items[]`
+(`lastSyncedAt`, `lastError`, `lastErrorAt`) plus the server-computed `sync.syncing` — its "Syncing…",
+error banners and failure popup depend on nothing else:
 
 - **`lastSyncedAt` / `lastSyncErrorAt` are the START time of the pass that set them.** A request stamped
   mid-pass stays newer, so the page keeps polling until the rerun.
@@ -126,7 +133,8 @@ The page's "Syncing…", error banners and the failure popup read only these sta
 - Every Plaid call goes through the gated `PlaidGateway`: `createLivePlaid` (Lambda entrypoints only),
   `InMemoryPlaid` (tests, replaying `financeFixtures`), `noopPlaid` (testMode, the CI smoke run, and the
   MCP edge). Starting the sync goes through `FinanceSyncInvoker` the same way (`liveInvoker` /
-  `inlineInvoker` / `noopInvoker`).
+  `inlineInvoker` / `noopInvoker`), and every table write through the repo's `Writes` (no-op under
+  testMode).
 - **Raw fetch, no SDK:** `Plaid-Version: 2020-09-14`, 10 s timeout, 3 attempts on five retryable codes,
   network retries on reads only, `/transactions/refresh` never re-sent (2/min per item). Logs carry path,
   item, Plaid `request_id` and code — never a body or token.
@@ -180,10 +188,11 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **`@aws-sdk/client-lambda`** (3.1102.0) — rule B: the BFF starts the sync Lambda with a SigV4-signed
   async Invoke, which we won't hand-roll. It ships in the Node 22 runtime, so the bundle keeps it external,
   pinned to the same line as the other AWS clients.
-- **Rejected `plaid`** (the Node SDK: ~18 MB unpacked plus axios) for a handful of POSTs —
+- **Rejected `plaid`** (the Node SDK, v47: ~18 MB unpacked plus axios) for a handful of POSTs —
   `lambdas/src/plaid/livePlaid.ts` is raw fetch.
 - **Rejected `react-plaid-link`** (a script loader plus a `Plaid.create` wrapper, pulls `prop-types`, and
-  has an open installed-PWA bug) — `app/src/modules/finances/usePlaidLink.ts` does the same in a few dozen
+  has an open installed-PWA bug, https://github.com/plaid/react-plaid-link/issues/396) —
+  `app/src/modules/finances/usePlaidLink.ts` does the same in a few dozen
   lines.
 
 ## 12. Operator checklist
@@ -202,9 +211,18 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **First-sync sign check:** a known card purchase is an expense (money out), the card payment shows as a
   pair (card side money in, checking side money out), a known refund is money in, and the card balance is
   what you owe. If the card reads inverted, flip it in the accounts strip.
-- **Disabling, least to most:** flip a mis-signed account · disable the schedule · delete the two
-  credential parameters · remove the bank in the app (revokes at Plaid; the slot stays spent) · revert the
-  PR (remove the bank first — the revert removes the code that calls `/item/remove`).
+- **Disabling, least to most:**
+  1. Flip a mis-signed account.
+  2. Disable the schedule: `aws scheduler update-schedule --region us-west-1 --name
+     aperture-finance-sync-<stage> --state DISABLED --schedule-expression 'cron(15 5,15,20 * * ? *)'
+     --schedule-expression-timezone America/Los_Angeles --flexible-time-window Mode=OFF --target
+     '<Target JSON from get-schedule>'`. This drifts from CloudFormation — a later deploy that touches the
+     schedule may re-enable it.
+  3. Delete the two credential parameters (warm Lambdas keep the cached ones until they recycle).
+  4. Remove the bank in the app — revokes at Plaid, deletes the token, tombstones the rows; the slot stays
+     spent.
+  5. Revert the PR — remove the bank first, since the revert removes the code that calls `/item/remove`.
+     The `fin#` rows (RETAIN table) and the SSM credentials stay.
 
 ## 13. What each test surface proves
 
@@ -218,6 +236,17 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **MCP** (`lambdas/src/mcp/financeTools.test.ts`, `index.test.ts`): the read-only tools match the page
   and never reach Plaid. See [mcp/](../mcp/index.md).
 
+| Where | What |
+| --- | --- |
+| `packages/shared/src/finance.ts`, `financeFixtures.ts`, `plaidTypes.ts` | types, the pure logic, fixtures |
+| `app/src/pages/Finances/`, `app/src/modules/finances/` | the page, tabs, detail, sync watch, Link |
+| `app/src/data/stubClient.ts`, `app/src/data/hooks/useFinances.ts` | the stub; queries + mutations |
+| `lambdas/src/finance/` (`service.ts`, `sync.ts`, invokers) | the RPC methods and the sync |
+| `lambdas/src/financeSync.ts` | the sync Lambda's entry |
+| `lambdas/src/plaid/` (`gateway.ts`, `livePlaid.ts`) | the Plaid seam |
+| `lambdas/src/mcp/financeTools.ts` | the read-only MCP tools |
+| `cdk/src/lib/finance-sync.ts`, `app-stack.ts`, `monitoring.ts` | the function, schedule, IAM, alarms |
+
 ## 14. Known limits and deferred
 
 - **Accepted:** a late BFF invoke after a deferred request can show a "try again" the data didn't need;
@@ -225,8 +254,8 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   transaction row (fine at one user); cdk-nag acks match by id app-wide.
 - **Deferred (v2):**
   - "Show other charges" when linking a refund — today a same-merchant match hides other merchants and
-    anything past the top five (tracked as a prod Aperture task).
+    anything past the top five (prod Aperture task `01M3GR4B48QB2088DNT9NHC5VR`).
   - A fuzzier merchant match ("AMZN Mktp" vs "AMAZON MKTPL").
   - CSV import (`source` is reserved for it).
   - Finance writes over MCP (today read-only).
-  - The top nav clips "Finances" at 390 px.
+  - The top nav clips "Finances" at 390 px; hidden-account polish.

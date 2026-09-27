@@ -20,7 +20,7 @@ GitHub Actions ──(OIDC, no static keys)──► cdk deploy + app build/depl
                                      DynamoDB (single table, on-demand, PITR)
                                             ▲
    Lambda BFF ──async invoke──► finance-sync Lambda ◄── EventBridge Scheduler (3×/day)
-                                            └──HTTPS──► Plaid
+        └──HTTPS──► Plaid ◄──HTTPS──┘   (BFF: link token, exchange, remove; sync: accounts, refresh, sync)
 
    Cognito User Pool (per env, invite-only, PKCE SPA client) ──JWT──► the app
 ```
@@ -50,10 +50,10 @@ Rationale: never let an app redeploy endanger the stateful resources.
 - **One multi-route BFF Lambda** per env (all routes in a single handler). Node 22 runtime, esbuild-bundled via CDK.
 - **Lambda Function URL**, auth type **`NONE`**, fronted by CloudFront. Not OAC: CloudFront OAC can't SigV4-sign POST bodies to a Function URL. Instead CloudFront stamps a shared **origin-secret header** (`ORIGIN_SECRET`) on every origin request and the handler 403s anything without it, so the raw URL is useless directly. Defense-in-depth only — the in-handler Cognito JWT check is the real auth gate. The MCP Lambda's URL works the same way. (`cdk/src/lib/app-stack.ts` class comment.)
 - **Auth:** validate the Cognito JWT **in-handler** (JWKS signature + issuer/expiry), extract `sub` → `userId` scoping every DynamoDB item.
-- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `MCP_CLIENT_ID`, `STAGE`, `ORIGIN_SECRET`, `DEVICE_TOKEN` (+ optional `DEVICE_USER_ID`). The BFF verifier is deliberately **not** bound to one app client (D14) — `MCP_CLIENT_ID` is the claude.ai MCP client, and the BFF **rejects** tokens minted for it (the MCP Lambda does the opposite: it accepts only that client).
+- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `MCP_CLIENT_ID`, `STAGE`, `ORIGIN_SECRET`, `DEVICE_TOKEN`, `PLAID_ENV`, `FINANCE_SYNC_FN` (+ optional `DEVICE_USER_ID`). The BFF verifier is deliberately **not** bound to one app client (D14) — `MCP_CLIENT_ID` is the claude.ai MCP client, and the BFF **rejects** tokens minted for it (the MCP Lambda does the opposite: it accepts only that client).
 - **Writes-object pattern** enforced (single audit point for all side effects; guarantees no writes during smoke tests).
 - **Recurrence generation: lazy on read** — when a day loads, materialize any due `taskSeries` occurrences. No cron for recurrence.
-- **Three functions:** the BFF, the MCP server (`aperture-mcp-<stage>`, [mcp/](../areas/mcp/index.md)), and the **finance sync** (`aperture-finance-sync-<stage>`, `cdk/src/lib/finance-sync.ts`): 300 s, 512 MB, no Function URL, invoked only asynchronously — by the BFF after Refresh / connect / reconnect, and by **EventBridge Scheduler** at 5:15a / 3:15p / 8:15p LA (the one scheduled job; created only when `DEVICE_USER_ID` is set). Lambda never retries it (retryAttempts 0, maxEventAge 60 s); 30-day log group; no reserved concurrency (a per-item CAS lock is the concurrency control). Its IAM is GetItem/PutItem/Query on the table + Plaid SSM read. The BFF adds env `PLAID_ENV` (prod `production`, else `sandbox`) and `FINANCE_SYNC_FN`, and may invoke exactly that function. Timing and design: [finances/](../areas/finances/index.md).
+- **Three functions:** the BFF, the MCP server (`aperture-mcp-<stage>`, [mcp/](../areas/mcp/index.md)), and the **finance sync** (`aperture-finance-sync-<stage>`, `cdk/src/lib/finance-sync.ts`): 300 s, 512 MB, no Function URL, invoked only asynchronously — by the BFF after a sync request, connect or reconnect, and by **EventBridge Scheduler** at 5:15a / 3:15p / 8:15p LA (the one scheduled job; created only when `DEVICE_USER_ID` is set). Never retried by Lambda; 30-day log group; no reserved concurrency (a per-item CAS lock is the concurrency control). Its IAM is GetItem/PutItem/Query on the table + Plaid SSM read. `PLAID_ENV` is `production` on prod, else `sandbox`; the BFF may invoke exactly this function. Timing and design: [finances/](../areas/finances/index.md).
 
 ## 5. Data — DynamoDB
 
