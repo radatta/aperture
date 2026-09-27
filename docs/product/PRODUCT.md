@@ -115,6 +115,13 @@ Capture **never** asks for structure. No estimate, no due date, no category at c
   - *Attempts* — LeetCode attempt capture. Every submission is recorded, **accepted and wrong**, by a browser extension; there's no authoring here. The list shows a derived per-problem attempt count ("attempt 2 of 2"), so the wrong→accepted arc is the visible unit — the same estimate-vs-reality move as calibration, applied to problem-solving. **No streaks, and a wrong answer is never red** — accepted reads positive, everything else reads "attention." Full design: **[recruiting/](../areas/recruiting/index.md)**.
   - *Stories* — a **behavioral story bank**: ~8–12 STAR stories tagged by competency. The one place the app is structured-at-entry, on purpose — a story is a slowly-tightened artifact you reuse across interviews, not a fleeting capture. Full design: **[recruiting/story-bank.md](../areas/recruiting/story-bank.md)**.
   - Deliberately off the daily home; it's a review surface, not a ritual one.
+- **Finances** — where the money went this billing period. Bank of America syncs in (Plaid) and every
+  charge gets sorted into **Parents pay · Budget · I pay**; only Budget counts against the per-period
+  budget ($600). You mark the card payment that ends a period, link refunds to the charges they reverse,
+  and teach it rules ("always put Uber in I pay"). Sorting is a batch pass (keys 1/2/3), not a per-charge
+  chore. The home gets **one line, never a card** — budget left + what's waiting to sort in the morning,
+  the sort count at night — because Morning is at its ≤5-element cap. Full design:
+  **[finances/](../areas/finances/index.md)**.
 
 ### Categories
 Tasks + pomodoro sessions carry a category (drives the time-budget glance + weekly balance view). Starting set (editable): **deep work · admin · learning · health · people.** Collapsible to just work / non-work if the fuller set is too much.
@@ -141,7 +148,7 @@ Tasks + pomodoro sessions carry a category (drives the time-budget glance + week
 
 ## 6. Non-goals for v1
 
-**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · rolls (deadline-free efforts, forgiving momentum) · quick-capture inbox · three-mode glanceable home · auto teal/gold theme. Online-first, multi-device (item 7 below). That's it. The bar for v1 is: **it earns the morning + night ritual.**
+**v1 in scope (the daily driver):** capture bar (Log/Task/Idea) · interstitial log · tasks with estimate/actual calibration · pomodoro · habits (weekly-cadence, may hold non-work) · rolls (deadline-free efforts, forgiving momentum) · quick-capture inbox · finances (the three-bucket budget, one home line) · three-mode glanceable home · auto teal/gold theme. Online-first, multi-device (item 7 below). That's it. The bar for v1 is: **it earns the morning + night ritual.**
 
 **Parked for later (ordered by likely arrival):**
 1. **Weekly balance view** (work vs non-work split, gentle nudge) — v1.1, the *first* thing after v1. In v1, balance lives entirely through **habits** (the non-work-habit vehicle); the analytical weekly view comes once a week of category data exists.
