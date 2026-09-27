@@ -6,7 +6,7 @@ import {
   addDays,
   dayKey,
   FINANCE_DEFAULT_BUDGET_CENTS,
-  FINANCE_DEFAULT_CYCLE_DAY,
+  FINANCE_DEFAULT_PAYMENT_DAY,
   rollRepFields,
 } from '@aperture/shared';
 import type {
@@ -73,7 +73,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     dayFocusStart: 8,
     dayEndHour: 22,
     financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
-    financeCycleDay: FINANCE_DEFAULT_CYCLE_DAY,
+    financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
   };
 
   const estimates = [30, 45, 60, 90];

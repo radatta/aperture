@@ -730,7 +730,7 @@ export function runApiContract(
       expect(updated.dayStartHour).toBe(5);
       expect(updated.pomodoroWorkMin).toBe(50);
       expect(s.financeBudgetCents).toBe(60000);
-      expect(s.financeCycleDay).toBe(23);
+      expect(s.financePaymentDay).toBe(20);
       const fin = await api.updateSettings({ financeBudgetCents: 45000 });
       expect(fin.financeBudgetCents).toBe(45000);
     });
@@ -847,22 +847,30 @@ export function runApiContract(
     // day, and both run the sync inline here (stub: in-process; lambda: InlineInvoker + InMemoryPlaid),
     // so the whole connect → sync → sort loop is compared end to end.
     const finToday = () => todayKey(4, clock);
-    const connect = () =>
+    const connectBare = () =>
       api.exchangePlaidPublicToken({
         publicToken: 'public-fixture',
         institution: FIXTURE_INSTITUTION,
         accounts: FIXTURE_LINK_ACCOUNTS,
       });
+    // Connect, then mark both fixture card payments — the period starts today−8, previous today−38.
+    const connect = async () => {
+      const item = await connectBare();
+      for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+        await api.setFinancePeriodStart(id, true);
+      return item;
+    };
     const finRange = async () => {
       const o = await api.getFinanceOverview({ today: finToday() });
       return { from: o.period.previous.start, to: o.period.end };
     };
 
-    it('finance: an empty overview falls back to the calendar period and the default budget', async () => {
+    it('finance: an empty overview falls back to the payment day and the default budget', async () => {
       const o = await api.getFinanceOverview({ today: finToday() });
       expect(o.items).toEqual([]);
       expect(o.accounts).toEqual([]);
-      expect(o.period.source).toBe('calendar');
+      expect(o.period.source).toBe('payment_day');
+      expect(o.period.lastPaymentDate).toBeNull();
       expect(o.budgetCents).toBe(60000);
       expect(o.leftCents).toBe(60000);
       expect(o.unsortedCount).toBe(0);
@@ -878,7 +886,7 @@ export function runApiContract(
 
       const o = await api.getFinanceOverview({ today: finToday() });
       expect(o.accounts).toHaveLength(3);
-      expect(o.period.source).toBe('matched');
+      expect(o.period.source).toBe('marked');
       expect(o.unsortedCount).toBeGreaterThan(0);
       expect(o.sync.lastSyncedAt).not.toBeNull();
       expect(o.sync.syncing).toBe(false);
@@ -1124,6 +1132,69 @@ export function runApiContract(
         (await api.exportData()).financeTransactions.find((t) => t.id === 'fx-refund-2')!
           .refundOfId,
       ).toBe('fx-pending-1');
+    });
+
+    it('finance: marking the card payment sets the period; unmarking falls back', async () => {
+      await connectBare();
+      const today = finToday();
+      expect((await api.getFinanceOverview({ today })).period.source).toBe('payment_day');
+
+      const marked = await api.setFinancePeriodStart('fx-ccpay-card-10', true);
+      expect(marked.startsPeriod).toBe(true);
+      const one = (await api.getFinanceOverview({ today })).period;
+      expect([one.source, one.start, one.previous.end]).toEqual([
+        'marked',
+        addDays(today, -8),
+        addDays(today, -9),
+      ]);
+      await api.setFinancePeriodStart('fx-ccpay-card-40', true);
+      expect((await api.getFinanceOverview({ today })).period.previous.start).toBe(
+        addDays(today, -38),
+      );
+      await api.setFinancePeriodStart('fx-ccpay-card-10', false);
+      expect((await api.getFinanceOverview({ today })).period.start).toBe(addDays(today, -38));
+
+      await expect(api.setFinancePeriodStart('fx-card-8', true)).rejects.toThrow(); // a charge
+      await expect(api.setFinancePeriodStart('fx-ccpay-chk-10', true)).rejects.toThrow(); // checking
+      await expect(api.setFinancePeriodStart('nope', true)).rejects.toThrow();
+      const data = await api.exportData();
+      expect(data.financeTransactions.find((t) => t.id === 'fx-ccpay-card-40')!.startsPeriod).toBe(
+        true,
+      );
+    });
+
+    it('finance: marking a linked card credit clears its bucket and link and moves the period', async () => {
+      await connect();
+      await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      const marked = await api.setFinancePeriodStart('fx-refund-1', true);
+      expect([marked.startsPeriod, marked.bucket, marked.refundOfId]).toEqual([true, null, null]);
+      const o = await api.getFinanceOverview({ today: finToday() });
+      expect(o.period.start).toBe(addDays(finToday(), -2)); // the day after the new mark
+      await expect(api.linkFinanceRefund('fx-refund-1', 'fx-card-8')).rejects.toThrow();
+
+      // Unmarking leaves it a plain, unsorted card credit — the old link isn't restored.
+      const back = await api.setFinancePeriodStart('fx-refund-1', false);
+      expect([back.startsPeriod, back.refundOfId]).toEqual([false, null]);
+    });
+
+    it('finance: a checking refund links to its debit charge and nets it', async () => {
+      await connect();
+      await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
+      const before = await api.getFinanceOverview({ today: finToday() });
+      expect(before.spentCents).toBe(3861);
+
+      await api.linkFinanceRefund('fx-refund-3', 'fx-safeway');
+      const after = await api.getFinanceOverview({ today: finToday() });
+      expect(after.spentCents).toBe(0);
+      expect(after.unsortedCount).toBe(before.unsortedCount); // a deposit was never in the queue
+
+      await api.linkFinanceRefund('fx-refund-3', null);
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(3861);
+
+      await api.linkFinanceRefund('fx-refund-1', 'fx-safeway'); // a card credit → a debit charge
+      await expect(api.linkFinanceRefund('fx-xfer-sav', 'fx-safeway')).rejects.toThrow(); // transfer in
+      await expect(api.linkFinanceRefund('fx-refund-3', 'fx-venmo')).rejects.toThrow(); // transfer out
+      await expect(api.linkFinanceRefund('fx-ccpay-card-10', 'fx-card-8')).rejects.toThrow(); // marked
     });
 
     it('finance: export carries items, accounts, transactions and rules', async () => {

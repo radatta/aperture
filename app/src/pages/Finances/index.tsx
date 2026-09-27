@@ -60,7 +60,7 @@ export function FinancesPage() {
   return (
     <div className="flex flex-col gap-4">
       {heading}
-      <PeriodHeader overview={overview} />
+      <PeriodHeader overview={overview} view={view} />
       <AccountsStrip overview={overview} link={link} />
       <FinancesTabs />
       <Outlet

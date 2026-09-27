@@ -62,12 +62,10 @@ export interface FinanceAccount extends BaseEntity {
   balanceAt: number | null;
   signOverride: FinanceSignOverride;
   hidden: boolean;
-  lastPaymentDate: string | null; // Liabilities, when BofA sends it
-  nextPaymentDueDate: string | null;
 }
 
-// id = Plaid transaction_id. Plaid owns everything above `source`; the user owns bucket/override/note,
-// which a sync never overwrites and which carry from a pending row to its posted replacement.
+// id = Plaid transaction_id. Plaid owns everything above `source`; the user owns everything after it,
+// which a sync never overwrites and which carries from a pending row to its posted replacement.
 export interface FinanceTransaction extends BaseEntity {
   itemId: string;
   accountId: string;
@@ -91,6 +89,9 @@ export interface FinanceTransaction extends BaseEntity {
   // carries it pending→posted). May still name a charge's old pending id — resolveRefundLinks
   // follows pendingTransactionId, so a link survives the charge posting.
   refundOfId: string | null;
+  // User-owned: this card payment ends a billing period (the next starts the day after). Trusted only
+  // while periodStartError passes — a flipped or moved row stops anchoring the period.
+  startsPeriod: boolean;
 }
 
 // "Always put <pattern> in <bucket>". pattern is lowercased and matched as a substring.
@@ -101,14 +102,15 @@ export interface FinanceRule extends BaseEntity {
 }
 
 // --- DTOs ------------------------------------------------------------------
-export type FinancePeriodSource = 'liabilities' | 'matched' | 'hint' | 'calendar';
+// marked = the payment you marked; payment_day = no mark yet, so the calendar day after your payment day.
+export type FinancePeriodSource = 'marked' | 'payment_day';
 
 export interface FinancePeriod {
   start: string;
   end: string; // today — the period is open until the next payment
   dayCount: number;
   source: FinancePeriodSource;
-  lastPaymentDate: string | null;
+  lastPaymentDate: string | null; // the marked payment's date; null on the payment-day fallback
   previous: { start: string; end: string };
 }
 
@@ -171,7 +173,7 @@ export interface RequestFinanceSyncResult {
 
 // --- Constants -------------------------------------------------------------
 export const FINANCE_DEFAULT_BUDGET_CENTS = 60_000;
-export const FINANCE_DEFAULT_CYCLE_DAY = 23;
+export const FINANCE_DEFAULT_PAYMENT_DAY = 20;
 export const FINANCE_REFRESH_COOLDOWN_MS = 5 * 60_000;
 export const FINANCE_REFRESH_POLL_MS = 20_000;
 export const FINANCE_REFRESH_POLL_MAX_MS = 4 * 60_000;
@@ -181,8 +183,11 @@ export const FINANCE_SYNCING_MAX_MS = 5 * 60_000 + FINANCE_REFRESH_POLL_MAX_MS;
 export const PAYMENT_MATCH_WINDOW_DAYS = 3;
 // How far back a refund looks for the charge it reverses.
 export const REFUND_MATCH_WINDOW_DAYS = 90;
+// Bank dates are posting dates, so a same-day return can post before its charge does.
+export const REFUND_DATE_SLACK_DAYS = 3;
 export const SYNC_PAGE_COUNT = 500;
-// How far back the overview reads. Two billing periods plus slack for the payment search.
+// How far back the overview reads: two billing periods plus slack. A mark older than this isn't
+// loaded, so the period falls back to the payment day.
 export const FINANCE_OVERVIEW_LOOKBACK_DAYS = 120;
 const CC_PAYMENT_PFC = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT';
 
@@ -205,23 +210,15 @@ export type InternalMoves = Map<string, 'transfer' | 'card_payment'>;
 // Card payments and own-account transfers, found by pairing a depository outflow with an inflow of
 // the same size on another linked account within PAYMENT_MATCH_WINDOW_DAYS (nearest date wins). A
 // pair needs at least one side whose PFC says payment/transfer — otherwise a $25 Venmo and a $25
-// card refund two days apart would pair up and restart the billing period. An unpaired row whose PFC
-// says credit-card payment still counts as one — the "hint". Returns every id involved (both sides
-// of a pair) and the card-side dates, which feed the billing period.
-export interface InternalMoveResult {
-  moves: InternalMoves;
-  matchedPaymentDates: string[];
-  hintedPaymentDates: string[];
-}
-
+// card refund two days apart would pair up as a payment. An unpaired row whose PFC says credit-card
+// payment still counts as one — the "hint". Returns every id involved (both sides of a pair). None of
+// this sets the billing period — you mark that payment; this only suggests it.
 export function detectInternalMoves(
   txns: FinanceTransaction[],
   accounts: FinanceAccount[],
-): InternalMoveResult {
+): InternalMoves {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const moves: InternalMoves = new Map();
-  const matchedPaymentDates: string[] = [];
-  const hintedPaymentDates: string[] = [];
   const live = txns.filter((t) => t.deletedAt === null && byId.has(t.accountId));
   const outs = live
     .filter(
@@ -251,15 +248,11 @@ export function detectInternalMoves(
     const kind = byId.get(best.accountId)!.type === 'credit' ? 'card_payment' : 'transfer';
     moves.set(out.id, kind);
     moves.set(best.id, kind);
-    if (kind === 'card_payment') matchedPaymentDates.push(best.date);
   }
 
-  for (const t of live) {
-    if (moves.has(t.id) || t.pfcDetailed !== CC_PAYMENT_PFC) continue;
-    moves.set(t.id, 'card_payment');
-    hintedPaymentDates.push(t.date);
-  }
-  return { moves, matchedPaymentDates, hintedPaymentDates };
+  for (const t of live)
+    if (!moves.has(t.id) && t.pfcDetailed === CC_PAYMENT_PFC) moves.set(t.id, 'card_payment');
+  return moves;
 }
 
 const MOVE_PFC_PRIMARIES = new Set(['LOAN_PAYMENTS', 'TRANSFER_IN', 'TRANSFER_OUT']);
@@ -271,6 +264,7 @@ export function classifyTransaction(
   account: FinanceAccount | undefined,
   moves: InternalMoves,
 ): FinanceTxnKind {
+  if (isPeriodStart(txn, account)) return 'card_payment'; // a payment by your declaration
   const move = moves.get(txn.id);
   if (move) return move;
   if (amountOf(txn, account) > 0) return 'expense';
@@ -278,6 +272,23 @@ export function classifyTransaction(
 }
 
 // --- Billing period --------------------------------------------------------
+// Why this row can't start a period, or null. A period starts at money coming IN to a card — the card
+// side of a payment. A hidden card still counts: hiding it mustn't move the boundary.
+export function periodStartError(
+  txn: FinanceTransaction,
+  account: FinanceAccount | undefined,
+): string | null {
+  if (txn.deletedAt !== null) return 'That transaction is gone';
+  if (!account || account.deletedAt !== null) return 'That account is gone';
+  if (account.type !== 'credit') return 'Only a card payment can start a period';
+  if (amountOf(txn, account) >= 0)
+    return 'A period starts at money coming in to the card — a payment, not a charge';
+  return null;
+}
+
+export const isPeriodStart = (txn: FinanceTransaction, account: FinanceAccount | undefined) =>
+  txn.startsPeriod && periodStartError(txn, account) === null;
+
 function parts(key: string): [number, number, number] {
   const p = key.split('-');
   return [Number(p[0]), Number(p[1]), Number(p[2])];
@@ -289,9 +300,9 @@ function daysInMonth(y: number, m: number): number {
   const next = m === 12 ? `${y + 1}-01-01` : `${y}-${pad2(m + 1)}-01`;
   return daysBetween(`${y}-${pad2(m)}-01`, next);
 }
-// The day after `cycleDay` in the given month, clamped (cycle day 31 in February → Mar 1).
-function cycleStartIn(y: number, m: number, cycleDay: number): string {
-  return addDays(`${y}-${pad2(m)}-${pad2(Math.min(cycleDay, daysInMonth(y, m)))}`, 1);
+// The day after `paymentDay` in the given month, clamped (day 31 in February → Mar 1).
+function cycleStartIn(y: number, m: number, paymentDay: number): string {
+  return addDays(`${y}-${pad2(m)}-${pad2(Math.min(paymentDay, daysInMonth(y, m)))}`, 1);
 }
 function prevMonth(y: number, m: number): [number, number] {
   return m === 1 ? [y - 1, 12] : [y, m - 1];
@@ -303,54 +314,43 @@ function monthBefore(key: string): string {
   return `${py}-${pad2(pm)}-${pad2(Math.min(d, daysInMonth(py, pm)))}`;
 }
 
-// Calendar fallback: the period that started the day after the last `cycleDay` on or before today.
-function calendarStart(today: string, cycleDay: number): string {
+// Fallback: the period that started the day after the last `paymentDay` on or before today.
+function calendarStart(today: string, paymentDay: number): string {
   const [y, m] = parts(today);
-  const thisMonth = cycleStartIn(y, m, cycleDay);
+  const thisMonth = cycleStartIn(y, m, paymentDay);
   if (thisMonth <= today) return thisMonth;
   const [py, pm] = prevMonth(y, m);
-  return cycleStartIn(py, pm, cycleDay);
+  return cycleStartIn(py, pm, paymentDay);
 }
 
-function maxDate(dates: string[], atOrBefore: string): string | null {
-  let best: string | null = null;
-  for (const d of dates) if (d <= atOrBefore && (best === null || d > best)) best = d;
-  return best;
-}
-
-// The current period starts the day after the last card payment and runs to today. The payment is the
-// NEWEST date across Liabilities' last_payment_date, matched checking→card pairs and PFC-hinted
-// payments (Liabilities refreshes less often, so it can't outrank a newer match); the source label
-// says which one found it, Liabilities winning ties. No payment at all → the calendar cycle.
-// `previous` runs from the payment before that one — ignoring dates within the match window, which
-// are the same payment seen from the other side — or one month back when there isn't one.
+// The current period starts the day after the newest payment you marked (dated on or before today)
+// and runs to today; `previous` runs from the mark before it, or one month back when there isn't one.
+// No mark → the day after your payment day.
 export function computeFinancePeriod(input: {
   today: string;
   accounts: FinanceAccount[];
   txns: FinanceTransaction[];
-  cycleDay: number;
+  paymentDay: number;
 }): FinancePeriod {
-  const { today, accounts, txns, cycleDay } = input;
-  const { matchedPaymentDates, hintedPaymentDates } = detectInternalMoves(txns, accounts);
-  const liabilities = maxDate(
-    accounts
-      .filter((a) => a.deletedAt === null)
-      .flatMap((a) => (a.lastPaymentDate ? [a.lastPaymentDate] : [])),
-    today,
-  );
-  const matched = maxDate(matchedPaymentDates, today);
-  const hinted = maxDate(hintedPaymentDates, today);
-  const found = [liabilities, matched, hinted].filter((d): d is string => d !== null);
-  const last = found.length ? found.reduce((a, b) => (b > a ? b : a)) : null;
+  const { today, accounts, txns, paymentDay } = input;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const marks = [
+    ...new Set(
+      txns
+        .filter((t) => t.date <= today && isPeriodStart(t, byId.get(t.accountId)))
+        .map((t) => t.date),
+    ),
+  ].sort();
+  const last = marks.at(-1);
 
-  if (last === null) {
-    const start = calendarStart(today, cycleDay);
-    const prevStart = calendarStart(addDays(start, -1), cycleDay);
+  if (last === undefined) {
+    const start = calendarStart(today, paymentDay);
+    const prevStart = calendarStart(addDays(start, -1), paymentDay);
     return {
       start,
       end: today,
       dayCount: daysBetween(start, today) + 1,
-      source: 'calendar',
+      source: 'payment_day',
       lastPaymentDate: null,
       previous: { start: prevStart, end: addDays(start, -1) },
     };
@@ -358,17 +358,37 @@ export function computeFinancePeriod(input: {
 
   const start = addDays(last, 1);
   const end = start > today ? start : today; // paid today → an empty period that starts tomorrow
-  const allPayments = [...matchedPaymentDates, ...hintedPaymentDates];
-  const prior = maxDate(allPayments, addDays(last, -(PAYMENT_MATCH_WINDOW_DAYS + 1)));
-  const prevStart = prior ? addDays(prior, 1) : monthBefore(start);
+  const prior = marks.at(-2);
   return {
     start,
     end,
     dayCount: daysBetween(start, end) + 1,
-    source: liabilities === last ? 'liabilities' : matched === last ? 'matched' : 'hint',
+    source: 'marked',
     lastPaymentDate: last,
-    previous: { start: prevStart, end: last },
+    previous: { start: prior ? addDays(prior, 1) : monthBefore(start), end: last },
   };
+}
+
+// The newest unmarked payment the page recognises (the card side of a detected payment) dated after
+// `after` and on or before today — offered as a one-click mark, never applied on its own.
+export function suggestPeriodStart(input: {
+  txns: FinanceTransaction[];
+  accounts: FinanceAccount[];
+  moves: InternalMoves;
+  after: string | null;
+  today: string;
+}): FinanceTransaction | null {
+  const { txns, accounts, moves, after, today } = input;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  let best: FinanceTransaction | null = null;
+  for (const t of txns) {
+    const account = byId.get(t.accountId);
+    if (t.startsPeriod || moves.get(t.id) !== 'card_payment') continue;
+    if (periodStartError(t, account) !== null) continue;
+    if (t.date > today || (after !== null && t.date <= after)) continue;
+    if (!best || t.date > best.date || (t.date === best.date && t.id > best.id)) best = t;
+  }
+  return best;
 }
 
 // Which window a transaction counts in. An override moves a charge across the boundary; anything
@@ -388,11 +408,11 @@ export function periodOf(
 }
 
 // --- Overview --------------------------------------------------------------
-// The sortable rows: alive, on a visible account, and a charge or card refund (not a payment/transfer).
-export function sortableTransactions(
+function onShownAccounts(
   txns: FinanceTransaction[],
   accounts: FinanceAccount[],
   moves: InternalMoves,
+  keep: (k: FinanceTxnKind) => boolean,
 ): FinanceTransaction[] {
   const visible = new Map(
     accounts.filter((a) => a.deletedAt === null && !a.hidden).map((a) => [a.id, a]),
@@ -401,9 +421,24 @@ export function sortableTransactions(
     (t) =>
       t.deletedAt === null &&
       visible.has(t.accountId) &&
-      isSortableKind(classifyTransaction(t, visible.get(t.accountId), moves)),
+      keep(classifyTransaction(t, visible.get(t.accountId), moves)),
   );
 }
+
+// The sortable rows: alive, on a visible account, and a charge or card refund (not a payment/transfer).
+export const sortableTransactions = (
+  txns: FinanceTransaction[],
+  accounts: FinanceAccount[],
+  moves: InternalMoves,
+) => onShownAccounts(txns, accounts, moves, isSortableKind);
+
+// Rows a refund link can touch: the sortable set plus deposits (money into checking/savings, which
+// counts only once you link it to the charge it reverses). Never a payment or transfer.
+export const linkableTransactions = (
+  txns: FinanceTransaction[],
+  accounts: FinanceAccount[],
+  moves: InternalMoves,
+) => onShownAccounts(txns, accounts, moves, (k) => isSortableKind(k) || k === 'income');
 
 // --- Refund links -----------------------------------------------------------
 // refund id → the alive charge it reverses. A link whose charge went pending→posted resolves through
@@ -456,8 +491,9 @@ export function refundedCentsByCharge(
   return out;
 }
 
-// Charges this refund could reverse, best first: an alive expense at the same merchant, dated on or
-// before the refund and within REFUND_MATCH_WINDOW_DAYS, with enough left unrefunded to cover it.
+// Charges this refund could reverse, best first: an alive expense at the same merchant, dated at most
+// REFUND_DATE_SLACK_DAYS after the refund and REFUND_MATCH_WINDOW_DAYS before it, with enough left
+// unrefunded to cover it. Works for card credits and checking/savings deposits alike.
 // Ranked: same account → smallest leftover (exact first) → nearer date → posted → id. `anyMerchant`
 // drops the merchant match — the fallback when a card credit's descriptor doesn't match its charge.
 export function suggestRefundMatches(input: {
@@ -481,7 +517,7 @@ export function suggestRefundMatches(input: {
         c.id !== refund.id &&
         classifyTransaction(c, byId.get(c.accountId), moves) === 'expense' &&
         (anyMerchant || merchantKey(c) === key) &&
-        c.date <= refund.date &&
+        c.date <= addDays(refund.date, REFUND_DATE_SLACK_DAYS) &&
         daysBetween(c.date, refund.date) <= REFUND_MATCH_WINDOW_DAYS,
     )
     .map((c) => ({ c, left: amount(c) - (refunded.get(c.id) ?? 0) - size }))
@@ -489,7 +525,7 @@ export function suggestRefundMatches(input: {
   const rank = (x: { c: FinanceTransaction; left: number }) => [
     x.c.accountId === refund.accountId ? 0 : 1,
     x.left,
-    daysBetween(x.c.date, refund.date),
+    Math.abs(daysBetween(x.c.date, refund.date)),
     x.c.pending ? 1 : 0,
   ];
   return scored
@@ -503,32 +539,39 @@ export function suggestRefundMatches(input: {
 }
 
 // Structural checks both ApiClient impls run before linking; the error text, or null when valid. Both
-// sides must be on visible, live card accounts (a refund goes back to a card; a hidden account's rows
-// never resolve), neither may be a payment/transfer, and the charge must come first.
+// sides must be on visible, live card or bank accounts (a hidden account's rows never resolve), and
+// neither may be a payment/transfer — by PFC, a detected move (`moves`, when the caller has it) or a
+// period mark. The charge may post up to REFUND_DATE_SLACK_DAYS after its refund, no later.
 // "Remaining unrefunded" is the suggestion list's job — the server only caps at the full charge.
 export function refundLinkError(input: {
   refund: FinanceTransaction;
   refundAccount: FinanceAccount | undefined;
   charge: FinanceTransaction;
   chargeAccount: FinanceAccount | undefined;
+  moves?: InternalMoves;
 }): string | null {
-  const { refund, refundAccount, charge, chargeAccount } = input;
+  const { refund, refundAccount, charge, chargeAccount, moves } = input;
   if (refund.deletedAt !== null || charge.deletedAt !== null) return 'That transaction is gone';
   if (refund.id === charge.id) return 'A refund can’t reverse itself';
   const usable = (a: FinanceAccount | undefined) => a && a.deletedAt === null && !a.hidden;
   if (!usable(refundAccount) || !usable(chargeAccount))
     return 'Both need to be on an account that’s shown in your totals';
-  if (refundAccount?.type !== 'credit' || amountOf(refund, refundAccount) >= 0)
-    return 'Only a card credit can be linked as a refund';
-  if (refund.pfcPrimary !== null && MOVE_PFC_PRIMARIES.has(refund.pfcPrimary))
-    return 'A card payment or transfer isn’t a refund';
+  const moneyAccount = (a: FinanceAccount | undefined) =>
+    a?.type === 'credit' || a?.type === 'depository';
+  const isMove = (t: FinanceTransaction) => isMovePfc(t) || (moves?.has(t.id) ?? false);
+  if (!moneyAccount(refundAccount) || amountOf(refund, refundAccount) >= 0)
+    return 'Only money coming in — a card credit or a deposit — can be linked as a refund';
+  if (refund.startsPeriod) return 'That’s the card payment that starts your period';
+  if (isMove(refund)) return 'A card payment or transfer isn’t a refund';
   if (
-    chargeAccount?.type !== 'credit' ||
+    !moneyAccount(chargeAccount) ||
     amountOf(charge, chargeAccount) <= 0 ||
-    (charge.pfcPrimary !== null && MOVE_PFC_PRIMARIES.has(charge.pfcPrimary))
+    charge.startsPeriod ||
+    isMove(charge)
   )
-    return 'A refund can only reverse a card charge';
-  if (charge.date > refund.date) return 'The charge has to come before its refund';
+    return 'A refund can only reverse a charge — not a payment or transfer';
+  if (charge.date > addDays(refund.date, REFUND_DATE_SLACK_DAYS))
+    return 'The charge has to come before its refund';
   if (-amountOf(refund, refundAccount) > amountOf(charge, chargeAccount))
     return 'The refund is larger than the charge';
   return null;
@@ -557,7 +600,7 @@ export function summarizePeriod(input: {
 > {
   const { period, txns, accounts, budgetCents } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
-  const { moves } = detectInternalMoves(txns, accounts);
+  const moves = detectInternalMoves(txns, accounts);
   const buckets: Record<FinanceBucket, FinanceBucketTotal> = {
     parents_pay: { totalCents: 0, count: 0 },
     budget: { totalCents: 0, count: 0 },
@@ -565,16 +608,18 @@ export function summarizePeriod(input: {
   };
   let unsortedCount = 0;
   let unsortedCents = 0;
-  const sortable = sortableTransactions(txns, accounts, moves);
-  // Built over the sortable set, so a refund whose charge is on a hidden account counts as unlinked.
-  const links = resolveRefundLinks(sortable, (t) => amountOf(t, byId.get(t.accountId)));
-  const refunded = refundedCentsByCharge(links, new Map(sortable.map((t) => [t.id, t])), (t) =>
-    amountOf(t, byId.get(t.accountId)),
-  );
-  for (const t of sortable) {
+  const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
+  const linkable = linkableTransactions(txns, accounts, moves);
+  // Built over the linkable set, so a refund whose charge is on a hidden account counts as unlinked.
+  const links = resolveRefundLinks(linkable, amount);
+  const refunded = refundedCentsByCharge(links, new Map(linkable.map((t) => [t.id, t])), amount);
+  for (const t of linkable) {
+    // A deposit counts only as a linked refund; otherwise it's income, outside the budget.
+    if (classifyTransaction(t, byId.get(t.accountId), moves) === 'income' && !links.has(t.id))
+      continue;
     const which = periodOf(t, period, links);
     if (which === null) continue;
-    const cents = amountOf(t, byId.get(t.accountId));
+    const cents = amount(t);
     const linked = links.has(t.id); // rides on its charge: nets its money, never adds to a count
     const bucket = bucketOf(t, links);
     if (bucket === null) {
@@ -599,7 +644,7 @@ export function summarizePeriod(input: {
 export function buildFinanceOverview(input: {
   today: string;
   budgetCents: number;
-  cycleDay: number;
+  paymentDay: number;
   items: FinanceItem[];
   accounts: FinanceAccount[];
   syncStates: FinanceSyncState[];
@@ -615,7 +660,7 @@ export function buildFinanceOverview(input: {
     today: input.today,
     accounts,
     txns,
-    cycleDay: input.cycleDay,
+    paymentDay: input.paymentDay,
   });
   const syncs = input.syncStates.filter((s) => s.deletedAt === null && liveItemIds.has(s.itemId));
   const synced = syncs.map((s) => s.lastSyncedAt);
@@ -762,7 +807,7 @@ export interface ReconcileInput {
 
 // One /transactions/sync page → the rows to write, applied added → modified → removed.
 //  - A replayed `added` (a restart after a failed batch) is treated as `modified` — idempotent.
-//  - A new posted row inherits bucket/override/note/refund link from its pending row
+//  - A new posted row inherits bucket/override/note/refund link/period mark from its pending row
 //    (pending_transaction_id), even when that pending row was already tombstoned; otherwise the rules
 //    decide — except for a carried refund link, which must not pick up its charge's merchant rule.
 //  - `modified` overwrites Plaid-owned fields only.
@@ -784,7 +829,7 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
     }
     const carry = p.pending_transaction_id ? existing.get(p.pending_transaction_id) : undefined;
     const rule =
-      carry?.bucket || carry?.refundOfId
+      carry?.bucket || carry?.refundOfId || carry?.startsPeriod
         ? null
         : applyRules(rules, { merchantName: p.merchant_name, name: p.name });
     write({
@@ -800,6 +845,7 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
       periodOverride: carry?.periodOverride ?? null,
       note: carry?.note ?? null,
       refundOfId: carry?.refundOfId ?? null,
+      startsPeriod: carry?.startsPeriod ?? false,
     });
   }
 

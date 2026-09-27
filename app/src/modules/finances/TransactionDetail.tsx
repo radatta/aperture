@@ -1,31 +1,50 @@
 import { useState } from 'react';
 import {
+  addDays,
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
   fmtMonthShortDay,
+  isPeriodStart,
   periodOf,
   REFUND_MATCH_WINDOW_DAYS,
   suggestRefundMatches,
 } from '@aperture/shared';
-import type { FinanceOverview, FinancePeriodOverride, FinanceTransaction } from '@aperture/shared';
+import type {
+  FinanceOverview,
+  FinancePeriodOverride,
+  FinanceTransaction,
+  FinanceTxnKind,
+} from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
 import { Modal } from '../../components/Modal';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
+import { useDisclosure } from '../../lib/useDisclosure';
 import {
   useLinkFinanceRefund,
   useSetFinanceBucket,
   useSetFinanceNote,
   useSetFinancePeriodOverride,
+  useSetFinancePeriodStart,
 } from '../../data/hooks/useFinances';
 import { fmtMoney } from './money';
 import type { FinanceView } from './useFinanceData';
 
+const KIND_LABEL: Record<FinanceTxnKind, string> = {
+  expense: 'Charge',
+  refund: 'Refund',
+  income: 'Money in',
+  transfer: 'Transfer',
+  card_payment: 'Payment',
+};
+
 // One transaction: its bucket, which period it counts in (a charge that posted after the payment but
 // belongs to the old cycle, or vice versa), and a note. Every control saves as you change it.
-// A card refund can instead be linked to the charge it reverses — it then follows that charge's
-// bucket and period, so those controls give way to the link. A charge lists the refunds against it.
+// Money coming in (a card credit or a checking/savings deposit) can instead be linked to the charge it
+// reverses — it then follows that charge's bucket and period, so those controls give way to the link.
+// A charge lists the refunds against it. Money in on the card can be marked as the payment that
+// starts a billing period.
 export function TransactionDetail({
   txn,
   view,
@@ -41,19 +60,28 @@ export function TransactionDetail({
   const setOverride = useSetFinancePeriodOverride();
   const setNote = useSetFinanceNote();
   const link = useLinkFinanceRefund();
-  const isRefund = view.kindOf(txn) === 'refund';
+  const mark = useSetFinancePeriodStart();
+  const kind = view.kindOf(txn);
+  const isRefund = kind === 'refund';
+  const isIncome = kind === 'income';
   const linkedTo = view.links.get(txn.id);
   const dangling = txn.refundOfId !== null && !linkedTo; // its charge isn't loaded / is gone
   const cents = view.amount(txn);
-  // Focus follows a link/unlink (the clicked button unmounts) — but never on first open, where a
-  // focused Link button would make a stray Enter link the refund.
+  const acct = view.accounts.get(txn.accountId);
+  const markable = acct?.type === 'credit' && cents < 0;
+  // Focus follows a link/unlink/mark (the clicked button unmounts) — but never on first open, where
+  // a focused Link button would make a stray Enter link the refund.
   const [acted, setActed] = useState(false);
   const setLink = (chargeId: string | null) => {
     setActed(true);
     link.mutate({ refundId: txn.id, chargeId });
   };
+  const setMark = (marked: boolean) => {
+    setActed(true);
+    mark.mutate({ id: txn.id, marked });
+  };
+  const incomeLink = useDisclosure();
   const [note, setNoteText] = useState(txn.note ?? '');
-  const acct = view.accounts.get(txn.accountId);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
     { value: null, label: 'By date' },
     { value: 'current', label: `This period (from ${fmtMonthShortDay(overview.period.start)})` },
@@ -70,7 +98,7 @@ export function TransactionDetail({
     <Modal
       open
       onClose={close}
-      label={`${isRefund ? 'Refund' : 'Charge'}: ${txn.merchantName ?? txn.name}`}
+      label={`${KIND_LABEL[kind]}: ${txn.merchantName ?? txn.name}`}
       closeOnBackdrop
     >
       <div className="flex flex-col gap-4">
@@ -104,8 +132,8 @@ export function TransactionDetail({
         {dangling && (
           <div className="flex flex-wrap items-center gap-3">
             <Text size="sm" tone="muted" className="flex-1">
-              Linked to an earlier charge that isn&apos;t shown here any more, so it counts as
-              unsorted.
+              Linked to an earlier charge that isn&apos;t shown here any more, so it counts as{' '}
+              {isIncome ? 'money in' : 'unsorted'}.
             </Text>
             <Button
               size="sm"
@@ -123,12 +151,49 @@ export function TransactionDetail({
             view={view}
             busy={link.isPending}
             focus={acted}
+            fallback="Nothing it could reverse. Sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
           />
         )}
-        {!isRefund && <RefundsAgainst charge={txn} view={view} />}
+        {isIncome &&
+          !txn.refundOfId &&
+          (incomeLink.open ? (
+            <RefundSuggestions
+              refund={txn}
+              view={view}
+              busy={link.isPending}
+              focus
+              fallback="Nothing it could reverse — it stays money in, outside the budget."
+              onLink={(chargeId) => setLink(chargeId)}
+            />
+          ) : (
+            <div className="flex flex-col gap-1">
+              <Text size="sm" tone="muted">
+                Money in stays out of the budget — unless it&apos;s a refund of a charge.
+              </Text>
+              <Button
+                ref={incomeLink.triggerRef}
+                size="sm"
+                variant="ghost"
+                className="self-start"
+                onClick={incomeLink.onOpen}
+              >
+                Link as a refund
+              </Button>
+            </div>
+          ))}
+        {kind === 'expense' && <RefundsAgainst charge={txn} view={view} />}
+        {kind === 'card_payment' && markable && (
+          <PeriodMark
+            txn={txn}
+            marked={isPeriodStart(txn, acct)}
+            busy={mark.isPending}
+            focus={acted}
+            onMark={setMark}
+          />
+        )}
 
-        {!txn.refundOfId && (
+        {(kind === 'expense' || isRefund) && !txn.refundOfId && (
           <>
             <Segmented
               label="Bucket"
@@ -146,6 +211,24 @@ export function TransactionDetail({
               onChange={(override) => setOverride.mutate({ id: txn.id, override })}
             />
           </>
+        )}
+        {isRefund && (
+          <Button
+            size="sm"
+            variant="quiet"
+            className="self-start"
+            disabled={mark.isPending}
+            onClick={() => setMark(true)}
+          >
+            Not a refund? It&apos;s a card payment — start the period here
+          </Button>
+        )}
+        {mark.isError && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn&apos;t change the period: {mark.error.message}
+            </Text>
+          </div>
         )}
         {link.isError && (
           <div role="alert">
@@ -222,12 +305,14 @@ function RefundSuggestions({
   view,
   busy,
   focus,
+  fallback,
   onLink,
 }: {
   refund: FinanceTransaction;
   view: FinanceView;
   busy: boolean;
   focus: boolean;
+  fallback: string;
   onLink: (chargeId: string) => void;
 }) {
   // Charges on shown accounts only — a hidden account's rows never resolve as a link target.
@@ -254,7 +339,7 @@ function RefundSuggestions({
       </Text>
       {matches.length === 0 ? (
         <Text size="sm" tone="muted">
-          Nothing it could reverse. Sort it below instead.
+          {fallback}
         </Text>
       ) : (
         <ul aria-labelledby={labelId} className="flex flex-col gap-1.5">
@@ -291,6 +376,41 @@ function RefundSuggestions({
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+// On a card payment: whether it ends a billing period. You mark it; the page never decides.
+function PeriodMark({
+  txn,
+  marked,
+  busy,
+  focus,
+  onMark,
+}: {
+  txn: FinanceTransaction;
+  marked: boolean;
+  busy: boolean;
+  focus: boolean;
+  onMark: (marked: boolean) => void;
+}) {
+  const starts = fmtMonthShortDay(addDays(txn.date, 1));
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
+      <Text size="sm" className="min-w-0 flex-1">
+        {marked
+          ? `This payment starts a period — the one from ${starts}.`
+          : `A card payment. Mark it to start a new period on ${starts}.`}
+      </Text>
+      <Button
+        size="sm"
+        variant={marked ? 'ghost' : 'primary'}
+        disabled={busy}
+        autoFocus={focus}
+        onClick={() => onMark(!marked)}
+      >
+        {marked ? 'Unmark' : 'Start the period here'}
+      </Button>
     </div>
   );
 }

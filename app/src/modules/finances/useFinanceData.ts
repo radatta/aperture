@@ -3,6 +3,7 @@ import {
   amountOf,
   classifyTransaction,
   detectInternalMoves,
+  linkableTransactions,
   periodOf,
   refundedCentsByCharge,
   resolveRefundLinks,
@@ -23,6 +24,7 @@ export interface FinanceView {
   txns: FinanceTransaction[]; // alive, inside the current or previous window, date desc
   allTxns: FinanceTransaction[]; // the whole loaded range — refund suggestions look back further
   sortable: FinanceTransaction[]; // allTxns on shown accounts, charges + refunds only
+  linkable: FinanceTransaction[]; // sortable + deposits — what a refund link can touch
   amount: (t: FinanceTransaction) => number; // normalised: positive = money out
   kindOf: (t: FinanceTransaction) => FinanceTxnKind;
   links: RefundLinks; // refund id → the charge it reverses
@@ -31,7 +33,7 @@ export interface FinanceView {
 
 // The overview plus the transactions of both windows, with the derived bits every tab needs. Moves and
 // refund links are resolved over the same range and rows the server's overview used (links over the
-// sortable set, so a charge on a hidden account leaves its refund unlinked), then rows outside both
+// linkable set, so a charge on a hidden account leaves its refund unlinked), then rows outside both
 // windows are dropped.
 export function useFinanceData() {
   const overviewQ = useFinanceOverview();
@@ -41,15 +43,17 @@ export function useFinanceData() {
     if (!overview || !txnsQ.data) return null;
     const accounts = new Map(overview.accounts.map((a) => [a.id, a]));
     const allTxns = txnsQ.data.filter((t) => accounts.has(t.accountId));
-    const { moves } = detectInternalMoves(allTxns, overview.accounts);
+    const moves = detectInternalMoves(allTxns, overview.accounts);
     const amount = (t: FinanceTransaction) => amountOf(t, accounts.get(t.accountId));
     const sortable = sortableTransactions(allTxns, overview.accounts, moves);
-    const links = resolveRefundLinks(sortable, amount);
+    const linkable = linkableTransactions(allTxns, overview.accounts, moves);
+    const links = resolveRefundLinks(linkable, amount);
     return {
       accounts,
       moves,
       allTxns,
       sortable,
+      linkable,
       txns: allTxns.filter((t) => periodOf(t, overview.period, links) !== null),
       amount,
       kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),

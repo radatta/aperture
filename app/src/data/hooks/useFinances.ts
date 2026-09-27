@@ -119,6 +119,32 @@ export function useLinkFinanceRefund() {
   });
 }
 
+export function useSetFinancePeriodStart() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; marked: boolean }) => api.setFinancePeriodStart(v.id, v.marked),
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: ['finance', 'txns'] });
+      patchTxnCaches(qc, (t) =>
+        t.id !== v.id
+          ? t
+          : v.marked
+            ? {
+                ...t,
+                startsPeriod: true,
+                bucket: null,
+                bucketSetBy: null,
+                periodOverride: null,
+                refundOfId: null,
+              }
+            : { ...t, startsPeriod: false },
+      );
+    },
+    onSettled: () => invalidateFinance(qc),
+  });
+}
+
 export function useSetFinancePeriodOverride() {
   const api = useApi();
   const qc = useQueryClient();

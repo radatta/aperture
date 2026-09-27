@@ -10,13 +10,21 @@ beforeEach(() => globalThis.localStorage?.clear());
 
 const fresh = () => createStubClient({ seed: false, storageKey: `fin-${Math.random()}` });
 
-async function linked(): Promise<ApiClient> {
+async function linkedBare(): Promise<ApiClient> {
   const api = fresh();
   await api.exchangePlaidPublicToken({
     publicToken: 'p',
     institution: FIXTURE_INSTITUTION,
     accounts: FIXTURE_LINK_ACCOUNTS,
   });
+  return api;
+}
+
+// Both fixture card payments marked, so the period is today−8 onward whatever the calendar says.
+async function linked(): Promise<ApiClient> {
+  const api = await linkedBare();
+  for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+    await api.setFinancePeriodStart(id, true);
   return api;
 }
 
@@ -47,7 +55,7 @@ describe('Finances page', () => {
     renderApp({ api: await linked(), path: '/finances' });
     expect(await screen.findByText('$600 left')).toBeTruthy();
     expect(screen.getByText('of $600 budget')).toBeTruthy();
-    expect(screen.getByText(/since the last card payment/)).toBeTruthy();
+    expect(screen.getByText(/since your .* payment/)).toBeTruthy();
     expect(screen.getByRole('link', { name: /to sort ·/ })).toBeTruthy();
   });
 
@@ -166,6 +174,60 @@ describe('Finances page', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
     expect(await within(dialog).findByRole('radiogroup', { name: 'Bucket' })).toBeTruthy();
     expect(await screen.findByText('$565 left')).toBeTruthy();
+  });
+
+  it('with no mark, uses the payment day and offers the last card payment as a one-click start', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linkedBare(), path: '/finances/all' });
+    expect(await screen.findByText(/using your payment day \(the 20th\)/)).toBeTruthy();
+    expect(
+      await screen.findByText(/Looks like you paid the card on .* \(\+\$745\.18\)/),
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Start the period there' }));
+    expect(await screen.findByText(/Day 9 · .* since your .* payment/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Start the period there' })).toBeNull();
+
+    const payment = (await screen.findAllByRole('button', { name: /\+\$745\.18/ }))[0]!;
+    expect(payment.textContent).toMatch(/starts period/);
+    await user.click(payment);
+    const dialog = await screen.findByRole('dialog', { name: /^Payment: / });
+    expect(within(dialog).getByText(/This payment starts a period/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Unmark' }));
+    expect(
+      await within(dialog).findByRole('button', { name: 'Start the period here' }),
+    ).toBeTruthy();
+    expect(await screen.findByText(/using your payment day/)).toBeTruthy();
+  });
+
+  it('money into checking opens with a collapsed "Link as a refund"', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    const payroll = (await screen.findAllByRole('button', { name: /Acme Corp/ }))[0]!;
+    await user.click(payroll);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Acme Corp/ });
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /^Link to/ })).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    expect(
+      await within(dialog).findByText(/Nothing it could reverse — it stays money in/),
+    ).toBeTruthy();
+  });
+
+  it('a checking refund links to its debit charge and nets the budget', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
+    renderApp({ api, path: '/finances/all' });
+    expect(await screen.findByText('$561 left')).toBeTruthy(); // $600 − $38.61
+    const refundRow = (await screen.findAllByRole('button', { name: /Safeway.*\+\$38\.61/ }))[0]!;
+    await user.click(refundRow);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Safeway/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    await user.click(
+      (await within(dialog).findAllByRole('button', { name: /Link to Safeway/ }))[0]!,
+    );
+    expect(await screen.findByText('$600 left')).toBeTruthy();
+    expect(await screen.findByText(/refunded \$38\.61/)).toBeTruthy();
   });
 
   it('a linked refund leaves the sort queue and nets its group', async () => {

@@ -1,7 +1,7 @@
 // Sandbox-shaped Plaid fixtures, anchored to a day so the stub always looks current. One BofA login
 // with checking + savings + card, ~60 days of history, two card payments with matching checking
-// outflows, a checking→savings transfer, payroll, and a pending card charge that posts in the
-// follow-up page. Shared by the app stub (inline sync) and the lambdas' InMemoryPlaid, so both
+// outflows, a checking→savings transfer, payroll, card + debit refunds, and a pending card charge
+// that posts in the follow-up page. Shared by the app stub (inline sync) and the lambdas' InMemoryPlaid, so both
 // ApiClient impls replay identical data under the contract tests.
 
 import { addDays } from './dates';
@@ -177,6 +177,11 @@ export function fixtureHistory(today: string): PlaidTransaction[] {
       'GENERAL_MERCHANDISE_OTHER',
     ]),
     txn('fx-safeway', checking, addDays(today, -7), 38.61, 'SAFEWAY #1711 DEBIT', 'Safeway', [
+      'FOOD_AND_DRINK',
+      'FOOD_AND_DRINK_GROCERIES',
+    ]),
+    // The Safeway debit returned in full to checking — income until linked to its charge.
+    txn('fx-refund-3', checking, addDays(today, -2), -38.61, 'SAFEWAY #1711 DEBIT', 'Safeway', [
       'FOOD_AND_DRINK',
       'FOOD_AND_DRINK_GROCERIES',
     ]),

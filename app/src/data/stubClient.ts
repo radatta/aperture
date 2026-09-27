@@ -11,8 +11,9 @@ import {
   applyRules,
   assertAttachmentAllowed,
   buildFinanceOverview,
+  detectInternalMoves,
   FINANCE_DEFAULT_BUDGET_CENTS,
-  FINANCE_DEFAULT_CYCLE_DAY,
+  FINANCE_DEFAULT_PAYMENT_DAY,
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
   FIXTURE_ACCOUNTS,
@@ -23,6 +24,7 @@ import {
   isDuplicateItem,
   normalizeRulePattern,
   reconcileSyncPage,
+  periodStartError,
   refundLinkError,
   todayKey,
   toCents,
@@ -111,7 +113,7 @@ import { seedStore } from './seed';
 const USER_ID = 'local';
 const FINANCE_SETTINGS_DEFAULTS = {
   financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
-  financeCycleDay: FINANCE_DEFAULT_CYCLE_DAY,
+  financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
 const STORAGE_KEY = 'aperture.stub.v1';
 
@@ -205,11 +207,15 @@ class StubClient implements ApiClient {
       if (!raw) return null;
       const store = { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) };
       // Settings gain fields over time; a persisted row from before them reads the defaults.
-      if (store.settings) store.settings = { ...FINANCE_SETTINGS_DEFAULTS, ...store.settings };
-      // Rows persisted before refund linking existed read as unlinked.
+      if (store.settings) {
+        store.settings = { ...FINANCE_SETTINGS_DEFAULTS, ...store.settings };
+        delete (store.settings as { financeCycleDay?: number }).financeCycleDay; // → financePaymentDay
+      }
+      // Rows persisted before refund linking / period marks existed read as unlinked and unmarked.
       store.financeTransactions = store.financeTransactions.map((t) => ({
         ...t,
         refundOfId: t.refundOfId ?? null,
+        startsPeriod: t.startsPeriod ?? false,
       }));
       return store;
     } catch {
@@ -1058,8 +1064,6 @@ class StubClient implements ApiClient {
         balanceAt: t,
         signOverride: prev?.signOverride ?? 'auto',
         hidden: prev?.hidden ?? false,
-        lastPaymentDate: null,
-        nextPaymentDueDate: null,
       });
     }
     this.writes.put(this.store.financeSyncStates, {
@@ -1076,7 +1080,8 @@ class StubClient implements ApiClient {
     this.syncItem(item.id);
     return item;
   }
-  // Dev seed: a linked BofA with three rules, older history sorted, and the recent weeks mostly not.
+  // Dev seed: a linked BofA with three rules, both card payments marked, older history sorted, and
+  // the recent weeks mostly not.
   private seedFinance(): void {
     for (const [pattern, bucket] of [
       ['spotify', 'i_pay'],
@@ -1094,6 +1099,8 @@ class StubClient implements ApiClient {
       institution: FIXTURE_INSTITUTION,
       accounts: FIXTURE_LINK_ACCOUNTS,
     });
+    for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+      this.writes.patch(this.store.financeTransactions, id, { startsPeriod: true });
     const cutoff = addDays(this.finToday(), -12);
     const sortedRecently = ['Chipotle', 'Blue Bottle Coffee'];
     for (const x of this.alive(this.store.financeTransactions)) {
@@ -1117,7 +1124,7 @@ class StubClient implements ApiClient {
     return buildFinanceOverview({
       today: input.today,
       budgetCents: settings.financeBudgetCents,
-      cycleDay: settings.financeCycleDay,
+      paymentDay: settings.financePaymentDay,
       items: this.alive(this.store.financeItems),
       accounts: this.alive(this.store.financeAccounts),
       syncStates: this.alive(this.store.financeSyncStates),
@@ -1152,7 +1159,8 @@ class StubClient implements ApiClient {
         bucket: input.bucket,
       });
       for (const x of this.alive(this.store.financeTransactions)) {
-        if (x.bucket !== null || x.refundOfId !== null || !applyRules([rule], x)) continue;
+        if (x.bucket !== null || x.refundOfId !== null || x.startsPeriod) continue;
+        if (!applyRules([rule], x)) continue;
         changed.set(
           x.id,
           this.writes.patch(this.store.financeTransactions, x.id, {
@@ -1178,12 +1186,13 @@ class StubClient implements ApiClient {
     if (chargeId === null)
       return this.writes.patch(this.store.financeTransactions, refundId, { refundOfId: null });
     const charge = this.mustFind(this.store.financeTransactions, chargeId);
-    const accounts = this.store.financeAccounts;
+    const accounts = this.alive(this.store.financeAccounts);
     const error = refundLinkError({
       refund,
       refundAccount: accounts.find((a) => a.id === refund.accountId),
       charge,
       chargeAccount: accounts.find((a) => a.id === charge.accountId),
+      moves: detectInternalMoves(this.alive(this.store.financeTransactions), accounts),
     });
     if (error) throw new Error(error);
     return this.writes.patch(this.store.financeTransactions, refundId, {
@@ -1195,6 +1204,21 @@ class StubClient implements ApiClient {
   }
   async setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction> {
     return this.writes.patch(this.store.financeTransactions, id, { note: note?.trim() || null });
+  }
+  async setFinancePeriodStart(id: string, marked: boolean): Promise<FinanceTransaction> {
+    const txn = this.mustFind(this.store.financeTransactions, id);
+    if (!marked)
+      return this.writes.patch(this.store.financeTransactions, id, { startsPeriod: false });
+    const account = this.store.financeAccounts.find((a) => a.id === txn.accountId);
+    const error = periodStartError(txn, account);
+    if (error) throw new Error(error);
+    return this.writes.patch(this.store.financeTransactions, id, {
+      startsPeriod: true,
+      bucket: null, // it's a payment now
+      bucketSetBy: null,
+      periodOverride: null,
+      refundOfId: null,
+    });
   }
   async listFinanceRules(): Promise<FinanceRule[]> {
     return this.alive(this.store.financeRules).sort((a, b) => a.pattern.localeCompare(b.pattern));

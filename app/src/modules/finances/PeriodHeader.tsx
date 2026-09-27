@@ -1,24 +1,51 @@
 import { Link } from 'react-router';
-import { FINANCE_BUCKET_LABELS, FINANCE_BUCKETS, fmtMonthShortDay } from '@aperture/shared';
-import type { FinanceOverview, FinancePeriodSource } from '@aperture/shared';
+import {
+  FINANCE_BUCKET_LABELS,
+  FINANCE_BUCKETS,
+  FINANCE_DEFAULT_PAYMENT_DAY,
+  fmtMonthShortDay,
+  suggestPeriodStart,
+} from '@aperture/shared';
+import type { FinanceOverview, FinancePeriod } from '@aperture/shared';
+import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
+import { useFinanceToday, useSetFinancePeriodStart } from '../../data/hooks/useFinances';
+import { useSettings } from '../../data/hooks/useSettings';
 import { bucketFillClass } from './bucketStyles';
 import { fmtMoney, fmtMoneyWhole } from './money';
+import type { FinanceView } from './useFinanceData';
 
-// Says where the period boundary came from, so a wrong guess is visible rather than silent.
-const SOURCE_LABEL: Record<FinancePeriodSource, string> = {
-  liabilities: 'since the last card payment',
-  matched: 'since the last card payment',
-  hint: 'since the last card payment (best guess)',
-  calendar: 'calendar cycle — no card payment found yet',
+const ordinal = (n: number) => {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
 };
 
+// Where the boundary came from, so a fallback is visible rather than silent.
+function periodLine(period: FinancePeriod, today: string, paymentDay: number): string {
+  if (period.lastPaymentDate === null)
+    return `Day ${period.dayCount} · ${fmtMonthShortDay(period.start)} – today · using your payment day (the ${ordinal(paymentDay)})`;
+  const since = `since your ${fmtMonthShortDay(period.lastPaymentDate)} payment`;
+  if (period.start > today) return `New period starts ${fmtMonthShortDay(period.start)} · ${since}`;
+  return `Day ${period.dayCount} · ${fmtMonthShortDay(period.start)} – today · ${since}`;
+}
+
 // "$X left of $600" for the current billing period, the three bucket totals, and what's left to sort.
-export function PeriodHeader({ overview }: { overview: FinanceOverview }) {
+// With the transactions loaded (`view`), it also offers the newest unmarked card payment as a
+// one-click period start — the page never moves the boundary on its own.
+export function PeriodHeader({
+  overview,
+  view,
+}: {
+  overview: FinanceOverview;
+  view?: FinanceView | null;
+}) {
   const { period, budgetCents, spentCents, leftCents, buckets, unsortedCount, unsortedCents } =
     overview;
+  const today = useFinanceToday();
+  const paymentDay = useSettings().data?.financePaymentDay ?? FINANCE_DEFAULT_PAYMENT_DAY;
   const pct = budgetCents > 0 ? Math.min(100, (spentCents / budgetCents) * 100) : 100;
   const over = leftCents < 0;
   return (
@@ -31,9 +58,9 @@ export function PeriodHeader({ overview }: { overview: FinanceOverview }) {
           <Text tone="muted">of {fmtMoneyWhole(budgetCents)} budget</Text>
         </div>
         <Text size="sm" tone="muted">
-          Day {period.dayCount} · {fmtMonthShortDay(period.start)} – today ·{' '}
-          {SOURCE_LABEL[period.source]}
+          {periodLine(period, today, paymentDay)}
         </Text>
+        {view && <PeriodNudge period={period} view={view} today={today} />}
       </div>
       <div
         className="h-2 overflow-hidden rounded-full bg-panel-2"
@@ -78,5 +105,53 @@ export function PeriodHeader({ overview }: { overview: FinanceOverview }) {
         </Link>
       )}
     </Card>
+  );
+}
+
+// "Looks like you paid the card on Sep 17 — start the period there", or, once marked, the next one.
+function PeriodNudge({
+  period,
+  view,
+  today,
+}: {
+  period: FinancePeriod;
+  view: FinanceView;
+  today: string;
+}) {
+  const mark = useSetFinancePeriodStart();
+  const next = suggestPeriodStart({
+    txns: view.allTxns,
+    accounts: [...view.accounts.values()],
+    moves: view.moves,
+    after: period.lastPaymentDate,
+    today,
+  });
+  const marked = period.source === 'marked';
+  if (!next && marked) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <Text size="sm" tone="muted" className="min-w-0 flex-1">
+        {next
+          ? `${marked ? 'Paid the card again' : 'Looks like you paid the card'} on ${fmtMonthShortDay(next.date)} (+${fmtMoney(-view.amount(next))}).`
+          : 'Mark your last card payment (open it under All) to start the period there.'}
+      </Text>
+      {next && (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={mark.isPending}
+          onClick={() => mark.mutate({ id: next.id, marked: true })}
+        >
+          {marked ? 'Start a new period there' : 'Start the period there'}
+        </Button>
+      )}
+      {mark.isError && (
+        <div role="alert" className="w-full">
+          <Text size="sm" tone="danger">
+            Couldn&apos;t mark it: {mark.error.message}
+          </Text>
+        </div>
+      )}
+    </div>
   );
 }

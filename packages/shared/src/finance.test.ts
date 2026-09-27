@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { addDays } from './dates';
 import {
+  amountOf,
   applyRules,
   buildFinanceOverview,
   classifyTransaction,
@@ -8,13 +9,18 @@ import {
   detectInternalMoves,
   groupByMerchant,
   isDuplicateItem,
+  isPeriodStart,
+  linkableTransactions,
   merchantKey,
   normalizeAmountCents,
   periodOf,
+  periodStartError,
   reconcileSyncPage,
   referencedTxnIds,
   refundLinkError,
   resolveRefundLinks,
+  sortableTransactions,
+  suggestPeriodStart,
   suggestRefundMatches,
   bucketOf,
   isUnsorted,
@@ -48,8 +54,6 @@ function acct(id: string, type: string, over: Partial<FinanceAccount> = {}): Fin
     balanceAt: null,
     signOverride: 'auto',
     hidden: false,
-    lastPaymentDate: null,
-    nextPaymentDueDate: null,
     ...over,
   };
 }
@@ -83,6 +87,7 @@ function tx(
     periodOverride: null,
     note: null,
     refundOfId: null,
+    startsPeriod: false,
     ...over,
   };
 }
@@ -96,6 +101,7 @@ function rule(
 }
 
 const PAY = { pfcPrimary: 'LOAN_PAYMENTS' };
+const MARK = { startsPeriod: true };
 const chk = acct('chk', 'depository');
 const sav = acct('sav', 'depository');
 const card = acct('card', 'credit');
@@ -118,21 +124,20 @@ describe('detectInternalMoves', () => {
       [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-10', -5000)],
       [chk, card],
     );
-    expect(r.moves.get('a')).toBe('card_payment');
-    expect(r.moves.get('b')).toBe('card_payment');
-    expect(r.matchedPaymentDates).toEqual(['2026-09-10']);
+    expect(r.get('a')).toBe('card_payment');
+    expect(r.get('b')).toBe('card_payment');
   });
   it('matches within 3 days and rejects 4', () => {
     const three = detectInternalMoves(
       [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-13', -5000)],
       [chk, card],
     );
-    expect(three.matchedPaymentDates).toEqual(['2026-09-13']); // the card-side date
+    expect(three.get('b')).toBe('card_payment');
     const four = detectInternalMoves(
       [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-14', -5000)],
       [chk, card],
     );
-    expect(four.moves.size).toBe(0);
+    expect(four.size).toBe(0);
   });
   it('pairs two payments to their nearest partners', () => {
     const r = detectInternalMoves(
@@ -144,24 +149,29 @@ describe('detectInternalMoves', () => {
       ],
       [chk, card],
     );
-    expect([...r.matchedPaymentDates].sort()).toEqual(['2026-08-11', '2026-08-12']);
-    expect(r.moves.size).toBe(4);
+    expect(r.size).toBe(4);
   });
   it('calls a depository→depository pair a transfer, not a payment', () => {
     const r = detectInternalMoves(
       [tx('a', 'chk', '2026-09-10', 20000, PAY), tx('b', 'sav', '2026-09-10', -20000)],
       [chk, sav],
     );
-    expect(r.moves.get('a')).toBe('transfer');
-    expect(r.matchedPaymentDates).toEqual([]);
+    expect(r.get('a')).toBe('transfer');
+    expect(r.get('b')).toBe('transfer');
   });
   it('uses the PFC hint for an unpaired card payment', () => {
     const r = detectInternalMoves(
       [tx('b', 'card', '2026-09-10', -5000, { pfcDetailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' })],
       [chk, card],
     );
-    expect(r.moves.get('b')).toBe('card_payment');
-    expect(r.hintedPaymentDates).toEqual(['2026-09-10']);
+    expect(r.get('b')).toBe('card_payment');
+  });
+  it('a same-size Venmo and card refund do not pair', () => {
+    const r = detectInternalMoves(
+      [tx('v', 'chk', '2026-09-20', 2500), tx('r', 'card', '2026-09-21', -2500)],
+      [chk, card],
+    );
+    expect(r.size).toBe(0);
   });
   it('honours a flipped card', () => {
     const flipped = acct('card', 'credit', { signOverride: 'flip' });
@@ -169,7 +179,7 @@ describe('detectInternalMoves', () => {
       [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-10', 5000)],
       [chk, flipped],
     );
-    expect(r.moves.get('b')).toBe('card_payment');
+    expect(r.get('b')).toBe('card_payment');
   });
 });
 
@@ -183,132 +193,131 @@ describe('classifyTransaction', () => {
       'card_payment',
     );
   });
+  it('a valid mark is a card payment even without a PFC; an invalid one falls through', () => {
+    const none = new Map();
+    expect(classifyTransaction(tx('m', 'card', '2026-09-01', -1200, MARK), card, none)).toBe(
+      'card_payment',
+    );
+    const flipped = acct('card', 'credit', { signOverride: 'flip' });
+    expect(classifyTransaction(tx('m', 'card', '2026-09-01', -1200, MARK), flipped, none)).toBe(
+      'expense',
+    );
+    expect(classifyTransaction(tx('m', 'chk', '2026-09-01', -1200, MARK), chk, none)).toBe(
+      'income',
+    );
+  });
+});
+
+describe('period marks', () => {
+  it('periodStartError guards each rule; isPeriodStart needs the flag too', () => {
+    const pay = tx('m', 'card', '2026-09-17', -5000);
+    expect(periodStartError(pay, card)).toBeNull();
+    expect(periodStartError({ ...pay, deletedAt: 1 }, card)).toMatch(/gone/);
+    expect(periodStartError(pay, undefined)).toMatch(/account/);
+    expect(periodStartError(pay, { ...card, deletedAt: 1 })).toMatch(/account/);
+    expect(periodStartError(pay, chk)).toMatch(/card payment/);
+    expect(periodStartError({ ...pay, rawAmountCents: 5000 }, card)).toMatch(/money coming in/);
+    expect(periodStartError(pay, { ...card, hidden: true })).toBeNull(); // hiding doesn't move it
+    expect(isPeriodStart(pay, card)).toBe(false);
+    expect(isPeriodStart({ ...pay, ...MARK }, card)).toBe(true);
+  });
+
+  it('a marked row leaves the sortable set', () => {
+    const rows = [tx('r', 'card', '2026-09-17', -5000), tx('m', 'card', '2026-09-18', -900, MARK)];
+    expect(sortableTransactions(rows, [card], new Map()).map((t) => t.id)).toEqual(['r']);
+  });
+
+  it('suggestPeriodStart offers the newest unmarked recognised payment after the last mark', () => {
+    const rows = [
+      tx('o1', 'chk', '2026-08-18', 5000, PAY),
+      tx('i1', 'card', '2026-08-18', -5000, MARK),
+      tx('o2', 'chk', '2026-09-17', 7000, PAY),
+      tx('i2', 'card', '2026-09-17', -7000),
+      tx('r', 'card', '2026-09-20', -900), // a refund — not a recognised payment
+      tx('late', 'card', '2026-09-30', -100, { pfcDetailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' }),
+    ];
+    const moves = detectInternalMoves(rows, [chk, card]);
+    const args = { txns: rows, accounts: [chk, card], moves, today: '2026-09-26' };
+    expect(suggestPeriodStart({ ...args, after: '2026-08-18' })?.id).toBe('i2');
+    expect(suggestPeriodStart({ ...args, after: null })?.id).toBe('i2');
+    expect(suggestPeriodStart({ ...args, after: '2026-09-17' })).toBeNull();
+    const allMarked = rows.map((t) => (t.id === 'i2' ? { ...t, ...MARK } : t));
+    expect(suggestPeriodStart({ ...args, txns: allMarked, after: null })).toBeNull();
+  });
 });
 
 describe('computeFinancePeriod', () => {
-  const pair = (d: string, cents = 5000) => [
-    tx(`o${d}`, 'chk', d, cents, PAY),
-    tx(`i${d}`, 'card', d, -cents),
-  ];
+  const mark = (d: string, over: Partial<FinanceTransaction> = {}) =>
+    tx(`m${d}`, 'card', d, -5000, { ...MARK, ...over });
+  const run = (txns: FinanceTransaction[], accounts = [chk, card], today = '2026-09-26') =>
+    computeFinancePeriod({ today, accounts, txns, paymentDay: 20 });
 
-  it('uses Liabilities when it is the newest payment', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, acct('card', 'credit', { lastPaymentDate: '2026-09-20' })],
-      txns: pair('2026-09-15'),
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('liabilities');
-    expect(p.start).toBe('2026-09-21');
-    expect(p.end).toBe('2026-09-26');
-    expect(p.dayCount).toBe(6);
-    expect(p.previous).toEqual({ start: '2026-09-16', end: '2026-09-20' });
-  });
-  it('uses the latest matched payment, and the one before for previous', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, card],
-      txns: [...pair('2026-08-18'), ...pair('2026-09-17', 7000)],
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('matched');
+  it('the latest mark wins and the mark before it bounds previous', () => {
+    const p = run([mark('2026-08-18'), mark('2026-09-17')]);
+    expect(p.source).toBe('marked');
     expect(p.lastPaymentDate).toBe('2026-09-17');
     expect(p.start).toBe('2026-09-18');
+    expect(p.end).toBe('2026-09-26');
+    expect(p.dayCount).toBe(9);
     expect(p.previous).toEqual({ start: '2026-08-19', end: '2026-09-17' });
   });
-  it('a newer matched payment beats a stale Liabilities date', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, acct('card', 'credit', { lastPaymentDate: '2026-08-18' })],
-      txns: [...pair('2026-08-18'), ...pair('2026-09-17')],
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('matched');
-    expect(p.start).toBe('2026-09-18');
-    expect(p.previous).toEqual({ start: '2026-08-19', end: '2026-09-17' });
+  it('a single mark gives a previous window one month back', () => {
+    expect(run([mark('2026-09-17')]).previous).toEqual({ start: '2026-08-18', end: '2026-09-17' });
   });
-  it('the same payment seen by Liabilities and a match a day apart keeps a full previous window', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, acct('card', 'credit', { lastPaymentDate: '2026-09-17' })],
-      txns: pair('2026-09-16'),
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('liabilities');
-    expect(p.previous).toEqual({ start: '2026-08-18', end: '2026-09-17' }); // one month back
+  it('two marks on the same day are one boundary', () => {
+    const p = run([mark('2026-08-18'), mark('2026-09-17'), mark('2026-09-17', { id: 'dup' })]);
+    expect(p.previous.start).toBe('2026-08-19');
   });
-  it('a same-size Venmo and card refund do not restart the period', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, card],
-      txns: [tx('v', 'chk', '2026-09-20', 2500), tx('r', 'card', '2026-09-21', -2500)],
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('calendar');
-  });
-  it('falls back to the PFC hint', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [card],
-      txns: [
-        tx('b', 'card', '2026-09-12', -5000, { pfcDetailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' }),
-      ],
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('hint');
-    expect(p.start).toBe('2026-09-13');
-    expect(p.previous.end).toBe('2026-09-12');
-  });
-  it('falls back to the calendar cycle, across a year boundary', () => {
-    const p = computeFinancePeriod({ today: '2026-01-10', accounts: [], txns: [], cycleDay: 23 });
-    expect(p.source).toBe('calendar');
-    expect(p.start).toBe('2025-12-24');
-    expect(p.previous).toEqual({ start: '2025-11-24', end: '2025-12-23' });
-  });
-  it('clamps a cycle day past the end of the month', () => {
-    const p = computeFinancePeriod({ today: '2026-03-05', accounts: [], txns: [], cycleDay: 31 });
-    expect(p.start).toBe('2026-03-01'); // day after Feb 28
-  });
-  it('ignores a payment dated after today', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, card],
-      txns: pair('2026-09-27'),
-      cycleDay: 23,
-    });
-    expect(p.source).toBe('calendar');
-  });
-  it('paid today → the new period starts tomorrow', () => {
-    const p = computeFinancePeriod({
-      today: '2026-09-26',
-      accounts: [chk, card],
-      txns: pair('2026-09-26'),
-      cycleDay: 23,
-    });
+  it('a mark today starts the period tomorrow', () => {
+    const p = run([mark('2026-09-26')]);
     expect(p.start).toBe('2026-09-27');
+    expect(p.end).toBe('2026-09-27');
     expect(p.dayCount).toBe(1);
+  });
+  it('ignores a mark after today, on a bank account, on a flipped card, tombstoned, or on a deleted account', () => {
+    expect(run([mark('2026-09-27')]).source).toBe('payment_day');
+    expect(run([mark('2026-09-17', { accountId: 'chk' })]).source).toBe('payment_day');
+    const flipped = acct('card', 'credit', { signOverride: 'flip' });
+    expect(run([mark('2026-09-17')], [chk, flipped]).source).toBe('payment_day');
+    expect(run([mark('2026-09-17', { deletedAt: 1 })]).source).toBe('payment_day');
+    expect(run([mark('2026-09-17')], [chk, { ...card, deletedAt: 1 }]).source).toBe('payment_day');
+  });
+  it('a mark on a hidden card still counts', () => {
+    expect(run([mark('2026-09-17')], [chk, { ...card, hidden: true }]).source).toBe('marked');
+  });
+  it('a detected payment alone never sets the period', () => {
+    const p = run([tx('o', 'chk', '2026-09-17', 5000, PAY), tx('i', 'card', '2026-09-17', -5000)]);
+    expect(p.source).toBe('payment_day');
+  });
+  it('no mark → the day after the payment day, across a year boundary', () => {
+    const p = run([], [], '2026-01-10');
+    expect(p.source).toBe('payment_day');
+    expect(p.lastPaymentDate).toBeNull();
+    expect(p.start).toBe('2025-12-21');
+    expect(p.previous).toEqual({ start: '2025-11-21', end: '2025-12-20' });
+    expect(run([], [], '2026-09-21').start).toBe('2026-09-21');
+    expect(run([], [], '2026-09-20').start).toBe('2026-08-21');
+  });
+  it('clamps a payment day past the end of the month', () => {
+    const p = computeFinancePeriod({ today: '2026-03-05', accounts: [], txns: [], paymentDay: 31 });
+    expect(p.start).toBe('2026-03-01'); // day after Feb 28
   });
 });
 
-describe('periodOf + summarizePeriod', () => {
-  const period = computeFinancePeriod({
-    today: '2026-09-26',
-    accounts: [chk, card],
-    txns: [
-      tx('o1', 'chk', '2026-08-18', 5000, PAY),
-      tx('i1', 'card', '2026-08-18', -5000),
-      tx('o2', 'chk', '2026-09-17', 7000, PAY),
-      tx('i2', 'card', '2026-09-17', -7000),
-    ],
-    cycleDay: 23,
-  });
-  const payments = [
-    tx('o1', 'chk', '2026-08-18', 5000, PAY),
-    tx('i1', 'card', '2026-08-18', -5000),
-    tx('o2', 'chk', '2026-09-17', 7000, PAY),
-    tx('i2', 'card', '2026-09-17', -7000),
-  ];
+const payments = [
+  tx('o1', 'chk', '2026-08-18', 5000, PAY),
+  tx('i1', 'card', '2026-08-18', -5000, MARK),
+  tx('o2', 'chk', '2026-09-17', 7000, PAY),
+  tx('i2', 'card', '2026-09-17', -7000, MARK),
+];
+const period = computeFinancePeriod({
+  today: '2026-09-26',
+  accounts: [chk, card],
+  txns: payments,
+  paymentDay: 20,
+});
 
+describe('periodOf + summarizePeriod', () => {
   it('places rows by date, lets an override move them, and ignores anything older', () => {
     expect(periodOf(tx('a', 'card', '2026-09-20', 1), period)).toBe('current');
     expect(periodOf(tx('a', 'card', '2026-09-01', 1), period)).toBe('previous');
@@ -335,6 +344,7 @@ describe('periodOf + summarizePeriod', () => {
       tx('u2', 'card', '2026-09-03', 300), // previous-window unsorted still counts as unsorted
       tx('ref', 'card', '2026-09-24', -900, { bucket: 'budget' }), // a card refund nets against its bucket
       tx('pay', 'chk', '2026-09-24', -150000), // money into checking — never sorted
+      tx('mk', 'card', '2026-09-24', -800, { ...MARK, bucket: 'budget' }), // a mark is a payment
     ];
     const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
     expect(s.buckets.budget).toEqual({ totalCents: 7100, count: 4 });
@@ -386,7 +396,7 @@ describe('buildFinanceOverview', () => {
     buildFinanceOverview({
       today: '2026-09-26',
       budgetCents: 60000,
-      cycleDay: 23,
+      paymentDay: 20,
       items,
       accounts: [chk, card],
       syncStates,
@@ -403,7 +413,7 @@ describe('buildFinanceOverview', () => {
     const stale = buildFinanceOverview({
       today: '2026-09-26',
       budgetCents: 60000,
-      cycleDay: 23,
+      paymentDay: 20,
       items: [item],
       accounts: [],
       syncStates: [sync({ syncRequestedAt: 200 })],
@@ -532,6 +542,32 @@ describe('reconcileSyncPage', () => {
     ]);
   });
 
+  it('a new row starts unmarked; modified keeps a mark; a marked pending row passes it on', () => {
+    const existing = new Map<string, FinanceTransaction>();
+    run(existing, fixtureInitialPages(today)[0]!);
+    expect([...existing.values()].every((t) => t.startsPeriod === false)).toBe(true);
+
+    const marked = tx('m', 'card', '2026-09-17', -5000, MARK);
+    const keep = new Map([[marked.id, marked]]);
+    const p: PlaidTransaction = { ...fixtureHistory(today)[0]!, transaction_id: 'm', amount: -50 };
+    run(keep, { added: [], modified: [p], removed: [] });
+    expect(keep.get('m')!.startsPeriod).toBe(true);
+
+    const pending = { ...marked, id: 'p-pay', pending: true, deletedAt: 900 };
+    const carry = new Map([[pending.id, pending]]);
+    const posted: PlaidTransaction = {
+      ...fixtureHistory(today)[0]!,
+      transaction_id: 'posted-pay',
+      account_id: 'card',
+      amount: -50,
+      merchant_name: 'Payment',
+      pending_transaction_id: 'p-pay',
+    };
+    run(carry, { added: [posted], modified: [], removed: [] }, [rule('payment', 'budget')]);
+    expect(carry.get('posted-pay')!.startsPeriod).toBe(true);
+    expect(carry.get('posted-pay')!.bucket).toBeNull(); // a payment picks up no rule
+  });
+
   it('pending→posted carries the user fields, even from a tombstoned pending row', () => {
     const pending = tx('fx-pending-1', FIXTURE_ACCOUNT_IDS.card, addDays(today, -1), 2150, {
       pending: true,
@@ -567,7 +603,7 @@ describe('reconcileSyncPage', () => {
 });
 
 describe('fixtures end-to-end', () => {
-  it('the fixture history yields a matched period and a sensible summary', () => {
+  it('the fixture history with both card payments marked yields a sensible summary', () => {
     const today = '2026-09-26';
     const existing = new Map<string, FinanceTransaction>();
     for (const p of fixtureInitialPages(today)) run(p);
@@ -579,10 +615,13 @@ describe('fixtures end-to-end', () => {
       acct(FIXTURE_ACCOUNT_IDS.savings, 'depository'),
       acct(FIXTURE_ACCOUNT_IDS.card, 'credit'),
     ];
+    for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+      existing.set(id, { ...existing.get(id)!, startsPeriod: true });
     const txns = [...existing.values()];
-    const period = computeFinancePeriod({ today, accounts, txns, cycleDay: 23 });
-    expect(period.source).toBe('matched');
+    const period = computeFinancePeriod({ today, accounts, txns, paymentDay: 20 });
+    expect(period.source).toBe('marked');
     expect(period.lastPaymentDate).toBe(addDays(today, -9));
+    expect(period.previous.start).toBe(addDays(today, -38));
     const s = summarizePeriod({ period, txns, accounts, budgetCents: 60000 });
     expect(s.unsortedCount).toBeGreaterThan(10);
     expect(s.spentCents).toBe(0);
@@ -590,23 +629,6 @@ describe('fixtures end-to-end', () => {
 });
 
 describe('refund links', () => {
-  const period = computeFinancePeriod({
-    today: '2026-09-26',
-    accounts: [chk, card],
-    txns: [
-      tx('o1', 'chk', '2026-08-18', 5000, PAY),
-      tx('i1', 'card', '2026-08-18', -5000),
-      tx('o2', 'chk', '2026-09-17', 7000, PAY),
-      tx('i2', 'card', '2026-09-17', -7000),
-    ],
-    cycleDay: 23,
-  });
-  const payments = [
-    tx('o1', 'chk', '2026-08-18', 5000, PAY),
-    tx('i1', 'card', '2026-08-18', -5000),
-    tx('o2', 'chk', '2026-09-17', 7000, PAY),
-    tx('i2', 'card', '2026-09-17', -7000),
-  ];
   const amazon = { merchantName: 'Amazon' };
 
   it('resolves directly, through a posted charge’s pending id, and not to a tombstone', () => {
@@ -699,7 +721,8 @@ describe('refund links', () => {
       tx('pending-exact', 'card', '2026-09-15', 3499, { ...amazon, pending: true }),
       tx('too-small', 'card', '2026-09-20', 1000, amazon),
       tx('too-old', 'card', '2026-06-01', 3499, amazon),
-      tx('after', 'card', '2026-09-23', 3499, amazon),
+      tx('slack', 'card', '2026-09-24', 3499, amazon), // posted 2 days after its refund
+      tx('after', 'card', '2026-09-26', 3499, amazon), // past the 3-day slack
       tx('other-merchant', 'card', '2026-09-20', 3499, { merchantName: 'Target' }),
       tx('used-up', 'card', '2026-09-19', 3499, amazon),
       tx('earlier-refund', 'card', '2026-09-20', -3499, { ...amazon, refundOfId: 'used-up' }),
@@ -712,7 +735,14 @@ describe('refund links', () => {
       moves: new Map(),
       links,
     }).map((t) => t.id);
-    expect(ids).toEqual(['exact-near', 'pending-exact', 'exact-far', 'bigger', 'exact-other-acct']);
+    expect(ids).toEqual([
+      'slack',
+      'exact-near',
+      'pending-exact',
+      'exact-far',
+      'bigger',
+      'exact-other-acct',
+    ]);
   });
 
   it('refundLinkError guards each rule', () => {
@@ -723,8 +753,10 @@ describe('refund links', () => {
     expect(refundLinkError({ ...ok, charge: refund, chargeAccount: card })).toMatch(
       /itself|charge/,
     );
-    expect(refundLinkError({ ...ok, refund: { ...charge, id: 'c2' } })).toMatch(/card credit/);
-    expect(refundLinkError({ ...ok, refundAccount: chk })).toMatch(/card credit/);
+    expect(refundLinkError({ ...ok, refund: { ...charge, id: 'c2' } })).toMatch(/money coming in/);
+    expect(refundLinkError({ ...ok, refundAccount: acct('ln', 'loan') })).toMatch(
+      /money coming in/,
+    );
     expect(refundLinkError({ ...ok, refund: { ...refund, pfcPrimary: 'LOAN_PAYMENTS' } })).toMatch(
       /payment/,
     );
@@ -734,19 +766,87 @@ describe('refund links', () => {
     expect(refundLinkError({ ...ok, charge: { ...charge, deletedAt: 1 } })).toMatch(/gone/);
   });
 
-  it('refundLinkError: hidden or checking accounts, transfers, and a later charge are refused', () => {
+  it('refundLinkError: hidden accounts, transfers, moves, marks, and a late charge are refused', () => {
     const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
     const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
     const ok = { refund, refundAccount: card, charge, chargeAccount: card };
     expect(refundLinkError({ ...ok, chargeAccount: { ...card, hidden: true } })).toMatch(/shown/);
     expect(refundLinkError({ ...ok, chargeAccount: undefined })).toMatch(/shown/);
-    expect(
-      refundLinkError({ ...ok, charge: { ...charge, accountId: 'chk' }, chargeAccount: chk }),
-    ).toMatch(/card charge/);
     expect(refundLinkError({ ...ok, charge: { ...charge, pfcPrimary: 'TRANSFER_OUT' } })).toMatch(
-      /card charge/,
+      /not a payment/,
     );
-    expect(refundLinkError({ ...ok, charge: { ...charge, date: '2026-09-23' } })).toMatch(/before/);
+    expect(refundLinkError({ ...ok, moves: new Map([['c', 'transfer' as const]]) })).toMatch(
+      /not a payment/,
+    );
+    expect(refundLinkError({ ...ok, moves: new Map([['r', 'card_payment' as const]]) })).toMatch(
+      /isn’t a refund/,
+    );
+    expect(refundLinkError({ ...ok, refund: { ...refund, ...MARK } })).toMatch(
+      /starts your period/,
+    );
+    expect(refundLinkError({ ...ok, charge: { ...charge, date: '2026-09-25' } })).toBeNull();
+    expect(refundLinkError({ ...ok, charge: { ...charge, date: '2026-09-26' } })).toMatch(/before/);
+  });
+
+  it('refundLinkError accepts checking/savings on either side', () => {
+    const debit = tx('c', 'chk', '2026-09-20', 3861);
+    const back = tx('r', 'chk', '2026-09-24', -3861);
+    const ok = { refund: back, refundAccount: chk, charge: debit, chargeAccount: chk };
+    expect(refundLinkError(ok)).toBeNull();
+    expect(refundLinkError({ ...ok, refundAccount: card })).toBeNull(); // a card credit → debit
+    expect(refundLinkError({ ...ok, refundAccount: sav })).toBeNull();
+    expect(refundLinkError({ ...ok, refund: { ...back, pfcPrimary: 'TRANSFER_IN' } })).toMatch(
+      /isn’t a refund/,
+    );
+  });
+
+  it('a linked checking refund nets its charge; an unlinked deposit stays out of the budget', () => {
+    const txns = [
+      ...payments,
+      tx('c', 'chk', '2026-09-20', 3861, { bucket: 'budget' }),
+      tx('r', 'chk', '2026-09-24', -3861, { refundOfId: 'c' }),
+      tx('wage', 'chk', '2026-09-25', -150000),
+    ];
+    const accounts = [chk, card];
+    const moves = detectInternalMoves(txns, accounts);
+    expect(linkableTransactions(txns, accounts, moves).map((t) => t.id)).toEqual([
+      'c',
+      'r',
+      'wage',
+    ]);
+    const s = summarizePeriod({ period, txns, accounts, budgetCents: 60000 });
+    expect(s.spentCents).toBe(0);
+    expect(s.buckets.budget.count).toBe(1);
+    expect(s.unsortedCount).toBe(0);
+    expect(s.unsortedCents).toBe(0);
+    const unlinked = txns.map((t) => (t.id === 'r' ? { ...t, refundOfId: null } : t));
+    expect(
+      summarizePeriod({ period, txns: unlinked, accounts, budgetCents: 60000 }).spentCents,
+    ).toBe(3861);
+  });
+
+  it('a flipped checking account drops its refund link', () => {
+    const charge = tx('c', 'chk', '2026-09-20', 3861);
+    const refund = tx('r', 'chk', '2026-09-24', -3861, { refundOfId: 'c' });
+    const flipped = acct('chk', 'depository', { signOverride: 'flip' });
+    expect(resolveRefundLinks([charge, refund], (t) => amountOf(t, flipped)).has('r')).toBe(false);
+  });
+
+  it('suggestRefundMatches offers the same-account checking charge first', () => {
+    const refund = tx('r', 'chk', '2026-09-24', -3861, { merchantName: 'Safeway' });
+    const txns = [
+      refund,
+      tx('on-card', 'card', '2026-09-20', 3861, { merchantName: 'Safeway' }),
+      tx('on-chk', 'chk', '2026-09-18', 3861, { merchantName: 'Safeway' }),
+    ];
+    const ids = suggestRefundMatches({
+      refund,
+      txns,
+      accounts: [chk, card],
+      moves: new Map(),
+      links: new Map(),
+    }).map((t) => t.id);
+    expect(ids).toEqual(['on-chk', 'on-card']);
   });
 
   it('a flipped account drops links whose signs no longer read refund → charge', () => {

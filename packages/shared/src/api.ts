@@ -206,7 +206,7 @@ export type SettingsPatch = Partial<
     | 'dayFocusStart'
     | 'dayEndHour'
     | 'financeBudgetCents'
-    | 'financeCycleDay'
+    | 'financePaymentDay'
   >
 >;
 
@@ -405,9 +405,14 @@ export interface ApiClient {
     override: FinancePeriodOverride | null,
   ): Promise<FinanceTransaction>;
   setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction>;
-  // Tie a card credit to the charge it reverses (null = unlink). The refund then takes the charge's
-  // bucket and period and leaves the sort queue. Throws per refundLinkError (card credit → earlier card
-  // charge, both on shown accounts, refund ≤ charge). Linking clears the refund's own bucket/override;
+  // Mark / unmark the card-side payment (money in on a credit account) that ends a billing period; the
+  // next period starts the day after it. Marking throws per periodStartError and clears the row's own
+  // bucket / override / refund link (it's a payment now). Unmarking never throws for an alive row.
+  setFinancePeriodStart(id: string, marked: boolean): Promise<FinanceTransaction>;
+  // Tie money coming in (a card credit or a checking/savings deposit) to the charge it reverses (null =
+  // unlink). The refund then takes the charge's bucket and period and leaves the sort queue. Throws per
+  // refundLinkError (both on shown card/bank accounts, no payment or transfer, charge ≤ refund + 3
+  // days, refund ≤ charge). Linking clears the refund's own bucket/override;
   // sorting or moving a linked refund yourself (setFinanceBucket / setFinancePeriodOverride) unlinks it —
   // which is also how a refund whose charge dropped out of view gets sorted.
   linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction>;

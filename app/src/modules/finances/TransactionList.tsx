@@ -4,6 +4,7 @@ import {
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
   fmtMonthShortDay,
+  isPeriodStart,
   isSortableKind,
   isUnsorted,
   periodOf,
@@ -38,7 +39,8 @@ const KIND_LABEL: Record<Exclude<FinanceTxnKind, 'expense' | 'refund'>, string> 
 
 // Every transaction in the current and previous period, newest first. Card payments, transfers and
 // money into the bank are listed (so the ledger reconciles with the bank) but never sorted or totalled.
-// Card refunds are sorted like charges and net against their bucket.
+// Card refunds are sorted like charges and net against their bucket; a deposit counts only once it's
+// linked as a refund. Card payments open to be marked as a period start.
 export function TransactionList({
   overview,
   view,
@@ -58,7 +60,7 @@ export function TransactionList({
   const kindOf = view.kindOf;
   const shown = view.txns.filter((t) => {
     if (filter === 'all') return true;
-    if (!isSortableKind(kindOf(t))) return false;
+    if (!isSortableKind(kindOf(t)) && !view.links.has(t.id)) return false;
     return filter === 'unsorted' ? isUnsorted(t, view.links) : bucketOf(t, view.links) === filter;
   });
   const sections = [
@@ -149,13 +151,15 @@ function TransactionRow({
 }) {
   const acct = view.accounts.get(txn.accountId);
   const cents = view.amount(txn);
-  const expense = isSortableKind(kind);
+  // Counts toward a bucket: a charge, a card credit, or a deposit linked as a refund.
+  const expense = isSortableKind(kind) || view.links.has(txn.id);
+  const markable = acct?.type === 'credit' && cents < 0;
   return (
     <li>
       <button
         type="button"
         onClick={onOpen}
-        disabled={!expense}
+        disabled={!(expense || markable || kind === 'income')}
         className="flex w-full items-center gap-3 py-2 text-left enabled:hover:bg-panel-2"
       >
         <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
@@ -169,6 +173,7 @@ function TransactionRow({
             {acct ? `${acct.name} ••${acct.mask}` : ''}
             {txn.pending ? ' · pending' : ''}
             {refundMeta(txn, kind, view)}
+            {isPeriodStart(txn, acct) ? ' · starts period' : ''}
             {txn.periodOverride ? ` · moved to ${txn.periodOverride} period` : ''}
             {txn.note ? ` · ${txn.note}` : ''}
           </Text>

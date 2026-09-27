@@ -584,14 +584,14 @@ function FinancesSection() {
             className="w-36"
           />
           <Field
-            label="Fallback cycle day"
+            label="Card payment day"
             type="number"
             min={1}
             max={31}
-            defaultValue={settings.financeCycleDay}
+            defaultValue={settings.financePaymentDay}
             onBlur={(e) => {
               const day = Math.round(Number(e.target.value));
-              if (day >= 1 && day <= 31) update.mutate({ financeCycleDay: day });
+              if (day >= 1 && day <= 31) update.mutate({ financePaymentDay: day });
             }}
             className="w-36"
           />
@@ -599,7 +599,7 @@ function FinancesSection() {
         <Text size="xs" tone="muted" className="mt-2 block">
           {budgetError
             ? 'Enter an amount like 600 or 600.00.'
-            : `Now ${fmtMoney(settings.financeBudgetCents)}. The cycle day is only used until a card payment is found.`}
+            : `Now ${fmtMoney(settings.financeBudgetCents)}. The payment day is used until you mark a payment — the period starts the day after it.`}
         </Text>
       </Card>
     </section>

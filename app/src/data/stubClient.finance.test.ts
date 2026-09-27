@@ -12,6 +12,7 @@ describe('stub finances', () => {
     expect(o.items.map((i) => i.institutionName)).toEqual(['Bank of America']);
     expect(o.accounts).toHaveLength(3);
     expect(o.sync.environment).toBe('stub');
+    expect(o.period.source).toBe('marked');
     expect(o.unsortedCount).toBeGreaterThan(0);
     expect(o.spentCents).toBeGreaterThan(0);
     expect((await api.listFinanceRules()).map((r) => r.pattern)).toEqual([
@@ -29,20 +30,24 @@ describe('stub finances', () => {
     for (const k of Object.keys(raw)) if (k.startsWith('finance')) delete raw[k];
     const oldSettings: Partial<typeof s> = { ...s };
     delete oldSettings.financeBudgetCents;
-    delete oldSettings.financeCycleDay;
+    delete oldSettings.financePaymentDay;
     localStorage.setItem(
       key,
       JSON.stringify({
         ...raw,
-        settings: oldSettings,
+        settings: { ...oldSettings, financeCycleDay: 23 },
         financeTransactions: [{ id: 'old-row', deletedAt: null, date: '2026-01-01' }],
       }),
     );
 
     const upgraded = createStubClient({ seed: false, storageKey: key });
-    expect((await upgraded.getSettings()).financeBudgetCents).toBe(60000);
+    const settings = await upgraded.getSettings();
+    expect(settings.financeBudgetCents).toBe(60000);
+    expect(settings.financePaymentDay).toBe(20);
+    expect('financeCycleDay' in settings).toBe(false);
     expect((await upgraded.getFinanceOverview({ today: todayKey(4) })).items).toEqual([]);
     const [old] = await upgraded.listFinanceTransactions({ from: '2026-01-01', to: '2026-01-01' });
     expect(old!.refundOfId).toBeNull(); // pre-refund-linking rows read as unlinked
+    expect(old!.startsPeriod).toBe(false);
   });
 });
