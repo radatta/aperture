@@ -9,6 +9,7 @@ import { invalidateTaskData } from '../../data/hooks/invalidate';
 import { PomodoroContext } from './pomodoro-context';
 import type { RunningTimer, StartFocusInput } from './pomodoro-context';
 import { activeSec, isStale, remainingSec, targetSecFor } from './pomodoro';
+import { chime, unlockAudio } from './chime';
 
 // The timer engine (PRODUCT §4b, TECH §2.3.3). Owns ALL concurrently-running timers — you run
 // several at once (parallel focus, e.g. multiple sessions), each with its own label, heartbeat, and
@@ -16,29 +17,6 @@ import { activeSec, isStale, remainingSec, targetSecFor } from './pomodoro';
 // so several finishing at once don't spawn a pile of break timers. On load, adopts still-running
 // sessions and flags long-silent ones for keep/discard. Only `work` accrues to the task (stub side).
 const HEARTBEAT_MS = 15_000;
-
-// A short, self-contained chime — no asset, and a no-op where Web Audio is absent (tests, blocked tabs).
-function chime() {
-  try {
-    const Ctx =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ac = new Ctx();
-    const osc = ac.createOscillator();
-    const gain = ac.createGain();
-    osc.connect(gain);
-    gain.connect(ac.destination);
-    osc.frequency.value = 660;
-    gain.gain.setValueAtTime(0.06, ac.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.4);
-    osc.start();
-    osc.stop(ac.currentTime + 0.4);
-    osc.onended = () => ac.close();
-  } catch {
-    // No audio available — the visual "Done" state carries it.
-  }
-}
 
 const withDeleted = (set: Set<string>, id: string) => {
   const next = new Set(set);
@@ -106,6 +84,17 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [api]);
+
+  // Any click or keypress unlocks audio (capture, so a stopPropagation can't swallow it). A timer adopted
+  // on load chimes only if it finishes after the first interaction.
+  useEffect(() => {
+    window.addEventListener('click', unlockAudio, true);
+    window.addEventListener('keydown', unlockAudio, true);
+    return () => {
+      window.removeEventListener('click', unlockAudio, true);
+      window.removeEventListener('keydown', unlockAudio, true);
+    };
+  }, []);
 
   // 1s display tick.
   useEffect(() => {
