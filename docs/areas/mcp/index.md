@@ -57,7 +57,8 @@ every task/log/story/settings row, calendar event inserts on the connected Googl
 **Privacy — finance data leaves the app here.** The finance tools put merchant names, amounts, notes,
 account names + last 4 digits, and balances into the Claude conversation (and so claude.ai's history and
 retention, and the phone). Full account numbers and Plaid tokens are never stored or exposed. To keep
-finances out of voice, turn the three tools off on the claude.ai connector.
+finances out of voice, disable the three tools on the claude.ai connector if it offers per-tool control
+(unverified), or remove them from `FINANCE_TOOLS`.
 
 Revocation is one secret rotation + redeploy + re-register, independent of the recruiting `DEVICE_TOKEN`.
 (Rejected alternative: a DynamoDB-only ceiling — the user wanted calendar + attachments too.)
@@ -71,7 +72,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy`                                                                  |
 | attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`            |
-| finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,today?,limit?}`, `list_finance_rules`                     |
+| finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`           |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -108,15 +109,20 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   shell PUTs directly. Both reuse the existing size-cap + pending→ready flow — **no new IAM**.
 - **Finances are read-only** (`lambdas/src/mcp/financeTools.ts`). Sorting, marking, linking, rules and
   Refresh stay app-only. Money is US dollars as numbers (`…Usd`, summed in cents first): positive = money
-  out, negative = money in, after an account's sign flip. Every row's `kind` / resolved `bucket` / `period`
-  comes from `deriveFinanceView` (shared) over the same range the page loads, so the MCP and the page
-  can't disagree; `unsorted: true` is exactly the Sort queue (= the overview's `toSort.count`). Hidden
-  accounts are listed with `hidden: true` and excluded from totals, as on the page. **`today`** is
-  optional: omitted, the server takes the user's day in `USER_TIME_ZONE` (America/Los_Angeles) at their
-  `dayStartHour` (`dayKeyInZone`), and the result says which (`todaySource`) — so "how much budget is
-  left?" works as one spoken sentence. This is the one server-side zone assumption; pass `today` when
-  travelling. The overview omits the Plaid environment (the MCP's gateway is inert, so it would always
-  read "sandbox"). Data is as fresh as the last bank sync; voice can't trigger one.
+  out, negative = money in, after an account's sign flip. Every row in the page's range gets its `kind` /
+  resolved `bucket` / `period` from `deriveFinanceView` (shared) over exactly the rows the page loads, so
+  those match the page; a `from`/`to` window reaching past that range derives only the outside rows
+  separately (over the window padded back 31 days) and never re-derives the page's. Without a window,
+  `unsorted: true` is exactly the Sort queue (= the overview's `toSort.count`) and `bucket` is the page's
+  bucket chip (hidden-account rows included, flagged). `merchant` is a case-insensitive substring, and
+  `totalUsd` is the net sum of **every** match — the answer to "how much at X", even when the list is
+  truncated. Hidden accounts are listed with `hidden: true` and excluded from the overview's totals.
+  **`today`** is optional: omitted, the server takes the user's day in `USER_TIME_ZONE`
+  (America/Los_Angeles) at their `dayStartHour` (`dayKeyInZone`), and the result says which
+  (`todaySource`) — so "how much budget is left?" works as one spoken sentence. Pass `today` when
+  travelling. (The finance sync's schedule is the other place Pacific time is fixed — cdk
+  `finance-sync.ts`.) The overview omits the Plaid environment (the MCP's gateway is inert, so it would
+  always read "sandbox"). Data is as fresh as the last bank sync; voice can't trigger one.
 
 ## Dependency note — the MCP protocol is hand-rolled (no SDK)
 
@@ -285,7 +291,8 @@ the model as the only UI — so:
 - **Logic that only runs when the app opens doesn't run for voice** (the stale-planned lag above is the
   existing case).
 - **Finances by voice are questions, not edits:** "how much budget is left?" → `get_finance_overview` with
-  no arguments; "what did I spend at Amazon?" → `list_finance_transactions`. Nothing finance-related is
+  no arguments; "what did I spend at Amazon?" → `list_finance_transactions {merchant: "amazon"}` and its
+  `totalUsd`. Nothing finance-related is
   writable from here.
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and

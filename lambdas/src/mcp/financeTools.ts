@@ -1,6 +1,7 @@
 import {
   FINANCE_BUCKETS,
   FINANCE_BUCKET_LABELS,
+  addDays,
   bucketOf,
   dayKeyInZone,
   daysBetween,
@@ -9,15 +10,16 @@ import {
   financeSyncErrorMessage,
   isDayKey,
   isSortableKind,
+  merchantText,
   needsSorting,
   periodOf,
-  sortableTransactions,
 } from '@aperture/shared';
 import type {
   FinanceBucket,
   FinanceOverview,
   FinanceRule,
   FinanceTransaction,
+  FinanceView,
   Settings,
 } from '@aperture/shared';
 import { RpcParamError } from './types';
@@ -35,6 +37,9 @@ export const USER_TIME_ZONE = 'America/Los_Angeles';
 const MAX_SPAN_DAYS = 366;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 300;
+// Context loaded before a window that reaches past the page's range (transfer pairs and refund links
+// span days, not months).
+const OUTER_PAD_DAYS = 31;
 
 const usd = (cents: number): number => cents / 100;
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
@@ -42,7 +47,7 @@ const iso = (ms: number | null): string | null => (ms === null ? null : new Date
 const READ_ONLY =
   'Read-only: nothing here syncs, sorts, or edits — those are app-only. Data is as of the last bank sync.';
 const TODAY_ARG =
-  'Omit `today` unless the user names another day; the server uses their Pacific day (4am rollover).';
+  "Omit `today` unless the user names another day; the server uses the user's Pacific day (at their day-start hour).";
 const SIGN =
   'Amounts are US dollars: positive = money out (spending), negative = money in (refunds, income, payments received).';
 
@@ -66,7 +71,7 @@ async function resolveToday(
   };
 }
 
-// The error line the page's banners show for one bank, or null.
+// One bank's problem in words (the page's banner wording, one line per bank), or null.
 function bankError(o: FinanceOverview, itemId: string): { text: string; code: string } | null {
   const item = o.items.find((i) => i.id === itemId);
   const bank = item?.institutionName;
@@ -107,7 +112,13 @@ export const FINANCE_TOOLS: Tool[] = [
         ctx.dispatch('getFinanceOverview', [{ today }]) as Promise<FinanceOverview>,
       ]);
       const bankName = new Map(o.items.map((i) => [i.id, i.institutionName]));
-      const errors = o.items.map((i) => bankError(o, i.id)).filter((e) => e !== null);
+      // Newest first, like the overview's own lastError; a sign-in problem has no stamp, so it leads.
+      const stamp = (id: string) =>
+        o.sync.items.find((x) => x.itemId === id)?.lastErrorAt ?? Infinity;
+      const errors = [...o.items]
+        .sort((a, b) => Math.sign(stamp(b.id) - stamp(a.id)) || 0) // NaN (∞ − ∞) → a tie
+        .map((i) => bankError(o, i.id))
+        .filter((e) => e !== null);
       return {
         today,
         todaySource,
@@ -181,7 +192,8 @@ export const FINANCE_TOOLS: Tool[] = [
     description: [
       'Bank/card transactions with how the user sorted them — "what did I spend at Amazon this period?", "what\'s still unsorted?".',
       'Default: the current and previous billing periods. Or pass from + to (YYYY-MM-DD, both or neither, ≤ 366 days).',
-      "unsorted: true → exactly the app's to-sort queue (matches get_finance_overview toSort.count). bucket → one bucket (parents_pay | budget | i_pay); not with unsorted.",
+      'unsorted: true → the app\'s to-sort queue (without from/to, exactly get_finance_overview toSort.count). bucket → one bucket (parents_pay | budget | i_pay), like the app\'s bucket chips; not with unsorted. merchant → a case-insensitive substring of the merchant/name ("amazon").',
+      'totalUsd is the net sum of EVERY match (not just the returned page) — use it for "how much did I spend at X", never a sum of a truncated list.',
       "kind: expense (a charge) | refund | income | transfer (between the user's own accounts) | card_payment. Only expense and refund rows (and deposits linked as refunds) count toward buckets.",
       "bucket is resolved through refund links (a linked refund takes its charge's bucket); period is which billing period it counts in (current | previous | outside).",
       "category is Plaid's (e.g. FOOD_AND_DRINK / FOOD_AND_DRINK_RESTAURANT). Newest first; limit defaults to 100 (max 300), truncated says if more matched.",
@@ -196,6 +208,7 @@ export const FINANCE_TOOLS: Tool[] = [
         to: { type: 'string' },
         unsorted: { type: 'boolean' },
         bucket: { type: 'string', enum: FINANCE_BUCKETS },
+        merchant: { type: 'string' },
         today: { type: 'string', description: 'YYYY-MM-DD; usually omit' },
         limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT },
       },
@@ -209,37 +222,53 @@ export const FINANCE_TOOLS: Tool[] = [
         throw new RpcParamError('"unsorted" must be true or false');
       const bucket = parseBucket(args);
       if (unsorted && bucket) throw new RpcParamError('pass "unsorted" or "bucket", not both');
+      const merchant = parseMerchant(args);
       const limit = parseLimit(args);
 
       const { today, todaySource } = await resolveToday(args, ctx);
       const o = (await ctx.dispatch('getFinanceOverview', [{ today }])) as FinanceOverview;
-      // Load the page's range (so kinds and refund links match it), widened to cover a window.
+      const load = async (range: { from: string; to: string }) =>
+        deriveFinanceView(
+          o,
+          (await ctx.dispatch('listFinanceTransactions', [range])) as FinanceTransaction[],
+        );
+      // Rows in the page's range come from the page's own derivation, so they match it exactly. A
+      // window reaching past it gets a second view for only those outside rows — loaded over the window
+      // padded back, so their transfer pairs and refund links have context — and never re-derives the
+      // page's rows over a wider set (that could re-pair a transfer or resolve an old refund link).
       const pageRange = financeListRange(today, o);
-      const load = window
-        ? {
-            from: window.from < pageRange.from ? window.from : pageRange.from,
-            to: window.to > pageRange.to ? window.to : pageRange.to,
-          }
-        : pageRange;
-      const loaded = (await ctx.dispatch('listFinanceTransactions', [
-        load,
-      ])) as FinanceTransaction[];
-      const view = deriveFinanceView(o, loaded);
+      const page = await load(pageRange);
+      const inPage = (d: string) => d >= pageRange.from && d <= pageRange.to;
+      let pool: { t: FinanceTransaction; v: FinanceView }[];
+      if (!window) pool = page.txns.map((t) => ({ t, v: page }));
+      else {
+        const inWindow = (d: string) => d >= window.from && d <= window.to;
+        pool = page.allTxns.filter((t) => inWindow(t.date)).map((t) => ({ t, v: page }));
+        if (window.from < pageRange.from || window.to > pageRange.to) {
+          const outer = await load({ from: addDays(window.from, -OUTER_PAD_DAYS), to: window.to });
+          for (const t of outer.allTxns)
+            if (inWindow(t.date) && !inPage(t.date)) pool.push({ t, v: outer });
+        }
+        pool.sort((a, b) => b.t.date.localeCompare(a.t.date) || b.t.id.localeCompare(a.t.id));
+      }
 
-      let rows = window
-        ? view.allTxns.filter((t) => t.date >= window.from && t.date <= window.to)
-        : view.txns;
-      if (unsorted)
-        rows = sortableTransactions(rows, o.accounts, view.moves).filter((t) =>
-          needsSorting(t, view.links, view.refunded, view.amount(t)),
-        );
-      if (bucket)
-        rows = rows.filter(
-          (t) =>
-            !view.accounts.get(t.accountId)?.hidden &&
-            (isSortableKind(view.kindOf(t)) || view.links.has(t.id)) &&
-            bucketOf(t, view.links) === bucket,
-        );
+      // The page's filters: the Sort queue (SortQueue) and a bucket chip (TransactionList).
+      const sortable = new Map<FinanceView, Set<string>>();
+      const isSortable = ({ t, v }: { t: FinanceTransaction; v: FinanceView }) => {
+        if (!sortable.has(v)) sortable.set(v, new Set(v.sortable.map((x) => x.id)));
+        return sortable.get(v)!.has(t.id);
+      };
+      const rows = pool.filter(
+        (r) =>
+          (!unsorted ||
+            (isSortable(r) && needsSorting(r.t, r.v.links, r.v.refunded, r.v.amount(r.t)))) &&
+          (!bucket ||
+            ((isSortableKind(r.v.kindOf(r.t)) || r.v.links.has(r.t.id)) &&
+              bucketOf(r.t, r.v.links) === bucket)) &&
+          (!merchant ||
+            merchantText(r.t).includes(merchant) ||
+            r.t.name.toLowerCase().includes(merchant)),
+      );
 
       const shown = rows.slice(0, limit);
       return {
@@ -248,18 +277,19 @@ export const FINANCE_TOOLS: Tool[] = [
         period: { start: o.period.start, end: o.period.end, previous: o.period.previous },
         range: window ?? { from: o.period.previous.start, to: o.period.end },
         total: rows.length,
+        totalUsd: usd(rows.reduce((sum, { t, v }) => sum + v.amount(t), 0)), // net, every match
         returned: shown.length,
         truncated: rows.length > shown.length,
-        transactions: shown.map((t) => {
-          const acct = view.accounts.get(t.accountId);
-          const refunded = view.refunded.get(t.id) ?? 0;
+        transactions: shown.map(({ t, v }) => {
+          const acct = v.accounts.get(t.accountId);
+          const refunded = v.refunded.get(t.id) ?? 0;
           return {
             id: t.id,
             date: t.date,
             authorizedDate: t.authorizedDate,
             merchant: t.merchantName ?? t.name,
             name: t.name,
-            amountUsd: usd(view.amount(t)),
+            amountUsd: usd(v.amount(t)),
             ...(t.isoCurrency && t.isoCurrency !== 'USD' ? { currency: t.isoCurrency } : {}),
             pending: t.pending,
             account: {
@@ -267,16 +297,16 @@ export const FINANCE_TOOLS: Tool[] = [
               mask: acct?.mask ?? null,
               hidden: acct?.hidden ?? false,
             },
-            kind: view.kindOf(t),
-            bucket: bucketOf(t, view.links),
+            kind: v.kindOf(t),
+            bucket: bucketOf(t, v.links),
             bucketSetBy: t.bucketSetBy,
-            period: periodOf(t, o.period, view.links) ?? 'outside',
+            period: periodOf(t, o.period, v.links) ?? 'outside',
             periodOverride: t.periodOverride,
             category: { primary: t.pfcPrimary, detailed: t.pfcDetailed },
             paymentChannel: t.paymentChannel,
             note: t.note,
             refundOfId: t.refundOfId,
-            linkedChargeId: view.links.get(t.id)?.id ?? null,
+            linkedChargeId: v.links.get(t.id)?.id ?? null,
             ...(refunded > 0 ? { refundedUsd: usd(refunded) } : {}),
             startsPeriod: t.startsPeriod,
           };
@@ -326,6 +356,14 @@ function parseBucket(args: Record<string, unknown>): FinanceBucket | null {
   if (typeof v !== 'string' || !(FINANCE_BUCKETS as string[]).includes(v))
     throw new RpcParamError(`"bucket" must be one of: ${FINANCE_BUCKETS.join(', ')}`);
   return v as FinanceBucket;
+}
+
+function parseMerchant(args: Record<string, unknown>): string | null {
+  const v = args.merchant;
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string' || v.trim() === '')
+    throw new RpcParamError('"merchant" must be a non-empty string');
+  return v.trim().toLowerCase();
 }
 
 function parseLimit(args: Record<string, unknown>): number {

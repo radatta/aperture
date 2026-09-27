@@ -27,7 +27,8 @@ vi.mock('../finance/liveInvoker', () => ({ liveInvoker: live.invoker }));
 import { handler, runtime } from './index';
 
 // Edge behavior that returns before any DynamoDB access (origin gate, method, auth, well-known) — plus
-// `initialize`, which touches no table. Tool dispatch (which needs the live table) is in tools.test.ts.
+// `initialize`, which touches no table. Tool behavior is in tools.test.ts / financeTools.test.ts; the one
+// tool call here (over the mocked in-memory table) is the finance Plaid tripwire at the end.
 const OK_ORIGIN = { 'x-aperture-origin-secret': 's3cr3t' };
 const init = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
 

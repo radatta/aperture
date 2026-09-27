@@ -20,7 +20,9 @@ import { runFinanceSync } from '../finance/sync';
 import { InMemoryPlaid } from '../plaid/gateway';
 import type { PlaidGateway } from '../plaid/gateway';
 import { TOOLS } from './tools';
+import { RpcParamError } from './types';
 import type { ToolContext } from './types';
+import { financeTxnItem } from '../ddb/mapping';
 
 // The fixtures are dated from TODAY; the server clock is 03:30 PDT the next morning, which the user's
 // 4am rollover still counts as TODAY.
@@ -98,7 +100,8 @@ interface TxnsOut {
   total: number;
   returned: number;
   truncated: boolean;
-  transactions: TxnRow[];
+  totalUsd: number;
+  transactions: (TxnRow & { merchant: string; account: { hidden: boolean } })[];
 }
 interface OverviewOut {
   today: string;
@@ -192,6 +195,7 @@ describe('list_finance_transactions', () => {
   it("unsorted is exactly the to-sort queue; a linked refund takes its charge's bucket", async () => {
     const o = await overview();
     const r = await call<TxnsOut>('list_finance_transactions', { unsorted: true, limit: 300 });
+    expect(o.unsortedCount).toBeGreaterThan(0);
     expect(r.total).toBe(o.unsortedCount);
 
     await setup.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
@@ -233,7 +237,61 @@ describe('list_finance_transactions', () => {
       { limit: 0 },
       { today: 'tomorrow' },
     ])
-      await expect(call<TxnsOut>('list_finance_transactions', bad)).rejects.toThrow(/"|pass/);
+      await expect(call<TxnsOut>('list_finance_transactions', bad)).rejects.toBeInstanceOf(
+        RpcParamError,
+      );
+  });
+});
+
+describe('list_finance_transactions — page parity at the edges', () => {
+  it("a window reaching past the page's range never changes a row the page also shows", async () => {
+    // An old charge (past the 120-day lookback) that a current refund names: the page can't load it,
+    // so the refund is unlinked there — and must stay unlinked in any window that includes it.
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const charge = (await repo.getFinanceTxn('fx-card-8'))!;
+    doc.putNow(
+      financeTxnItem(U, { ...charge, id: 'old-charge', date: '2026-04-01', bucket: 'i_pay' }),
+    );
+    const refund = (await repo.getFinanceTxn('fx-refund-2'))!;
+    doc.putNow(
+      financeTxnItem(U, { ...refund, refundOfId: 'old-charge', updatedAt: refund.updatedAt + 1 }),
+    );
+    const pick = (r: TxnsOut) => r.transactions.find((x) => x.id === 'fx-refund-2')!;
+    const onPage = pick(await call<TxnsOut>('list_finance_transactions', { limit: 300 }));
+    const wide = await call<TxnsOut>('list_finance_transactions', {
+      from: '2026-03-15',
+      to: TODAY,
+      limit: 300,
+    });
+    expect(onPage).toMatchObject({ linkedChargeId: null, period: 'current', bucket: null });
+    expect(pick(wide)).toMatchObject({
+      kind: onPage.kind,
+      bucket: onPage.bucket,
+      period: onPage.period,
+      linkedChargeId: null,
+    });
+    expect(wide.transactions.some((x) => x.id === 'old-charge')).toBe(true); // outside rows still come
+  });
+
+  it("a bucket filter keeps rows on a hidden account, like the page's chip", async () => {
+    await setup.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
+    await setup.updateFinanceAccount(FIXTURE_ACCOUNT_IDS.card, { hidden: true });
+    const r = await call<TxnsOut>('list_finance_transactions', { bucket: 'budget', limit: 300 });
+    const row = r.transactions.find((x) => x.id === 'fx-card-8');
+    expect(row?.account.hidden).toBe(true);
+  });
+
+  it('merchant narrows by name, and totalUsd sums every match', async () => {
+    const all = await call<TxnsOut>('list_finance_transactions', {
+      merchant: 'AMAZON',
+      limit: 300,
+    });
+    expect(all.total).toBeGreaterThan(2);
+    expect(all.transactions.every((x) => /amazon/i.test(x.merchant))).toBe(true);
+    const sum = all.transactions.reduce((s, x) => s + Math.round(x.amountUsd * 100), 0) / 100;
+    expect(all.totalUsd).toBe(sum);
+    const cut = await call<TxnsOut>('list_finance_transactions', { merchant: 'amazon', limit: 1 });
+    expect([cut.returned, cut.truncated, cut.totalUsd]).toEqual([1, true, sum]);
   });
 });
 
