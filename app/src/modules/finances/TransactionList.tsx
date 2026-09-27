@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import {
-  classifyTransaction,
+  bucketOf,
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
   fmtMonthShortDay,
   isSortableKind,
+  isUnsorted,
   periodOf,
 } from '@aperture/shared';
 import type {
@@ -18,6 +19,7 @@ import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { BucketTag } from './BucketTag';
 import { fmtMoney } from './money';
+import { refundMeta } from './refundMeta';
 import { TransactionDetail } from './TransactionDetail';
 import type { FinanceView } from './useFinanceData';
 
@@ -53,23 +55,22 @@ export function TransactionList({
   if (!view)
     return <EmptyState pending={pending && !error} error={error} title="No transactions yet." />;
 
-  const kindOf = (t: FinanceTransaction) =>
-    classifyTransaction(t, view.accounts.get(t.accountId), view.moves);
+  const kindOf = view.kindOf;
   const shown = view.txns.filter((t) => {
     if (filter === 'all') return true;
     if (!isSortableKind(kindOf(t))) return false;
-    return filter === 'unsorted' ? t.bucket === null : t.bucket === filter;
+    return filter === 'unsorted' ? isUnsorted(t, view.links) : bucketOf(t, view.links) === filter;
   });
   const sections = [
     {
       key: 'current',
       title: `This period · ${fmtMonthShortDay(overview.period.start)} – today`,
-      rows: shown.filter((t) => periodOf(t, overview.period) === 'current'),
+      rows: shown.filter((t) => periodOf(t, overview.period, view.links) === 'current'),
     },
     {
       key: 'previous',
       title: `Last period · ${fmtMonthShortDay(overview.period.previous.start)} – ${fmtMonthShortDay(overview.period.previous.end)}`,
-      rows: shown.filter((t) => periodOf(t, overview.period) === 'previous'),
+      rows: shown.filter((t) => periodOf(t, overview.period, view.links) === 'previous'),
     },
   ];
   const open = openId ? view.txns.find((t) => t.id === openId) : undefined;
@@ -166,7 +167,7 @@ function TransactionRow({
           <Text size="xs" tone="muted" className="truncate">
             {acct ? `${acct.name} ••${acct.mask}` : ''}
             {txn.pending ? ' · pending' : ''}
-            {kind === 'refund' ? ' · refund' : ''}
+            {refundMeta(txn, kind, view)}
             {txn.periodOverride ? ` · moved to ${txn.periodOverride} period` : ''}
             {txn.note ? ` · ${txn.note}` : ''}
           </Text>
@@ -176,7 +177,7 @@ function TransactionRow({
         </Text>
         <span className="w-24 shrink-0 text-right">
           {expense ? (
-            <BucketTag bucket={txn.bucket} />
+            <BucketTag bucket={bucketOf(txn, view.links)} />
           ) : (
             <Text size="xs" tone="muted">
               {KIND_LABEL[kind as keyof typeof KIND_LABEL]}

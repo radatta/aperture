@@ -23,6 +23,7 @@ import {
   isDuplicateItem,
   normalizeRulePattern,
   reconcileSyncPage,
+  refundLinkError,
   todayKey,
   toCents,
   assertCategoryDeletable,
@@ -205,6 +206,11 @@ class StubClient implements ApiClient {
       const store = { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) };
       // Settings gain fields over time; a persisted row from before them reads the defaults.
       if (store.settings) store.settings = { ...FINANCE_SETTINGS_DEFAULTS, ...store.settings };
+      // Rows persisted before refund linking existed read as unlinked.
+      store.financeTransactions = store.financeTransactions.map((t) => ({
+        ...t,
+        refundOfId: t.refundOfId ?? null,
+      }));
       return store;
     } catch {
       return null;
@@ -1129,7 +1135,9 @@ class StubClient implements ApiClient {
   }
   async setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]> {
     if (input.rule && input.bucket === null) throw new Error('A rule needs a bucket');
-    for (const id of input.ids) this.mustFind(this.store.financeTransactions, id);
+    for (const id of input.ids)
+      if (this.mustFind(this.store.financeTransactions, id).refundOfId)
+        throw new Error('A linked refund takes its charge’s bucket — unlink it first');
     const changed = new Map<string, FinanceTransaction>();
     for (const id of input.ids)
       changed.set(
@@ -1145,7 +1153,7 @@ class StubClient implements ApiClient {
         bucket: input.bucket,
       });
       for (const x of this.alive(this.store.financeTransactions)) {
-        if (x.bucket !== null || !applyRules([rule], x)) continue;
+        if (x.bucket !== null || x.refundOfId !== null || !applyRules([rule], x)) continue;
         changed.set(
           x.id,
           this.writes.patch(this.store.financeTransactions, x.id, {
@@ -1161,7 +1169,29 @@ class StubClient implements ApiClient {
     id: string,
     override: FinancePeriodOverride | null,
   ): Promise<FinanceTransaction> {
+    if (this.mustFind(this.store.financeTransactions, id).refundOfId)
+      throw new Error('A linked refund counts in its charge’s period — unlink it first');
     return this.writes.patch(this.store.financeTransactions, id, { periodOverride: override });
+  }
+  async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
+    const refund = this.mustFind(this.store.financeTransactions, refundId);
+    if (chargeId === null)
+      return this.writes.patch(this.store.financeTransactions, refundId, { refundOfId: null });
+    const charge = this.mustFind(this.store.financeTransactions, chargeId);
+    const accounts = this.store.financeAccounts;
+    const error = refundLinkError({
+      refund,
+      refundAccount: accounts.find((a) => a.id === refund.accountId),
+      charge,
+      chargeAccount: accounts.find((a) => a.id === charge.accountId),
+    });
+    if (error) throw new Error(error);
+    return this.writes.patch(this.store.financeTransactions, refundId, {
+      refundOfId: chargeId,
+      bucket: null,
+      bucketSetBy: null,
+      periodOverride: null,
+    });
   }
   async setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction> {
     return this.writes.patch(this.store.financeTransactions, id, { note: note?.trim() || null });

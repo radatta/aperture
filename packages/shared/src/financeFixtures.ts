@@ -166,6 +166,16 @@ export function fixtureHistory(today: string): PlaidTransaction[] {
       'TRANSFER_OUT',
       'TRANSFER_OUT_ACCOUNT_TRANSFER',
     ]),
+    // Card credits: the Amazon order from 8 days ago returned in full, and a partial Target refund
+    // of a charge from the previous period. Both land unsorted until linked to their charges.
+    txn('fx-refund-1', card, addDays(today, -3), -34.99, 'AMAZON MKTPL*2K4LQ09', 'Amazon', [
+      'GENERAL_MERCHANDISE',
+      'GENERAL_MERCHANDISE_OTHER',
+    ]),
+    txn('fx-refund-2', card, addDays(today, -2), -10, 'TARGET 00012345', 'Target', [
+      'GENERAL_MERCHANDISE',
+      'GENERAL_MERCHANDISE_OTHER',
+    ]),
     txn('fx-safeway', checking, addDays(today, -7), 38.61, 'SAFEWAY #1711 DEBIT', 'Safeway', [
       'FOOD_AND_DRINK',
       'FOOD_AND_DRINK_GROCERIES',

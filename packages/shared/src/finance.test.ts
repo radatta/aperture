@@ -13,6 +13,11 @@ import {
   periodOf,
   reconcileSyncPage,
   referencedTxnIds,
+  refundLinkError,
+  resolveRefundLinks,
+  suggestRefundMatches,
+  bucketOf,
+  isUnsorted,
   summarizePeriod,
   toCents,
 } from './finance';
@@ -77,6 +82,7 @@ function tx(
     bucketSetBy: null,
     periodOverride: null,
     note: null,
+    refundOfId: null,
     ...over,
   };
 }
@@ -580,5 +586,169 @@ describe('fixtures end-to-end', () => {
     const s = summarizePeriod({ period, txns, accounts, budgetCents: 60000 });
     expect(s.unsortedCount).toBeGreaterThan(10);
     expect(s.spentCents).toBe(0);
+  });
+});
+
+describe('refund links', () => {
+  const period = computeFinancePeriod({
+    today: '2026-09-26',
+    accounts: [chk, card],
+    txns: [
+      tx('o1', 'chk', '2026-08-18', 5000, PAY),
+      tx('i1', 'card', '2026-08-18', -5000),
+      tx('o2', 'chk', '2026-09-17', 7000, PAY),
+      tx('i2', 'card', '2026-09-17', -7000),
+    ],
+    cycleDay: 23,
+  });
+  const payments = [
+    tx('o1', 'chk', '2026-08-18', 5000, PAY),
+    tx('i1', 'card', '2026-08-18', -5000),
+    tx('o2', 'chk', '2026-09-17', 7000, PAY),
+    tx('i2', 'card', '2026-09-17', -7000),
+  ];
+  const amazon = { merchantName: 'Amazon' };
+
+  it('resolves directly, through a posted charge’s pending id, and not to a tombstone', () => {
+    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' });
+    expect(resolveRefundLinks([charge, refund]).get('r')?.id).toBe('c');
+
+    const posted = tx('c-posted', 'card', '2026-09-20', 3499, {
+      ...amazon,
+      pendingTransactionId: 'c',
+    });
+    expect(resolveRefundLinks([posted, refund]).get('r')?.id).toBe('c-posted');
+
+    expect(resolveRefundLinks([{ ...charge, deletedAt: 5 }, refund]).has('r')).toBe(false);
+    expect(resolveRefundLinks([refund]).has('r')).toBe(false);
+  });
+
+  it('bucketOf follows the charge, including an unsorted one', () => {
+    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3499, { refundOfId: 'c', bucket: 'i_pay' });
+    const links = resolveRefundLinks([charge, refund]);
+    expect(bucketOf(refund, links)).toBeNull();
+    expect(isUnsorted(refund, links)).toBe(false);
+    expect(isUnsorted(charge, links)).toBe(true);
+  });
+
+  it('a linked refund nets in its charge’s bucket and period, and never counts', () => {
+    const txns = [
+      ...payments,
+      tx('c', 'card', '2026-09-20', 3499, { ...amazon, bucket: 'budget' }),
+      tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' }),
+      tx('old', 'card', '2026-09-01', 2689, { bucket: 'budget' }), // previous period
+      tx('r2', 'card', '2026-09-23', -1000, { refundOfId: 'old' }), // dated current, counts previous
+    ];
+    const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
+    expect(s.spentCents).toBe(0);
+    expect(s.buckets.budget.count).toBe(1);
+    expect(s.unsortedCount).toBe(0);
+  });
+
+  it('an unsorted charge with a partial refund: one to sort, net cents', () => {
+    const txns = [
+      ...payments,
+      tx('c', 'card', '2026-09-20', 5000, amazon),
+      tx('r', 'card', '2026-09-22', -2000, { ...amazon, refundOfId: 'c' }),
+      tx('r3', 'card', '2026-09-23', -1000, { ...amazon, refundOfId: 'c' }),
+    ];
+    const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
+    expect(s.unsortedCount).toBe(1);
+    expect(s.unsortedCents).toBe(2000);
+  });
+
+  it('a charge on a hidden account leaves its refund unlinked (back to sort)', () => {
+    const other = acct('card2', 'credit', { hidden: true });
+    const txns = [
+      ...payments,
+      tx('c', 'card2', '2026-09-20', 3499, { ...amazon, bucket: 'budget' }),
+      tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' }),
+    ];
+    const s = summarizePeriod({ period, txns, accounts: [chk, card, other], budgetCents: 60000 });
+    expect(s.unsortedCount).toBe(1);
+  });
+
+  it('periodOf with links follows the charge’s override', () => {
+    const charge = tx('c', 'card', '2026-09-20', 3499, { periodOverride: 'previous' });
+    const refund = tx('r', 'card', '2026-09-22', -3499, { refundOfId: 'c' });
+    expect(periodOf(refund, period, resolveRefundLinks([charge, refund]))).toBe('previous');
+  });
+
+  it('suggestRefundMatches ranks and filters', () => {
+    const card2 = acct('card2', 'credit');
+    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const txns = [
+      refund,
+      tx('exact-other-acct', 'card2', '2026-09-21', 3499, amazon),
+      tx('exact-far', 'card', '2026-08-01', 3499, amazon),
+      tx('exact-near', 'card', '2026-09-15', 3499, amazon),
+      tx('bigger', 'card', '2026-09-20', 5000, amazon),
+      tx('pending-exact', 'card', '2026-09-15', 3499, { ...amazon, pending: true }),
+      tx('too-small', 'card', '2026-09-20', 1000, amazon),
+      tx('too-old', 'card', '2026-06-01', 3499, amazon),
+      tx('after', 'card', '2026-09-23', 3499, amazon),
+      tx('other-merchant', 'card', '2026-09-20', 3499, { merchantName: 'Target' }),
+      tx('used-up', 'card', '2026-09-19', 3499, amazon),
+      tx('earlier-refund', 'card', '2026-09-20', -3499, { ...amazon, refundOfId: 'used-up' }),
+    ];
+    const links = resolveRefundLinks(txns);
+    const ids = suggestRefundMatches({
+      refund,
+      txns,
+      accounts: [chk, card, card2],
+      moves: new Map(),
+      links,
+    }).map((t) => t.id);
+    expect(ids).toEqual(['exact-near', 'pending-exact', 'exact-far', 'bigger', 'exact-other-acct']);
+  });
+
+  it('refundLinkError guards each rule', () => {
+    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const ok = { refund, refundAccount: card, charge, chargeAccount: card };
+    expect(refundLinkError(ok)).toBeNull();
+    expect(refundLinkError({ ...ok, charge: refund, chargeAccount: card })).toMatch(
+      /itself|charge/,
+    );
+    expect(refundLinkError({ ...ok, refund: { ...charge, id: 'c2' } })).toMatch(/card credit/);
+    expect(refundLinkError({ ...ok, refundAccount: chk })).toMatch(/card credit/);
+    expect(refundLinkError({ ...ok, refund: { ...refund, pfcPrimary: 'LOAN_PAYMENTS' } })).toMatch(
+      /payment/,
+    );
+    expect(refundLinkError({ ...ok, refund: { ...refund, rawAmountCents: -5000 } })).toMatch(
+      /larger/,
+    );
+    expect(refundLinkError({ ...ok, charge: { ...charge, deletedAt: 1 } })).toMatch(/gone/);
+  });
+
+  it('reconcileSyncPage carries the link pending→posted and skips the merchant rule', () => {
+    const pending = tx('p-refund', 'card', '2026-09-22', -3499, {
+      ...amazon,
+      pending: true,
+      refundOfId: 'c',
+    });
+    const existing = new Map([[pending.id, pending]]);
+    const posted: PlaidTransaction = {
+      ...fixtureHistory('2026-09-26')[0]!,
+      transaction_id: 'posted-refund',
+      account_id: 'card',
+      amount: -34.99,
+      merchant_name: 'Amazon',
+      pending: false,
+      pending_transaction_id: 'p-refund',
+    };
+    reconcileSyncPage({
+      existing,
+      page: { added: [posted], modified: [], removed: [{ transaction_id: 'p-refund' }] },
+      rules: [rule('amazon', 'budget')],
+      now: 1,
+      itemId: 'item',
+      userId: 'u',
+    });
+    const row = existing.get('posted-refund')!;
+    expect(row.refundOfId).toBe('c');
+    expect(row.bucket).toBeNull();
   });
 });

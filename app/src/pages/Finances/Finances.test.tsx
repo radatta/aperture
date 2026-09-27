@@ -145,6 +145,38 @@ describe('Finances page', () => {
     expect(within(alert).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
   });
 
+  it('links a refund to its charge from the detail, and unlinks it back into the queue', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
+    renderApp({ api, path: '/finances/all' });
+    expect(await screen.findByText('$565 left')).toBeTruthy(); // $600 − $34.99
+    const refundRow = (await screen.findAllByRole('button', { name: /Amazon.*\+\$34\.99/ }))[0]!;
+    await user.click(refundRow);
+    const dialog = await screen.findByRole('dialog', { name: /Refund: Amazon/ });
+    // The best match is the $34.99 Amazon charge — one click.
+    const best = within(dialog).getAllByRole('button', { name: /Link to Amazon/ })[0]!;
+    expect(best.getAttribute('aria-label')).toMatch(/\$34\.99/);
+    await user.click(best);
+    expect(await within(dialog).findByText(/it follows the charge/)).toBeTruthy();
+    expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
+    expect(await screen.findByText('$600 left')).toBeTruthy(); // netted
+    expect(await screen.findByText(/refunded \$34\.99/)).toBeTruthy(); // the charge's row
+
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByRole('radiogroup', { name: 'Bucket' })).toBeTruthy();
+    expect(await screen.findByText('$565 left')).toBeTruthy();
+  });
+
+  it('a linked refund leaves the sort queue and nets its group', async () => {
+    const api = await linked();
+    await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+    renderApp({ api, path: '/finances' });
+    const amazon = await group(/^Amazon, /);
+    expect(within(amazon).queryByText(/\+\$34\.99/)).toBeNull();
+    expect(within(amazon).getByText(/refunded \$34\.99/)).toBeTruthy();
+  });
+
   it('rules tab adds and lists a rule', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/rules' });

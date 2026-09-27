@@ -5,6 +5,7 @@ import {
   fmtMonthShortDay,
   groupByMerchant,
   periodOf,
+  isUnsorted,
   sortableTransactions,
 } from '@aperture/shared';
 import type {
@@ -20,6 +21,7 @@ import { Text } from '../../components/Text';
 import { useSetFinanceBucket } from '../../data/hooks/useFinances';
 import { fmtMoney } from './money';
 import { TransactionDetail } from './TransactionDetail';
+import { refundMeta } from './refundMeta';
 import type { FinanceView } from './useFinanceData';
 
 // The batch sort: every unsorted charge in the current AND previous period, grouped by merchant,
@@ -39,10 +41,11 @@ export function SortQueue({
 }) {
   const groups = useMemo(() => {
     if (!view) return [];
-    const unsorted = sortableTransactions(view.txns, overview.accounts, view.moves).filter(
-      (t) => t.bucket === null,
+    const unsorted = sortableTransactions(view.txns, overview.accounts, view.moves).filter((t) =>
+      isUnsorted(t, view.links),
     );
-    return groupByMerchant(unsorted, view.amount);
+    // Group totals are net of linked refunds, matching the header's unsorted total.
+    return groupByMerchant(unsorted, (t) => view.amount(t) - (view.refunded.get(t.id) ?? 0));
   }, [view, overview.accounts]);
   const setBucket = useSetFinanceBucket();
   const refs = useRef(new Map<string, HTMLDivElement>());
@@ -220,7 +223,7 @@ function GroupCard({
             key={t.id}
             txn={t}
             view={view}
-            previous={periodOf(t, overview.period) === 'previous'}
+            previous={periodOf(t, overview.period, view.links) === 'previous'}
             onOpen={() => onOpen(t.id)}
           />
         ))}
@@ -289,7 +292,7 @@ function ChargeRow({
           {txn.name}
           {acct?.mask ? ` · ••${acct.mask}` : ''}
           {txn.pending ? ' · pending' : ''}
-          {cents < 0 ? ' · refund' : ''}
+          {refundMeta(txn, view.kindOf(txn), view)}
           {previous ? ' · last period' : ''}
           {txn.note ? ` · ${txn.note}` : ''}
         </Text>

@@ -30,10 +30,19 @@ describe('stub finances', () => {
     const oldSettings: Partial<typeof s> = { ...s };
     delete oldSettings.financeBudgetCents;
     delete oldSettings.financeCycleDay;
-    localStorage.setItem(key, JSON.stringify({ ...raw, settings: oldSettings }));
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        ...raw,
+        settings: oldSettings,
+        financeTransactions: [{ id: 'old-row', deletedAt: null, date: '2026-01-01' }],
+      }),
+    );
 
     const upgraded = createStubClient({ seed: false, storageKey: key });
     expect((await upgraded.getSettings()).financeBudgetCents).toBe(60000);
     expect((await upgraded.getFinanceOverview({ today: todayKey(4) })).items).toEqual([]);
+    const [old] = await upgraded.listFinanceTransactions({ from: '2026-01-01', to: '2026-01-01' });
+    expect(old!.refundOfId).toBeNull(); // pre-refund-linking rows read as unlinked
   });
 });

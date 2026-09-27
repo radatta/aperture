@@ -3,7 +3,7 @@ import type { ApiClient } from './api';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
-import { FINANCE_REFRESH_COOLDOWN_MS } from './finance';
+import { FINANCE_REFRESH_COOLDOWN_MS, resolveRefundLinks } from './finance';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS } from './financeFixtures';
 
 // ONE behavior suite, run against every ApiClient implementation — the in-memory stub, the in-process
@@ -1045,6 +1045,81 @@ export function runApiContract(
       await expect(api.updateFinanceAccount('nope', { hidden: true })).rejects.toThrow();
       await api.removePlaidItem('nope');
       expect((await api.getFinanceOverview({ today: finToday() })).items).toHaveLength(1);
+    });
+
+    it('finance: linking a refund nets it against the charge’s bucket and period', async () => {
+      await connect();
+      await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
+      const before = await api.getFinanceOverview({ today: finToday() });
+      expect(before.spentCents).toBe(3499);
+
+      const linked = await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      expect(linked.refundOfId).toBe('fx-card-8');
+      expect(linked.bucket).toBeNull();
+      const after = await api.getFinanceOverview({ today: finToday() });
+      expect(after.spentCents).toBe(0);
+      expect(after.unsortedCount).toBe(before.unsortedCount - 1);
+
+      await api.linkFinanceRefund('fx-refund-1', null);
+      const unlinked = await api.getFinanceOverview({ today: finToday() });
+      expect(unlinked.spentCents).toBe(3499);
+      expect(unlinked.unsortedCount).toBe(before.unsortedCount);
+    });
+
+    it('finance: a partial refund nets partially and follows the charge into its period', async () => {
+      await connect();
+      await api.linkFinanceRefund('fx-refund-2', 'fx-card-14');
+      await api.setFinanceBucket({ ids: ['fx-card-14'], bucket: 'budget' });
+      // The charge is in the previous period — so is its refund, though it's dated this period.
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
+      await api.setFinancePeriodOverride('fx-card-14', 'current');
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(2689 - 1000);
+    });
+
+    it('finance: refund link validation', async () => {
+      await connect();
+      await expect(api.linkFinanceRefund('fx-card-8', 'fx-card-2')).rejects.toThrow(); // charge as refund
+      await expect(api.linkFinanceRefund('fx-refund-1', 'fx-refund-2')).rejects.toThrow(); // onto a credit
+      await expect(api.linkFinanceRefund('fx-refund-1', 'fx-refund-1')).rejects.toThrow(); // self
+      await expect(api.linkFinanceRefund('fx-refund-2', 'fx-card-10')).rejects.toThrow(); // $10 > $6.75
+      await expect(api.linkFinanceRefund('fx-ccpay-card-10', 'fx-card-8')).rejects.toThrow(); // a payment
+      await expect(api.linkFinanceRefund('nope', 'fx-card-8')).rejects.toThrow();
+      await expect(api.linkFinanceRefund('fx-refund-1', 'nope')).rejects.toThrow();
+
+      await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      await expect(
+        api.setFinanceBucket({ ids: ['fx-refund-1'], bucket: 'budget' }),
+      ).rejects.toThrow();
+      await expect(api.setFinancePeriodOverride('fx-refund-1', 'current')).rejects.toThrow();
+      // "Always" for the merchant sorts the other Amazon charges but leaves the linked refund alone.
+      await api.setFinanceBucket({
+        ids: ['fx-card-28'],
+        bucket: 'i_pay',
+        rule: { pattern: 'amazon' },
+      });
+      const txns = await api.listFinanceTransactions({
+        from: addDays(finToday(), -400),
+        to: finToday(),
+      });
+      const refund = txns.find((t) => t.id === 'fx-refund-1')!;
+      expect(refund.bucket).toBeNull();
+      expect(refund.refundOfId).toBe('fx-card-8');
+    });
+
+    it('finance: a refund link survives its charge going pending→posted', async () => {
+      await connect();
+      await api.linkFinanceRefund('fx-refund-2', 'fx-pending-1');
+      await api.setFinanceBucket({ ids: ['fx-pending-1'], bucket: 'parents_pay' });
+      advance(1000);
+      await api.requestFinanceSync({ refresh: false });
+      const txns = await api.listFinanceTransactions(await finRange());
+      expect(resolveRefundLinks(txns).get('fx-refund-2')?.id).toBe('fx-posted-1');
+      const o = await api.getFinanceOverview({ today: finToday() });
+      expect(o.buckets.parents_pay.totalCents).toBe(2450 - 1000);
+      expect(
+        (await api.exportData()).financeTransactions.find((t) => t.id === 'fx-refund-2')!
+          .refundOfId,
+      ).toBe('fx-pending-1');
     });
 
     it('finance: export carries items, accounts, transactions and rules', async () => {

@@ -87,6 +87,10 @@ export interface FinanceTransaction extends BaseEntity {
   bucketSetBy: 'user' | 'rule' | null;
   periodOverride: FinancePeriodOverride | null;
   note: string | null;
+  // User-owned, like bucket: the charge this card credit reverses. Sync never writes it (it only
+  // carries it pending→posted). May still name a charge's old pending id — resolveRefundLinks
+  // follows pendingTransactionId, so a link survives the charge posting.
+  refundOfId: string | null;
 }
 
 // "Always put <pattern> in <bucket>". pattern is lowercased and matched as a substring.
@@ -175,6 +179,8 @@ export const FINANCE_SYNC_LOCK_MS = 5 * 60_000;
 // The sync Lambda's own timeout (300 s) plus the refresh poll ceiling — past this a request is dead.
 export const FINANCE_SYNCING_MAX_MS = 5 * 60_000 + FINANCE_REFRESH_POLL_MAX_MS;
 export const PAYMENT_MATCH_WINDOW_DAYS = 3;
+// How far back a refund looks for the charge it reverses.
+export const REFUND_MATCH_WINDOW_DAYS = 90;
 export const SYNC_PAGE_COUNT = 500;
 // How far back the overview reads. Two billing periods plus slack for the payment search.
 export const FINANCE_OVERVIEW_LOOKBACK_DAYS = 120;
@@ -366,11 +372,14 @@ export function computeFinancePeriod(input: {
 }
 
 // Which window a transaction counts in. An override moves a charge across the boundary; anything
-// outside both windows is ignored, override or not.
+// outside both windows is ignored, override or not. A linked refund counts wherever its charge does.
 export function periodOf(
   txn: FinanceTransaction,
   period: FinancePeriod,
+  links?: RefundLinks,
 ): 'current' | 'previous' | null {
+  const charge = links?.get(txn.id);
+  if (charge) return periodOf(charge, period);
   const inCurrent = txn.date >= period.start && txn.date <= period.end;
   const inPrevious = txn.date >= period.previous.start && txn.date <= period.previous.end;
   if (!inCurrent && !inPrevious) return null;
@@ -396,6 +405,118 @@ export function sortableTransactions(
   );
 }
 
+// --- Refund links -----------------------------------------------------------
+// refund id → the alive charge it reverses. A link whose charge went pending→posted resolves through
+// the posted row's pendingTransactionId. Only rows in `txns` resolve: a charge outside the loaded
+// window, tombstoned, or filtered out (a hidden account) leaves the refund unlinked in effect.
+export type RefundLinks = Map<string, FinanceTransaction>;
+
+export function resolveRefundLinks(txns: FinanceTransaction[]): RefundLinks {
+  const live = txns.filter((t) => t.deletedAt === null);
+  const byId = new Map(live.map((t) => [t.id, t]));
+  const byPending = new Map(
+    live.filter((t) => t.pendingTransactionId).map((t) => [t.pendingTransactionId!, t]),
+  );
+  const links: RefundLinks = new Map();
+  for (const t of live) {
+    if (!t.refundOfId) continue;
+    const charge = byId.get(t.refundOfId) ?? byPending.get(t.refundOfId);
+    if (charge && charge.id !== t.id) links.set(t.id, charge);
+  }
+  return links;
+}
+
+// A linked refund takes its charge's bucket — explicitly, so an unsorted charge yields null.
+export function bucketOf(t: FinanceTransaction, links: RefundLinks): FinanceBucket | null {
+  const charge = links.get(t.id);
+  return charge ? charge.bucket : t.bucket;
+}
+
+// Needs a decision from you: no bucket, and not riding on a charge.
+export function isUnsorted(t: FinanceTransaction, links: RefundLinks): boolean {
+  return !links.has(t.id) && t.bucket === null;
+}
+
+// charge id → cents already refunded (positive), summed over its linked refunds.
+export function refundedCentsByCharge(
+  links: RefundLinks,
+  txnsById: Map<string, FinanceTransaction>,
+  amount: (t: FinanceTransaction) => number,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [refundId, charge] of links) {
+    const refund = txnsById.get(refundId);
+    if (refund) out.set(charge.id, (out.get(charge.id) ?? 0) - amount(refund));
+  }
+  return out;
+}
+
+// Charges this refund could reverse, best first: an alive expense at the same merchant, dated on or
+// before the refund and within REFUND_MATCH_WINDOW_DAYS, with enough left unrefunded to cover it.
+// Ranked: same account → exact remaining → smaller leftover → nearer date → posted → id.
+export function suggestRefundMatches(input: {
+  refund: FinanceTransaction;
+  txns: FinanceTransaction[];
+  accounts: FinanceAccount[];
+  moves: InternalMoves;
+  links: RefundLinks;
+}): FinanceTransaction[] {
+  const { refund, txns, accounts, moves, links } = input;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
+  const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
+  const size = -amount(refund);
+  const key = merchantKey(refund);
+  const scored = txns
+    .filter(
+      (c) =>
+        c.deletedAt === null &&
+        c.id !== refund.id &&
+        classifyTransaction(c, byId.get(c.accountId), moves) === 'expense' &&
+        merchantKey(c) === key &&
+        c.date <= refund.date &&
+        daysBetween(c.date, refund.date) <= REFUND_MATCH_WINDOW_DAYS,
+    )
+    .map((c) => ({ c, left: amount(c) - (refunded.get(c.id) ?? 0) - size }))
+    .filter((x) => x.left >= 0);
+  const rank = (x: { c: FinanceTransaction; left: number }) => [
+    x.c.accountId === refund.accountId ? 0 : 1,
+    x.left === 0 ? 0 : 1,
+    x.left,
+    daysBetween(x.c.date, refund.date),
+    x.c.pending ? 1 : 0,
+  ];
+  return scored
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i]! - rb[i]!;
+      return a.c.id.localeCompare(b.c.id);
+    })
+    .map((x) => x.c);
+}
+
+// Structural checks both ApiClient impls run before linking; the error text, or null when valid.
+// "Remaining unrefunded" is the suggestion list's job — the server only caps at the full charge.
+export function refundLinkError(input: {
+  refund: FinanceTransaction;
+  refundAccount: FinanceAccount | undefined;
+  charge: FinanceTransaction;
+  chargeAccount: FinanceAccount | undefined;
+}): string | null {
+  const { refund, refundAccount, charge, chargeAccount } = input;
+  if (refund.deletedAt !== null || charge.deletedAt !== null) return 'That transaction is gone';
+  if (refund.id === charge.id) return 'A refund can’t reverse itself';
+  if (refundAccount?.type !== 'credit' || amountOf(refund, refundAccount) >= 0)
+    return 'Only a card credit can be linked as a refund';
+  if (refund.pfcPrimary !== null && MOVE_PFC_PRIMARIES.has(refund.pfcPrimary))
+    return 'A card payment or transfer isn’t a refund';
+  if (amountOf(charge, chargeAccount) <= 0) return 'A refund can only reverse a charge';
+  if (-amountOf(refund, refundAccount) > amountOf(charge, chargeAccount))
+    return 'The refund is larger than the charge';
+  return null;
+}
+
 export function summarizePeriod(input: {
   period: FinancePeriod;
   txns: FinanceTransaction[];
@@ -415,16 +536,21 @@ export function summarizePeriod(input: {
   };
   let unsortedCount = 0;
   let unsortedCents = 0;
-  for (const t of sortableTransactions(txns, accounts, moves)) {
-    const which = periodOf(t, period);
+  const sortable = sortableTransactions(txns, accounts, moves);
+  // Built over the sortable set, so a refund whose charge is on a hidden account counts as unlinked.
+  const links = resolveRefundLinks(sortable);
+  for (const t of sortable) {
+    const which = periodOf(t, period, links);
     if (which === null) continue;
     const cents = amountOf(t, byId.get(t.accountId));
-    if (t.bucket === null) {
-      unsortedCount += 1;
+    const linked = links.has(t.id); // rides on its charge: nets its money, never adds to a count
+    const bucket = bucketOf(t, links);
+    if (bucket === null) {
+      if (!linked) unsortedCount += 1;
       unsortedCents += cents;
     } else if (which === 'current') {
-      buckets[t.bucket].totalCents += cents;
-      buckets[t.bucket].count += 1;
+      buckets[bucket].totalCents += cents;
+      if (!linked) buckets[bucket].count += 1;
     }
   }
   const spentCents = buckets.budget.totalCents;
@@ -604,8 +730,9 @@ export interface ReconcileInput {
 
 // One /transactions/sync page → the rows to write, applied added → modified → removed.
 //  - A replayed `added` (a restart after a failed batch) is treated as `modified` — idempotent.
-//  - A new posted row inherits bucket/override/note from its pending row (pending_transaction_id),
-//    even when that pending row was already tombstoned; otherwise the rules decide.
+//  - A new posted row inherits bucket/override/note/refund link from its pending row
+//    (pending_transaction_id), even when that pending row was already tombstoned; otherwise the rules
+//    decide — except for a carried refund link, which must not pick up its charge's merchant rule.
 //  - `modified` overwrites Plaid-owned fields only.
 //  - `removed` tombstones.
 // `existing` is updated in place so the caller can feed the next page through the same map.
@@ -624,9 +751,10 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
       continue;
     }
     const carry = p.pending_transaction_id ? existing.get(p.pending_transaction_id) : undefined;
-    const rule = carry?.bucket
-      ? null
-      : applyRules(rules, { merchantName: p.merchant_name, name: p.name });
+    const rule =
+      carry?.bucket || carry?.refundOfId
+        ? null
+        : applyRules(rules, { merchantName: p.merchant_name, name: p.name });
     write({
       id: p.transaction_id,
       userId,
@@ -639,6 +767,7 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
       bucketSetBy: carry?.bucket ? carry.bucketSetBy : rule ? 'rule' : null,
       periodOverride: carry?.periodOverride ?? null,
       note: carry?.note ?? null,
+      refundOfId: carry?.refundOfId ?? null,
     });
   }
 

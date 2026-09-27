@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import { FINANCE_BUCKET_LABELS, FINANCE_BUCKETS, fmtMonthShortDay } from '@aperture/shared';
+import {
+  FINANCE_BUCKET_LABELS,
+  FINANCE_BUCKETS,
+  fmtMonthShortDay,
+  periodOf,
+  suggestRefundMatches,
+} from '@aperture/shared';
 import type { FinanceOverview, FinancePeriodOverride, FinanceTransaction } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -7,6 +13,7 @@ import { Modal } from '../../components/Modal';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import {
+  useLinkFinanceRefund,
   useSetFinanceBucket,
   useSetFinanceNote,
   useSetFinancePeriodOverride,
@@ -14,8 +21,10 @@ import {
 import { fmtMoney } from './money';
 import type { FinanceView } from './useFinanceData';
 
-// One charge: its bucket, which period it counts in (a charge that posted after the payment but
+// One transaction: its bucket, which period it counts in (a charge that posted after the payment but
 // belongs to the old cycle, or vice versa), and a note. Every control saves as you change it.
+// A card refund can instead be linked to the charge it reverses — it then follows that charge's
+// bucket and period, so those controls give way to the link. A charge lists the refunds against it.
 export function TransactionDetail({
   txn,
   view,
@@ -30,6 +39,11 @@ export function TransactionDetail({
   const setBucket = useSetFinanceBucket();
   const setOverride = useSetFinancePeriodOverride();
   const setNote = useSetFinanceNote();
+  const link = useLinkFinanceRefund();
+  const isRefund = view.kindOf(txn) === 'refund';
+  const linkedTo = view.links.get(txn.id);
+  const dangling = txn.refundOfId !== null && !linkedTo; // its charge isn't loaded / is gone
+  const cents = view.amount(txn);
   const [note, setNoteText] = useState(txn.note ?? '');
   const acct = view.accounts.get(txn.accountId);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
@@ -45,7 +59,12 @@ export function TransactionDetail({
   }
 
   return (
-    <Modal open onClose={close} label={`Charge: ${txn.merchantName ?? txn.name}`} closeOnBackdrop>
+    <Modal
+      open
+      onClose={close}
+      label={`${isRefund ? 'Refund' : 'Charge'}: ${txn.merchantName ?? txn.name}`}
+      closeOnBackdrop
+    >
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-0.5">
           <div className="flex items-baseline justify-between gap-3">
@@ -53,32 +72,72 @@ export function TransactionDetail({
               {txn.merchantName ?? txn.name}
             </Text>
             <Text size="lg" tabular>
-              {fmtMoney(view.amount(txn))}
+              {cents < 0 ? `+${fmtMoney(-cents)}` : fmtMoney(cents)}
             </Text>
           </div>
           <Text size="sm" tone="muted">
             {fmtMonthShortDay(txn.date)} · {txn.name}
             {acct ? ` · ${acct.name} ••${acct.mask}` : ''}
             {txn.pending ? ' · pending' : ''}
+            {isRefund ? ' · refund' : ''}
           </Text>
         </div>
 
-        <Segmented
-          label="Bucket"
-          options={[
-            ...FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BUCKET_LABELS[b] })),
-            { value: null, label: 'Unsorted' },
-          ]}
-          value={txn.bucket}
-          onChange={(bucket) => setBucket.mutate({ ids: [txn.id], bucket })}
-        />
-        <Segmented
-          label="Counts in"
-          options={overrides}
-          value={txn.periodOverride}
-          onChange={(override) => setOverride.mutate({ id: txn.id, override })}
-        />
-        {(setBucket.isError || setOverride.isError || setNote.isError) && (
+        {linkedTo && (
+          <LinkedRefund
+            charge={linkedTo}
+            view={view}
+            overview={overview}
+            busy={link.isPending}
+            onUnlink={() => link.mutate({ refundId: txn.id, chargeId: null })}
+          />
+        )}
+        {dangling && (
+          <div className="flex flex-wrap items-center gap-3">
+            <Text size="sm" tone="muted" className="flex-1">
+              Linked to an earlier charge that isn&apos;t shown here any more, so it counts as
+              unsorted.
+            </Text>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={link.isPending}
+              onClick={() => link.mutate({ refundId: txn.id, chargeId: null })}
+            >
+              Unlink
+            </Button>
+          </div>
+        )}
+        {isRefund && !txn.refundOfId && (
+          <RefundSuggestions
+            refund={txn}
+            view={view}
+            busy={link.isPending}
+            onLink={(chargeId) => link.mutate({ refundId: txn.id, chargeId })}
+          />
+        )}
+        {!isRefund && <RefundsAgainst charge={txn} view={view} />}
+
+        {!txn.refundOfId && (
+          <>
+            <Segmented
+              label="Bucket"
+              options={[
+                ...FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BUCKET_LABELS[b] })),
+                { value: null, label: 'Unsorted' },
+              ]}
+              value={txn.bucket}
+              onChange={(bucket) => setBucket.mutate({ ids: [txn.id], bucket })}
+            />
+            <Segmented
+              label="Counts in"
+              options={overrides}
+              value={txn.periodOverride}
+              onChange={(override) => setOverride.mutate({ id: txn.id, override })}
+            />
+          </>
+        )}
+        {(setBucket.isError || setOverride.isError || setNote.isError || link.isError) && (
           <div role="alert">
             <Text size="sm" tone="danger">
               Couldn&apos;t save that change — check your connection and try again.
@@ -97,6 +156,130 @@ export function TransactionDetail({
         </div>
       </div>
     </Modal>
+  );
+}
+
+function LinkedRefund({
+  charge,
+  view,
+  overview,
+  busy,
+  onUnlink,
+}: {
+  charge: FinanceTransaction;
+  view: FinanceView;
+  overview: FinanceOverview;
+  busy: boolean;
+  onUnlink: () => void;
+}) {
+  const which = periodOf(charge, overview.period);
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Text size="sm" className="flex-1">
+          Refund of <Text weight="medium">{charge.merchantName ?? charge.name}</Text> ·{' '}
+          {fmtMonthShortDay(charge.date)} · {fmtMoney(view.amount(charge))}
+        </Text>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink}>
+          Unlink
+        </Button>
+      </div>
+      <Text size="sm" tone="muted">
+        Counts as {charge.bucket ? FINANCE_BUCKET_LABELS[charge.bucket] : 'unsorted'},{' '}
+        {which === 'current'
+          ? 'this period'
+          : which === 'previous'
+            ? 'last period'
+            : 'an earlier period'}{' '}
+        — it follows the charge.
+      </Text>
+    </div>
+  );
+}
+
+// The charges this refund could reverse: the best as a one-click Link, then a few runners-up.
+function RefundSuggestions({
+  refund,
+  view,
+  busy,
+  onLink,
+}: {
+  refund: FinanceTransaction;
+  view: FinanceView;
+  busy: boolean;
+  onLink: (chargeId: string) => void;
+}) {
+  const matches = suggestRefundMatches({
+    refund,
+    txns: view.allTxns,
+    accounts: [...view.accounts.values()],
+    moves: view.moves,
+    links: view.links,
+  }).slice(0, 5);
+  const merchant = refund.merchantName ?? refund.name;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Text size="sm" tone="muted">
+        Refund of
+      </Text>
+      {matches.length === 0 ? (
+        <Text size="sm" tone="muted">
+          No matching {merchant} charge in the last 90 days. Sort it below instead.
+        </Text>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {matches.map((c, i) => {
+            const refunded = view.refunded.get(c.id) ?? 0;
+            return (
+              <li
+                key={c.id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line px-3 py-2"
+              >
+                <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
+                  {fmtMonthShortDay(c.date)}
+                </Text>
+                <Text size="sm" className="min-w-0 flex-1 truncate">
+                  {c.merchantName ?? c.name}
+                  {c.bucket ? ` · ${FINANCE_BUCKET_LABELS[c.bucket]}` : ' · unsorted'}
+                  {refunded > 0 ? ` · ${fmtMoney(refunded)} already refunded` : ''}
+                </Text>
+                <Text size="sm" tabular>
+                  {fmtMoney(view.amount(c))}
+                </Text>
+                <Button
+                  size="sm"
+                  variant={i === 0 ? 'primary' : 'ghost'}
+                  disabled={busy}
+                  onClick={() => onLink(c.id)}
+                  aria-label={`Link to ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
+                >
+                  Link
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// On a charge: what's been refunded against it, so a smaller net makes sense at a glance.
+function RefundsAgainst({ charge, view }: { charge: FinanceTransaction; view: FinanceView }) {
+  const refunds = view.allTxns.filter((t) => view.links.get(t.id)?.id === charge.id);
+  if (refunds.length === 0) return null;
+  const total = view.refunded.get(charge.id) ?? 0;
+  return (
+    <div className="flex flex-col gap-1 rounded-xl border border-line p-3">
+      <Text size="sm">
+        Refunded {fmtMoney(total)} of {fmtMoney(view.amount(charge))}
+      </Text>
+      {refunds.map((r) => (
+        <Text key={r.id} size="sm" tone="muted" tabular>
+          {fmtMonthShortDay(r.date)} · +{fmtMoney(-view.amount(r))}
+        </Text>
+      ))}
+    </div>
   );
 }
 

@@ -405,6 +405,11 @@ export interface ApiClient {
     override: FinancePeriodOverride | null,
   ): Promise<FinanceTransaction>;
   setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction>;
+  // Tie a card credit to the charge it reverses (null = unlink). The refund then takes the charge's
+  // bucket and period and leaves the sort queue. Throws unless the refund is a card credit, the charge
+  // an alive outflow, the ids differ and the refund ≤ the charge (refundLinkError). Linking clears the
+  // refund's own bucket/override; setting either on a linked refund throws (unlink first).
+  linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction>;
   listFinanceRules(): Promise<FinanceRule[]>; // alive, pattern asc
   upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule>;
   deleteFinanceRule(id: string): Promise<void>; // soft-delete

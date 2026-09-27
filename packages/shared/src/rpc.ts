@@ -80,6 +80,7 @@ export const API_METHODS = [
   'setFinanceBucket',
   'setFinancePeriodOverride',
   'setFinanceNote',
+  'linkFinanceRefund',
   'listFinanceRules',
   'upsertFinanceRule',
   'deleteFinanceRule',

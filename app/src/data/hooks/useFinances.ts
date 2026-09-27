@@ -88,6 +88,32 @@ export function useSetFinanceBucket() {
   });
 }
 
+export function useLinkFinanceRefund() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { refundId: string; chargeId: string | null }) =>
+      api.linkFinanceRefund(v.refundId, v.chargeId),
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: ['finance', 'txns'] });
+      patchTxnCaches(qc, (t) =>
+        t.id !== v.refundId
+          ? t
+          : v.chargeId
+            ? {
+                ...t,
+                refundOfId: v.chargeId,
+                bucket: null,
+                bucketSetBy: null,
+                periodOverride: null,
+              }
+            : { ...t, refundOfId: null },
+      );
+    },
+    onSettled: () => invalidateFinance(qc),
+  });
+}
+
 export function useSetFinancePeriodOverride() {
   const api = useApi();
   const qc = useQueryClient();
