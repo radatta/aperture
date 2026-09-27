@@ -84,7 +84,8 @@ export function TransactionDetail({
     mark.mutate({ id: txn.id, marked });
   };
   const incomeLink = useDisclosure();
-  const [note, setNoteText] = useState(txn.note ?? '');
+  // null until you type: an untouched field tracks the server's note, so closing never writes it.
+  const [draft, setDraft] = useState<string | null>(null);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
     { value: null, label: 'By date' },
     { value: 'current', label: `This period (from ${fmtMonthShortDay(overview.period.start)})` },
@@ -92,7 +93,7 @@ export function TransactionDetail({
   ];
 
   function close() {
-    const next = note.trim() || null;
+    const next = draft === null ? txn.note : draft.trim() || null;
     if (next !== txn.note) setNote.mutate({ id: txn.id, note: next });
     onClose();
   }
@@ -252,9 +253,13 @@ export function TransactionDetail({
         )}
         <Field
           label="Note"
-          value={note}
-          onChange={(e) => setNoteText(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && close()}
+          value={draft ?? txn.note ?? ''}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault(); // else the same keypress clicks the row focus returns to, reopening it
+            close();
+          }}
           placeholder="Split with…, refund pending…"
         />
         <div className="flex justify-end">

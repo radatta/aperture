@@ -336,6 +336,44 @@ describe('Finances page', () => {
     expect(previous.contains(document.activeElement)).toBe(true);
   });
 
+  it('Enter in the note saves it and closes, without reopening the row', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    const save = vi.spyOn(api, 'setFinanceNote');
+    renderApp({ api, path: '/finances/all' });
+    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const id = row.getAttribute('data-txn-id')!;
+    await user.click(row);
+    const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
+    await user.type(within(dialog).getByLabelText('Note'), 'split{Enter}');
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-txn-id')).toBe(id));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('dialog', { name: /Chipotle/ })).toBeNull();
+    expect(save.mock.calls).toEqual([[id, 'split']]);
+  });
+
+  it('closing a detail whose note you didn’t touch never writes the note', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    renderApp({ api, path: '/finances/all' });
+    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const id = row.getAttribute('data-txn-id')!;
+    await user.click(row);
+    const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
+    const field = within(dialog).getByLabelText('Note') as HTMLInputElement;
+    await api.setFinanceNote(id, 'from elsewhere'); // e.g. an earlier save landing late
+    const save = vi.spyOn(api, 'setFinanceNote');
+    // Any save refetches the list; the untouched field follows the server.
+    await user.click(within(dialog).getByRole('radio', { name: 'I pay' }));
+    await waitFor(() => expect(field.value).toBe('from elsewhere'));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' })); // Escape runs the same close()
+    expect(save).not.toHaveBeenCalled();
+    const range = { from: '2000-01-01', to: '2100-01-01' };
+    expect((await api.listFinanceTransactions(range)).find((t) => t.id === id)?.note).toBe(
+      'from elsewhere',
+    );
+  });
+
   it('the detail opens on the checked bucket, and arrow keys move and select', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });
