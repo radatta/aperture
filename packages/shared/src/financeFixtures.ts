@@ -172,7 +172,7 @@ export function fixtureHistory(today: string): PlaidTransaction[] {
       'GENERAL_MERCHANDISE',
       'GENERAL_MERCHANDISE_OTHER',
     ]),
-    txn('fx-refund-2', card, addDays(today, -2), -10, 'TARGET 00012345', 'Target', [
+    txn('fx-refund-2', card, today, -10, 'TARGET 00012345', 'Target', [
       'GENERAL_MERCHANDISE',
       'GENERAL_MERCHANDISE_OTHER',
     ]),

@@ -5,7 +5,7 @@ import {
   fmtMonthShortDay,
   groupByMerchant,
   periodOf,
-  isUnsorted,
+  needsSorting,
   sortableTransactions,
 } from '@aperture/shared';
 import type {
@@ -42,7 +42,7 @@ export function SortQueue({
   const groups = useMemo(() => {
     if (!view) return [];
     const unsorted = sortableTransactions(view.txns, overview.accounts, view.moves).filter((t) =>
-      isUnsorted(t, view.links),
+      needsSorting(t, view.links, view.refunded, view.amount(t)),
     );
     // Group totals are net of linked refunds, matching the header's unsorted total.
     return groupByMerchant(unsorted, (t) => view.amount(t) - (view.refunded.get(t.id) ?? 0));
@@ -90,7 +90,8 @@ export function SortQueue({
     setBucket.mutate({ ids, bucket, rule: rulePattern ? { pattern: rulePattern } : undefined });
   }
 
-  const open = openId ? view?.txns.find((t) => t.id === openId) : undefined;
+  // allTxns, not txns: linking to an older charge can move a refund out of both windows mid-edit.
+  const open = openId ? view?.allTxns.find((t) => t.id === openId) : undefined;
 
   if (groups.length === 0 && !open)
     return (

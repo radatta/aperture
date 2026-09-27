@@ -4,6 +4,7 @@ import {
   FINANCE_BUCKETS,
   fmtMonthShortDay,
   periodOf,
+  REFUND_MATCH_WINDOW_DAYS,
   suggestRefundMatches,
 } from '@aperture/shared';
 import type { FinanceOverview, FinancePeriodOverride, FinanceTransaction } from '@aperture/shared';
@@ -44,6 +45,13 @@ export function TransactionDetail({
   const linkedTo = view.links.get(txn.id);
   const dangling = txn.refundOfId !== null && !linkedTo; // its charge isn't loaded / is gone
   const cents = view.amount(txn);
+  // Focus follows a link/unlink (the clicked button unmounts) — but never on first open, where a
+  // focused Link button would make a stray Enter link the refund.
+  const [acted, setActed] = useState(false);
+  const setLink = (chargeId: string | null) => {
+    setActed(true);
+    link.mutate({ refundId: txn.id, chargeId });
+  };
   const [note, setNoteText] = useState(txn.note ?? '');
   const acct = view.accounts.get(txn.accountId);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
@@ -89,7 +97,8 @@ export function TransactionDetail({
             view={view}
             overview={overview}
             busy={link.isPending}
-            onUnlink={() => link.mutate({ refundId: txn.id, chargeId: null })}
+            focus={acted}
+            onUnlink={() => setLink(null)}
           />
         )}
         {dangling && (
@@ -102,7 +111,7 @@ export function TransactionDetail({
               size="sm"
               variant="ghost"
               disabled={link.isPending}
-              onClick={() => link.mutate({ refundId: txn.id, chargeId: null })}
+              onClick={() => setLink(null)}
             >
               Unlink
             </Button>
@@ -113,7 +122,8 @@ export function TransactionDetail({
             refund={txn}
             view={view}
             busy={link.isPending}
-            onLink={(chargeId) => link.mutate({ refundId: txn.id, chargeId })}
+            focus={acted}
+            onLink={(chargeId) => setLink(chargeId)}
           />
         )}
         {!isRefund && <RefundsAgainst charge={txn} view={view} />}
@@ -137,7 +147,14 @@ export function TransactionDetail({
             />
           </>
         )}
-        {(setBucket.isError || setOverride.isError || setNote.isError || link.isError) && (
+        {link.isError && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn&apos;t link it: {link.error.message}
+            </Text>
+          </div>
+        )}
+        {(setBucket.isError || setOverride.isError || setNote.isError) && (
           <div role="alert">
             <Text size="sm" tone="danger">
               Couldn&apos;t save that change — check your connection and try again.
@@ -164,12 +181,14 @@ function LinkedRefund({
   view,
   overview,
   busy,
+  focus,
   onUnlink,
 }: {
   charge: FinanceTransaction;
   view: FinanceView;
   overview: FinanceOverview;
   busy: boolean;
+  focus: boolean;
   onUnlink: () => void;
 }) {
   const which = periodOf(charge, overview.period);
@@ -180,7 +199,7 @@ function LinkedRefund({
           Refund of <Text weight="medium">{charge.merchantName ?? charge.name}</Text> ·{' '}
           {fmtMonthShortDay(charge.date)} · {fmtMoney(view.amount(charge))}
         </Text>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink}>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink} autoFocus={focus}>
           Unlink
         </Button>
       </div>
@@ -202,32 +221,43 @@ function RefundSuggestions({
   refund,
   view,
   busy,
+  focus,
   onLink,
 }: {
   refund: FinanceTransaction;
   view: FinanceView;
   busy: boolean;
+  focus: boolean;
   onLink: (chargeId: string) => void;
 }) {
-  const matches = suggestRefundMatches({
-    refund,
-    txns: view.allTxns,
-    accounts: [...view.accounts.values()],
-    moves: view.moves,
-    links: view.links,
-  }).slice(0, 5);
+  // Charges on shown accounts only — a hidden account's rows never resolve as a link target.
+  const suggest = (anyMerchant: boolean) =>
+    suggestRefundMatches({
+      refund,
+      txns: view.sortable,
+      accounts: [...view.accounts.values()],
+      moves: view.moves,
+      links: view.links,
+      anyMerchant,
+    }).slice(0, 5);
+  const sameMerchant = suggest(false);
+  // A card credit's descriptor doesn't always match its charge's merchant — fall back to any charge.
+  const matches = sameMerchant.length ? sameMerchant : suggest(true);
   const merchant = refund.merchantName ?? refund.name;
+  const labelId = `refund-of-${refund.id}`;
   return (
     <div className="flex flex-col gap-1.5">
-      <Text size="sm" tone="muted">
-        Refund of
+      <Text id={labelId} size="sm" tone="muted">
+        {sameMerchant.length
+          ? `Refund of which ${merchant} charge?`
+          : `No ${merchant} charge found from the ${REFUND_MATCH_WINDOW_DAYS} days before it. Other charges it could be:`}
       </Text>
       {matches.length === 0 ? (
         <Text size="sm" tone="muted">
-          No matching {merchant} charge in the last 90 days. Sort it below instead.
+          Nothing it could reverse. Sort it below instead.
         </Text>
       ) : (
-        <ul className="flex flex-col gap-1.5">
+        <ul aria-labelledby={labelId} className="flex flex-col gap-1.5">
           {matches.map((c, i) => {
             const refunded = view.refunded.get(c.id) ?? 0;
             return (
@@ -239,8 +269,8 @@ function RefundSuggestions({
                   {fmtMonthShortDay(c.date)}
                 </Text>
                 <Text size="sm" className="min-w-0 flex-1 truncate">
-                  {c.merchantName ?? c.name}
-                  {c.bucket ? ` · ${FINANCE_BUCKET_LABELS[c.bucket]}` : ' · unsorted'}
+                  {sameMerchant.length ? '' : `${c.merchantName ?? c.name} · `}
+                  {c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted'}
                   {refunded > 0 ? ` · ${fmtMoney(refunded)} already refunded` : ''}
                 </Text>
                 <Text size="sm" tabular>
@@ -250,6 +280,7 @@ function RefundSuggestions({
                   size="sm"
                   variant={i === 0 ? 'primary' : 'ghost'}
                   disabled={busy}
+                  autoFocus={focus && i === 0}
                   onClick={() => onLink(c.id)}
                   aria-label={`Link to ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
                 >

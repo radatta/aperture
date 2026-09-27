@@ -172,9 +172,11 @@ describe('Finances page', () => {
     const api = await linked();
     await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
     renderApp({ api, path: '/finances' });
-    const amazon = await group(/^Amazon, /);
+    // The refund rides on its charge, and the charge it cancels in full nets to $0 — neither is asked
+    // about. The older Amazon charge (last period) still is.
+    const amazon = await group(/^Amazon, 1 charges/);
     expect(within(amazon).queryByText(/\+\$34\.99/)).toBeNull();
-    expect(within(amazon).getByText(/refunded \$34\.99/)).toBeTruthy();
+    expect(within(amazon).queryByText(/refunded/)).toBeNull();
   });
 
   it('rules tab adds and lists a rule', async () => {

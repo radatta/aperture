@@ -22,6 +22,7 @@ export interface FinanceView {
   moves: InternalMoves;
   txns: FinanceTransaction[]; // alive, inside the current or previous window, date desc
   allTxns: FinanceTransaction[]; // the whole loaded range — refund suggestions look back further
+  sortable: FinanceTransaction[]; // allTxns on shown accounts, charges + refunds only
   amount: (t: FinanceTransaction) => number; // normalised: positive = money out
   kindOf: (t: FinanceTransaction) => FinanceTxnKind;
   links: RefundLinks; // refund id → the charge it reverses
@@ -41,12 +42,14 @@ export function useFinanceData() {
     const accounts = new Map(overview.accounts.map((a) => [a.id, a]));
     const allTxns = txnsQ.data.filter((t) => accounts.has(t.accountId));
     const { moves } = detectInternalMoves(allTxns, overview.accounts);
-    const links = resolveRefundLinks(sortableTransactions(allTxns, overview.accounts, moves));
     const amount = (t: FinanceTransaction) => amountOf(t, accounts.get(t.accountId));
+    const sortable = sortableTransactions(allTxns, overview.accounts, moves);
+    const links = resolveRefundLinks(sortable, amount);
     return {
       accounts,
       moves,
       allTxns,
+      sortable,
       txns: allTxns.filter((t) => periodOf(t, overview.period, links) !== null),
       amount,
       kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),

@@ -76,7 +76,12 @@ export function useSetFinanceBucket() {
       const ids = new Set(input.ids);
       patchTxnCaches(qc, (t) =>
         ids.has(t.id)
-          ? { ...t, bucket: input.bucket, bucketSetBy: input.bucket ? 'user' : null }
+          ? {
+              ...t,
+              bucket: input.bucket,
+              bucketSetBy: input.bucket ? 'user' : null,
+              refundOfId: null,
+            }
           : t,
       );
     },

@@ -406,9 +406,10 @@ export interface ApiClient {
   ): Promise<FinanceTransaction>;
   setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction>;
   // Tie a card credit to the charge it reverses (null = unlink). The refund then takes the charge's
-  // bucket and period and leaves the sort queue. Throws unless the refund is a card credit, the charge
-  // an alive outflow, the ids differ and the refund ≤ the charge (refundLinkError). Linking clears the
-  // refund's own bucket/override; setting either on a linked refund throws (unlink first).
+  // bucket and period and leaves the sort queue. Throws per refundLinkError (card credit → earlier card
+  // charge, both on shown accounts, refund ≤ charge). Linking clears the refund's own bucket/override;
+  // sorting or moving a linked refund yourself (setFinanceBucket / setFinancePeriodOverride) unlinks it —
+  // which is also how a refund whose charge dropped out of view gets sorted.
   linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction>;
   listFinanceRules(): Promise<FinanceRule[]>; // alive, pattern asc
   upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule>;

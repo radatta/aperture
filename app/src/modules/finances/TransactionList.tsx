@@ -73,7 +73,8 @@ export function TransactionList({
       rows: shown.filter((t) => periodOf(t, overview.period, view.links) === 'previous'),
     },
   ];
-  const open = openId ? view.txns.find((t) => t.id === openId) : undefined;
+  // allTxns, not txns: linking to an older charge can move a refund out of both windows mid-edit.
+  const open = openId ? view.allTxns.find((t) => t.id === openId) : undefined;
 
   return (
     <div className="flex flex-col gap-4">

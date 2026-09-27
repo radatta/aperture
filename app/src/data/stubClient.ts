@@ -1135,9 +1135,7 @@ class StubClient implements ApiClient {
   }
   async setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]> {
     if (input.rule && input.bucket === null) throw new Error('A rule needs a bucket');
-    for (const id of input.ids)
-      if (this.mustFind(this.store.financeTransactions, id).refundOfId)
-        throw new Error('A linked refund takes its charge’s bucket — unlink it first');
+    for (const id of input.ids) this.mustFind(this.store.financeTransactions, id);
     const changed = new Map<string, FinanceTransaction>();
     for (const id of input.ids)
       changed.set(
@@ -1145,6 +1143,7 @@ class StubClient implements ApiClient {
         this.writes.patch(this.store.financeTransactions, id, {
           bucket: input.bucket,
           bucketSetBy: input.bucket ? 'user' : null,
+          refundOfId: null, // sorting a refund yourself unlinks it
         }),
       );
     if (input.rule && input.bucket) {
@@ -1169,9 +1168,10 @@ class StubClient implements ApiClient {
     id: string,
     override: FinancePeriodOverride | null,
   ): Promise<FinanceTransaction> {
-    if (this.mustFind(this.store.financeTransactions, id).refundOfId)
-      throw new Error('A linked refund counts in its charge’s period — unlink it first');
-    return this.writes.patch(this.store.financeTransactions, id, { periodOverride: override });
+    return this.writes.patch(this.store.financeTransactions, id, {
+      periodOverride: override,
+      refundOfId: null, // moving a refund yourself unlinks it
+    });
   }
   async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
     const refund = this.mustFind(this.store.financeTransactions, refundId);

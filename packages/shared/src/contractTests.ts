@@ -1085,12 +1085,9 @@ export function runApiContract(
       await expect(api.linkFinanceRefund('fx-ccpay-card-10', 'fx-card-8')).rejects.toThrow(); // a payment
       await expect(api.linkFinanceRefund('nope', 'fx-card-8')).rejects.toThrow();
       await expect(api.linkFinanceRefund('fx-refund-1', 'nope')).rejects.toThrow();
+      await expect(api.linkFinanceRefund('fx-refund-2', 'fx-xfer-chk')).rejects.toThrow(); // transfer out
 
       await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
-      await expect(
-        api.setFinanceBucket({ ids: ['fx-refund-1'], bucket: 'budget' }),
-      ).rejects.toThrow();
-      await expect(api.setFinancePeriodOverride('fx-refund-1', 'current')).rejects.toThrow();
       // "Always" for the merchant sorts the other Amazon charges but leaves the linked refund alone.
       await api.setFinanceBucket({
         ids: ['fx-card-28'],
@@ -1104,6 +1101,13 @@ export function runApiContract(
       const refund = txns.find((t) => t.id === 'fx-refund-1')!;
       expect(refund.bucket).toBeNull();
       expect(refund.refundOfId).toBe('fx-card-8');
+
+      // Sorting or moving a linked refund yourself unlinks it.
+      const [sorted] = await api.setFinanceBucket({ ids: ['fx-refund-1'], bucket: 'budget' });
+      expect([sorted!.bucket, sorted!.refundOfId]).toEqual(['budget', null]);
+      await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      const moved = await api.setFinancePeriodOverride('fx-refund-1', 'current');
+      expect(moved.refundOfId).toBeNull();
     });
 
     it('finance: a refund link survives its charge going pending→posted', async () => {

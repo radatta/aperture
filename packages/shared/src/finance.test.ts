@@ -659,6 +659,17 @@ describe('refund links', () => {
     expect(s.unsortedCents).toBe(2000);
   });
 
+  it('a charge its refunds cancel in full no longer needs sorting', () => {
+    const txns = [
+      ...payments,
+      tx('c', 'card', '2026-09-20', 3499, amazon),
+      tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' }),
+    ];
+    const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
+    expect(s.unsortedCount).toBe(0);
+    expect(s.unsortedCents).toBe(0);
+  });
+
   it('a charge on a hidden account leaves its refund unlinked (back to sort)', () => {
     const other = acct('card2', 'credit', { hidden: true });
     const txns = [
@@ -721,6 +732,42 @@ describe('refund links', () => {
       /larger/,
     );
     expect(refundLinkError({ ...ok, charge: { ...charge, deletedAt: 1 } })).toMatch(/gone/);
+  });
+
+  it('refundLinkError: hidden or checking accounts, transfers, and a later charge are refused', () => {
+    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const ok = { refund, refundAccount: card, charge, chargeAccount: card };
+    expect(refundLinkError({ ...ok, chargeAccount: { ...card, hidden: true } })).toMatch(/shown/);
+    expect(refundLinkError({ ...ok, chargeAccount: undefined })).toMatch(/shown/);
+    expect(
+      refundLinkError({ ...ok, charge: { ...charge, accountId: 'chk' }, chargeAccount: chk }),
+    ).toMatch(/card charge/);
+    expect(refundLinkError({ ...ok, charge: { ...charge, pfcPrimary: 'TRANSFER_OUT' } })).toMatch(
+      /card charge/,
+    );
+    expect(refundLinkError({ ...ok, charge: { ...charge, date: '2026-09-23' } })).toMatch(/before/);
+  });
+
+  it('a flipped account drops links whose signs no longer read refund → charge', () => {
+    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const refund = tx('r', 'card', '2026-09-22', -3499, { ...amazon, refundOfId: 'c' });
+    const flipped = (t: FinanceTransaction) => -t.rawAmountCents;
+    expect(resolveRefundLinks([charge, refund], flipped).has('r')).toBe(false);
+  });
+
+  it('anyMerchant falls back to other charges when the descriptor doesn’t match', () => {
+    const refund = tx('r', 'card', '2026-09-22', -3499, { merchantName: null, name: 'AMZN MKTP' });
+    const charge = tx('c', 'card', '2026-09-20', 3499, amazon);
+    const args = {
+      refund,
+      txns: [refund, charge],
+      accounts: [card],
+      moves: new Map(),
+      links: new Map(),
+    };
+    expect(suggestRefundMatches(args)).toEqual([]);
+    expect(suggestRefundMatches({ ...args, anyMerchant: true }).map((t) => t.id)).toEqual(['c']);
   });
 
   it('reconcileSyncPage carries the link pending→posted and skips the merchant rule', () => {

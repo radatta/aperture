@@ -408,10 +408,14 @@ export function sortableTransactions(
 // --- Refund links -----------------------------------------------------------
 // refund id → the alive charge it reverses. A link whose charge went pending→posted resolves through
 // the posted row's pendingTransactionId. Only rows in `txns` resolve: a charge outside the loaded
-// window, tombstoned, or filtered out (a hidden account) leaves the refund unlinked in effect.
+// window, tombstoned, or filtered out (a hidden account) leaves the refund unlinked in effect. Signs
+// are re-checked with `amount`, so flipping an account can't leave a stale link on a charge.
 export type RefundLinks = Map<string, FinanceTransaction>;
 
-export function resolveRefundLinks(txns: FinanceTransaction[]): RefundLinks {
+export function resolveRefundLinks(
+  txns: FinanceTransaction[],
+  amount: (t: FinanceTransaction) => number = (t) => t.rawAmountCents,
+): RefundLinks {
   const live = txns.filter((t) => t.deletedAt === null);
   const byId = new Map(live.map((t) => [t.id, t]));
   const byPending = new Map(
@@ -421,7 +425,8 @@ export function resolveRefundLinks(txns: FinanceTransaction[]): RefundLinks {
   for (const t of live) {
     if (!t.refundOfId) continue;
     const charge = byId.get(t.refundOfId) ?? byPending.get(t.refundOfId);
-    if (charge && charge.id !== t.id) links.set(t.id, charge);
+    if (charge && charge.id !== t.id && amount(t) < 0 && amount(charge) > 0)
+      links.set(t.id, charge);
   }
   return links;
 }
@@ -453,15 +458,17 @@ export function refundedCentsByCharge(
 
 // Charges this refund could reverse, best first: an alive expense at the same merchant, dated on or
 // before the refund and within REFUND_MATCH_WINDOW_DAYS, with enough left unrefunded to cover it.
-// Ranked: same account → exact remaining → smaller leftover → nearer date → posted → id.
+// Ranked: same account → smallest leftover (exact first) → nearer date → posted → id. `anyMerchant`
+// drops the merchant match — the fallback when a card credit's descriptor doesn't match its charge.
 export function suggestRefundMatches(input: {
   refund: FinanceTransaction;
   txns: FinanceTransaction[];
   accounts: FinanceAccount[];
   moves: InternalMoves;
   links: RefundLinks;
+  anyMerchant?: boolean;
 }): FinanceTransaction[] {
-  const { refund, txns, accounts, moves, links } = input;
+  const { refund, txns, accounts, moves, links, anyMerchant = false } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
   const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
@@ -473,7 +480,7 @@ export function suggestRefundMatches(input: {
         c.deletedAt === null &&
         c.id !== refund.id &&
         classifyTransaction(c, byId.get(c.accountId), moves) === 'expense' &&
-        merchantKey(c) === key &&
+        (anyMerchant || merchantKey(c) === key) &&
         c.date <= refund.date &&
         daysBetween(c.date, refund.date) <= REFUND_MATCH_WINDOW_DAYS,
     )
@@ -481,7 +488,6 @@ export function suggestRefundMatches(input: {
     .filter((x) => x.left >= 0);
   const rank = (x: { c: FinanceTransaction; left: number }) => [
     x.c.accountId === refund.accountId ? 0 : 1,
-    x.left === 0 ? 0 : 1,
     x.left,
     daysBetween(x.c.date, refund.date),
     x.c.pending ? 1 : 0,
@@ -496,7 +502,9 @@ export function suggestRefundMatches(input: {
     .map((x) => x.c);
 }
 
-// Structural checks both ApiClient impls run before linking; the error text, or null when valid.
+// Structural checks both ApiClient impls run before linking; the error text, or null when valid. Both
+// sides must be on visible, live card accounts (a refund goes back to a card; a hidden account's rows
+// never resolve), neither may be a payment/transfer, and the charge must come first.
 // "Remaining unrefunded" is the suggestion list's job — the server only caps at the full charge.
 export function refundLinkError(input: {
   refund: FinanceTransaction;
@@ -507,14 +515,35 @@ export function refundLinkError(input: {
   const { refund, refundAccount, charge, chargeAccount } = input;
   if (refund.deletedAt !== null || charge.deletedAt !== null) return 'That transaction is gone';
   if (refund.id === charge.id) return 'A refund can’t reverse itself';
+  const usable = (a: FinanceAccount | undefined) => a && a.deletedAt === null && !a.hidden;
+  if (!usable(refundAccount) || !usable(chargeAccount))
+    return 'Both need to be on an account that’s shown in your totals';
   if (refundAccount?.type !== 'credit' || amountOf(refund, refundAccount) >= 0)
     return 'Only a card credit can be linked as a refund';
   if (refund.pfcPrimary !== null && MOVE_PFC_PRIMARIES.has(refund.pfcPrimary))
     return 'A card payment or transfer isn’t a refund';
-  if (amountOf(charge, chargeAccount) <= 0) return 'A refund can only reverse a charge';
+  if (
+    chargeAccount?.type !== 'credit' ||
+    amountOf(charge, chargeAccount) <= 0 ||
+    (charge.pfcPrimary !== null && MOVE_PFC_PRIMARIES.has(charge.pfcPrimary))
+  )
+    return 'A refund can only reverse a card charge';
+  if (charge.date > refund.date) return 'The charge has to come before its refund';
   if (-amountOf(refund, refundAccount) > amountOf(charge, chargeAccount))
     return 'The refund is larger than the charge';
   return null;
+}
+
+// What the sort queue asks you about: unsorted, not riding on a charge, and not a charge its linked
+// refunds already cancel out in full (it nets to $0 whichever bucket it lands in).
+export function needsSorting(
+  t: FinanceTransaction,
+  links: RefundLinks,
+  refunded: Map<string, number>,
+  cents: number,
+): boolean {
+  if (!isUnsorted(t, links)) return false;
+  return !(cents > 0 && (refunded.get(t.id) ?? 0) >= cents);
 }
 
 export function summarizePeriod(input: {
@@ -538,7 +567,10 @@ export function summarizePeriod(input: {
   let unsortedCents = 0;
   const sortable = sortableTransactions(txns, accounts, moves);
   // Built over the sortable set, so a refund whose charge is on a hidden account counts as unlinked.
-  const links = resolveRefundLinks(sortable);
+  const links = resolveRefundLinks(sortable, (t) => amountOf(t, byId.get(t.accountId)));
+  const refunded = refundedCentsByCharge(links, new Map(sortable.map((t) => [t.id, t])), (t) =>
+    amountOf(t, byId.get(t.accountId)),
+  );
   for (const t of sortable) {
     const which = periodOf(t, period, links);
     if (which === null) continue;
@@ -546,7 +578,7 @@ export function summarizePeriod(input: {
     const linked = links.has(t.id); // rides on its charge: nets its money, never adds to a count
     const bucket = bucketOf(t, links);
     if (bucket === null) {
-      if (!linked) unsortedCount += 1;
+      if (needsSorting(t, links, refunded, cents)) unsortedCount += 1;
       unsortedCents += cents;
     } else if (which === 'current') {
       buckets[bucket].totalCents += cents;
