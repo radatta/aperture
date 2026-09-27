@@ -12,6 +12,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
 import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
 
@@ -40,7 +41,7 @@ const MCP_ENTRY = fileURLToPath(new URL('../../../lambdas/src/mcp/index.ts', imp
 // ids (the id embeds the resource, not the function), so one helper serves both; only the token-WRITE ack
 // differs — the BFF connects/disconnects Google accounts, the MCP function never writes SSM. Reason text
 // is free; only the id (the key) must match.
-function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: { ssmWrite: boolean }): void {
+function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: { ssmWrite: boolean; plaid?: boolean }): void {
   const acks: Record<string, string> = {
     'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
       'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
@@ -56,6 +57,12 @@ function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: {
       `AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${region}:<AWS::AccountId>:parameter/aperture/${stage}/google/tokens/*]`
     ] =
       'Per-account refresh tokens are written/deleted at connect/disconnect under .../google/tokens/<sub>; the dynamic <sub> requires the trailing wildcard.';
+  }
+  if (opts.plaid) {
+    acks[
+      `AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${region}:<AWS::AccountId>:parameter/aperture/${stage}/plaid/items/*]`
+    ] =
+      'Per-item Plaid access tokens are written at link and deleted at remove under .../plaid/items/<itemId>; the dynamic <itemId> needs the trailing wildcard.';
   }
   fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, acks);
 }
@@ -138,6 +145,19 @@ export class ApertureAppStack extends Stack {
       },
     });
 
+    // Plaid (docs/areas/finances): Production on prod, Sandbox elsewhere. Credentials are SSM
+    // SecureStrings the operator writes once; item tokens are written by the BFF at link.
+    const plaidEnv = stage === 'prod' ? 'production' : 'sandbox';
+    const plaidSsmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/plaid`;
+    // The finance sync Lambda — declared before the BFF, whose env names it (no reverse edge, no cycle).
+    const financeSync = new FinanceSync(this, 'FinanceSync', {
+      stage,
+      table,
+      plaidEnv,
+      plaidSsmBase,
+      deviceUserId,
+    });
+
     // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
     const fnTimeout = Duration.seconds(15); // shared with the Monitoring duration alarm below
     const fn = new NodejsFunction(this, 'Bff', {
@@ -156,6 +176,8 @@ export class ApertureAppStack extends Stack {
         ORIGIN_SECRET: originSecret, // must match the header CloudFront stamps below
         DEVICE_TOKEN: deviceToken, // extension ingest auth (resolveDeviceUserId), scoped to recordLeetcodeAttempt
         ...(deviceUserId ? { DEVICE_USER_ID: deviceUserId } : {}),
+        PLAID_ENV: plaidEnv,
+        FINANCE_SYNC_FN: financeSync.fn.functionName, // async-invoked after Refresh / connect / reconnect
         // Google OAuth redirect/return base. Only a static custom-domain URL — the CloudFront domain is a
         // token that would create a Lambda→distribution→FunctionURL→Lambda cycle. Unset without a domain.
         ...(domainName ? { APP_URL: `https://${domainName}` } : {}),
@@ -166,7 +188,31 @@ export class ApertureAppStack extends Stack {
     // BFF gets the SSM write grant (it connects/disconnects Google accounts via the browser callback).
     const ssmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/google`;
     grantBackendData(fn, table, filesBucket, ssmBase, { ssmWrite: true });
-    ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true });
+    // Plaid: the BFF only (never the MCP function) — read creds + tokens, write/delete item tokens at
+    // link/remove, and invoke the sync function (its exact ARN, not `:*`).
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [
+          `${plaidSsmBase}/client_id`,
+          `${plaidSsmBase}/secret`,
+          `${plaidSsmBase}/items/*`,
+        ],
+      }),
+    );
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
+        resources: [`${plaidSsmBase}/items/*`],
+      }),
+    );
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'],
+        resources: [financeSync.fn.functionArn],
+      }),
+    );
+    ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true, plaid: true });
 
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
     const fnUrl = fn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
@@ -356,6 +402,28 @@ export class ApertureAppStack extends Stack {
     // Runtime watch on the BFF, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
     // worth it, and the synthetic check already proves the edge wiring at deploy time).
-    if (stage === 'prod') new Monitoring(this, 'Monitoring', { fn, timeout: fnTimeout });
+    if (stage === 'prod')
+      new Monitoring(this, 'Monitoring', {
+        functions: [
+          {
+            id: '',
+            label: 'BFF',
+            fn,
+            durationAlarm: { statistic: 'p99', thresholdMs: fnTimeout.toMilliseconds() * 0.8 },
+          },
+          // Maximum ≥ 290 s: a run that ate its own safety margin (a real timeout also lands in Errors).
+          // Not p99-at-80%: a legitimate refresh poll runs for minutes. Errors here are infra faults
+          // only — a bank's failure is a per-item report, not a throw.
+          {
+            id: 'FinanceSync',
+            label: 'Finance sync',
+            fn: financeSync.fn,
+            durationAlarm: {
+              statistic: 'Maximum',
+              thresholdMs: FINANCE_SYNC_TIMEOUT.toMilliseconds() - 10_000,
+            },
+          },
+        ],
+      });
   }
 }
