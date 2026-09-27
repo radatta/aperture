@@ -43,11 +43,11 @@ function deviceTokenFor(stage: string): string {
   return token;
 }
 
-// The MCP server's static agent token (Claude Code / claude.ai → /mcp). Same class + delivery as the
-// device token — a plain Lambda env var from a gitignored file (or APERTURE_AGENT_TOKEN in CI), NOT
-// Secrets Manager. Generated once per stage; `cat cdk/.secrets/agent-token.<stage>` to register it in
-// Claude Code. Kept DISTINCT from the device token so the two revoke independently. NB: CI MUST set the
-// AGENT_TOKEN_<STAGE> secret, else each deploy rotates it and the registered client stops matching.
+// The MCP server's static agent token (Claude Code / claude.ai → /mcp). Same pattern as the device token
+// above (INFRA §10): APERTURE_AGENT_TOKEN in CI, else a gitignored file generated once per stage;
+// `cat cdk/.secrets/agent-token.<stage>` to register it in Claude Code. Kept DISTINCT from the device
+// token so the two revoke independently. NB: CI MUST set the AGENT_TOKEN_<STAGE> secret, else each
+// deploy rotates it and the registered client stops matching.
 function agentTokenFor(stage: string): string {
   const fromEnv = process.env.APERTURE_AGENT_TOKEN;
   if (fromEnv) return fromEnv.trim();

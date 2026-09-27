@@ -148,7 +148,7 @@ export interface RecordLeetcodeAttemptInput {
 //
 // Soft-deleted rows are EXCLUDED (see the export contract test). That's the right call while the
 // export is a one-way download; if an import/restore path ever lands it will need tombstones for
-// merge, plus a versioned envelope — revisit here at that point, not before.
+// merge, plus a versioned envelope.
 export interface ExportBundle {
   exportedAt: number;
   userId: string;

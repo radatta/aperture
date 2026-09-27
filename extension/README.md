@@ -59,12 +59,12 @@ content-type: application/json
 
 ## How it works
 
-LeetCode's own network calls are observed and mirrored; nothing is blocked or altered. **The extension
-is 100% passive — it never issues a request of its own** (no automated/scraping call, best ToS posture).
+LeetCode's own network calls are observed and mirrored; nothing is blocked or altered. Why the extension
+is passive, and why metadata comes from the DOM: `docs/areas/recruiting/index.md` → *Design decisions*.
 
 - **Submit** — `POST https://leetcode.com/problems/<slug>/submit/`, body `{lang, question_id, typed_code}`, response `{submission_id}`. The interceptor remembers `submission_id -> {slug, lang, question_id}`.
 - **Result poll** — `GET https://leetcode.com/submissions/detail/<submission_id>/v2/check/` (note `/v2/`), polled repeatedly. On the **first** response with `state === "SUCCESS"`, the extension fires **once** for that submission.
-- **Metadata** — read straight from the **rendered page** at capture time (no network call): `title` from `document.title`, `difficulty` from the header Easy/Medium/Hard pill (link-nested similar-questions rows are skipped), `topicTags` from the `a[href^="/tag/"]` anchors. LeetCode **server-renders** this — there is no client `questionData` request to intercept, so the DOM is the source. Best-effort: `title` degrades to a slug-derived string and `difficulty`/`topicTags` to `null` if not found (e.g. LeetCode is hiding topics behind a "Show Topics" toggle).
+- **Metadata** — read straight from the **rendered page** at capture time (no network call): `title` from `document.title`, `difficulty` from the header Easy/Medium/Hard pill (link-nested similar-questions rows are skipped), `topicTags` from the `a[href^="/tag/"]` anchors (LeetCode server-renders these — see the design doc above). Best-effort: `title` degrades to a slug-derived string and `difficulty`/`topicTags` to `null` if not found (e.g. LeetCode is hiding topics behind a "Show Topics" toggle).
 
 ### MAIN vs ISOLATED worlds
 

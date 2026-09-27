@@ -185,12 +185,9 @@ export class BackendClient implements ApiClient {
 
   // --- Recruiting (LeetCode) ---
   async recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt> {
-    // The extension is 100% passive — it never issues its own LeetCode request. Problem metadata
-    // (title/difficulty/tags) is read straight off the rendered problem page (LeetCode server-renders
-    // it) at capture time, then attached here. So there is no ToS-sensitive automated call to count.
-    // We still log each ingest with whether metadata was captured, to watch the DOM-scrape hit rate via
-    // a Logs Insights query. CloudWatch Logs is free at our scale; a custom metric ($0.30/mo) would be
-    // the biggest cost in the project, so we deliberately don't emit one.
+    // Extension is passive; metadata is DOM-scraped client-side (docs/areas/recruiting/index.md → Design
+    // decisions). Log `metaCaptured` per ingest for the Logs Insights hit-rate query — deliberately no
+    // custom metric (same doc → Watching an ingest).
     const metaCaptured =
       input.difficulty != null || (Array.isArray(input.topicTags) && input.topicTags.length > 0);
     console.log(
@@ -941,7 +938,7 @@ export class BackendClient implements ApiClient {
 
   // --- Calibration ---
   // Parity with the stub: filter done+locked tasks by their completion DAY (dayStartHour offset).
-  // TODO(scale, pre-deploy): swap the full task scan for `repo.doneTasksInWindow` over the GSI once the
+  // TODO(scale): swap the full task scan for `repo.doneTasksInWindow` over the GSI once the
   // day-range → epoch-window mapping (with the offset) is nailed down.
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = (await this.ensureSettings()).dayStartHour;

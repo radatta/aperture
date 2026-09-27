@@ -1,8 +1,7 @@
 # Aperture — Technical Spec
 
 Implements `../product/PRODUCT.md`. AWS-native PWA, web-first, online-first. Solo build, single user.
-Status: **Specs complete; implementation underway — workspace foundation (V1_PLAN Phase 0) built 2026-08-03.**
-Started: 2026-08-02.
+Status: built — see [`docs/index.md`](../index.md). Started: 2026-08-02.
 
 > Product is the source of truth. If this doc and `../product/PRODUCT.md` disagree, product wins.
 
@@ -13,7 +12,7 @@ Started: 2026-08-02.
 **AWS-native serverless BFF.** Multi-device sync is structural, not built: DynamoDB is the shared source of truth, so laptop + phone just hit the same API.
 
 ```
-React PWA (S3 + CloudFront) --Cognito JWT--> API (API GW HTTP API | Lambda Function URLs) --> Lambda(s) --> DynamoDB (SoR)
+React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + origin-secret header) --> Lambda BFF --> DynamoDB (SoR)
 ```
 
 **Frontend**
@@ -26,24 +25,24 @@ React PWA (S3 + CloudFront) --Cognito JWT--> API (API GW HTTP API | Lambda Funct
 - **Dates:** **roll our own** small helpers (day-start offset + ISO-week cadence are small, targeted) — only reach for a date lib if DST edge cases prove genuinely gnarly. Per [CONVENTIONS.md](../product/CONVENTIONS.md).
 - **Charts:** deferred; v1 viz is hand-rolled CSS/SVG.
 
-**Backend / infra (direction set; details deferred to the infra discussion)**
+**Backend / infra (resolved — the blueprint is [INFRA.md](INFRA.md))**
 - **Hosting:** S3 (static) + CloudFront (CDN + HTTPS — required for the PWA service worker).
 - **Auth:** Cognito (multi-device identity → JWT validated by the API).
 - **Compute:** Lambda(s), TS/esbuild.
-- **Data:** DynamoDB, on-demand. Logical entities per §2 unchanged; **physical model (keys / access patterns) is an infra-pass task** — DDB is access-pattern-first, not relational.
-- **Cost:** effectively free at single-user scale — S3/CloudFront in cents, DDB/Lambda/Cognito within always-free tiers. Lambda Function URLs avoid even API Gateway's post-free-tier cost if desired.
+- **Data:** DynamoDB, on-demand. Logical entities per §2; the physical model (keys / access patterns) is §2.4 — DDB is access-pattern-first, not relational.
+- **Cost:** effectively free at single-user scale — breakdown in INFRA §11.
 
-**Deferred to the infra talk:** API Gateway HTTP API vs Lambda Function URLs · Cognito setup · single-table vs multi-table DDB · one multi-route Lambda vs several · IaC (CDK likely) · custom domain.
+**Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route Lambda (§4) · CDK (§3) · custom domain (§8).
 
 **Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1.
 
-**Version discipline:** `npm show <pkg> version` before pinning anything — never guess versions.
+**Version discipline:** check the registry (`npm show <pkg> version`) before pinning — the rule lives in `CLAUDE.md`.
 
 ---
 
 ## 2. Data model
 
-Logical entities below are **storage-agnostic**; the physical DynamoDB shape is §2.4 (single-table, direction set, refined in the infra talk).
+Logical entities below are **storage-agnostic**; the physical DynamoDB shape is §2.4 (single-table, as built).
 
 ### 2.1 Global conventions
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable).
@@ -123,7 +122,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 5. ULIDs, `userId` on everything, `updatedAt` for last-write-wins across devices.
 6. Day buckets use the configurable `dayStartHour` (default 4am).
 
-### 2.4 Physical model — DynamoDB single-table (direction set; refined in infra talk)
+### 2.4 Physical model — DynamoDB single-table (as built; `lambdas/src/ddb/keys.ts`)
 ```
 PK = u#<userId>            (one partition per user — fine at single-user volume)
 SK (type-prefixed range keys):
@@ -131,6 +130,8 @@ SK (type-prefixed range keys):
   task#<ulid>                   task by id
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
+  sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
+  lc#<day>#<ulid>               LeetCode attempts, day-bucketed  (begins_with lc#)
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)
   day#<date>                    day singleton (direct get)
   attach#<taskId>#<ulid>        a task's attachments        (begins_with attach#<taskId>)
@@ -140,7 +141,7 @@ SK (type-prefixed range keys):
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".
 - **Balance / time-budget aggregate in the Lambda** over the day/week range (no GSI needed at this volume).
-- Access patterns enumerated in the infra discussion; keys above satisfy them with prefix reads + the one GSI.
+- Access patterns as built: the keys above satisfy them with prefix reads + the one GSI.
 
 ---
 
@@ -148,7 +149,7 @@ SK (type-prefixed range keys):
 
 **Routes (React Router):**
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /habits · /rolls · /inbox · /settings` — the **deep views** (full backlog, browse past log days, manage habits, manage rolls + their contact sheets, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /recruiting (+ /recruiting/stories) · /habits · /rolls · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, manage habits, manage rolls + their contact sheets, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route.
 
@@ -175,25 +176,24 @@ pnpm workspaces monorepo.
 aperture/
   app/                 # React PWA (Vite)
     src/
-      pages/           # Home, Log, Tasks, Recruiting, Habits, Inbox, Settings
-      modules/         # capture, pomodoro, tasks, habits, rolls, log, calibration
+      pages/           # Home, Log, Tasks, Recruiting, Habits, Rolls, Inbox, Settings (a dir each)
+      modules/         # calendar, calibration, capture, habits, home, log, pomodoro, reflection, rolls, tasks
       components/      # primitives: Card, Text, … (anti-generic token layer)
-      data/            # React Query hooks + api client
-      lib/             # ulid, dates, dayBoundary helpers
-      auth/            # Cognito/OIDC glue
+      data/            # React Query hooks + the api clients (stubClient, httpClient) + seed
+      lib/             # cx, format, useDisclosure, useRowAction (ulid/dates live in packages/shared)
+      auth/            # Cognito/OIDC glue (userManager, OidcBridge, AuthProvider)
       styles/          # Tailwind tokens (CSS-var theme)
-  lambdas/             # BFF Lambda(s) — index.ts, routes, ddb client, jwt-validate, writes object
-  cdk/                 # CDK app (infra)
+  lambdas/src/         # BFF — index.ts, handler.ts, backend.ts; auth/ (verify), ddb/ (keys, repo, writes,
+                       #   mapping, DocClient), google/, mcp/, s3/
+  cdk/src/             # CDK app — bin/aperture.ts, lib/ (data, app, cicd, billing stacks, monitoring), config/
   extension/           # Firefox MV3 add-on — LeetCode capture. No deps/bundler/build step; NOT a
                        #   pnpm workspace member, and excluded from eslint + prettier
-  packages/shared/     # shared TS types across app + lambda
+  packages/shared/     # shared TS types + contract across app + lambda (also ulid, dates, machines, contractTests)
   scripts/             # dev + CI utilities
   docs/  ·  localNotes/
 ```
 
-**Tooling:** **pnpm** (package manager + workspaces) — **never npm/yarn** · **Vitest** (one test runner, Node everywhere) · Vite (app bundler) · TS project refs · ESLint + Prettier · esbuild-via-CDK for Lambda bundling · GitHub Actions CI. Dependency discipline per **[CONVENTIONS.md](../product/CONVENTIONS.md)** (first-principles: build it ourselves by default).
-
-**As built (Phase 0):** Node 22 · pnpm 11 · TypeScript **6** (pinned below 7 for lint support) · Vite 8 · Vitest 4 · React 19 · ESLint 10. Internal packages resolve **from source** (`@aperture/shared` exports `src/index.ts`; consumers transpile it, no dev/test build step); `shared` emits a gitignored `dist/` only to satisfy project references. Full rationale + the version-pin gotchas in **[V1_PLAN.md](V1_PLAN.md) → Phase 0 (as built)**.
+**Tooling:** pnpm (workspaces) · Vitest · Vite · TS project refs · ESLint + Prettier · esbuild-via-CDK for Lambda bundling · GitHub Actions CI. The rules (pnpm-only, one runner with Node parity, packages resolve from source + the `dist/`/TS6310 note, command shape, dependency discipline) are in **[CONVENTIONS.md](../product/CONVENTIONS.md)**; the toolchain pins as built and the version-pin gotchas are in **[V1_PLAN.md](../V1_PLAN.md) → Phase 0 (as built)**.
 
 ---
 
@@ -214,19 +214,12 @@ it's fixed or the rule changes — not until people stop noticing it.
 
 ### Worktree-blind git hooks — RESOLVED 2026-09-19 (`fix-hooks`)
 
-Kept as a record. **The defect (surfaced 2026-09-17):** the git-aware hooks resolved their working dir
-with `cd "${CLAUDE_PROJECT_DIR:-$(pwd)}"`, but `CLAUDE_PROJECT_DIR` is the **project root** (main checkout)
-and stays there in a worktree session — so every hook read the main checkout's git state, not the
-worktree's. Worst blast: `precommit-guard`'s credential scan ran `git diff --cached` on the wrong index
-(a secret staged in the worktree was never seen); `main-branch-guard` gated edits on the wrong branch.
-Confirmed against the Claude Code hooks docs: the session's real dir arrives on the hook's stdin as `.cwd`
-(the worktree root); `CLAUDE_PROJECT_DIR` is the static project root.
-
-**The fix.** A shared `.claude/hooks/_hook-common.sh` exposes `hook_cd "$INPUT"`, which cd's to `.cwd`
-with a fallback to `CLAUDE_PROJECT_DIR` then `$(pwd)` (so it can never regress). Every git/path-aware hook
-sources it and calls it before any git work; `.claude/hooks/README.md` documents the rule so new hooks
-inherit it by default. Verified empirically: same hook resolves to the worktree branch with `.cwd` and to
-the main-checkout branch on fallback. Note the fix only takes effect once merged to `main` and the main
+Kept as a record. **Defect (surfaced 2026-09-17):** the git-aware hooks did `cd "${CLAUDE_PROJECT_DIR:-$(pwd)}"`,
+which is the main checkout even in a worktree session — `precommit-guard`'s credential scan ran
+`git diff --cached` on the wrong index and `main-branch-guard` gated on the wrong branch. **Fix:**
+`.claude/hooks/_hook-common.sh` → `hook_cd "$INPUT"` cd's to the hook stdin's `.cwd` (the worktree root),
+falling back to `CLAUDE_PROJECT_DIR` then `$(pwd)`; verified empirically both ways. The rule for new
+hooks: `.claude/hooks/README.md`. Note the fix only takes effect once merged to `main` and the main
 checkout pulls it — the executing copy is always `${CLAUDE_PROJECT_DIR}`'s (the main checkout).
 
 ### Hard-deletes — breaks §2.1 "Soft-delete everywhere"
@@ -260,11 +253,3 @@ test proves two impls agree, not that either is correct.**
 
 **Before adding any delete path**, check it writes `deletedAt` rather than removing the row, and that
 something outside the contract suite can tell the difference.
-
----
-
-## Status
-
-Specs complete; infra decisions resolved in **[INFRA.md](INFRA.md)** (Function URL + CloudFront OAC, Cognito, dev+prod, CDK split, GitHub OIDC CI, Porkbun/ACM domain as last step).
-
-**Implementation:** the pnpm/TS/Vitest workspace foundation (V1_PLAN Phase 0) is built and green as of 2026-08-03 — pinned toolchain, project references, dual Vitest envs, blank app shell. Next: **Phase 1** (shared contract + in-memory stub).

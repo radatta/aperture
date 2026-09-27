@@ -1,35 +1,10 @@
 #!/bin/bash
 # PreToolUse hook on Bash — DENIES command shapes that COI's security monitor
-# classifies as a CRITICAL "reverse shell", which KILLS THE WHOLE CONTAINER.
+# classifies as a CRITICAL "reverse shell", which KILLS THE WHOLE CONTAINER; the
+# right move is to stop emitting the shape, not to disarm the detector.
 #
-# Why this exists, and why the fix isn't `auto_kill_on_critical = false`:
-# that flag is the sandbox's actual purpose. The right move is to stop emitting
-# the shape, not to disarm the detector.
-#
-# The mechanism (read from COI source, commit d304121):
-#  - internal/monitor/process.go:249-290 holds a HARDCODED pattern list, matched
-#    with strings.Contains against each process's lowercased command line. There
-#    is no config key to edit it.
-#  - process.go:298-302 gates most patterns on "is this network related?", defined
-#    as strings.Contains(cmd, ":") || "sock" || "tcp" || "udp" || an IP pattern.
-#    ANY colon qualifies — a dict literal, a slice (`v[-5:]`, `s[11:19]`), a URL,
-#    a timestamp. In practice every JSON one-liner matches. `bash -i` and `sh -i`
-#    skip the gate entirely and always fire.
-#  - internal/monitor/responder.go:137-147 — on CRITICAL with auto_kill_on_critical
-#    it calls killContainer(). Unlike HIGH threats there is no "already fired"
-#    latch, so it repeats every time.
-#  - Detection samples the process list every poll_interval_sec (2s). Short-lived
-#    one-liners often slip through; ones blocked on a slow pipe (`gh api ... |`,
-#    `npm view ... |`) sit long enough to be sampled and are reliably caught.
-#    Passing before is luck, not safety.
-#
-# Observed 2026-09-07, three container kills, all benign:
-#   npm view aws-cdk-lib versions --json | python3 -c "...print(v[-5:])"
-#   gh api repos/aws/aws-cdk/pulls/32369 | python3 -c "...print('merged_at:', ...)"
-#   a test harness for THIS hook, carrying the patterns as fixture strings
-#
-# Note CLAUDE.md's own "always check the registry — npm view <pkg> version" rule
-# leads straight into this, which is why a guard beats remembering.
+# Mechanism, observed kills and why the fix is not `auto_kill_on_critical = false`:
+# docs/ops/COI-INCIDENTS.md → Incident F.
 #
 # ---------------------------------------------------------------------------
 # IMPLEMENTATION CONSTRAINT — READ BEFORE EDITING
@@ -51,8 +26,8 @@
 # Over-blocking is the correct bias; the failure mode this prevents is the
 # container dying.
 #
-# See docs/COI-SANDBOX.md → "Container killed — the CRITICAL path is a different
-# animal", and docs/COI-INCIDENTS.md → Incident F.
+# See docs/ops/COI-SANDBOX.md → "Container killed — the CRITICAL path is a different
+# animal", and docs/ops/COI-INCIDENTS.md → Incident F.
 
 set -euo pipefail
 

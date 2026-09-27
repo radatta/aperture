@@ -2,30 +2,23 @@
 # SessionStart hook, matcher "compact" — runs AFTER compaction and injects live repo state into the
 # freshly-compacted context. Anthropic's documented pattern for re-establishing context post-compact.
 #
-# Why this exists, and why it pairs with the `handoff` skill:
-# a handoff file is a dated SNAPSHOT — correct when written, progressively wrong after. This hook
-# supplies the half that must never be stale by re-deriving it at the moment it's needed, so the file
-# never has to carry live state and can't rot into a confident lie.
+# Pairs with the `handoff` skill: a handoff file is a dated SNAPSHOT, so it carries only what is safe
+# to freeze, and this hook re-derives the rest at the moment it's needed:
 #
 #   handoff file  ->  decisions, dead ends, open questions   (durable — safe to freeze)
 #   this hook     ->  branch, commits, PRs, deploys          (volatile — always re-derived)
 #
-# Failure mode this prevents, observed repeatedly on 2026-09-07: asserting deployment history and
-# branch state from stale `origin/*` refs, confidently and wrongly, three separate times. Compaction
-# makes it worse — the summary carries forward whatever was believed, detached from how it was learned.
+# Motivation: on 2026-09-07 deployment history and branch state were asserted from stale `origin/*`
+# refs, confidently and wrongly, three separate times — see docs/ops/COI-SANDBOX.md → GitHub access
+# inside the container. Compaction makes it worse: the summary carries forward whatever was believed,
+# detached from how it was learned.
 #
 # Everything here is READ-ONLY and best-effort. Any command may fail (no network, no `gh` auth, not a
 # repo); each is guarded so the hook always exits 0. A hook that errors on a plane is worse than one
 # that says less.
 #
-# To wire (settings.json is a protected read-only mount in the COI container — the user does this):
-#   "SessionStart": [
-#     { "matcher": "compact",
-#       "hooks": [{ "type": "command",
-#                   "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-compact-context.sh" }] }
-#   ]
-#
-# See .claude/skills/handoff/SKILL.md and docs/COI-SANDBOX.md.
+# Wired in .claude/settings.json (SessionStart, matcher "compact").
+# See .claude/skills/handoff/SKILL.md and docs/ops/COI-SANDBOX.md.
 
 set -uo pipefail  # deliberately NOT -e: a failing probe must not kill the hook
 

@@ -10,9 +10,7 @@ Not a mood tracker, not a habit-shaming app, not a productivity cult. Balance is
 
 ## Status
 
-**Foundation built — Phase 0 (2026-08-03).** The pnpm monorepo installs, typechecks, lints, tests, builds, and serves — green end to end. No product code yet; Phases 1–14 of [`docs/V1_PLAN.md`](docs/V1_PLAN.md) remain. Specs (product, technical, infra) are complete — start at [`docs/index.md`](docs/index.md).
-
-Build order is **page-first, backend-second**: the app runs against a stubbed API and the whole UX gets validated in-hand before any Lambda or DynamoDB is wired. Next up is **Phase 1** — the shared `ApiClient` contract + in-memory stub.
+Built and in daily use. The current build status — phases, test count, what's still open — is the block at the top of [`docs/index.md`](docs/index.md).
 
 ## Develop
 
@@ -33,23 +31,19 @@ Monorepo layout: `app/` (React PWA) · `lambdas/` (BFF) · `cdk/` (infra) · `pa
 
 Claude Code runs against this repo inside an Incus container — see
 **[docs/ops/COI-SANDBOX.md](docs/ops/COI-SANDBOX.md)** for the runbook and
-**[docs/ops/COI-INCIDENTS.md](docs/ops/COI-INCIDENTS.md)** for the post-mortems. Three rules that will bite you
-otherwise:
+**[docs/ops/COI-INCIDENTS.md](docs/ops/COI-INCIDENTS.md)** for the post-mortems. Four rules that will bite
+you otherwise, each with its home:
 
-1. **Always exit the TUI cleanly** (`Ctrl+D` / `/exit`) before you walk away, then `coi shutdown`.
-   Killing it abruptly — by closing the laptop lid, dropping the connection, or closing the window —
-   leaves your *local terminal* with mouse reporting still on, so your prompt fills with
-   `35;97;27M` garbage. Clean exit costs nothing and prevents it entirely.
-2. **Unattended runs need AC power, and `caffeinate` is not enough.** `caffeinate` blocks idle sleep
-   only; closing the lid sleeps the Mac regardless. Lid open + `caffeinate -s`, or clamshell mode /
-   Amphetamine's closed-display option if the lid must shut. A flat battery hibernates the Mac and
-   nothing prevents that.
-3. **`node_modules` is shared with the host**, so a native-binding error from `vite` usually just
-   means the other platform installed last — see the incidents doc. This, not a port clash, is the
-   usual reason `pnpm dev` "stops working locally" after a container session.
-4. **Ports are split by owner:** `5173+` is your Mac, `6173+` is a container. Chosen automatically off
-   the container hostname, with the host port pinned to match — so `localhost:6173` on the Mac is the
-   container's dev server, and the number alone tells you whose it is. See *Ports* in the runbook.
+1. **Always exit the TUI cleanly** (`Ctrl+D` / `/exit`) before you walk away, then `coi shutdown` — an
+   abrupt kill leaves your local terminal with mouse reporting on. COI-INCIDENTS → *Symptom: your
+   prompt fills with `35;97;27M`-style garbage*.
+2. **Unattended runs need AC power, and `caffeinate` is not enough** — the lid sleeps the Mac
+   regardless, and a flat battery hibernates it. COI-INCIDENTS §B.2 (the lid) + *Third kill mechanism:
+   a flat battery*; the lid-open / clamshell / Amphetamine options table is in COI-SANDBOX → *Run*.
+3. **`node_modules` is shared with the host** — a native-binding error from `vite` usually means the
+   other platform installed last, not a port clash. `CLAUDE.md` → Commands; COI-INCIDENTS → *Related:
+   the shared `node_modules` hazard*.
+4. **Ports are split by owner:** `5173+` is your Mac, `6173+` is a container. COI-SANDBOX → *Ports*.
 
 ## What it does (v1)
 
@@ -62,30 +56,16 @@ otherwise:
 
 ## Stack
 
-React + Vite + TypeScript PWA on an **AWS-native serverless BFF**:
-
-```
-React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (OAC) --> DynamoDB
-```
-
-Same-origin `/api/*` via CloudFront OAC (no CORS), in-handler Cognito JWT validation, single-table DynamoDB (PITR + RETAIN), CDK IaC, GitHub Actions + OIDC (no static creds), dev + prod. Multi-device sync is **structural** — laptop and phone hit the same table under the same identity.
-
-Cost is effectively $0 at single-user scale.
+React + Vite + TypeScript PWA on an **AWS-native serverless BFF**. The one-paragraph shape is
+[`CLAUDE.md`](CLAUDE.md) → Architecture; the blueprint is [`docs/arch/INFRA.md`](docs/arch/INFRA.md)
+(§4 for the Function URL + origin-secret edge, §11 for why it costs effectively $0 at single-user
+scale). Multi-device sync is **structural** — laptop and phone hit the same table under the same
+identity ([`docs/arch/TECH.md`](docs/arch/TECH.md) §1).
 
 ## Conventions
 
-- **pnpm only** — never npm or yarn.
-- **Vitest** — one test runner, Node everywhere for Lambda parity.
-- **First-principles dependency discipline** — roll our own by default; a dep needs an explicit (A) substantial-hard-to-own-logic or (B) security-critical/subtle-correctness justification. *Popular is not a reason.*
-- Full rules in [`docs/product/CONVENTIONS.md`](docs/product/CONVENTIONS.md).
+**pnpm only**, one test runner (Vitest, Node parity for the Lambda), first-principles dependency
+discipline — the full rules are [`docs/product/CONVENTIONS.md`](docs/product/CONVENTIONS.md); the
+load-bearing ones are repeated in `CLAUDE.md`.
 
-## Docs
-
-| Doc | What |
-|---|---|
-| [`docs/index.md`](docs/index.md) | Doc index — start here |
-| [`docs/product/PRODUCT.md`](docs/product/PRODUCT.md) | What Aperture is and how it feels (source of truth) |
-| [`docs/arch/TECH.md`](docs/arch/TECH.md) | Architecture, data model, routing/state, folder structure |
-| [`docs/product/CONVENTIONS.md`](docs/product/CONVENTIONS.md) | Cross-cutting rules |
-| [`docs/arch/INFRA.md`](docs/arch/INFRA.md) | AWS blueprint |
-| [`docs/V1_PLAN.md`](docs/V1_PLAN.md) | Sequenced v1 work breakdown |
+Docs: [`docs/index.md`](docs/index.md).

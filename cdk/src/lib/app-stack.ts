@@ -32,15 +32,14 @@ export interface AppStackProps extends StackProps {
 const LAMBDA_ENTRY = fileURLToPath(new URL('../../../lambdas/src/index.ts', import.meta.url));
 const MCP_ENTRY = fileURLToPath(new URL('../../../lambdas/src/mcp/index.ts', import.meta.url));
 
-// cdk-nag granular IAM acks. WORKAROUND for the open cdk-nag v3 bug (cdklabs/cdk-nag#2359/#2351):
-// Validations.acknowledge() splits the rule id on `::` and rejects the granular finding ids (which embed
-// ARNs containing `::`), so we write the metadata cdk-nag itself reads (isAcknowledged) directly. Ids MUST
+// cdk-nag granular IAM acks, written as the raw metadata cdk-nag reads (isAcknowledged) — the workaround
+// for cdk-nag v3 bug cdklabs/cdk-nag#2359/#2351; see #2 in docs/arch/CICD_HARDENING.md. Rules: ids MUST
 // match synth's "Acknowledge with '...'" hint verbatim; the IAM5 ids embed the cross-stack table/bucket
-// exports (their logical-id hashes) — if the data stack's Table/Files construct ids change, synth re-flags
+// exports (their logical-id hashes), so if the data stack's Table/Files construct ids change, synth re-flags
 // and these must be updated from the hint. Both the BFF and the MCP function carry the SAME per-resource
 // ids (the id embeds the resource, not the function), so one helper serves both; only the token-WRITE ack
-// differs — the BFF connects/disconnects Google accounts, the MCP function never writes SSM. See #2 in
-// docs/arch/CICD_HARDENING.md. Reason text is free; only the id (the key) must match.
+// differs — the BFF connects/disconnects Google accounts, the MCP function never writes SSM. Reason text
+// is free; only the id (the key) must match.
 function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: { ssmWrite: boolean }): void {
   const acks: Record<string, string> = {
     'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
@@ -129,9 +128,8 @@ export class ApertureAppStack extends Stack {
       generateSecret: false,
       authFlows: {}, // none requested → Cognito's defaults (refresh/SRP/custom); claude.ai only uses the hosted-UI code flow
       preventUserExistenceErrors: true,
-      // 30 days (vs the SPA client's 7): the refresh token lives in claude.ai's server-side store, not a
-      // browser, and its expiry means re-doing the connector OAuth dance on BOTH web and phone. The
-      // localStorage-leak reasoning that set the SPA ceiling doesn't apply here. (D13.)
+      // 30 days (D13, docs/areas/mcp/index.md): this refresh token lives in claude.ai's server-side store,
+      // so the SPA client's 7-day localStorage reasoning doesn't apply.
       refreshTokenValidity: Duration.days(30),
       oAuth: {
         flows: { authorizationCodeGrant: true },
@@ -330,11 +328,9 @@ export class ApertureAppStack extends Stack {
       generateSecret: false,
       authFlows: { userSrp: true },
       preventUserExistenceErrors: true,
-      // The refresh token is what carries the session across app relaunches, so it — not the access
-      // token — sets how often you actually retype a password. Cognito allows up to 3650 days, but the
-      // token sits in browser localStorage, so the ceiling is deliberately short: a week caps how long
-      // a leaked one stays useful, at the cost of a weekly sign-in. Access/ID stay at the 1-hour
-      // default — they cross the network on every request and are cheap to renew.
+      // 7 days (Cognito allows up to 3650): the refresh token sits in browser localStorage, so a leaked one
+      // stays useful for at most a week, at the cost of a weekly sign-in. Access/ID stay at the 1-hour
+      // default (they cross the network on every request and are cheap to renew). Why: TECH §3.
       refreshTokenValidity: Duration.days(7),
       oAuth: {
         flows: { authorizationCodeGrant: true },

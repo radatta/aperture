@@ -2,11 +2,11 @@
 
 **Area:** tasks · **Branch:** `task-attachments`
 
-**Status: built 2026-09-17** (branch `task-attachments`, forked from `main` after the CI-pipeline refactor #15). Page-first: UI validated on the stub (headless pass, zero console errors) before the Lambda + S3 were wired. Gate green: typecheck (6 projects) · lint · tests (app 200 · lambdas 79 · shared 33 · cdk 21 · scripts 12) · headless UI pass · `cdk synth` clean (cdk-nag). **Not yet dev-validated** — the presigned round-trip against real S3 + CORS is proven only once pushed to `dev` (see §7 Phase 4).
+**Status: built 2026-09-17** (branch `task-attachments`, forked from `main` after the CI-pipeline refactor #15). Page-first: UI validated on the stub (headless pass, zero console errors) before the Lambda + S3 were wired. Gate green: typecheck (6 projects) · lint · tests (app 200 · lambdas 79 · shared 33 · cdk 21 · scripts 12) · headless UI pass · `cdk synth` clean (cdk-nag). **Dev-validated** — the presigned round-trip against real S3 + CORS was confirmed on `dev`; the polish that followed landed in `b6ed97e` (2026-09-19, §7 Phase 6).
 
 Attach files to a task — a receipt, a spec, a screenshot. This is the first feature in Aperture that stores **bytes**, not just JSON rows, so most of its weight is infrastructure: a new S3 bucket, presigned-URL transport, and an IAM grant. The task model itself gains only a lightweight metadata child.
 
-This is a permanent design-of-record — the design, the decision log, **and** the build record. §3 is the decision log: every product/infra decision we made, why, and what we rejected. §7 is the build record: how the first cut was built, kept after merge. Where this doc and the code disagree, fix whichever is wrong and say so here.
+Permanent design-of-record: §3 is the decision log, §7 the build record. Where this doc and the code disagree, fix whichever is wrong and say so here.
 
 ---
 
@@ -151,13 +151,13 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 
 - [x] **Phase 3 — backend**
   - Deps `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` `@3.1102.0` (**dependency discipline: category B** — SigV4 query-string presigning is security-critical / subtle-correctness we must not hand-roll; the rejected roll-our-own is ~200 lines of signing + canonicalization. Pinned to the existing DynamoDB SDK line, externalized in the Lambda runtime → zero bundle impact; the only new transitives are a few `@smithy/*` the DynamoDB client already pulls). `s3/presigner.ts` (seam + fake), `ddb/keys.ts` (`attach#`), `ddb/repo.ts` (list/find/put), `backend.ts` (5 methods + export), `handler.ts`/`index.ts` (presigner injected via `RpcDeps`), `backend.contract.test.ts` (fake presigner in both passes). Tests: `keys.test.ts`, `presigner.test.ts`, `backend.test.ts` (tombstone survives, S3-key scheme, cancel ≠ delete, cross-user 404). `scripts/src/smoke.ts` gains `listAttachments` (also proves the S3 SDK loaded at cold start).
-    - ↳ *`presigner.test.ts` revealed content-type is not signed into the PUT — only content-length. Adjusted the security story (D6): size is cryptographically capped; serving safety is the forced GET disposition, not the stored type.*
+    - ↳ *`presigner.test.ts` revealed content-type is not signed into the PUT — the security story was adjusted in D6's reality check.*
 
 - [x] **Phase 4 — CDK / infra**
   - `data-stack.ts` — the `Files` bucket (RETAIN, versioned, BLOCK_ALL, CORS PUT/GET/HEAD, lifecycle) + `allowedOrigins` prop. `app-stack.ts` — `filesBucket` prop, `FILES_BUCKET` env, the object-scoped `s3:PutObject/GetObject` grant, a granular IAM5 ack. `bin/aperture.ts` — derive `allowedOrigins` from `domainConfigFor` and pass it into the data stack (before the app stack, to avoid the cross-stack cycle); a data-stack `AwsSolutions-S1` ack. `stacks.test.ts` — thread `filesBucket`/`allowedOrigins`; assert the bucket + the scoped grant + the env var. `cdk synth` clean.
     - ↳ *The IAM5 finding id embeds the Files bucket's logical-id hash (`…Files8E6940B8Arn…`), read verbatim from synth's "Acknowledge with '…'" hint — same brittleness as the existing table IAM5 ack.*
     - ↳ *`AwsSolutions-S1` is already acked at app-stack scope for the Site bucket, but the new Files bucket is in the DATA stack, so it needed its own `ack(data, …)`.*
-    - ↳ **Not dev-validated yet.** `cdk synth` proves the template; only a `dev` deploy proves the real presigned round-trip, CORS from the domained origin, and the runtime S3 SDK at cold start.
+    - ↳ *`cdk synth` proves the template only; the real presigned round-trip was confirmed later on `dev` (Phase 6); CORS from the domained origin and the runtime S3 SDK at cold start are exercised by that round-trip.*
 
 - [x] **Phase 5 — docs + gate**
   - `docs/areas/tasks/attachments.md` (this doc), `docs/index.md`, `docs/arch/TECH.md` (entity + key line), `docs/arch/INFRA.md` (the files bucket in the data stack).
@@ -172,7 +172,7 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 ## 8. Deferred / out of scope
 
 - **Bytes-cleanup sweeper** — a scheduled job to delete orphaned S3 objects (tombstoned metadata, expired-pending uploads). Bytes cost pennies; skip until it matters.
-- **`deleteTask` cascade** — ✅ landed: tombstoning a task's attachment metadata (D7) ships with `deleteTask`. Bytes are still orphaned (the sweeper above stays deferred).
+- **`deleteTask` cascade** — ✅ landed (D7); the bytes sweeper above stays deferred.
 - **HEAD-on-confirm** — `confirmAttachment` trusts the client that the PUT succeeded; a HEAD to verify the object exists would be the Lambda's first S3 call. Low value at single-user scale.
 - **Multipart / resumable uploads** — a single XHR PUT is fine at 20 MB; revisit only if the cap rises to large video.
 - **Bytes in the export** — metadata only for now (D8).

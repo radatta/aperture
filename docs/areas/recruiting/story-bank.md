@@ -4,7 +4,7 @@ A deep view in the `/recruiting` hub holding ~8–12 STAR stories tagged by comp
 has a home. Second tab of recruiting, alongside LeetCode attempt capture ([index.md](index.md)).
 
 **Status: built 2026-09-15** (branch `story-bank`). Validated on dev — create / update / delete verified
-against real Cognito → Lambda → DynamoDB, including the deep-linked nested route. Pending merge to `main`.
+against real Cognito → Lambda → DynamoDB, including the deep-linked nested route. Merged as #12.
 Gate green: typecheck · lint · tests (app 189 · lambdas 67 · shared 29 · cdk 18 · scripts 6) · headless UI
 pass · code-review (0 Sev-1/2).
 
@@ -109,20 +109,11 @@ BACKEND · lambdas/  —  BackendClient · 4 story methods
 STORAGE · DynamoDB  —  PK u#<userId> · SK story#<ulid>
 ```
 
-
-- **`packages/shared`** — `stories.ts` (the `COMPETENCY_TAGS` constant + `CompetencyTag` type), the `Story`
-  type in `types.ts`, the four methods on the `ApiClient` interface in `api.ts` (with `CreateStoryInput` /
-  `StoryPatch`), and the method names in the `API_METHODS` allowlist in `rpc.ts`.
 - **Export bundle.** `stories` is part of `ExportBundle`, and the stub `Store`, both `exportData()`
   implementations, and the contract-test key list all carry it — a deliberate compile-time double-entry, so
   a new collection cannot silently fall out of the export (omitting `stories` anywhere fails to compile).
-- **Backend** (`lambdas/`) — `sk.story` / `sk.storyPrefix` in `ddb/keys.ts`; `listStories` / `getStory`
-  (tombstone → `null`, like `getTask`) / `putStory` in `ddb/repo.ts`; `mustStory` + the four methods on
-  `BackendClient` in `backend.ts`. Story methods ride the JWT path — no per-method handling in `index.ts` /
-  `handler.ts`.
-- **App** (`app/`) — `useStories` + mutation hooks in `data/hooks/`, the `stories` query key, and the stub
-  client's `stories` store (with seed rows). UI in `pages/Recruiting/`: the tab bar, the moved attempts
-  section, the story list, and the create/edit editor.
+- Story methods ride the JWT path — no per-method handling in `index.ts` / `handler.ts`.
+- The per-layer file list (shared / stub / hooks / UI / backend): the *Build record* below.
 
 ---
 
@@ -165,8 +156,7 @@ the build diverged from the plan above or hit something worth remembering. Built
     - ↳ *Chromium fought the sandbox: the `apt` `chromium` package is a snap wrapper that hangs in the container, so it pivoted to Playwright's own build + `playwright install-deps` (after clearing a hung dpkg lock). Dark had to be checked via the in-app **Night** mode toggle — the browser's `prefers-color-scheme` doesn't drive the theme (the app's `auto` follows home-mode).*
 
 - [x] **Phase 5 — app tests (jsdom)**
-  - `app/src/pages/Recruiting/Recruiting.test.tsx` — kept the four; added tab-is-a-link + deep-link.
-  - `app/src/pages/Recruiting/StoryBank.test.tsx` (new) — create / title-required / focus-return / edit / delete-asks-first / loading + error states.
+  - `app/src/pages/Recruiting/Recruiting.test.tsx`, `app/src/pages/Recruiting/StoryBank.test.tsx` (new) — the cases are listed under *Testing*.
     - ↳ *Initially skipped — the contract suite + visual pass + dev dogfood all passed, which masked that the new UI had no dedicated jsdom tests; caught while auditing this build record and written 2026-09-15. Used plain DOM property assertions (`.disabled`), not `jest-dom` matchers — this repo doesn't wire those up.*
 
 - [x] **Phase 6 — real backend (node)**
@@ -174,7 +164,7 @@ the build diverged from the plan above or hit something worth remembering. Built
   - `lambdas/src/ddb/repo.ts` — `listStories` / `getStory` / `putStory`.
     - ↳ *`getStory` re-filters tombstones → `null` (mirrors `getTask`, not `getSeries`), so `updateStory` on a deleted row throws — parity with the stub's `patch`, which refuses a tombstoned id.*
   - `lambdas/src/backend.ts` — `mustStory` + the four methods (create S/A/R default to `''`; delete re-puts with `deletedAt`, no-op if missing); `exportData` adds `stories`.
-  - `lambdas/src/ddb/keys.test.ts` — the story key. `lambdas/src/backend.test.ts` (new) — a tombstone row survives `deleteStory` yet drops from `listStories`.
+  - `lambdas/src/ddb/keys.test.ts` — the story key. `lambdas/src/backend.test.ts` (new) — the tombstone check under *Testing*.
 
 - [x] **Phase 7 — docs + gate**
   - Updated [index.md](index.md), [../TECH.md](../../arch/TECH.md) §2, [../PRODUCT.md](../../product/PRODUCT.md).
@@ -188,8 +178,10 @@ the build diverged from the plan above or hit something worth remembering. Built
 - **Contract suite** (`packages/shared/src/contractTests.ts`, run against stub + backend): create/list
   order, update bumps `updatedAt` and reorders, empty S/A/R default to `''`, soft-deleted stories don't
   list, update-on-deleted rejects.
-- **Backend** (node env) — a tombstone row survives `deleteStory` in the table yet drops from
+- **Backend** (node env, `lambdas/src/backend.test.ts`) — a tombstone row survives `deleteStory` in the table yet drops from
   `listStories` (the "tell a tombstone from absence" check [../TECH.md](../../arch/TECH.md)'s tech-debt entry wants
   for any new delete path).
-- **App** (jsdom) — the tab deep-links; create/edit/delete round-trips through the list; cancel returns
-  focus and drops the draft; loading/error states.
+- **App** (jsdom) — `Recruiting.test.tsx` kept its four cases and added tab-is-a-link + deep-link;
+  `StoryBank.test.tsx`: create / title-required / focus-return / edit / delete-asks-first / loading + error
+  states — i.e. the tab deep-links; create/edit/delete round-trips through the list; cancel returns
+  focus and drops the draft.

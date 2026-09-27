@@ -94,11 +94,9 @@ export class ApertureCicdStack extends Stack {
       // cdk-nag IAM5: every wildcard in this deploy role is deliberate — assuming the account bootstrap
       // roles, the stage's hash-suffixed site bucket, CloudFront invalidation (the distribution id isn't
       // known until the app stack deploys), and the app-tier DescribeStacks. Acknowledge each with
-      // evidence. Written as raw acknowledgment metadata rather than `Validations.of().acknowledge()`
-      // because of a cdk-nag v3 bug (cdklabs/cdk-nag#2359) that splits rule ids on `::` and rejects
-      // finding ids containing ARNs — same workaround as app-stack.ts. The ids must match synth's
-      // "Acknowledge with '...'" hint verbatim; region is literal (us-west-1) and account stays the
-      // `<AWS::AccountId>` token, both as they appear in the finding.
+      // evidence, as raw acknowledgment metadata — the same cdk-nag#2359 workaround as app-stack.ts. The
+      // ids must match synth's "Acknowledge with '...'" hint verbatim; region is literal (us-west-1) and
+      // account stays the `<AWS::AccountId>` token, both as they appear in the finding.
       role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
         [`AwsSolutions-IAM5[Resource::arn:aws:iam::<AWS::AccountId>:role/cdk-${CDK_QUALIFIER}-*-<AWS::AccountId>-${region}]`]:
           'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',

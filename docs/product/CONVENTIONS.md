@@ -27,7 +27,7 @@ When proposing a dep, **justify against A/B explicitly**, note its footprint + t
 **Worked calls (applying the rule):**
 - **Justified (B):** `react-oidc-context` — OIDC/PKCE + token refresh is subtle and security-critical.
 - **Roll our own:** date helpers — day-start offset + ISO-week cadence are small and targeted; hand-roll them. Only reach for a date lib if DST edge cases prove genuinely gnarly.
-- **Decide when we get there:** ULID generation — small, but ID correctness (monotonicity, base32, entropy) is subtle; evaluate under A/B at the point of need.
+- **Rolled our own (decided at the point of need):** ULID generation — small, but ID correctness (monotonicity, base32, entropy) is subtle; hand-rolled at `packages/shared/src/ulid.ts` (+ `ulid.test.ts`), reasoning in `V1_PLAN.md` §B.
 
 ---
 

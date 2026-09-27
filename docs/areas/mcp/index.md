@@ -1,4 +1,4 @@
-# MCP server — Claude Code (and, later, claude.ai) → Aperture
+# MCP server — Claude Code and claude.ai → Aperture
 
 An MCP (Model Context Protocol) server that lets **Claude Code** read and write the user's Aperture data
 during coding sessions — tasks, calibration, LeetCode history, calendar events, attachments — so the task

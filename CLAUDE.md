@@ -32,29 +32,26 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 **Inside the COI container (the usual case), four things bite:**
 
 - **Never put a reverse-shell literal on a Bash command line — it kills the container.** COI's monitor
-  samples every process each poll and matches a hardcoded list: `python -c` / `python3 -c`,
-  `perl -e`, `php -r`, `ruby -e`, `bash -i`, `sh -i`, `nc -e`, `socat`, `/dev/tcp/`. A match is
-  **CRITICAL**, and `auto_kill_on_critical` kills the whole container — no pause, no latch, it
-  repeats. For the interpreter one-liners the "is this network related?" gate is satisfied by **any
-  `:` in the command**, so a dict, a slice (`v[-5:]`), a URL or a timestamp all qualify; in practice
-  every JSON one-liner matches. Use `python3 - <<'PY' … PY` (runs as `python3 -`, not on the list)
-  or `jq`. **This applies to the literal text anywhere in the command**, including test fixtures and
-  echoed strings — writing a file whose contents mention these belongs in the Write/Edit tools, not
-  a Bash heredoc. `.claude/hooks/coi-reverse-shell-guard.sh` enforces this; the rule stands whether
-  or not it's registered.
+  matches a hardcoded list: `python -c` / `python3 -c`, `perl -e`, `php -r`, `ruby -e`, `bash -i`,
+  `sh -i`, `nc -e`, `socat`, `/dev/tcp/`. A match is **CRITICAL**, and `auto_kill_on_critical` kills
+  the whole container (no latch — it repeats; `docs/ops/COI-INCIDENTS.md` → Incident F). For the interpreter one-liners the "is this network related?" gate is satisfied
+  by **any `:` in the command** (a dict, a slice like `v[-5:]`, a URL, a timestamp — every JSON
+  one-liner). Use `python3 - <<'PY' … PY` (runs as `python3 -`, not on the list) or `jq`. **This
+  applies to the literal text anywhere in the command**, including test fixtures and echoed strings —
+  file contents mentioning these belong in the Write/Edit tools, not a Bash heredoc.
+  `.claude/hooks/coi-reverse-shell-guard.sh` enforces this; the rule stands whether or not it's registered.
 
 - **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
-- **`node_modules` is shared with the macOS host** — `/workspace` is a virtiofs mount and
-  `node_modules` isn't separately mounted, so native binaries belong to whichever side installed
-  last. If `vite dev`/`vite build` dies with `Cannot find module '../lightningcss.*.node'`, that's
-  this. `pnpm install` fixes it for the current platform (and breaks the other side until they do the
-  same). Doesn't affect `tsc` or `vitest`.
+- **`node_modules` is shared with the macOS host** — native binaries belong to whichever side installed
+  last. `vite dev`/`vite build` dying with `Cannot find module '../lightningcss.*.node'` is this;
+  `pnpm install` fixes it for the current platform (and breaks the other side until they do the same).
+  Doesn't affect `tsc` or `vitest`. Mechanism: `docs/ops/COI-INCIDENTS.md` → Incident B → *Related*.
 - **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs, and
-  **two different ceilings** bite here, which is why the crashes read as code bugs when they aren't:
-  the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`, *not* memory) and memory itself
-  (`SIGKILL`/137). A `tsgo` fatal has also been seen under load with the mechanism never confirmed —
-  capture the **head** of the output, don't assume OOM. Serialise: screenshot, kill the browser,
-  then test. Details: `docs/ops/COI-INCIDENTS.md`.
+  **two different ceilings** bite, which is why the crashes read as code bugs when they aren't: the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`,
+  *not* memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory itself (`SIGKILL`/137). A `tsgo`
+  fatal has also been seen under load with the mechanism never confirmed — capture the **head** of the
+  output, don't assume OOM (`docs/ops/COI-SANDBOX.md` → *Ops notes* → *Transient `tsc` crashes*).
+  Serialise: screenshot, kill the browser, then test.
 
 Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/ops/COI-INCIDENTS.md`.
 
@@ -62,7 +59,7 @@ Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts)
 
 Full detail in `docs/product/CONVENTIONS.md`. The load-bearing ones:
 
-- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: `.github/workflows/ci.yml` resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI.
+- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: CI (`.github/workflows/ci.yml`) resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI (the mise trap: `docs/ops/COI-SANDBOX.md` → *Start here → 1*).
 - **First-principles dependency discipline.** Default to rolling our own. Only propose a dependency when EITHER (A) it's substantial hard-to-own logic, OR (B) it's security-critical / subtle-correctness / hard cross-platform edges we shouldn't hand-roll. When proposing one, justify against A/B explicitly, note its footprint + transitive deps, and state the roll-our-own alternative. **"It's popular" is not a reason.**
 - **Build order: page-first, backend-second.** Build `app/` against a stubbed API and validate the UX in-hand *before* wiring the Lambda + DynamoDB behind the same contract.
 - **Workspace packages resolve from source.** `packages/shared` exports `./src/index.ts`; app and lambdas import it directly and their bundler transpiles it — no build step in the dev/test loop. (`shared` still emits a gitignored `dist/` only to satisfy TS project references; nothing imports it.)
@@ -108,29 +105,31 @@ Merges to `main` happen via PR, not a local push.
 
 **Commit messages: one lowercase line, past tense, 4–5 words — 6 is the hard max.** A hyphenated word counts as one; filenames and acronyms keep their case. No blank line, no body, no trailers — including `Co-Authored-By` and `Claude-Session` (Claude Code's harness adds them by default; this rule overrides that). Say what the change did: `fixed cache policy ttl`, `added oauth metadata facade`, `retuned palette for contrast`. Context that needs recording belongs in `docs/` or the PR body, not the commit. `.claude/hooks/precommit-guard.sh` enforces this — it denies a `git commit` whose message breaks it.
 
+**PR bodies: Claude writes the body to a file, the user opens the PR.** The container's GitHub token is read-only, so the push and `gh pr create` happen on the Mac. Write the body to `localNotes/pr-<branch>.md` (gitignored, survives the session), keep it current as the branch changes, and when the user says they're ready hand them the exact commands: `git push -u origin <branch>` and `gh pr create --title "<title>" --body-file localNotes/pr-<branch>.md`. **Never write `#<number>` in a PR body or title unless you mean to link that PR or issue** — GitHub autolinks every one, so a test count, a step number, or a merged-PR mention becomes a bogus link. Say "PR 33" or use a date instead. Prefixes like `lc#day` are fine (a letter follows the `#`).
+
 ## Claude behavior
 
 - **Consult before big or irreversible actions**, and before deep research/exploration. Don't go off alone.
 - **Aperture MCP connector.** When an `aperture-*` MCP server is registered (`claude mcp list`), its tools read and write the user's **live** Aperture data — tasks, calibration, LeetCode, calendar, attachments. **`aperture` is prod — the user's real data and the default for any real task work. `aperture-dev` is for testing Aperture changes only** (e.g. verifying a dev deploy); never log real tasks there, and say which one you're using. A write hits DynamoDB directly and can create real Google Calendar events / S3 files. **Reads are free. Every write requires the user's explicit, in-the-moment approval — no exceptions.** Never write unprompted or inferred, and if running unattended (e.g. overnight) do **no** writes at all — a write happens only when the user explicitly asks for that specific write, then you do it. `complete_task` requires `actualMin`. Full surface: `docs/areas/mcp/index.md`.
 - **Don't write code that wasn't asked for.** Diagnosis, research, and a proposal are the deliverable until the user says to implement. "Continue" means continue what was asked — it is not license to start editing.
 - **When rebasing or pulling in others' merged work, read the PR(s) first.** Before `git rebase origin/main` (or building on top of freshly-merged branches), read the body of each PR that landed since you branched — `gh pr view <n>` — so you know what's being introduced. Rebasing blind means building on changes you haven't seen: the conflict you resolve or the contract you call may have moved for a reason the PR explains.
-- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. The rationalisations to distrust are the plausible ones — "this is well understood", "it's only just over", "the design is obvious", "I already researched it". Every one of those is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, and rewriting logic you have already defended is not.
+- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. Distrust the plausible rationalisations ("well understood", "only just over", "obvious design", "already researched") — each is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, rewriting logic you have already defended is not.
 - **Running the `Plan` agent: ask which model, never default.** When the user asks to run `Plan` (or you're about to spawn it) without naming a model, ask which model first — don't pick one silently. The user usually wants `fable`, but token budget varies, so it must be a deliberate choice each time.
 - **Reviews go through the `code-reviewer` agent** (project-aware) — not inline reading. Run it before committing anything non-trivial.
 - **Non-trivial external research → the `search-specialist` agent.** Single-fact lookups can use `WebSearch`/`WebFetch` directly. Codebase search is `Explore`'s job.
 - **Keep `docs/index.md` current.** Add or update a doc's one-line entry there in the same change — a doc missing from the index is undiscoverable.
 - **Version awareness:** always check the registry for the actual latest version before pinning a package — `npm view <pkg> version` (a read-only registry query; fine even though installs are pnpm-only). Never guess versions from memory.
 - **A piped command hides its exit code.** `pnpm typecheck | tail` reports success even when the typecheck never ran — the exit status you see belongs to `tail`. Before reporting any pass/fail, use `set -o pipefail` and echo `${PIPESTATUS[0]}`. This produced a false "it passed" here on 2026-09-07.
-- **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. When answering needs data from one of these, hand the user the exact command(s) to run and read back the output — treat them as your hands on that resource. This is the same "verify, don't assert" discipline: reason from real output the user pastes, not from an assumption about what the resource contains.
+- **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. Hand the user the exact command(s) to run and read back the output — they are your hands on that resource. Same "verify, don't assert" discipline: reason from real output, not from an assumption about what the resource contains.
 
 ### Before concluding "X can't do Y"
 
-A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/ops/COI-INCIDENTS.md` → the 2026-09-07 correction.
+A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/ops/COI-INCIDENTS.md` → Incident D → *Fix* → the 2026-09-07 correction.
 
-- **Check the tool's own surface first.** `coi --help` was one command and would have ended it immediately. Same lesson as `findmnt` and `incus info` earlier in that incident. Never write "X doesn't support Y" into a doc — or build a workaround for it — without first running the thing that would disprove it.
-- **Remove your own workaround before re-testing.** The symlink built to fix the problem was *causing* the symptom, so every re-test confirmed the wrong answer. While a fix is installed, the original question is unfalsifiable. Take it out, then measure.
-- **Don't inherit a test's success criterion unexamined.** That test defined success as `claude --resume` working — one layer below where the answer actually lived. On a negative result, ask what the check really measures before building on it.
-- **Mark inference as inference.** "No kernel OOM, so Go alloc-failed fatally" and "nothing restores it, COI defect" were both reasoning written down as fact, and both were wrong. State what was observed, then what you concluded from it, separately — so the next reader can re-derive rather than inherit.
+- **Check the tool's own surface first.** Never write "X doesn't support Y" into a doc — or build a workaround for it — without first running the thing that would disprove it (`coi --help` was one command).
+- **Remove your own workaround before re-testing.** While a fix is installed, the original question is unfalsifiable. Take it out, then measure.
+- **Don't inherit a test's success criterion unexamined.** On a negative result, ask what the check really measures before building on it.
+- **Mark inference as inference.** State what was observed, then what you concluded from it, separately — so the next reader can re-derive rather than inherit.
 
 ## Writing style
 

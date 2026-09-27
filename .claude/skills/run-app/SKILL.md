@@ -24,7 +24,7 @@ cd /path/to/aperture && pnpm dev   # root script → @aperture/app (run in backg
 
 **The port depends on where you are, and Vite walks upward if it's taken** — so read it, don't assume
 it. Inside a COI container the base is `6173`; on a bare Mac it's `5173` (`app/vite.config.ts`, and
-docs/COI-SANDBOX.md → *Ports*). Resolve it from what's actually listening:
+`docs/ops/COI-SANDBOX.md` → *Ports*). Resolve it from what's actually listening:
 
 ```bash
 PORT=$(ss -ltn 2>/dev/null | grep -oE ':(5|6)[12][78][0-9]' | tr -d ':' | sort -u | head -1)
@@ -54,7 +54,7 @@ mkdir -p "$SCRATCH/pw" && cd "$SCRATCH/pw" && npm init -y && npm install playwri
 
 ## Drive + screenshot
 
-Run from `$SCRATCH/pw`. Routes: `/` (home), `/log`, `/tasks`, `/habits`, `/inbox`, `/settings`.
+Run from `$SCRATCH/pw`. Routes: `/` (home), `/log`, `/tasks`, `/recruiting`, `/recruiting/stories`, `/habits`, `/rolls`, `/inbox`, `/settings`.
 
 ```js
 import { chromium } from 'playwright';
@@ -85,8 +85,4 @@ Interactions (`fill`, `click`, `press`) go through the real input pipeline, so R
 
 ## Gotchas
 
-- Launch with **no env flags** — `VITE_API_MODE=http` breaks visual work (real Cognito + no backend).
-- First Vite compile is slow → always `waitForSelector`, never `sleep`.
-- Tailwind classes aren't hashed → select on text / `data-*`, not class substrings.
-- Don't add Playwright (or any browser driver) to a `package.json` — scratchpad only.
 - Light/dark is a CSS-variable flip; if you're verifying a theme, toggle it in-app rather than assuming a default.

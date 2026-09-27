@@ -47,7 +47,9 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - **Single diff-driven Save.** The details form writes only what changed, sequentially (the old
   `ScopePanel.save` pattern), then closes. Estimate + buffer are **read-only once work has started** —
   `canEditEstimate` (backlog|planned only), because the machine freezes the calibration baseline and
-  `withEstimate` throws past that. Category + due stay editable at any status (no machine guard).
+  `withEstimate` throws past that. Category stays editable at any status (no machine guard); **due locks
+  once the task is done or cancelled** — a UI rule (`isTerminal` in `TaskDetailsForm`), since re-dating
+  history is meaningless.
 - **Done opens the modal in a finish intent** (actual-minutes capture, `DoneForm` reused) focused on
   the Actual field. Scope opens it focused on Estimate. `TaskModal` owns that focus effect — it sits a
   parent above `Modal`, so its effect runs *after* `showModal()` (child effects fire first), the same
