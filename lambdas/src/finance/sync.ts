@@ -128,6 +128,7 @@ async function syncItem(
     lastSyncErrorAt: null,
     syncRequestedAt: null,
     refreshRequestedAt: null,
+    lastRefreshedAt: null,
     lockedUntil: null,
   });
 

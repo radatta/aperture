@@ -234,6 +234,7 @@ class StubClient implements ApiClient {
       store.financeSyncStates = store.financeSyncStates.map((x) => ({
         ...x,
         lastSyncErrorAt: x.lastSyncErrorAt ?? null,
+        lastRefreshedAt: x.lastRefreshedAt ?? null,
       }));
       return store;
     } catch {
@@ -1114,6 +1115,7 @@ class StubClient implements ApiClient {
       lastSyncErrorAt: null,
       syncRequestedAt: t,
       refreshRequestedAt: null,
+      lastRefreshedAt: null,
       lockedUntil: null,
     });
     this.syncItem(item.id);
@@ -1321,6 +1323,7 @@ class StubClient implements ApiClient {
         ...s,
         syncRequestedAt: t,
         refreshRequestedAt: input.refresh ? t : s.refreshRequestedAt,
+        lastRefreshedAt: input.refresh ? t : s.lastRefreshedAt, // the inline sync "refreshes"
         updatedAt: t,
       });
       this.syncItem(s.itemId);

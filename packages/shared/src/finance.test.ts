@@ -422,6 +422,7 @@ describe('buildFinanceOverview', () => {
     lastSyncErrorAt: null,
     syncRequestedAt: 50,
     refreshRequestedAt: null,
+    lastRefreshedAt: null,
     lockedUntil: null,
     ...over,
   });

@@ -59,6 +59,7 @@ async function link(itemId = FIXTURE_ITEM_ID): Promise<void> {
     lastSyncErrorAt: null,
     syncRequestedAt: T,
     refreshRequestedAt: null,
+    lastRefreshedAt: null,
     lockedUntil: null,
   };
   await doc.put(entityItem(U, sk.finSync(itemId), state));

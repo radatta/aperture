@@ -46,6 +46,10 @@ export interface FinanceSyncState extends BaseEntity {
   lastSyncErrorAt: number | null; // when that run failed — lets the page tell a new failure from an old one
   syncRequestedAt: number | null;
   refreshRequestedAt: number | null;
+  // The start of the pass that claimed the latest refresh. A refresh is due while
+  // refreshRequestedAt > lastRefreshedAt — decided from stored state, so whichever run holds the lock
+  // does it (a scheduled run that beats the Refresh button's own invoke still refreshes).
+  lastRefreshedAt: number | null;
   lockedUntil: number | null;
 }
 

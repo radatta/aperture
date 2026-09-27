@@ -46,5 +46,9 @@ export function toFinanceTxn(item: Item): FinanceTransaction {
 }
 export function toFinanceSyncState(item: Item): FinanceSyncState {
   const s = toEntity<FinanceSyncState>(item);
-  return { ...s, lastSyncErrorAt: s.lastSyncErrorAt ?? null };
+  return {
+    ...s,
+    lastSyncErrorAt: s.lastSyncErrorAt ?? null,
+    lastRefreshedAt: s.lastRefreshedAt ?? null,
+  };
 }

@@ -432,6 +432,7 @@ export class FinanceService {
       lastSyncErrorAt: null,
       syncRequestedAt: t,
       refreshRequestedAt: null,
+      lastRefreshedAt: null,
       lockedUntil: null,
     };
   }
