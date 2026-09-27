@@ -19,6 +19,7 @@ import type {
   TaskStatus,
   UpsertCategoryInput,
 } from '@aperture/shared';
+import { FINANCE_TOOLS } from './financeTools';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
@@ -693,6 +694,7 @@ export const TOOLS: Tool[] = [
       return { deleted: id };
     },
   },
+  ...FINANCE_TOOLS,
 ];
 
 // Guard against a duplicate name slipping in (both clients index tools by name).
