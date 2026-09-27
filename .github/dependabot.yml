@@ -9,15 +9,15 @@ version: 2
 #     solo operator to review and merge).
 updates:
   - package-ecosystem: github-actions
-    directory: "/"
+    directory: '/'
     schedule:
       interval: weekly
     groups:
       actions:
-        patterns: ["*"]
+        patterns: ['*']
 
   - package-ecosystem: npm # handles the pnpm workspace / pnpm-lock.yaml from the root
-    directory: "/"
+    directory: '/'
     schedule:
       interval: weekly
     open-pull-requests-limit: 0 # version updates off → security-only

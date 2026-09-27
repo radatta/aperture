@@ -56,7 +56,9 @@ export class ApertureCicdStack extends Stack {
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter'],
-          resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${CDK_QUALIFIER}/version`],
+          resources: [
+            `arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${CDK_QUALIFIER}/version`,
+          ],
         }),
       );
       // Frontend publish (S3 sync + CloudFront invalidate) + smoke (direct Lambda invoke) — outside CFN,
@@ -64,7 +66,10 @@ export class ApertureCicdStack extends Stack {
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['s3:PutObject', 's3:DeleteObject', 's3:GetObject', 's3:ListBucket'],
-          resources: [`arn:aws:s3:::apertureapp-${stage}-*`, `arn:aws:s3:::apertureapp-${stage}-*/*`],
+          resources: [
+            `arn:aws:s3:::apertureapp-${stage}-*`,
+            `arn:aws:s3:::apertureapp-${stage}-*/*`,
+          ],
         }),
       );
       role.addToPolicy(
@@ -100,10 +105,8 @@ export class ApertureCicdStack extends Stack {
       role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
         [`AwsSolutions-IAM5[Resource::arn:aws:iam::<AWS::AccountId>:role/cdk-${CDK_QUALIFIER}-*-<AWS::AccountId>-${region}]`]:
           'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
-        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]:
-          `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
-        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]:
-          `Object-level access to the same ${stage} site bucket.`,
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]: `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]: `Object-level access to the same ${stage} site bucket.`,
         [`AwsSolutions-IAM5[Resource::arn:aws:cloudfront::<AWS::AccountId>:distribution/*]`]:
           'CloudFront invalidation; the distribution id is not known until the app stack deploys.',
         [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:<AWS::AccountId>:stack/ApertureApp-${stage}/*]`]:

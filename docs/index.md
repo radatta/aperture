@@ -7,21 +7,24 @@ Personal life-OS PWA. Web-first, installable. AWS-native serverless.
 Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built), **areas/** (per-domain design docs — the map of what exists), **ops/** (sandbox runbooks). `V1_PLAN.md` stays at the top level as the plan as written plus the per-phase as-built record — not a roadmap of what exists and not a second copy of the spec.
 
 ## product/ — what Aperture is, and the rules
+
 - **[product/PRODUCT.md](product/PRODUCT.md)** — what Aperture is and how it feels: identity, capture mechanic, glanceable home, modules, aesthetic, v1 non-goals. Product is the source of truth.
 - **[product/CONVENTIONS.md](product/CONVENTIONS.md)** — cross-cutting rules: **pnpm only**, first-principles dependency discipline, page-first build order, monorepo-from-source, the shared-jsdom test contract (module state resets in `setup.ts`, shuffled file order), and the UI contracts (colour tiers, the single bottom dock, focus-return on dismiss, empty states).
 - **[product/EvaluatingChanges.md](product/EvaluatingChanges.md)** — how to judge a change: **simulate real day-to-day use**, not just architectural fit. Read before proposing features or business-logic changes. Holds the (still empty) usage baseline, so fit judgments are provisional.
 
 ## arch/ — how it's built
+
 - **[arch/TECH.md](arch/TECH.md)** — how it's built: stack, data model (logical + single-table DDB keys), routing/state and the session-renewal rules, folder structure, AI seam, and the **tech debt ledger** (currently the `uncheckHabit` hard-delete, which no contract test can detect).
 - **[arch/INFRA.md](arch/INFRA.md)** — the AWS blueprint as built: dev+prod, CDK stack split, Function URL (auth `NONE` + origin-secret header) behind CloudFront, Cognito, DynamoDB, GitHub OIDC CI (environment-scoped roles; the PR's required checks are the only merge gate; change-tiered deploys, the `dev` fast path, per-stage deploy serialisation, template diff + direct deploy, edge-polling health check), custom domains (live), secrets, cost.
 - **[arch/CICD_HARDENING.md](arch/CICD_HARDENING.md)** — the seven CI/CD + ops additions (all $0): ntfy deploy notifications, cdk-nag, gitleaks, Dependabot, CloudWatch alarms, post-deploy health check, AWS budget — wired 2026-08-10, with the per-item plan and operator checklist. Read before touching any of the seven.
 
 ## areas/ — per-domain design docs
+
 - **[areas/tasks/due-dates.md](areas/tasks/due-dates.md)** — **task due dates**: a day-granular `dueDay` (when it's due, distinct from `taskPlans.day`), free metadata outside the estimate lock; the no-scold posture applied to deadlines. Decision log + build record.
 - **[areas/tasks/bulk-add.md](areas/tasks/bulk-add.md)** — **bulk add tasks**: paste many lines → many backlog tasks with a strict inline `~estimate #category due:date` grammar — **read the "Operator reference" section before generating a bulk paste**. Decision log + build record.
 - **[areas/tasks/task-editor.md](areas/tasks/task-editor.md)** — the **task detail-and-edit modal**: tap a title and the whole task opens in one surface; the card slims to lifecycle. Decision log + build record. **Rename-sync (series/calendar) is deferred.**
 - **[areas/tasks/lenses.md](areas/tasks/lenses.md)** — **task lenses**: `/tasks` as Today · Week · Backlog · Done over one list, plus Home "+ Add", capture "→ today", and the night "Still open — when?" step. Place table + decision log (`useAddToDay` is the single plan-write path).
-- **[areas/tasks/attachments.md](areas/tasks/attachments.md)** — **task attachments**: the first feature that stores **bytes** — DynamoDB metadata plus a *precious* S3 Files bucket with **presigned-URL** transport. Decision log + build record.
+- **[areas/tasks/attachments.md](areas/tasks/attachments.md)** — **task attachments**: the first feature that stores **bytes** — DynamoDB metadata plus a _precious_ S3 Files bucket with **presigned-URL** transport. Decision log + build record.
 - **[areas/home/right-now.md](areas/home/right-now.md)** — the **daytime home**: a "Right now" card (the Big 3 from today's plan, the in-progress task as a hero with a calm count-up) over a capped "Coming up" deadline radar. Decision log + build record.
 - **[areas/home/rolls.md](areas/home/rolls.md)** — **Rolls**: deadline-free ongoing efforts with a **forgiving momentum "contact sheet"** (fills, never resets); a rep is a done task tagged with the roll, never a counter. Decision log + build record.
 - **[areas/recruiting/index.md](areas/recruiting/index.md)** — the **LeetCode attempt-capture** module (`/recruiting`): the passive Firefox extension, the device-token ingest path versus the JWT read path, and the identity seam (**`DEVICE_USER_ID` must equal your Cognito `sub`**). Operator checklist + what each test surface proves. Read before touching the extension or the ingest endpoint.
@@ -32,8 +35,10 @@ Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built),
 - **areas/calibration/** — (planned) per-course & intent-vs-actual calibration, exam-prep spacing, this-week's-dues. Design doc lands with that work.
 
 ## Roadmap
+
 - **[V1_PLAN.md](V1_PLAN.md)** — the v1 plan as written plus the per-phase as-built record: 15 phases, order-sensitive decisions, dependency ledger, definition of done. Build status is the block at the top of this file; each phase's "as built" note holds toolchain pins + gotchas.
 
 ## ops/ — sandbox runbooks
+
 - **[ops/COI-SANDBOX.md](ops/COI-SANDBOX.md)** — the **runtime playbook** for Claude Code inside the Incus container (day + night profiles). **Start here — the four things you ever do** and which of the three layers (Mac / Lima VM / container) each runs at; the stack, one-time setup, the four config files, ending a session, **ports** (5173+ you, 6173+ container), frozen-container triage from the audit log, **GitHub access inside the container**, and the failure-signature index.
 - **[ops/COI-INCIDENTS.md](ops/COI-INCIDENTS.md)** — post-mortems A–G, incident table at the top: pids/`SIGABRT`, clamshell sleep, the VM-restarting mount change, shared `node_modules`, the `limactl edit` rebuild + VM bootstrap, the false-positive freeze + `coi audit` defect, the interpreter one-liner kills, resume forks + dotfile drift. Plus the full log map, ruled-out hypotheses, and broken commands not to repeat.
