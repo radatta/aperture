@@ -561,6 +561,12 @@ describe('isDuplicateItem', () => {
       isDuplicateItem([{ ...item, deletedAt: 5 }], accounts, 'ins_1', [meta('chk-2050')]),
     ).toBe(false);
   });
+  it('flags a same-bank item whose accounts haven’t synced (or were all removed)', () => {
+    expect(isDuplicateItem([item], [], 'ins_1', [meta('sav-4321')])).toBe(true);
+    const gone = accounts.map((a) => ({ ...a, deletedAt: 5 }));
+    expect(isDuplicateItem([item], gone, 'ins_1', [meta('sav-4321')])).toBe(true);
+    expect(isDuplicateItem([item], [], 'ins_2', [meta('sav-4321')])).toBe(false);
+  });
 });
 
 describe('reconcileSyncPage', () => {

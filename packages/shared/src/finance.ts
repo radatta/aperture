@@ -840,7 +840,9 @@ export function groupByMerchant(
 // --- Link guard ------------------------------------------------------------
 // Plaid Trial has 10 Items and /item/remove doesn't free a slot, so re-linking the same login is
 // refused BEFORE the public token is exchanged: same institution and every ticked account already
-// present (by name + mask, Plaid's recommended check).
+// present (by name + mask, Plaid's recommended check). A same-bank item with no live accounts also
+// counts: the sync writes accounts, so until its first sync lands (or forever, if that failed) the
+// check above has nothing to compare, and letting it through spends a second slot on the same login.
 export function isDuplicateItem(
   items: FinanceItem[],
   accounts: FinanceAccount[],
@@ -851,11 +853,9 @@ export function isDuplicateItem(
     items.filter((i) => i.deletedAt === null && i.institutionId === institutionId).map((i) => i.id),
   );
   if (sameInst.size === 0) return false;
-  const have = new Set(
-    accounts
-      .filter((a) => a.deletedAt === null && sameInst.has(a.itemId))
-      .map((a) => `${a.name}|${a.mask ?? ''}`),
-  );
+  const live = accounts.filter((a) => a.deletedAt === null && sameInst.has(a.itemId));
+  if ([...sameInst].some((id) => !live.some((a) => a.itemId === id))) return true;
+  const have = new Set(live.map((a) => `${a.name}|${a.mask ?? ''}`));
   return linkAccounts.every((a) => have.has(`${a.name}|${a.mask ?? ''}`));
 }
 

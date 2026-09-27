@@ -102,6 +102,10 @@ describe('finance backend', () => {
     expect((await api.getFinanceOverview({ today })).sync.items[0]).toMatchObject({
       lastError: 'INTERNAL_SERVER_ERROR',
     });
+    // No accounts synced yet, but re-linking the same bank is still refused before the exchange.
+    const exchanges = methods().filter((m) => m === 'exchangePublicToken').length;
+    await expect(connect()).rejects.toThrow(/already linked/);
+    expect(methods().filter((m) => m === 'exchangePublicToken').length).toBe(exchanges);
     expect((await api.requestFinanceSync({ refresh: false })).accepted).toBe(true);
     const o = await api.getFinanceOverview({ today });
     expect(o.sync.items[0]).toMatchObject({ lastError: null });
