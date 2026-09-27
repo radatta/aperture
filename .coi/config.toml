@@ -1,10 +1,10 @@
 # code-on-incus config for Aperture — <aperture>/.coi/config.toml (project config → run `coi trust`).
 # VL-free, secret-free (token injected via env). Daytime base; night profile is a separate file (later).
-# Validated against `coi schema profile` on the installed COI (7.3) — not the wiki (stale on forward_env).
+# Validated against `coi schema profile` on the installed COI (v0.12.0, Incus 7.4) — not the wiki (stale on forward_env).
 
 [container]
 image      = "coi-default"   # Node 22 + pnpm + jq + git; only chromium missing (defer)
-persistent = true           # survives coi shutdown; ~/.coi is VM-local so a VM rebuild still wipes it
+persistent = true           # reused across `coi shell` exits; `coi shutdown` deletes it, and ~/.coi is VM-local so a VM rebuild wipes it too
 alias      = "aperture"
 
 [tool]
