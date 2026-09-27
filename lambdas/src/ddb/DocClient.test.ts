@@ -94,4 +94,28 @@ describe('InMemoryDoc', () => {
       expect((await db.get('u#1', 'fin#txn#a'))?.v).toBe('mine');
     });
   });
+
+  it('staleNextGets serves an old version to non-consistent reads only, then expires', async () => {
+    await db.put(item({ PK: 'u#1', SK: 'fin#sync#a', v: 'new' }));
+    db.staleNextGets('u#1', 'fin#sync#a', item({ PK: 'u#1', SK: 'fin#sync#a', v: 'old' }), 1);
+    expect((await db.get('u#1', 'fin#sync#a', { consistent: true }))?.v).toBe('new');
+    expect((await db.get('u#1', 'fin#sync#a'))?.v).toBe('old');
+    expect((await db.get('u#1', 'fin#sync#a'))?.v).toBe('new');
+    expect(db.gets.map((g) => g.consistent)).toEqual([true, false, false]);
+  });
+
+  it('an intercept with `when` waits for the matching write', async () => {
+    await db.put(item({ PK: 'u#1', SK: 'k', updatedAt: 1 }));
+    let fired = 0;
+    db.interceptNextPutIf(
+      'u#1',
+      'k',
+      () => void fired++,
+      (it) => it.v === 'target',
+    );
+    await db.putIf(item({ PK: 'u#1', SK: 'k', updatedAt: 2, v: 'other' }), 1);
+    expect(fired).toBe(0);
+    await db.putIf(item({ PK: 'u#1', SK: 'k', updatedAt: 3, v: 'target' }), 2);
+    expect(fired).toBe(1);
+  });
 });

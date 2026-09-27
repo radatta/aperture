@@ -146,4 +146,30 @@ describe('Repo finances', () => {
       expect(await repo.listFinanceTxnsInRange('2026-09-03', '2026-09-03')).toHaveLength(1);
     });
   });
+
+  it('casUpdate {consistent} decides on the real row even when a stale read would say otherwise', async () => {
+    await seed(txn('a', '2026-09-01', { updatedAt: 10, note: 'real' }));
+    doc.staleNextGets(
+      pk(U),
+      sk.finTxn('a'),
+      financeTxnItem(U, txn('a', '2026-09-01', { note: 'stale' })),
+    );
+    let seen: string | null = null;
+    await repo.casUpdate(repo.finTxnShape('a'), 'a', (t) => ((seen = t.note), null), 5, {
+      consistent: true,
+    });
+    expect(seen).toBe('real');
+  });
+
+  it('insertFinanceTxn writes a new row, and merges into one that already exists', async () => {
+    const made = await repo.insertFinanceTxn(txn('n', '2026-09-02', { updatedAt: 5 }), (f) => f);
+    expect(made.id).toBe('n');
+    await seed(txn('e', '2026-09-02', { updatedAt: 10, bucket: 'budget', rawAmountCents: 1 }));
+    const merged = await repo.insertFinanceTxn(
+      txn('e', '2026-09-02', { updatedAt: 5, rawAmountCents: 999 }),
+      (fresh) => ({ ...txn('e', '2026-09-02', { rawAmountCents: 999 }), bucket: fresh.bucket }),
+    );
+    expect([merged.bucket, merged.rawAmountCents]).toEqual(['budget', 999]);
+    expect((await repo.getFinanceTxn('e'))!.bucket).toBe('budget');
+  });
 });

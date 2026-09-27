@@ -355,15 +355,19 @@ export class Repo {
   // `Not found`, or is created from `create()` when given (itself conditional — absent only). A
   // tombstoned row throws unless `allowDeleted`. updatedAt is bumped strictly past the read value, so
   // two writes in the same millisecond (or under a frozen test clock) can't both pass the condition.
+  // `consistent` makes the FIRST read strongly consistent too — for decisions taken on a read that
+  // may never be written back (fn → null), like "is the sync lock held?".
   async casUpdate<T extends BaseEntity>(
     shape: CasShape<T>,
     id: string,
     fn: (fresh: T) => T | null,
     now: number,
-    opts: { allowDeleted?: boolean; create?: () => T } = {},
+    opts: { allowDeleted?: boolean; create?: () => T; consistent?: boolean } = {},
   ): Promise<T> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
-      const item = await this.doc.get(this.p(), shape.sk, { consistent: attempt > 0 });
+      const item = await this.doc.get(this.p(), shape.sk, {
+        consistent: attempt > 0 || opts.consistent === true,
+      });
       if (!item) {
         if (!opts.create) throw new Error(`Not found: ${id}`);
         const created = opts.create();
@@ -428,8 +432,8 @@ export class Repo {
   }
 
   // Tombstones included: callers decide (a removed item is a no-op; a returning account revives).
-  async getFinanceItem(id: string): Promise<FinanceItem | null> {
-    const it = await this.doc.get(this.p(), sk.finItem(id));
+  async getFinanceItem(id: string, opts?: { consistent?: boolean }): Promise<FinanceItem | null> {
+    const it = await this.doc.get(this.p(), sk.finItem(id), opts);
     return it ? toEntity<FinanceItem>(it) : null;
   }
   async listFinanceItems(): Promise<FinanceItem[]> {
@@ -437,8 +441,11 @@ export class Repo {
       (await this.doc.query(this.p(), sk.finItemPrefix())).map((i) => toEntity<FinanceItem>(i)),
     );
   }
-  async getFinanceSyncState(itemId: string): Promise<FinanceSyncState | null> {
-    const it = await this.doc.get(this.p(), sk.finSync(itemId));
+  async getFinanceSyncState(
+    itemId: string,
+    opts?: { consistent?: boolean },
+  ): Promise<FinanceSyncState | null> {
+    const it = await this.doc.get(this.p(), sk.finSync(itemId), opts);
     return it ? toFinanceSyncState(it) : null;
   }
   async listFinanceSyncStates(): Promise<FinanceSyncState[]> {
@@ -468,13 +475,19 @@ export class Repo {
   async listAllFinanceTxns(): Promise<FinanceTransaction[]> {
     return alive((await this.doc.query(this.p(), sk.finTxnPrefix())).map(toFinanceTxn));
   }
-  async getFinanceTxn(id: string): Promise<FinanceTransaction | null> {
-    const it = await this.doc.get(this.p(), sk.finTxn(id));
+  async getFinanceTxn(
+    id: string,
+    opts?: { consistent?: boolean },
+  ): Promise<FinanceTransaction | null> {
+    const it = await this.doc.get(this.p(), sk.finTxn(id), opts);
     return it ? toFinanceTxn(it) : null;
   }
   // Each id's row, tombstones included (a posted row inherits from an already-removed pending one).
-  async getFinanceTxns(ids: string[]): Promise<Map<string, FinanceTransaction>> {
-    const rows = await mapLimit(ids, FIN_CONCURRENCY, (id) => this.getFinanceTxn(id));
+  async getFinanceTxns(
+    ids: string[],
+    opts?: { consistent?: boolean },
+  ): Promise<Map<string, FinanceTransaction>> {
+    const rows = await mapLimit(ids, FIN_CONCURRENCY, (id) => this.getFinanceTxn(id, opts));
     const out = new Map<string, FinanceTransaction>();
     for (const r of rows) if (r) out.set(r.id, r);
     return out;
@@ -482,6 +495,23 @@ export class Repo {
   // Brand-new rows only — anything that may already exist goes through casUpdate.
   async insertFinanceTxns(txns: FinanceTransaction[]): Promise<void> {
     if (txns.length) await this.writes.batchPut(txns.map((t) => financeTxnItem(this.userId, t)));
+  }
+  // A row the caller believes is new: written only if absent. If it turns out to exist (a read that
+  // missed it, a write that landed meanwhile), `merge(fresh)` decides the write instead, via casUpdate —
+  // so a blind insert can never flatten a user's edit.
+  async insertFinanceTxn(
+    row: FinanceTransaction,
+    merge: (fresh: FinanceTransaction) => FinanceTransaction,
+  ): Promise<FinanceTransaction> {
+    try {
+      await this.writes.putIf(financeTxnItem(this.userId, row), null);
+      return row;
+    } catch (err) {
+      if (!(err instanceof ConditionFailedError)) throw err;
+      return this.casUpdate(this.finTxnShape(row.id), row.id, merge, row.updatedAt, {
+        allowDeleted: true,
+      });
+    }
   }
   async listFinanceRules(): Promise<FinanceRule[]> {
     return alive(
