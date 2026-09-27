@@ -5,7 +5,11 @@ import {
   SSMClient,
 } from '@aws-sdk/client-ssm';
 import type { CreateLinkTokenInput, PlaidAccount, PlaidSyncResponse } from '@aperture/shared';
-import { PlaidApiError } from './gateway';
+import {
+  PLAID_ATTEMPTS as ATTEMPTS,
+  PLAID_TIMEOUT_MS as TIMEOUT_MS,
+  PlaidApiError,
+} from './gateway';
 import type { PlaidGateway, PlaidItemHealth } from './gateway';
 
 // The live Plaid gateway: raw fetch against the REST API (no SDK — `plaid` is 18 MB + axios for a
@@ -17,7 +21,6 @@ import type { PlaidGateway, PlaidItemHealth } from './gateway';
 // the path, item id, Plaid request_id and error code, never a token.
 
 const PLAID_VERSION = '2020-09-14';
-const TIMEOUT_MS = 10_000; // under the BFF's 15 s so a hung call fails as a Plaid error, not a timeout
 const RETRY_CODES = new Set([
   'RATE_LIMIT_EXCEEDED',
   'INTERNAL_SERVER_ERROR',
@@ -25,7 +28,6 @@ const RETRY_CODES = new Set([
   'INSTITUTION_NOT_RESPONDING',
   'INSTITUTION_DOWN',
 ]);
-const ATTEMPTS = 3;
 
 type SsmLike = Pick<SSMClient, 'send'>;
 

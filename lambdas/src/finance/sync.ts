@@ -18,7 +18,7 @@ import type {
 } from '@aperture/shared';
 import type { Repo } from '../ddb/repo';
 import { ConflictError } from '../ddb/repo';
-import { PlaidApiError } from '../plaid/gateway';
+import { PLAID_CALL_MAX_MS, PlaidApiError } from '../plaid/gateway';
 import type { PlaidGateway, PlaidItemHealth } from '../plaid/gateway';
 
 // The finance sync — one run per invoke (scheduled 4×/day, or after Refresh / connect / reconnect).
@@ -89,7 +89,11 @@ const sameUser = (a: UserFields, b: UserFields) => USER_TXN_FIELDS.every((k) => 
 
 export const MAX_PASSES = 3; // the first pass + up to two reruns for requests that landed mid-run
 export const RUN_BUDGET_MS = 290_000; // default deadline when the caller gives none
-export const PASS_RESERVE_MS = 40_000; // time one plain pass needs (3 × Plaid's 10 s timeout + writes)
+// No step (one Plaid call and the DynamoDB work around it) starts unless it can finish by the deadline
+// at its worst: every retry timing out. So a slow Plaid ends the run with TIMEOUT, not a killed Lambda
+// still holding the lock.
+export const STEP_MAX_MS = PLAID_CALL_MAX_MS + 3_500;
+export const PASS_RESERVE_MS = 2 * STEP_MAX_MS; // what starting a rerun or a refresh must leave room for
 const MUTATION_RESTARTS = 3;
 const PENDING_DISCONNECT_MS = 7 * 24 * 60 * 60_000;
 const POLL_TRIES = Math.ceil(FINANCE_REFRESH_POLL_MAX_MS / FINANCE_REFRESH_POLL_MS);
@@ -101,6 +105,13 @@ class LockLostError extends Error {
   }
 }
 class RemovedError extends Error {}
+class DeadlineError extends Error {}
+
+function guard(ctx: Ctx, itemId: string, step: string): void {
+  if (ctx.now() + STEP_MAX_MS <= ctx.deadline) return;
+  console.log(JSON.stringify({ event: 'finance_sync_out_of_time', itemId, step }));
+  throw new DeadlineError();
+}
 
 const codeOf = (err: unknown): string =>
   err instanceof PlaidApiError
@@ -109,9 +120,11 @@ const codeOf = (err: unknown): string =>
       ? err.code
       : err instanceof LockLostError
         ? 'LOCK_LOST'
-        : err instanceof Error && err.message.startsWith('Not found')
-          ? 'NOT_FOUND'
-          : 'INTERNAL_ERROR';
+        : err instanceof DeadlineError
+          ? 'TIMEOUT'
+          : err instanceof Error && err.message.startsWith('Not found')
+            ? 'NOT_FOUND'
+            : 'INTERNAL_ERROR';
 
 const refreshDue = (s: FinanceSyncState) => (s.refreshRequestedAt ?? 0) > (s.lastRefreshedAt ?? 0);
 
@@ -123,7 +136,11 @@ export async function runFinanceSync(
   deps: SyncDeps,
   e: FinanceSyncEvent,
 ): Promise<ItemSyncReport[]> {
-  const ctx: Ctx = { ...deps, deadline: deps.deadline ?? deps.now() + RUN_BUDGET_MS };
+  // Never past the budget, which is under the lock's length: a pass can't outlive its own lock.
+  const ctx: Ctx = {
+    ...deps,
+    deadline: Math.min(deps.deadline ?? Infinity, deps.now() + RUN_BUDGET_MS),
+  };
   const items = e.itemId
     ? [await deps.repo.getFinanceItem(e.itemId, { consistent: true })].filter(
         (i): i is FinanceItem => i !== null && i.deletedAt === null,
@@ -197,13 +214,20 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       // The bank may have been removed while we waited or ran — stop, and write nothing.
       const item = await repo.getFinanceItem(itemId, { consistent: true });
       if (!item || item.deletedAt !== null) throw new RemovedError();
+      guard(ctx, itemId, 'accounts');
       const before = await refreshAccountsAndHealth(ctx, itemId, passStart);
       if (refresh) {
         try {
+          guard(ctx, itemId, 'refresh');
           await ctx.plaid.transactionsRefresh(itemId);
           await pollRefresh(ctx, itemId, before, renew);
         } catch (err) {
-          if (err instanceof LockLostError) throw err;
+          if (
+            err instanceof LockLostError ||
+            err instanceof DeadlineError ||
+            err instanceof RemovedError
+          )
+            throw err;
           // A refused refresh still leaves a normal sync worth running.
           console.log(
             JSON.stringify({ event: 'finance_refresh_failed', itemId, code: codeOf(err) }),
@@ -396,13 +420,14 @@ interface PassResult {
 
 // One pass: every page from the saved cursor, reconciled together, written, then the cursor.
 async function syncPass(ctx: Ctx, itemId: string, passStart: number): Promise<PassResult> {
-  const { repo, plaid } = ctx;
+  const { repo } = ctx;
   // Consistent reads throughout: a pass right after another must see its cursor and its rows.
   const state = await repo.getFinanceSyncState(itemId, { consistent: true });
   const saved = state?.cursor ?? null;
-  const gathered = await gatherPages(plaid, itemId, saved);
+  const gathered = await gatherPages(ctx, itemId, saved);
   if (gathered === null) return { written: 0, status: 'NOT_READY' };
   const { pages, status } = gathered;
+  guard(ctx, itemId, 'write'); // nothing written, so the cursor stays and the next run replays
 
   const ids = [...new Set(pages.flatMap((p) => referencedTxnIds(p)))];
   const existing = ids.length
@@ -470,7 +495,7 @@ async function syncPass(ctx: Ctx, itemId: string, passStart: number): Promise<Pa
 // All pages from `cursor` until has_more=false. Plaid can change data mid-pagination — then the whole
 // batch restarts from the SAVED cursor. Not ready yet (a fresh link: empty arrays + NOT_READY) → null.
 async function gatherPages(
-  plaid: PlaidGateway,
+  ctx: Ctx,
   itemId: string,
   cursor: string | null,
 ): Promise<{ pages: PlaidSyncResponse[]; status: string | undefined } | null> {
@@ -479,7 +504,8 @@ async function gatherPages(
     let c = cursor;
     try {
       for (;;) {
-        const page = await plaid.transactionsSync(itemId, c, SYNC_PAGE_COUNT);
+        guard(ctx, itemId, 'page');
+        const page = await ctx.plaid.transactionsSync(itemId, c, SYNC_PAGE_COUNT);
         if (pages.length === 0 && page.transactions_update_status === 'NOT_READY') return null;
         pages.push(page);
         c = page.next_cursor || c;

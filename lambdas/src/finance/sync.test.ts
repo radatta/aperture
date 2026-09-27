@@ -13,7 +13,7 @@ import { entityItem, financeTxnItem } from '../ddb/mapping';
 import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
 import { InMemoryPlaid } from '../plaid/gateway';
-import { itemStatus, MAX_PASSES, runFinanceSync, upsertAccounts } from './sync';
+import { itemStatus, MAX_PASSES, RUN_BUDGET_MS, runFinanceSync, upsertAccounts } from './sync';
 import type { FinanceSyncMode, SyncDeps } from './sync';
 
 const U = 'u1';
@@ -487,6 +487,35 @@ describe('runFinanceSync — the review findings', () => {
     const [r] = await run();
     expect(r).toMatchObject({ outcome: 'error', code: 'LOCK_LOST' });
     expect((await state()).lockedUntil).toBe(T + 999_999);
+  });
+
+  it('a slow Plaid never starts a step past the deadline', async () => {
+    await link();
+    deps.deadline = T + 60_000;
+    const real = plaid.transactionsSync.bind(plaid);
+    plaid.transactionsSync = async (...a) => {
+      clock += 31_500; // every retry timed out
+      return real(...a);
+    };
+    const [r] = await run();
+    expect(r).toMatchObject({ outcome: 'error', code: 'TIMEOUT' });
+    expect(clock).toBeLessThanOrEqual(deps.deadline);
+    const s = await state();
+    expect([s.cursor, s.lockedUntil, s.lastSyncErrorAt]).toEqual([null, null, T]);
+    expect(await txns()).toEqual([]);
+  });
+
+  it('a caller deadline past the budget is capped, so a pass never outlives its lock', async () => {
+    await link();
+    deps.deadline = T + 900_000;
+    plaid.notReadyCalls = 10_000;
+    const real = plaid.transactionsSync.bind(plaid);
+    plaid.transactionsSync = async (...a) => {
+      clock += 5_000;
+      return real(...a);
+    };
+    await run('post-link', FIXTURE_ITEM_ID);
+    expect(clock).toBeLessThanOrEqual(T + RUN_BUDGET_MS);
   });
 
   it('never runs more than MAX_PASSES, even with requests arriving every pass', async () => {

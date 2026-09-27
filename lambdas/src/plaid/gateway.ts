@@ -7,6 +7,13 @@ import type { CreateLinkTokenInput, PlaidAccount, PlaidSyncResponse } from '@ape
 // Lambda and the stub compare end to end), and `createLivePlaid` (livePlaid.ts) is wired only in the
 // Lambda entrypoints. Access tokens never leave the gateway: exchange stores one, the rest load it.
 
+// One live call's worst case, which the sync's deadline checks budget for: every attempt times out,
+// with the backoff between them (500 ms, then 1 s).
+export const PLAID_TIMEOUT_MS = 10_000; // under the BFF's 15 s so a hung call fails as a Plaid error
+export const PLAID_ATTEMPTS = 3;
+export const PLAID_CALL_MAX_MS =
+  PLAID_ATTEMPTS * PLAID_TIMEOUT_MS + 500 * (2 ** (PLAID_ATTEMPTS - 1) - 1);
+
 export interface PlaidItemHealth {
   errorCode: string | null; // /item/get `item.error.error_code`
   consentExpiresAt: number | null;
