@@ -48,7 +48,7 @@ export function FakeLinkDialog({
                 type="checkbox"
                 checked={picked.has(a.id)}
                 onChange={() => toggle(a.id)}
-                className="accent-[var(--teal)]"
+                className="accent-teal"
               />
               <Text size="sm">{a.name}</Text>
               <Text size="sm" tone="muted">

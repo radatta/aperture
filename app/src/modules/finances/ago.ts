@@ -9,3 +9,10 @@ export function fmtAgo(epochMs: number, now: number): string {
   const days = Math.floor(d / (24 * 60 * MIN));
   return `${days} ${days === 1 ? 'day' : 'days'} ago`;
 }
+
+// "3 min" until a moment — never below 1, so "try again in 0 min" can't happen.
+export function fmtMinutesUntil(epochMs: number, now: number): string {
+  return `${Math.max(1, Math.ceil((epochMs - now) / MIN))} min`;
+}
+
+export const nowMs = (): number => Date.now();

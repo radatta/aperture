@@ -40,10 +40,9 @@ export function RulesSection() {
       <Card>
         <form
           className="flex flex-wrap items-end gap-3"
-          onSubmit={async (e) => {
+          onSubmit={(e) => {
             e.preventDefault();
-            await upsert.mutateAsync({ pattern, bucket });
-            setPattern('');
+            upsert.mutate({ pattern, bucket }, { onSuccess: () => setPattern('') });
           }}
         >
           <Field
@@ -63,6 +62,11 @@ export function RulesSection() {
           <Button type="submit" size="sm" disabled={!pattern.trim() || upsert.isPending}>
             Add rule
           </Button>
+          {upsert.isError && (
+            <Text size="sm" tone="danger" className="basis-full">
+              Couldn&apos;t save the rule — try again.
+            </Text>
+          )}
         </form>
       </Card>
     </div>

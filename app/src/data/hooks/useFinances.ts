@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { addDays, PAYMENT_MATCH_WINDOW_DAYS, todayKey } from '@aperture/shared';
+import { addDays, FINANCE_OVERVIEW_LOOKBACK_DAYS, todayKey } from '@aperture/shared';
 import type {
   ExchangePublicTokenInput,
   FinanceAccountPatch,
@@ -33,15 +33,20 @@ export function useFinanceOverview() {
   });
 }
 
-// The current + previous windows, widened by the payment-match window so a card payment whose checking
-// side sits just outside the previous period still pairs up (and isn't mistaken for spending).
-export function financeListRange(o: FinanceOverview): { from: string; to: string } {
-  return { from: addDays(o.period.previous.start, -PAYMENT_MATCH_WINDOW_DAYS), to: o.period.end };
+// The same window the server's overview reads (FINANCE_OVERVIEW_LOOKBACK_DAYS back from today), so
+// the client's payment/transfer matching sees exactly the rows the server's did and the sort queue's
+// count can't drift from the header's.
+export function financeListRange(today: string, o: FinanceOverview): { from: string; to: string } {
+  return {
+    from: addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS),
+    to: o.period.end > today ? o.period.end : today,
+  };
 }
 
 export function useFinanceTransactions(overview: FinanceOverview | undefined) {
   const api = useApi();
-  const range = overview ? financeListRange(overview) : null;
+  const today = useFinanceToday();
+  const range = overview ? financeListRange(today, overview) : null;
   return useQuery({
     queryKey: qk.financeTxns(range?.from ?? '', range?.to ?? ''),
     queryFn: () => api.listFinanceTransactions(range!),

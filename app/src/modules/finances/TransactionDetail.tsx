@@ -78,6 +78,13 @@ export function TransactionDetail({
           value={txn.periodOverride}
           onChange={(override) => setOverride.mutate({ id: txn.id, override })}
         />
+        {(setBucket.isError || setOverride.isError || setNote.isError) && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn&apos;t save that change — check your connection and try again.
+            </Text>
+          </div>
+        )}
         <Field
           label="Note"
           value={note}

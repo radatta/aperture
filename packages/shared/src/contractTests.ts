@@ -995,6 +995,58 @@ export function runApiContract(
       expect(gone.unsortedCount).toBe(0);
     });
 
+    it('finance: hidden and flipped accounts change the totals the same way everywhere', async () => {
+      await connect();
+      const o = await api.getFinanceOverview({ today: finToday() });
+      const card = o.accounts.find((a) => a.type === 'credit')!;
+      const txns = await api.listFinanceTransactions(await finRange());
+      const charge = txns.find(
+        (t) => t.accountId === card.id && t.rawAmountCents > 0 && t.date >= o.period.start,
+      )!;
+      await api.setFinanceBucket({ ids: [charge.id], bucket: 'budget' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        charge.rawAmountCents,
+      );
+
+      // Flipped, the charge reads as a card credit (a refund) and nets negative.
+      await api.updateFinanceAccount(card.id, { signOverride: 'flip' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        -charge.rawAmountCents,
+      );
+
+      await api.updateFinanceAccount(card.id, { signOverride: 'auto', hidden: true });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
+    });
+
+    it('finance: a "current" override pulls a last-period charge into this period', async () => {
+      await connect();
+      const o = await api.getFinanceOverview({ today: finToday() });
+      const txns = await api.listFinanceTransactions(await finRange());
+      const old = txns.find(
+        (t) =>
+          t.accountId === 'acct-fixture-card' && t.rawAmountCents > 0 && t.date < o.period.start,
+      )!;
+      await api.setFinanceBucket({ ids: [old.id], bucket: 'budget' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
+      await api.setFinancePeriodOverride(old.id, 'current');
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        old.rawAmountCents,
+      );
+    });
+
+    it('finance: unknown ids — bucket sets are all-or-nothing, account patch throws, remove is a no-op', async () => {
+      await connect();
+      const [first] = await api.listFinanceTransactions(await finRange());
+      await expect(
+        api.setFinanceBucket({ ids: [first!.id, 'nope'], bucket: 'budget' }),
+      ).rejects.toThrow();
+      const again = await api.listFinanceTransactions(await finRange());
+      expect(again.find((t) => t.id === first!.id)!.bucket).toBe(first!.bucket); // untouched
+      await expect(api.updateFinanceAccount('nope', { hidden: true })).rejects.toThrow();
+      await api.removePlaidItem('nope');
+      expect((await api.getFinanceOverview({ today: finToday() })).items).toHaveLength(1);
+    });
+
     it('finance: export carries items, accounts, transactions and rules', async () => {
       await connect();
       await api.upsertFinanceRule({ pattern: 'netflix', bucket: 'i_pay' });

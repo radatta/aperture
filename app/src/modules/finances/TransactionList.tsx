@@ -4,6 +4,7 @@ import {
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
   fmtMonthShortDay,
+  isSortableKind,
   periodOf,
 } from '@aperture/shared';
 import type {
@@ -27,32 +28,36 @@ const FILTERS: { value: Filter; label: string }[] = [
   ...FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BUCKET_LABELS[b] })),
 ];
 
-const KIND_LABEL: Record<Exclude<FinanceTxnKind, 'expense'>, string> = {
+const KIND_LABEL: Record<Exclude<FinanceTxnKind, 'expense' | 'refund'>, string> = {
   income: 'money in',
   transfer: 'transfer',
   card_payment: 'card payment',
 };
 
 // Every transaction in the current and previous period, newest first. Card payments, transfers and
-// money in are listed (so the ledger reconciles with the bank) but never sorted or totalled.
+// money into the bank are listed (so the ledger reconciles with the bank) but never sorted or totalled.
+// Card refunds are sorted like charges and net against their bucket.
 export function TransactionList({
   overview,
   view,
   pending,
+  error,
 }: {
   overview: FinanceOverview;
   view: FinanceView | null;
   pending: boolean;
+  error: boolean;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [openId, setOpenId] = useState<string | null>(null);
-  if (!view) return <EmptyState pending={pending} title="No transactions yet." />;
+  if (!view)
+    return <EmptyState pending={pending && !error} error={error} title="No transactions yet." />;
 
   const kindOf = (t: FinanceTransaction) =>
     classifyTransaction(t, view.accounts.get(t.accountId), view.moves);
   const shown = view.txns.filter((t) => {
     if (filter === 'all') return true;
-    if (kindOf(t) !== 'expense') return false;
+    if (!isSortableKind(kindOf(t))) return false;
     return filter === 'unsorted' ? t.bucket === null : t.bucket === filter;
   });
   const sections = [
@@ -142,7 +147,7 @@ function TransactionRow({
 }) {
   const acct = view.accounts.get(txn.accountId);
   const cents = view.amount(txn);
-  const expense = kind === 'expense';
+  const expense = isSortableKind(kind);
   return (
     <li>
       <button
@@ -161,6 +166,7 @@ function TransactionRow({
           <Text size="xs" tone="muted" className="truncate">
             {acct ? `${acct.name} ••${acct.mask}` : ''}
             {txn.pending ? ' · pending' : ''}
+            {kind === 'refund' ? ' · refund' : ''}
             {txn.periodOverride ? ` · moved to ${txn.periodOverride} period` : ''}
             {txn.note ? ` · ${txn.note}` : ''}
           </Text>
@@ -173,7 +179,7 @@ function TransactionRow({
             <BucketTag bucket={txn.bucket} />
           ) : (
             <Text size="xs" tone="muted">
-              {KIND_LABEL[kind as Exclude<FinanceTxnKind, 'expense'>]}
+              {KIND_LABEL[kind as keyof typeof KIND_LABEL]}
             </Text>
           )}
         </span>

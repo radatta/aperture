@@ -30,10 +30,12 @@ export function SortQueue({
   overview,
   view,
   pending,
+  error,
 }: {
   overview: FinanceOverview;
   view: FinanceView | null;
   pending: boolean;
+  error: boolean;
 }) {
   const groups = useMemo(() => {
     if (!view) return [];
@@ -44,28 +46,44 @@ export function SortQueue({
   }, [view, overview.accounts]);
   const setBucket = useSetFinanceBucket();
   const refs = useRef(new Map<string, HTMLDivElement>());
-  const focusIndex = useRef<number | null>(null);
+  // Which group was just sorted, and where it sat. Keyed, not indexed: an unrelated re-render (the
+  // previous sort settling, the sync poll) can change `groups` first, and sorting one charge re-orders
+  // groups by total — so wait until THAT group is gone, then focus whatever took its place. A partial
+  // sort (one charge of several) keeps the group, so focus returns to its card.
+  const pendingFocus = useRef<{ key: string; index: number; partial: boolean } | null>(null);
   const doneRef = useRef<HTMLDivElement>(null);
 
-  // After a group leaves the list, the one that slid into its place takes focus.
   useEffect(() => {
-    const i = focusIndex.current;
-    if (i === null) return;
-    focusIndex.current = null;
-    const next = groups[Math.min(i, groups.length - 1)];
+    const p = pendingFocus.current;
+    if (!p) return;
+    const still = groups.findIndex((g) => g.key === p.key);
+    if (still !== -1) {
+      if (!p.partial) return;
+      pendingFocus.current = null;
+      refs.current.get(p.key)?.focus();
+      return;
+    }
+    pendingFocus.current = null;
+    const next = groups[Math.min(p.index, groups.length - 1)];
     if (next) refs.current.get(next.key)?.focus();
     else doneRef.current?.focus();
   }, [groups]);
 
-  function sort(index: number, ids: string[], bucket: FinanceBucket, rulePattern: string | null) {
-    focusIndex.current = index;
+  function sort(
+    group: MerchantGroup,
+    index: number,
+    ids: string[],
+    bucket: FinanceBucket,
+    rulePattern: string | null,
+  ) {
+    pendingFocus.current = { key: group.key, index, partial: ids.length < group.txns.length };
     setBucket.mutate({ ids, bucket, rule: rulePattern ? { pattern: rulePattern } : undefined });
   }
 
   if (groups.length === 0)
     return (
       <div ref={doneRef} tabIndex={-1} className="outline-none">
-        <EmptyState pending={pending || !view} title="All sorted.">
+        <EmptyState pending={!error && (pending || !view)} error={error} title="All sorted.">
           New charges land here after each sync (four times a day). Sort them whenever — mid-cycle
           or right before the payment.
         </EmptyState>
@@ -74,10 +92,18 @@ export function SortQueue({
 
   return (
     <div className="flex flex-col gap-3">
-      <Text size="sm" tone="muted">
+      <Text id="sort-help" size="sm" tone="muted">
         {groups.reduce((n, g) => n + g.txns.length, 0)} charges from {groups.length} places. Focus a
         group and press <Kbd>1</Kbd> <Kbd>2</Kbd> <Kbd>3</Kbd>.
       </Text>
+      {setBucket.isError && (
+        <div role="alert">
+          <Text size="sm" tone="danger">
+            Couldn&apos;t save that sort — it&apos;s back in the list. Check your connection and try
+            again.
+          </Text>
+        </div>
+      )}
       {groups.map((g, i) => (
         <GroupCard
           key={g.key}
@@ -88,7 +114,7 @@ export function SortQueue({
             if (el) refs.current.set(g.key, el);
             else refs.current.delete(g.key);
           }}
-          onSort={(ids, bucket, rule) => sort(i, ids, bucket, rule)}
+          onSort={(ids, bucket, rule) => sort(g, i, ids, bucket, rule)}
         />
       ))}
     </div>
@@ -132,6 +158,8 @@ function GroupCard({
       ref={cardRef}
       role="group"
       tabIndex={0}
+      aria-keyshortcuts="1 2 3"
+      aria-describedby="sort-help"
       aria-label={`${group.label}, ${group.txns.length} charges, ${fmtMoney(group.totalCents)}`}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return; // keys typed into the checkbox etc. aren't sorts
@@ -175,7 +203,7 @@ function GroupCard({
             type="checkbox"
             checked={always}
             onChange={(e) => setAlways(e.target.checked)}
-            className="accent-[var(--teal)]"
+            className="accent-teal"
           />
           Always
         </label>

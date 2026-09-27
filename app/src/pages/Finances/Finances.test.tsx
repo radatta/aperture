@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS, todayKey } from '@aperture/shared';
@@ -72,6 +72,17 @@ describe('Finances page', () => {
       await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' })
     ).filter((t) => t.bucket === 'budget');
     expect(sorted.length).toBeGreaterThan(0);
+  });
+
+  it('a failed sort says so instead of silently snapping back', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    vi.spyOn(api, 'setFinanceBucket').mockRejectedValue(new Error('offline'));
+    renderApp({ api, path: '/finances' });
+    const first = await group(/charges?, \$/);
+    first.focus();
+    await user.keyboard('1');
+    expect(await screen.findByText(/Couldn.t save that sort/)).toBeTruthy();
   });
 
   it('"Always" saves a rule for the merchant', async () => {

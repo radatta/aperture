@@ -42,6 +42,7 @@ export function PeriodHeader({ overview }: { overview: FinanceOverview }) {
         aria-valuemin={0}
         aria-valuemax={budgetCents}
         aria-valuenow={spentCents}
+        aria-valuetext={`${fmtMoney(spentCents)} of ${fmtMoney(budgetCents)} spent`}
       >
         <div
           className={cx(

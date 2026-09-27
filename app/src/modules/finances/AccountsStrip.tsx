@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { FinanceAccount, FinanceItem, FinanceOverview } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Menu } from '../../components/Menu';
@@ -9,7 +9,7 @@ import {
   useRequestFinanceSync,
   useUpdateFinanceAccount,
 } from '../../data/hooks/useFinances';
-import { fmtAgo } from './ago';
+import { fmtAgo, fmtMinutesUntil, nowMs } from './ago';
 import { fmtMoney } from './money';
 import { ConnectButton } from './ConnectButton';
 import type { useBankLink } from './useBankLink';
@@ -67,8 +67,16 @@ function ItemAccounts({
 }) {
   const remove = useRemovePlaidItem();
   const [confirming, setConfirming] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Cancel unmounts the strip; hand focus back to the menu trigger that opened it.
+  function cancel() {
+    setConfirming(false);
+    requestAnimationFrame(() =>
+      rootRef.current?.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.focus(),
+    );
+  }
   return (
-    <div className="flex flex-col gap-1.5">
+    <div ref={rootRef} className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
         <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
           {item.institutionName}
@@ -101,9 +109,9 @@ function ItemAccounts({
           className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
         >
           <Text size="sm" tone="muted">
-            Remove {item.institutionName}? Syncing stops and its accounts leave your totals; sorted
-            history is kept. Plaid&apos;s free plan doesn&apos;t give the slot back — relinking uses
-            a new one (10 total).
+            Remove {item.institutionName}? Syncing stops and its accounts leave your totals.
+            Plaid&apos;s free plan doesn&apos;t give the slot back: relinking uses a new one (10
+            total), and its charges come back as new, unsorted rows.
           </Text>
           <Button
             autoFocus
@@ -114,9 +122,14 @@ function ItemAccounts({
           >
             Remove
           </Button>
-          <Button variant="quiet" size="sm" onClick={() => setConfirming(false)}>
+          <Button variant="quiet" size="sm" onClick={cancel}>
             Cancel
           </Button>
+          {remove.isError && (
+            <Text size="sm" tone="danger" className="basis-full">
+              Couldn&apos;t remove it — try again.
+            </Text>
+          )}
         </div>
       )}
     </div>
@@ -154,7 +167,7 @@ function AccountChip({ account: a }: { account: FinanceAccount }) {
         label={`More actions for ${a.name}`}
         items={[
           {
-            label: flipped ? 'Un-flip amounts' : 'Flip amounts (charges show as income)',
+            label: flipped ? 'Un-flip amounts' : 'Flip amounts (if charges read as money in)',
             onSelect: () =>
               update.mutate({ id: a.id, patch: { signOverride: flipped ? 'auto' : 'flip' } }),
           },
@@ -176,7 +189,7 @@ function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLin
     ? 'Syncing…'
     : lastSyncedAt === null
       ? 'Not synced yet'
-      : `Synced ${fmtAgo(lastSyncedAt, Date.now())}`;
+      : `Synced ${fmtAgo(lastSyncedAt, nowMs())}`;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <Text size="xs" tone="muted" aria-live="polite">
@@ -188,14 +201,17 @@ function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLin
         size="sm"
         variant="quiet"
         disabled={syncing || sync.isPending}
-        onClick={async () => {
-          const r = await sync.mutateAsync(true);
-          setNote(
-            r.accepted || r.nextAllowedAt === null
-              ? null
-              : `Asked the bank recently — try again in ${Math.max(1, Math.ceil((r.nextAllowedAt - Date.now()) / 60_000))} min.`,
-          );
-        }}
+        onClick={() =>
+          sync.mutate(true, {
+            onSuccess: (r) =>
+              setNote(
+                r.accepted || r.nextAllowedAt === null
+                  ? null
+                  : `Asked the bank recently — try again in ${fmtMinutesUntil(r.nextAllowedAt, nowMs())}.`,
+              ),
+            onError: () => setNote('Couldn’t reach the server — try again.'),
+          })
+        }
       >
         Refresh
       </Button>

@@ -18,6 +18,7 @@ interface FinancesOutlet {
   overview: FinanceOverview;
   view: FinanceView | null;
   pending: boolean;
+  error: boolean;
 }
 
 // Finances (docs/areas/finances): the three-bucket budget over the synced bank. The header answers
@@ -62,7 +63,16 @@ export function FinancesPage() {
       <PeriodHeader overview={overview} />
       <AccountsStrip overview={overview} link={link} />
       <FinancesTabs />
-      <Outlet context={{ overview, view, pending: txnsQ.isPending } satisfies FinancesOutlet} />
+      <Outlet
+        context={
+          {
+            overview,
+            view,
+            pending: txnsQ.isPending,
+            error: txnsQ.isError,
+          } satisfies FinancesOutlet
+        }
+      />
       {link.dialog}
     </div>
   );
@@ -82,13 +92,13 @@ function useConnectFromUrl(start: ReturnType<typeof useBankLink>['start'], ready
 }
 
 export function FinancesSortTab() {
-  const { overview, view, pending } = useOutletContext<FinancesOutlet>();
-  return <SortQueue overview={overview} view={view} pending={pending} />;
+  const { overview, view, pending, error } = useOutletContext<FinancesOutlet>();
+  return <SortQueue overview={overview} view={view} pending={pending} error={error} />;
 }
 
 export function FinancesAllTab() {
-  const { overview, view, pending } = useOutletContext<FinancesOutlet>();
-  return <TransactionList overview={overview} view={view} pending={pending} />;
+  const { overview, view, pending, error } = useOutletContext<FinancesOutlet>();
+  return <TransactionList overview={overview} view={view} pending={pending} error={error} />;
 }
 
 export function FinancesRulesTab() {

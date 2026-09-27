@@ -190,13 +190,18 @@ export function amountOf(txn: FinanceTransaction, account: FinanceAccount | unde
   return normalizeAmountCents(txn.rawAmountCents, account?.signOverride ?? 'auto');
 }
 
-export type FinanceTxnKind = 'expense' | 'income' | 'transfer' | 'card_payment';
+// expense = money out; refund = money back onto a card (sorted like a charge, and nets against its
+// bucket); income = money into a bank account; transfer / card_payment = moving your own money.
+export type FinanceTxnKind = 'expense' | 'refund' | 'income' | 'transfer' | 'card_payment';
+export const isSortableKind = (k: FinanceTxnKind): boolean => k === 'expense' || k === 'refund';
 export type InternalMoves = Map<string, 'transfer' | 'card_payment'>;
 
 // Card payments and own-account transfers, found by pairing a depository outflow with an inflow of
-// the same size on another linked account within PAYMENT_MATCH_WINDOW_DAYS (nearest date wins). An
-// unpaired row whose PFC says credit-card payment still counts as one — the "hint". Returns every id
-// involved (both sides of a pair) and the card-side dates, which feed the billing period.
+// the same size on another linked account within PAYMENT_MATCH_WINDOW_DAYS (nearest date wins). A
+// pair needs at least one side whose PFC says payment/transfer — otherwise a $25 Venmo and a $25
+// card refund two days apart would pair up and restart the billing period. An unpaired row whose PFC
+// says credit-card payment still counts as one — the "hint". Returns every id involved (both sides
+// of a pair) and the card-side dates, which feed the billing period.
 export interface InternalMoveResult {
   moves: InternalMoves;
   matchedPaymentDates: string[];
@@ -217,7 +222,9 @@ export function detectInternalMoves(
       (t) => byId.get(t.accountId)!.type === 'depository' && amountOf(t, byId.get(t.accountId)) > 0,
     )
     .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
-  const ins = live.filter((t) => amountOf(t, byId.get(t.accountId)) < 0);
+  const ins = live
+    .filter((t) => amountOf(t, byId.get(t.accountId)) < 0)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const used = new Set<string>();
 
   for (const out of outs) {
@@ -227,6 +234,7 @@ export function detectInternalMoves(
     for (const inn of ins) {
       if (used.has(inn.id) || inn.accountId === out.accountId) continue;
       if (-amountOf(inn, byId.get(inn.accountId)) !== size) continue;
+      if (!isMovePfc(out) && !isMovePfc(inn)) continue;
       const gap = Math.abs(daysBetween(out.date, inn.date));
       if (gap > PAYMENT_MATCH_WINDOW_DAYS || gap >= bestGap) continue;
       best = inn;
@@ -248,6 +256,10 @@ export function detectInternalMoves(
   return { moves, matchedPaymentDates, hintedPaymentDates };
 }
 
+const MOVE_PFC_PRIMARIES = new Set(['LOAN_PAYMENTS', 'TRANSFER_IN', 'TRANSFER_OUT']);
+const isMovePfc = (t: FinanceTransaction) =>
+  t.pfcPrimary !== null && MOVE_PFC_PRIMARIES.has(t.pfcPrimary);
+
 export function classifyTransaction(
   txn: FinanceTransaction,
   account: FinanceAccount | undefined,
@@ -255,7 +267,8 @@ export function classifyTransaction(
 ): FinanceTxnKind {
   const move = moves.get(txn.id);
   if (move) return move;
-  return amountOf(txn, account) > 0 ? 'expense' : 'income';
+  if (amountOf(txn, account) > 0) return 'expense';
+  return account?.type === 'credit' ? 'refund' : 'income';
 }
 
 // --- Billing period --------------------------------------------------------
@@ -277,6 +290,12 @@ function cycleStartIn(y: number, m: number, cycleDay: number): string {
 function prevMonth(y: number, m: number): [number, number] {
   return m === 1 ? [y - 1, 12] : [y, m - 1];
 }
+// The same day one month earlier, clamped (Mar 31 → Feb 28).
+function monthBefore(key: string): string {
+  const [y, m, d] = parts(key);
+  const [py, pm] = prevMonth(y, m);
+  return `${py}-${pad2(pm)}-${pad2(Math.min(d, daysInMonth(py, pm)))}`;
+}
 
 // Calendar fallback: the period that started the day after the last `cycleDay` on or before today.
 function calendarStart(today: string, cycleDay: number): string {
@@ -293,10 +312,12 @@ function maxDate(dates: string[], atOrBefore: string): string | null {
   return best;
 }
 
-// The current period starts the day after the last card payment and runs to today. Sources, most
-// trusted first: Liabilities' last_payment_date → a matched checking→card pair → a PFC-hinted payment
-// → the calendar cycle. `previous` is the window before it: from the prior payment (any source), or
-// one calendar cycle back when there isn't one.
+// The current period starts the day after the last card payment and runs to today. The payment is the
+// NEWEST date across Liabilities' last_payment_date, matched checking→card pairs and PFC-hinted
+// payments (Liabilities refreshes less often, so it can't outrank a newer match); the source label
+// says which one found it, Liabilities winning ties. No payment at all → the calendar cycle.
+// `previous` runs from the payment before that one — ignoring dates within the match window, which
+// are the same payment seen from the other side — or one month back when there isn't one.
 export function computeFinancePeriod(input: {
   today: string;
   accounts: FinanceAccount[];
@@ -313,7 +334,8 @@ export function computeFinancePeriod(input: {
   );
   const matched = maxDate(matchedPaymentDates, today);
   const hinted = maxDate(hintedPaymentDates, today);
-  const last = liabilities ?? matched ?? hinted;
+  const found = [liabilities, matched, hinted].filter((d): d is string => d !== null);
+  const last = found.length ? found.reduce((a, b) => (b > a ? b : a)) : null;
 
   if (last === null) {
     const start = calendarStart(today, cycleDay);
@@ -331,15 +353,15 @@ export function computeFinancePeriod(input: {
   const start = addDays(last, 1);
   const end = start > today ? start : today; // paid today → an empty period that starts tomorrow
   const allPayments = [...matchedPaymentDates, ...hintedPaymentDates];
-  const prior = maxDate(allPayments, addDays(last, -1));
-  const prevStart = prior ? addDays(prior, 1) : calendarStart(last, cycleDay);
+  const prior = maxDate(allPayments, addDays(last, -(PAYMENT_MATCH_WINDOW_DAYS + 1)));
+  const prevStart = prior ? addDays(prior, 1) : monthBefore(start);
   return {
     start,
     end,
     dayCount: daysBetween(start, end) + 1,
-    source: liabilities ? 'liabilities' : matched ? 'matched' : 'hint',
+    source: liabilities === last ? 'liabilities' : matched === last ? 'matched' : 'hint',
     lastPaymentDate: last,
-    previous: { start: prevStart <= last ? prevStart : last, end: last },
+    previous: { start: prevStart, end: last },
   };
 }
 
@@ -357,7 +379,7 @@ export function periodOf(
 }
 
 // --- Overview --------------------------------------------------------------
-// The sortable rows: alive, on a visible account, and money out that isn't a card payment/transfer.
+// The sortable rows: alive, on a visible account, and a charge or card refund (not a payment/transfer).
 export function sortableTransactions(
   txns: FinanceTransaction[],
   accounts: FinanceAccount[],
@@ -370,7 +392,7 @@ export function sortableTransactions(
     (t) =>
       t.deletedAt === null &&
       visible.has(t.accountId) &&
-      classifyTransaction(t, visible.get(t.accountId), moves) === 'expense',
+      isSortableKind(classifyTransaction(t, visible.get(t.accountId), moves)),
   );
 }
 
@@ -471,14 +493,17 @@ export function merchantText(txn: Pick<FinanceTransaction, 'merchantName' | 'nam
 }
 
 // The longest active pattern contained in the merchant text wins (the most specific rule).
+// Matched against both the raw text and its merchantKey, so a pattern saved from a sort-queue group
+// (which is a merchantKey — digits stripped) still matches "CHECKCARD 0915 SQ *BLUE BOTTLE".
 export function applyRules(
   rules: FinanceRule[],
   txn: Pick<FinanceTransaction, 'merchantName' | 'name'>,
 ): FinanceRule | null {
-  const text = merchantText(txn);
+  const texts = [normalizeRulePattern(merchantText(txn)), merchantKey(txn)];
   let best: FinanceRule | null = null;
   for (const r of rules) {
-    if (!r.active || r.deletedAt !== null || !r.pattern || !text.includes(r.pattern)) continue;
+    if (!r.active || r.deletedAt !== null || !r.pattern) continue;
+    if (!texts.some((t) => t.includes(r.pattern))) continue;
     if (!best || r.pattern.length > best.pattern.length) best = r;
   }
   return best;

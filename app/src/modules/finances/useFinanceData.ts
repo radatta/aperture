@@ -11,7 +11,7 @@ export interface FinanceView {
 }
 
 // The overview plus the transactions of both windows, with the derived bits every tab needs. Moves are
-// detected over the widened list range, then rows outside both windows are dropped.
+// detected over the same range the server's overview used, then rows outside both windows are dropped.
 export function useFinanceData() {
   const overviewQ = useFinanceOverview();
   const txnsQ = useFinanceTransactions(overviewQ.data);

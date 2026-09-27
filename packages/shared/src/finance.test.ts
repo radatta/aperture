@@ -89,6 +89,7 @@ function rule(
   return { ...base, id: `r-${pattern}`, pattern, bucket, active: true, ...over };
 }
 
+const PAY = { pfcPrimary: 'LOAN_PAYMENTS' };
 const chk = acct('chk', 'depository');
 const sav = acct('sav', 'depository');
 const card = acct('card', 'credit');
@@ -108,7 +109,7 @@ describe('normalizeAmountCents', () => {
 describe('detectInternalMoves', () => {
   it('pairs a checking outflow with a card inflow on the same day', () => {
     const r = detectInternalMoves(
-      [tx('a', 'chk', '2026-09-10', 5000), tx('b', 'card', '2026-09-10', -5000)],
+      [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-10', -5000)],
       [chk, card],
     );
     expect(r.moves.get('a')).toBe('card_payment');
@@ -117,12 +118,12 @@ describe('detectInternalMoves', () => {
   });
   it('matches within 3 days and rejects 4', () => {
     const three = detectInternalMoves(
-      [tx('a', 'chk', '2026-09-10', 5000), tx('b', 'card', '2026-09-13', -5000)],
+      [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-13', -5000)],
       [chk, card],
     );
     expect(three.matchedPaymentDates).toEqual(['2026-09-13']); // the card-side date
     const four = detectInternalMoves(
-      [tx('a', 'chk', '2026-09-10', 5000), tx('b', 'card', '2026-09-14', -5000)],
+      [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-14', -5000)],
       [chk, card],
     );
     expect(four.moves.size).toBe(0);
@@ -130,8 +131,8 @@ describe('detectInternalMoves', () => {
   it('pairs two payments to their nearest partners', () => {
     const r = detectInternalMoves(
       [
-        tx('a1', 'chk', '2026-08-10', 5000),
-        tx('a2', 'chk', '2026-08-12', 5000),
+        tx('a1', 'chk', '2026-08-10', 5000, PAY),
+        tx('a2', 'chk', '2026-08-12', 5000, PAY),
         tx('b2', 'card', '2026-08-12', -5000),
         tx('b1', 'card', '2026-08-11', -5000),
       ],
@@ -142,7 +143,7 @@ describe('detectInternalMoves', () => {
   });
   it('calls a depository→depository pair a transfer, not a payment', () => {
     const r = detectInternalMoves(
-      [tx('a', 'chk', '2026-09-10', 20000), tx('b', 'sav', '2026-09-10', -20000)],
+      [tx('a', 'chk', '2026-09-10', 20000, PAY), tx('b', 'sav', '2026-09-10', -20000)],
       [chk, sav],
     );
     expect(r.moves.get('a')).toBe('transfer');
@@ -159,7 +160,7 @@ describe('detectInternalMoves', () => {
   it('honours a flipped card', () => {
     const flipped = acct('card', 'credit', { signOverride: 'flip' });
     const r = detectInternalMoves(
-      [tx('a', 'chk', '2026-09-10', 5000), tx('b', 'card', '2026-09-10', 5000)],
+      [tx('a', 'chk', '2026-09-10', 5000, PAY), tx('b', 'card', '2026-09-10', 5000)],
       [chk, flipped],
     );
     expect(r.moves.get('b')).toBe('card_payment');
@@ -167,10 +168,11 @@ describe('detectInternalMoves', () => {
 });
 
 describe('classifyTransaction', () => {
-  it('money out is an expense, money in is income, matched rows keep their move', () => {
+  it('money out is an expense, a card credit is a refund, bank money in is income, matched rows keep their move', () => {
     const moves = new Map([['p', 'card_payment' as const]]);
     expect(classifyTransaction(tx('e', 'card', '2026-09-01', 1200), card, moves)).toBe('expense');
-    expect(classifyTransaction(tx('r', 'card', '2026-09-01', -1200), card, moves)).toBe('income');
+    expect(classifyTransaction(tx('r', 'card', '2026-09-01', -1200), card, moves)).toBe('refund');
+    expect(classifyTransaction(tx('w', 'chk', '2026-09-01', -1200), chk, moves)).toBe('income');
     expect(classifyTransaction(tx('p', 'chk', '2026-09-01', 1200), chk, moves)).toBe(
       'card_payment',
     );
@@ -179,11 +181,11 @@ describe('classifyTransaction', () => {
 
 describe('computeFinancePeriod', () => {
   const pair = (d: string, cents = 5000) => [
-    tx(`o${d}`, 'chk', d, cents),
+    tx(`o${d}`, 'chk', d, cents, PAY),
     tx(`i${d}`, 'card', d, -cents),
   ];
 
-  it('prefers Liabilities over a matched payment', () => {
+  it('uses Liabilities when it is the newest payment', () => {
     const p = computeFinancePeriod({
       today: '2026-09-26',
       accounts: [chk, acct('card', 'credit', { lastPaymentDate: '2026-09-20' })],
@@ -207,6 +209,36 @@ describe('computeFinancePeriod', () => {
     expect(p.lastPaymentDate).toBe('2026-09-17');
     expect(p.start).toBe('2026-09-18');
     expect(p.previous).toEqual({ start: '2026-08-19', end: '2026-09-17' });
+  });
+  it('a newer matched payment beats a stale Liabilities date', () => {
+    const p = computeFinancePeriod({
+      today: '2026-09-26',
+      accounts: [chk, acct('card', 'credit', { lastPaymentDate: '2026-08-18' })],
+      txns: [...pair('2026-08-18'), ...pair('2026-09-17')],
+      cycleDay: 23,
+    });
+    expect(p.source).toBe('matched');
+    expect(p.start).toBe('2026-09-18');
+    expect(p.previous).toEqual({ start: '2026-08-19', end: '2026-09-17' });
+  });
+  it('the same payment seen by Liabilities and a match a day apart keeps a full previous window', () => {
+    const p = computeFinancePeriod({
+      today: '2026-09-26',
+      accounts: [chk, acct('card', 'credit', { lastPaymentDate: '2026-09-17' })],
+      txns: pair('2026-09-16'),
+      cycleDay: 23,
+    });
+    expect(p.source).toBe('liabilities');
+    expect(p.previous).toEqual({ start: '2026-08-18', end: '2026-09-17' }); // one month back
+  });
+  it('a same-size Venmo and card refund do not restart the period', () => {
+    const p = computeFinancePeriod({
+      today: '2026-09-26',
+      accounts: [chk, card],
+      txns: [tx('v', 'chk', '2026-09-20', 2500), tx('r', 'card', '2026-09-21', -2500)],
+      cycleDay: 23,
+    });
+    expect(p.source).toBe('calendar');
   });
   it('falls back to the PFC hint', () => {
     const p = computeFinancePeriod({
@@ -257,17 +289,17 @@ describe('periodOf + summarizePeriod', () => {
     today: '2026-09-26',
     accounts: [chk, card],
     txns: [
-      tx('o1', 'chk', '2026-08-18', 5000),
+      tx('o1', 'chk', '2026-08-18', 5000, PAY),
       tx('i1', 'card', '2026-08-18', -5000),
-      tx('o2', 'chk', '2026-09-17', 7000),
+      tx('o2', 'chk', '2026-09-17', 7000, PAY),
       tx('i2', 'card', '2026-09-17', -7000),
     ],
     cycleDay: 23,
   });
   const payments = [
-    tx('o1', 'chk', '2026-08-18', 5000),
+    tx('o1', 'chk', '2026-08-18', 5000, PAY),
     tx('i1', 'card', '2026-08-18', -5000),
-    tx('o2', 'chk', '2026-09-17', 7000),
+    tx('o2', 'chk', '2026-09-17', 7000, PAY),
     tx('i2', 'card', '2026-09-17', -7000),
   ];
 
@@ -295,13 +327,14 @@ describe('periodOf + summarizePeriod', () => {
       tx('b4', 'card', '2026-09-02', 1500, { bucket: 'budget', periodOverride: 'current' }), // pulled in
       tx('u1', 'card', '2026-09-23', 700),
       tx('u2', 'card', '2026-09-03', 300), // previous-window unsorted still counts as unsorted
-      tx('ref', 'card', '2026-09-24', -900), // a refund — not an expense
+      tx('ref', 'card', '2026-09-24', -900, { bucket: 'budget' }), // a card refund nets against its bucket
+      tx('pay', 'chk', '2026-09-24', -150000), // money into checking — never sorted
     ];
     const s = summarizePeriod({ period, txns, accounts: [chk, card], budgetCents: 60000 });
-    expect(s.buckets.budget).toEqual({ totalCents: 8000, count: 3 });
+    expect(s.buckets.budget).toEqual({ totalCents: 7100, count: 4 });
     expect(s.buckets.parents_pay.totalCents).toBe(9000);
-    expect(s.spentCents).toBe(8000);
-    expect(s.leftCents).toBe(52000);
+    expect(s.spentCents).toBe(7100);
+    expect(s.leftCents).toBe(52900);
     expect(s.unsortedCount).toBe(2);
     expect(s.unsortedCents).toBe(1000);
   });
@@ -392,6 +425,11 @@ describe('rules + grouping', () => {
     expect(applyRules(rules, { merchantName: 'Uber Eats', name: 'x' })?.bucket).toBe('budget');
     expect(applyRules(rules, { merchantName: null, name: 'UBER *TRIP' })?.bucket).toBe('i_pay');
     expect(applyRules(rules, { merchantName: 'Lyft', name: 'x' })).toBeNull();
+  });
+  it('a rule saved from a group key matches text with digits mid-string', () => {
+    const txn = { merchantName: null, name: 'CHECKCARD 0915 SQ *BLUE BOTTLE' };
+    const pattern = merchantKey(txn);
+    expect(applyRules([rule(pattern, 'budget')], txn)?.bucket).toBe('budget');
   });
   it('merchantKey drops store numbers', () => {
     expect(merchantKey({ merchantName: null, name: 'SQ *BLUE BOTTLE #1234' })).toBe(
