@@ -13,7 +13,7 @@ Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built),
 
 ## arch/ — how it's built
 - **[arch/TECH.md](arch/TECH.md)** — how it's built: stack, data model (logical + single-table DDB keys), routing/state and the session-renewal rules, folder structure, AI seam, and the **tech debt ledger** (currently the `uncheckHabit` hard-delete, which no contract test can detect).
-- **[arch/INFRA.md](arch/INFRA.md)** — the AWS blueprint as built: dev+prod, CDK stack split, Function URL (auth `NONE` + origin-secret header) behind CloudFront, Cognito, DynamoDB, GitHub OIDC CI with the `dev`-deployment merge gate, custom domains (live), secrets, cost.
+- **[arch/INFRA.md](arch/INFRA.md)** — the AWS blueprint as built: dev+prod, CDK stack split, Function URL (auth `NONE` + origin-secret header) behind CloudFront, Cognito, DynamoDB, GitHub OIDC CI with the `dev`-deployment merge gate (change-tiered deploys, the `dev` fast path, per-stage deploy serialisation, template diff + direct deploy, edge-polling health check), custom domains (live), secrets, cost.
 - **[arch/CICD_HARDENING.md](arch/CICD_HARDENING.md)** — the seven CI/CD + ops additions (all $0): ntfy deploy notifications, cdk-nag, gitleaks, Dependabot, CloudWatch alarms, post-deploy health check, AWS budget — wired 2026-08-10, with the per-item plan and operator checklist. Read before touching any of the seven.
 
 ## areas/ — per-domain design docs
