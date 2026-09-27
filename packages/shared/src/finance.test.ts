@@ -487,6 +487,15 @@ describe('buildFinanceOverview', () => {
       'Bank of America isn’t responding right now.',
     );
     expect(financeSyncErrorMessage('WEIRD_CODE')).toBe('The sync failed (WEIRD_CODE).');
+    // The codes our own gateway and sync produce all read as words, never the raw fallback.
+    for (const code of [
+      'TIMEOUT',
+      'NETWORK_ERROR',
+      'INTERNAL_ERROR',
+      'NOT_FOUND',
+      'PRODUCT_NOT_READY',
+    ])
+      expect(financeSyncErrorMessage(code, 'Bank of America')).not.toMatch(/sync failed \(/);
   });
   it('last synced is null until every item has synced', () => {
     expect(build([sync({ lastSyncedAt: null })]).sync.lastSyncedAt).toBeNull();

@@ -80,17 +80,31 @@ type Method = Exclude<keyof PlaidGateway, 'environment'>;
 // cursor — the same pages the stub serves. `calls` records every call; `failNext` queues a
 // PlaidApiError for a method; `accounts` / `health` are mutable to drive update mode and item status.
 // It doesn't filter by the accounts ticked in Link: the contract ticks all three, and real Plaid only
-// returns consented accounts.
+// returns consented accounts. Timing knobs for the sync tests:
+//   - `notReadyCalls`: the next N syncs answer NOT_READY with empty arrays (a fresh link);
+//   - `refreshLandsAfter`: after a refresh, the Nth /item/get reports a new last_successful_update
+//     (null = the refresh never lands);
+//   - `addItem(id)`: another login with no accounts and no transactions (multi-bank runs).
 export class InMemoryPlaid implements PlaidGateway {
   readonly environment = 'sandbox' as const;
   readonly tokens = new Map<string, string>(); // itemId → access token (SSM, in the live gateway)
   readonly calls: { method: Method; itemId?: string; detail?: unknown }[] = [];
   accounts: PlaidAccount[] = structuredClone(FIXTURE_ACCOUNTS);
   health: PlaidItemHealth = { ...HEALTHY };
+  notReadyCalls = 0;
+  refreshLandsAfter: number | null = 1;
   private readonly failures: { method: Method; code: string }[] = [];
+  private readonly extraItems = new Set<string>();
+  private readonly landing = new Map<string, number>(); // itemId → itemGets left until it lands
+  private readonly lastSuccess = new Map<string, number>();
   private seq = 0;
 
-  constructor(private readonly opts: { today: () => string }) {}
+  constructor(private readonly opts: { today: () => string; now?: () => number }) {}
+
+  addItem(itemId: string): void {
+    this.extraItems.add(itemId);
+    this.tokens.set(itemId, `access-sandbox-${++this.seq}`);
+  }
 
   failNext(method: Method, code: string): void {
     this.failures.push({ method, code });
@@ -122,18 +136,43 @@ export class InMemoryPlaid implements PlaidGateway {
     count: number,
   ): Promise<PlaidSyncResponse> {
     this.enter('transactionsSync', itemId, { cursor, count });
-    return fixturePageAfter(cursor, this.opts.today());
+    if (this.notReadyCalls > 0) {
+      this.notReadyCalls--;
+      return {
+        added: [],
+        modified: [],
+        removed: [],
+        next_cursor: '',
+        has_more: false,
+        transactions_update_status: 'NOT_READY',
+      };
+    }
+    const page = this.extraItems.has(itemId)
+      ? { added: [], modified: [], removed: [], next_cursor: `c-${itemId}`, has_more: false }
+      : fixturePageAfter(cursor, this.opts.today());
+    return { ...page, transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE' };
   }
   async transactionsRefresh(itemId: string): Promise<void> {
     this.enter('transactionsRefresh', itemId);
+    if (this.refreshLandsAfter !== null) this.landing.set(itemId, this.refreshLandsAfter);
   }
   async accountsGet(itemId: string): Promise<PlaidAccount[]> {
     this.enter('accountsGet', itemId);
-    return structuredClone(this.accounts);
+    return this.extraItems.has(itemId) ? [] : structuredClone(this.accounts);
   }
   async itemGet(itemId: string): Promise<PlaidItemHealth> {
     this.enter('itemGet', itemId);
-    return { ...this.health };
+    const left = this.landing.get(itemId);
+    if (left !== undefined) {
+      if (left <= 1) {
+        this.landing.delete(itemId);
+        this.lastSuccess.set(itemId, (this.opts.now ?? Date.now)());
+      } else this.landing.set(itemId, left - 1);
+    }
+    const landed = this.lastSuccess.get(itemId);
+    return landed === undefined
+      ? { ...this.health }
+      : { ...this.health, lastSuccessfulUpdateAt: landed };
   }
   async itemRemove(itemId: string): Promise<void> {
     this.calls.push({ method: 'itemRemove', itemId });

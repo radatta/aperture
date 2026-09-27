@@ -28,6 +28,10 @@ export interface PlaidSyncResponse {
   removed: { transaction_id: string }[];
   next_cursor: string;
   has_more: boolean;
+  // NOT_READY right after a link: the arrays are empty because Plaid hasn't pulled yet, not because
+  // nothing happened — the sync must not record that as a success.
+  transactions_update_status?:
+    'NOT_READY' | 'INITIAL_UPDATE_COMPLETE' | 'HISTORICAL_UPDATE_COMPLETE' | (string & {});
 }
 
 export interface PlaidAccount {

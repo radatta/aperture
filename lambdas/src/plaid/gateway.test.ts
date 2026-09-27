@@ -23,8 +23,11 @@ describe('InMemoryPlaid', () => {
     });
     const { itemId } = await p.exchangePublicToken('pub');
     expect(itemId).toBe(FIXTURE_ITEM_ID);
-    expect(await p.transactionsSync(itemId, null, 500)).toEqual(fixturePageAfter(null, today));
-    expect(await p.transactionsSync(itemId, 'fx-cursor-1', 500)).toEqual(
+    expect(await p.transactionsSync(itemId, null, 500)).toEqual({
+      ...fixturePageAfter(null, today),
+      transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE',
+    });
+    expect(await p.transactionsSync(itemId, 'fx-cursor-1', 500)).toMatchObject(
       fixturePageAfter('fx-cursor-1', today),
     );
     expect(p.calls.at(-1)!.detail).toEqual({ cursor: 'fx-cursor-1', count: 500 });
@@ -45,6 +48,29 @@ describe('InMemoryPlaid', () => {
     expect(e).toBeInstanceOf(PlaidApiError);
     expect((e as PlaidApiError).code).toBe('INSTITUTION_DOWN');
     await p.transactionsSync(FIXTURE_ITEM_ID, null, 500);
+  });
+
+  it('timing knobs: a not-ready phase, a refresh that lands on the Nth health check, extra items', async () => {
+    let clock = 1000;
+    const p = new InMemoryPlaid({ today: () => today, now: () => clock });
+    await p.exchangePublicToken('pub');
+    p.notReadyCalls = 1;
+    expect(await p.transactionsSync(FIXTURE_ITEM_ID, null, 500)).toMatchObject({
+      added: [],
+      next_cursor: '',
+      transactions_update_status: 'NOT_READY',
+    });
+    expect((await p.transactionsSync(FIXTURE_ITEM_ID, null, 500)).added.length).toBeGreaterThan(0);
+
+    p.refreshLandsAfter = 2;
+    await p.transactionsRefresh(FIXTURE_ITEM_ID);
+    expect((await p.itemGet(FIXTURE_ITEM_ID)).lastSuccessfulUpdateAt).toBeNull();
+    clock = 2000;
+    expect((await p.itemGet(FIXTURE_ITEM_ID)).lastSuccessfulUpdateAt).toBe(2000);
+
+    p.addItem('item-2');
+    expect(await p.accountsGet('item-2')).toEqual([]);
+    expect((await p.transactionsSync('item-2', null, 500)).next_cursor).toBe('c-item-2');
   });
 
   it('remove forgets the token', async () => {

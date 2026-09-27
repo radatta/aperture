@@ -54,10 +54,6 @@ interface ItemGetResponse {
   } | null;
 }
 
-interface SyncWire extends PlaidSyncResponse {
-  transactions_update_status?: string;
-}
-
 const isoMs = (s: string | null | undefined): number | null => {
   if (!s) return null;
   const ms = Date.parse(s);
@@ -104,8 +100,17 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
     return t;
   }
 
-  // One Plaid POST, retried (backed off) only on the codes Plaid says are transient.
-  async function post<T>(path: string, body: Record<string, unknown>, itemId?: string): Promise<T> {
+  // One Plaid POST, retried (backed off) on the codes Plaid says are transient — and, for READ calls
+  // only (`network`), on a timeout or dropped connection. A write-ish call (exchange, remove, link
+  // token) isn't re-sent blind after a network error; refresh (`retry: false`) is never re-sent at all:
+  // it's rate-limited to 2/min per item, and the sync polls for its result anyway.
+  async function post<T>(
+    path: string,
+    body: Record<string, unknown>,
+    itemId?: string,
+    opts: { retry?: boolean; network?: boolean } = {},
+  ): Promise<T> {
+    const retry = opts.retry ?? true;
     const { clientId, secret } = await getCreds();
     for (let attempt = 1; ; attempt++) {
       let res: Response;
@@ -124,8 +129,20 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
       } catch (err) {
         const code =
           err instanceof Error && err.name === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK_ERROR';
-        log(JSON.stringify({ event: 'plaid_call', path, itemId, ok: false, error_code: code }));
-        throw new PlaidApiError(code, null, `Plaid ${path} failed: ${code}`);
+        log(
+          JSON.stringify({
+            event: 'plaid_call',
+            path,
+            itemId,
+            ok: false,
+            error_code: code,
+            attempt,
+          }),
+        );
+        if (!retry || !opts.network || attempt >= ATTEMPTS)
+          throw new PlaidApiError(code, null, `Plaid ${path} failed: ${code}`);
+        await sleep(500 * 2 ** (attempt - 1));
+        continue;
       }
       const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       const requestId = typeof json.request_id === 'string' ? json.request_id : null;
@@ -145,7 +162,8 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
           attempt,
         }),
       );
-      if (!RETRY_CODES.has(code) || attempt >= ATTEMPTS) throw new PlaidApiError(code, requestId);
+      if (!retry || !RETRY_CODES.has(code) || attempt >= ATTEMPTS)
+        throw new PlaidApiError(code, requestId);
       await sleep(500 * 2 ** (attempt - 1));
     }
   }
@@ -190,7 +208,7 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
     },
 
     async transactionsSync(itemId: string, cursor: string | null, count: number) {
-      const res = await post<SyncWire>(
+      const res = await post<PlaidSyncResponse>(
         '/transactions/sync',
         {
           access_token: await accessToken(itemId),
@@ -198,6 +216,7 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
           ...(cursor ? { cursor } : {}), // omit on the first call
         },
         itemId,
+        { network: true },
       );
       return {
         added: res.added ?? [],
@@ -205,11 +224,16 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
         removed: res.removed ?? [],
         next_cursor: res.next_cursor ?? '',
         has_more: res.has_more === true,
+        ...(res.transactions_update_status
+          ? { transactions_update_status: res.transactions_update_status }
+          : {}),
       };
     },
 
     async transactionsRefresh(itemId: string) {
-      await post('/transactions/refresh', { access_token: await accessToken(itemId) }, itemId);
+      await post('/transactions/refresh', { access_token: await accessToken(itemId) }, itemId, {
+        retry: false,
+      });
     },
 
     async accountsGet(itemId: string): Promise<PlaidAccount[]> {
@@ -217,6 +241,7 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
         '/accounts/get',
         { access_token: await accessToken(itemId) },
         itemId,
+        { network: true },
       );
       return res.accounts ?? [];
     },
@@ -226,6 +251,7 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
         '/item/get',
         { access_token: await accessToken(itemId) },
         itemId,
+        { network: true },
       );
       const tx = res.status?.transactions;
       return {

@@ -230,17 +230,54 @@ describe('livePlaid', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('a network failure surfaces as a PlaidApiError without a retry', async () => {
+  it('a network failure is retried for reads only, and refresh is never re-sent', async () => {
+    let fetches = 0;
     const plaid = createLivePlaid({
       stage: 'dev',
       env: 'production',
       fetch: (async () => {
+        fetches++;
         throw new TypeError('fetch failed');
       }) as unknown as typeof fetch,
       ssm: fakeSsm({ ...CREDS, '/aperture/dev/plaid/items/i/access_token': 'a' }),
+      sleep: async () => {},
       log: () => {},
     });
     expect(plaid.environment).toBe('production');
     await expect(plaid.accountsGet('i')).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    expect(fetches).toBe(3);
+    fetches = 0;
+    await expect(plaid.exchangePublicToken('p')).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    expect(fetches).toBe(1);
+    fetches = 0;
+    await expect(plaid.transactionsRefresh('i')).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    expect(fetches).toBe(1);
+  });
+
+  it('refresh is not retried even on a transient code; sync passes the readiness status through', async () => {
+    const r = setup([err('RATE_LIMIT_EXCEEDED', 429)], {
+      ...CREDS,
+      '/aperture/dev/plaid/items/i/access_token': 'a',
+    });
+    await expect(r.plaid.transactionsRefresh('i')).rejects.toMatchObject({
+      code: 'RATE_LIMIT_EXCEEDED',
+    });
+    expect(r.calls).toHaveLength(1);
+    const s = setup(
+      [
+        ok({
+          added: [],
+          modified: [],
+          removed: [],
+          next_cursor: '',
+          has_more: false,
+          transactions_update_status: 'NOT_READY',
+        }),
+      ],
+      { ...CREDS, '/aperture/dev/plaid/items/i/access_token': 'a' },
+    );
+    expect((await s.plaid.transactionsSync('i', null, 500)).transactions_update_status).toBe(
+      'NOT_READY',
+    );
   });
 });

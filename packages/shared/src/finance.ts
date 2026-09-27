@@ -757,6 +757,12 @@ const SYNC_ERROR_TEXT: Record<string, string> = {
   TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION: '{bank} changed its data mid-sync.',
   ITEM_NOT_FOUND: 'This bank connection no longer exists — remove it and connect again.',
   CONFLICT: 'Your edits and the sync collided.',
+  TIMEOUT: '{bank} took too long to answer.',
+  NETWORK_ERROR: 'Couldn’t reach the bank connection.',
+  INTERNAL_ERROR: 'Something went wrong on our side.',
+  NOT_FOUND: 'Something went wrong on our side.',
+  PRODUCT_NOT_READY:
+    '{bank} is still getting your transactions ready — try Refresh in a few minutes.',
 };
 
 export function financeSyncErrorMessage(code: string, bank = 'The bank'): string {
