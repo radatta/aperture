@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { FINANCE_BUCKET_LABELS, FINANCE_BUCKETS } from '@aperture/shared';
+import { FINANCE_BUCKET_LABELS, FINANCE_BUCKETS, normalizeRulePattern } from '@aperture/shared';
 import type { FinanceBucket, FinanceRule } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -24,6 +24,8 @@ export function RulesSection() {
   const [pattern, setPattern] = useState('');
   const [bucket, setBucket] = useState<FinanceBucket>('budget');
   const patternRef = useRef<HTMLInputElement>(null);
+  // Adding a pattern that already has a rule updates it — say so, rather than silently re-sorting.
+  const [note, setNote] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -44,11 +46,27 @@ export function RulesSection() {
           onSubmit={(e) => {
             e.preventDefault();
             if (upsert.isPending || !pattern.trim()) return;
+            const key = normalizeRulePattern(pattern);
+            const existing = rules.find((r) => r.pattern === key);
+            const name = FINANCE_BUCKET_LABELS[bucket];
+            if (existing && existing.bucket === bucket && existing.active) {
+              setNote(`“${key}” already sorts into ${name}.`);
+              return;
+            }
             upsert.mutate(
               { pattern, bucket },
               {
                 onSuccess: () => {
                   setPattern('');
+                  setNote(
+                    existing
+                      ? `Updated “${key}”: ${name}` +
+                          (existing.bucket !== bucket
+                            ? ` (was ${FINANCE_BUCKET_LABELS[existing.bucket]})`
+                            : '') +
+                          (existing.active ? '.' : ' — resumed.')
+                      : null,
+                  );
                   patternRef.current?.focus(); // ready for the next one, wherever you submitted from
                 },
               },
@@ -59,7 +77,10 @@ export function RulesSection() {
             ref={patternRef}
             label="When the merchant contains"
             value={pattern}
-            onChange={(e) => setPattern(e.target.value)}
+            onChange={(e) => {
+              setPattern(e.target.value);
+              setNote(null);
+            }}
             placeholder="uber eats"
             className="w-48"
           />
@@ -79,6 +100,13 @@ export function RulesSection() {
           >
             Add rule
           </Button>
+          {note && (
+            <div role="status" className="basis-full">
+              <Text size="sm" tone="muted">
+                {note}
+              </Text>
+            </div>
+          )}
           {upsert.isError && (
             <Text size="sm" tone="danger" className="basis-full">
               Couldn&apos;t save the rule — try again.

@@ -400,6 +400,22 @@ describe('Finances page', () => {
     await waitFor(() => expect(document.activeElement).toBe(input));
   });
 
+  it('adding a pattern that already has a rule says what changed (or that nothing did)', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.upsertFinanceRule({ pattern: 'netflix', bucket: 'i_pay' });
+    renderApp({ api, path: '/finances/rules' });
+    const input = await screen.findByLabelText('When the merchant contains');
+    await user.type(input, 'Netflix');
+    await user.selectOptions(screen.getByLabelText('Sort into'), 'i_pay');
+    await user.click(screen.getByRole('button', { name: 'Add rule' }));
+    expect(await screen.findByText('“netflix” already sorts into I pay.')).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText('Sort into'), 'budget');
+    await user.click(screen.getByRole('button', { name: 'Add rule' }));
+    expect(await screen.findByText('Updated “netflix”: Budget (was I pay).')).toBeTruthy();
+    expect((await api.listFinanceRules()).map((r) => r.bucket)).toEqual(['budget']);
+  });
+
   it('rules tab adds and lists a rule', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/rules' });

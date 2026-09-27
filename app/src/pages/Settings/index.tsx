@@ -556,12 +556,14 @@ function PreferencesSection() {
   );
 }
 
-// The budget bucket's limit per billing period, and the cycle day used only when no card payment has
-// been found to anchor the period (finance.ts computeFinancePeriod).
+// The budget bucket's limit per billing period, and the card payment day the period falls back to
+// until you mark a payment (finance.ts computeFinancePeriod). A bad value says so and isn't saved; it
+// stays in the field so it can be fixed.
 function FinancesSection() {
   const { data: settings } = useSettings();
   const update = useUpdateSettings();
   const [budgetError, setBudgetError] = useState(false);
+  const [dayError, setDayError] = useState(false);
   if (!settings) return null;
   return (
     <section className="flex flex-col gap-3">
@@ -581,6 +583,7 @@ function FinancesSection() {
                 update.mutate({ financeBudgetCents: cents });
             }}
             aria-invalid={budgetError}
+            aria-describedby={budgetError ? 'fin-budget-error' : undefined}
             className="w-36"
           />
           <Field
@@ -590,16 +593,35 @@ function FinancesSection() {
             max={31}
             defaultValue={settings.financePaymentDay}
             onBlur={(e) => {
-              const day = Math.round(Number(e.target.value));
-              if (day >= 1 && day <= 31) update.mutate({ financePaymentDay: day });
+              const raw = e.target.value.trim();
+              const day = Number(raw);
+              const ok = raw !== '' && Number.isInteger(day) && day >= 1 && day <= 31;
+              setDayError(!ok);
+              if (ok && day !== settings.financePaymentDay)
+                update.mutate({ financePaymentDay: day });
             }}
+            aria-invalid={dayError}
+            aria-describedby={dayError ? 'fin-day-error' : undefined}
             className="w-36"
           />
         </div>
+        {budgetError && (
+          <div role="alert" className="mt-2">
+            <Text id="fin-budget-error" size="xs" tone="danger">
+              Enter a dollar amount, like 600 or 600.00.
+            </Text>
+          </div>
+        )}
+        {dayError && (
+          <div role="alert" className="mt-2">
+            <Text id="fin-day-error" size="xs" tone="danger">
+              Enter a day from 1 to 31.
+            </Text>
+          </div>
+        )}
         <Text size="xs" tone="muted" className="mt-2 block">
-          {budgetError
-            ? 'Enter an amount like 600 or 600.00.'
-            : `Now ${fmtMoney(settings.financeBudgetCents)}. The payment day is used until you mark a payment — the period starts the day after it.`}
+          Now {fmtMoney(settings.financeBudgetCents)}, payment day {settings.financePaymentDay}. The
+          payment day is used until you mark a payment — the period starts the day after it.
         </Text>
       </Card>
     </section>
