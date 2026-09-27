@@ -38,7 +38,9 @@ import type { PlaidGateway, PlaidItemHealth } from '../plaid/gateway';
 //
 // Stamps (the overview's `syncing` contract): `lastSyncedAt` / `lastSyncErrorAt` are the START time of
 // the pass that set them, and a rerun starts at max(now, the request) — so a request always ends up
-// covered by a stamp at least as new, and `syncing` (request > max(stamps)) clears exactly then.
+// covered by a stamp at least as new, and `syncing` (request > max(stamps)) clears exactly then. The
+// one exception to "pass start": a request the run had to leave unserved (MAX_PASSES reached, or no
+// time left for a rerun) gets `lastSyncErrorAt` = that request, as SYNC_DEFERRED — never dropped.
 //
 // The lock: `lockedUntil`'s value doubles as the holder's token. Renewing and finishing check it, so a
 // run that lost its lock (expired, taken over, or the bank was removed) writes nothing more.
@@ -277,7 +279,8 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       decision: 'lost' | 'removed' | 'rerun' | 'done';
       nextStart: number;
       nextClaim: boolean;
-    } = { decision: 'lost', nextStart: passStart, nextClaim: false };
+      deferred: boolean;
+    } = { decision: 'lost', nextStart: passStart, nextClaim: false, deferred: false };
     const finished = await repo
       .casUpdate(
         shape,
@@ -286,6 +289,7 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
           const t2 = now();
           fin.nextStart = passStart;
           fin.nextClaim = false;
+          fin.deferred = false;
           if (fresh.deletedAt !== null) {
             fin.decision = 'removed';
             return null;
@@ -310,18 +314,28 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
             };
           }
           fin.decision = 'done';
-          return result.ok
+          // A request newer than this pass that we can't rerun for: cover it, don't drop it.
+          fin.deferred = asked > passStart;
+          if (!result.ok)
+            return {
+              ...fresh,
+              lastSyncError: result.code,
+              lastSyncErrorAt: Math.max(passStart, asked),
+              lockedUntil: null,
+            };
+          return fin.deferred
             ? {
                 ...fresh,
                 lastSyncedAt: passStart,
-                lastSyncError: null,
-                lastSyncErrorAt: null,
+                lastSyncError: 'SYNC_DEFERRED',
+                lastSyncErrorAt: asked,
                 lockedUntil: null,
               }
             : {
                 ...fresh,
-                lastSyncError: result.code,
-                lastSyncErrorAt: passStart,
+                lastSyncedAt: passStart,
+                lastSyncError: null,
+                lastSyncErrorAt: null,
                 lockedUntil: null,
               };
         },
@@ -336,6 +350,15 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
         return null;
       });
     if (finished === null) return { ...report, outcome: 'error', code: 'UNLOCK_FAILED' };
+    if (fin.decision === 'done' && fin.deferred)
+      console.log(
+        JSON.stringify({
+          event: 'finance_sync_request_deferred',
+          itemId,
+          passes: report.passes,
+          reason: report.passes >= MAX_PASSES ? 'cap' : 'deadline',
+        }),
+      );
     if (fin.decision === 'removed') return { ...report, outcome: 'removed' };
     if (fin.decision === 'lost') return { ...report, outcome: 'error', code: 'LOCK_LOST' };
     if (fin.decision === 'rerun') {

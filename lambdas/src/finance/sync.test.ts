@@ -528,6 +528,32 @@ describe('runFinanceSync — the review findings', () => {
     };
     const [r] = await run();
     expect(r!.passes).toBe(MAX_PASSES);
+    // The request it couldn't serve is covered, not dropped: syncing clears and the page can say so.
+    const s = await state();
+    expect(s.lastSyncError).toBe('SYNC_DEFERRED');
+    expect(s.lastSyncErrorAt).toBe(s.syncRequestedAt);
+    expect(s.lockedUntil).toBeNull();
+    expect(overviewSyncing(s)).toBe(false);
+  });
+
+  it('a request with no time left for a rerun is covered as SYNC_DEFERRED', async () => {
+    await link();
+    deps.deadline = T + 100_000; // room for the pass, not for a rerun after it
+    const real = plaid.accountsGet.bind(plaid);
+    plaid.accountsGet = async (id) => {
+      clock += 40_000;
+      patchState({ syncRequestedAt: clock });
+      return real(id);
+    };
+    const [r] = await run();
+    expect(r!.passes).toBe(1);
+    const s = await state();
+    expect([s.lastSyncError, s.lastSyncErrorAt, s.lastSyncedAt]).toEqual([
+      'SYNC_DEFERRED',
+      T + 40_000,
+      T,
+    ]);
+    expect(overviewSyncing(s)).toBe(false);
   });
 });
 

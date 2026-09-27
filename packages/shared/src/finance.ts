@@ -767,6 +767,7 @@ const SYNC_ERROR_TEXT: Record<string, string> = {
   NOT_FOUND: 'Something went wrong on our side.',
   PRODUCT_NOT_READY:
     '{bank} is still getting your transactions ready — try Refresh in a few minutes.',
+  SYNC_DEFERRED: '{bank} was still busy with an earlier sync — try again.',
 };
 
 export function financeSyncErrorMessage(code: string, bank = 'The bank'): string {
