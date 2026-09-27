@@ -30,27 +30,38 @@ export function AccountsStrip({
   const needsLogin = overview.items.filter(
     (i) => i.status === 'login_required' || i.status === 'pending_disconnect',
   );
-  const { lastError, lastSyncedAt, syncing } = overview.sync;
-  // A login error is the reconnect banner's job; any other failure gets its own.
-  const failed = lastError && !syncing && lastError !== 'ITEM_LOGIN_REQUIRED' ? lastError : null;
+  // One banner per bank whose last run failed. A login error is the reconnect banner's job.
+  const failed = overview.sync.syncing
+    ? []
+    : overview.sync.items.filter((s) => s.lastError && s.lastError !== 'ITEM_LOGIN_REQUIRED');
   return (
     <section aria-label="Accounts" className="flex flex-col gap-2">
-      {failed && (
+      {failed.map((s) => (
         <div
+          key={s.itemId}
           role="alert"
           className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-danger px-4 py-2"
         >
           <Text size="sm">
-            {financeSyncErrorMessage(failed, overview.items[0]?.institutionName)}{' '}
-            {lastSyncedAt === null
+            {financeSyncErrorMessage(
+              s.lastError!,
+              overview.items.find((i) => i.id === s.itemId)?.institutionName,
+            )}{' '}
+            {s.lastSyncedAt === null
               ? 'Nothing has synced yet.'
-              : `Last synced ${fmtAgo(lastSyncedAt, nowMs())}.`}
+              : `Last synced ${fmtAgo(s.lastSyncedAt, nowMs())}.`}
           </Text>
-          <Button size="sm" variant="ghost" onClick={watch.retry} data-sync-next-step>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={watch.retry}
+            disabled={watch.retrying}
+            data-sync-next-step
+          >
             Try again
           </Button>
         </div>
-      )}
+      ))}
       {needsLogin.map((item) => (
         <div
           key={item.id}
@@ -244,7 +255,7 @@ function SyncLine({
       <Button
         size="sm"
         variant="quiet"
-        disabled={syncing || sync.isPending}
+        disabled={syncing || sync.isPending || watch.retrying}
         onClick={() => {
           watch.arm(); // before the request: the stub syncs inline, so the result can land first
           sync.mutate(true, {

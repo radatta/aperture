@@ -1016,7 +1016,10 @@ class StubClient implements ApiClient {
     const t = this.now();
     const state = this.find(this.store.financeSyncStates, itemId);
     if (!state) return;
-    const failure = takeStubSyncFailure();
+    // A login that needs fixing keeps failing until update mode (completePlaidUpdate) fixes it — as
+    // at Plaid, where every call on the item returns ITEM_LOGIN_REQUIRED.
+    const loginNeeded = this.find(this.store.financeItems, itemId)?.status === 'login_required';
+    const failure = loginNeeded ? 'ITEM_LOGIN_REQUIRED' : takeStubSyncFailure();
     if (failure) {
       // A failed run changes nothing but the error — the cursor and lastSyncedAt stay put.
       this.writes.put(this.store.financeSyncStates, {

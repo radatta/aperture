@@ -2,50 +2,67 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FINANCE_SYNCING_MAX_MS } from '@aperture/shared';
 import type { FinanceOverview } from '@aperture/shared';
 import { useRequestFinanceSync } from '../../data/hooks/useFinances';
-import { nowMs } from './ago';
 
 interface Armed {
-  errorAt: number | null;
-  syncedAt: number | null;
-  at: number; // client clock — only to give up on a run that never reported back
+  overview: FinanceOverview | undefined; // the overview on screen when the sync was started
+  errorAt: Map<string, number | null>; // itemId → its error stamp then
+}
+
+export interface SyncFailure {
+  itemId: string;
+  code: string;
 }
 
 export interface SyncWatch {
   arm: () => void; // call BEFORE starting a sync you want to hear about
   disarm: () => void; // the request failed or was refused — nothing is coming
   retry: () => void; // a plain sync (not a refresh: a failed Refresh still holds the cooldown)
-  failed: string | null; // the error code to show, while the dialog is open
+  retrying: boolean;
+  failed: SyncFailure | null; // what the dialog shows, while it's open
   dismiss: () => void;
 }
 
 // A sync you started (Refresh, connect, reconnect) that fails pops a dialog; one that ran on its own
-// schedule only shows the banner. Arming snapshots the overview's error and last-synced stamps; the
-// next overview that isn't syncing decides it: a different error stamp → the dialog, a newer success
-// → quietly disarm. Stamps are compared, not clocks, so client/server skew can't miss or fake one.
+// schedule only shows the banner. Arming snapshots each item's error stamp and the overview on screen.
+// The first NEWER overview that isn't syncing decides: an item whose error stamp changed → the
+// dialog, otherwise → quietly disarm. Stamps are compared, not clocks, so client/server skew can't
+// miss or fake one; "newer" is overview identity (React Query keeps it stable until data changes).
+// The server marks a request `syncing` until its run stamps a success or failure, so the in-between
+// polls never decide early. An arm that hears nothing within the server's own syncing cap expires.
 export function useSyncWatch(overview: FinanceOverview | undefined): SyncWatch {
   const [armed, setArmed] = useState<Armed | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failed, setFailed] = useState<SyncFailure | null>(null);
   const latest = useRef(overview);
   latest.current = overview;
   const request = useRequestFinanceSync();
 
   const arm = useCallback(() => {
-    const s = latest.current?.sync;
-    setArmed({ errorAt: s?.lastErrorAt ?? null, syncedAt: s?.lastSyncedAt ?? null, at: nowMs() });
+    const o = latest.current;
+    setArmed({
+      overview: o,
+      errorAt: new Map((o?.sync.items ?? []).map((i) => [i.itemId, i.lastErrorAt])),
+    });
   }, []);
   const disarm = useCallback(() => setArmed(null), []);
 
-  const sync = overview?.sync;
   useEffect(() => {
-    if (!armed || !sync || sync.syncing) return;
-    if (sync.lastError && sync.lastErrorAt !== null && sync.lastErrorAt !== armed.errorAt) {
-      setFailed(sync.lastError);
-      setArmed(null);
-    } else if (sync.lastSyncedAt !== armed.syncedAt) setArmed(null);
-    // A run that never reported back (a lost invoke) — stop waiting, so a later scheduled failure
-    // can't pop this dialog hours afterwards.
-    else if (nowMs() - armed.at > FINANCE_SYNCING_MAX_MS) setArmed(null);
-  }, [armed, sync]);
+    if (!armed || !overview || overview === armed.overview || overview.sync.syncing) return;
+    const hit = overview.sync.items.find(
+      (i) =>
+        i.lastError !== null &&
+        i.lastErrorAt !== null &&
+        i.lastErrorAt !== (armed.errorAt.get(i.itemId) ?? null),
+    );
+    setArmed(null);
+    if (hit) setFailed({ itemId: hit.itemId, code: hit.lastError! });
+  }, [armed, overview]);
+
+  // Expiry runs on a timer, not on the next overview: once polling stops nothing else would come.
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(null), FINANCE_SYNCING_MAX_MS);
+    return () => clearTimeout(t);
+  }, [armed]);
 
   const retry = useCallback(() => {
     arm();
@@ -57,5 +74,12 @@ export function useSyncWatch(overview: FinanceOverview | undefined): SyncWatch {
     });
   }, [arm, disarm, request]);
 
-  return { arm, disarm, retry, failed, dismiss: useCallback(() => setFailed(null), []) };
+  return {
+    arm,
+    disarm,
+    retry,
+    retrying: request.isPending,
+    failed,
+    dismiss: useCallback(() => setFailed(null), []),
+  };
 }

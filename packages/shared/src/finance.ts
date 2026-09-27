@@ -115,6 +115,15 @@ export interface FinancePeriod {
   previous: { start: string; end: string };
 }
 
+// One item's sync stamps. Both are the START time of the run that set them (a success or a failure),
+// so a request that lands mid-run is newer than either and keeps the overview `syncing`.
+export interface FinanceItemSync {
+  itemId: string;
+  lastSyncedAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+
 export interface FinanceBucketTotal {
   totalCents: number;
   count: number;
@@ -135,6 +144,7 @@ export interface FinanceOverview {
     syncing: boolean;
     lastError: string | null; // a Plaid error code — financeSyncErrorMessage turns it into words
     lastErrorAt: number | null;
+    items: FinanceItemSync[]; // per bank login — the page decides and names failures per item
     environment: PlaidEnvironment;
   };
 }
@@ -711,6 +721,12 @@ export function buildFinanceOverview(input: {
           input.now - (s.syncRequestedAt ?? 0) < FINANCE_SYNCING_MAX_MS,
       ),
       ...lastSyncError(syncs),
+      items: syncs.map((s) => ({
+        itemId: s.itemId,
+        lastSyncedAt: s.lastSyncedAt,
+        lastError: s.lastSyncError,
+        lastErrorAt: s.lastSyncErrorAt,
+      })),
       environment: input.environment,
     },
   };

@@ -475,6 +475,12 @@ describe('buildFinanceOverview', () => {
       sync({ id: 'b', itemId: 'item', lastSyncError: 'ITEM_LOGIN_REQUIRED', lastSyncErrorAt: 20 }),
     ]);
     expect([two.sync.lastError, two.sync.lastErrorAt]).toEqual(['ITEM_LOGIN_REQUIRED', 20]);
+    expect(two.sync.items.map((i) => [i.lastError, i.lastErrorAt])).toEqual([
+      ['INSTITUTION_DOWN', 10],
+      ['ITEM_LOGIN_REQUIRED', 20],
+    ]);
+    const cleared = build([sync({ lastSyncError: null, lastSyncErrorAt: null, lastSyncedAt: 30 })]);
+    expect([cleared.sync.lastError, cleared.sync.lastErrorAt]).toEqual([null, null]);
   });
   it('financeSyncErrorMessage names the bank, and falls back to the code', () => {
     expect(financeSyncErrorMessage('INSTITUTION_NOT_RESPONDING', 'Bank of America')).toBe(
