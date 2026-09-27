@@ -14,6 +14,16 @@ vi.mock('../auth/verify', async (importActual) => {
   return { ...actual, createCognitoVerifier: () => okVerifier };
 });
 
+// The live table is an in-memory one, and the live Plaid gateway + sync invoker are spies: the finance
+// tripwire below drives a real tool call through the edge and asserts neither is ever built or used.
+const live = vi.hoisted(() => ({ plaid: vi.fn(), invoker: vi.fn() }));
+vi.mock('../ddb/LiveDoc', async () => {
+  const { InMemoryDoc } = await import('../ddb/DocClient');
+  return { createLiveDoc: () => new InMemoryDoc() };
+});
+vi.mock('../plaid/livePlaid', () => ({ createLivePlaid: live.plaid }));
+vi.mock('../finance/liveInvoker', () => ({ liveInvoker: live.invoker }));
+
 import { handler, runtime } from './index';
 
 // Edge behavior that returns before any DynamoDB access (origin gate, method, auth, well-known) — plus
@@ -167,5 +177,28 @@ describe('mcp edge', () => {
     process.env.APP_URL = 'https://dev.aperture.rahuldatta.dev';
     const res = await get('/.well-known/oauth-authorization-server', {});
     expect(res.statusCode).toBe(403);
+  });
+
+  it('a finance tool call through the edge never builds a live Plaid gateway or sync invoker', async () => {
+    process.env.ORIGIN_SECRET = 's3cr3t';
+    process.env.AGENT_TOKEN = 'agent-secret';
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'get_finance_overview', arguments: { today: '2026-09-26' } },
+    });
+    const res = await post({ ...OK_ORIGIN, 'x-aperture-agent-token': 'agent-secret' }, body);
+    expect(res.statusCode).toBe(200);
+    const out = JSON.parse(res.body) as {
+      result: { isError?: boolean; content: { text: string }[] };
+    };
+    expect(out.result.isError).toBeFalsy();
+    expect(JSON.parse(out.result.content[0]!.text)).toMatchObject({
+      today: '2026-09-26',
+      banks: [],
+    });
+    expect(live.plaid).not.toHaveBeenCalled();
+    expect(live.invoker).not.toHaveBeenCalled();
   });
 });

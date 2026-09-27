@@ -14,6 +14,8 @@ export interface ToolContext {
   // PUT bytes to a presigned URL. Injected (not a bare fetch) so tests record the upload without a network
   // call — the attach_file path is the only place the MCP server itself moves bytes.
   upload: (url: string, bytes: Buffer, contentType: string) => Promise<void>;
+  // The clock, for tools that resolve "today" server-side (finance). Defaults to Date.now.
+  now?: () => number;
 }
 
 // A minimal JSON-Schema object shape — enough for tools/list. We EMIT this for the client's benefit; we
