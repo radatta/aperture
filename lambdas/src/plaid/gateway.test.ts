@@ -27,6 +27,7 @@ describe('InMemoryPlaid', () => {
     expect(await p.transactionsSync(itemId, 'fx-cursor-1', 500)).toEqual(
       fixturePageAfter('fx-cursor-1', today),
     );
+    expect(p.calls.at(-1)!.detail).toEqual({ cursor: 'fx-cursor-1', count: 500 });
     expect(p.calls.map((c) => c.method)).toEqual([
       'transactionsSync',
       'exchangePublicToken',

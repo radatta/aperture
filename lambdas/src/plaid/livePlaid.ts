@@ -122,7 +122,8 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (err) {
-        const code = err instanceof Error && err.name === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK_ERROR';
+        const code =
+          err instanceof Error && err.name === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK_ERROR';
         log(JSON.stringify({ event: 'plaid_call', path, itemId, ok: false, error_code: code }));
         throw new PlaidApiError(code, null, `Plaid ${path} failed: ${code}`);
       }
@@ -134,7 +135,15 @@ export function createLivePlaid(cfg: LivePlaidConfig): PlaidGateway {
       }
       const code = typeof json.error_code === 'string' ? json.error_code : `HTTP_${res.status}`;
       log(
-        JSON.stringify({ event: 'plaid_call', path, itemId, ok: false, request_id: requestId, error_code: code, attempt }),
+        JSON.stringify({
+          event: 'plaid_call',
+          path,
+          itemId,
+          ok: false,
+          request_id: requestId,
+          error_code: code,
+          attempt,
+        }),
       );
       if (!RETRY_CODES.has(code) || attempt >= ATTEMPTS) throw new PlaidApiError(code, requestId);
       await sleep(500 * 2 ** (attempt - 1));

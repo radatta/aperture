@@ -12,6 +12,9 @@ import { liveWrites } from './ddb/writes';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
 import { createS3Presigner } from './s3/presigner';
+import { createLivePlaid } from './plaid/livePlaid';
+import { noopInvoker } from './finance/invoker';
+import { liveInvoker } from './finance/liveInvoker';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
@@ -36,6 +39,17 @@ const verifier = process.env.USER_POOL_ID
 const STAGE = process.env.STAGE ?? 'dev';
 const APP_URL = process.env.APP_URL ?? '';
 const google = createLiveGoogle({ stage: STAGE, appUrl: APP_URL });
+
+// Plaid (raw fetch + SSM) and the finance sync invoker — built once, inert until a finance method runs;
+// testMode swaps both for noops in handleRpc. dev → Sandbox, prod → Production (PLAID_ENV, step D). No
+// FINANCE_SYNC_FN (local) → syncs are requested but never started.
+const plaid = createLivePlaid({
+  stage: STAGE,
+  env: process.env.PLAID_ENV === 'production' ? 'production' : 'sandbox',
+});
+const financeInvoker = process.env.FINANCE_SYNC_FN
+  ? liveInvoker(process.env.FINANCE_SYNC_FN)
+  : noopInvoker();
 
 interface HttpEvent {
   rawPath?: string;
@@ -87,7 +101,11 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   // AHEAD of any auth/DynamoDB. So a headerless HTTP call still 403s (proves the gate is enforced) while a
   // CloudFront-stamped call gets 200 (proves the edge → Lambda wiring). No JWT, no table access, no writes.
   if (method === 'health') {
-    return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true, stage: process.env.STAGE ?? null }) };
+    return {
+      statusCode: 200,
+      headers: CORS,
+      body: JSON.stringify({ ok: true, stage: process.env.STAGE ?? null }),
+    };
   }
 
   // Google OAuth callback — a REAL browser GET redirect, OUTSIDE the RPC dispatch. It sits behind the
@@ -103,7 +121,11 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
     const q = event.queryStringParameters ?? {};
     if (q.error) return back('error');
     if (!q.code || !q.state) {
-      return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Missing code/state' }) };
+      return {
+        statusCode: 400,
+        headers: CORS,
+        body: JSON.stringify({ error: 'Missing code/state' }),
+      };
     }
     let userId: string;
     try {
@@ -145,7 +167,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
         google,
         stateSecret: process.env.ORIGIN_SECRET,
       },
-      { presigner },
+      { presigner, plaid, financeInvoker },
     );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {

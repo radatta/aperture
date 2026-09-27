@@ -119,8 +119,7 @@ describe('Repo finances', () => {
       let n = 10;
       const clash = () => {
         doc.putNow(financeTxnItem(U, txn('a', '2026-09-01', { updatedAt: ++n })));
-        if (n < 10 + CAS_ATTEMPTS)
-          doc.interceptNextPutIf(pk(U), sk.finTxn('a'), clash);
+        if (n < 10 + CAS_ATTEMPTS) doc.interceptNextPutIf(pk(U), sk.finTxn('a'), clash);
       };
       doc.interceptNextPutIf(pk(U), sk.finTxn('a'), clash);
       await expect(repo.casUpdate(shape(), 'a', (t) => ({ ...t }), 5)).rejects.toThrow(
@@ -133,9 +132,9 @@ describe('Repo finances', () => {
       await expect(repo.casUpdate(shape(), 'a', (t) => t, 5)).rejects.toThrow('Not found: a');
       const kept = await repo.casUpdate(shape(), 'a', () => null, 5, { allowDeleted: true });
       expect(kept.updatedAt).toBe(10);
-      await expect(
-        repo.casUpdate(repo.finTxnShape('nope'), 'nope', (t) => t, 5),
-      ).rejects.toThrow('Not found: nope');
+      await expect(repo.casUpdate(repo.finTxnShape('nope'), 'nope', (t) => t, 5)).rejects.toThrow(
+        'Not found: nope',
+      );
     });
 
     it('creates a missing row with create(), conditionally', async () => {

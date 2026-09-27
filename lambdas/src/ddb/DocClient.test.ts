@@ -63,9 +63,9 @@ describe('InMemoryDoc', () => {
   describe('putIf', () => {
     it('null expects no row — a tombstone counts as a row', async () => {
       await db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 1 }), null);
-      await expect(db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 2 }), null)).rejects.toThrow(
-        ConditionFailedError,
-      );
+      await expect(
+        db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 2 }), null),
+      ).rejects.toThrow(ConditionFailedError);
       await db.put(item({ PK: 'u#1', SK: 'fin#txn#b', updatedAt: 1, deletedAt: 5 }));
       await expect(db.putIf(item({ PK: 'u#1', SK: 'fin#txn#b' }), null)).rejects.toThrow(
         ConditionFailedError,

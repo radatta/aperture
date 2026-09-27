@@ -19,7 +19,11 @@ export interface PlaidGateway {
   readonly environment: 'sandbox' | 'production';
   createLinkToken(input: { userId: string } & CreateLinkTokenInput): Promise<string>;
   exchangePublicToken(publicToken: string): Promise<{ itemId: string }>;
-  transactionsSync(itemId: string, cursor: string | null, count: number): Promise<PlaidSyncResponse>;
+  transactionsSync(
+    itemId: string,
+    cursor: string | null,
+    count: number,
+  ): Promise<PlaidSyncResponse>;
   transactionsRefresh(itemId: string): Promise<void>;
   accountsGet(itemId: string): Promise<PlaidAccount[]>;
   itemGet(itemId: string): Promise<PlaidItemHealth>;
@@ -80,7 +84,7 @@ type Method = Exclude<keyof PlaidGateway, 'environment'>;
 export class InMemoryPlaid implements PlaidGateway {
   readonly environment = 'sandbox' as const;
   readonly tokens = new Map<string, string>(); // itemId → access token (SSM, in the live gateway)
-  readonly calls: { method: Method; itemId?: string }[] = [];
+  readonly calls: { method: Method; itemId?: string; detail?: unknown }[] = [];
   accounts: PlaidAccount[] = structuredClone(FIXTURE_ACCOUNTS);
   health: PlaidItemHealth = { ...HEALTHY };
   private readonly failures: { method: Method; code: string }[] = [];
@@ -92,8 +96,8 @@ export class InMemoryPlaid implements PlaidGateway {
     this.failures.push({ method, code });
   }
 
-  private enter(method: Method, itemId?: string): void {
-    this.calls.push({ method, itemId });
+  private enter(method: Method, itemId?: string, detail?: unknown): void {
+    this.calls.push({ method, itemId, ...(detail === undefined ? {} : { detail }) });
     const i = this.failures.findIndex((f) => f.method === method);
     if (i >= 0) {
       const [f] = this.failures.splice(i, 1);
@@ -103,17 +107,21 @@ export class InMemoryPlaid implements PlaidGateway {
       throw new PlaidApiError('ITEM_NOT_FOUND', `req-${++this.seq}`);
   }
 
-  async createLinkToken(): Promise<string> {
-    this.enter('createLinkToken');
+  async createLinkToken(input: { userId: string } & CreateLinkTokenInput): Promise<string> {
+    this.enter('createLinkToken', undefined, input);
     return `link-sandbox-${++this.seq}`;
   }
-  async exchangePublicToken(): Promise<{ itemId: string }> {
-    this.enter('exchangePublicToken');
+  async exchangePublicToken(publicToken: string): Promise<{ itemId: string }> {
+    this.enter('exchangePublicToken', undefined, { publicToken });
     this.tokens.set(FIXTURE_ITEM_ID, `access-sandbox-${++this.seq}`);
     return { itemId: FIXTURE_ITEM_ID };
   }
-  async transactionsSync(itemId: string, cursor: string | null): Promise<PlaidSyncResponse> {
-    this.enter('transactionsSync', itemId);
+  async transactionsSync(
+    itemId: string,
+    cursor: string | null,
+    count: number,
+  ): Promise<PlaidSyncResponse> {
+    this.enter('transactionsSync', itemId, { cursor, count });
     return fixturePageAfter(cursor, this.opts.today());
   }
   async transactionsRefresh(itemId: string): Promise<void> {

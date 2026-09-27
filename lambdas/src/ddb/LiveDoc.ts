@@ -49,7 +49,10 @@ export function createLiveDoc(tableName: string): DocClient {
         );
       } catch (err) {
         const name = err instanceof Error ? err.name : '';
-        if (err instanceof ConditionalCheckFailedException || name === 'ConditionalCheckFailedException')
+        if (
+          err instanceof ConditionalCheckFailedException ||
+          name === 'ConditionalCheckFailedException'
+        )
           throw new ConditionFailedError();
         throw err;
       }

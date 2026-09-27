@@ -1,0 +1,72 @@
+// @aperture/lambdas — the finance sync Lambda (the third function; CDK wiring is step D). Invoked two
+// ways, both with a FinanceSyncEvent: by EventBridge Scheduler (6:15 / 11:15 / 16:15 / 21:15 LA, the
+// schedule's fixed input carries the user id) and asynchronously by the BFF after Refresh / connect /
+// reconnect. It never serves HTTP. The logic lives in finance/sync.ts; this is the AWS edge.
+import { createLiveDoc } from './ddb/LiveDoc';
+import type { DocClient } from './ddb/DocClient';
+import { Repo } from './ddb/repo';
+import { liveWrites, noopWrites } from './ddb/writes';
+import { runFinanceSync } from './finance/sync';
+import type { FinanceSyncEvent, ItemSyncReport } from './finance/sync';
+import { noopPlaid } from './plaid/gateway';
+import type { PlaidGateway } from './plaid/gateway';
+import { createLivePlaid } from './plaid/livePlaid';
+
+const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
+const plaid = createLivePlaid({
+  stage: process.env.STAGE ?? 'dev',
+  env: process.env.PLAID_ENV === 'production' ? 'production' : 'sandbox',
+});
+
+const MODES = new Set(['scheduled', 'manual', 'post-link']);
+
+// Anything else is a malformed invoke — refuse it before touching the table or Plaid.
+export function parseSyncEvent(raw: unknown): FinanceSyncEvent & { testMode?: boolean } {
+  const e = (raw ?? {}) as Record<string, unknown>;
+  if (typeof e.userId !== 'string' || e.userId.trim() === '')
+    throw new Error('Invalid finance sync event: userId');
+  if (typeof e.mode !== 'string' || !MODES.has(e.mode))
+    throw new Error('Invalid finance sync event: mode');
+  if (e.itemId !== undefined && typeof e.itemId !== 'string')
+    throw new Error('Invalid finance sync event: itemId');
+  if (e.refresh !== undefined && typeof e.refresh !== 'boolean')
+    throw new Error('Invalid finance sync event: refresh');
+  return {
+    userId: e.userId,
+    mode: e.mode as FinanceSyncEvent['mode'],
+    ...(e.itemId !== undefined ? { itemId: e.itemId as string } : {}),
+    ...(e.refresh !== undefined ? { refresh: e.refresh as boolean } : {}),
+    ...(e.testMode === true ? { testMode: true } : {}),
+  };
+}
+
+// The core, AWS-free for tests. testMode (the CI smoke path) runs the same code over the inert Plaid
+// gateway and write-free table seam: nothing is read from Plaid, nothing persists.
+export async function handleFinanceSync(
+  table: DocClient,
+  gateway: PlaidGateway,
+  raw: unknown,
+  opts: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<ItemSyncReport[]> {
+  const e = parseSyncEvent(raw);
+  const repo = new Repo(table, e.testMode ? noopWrites() : liveWrites(table), e.userId);
+  const report = await runFinanceSync(
+    {
+      repo,
+      plaid: e.testMode ? noopPlaid() : gateway,
+      now: opts.now ?? Date.now,
+      sleep: opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+      userId: e.userId,
+    },
+    e,
+  );
+  for (const r of report)
+    console.log(
+      JSON.stringify({ event: 'finance_sync', mode: e.mode, testMode: e.testMode === true, ...r }),
+    );
+  return report;
+}
+
+export async function handler(event: unknown): Promise<ItemSyncReport[]> {
+  return handleFinanceSync(doc, plaid, event);
+}

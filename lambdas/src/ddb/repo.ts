@@ -181,9 +181,7 @@ export class Repo {
 
   // --- Stories ---
   async listStories(): Promise<Story[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.storyPrefix())).map((i) => toEntity<Story>(i)),
-    );
+    return alive((await this.doc.query(this.p(), sk.storyPrefix())).map((i) => toEntity<Story>(i)));
   }
   // getTask-style (re-filter tombstones → null), so updateStory on a deleted row throws — parity with
   // the stub's `patch`, which refuses a tombstoned id.

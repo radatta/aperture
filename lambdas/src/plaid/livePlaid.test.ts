@@ -22,7 +22,8 @@ function fakeSsm(initial: Record<string, string> = {}) {
       if (cmd instanceof GetParameterCommand) {
         const name = cmd.input.Name!;
         gets.push(name);
-        if (!params.has(name)) throw Object.assign(new Error('nope'), { name: 'ParameterNotFound' });
+        if (!params.has(name))
+          throw Object.assign(new Error('nope'), { name: 'ParameterNotFound' });
         return { Parameter: { Value: params.get(name) } };
       }
       if (cmd instanceof PutParameterCommand) {
@@ -78,10 +79,12 @@ function setup(
 }
 
 const ok = (json: unknown) => () => ({ status: 200, json });
-const err = (code: string, status = 400) => () => ({
-  status,
-  json: { error_code: code, error_message: 'x', request_id: 'req-1' },
-});
+const err =
+  (code: string, status = 400) =>
+  () => ({
+    status,
+    json: { error_code: code, error_message: 'x', request_id: 'req-1' },
+  });
 
 describe('livePlaid', () => {
   it('sends the version and credentials headers to the environment host, creds read once', async () => {
@@ -130,7 +133,9 @@ describe('livePlaid', () => {
     ]);
     const res = await plaid.exchangePublicToken('public-1');
     expect(res).toEqual({ itemId: 'item-9' });
-    expect(ssm.params.get('/aperture/dev/plaid/items/item-9/access_token')).toBe('access-secret-xyz');
+    expect(ssm.params.get('/aperture/dev/plaid/items/item-9/access_token')).toBe(
+      'access-secret-xyz',
+    );
     await plaid.accountsGet('item-9'); // uses the cached token
     expect(calls[1]!.body.access_token).toBe('access-secret-xyz');
     expect(logs.join('\n')).not.toContain('access-secret-xyz');
@@ -160,10 +165,10 @@ describe('livePlaid', () => {
   });
 
   it('gives up after three transient failures, and never retries a login error', async () => {
-    const t = setup(
-      [err('INSTITUTION_DOWN'), err('INSTITUTION_DOWN'), err('INSTITUTION_DOWN')],
-      { ...CREDS, '/aperture/dev/plaid/items/i/access_token': 'a' },
-    );
+    const t = setup([err('INSTITUTION_DOWN'), err('INSTITUTION_DOWN'), err('INSTITUTION_DOWN')], {
+      ...CREDS,
+      '/aperture/dev/plaid/items/i/access_token': 'a',
+    });
     await expect(t.plaid.accountsGet('i')).rejects.toMatchObject({ code: 'INSTITUTION_DOWN' });
     const l = setup([err('ITEM_LOGIN_REQUIRED')], {
       ...CREDS,
@@ -194,7 +199,12 @@ describe('livePlaid', () => {
             consent_expiration_time: '2027-01-01T00:00:00Z',
             consented_products: ['transactions'],
           },
-          status: { transactions: { last_successful_update: '2026-09-26T10:00:00Z', last_failed_update: null } },
+          status: {
+            transactions: {
+              last_successful_update: '2026-09-26T10:00:00Z',
+              last_failed_update: null,
+            },
+          },
         }),
       ],
       { ...CREDS, '/aperture/dev/plaid/items/i/access_token': 'a' },

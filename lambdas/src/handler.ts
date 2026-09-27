@@ -6,6 +6,10 @@ import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
 import type { Presigner } from './s3/presigner';
+import { noopInvoker } from './finance/invoker';
+import type { FinanceSyncInvoker } from './finance/invoker';
+import { noopPlaid } from './plaid/gateway';
+import type { PlaidGateway } from './plaid/gateway';
 
 export interface RpcCall {
   userId: string;
@@ -21,12 +25,18 @@ export interface RpcCall {
 // separate from RpcCall so the contract suite can supply a fake without a per-call field.
 export interface RpcDeps {
   presigner?: Presigner;
+  plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
+  financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
 }
 
 // Transport-agnostic RPC core: validate the method against the shared allowlist, build a BackendClient
 // (live writes, or write-free for a smoke call), and invoke it. The AWS handler and the httpClient's
 // in-process test harness both go through here, so there's one dispatch path to trust.
-export async function handleRpc(doc: DocClient, call: RpcCall, deps: RpcDeps = {}): Promise<unknown> {
+export async function handleRpc(
+  doc: DocClient,
+  call: RpcCall,
+  deps: RpcDeps = {},
+): Promise<unknown> {
   if (!isApiMethod(call.method)) throw new Error(`Unknown method: ${call.method}`);
   const writes = call.testMode ? noopWrites() : liveWrites(doc);
   // testMode forces the inert gateway too — a smoke run reads no SSM token and makes no Google fetch.
@@ -37,6 +47,9 @@ export async function handleRpc(doc: DocClient, call: RpcCall, deps: RpcDeps = {
     google,
     stateSecret: call.stateSecret,
     presigner: deps.presigner,
+    // testMode forces these inert too — a smoke run reads no Plaid token and starts no sync.
+    plaid: call.testMode ? noopPlaid() : (deps.plaid ?? noopPlaid()),
+    financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
   });
   const fn = (
     backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>
