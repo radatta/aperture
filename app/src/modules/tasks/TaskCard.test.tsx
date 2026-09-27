@@ -158,6 +158,10 @@ describe('unsaved-changes guard', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Task: Editable' })).toBeNull(),
     );
+    // Focus goes back to the row's title, which the page-level modal still knows about.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Editable' })),
+    );
   });
 });
 
@@ -202,6 +206,10 @@ describe('deleting a task', () => {
     await waitFor(async () =>
       expect((await api.listTasks()).map((t) => t.title)).not.toContain('Doomed'),
     );
+    // The modal closes itself once the task leaves the list, and focus lands on the list area — the
+    // row it came from is gone — never <body>.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: Doomed' })).toBeNull());
+    await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
   });
 
   it('keeps the task when the confirm is cancelled', async () => {

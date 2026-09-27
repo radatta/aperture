@@ -10,6 +10,7 @@ import { useAllTasks } from '../../data/hooks/useTasks';
 import { LensStrip } from '../../modules/tasks/LensStrip';
 import { QueryControls } from '../../modules/tasks/QueryControls';
 import { TaskListSection } from '../../modules/tasks/TaskListSection';
+import { TaskModalHost } from '../../modules/tasks/TaskModalHost';
 import { TodayLens } from '../../modules/tasks/TodayLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
 import { CalibrationSection } from '../../modules/calibration/CalibrationSection';
@@ -86,22 +87,25 @@ export function TasksPage() {
       </div>
       <LensStrip lens={lens} counts={counts} onChange={setLens} />
       {isList && <QueryControls place={place} query={query} onChange={setQuery} />}
-      {lens === 'today' && !searching ? (
-        <TodayLens tasks={tasks} onOpenWeek={() => setLens('week')} />
-      ) : isList ? (
-        <TaskListSection
-          place={place}
-          query={query}
-          onQueryChange={setQuery}
-          tasks={pending || error ? [] : tasks}
-          plans={plans}
-          ctx={ctx}
-          pending={pending}
-          error={error}
-        />
-      ) : null}
-      {lens === 'recurring' && <RecurringSection />}
-      {lens === 'calibration' && <CalibrationSection />}
+      {/* The task modal lives here, above the rows, so Save can keep it open while a row moves. */}
+      <TaskModalHost className="flex flex-col gap-4">
+        {lens === 'today' && !searching ? (
+          <TodayLens tasks={tasks} onOpenWeek={() => setLens('week')} />
+        ) : isList ? (
+          <TaskListSection
+            place={place}
+            query={query}
+            onQueryChange={setQuery}
+            tasks={pending || error ? [] : tasks}
+            plans={plans}
+            ctx={ctx}
+            pending={pending}
+            error={error}
+          />
+        ) : null}
+        {lens === 'recurring' && <RecurringSection />}
+        {lens === 'calibration' && <CalibrationSection />}
+      </TaskModalHost>
       <BulkAddDialog
         open={bulk.open}
         onClose={bulk.onClose}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef } from 'react';
 import type { ReactNode } from 'react';
 import { fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -7,50 +7,57 @@ import { Card } from '../../components/Card';
 import { Text } from '../../components/Text';
 import { NoteIcon, PaperclipIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
-import { useDisclosure } from '../../lib/useDisclosure';
 import { useAttachments } from '../../data/hooks/useAttachments';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useTransitionTask } from '../../data/hooks/useTasks';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { CategoryTag } from './CategoryTag';
 import { RollTag } from '../rolls/RollTag';
-import { TaskModal } from './TaskModal';
+import { TaskModalHost } from './TaskModalHost';
+import { useOpenTask } from './task-modal-context';
 import { TaskTitleButton } from './TaskTitleButton';
 import { remainingMin } from './taskMath';
 import type { TaskEditorIntent } from './editor/TaskEditor';
 
-const ROW_CONTROLS = 'button, a, input, select, textarea, label, dialog';
+const ROW_CONTROLS = 'button, a, input, select, textarea, label';
 
 // One task, slimmed to the lifecycle actions you press without thinking — Start, Focus, Done, plus the
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
 // calendar, files, drop, delete — lives in the modal the title (or Scope/Done) opens. No overflow menu.
 // `notesHit` marks a search result the title and category alone don't explain, so the row says why
 // it's here.
-export function TaskCard({
-  task,
-  actions,
-  notesHit = false,
-}: {
+interface TaskCardProps {
   task: Task;
   actions?: ReactNode;
   notesHit?: boolean;
-}) {
+}
+
+// The modal lives on the page (TaskModalHost), so it outlives a row that a save moves out of the list.
+// A row rendered outside any host hosts itself.
+export function TaskCard(props: TaskCardProps) {
+  return useOpenTask() ? (
+    <TaskRow {...props} />
+  ) : (
+    <TaskModalHost>
+      <TaskRow {...props} />
+    </TaskModalHost>
+  );
+}
+
+function TaskRow({ task, actions, notesHit = false }: TaskCardProps) {
   const transition = useTransitionTask();
   const pomodoro = usePomodoro();
-  const modal = useDisclosure();
-  const [intent, setIntent] = useState<TaskEditorIntent>('view');
+  const openTask = useOpenTask()!;
+  const titleRef = useRef<HTMLButtonElement>(null);
   const canScope = task.status === 'backlog' || task.status === 'planned';
 
-  // `useDisclosure` returns focus to the title button on close; set the intent before opening so the
-  // modal focuses the right field (finish → Actual, scope → Estimate).
-  const openAs = (i: TaskEditorIntent) => {
-    setIntent(i);
-    modal.onOpen();
-  };
+  // The intent picks the field the modal focuses (finish → Actual, scope → Estimate); focus returns
+  // to the title button on close.
+  const openAs = (i: TaskEditorIntent) => openTask(task, i, titleRef.current);
 
   return (
     // A click anywhere on the row opens the editor too — the title button stays the keyboard path,
-    // and clicks on controls (or inside the open dialog, a DOM child of this card) are left alone.
+    // and clicks on controls are left alone.
     <Card
       className="cursor-pointer px-3.5 py-3"
       onClick={(e) => {
@@ -59,7 +66,7 @@ export function TaskCard({
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <TaskTitleButton task={task} ref={modal.triggerRef} onOpen={() => openAs('view')} />
+          <TaskTitleButton task={task} ref={titleRef} onOpen={() => openAs('view')} />
           <TaskMeta task={task} notesHit={notesHit} />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -90,7 +97,6 @@ export function TaskCard({
           )}
         </div>
       </div>
-      <TaskModal task={task} open={modal.open} intent={intent} onClose={modal.onClose} />
     </Card>
   );
 }
