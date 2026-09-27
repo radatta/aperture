@@ -35,11 +35,13 @@ export function FinancesPage() {
   // When the focused control vanishes (a banner's Try again that worked, a Reconnect that fixed the
   // login, a removed bank), focus lands on the next useful thing instead of <body>.
   const pageRef = useRef<HTMLDivElement>(null);
-  const headingRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLElement>(null);
   useFocusRescue(
     pageRef,
     useCallback(() => {
-      const q = (sel: string) => pageRef.current?.querySelector<HTMLElement>(sel) ?? null;
+      // Only a control that can take focus: a disabled one (Refresh mid-sync) would leave it on <body>.
+      const q = (sel: string) =>
+        pageRef.current?.querySelector<HTMLElement>(`${sel}:not(:disabled)`) ?? null;
       return (
         q('[data-sync-next-step]') ??
         q('[data-sync-home]') ??
@@ -52,11 +54,16 @@ export function FinancesPage() {
 
   return (
     <div ref={pageRef} className="flex flex-col gap-4">
-      <div ref={headingRef} tabIndex={-1} className="outline-none">
-        <Text as="h1" size="2xl" weight="semibold">
-          Finances
-        </Text>
-      </div>
+      <Text
+        as="h1"
+        ref={headingRef}
+        tabIndex={-1}
+        size="2xl"
+        weight="semibold"
+        className="outline-none"
+      >
+        Finances
+      </Text>
       {linked ? (
         <>
           <PeriodHeader overview={overview} view={view} />

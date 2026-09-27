@@ -45,4 +45,31 @@ describe('useFocusRescue', () => {
     expect(document.activeElement).toBe(outside);
     outside.remove();
   });
+
+  it('rescues a focused control that turns disabled', async () => {
+    render(<Page />);
+    const btn = screen.getByRole('button', { name: 'Try again' });
+    act(() => btn.focus());
+    act(() => {
+      btn.setAttribute('disabled', '');
+      btn.blur();
+    });
+    await waitFor(() => expect(document.activeElement?.id).toBe('home'));
+  });
+
+  it('rescues a focused control inside a <dialog> that closes without unmounting', async () => {
+    render(<Page />);
+    const root = screen.getByRole('button', { name: 'Refresh' }).parentElement!;
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('open', '');
+    const inner = document.createElement('button');
+    dialog.appendChild(inner);
+    act(() => root.appendChild(dialog));
+    act(() => inner.focus());
+    act(() => {
+      dialog.removeAttribute('open');
+      inner.blur();
+    });
+    await waitFor(() => expect(document.activeElement?.id).toBe('home'));
+  });
 });

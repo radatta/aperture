@@ -304,6 +304,10 @@ describe('Finances page', () => {
     await user.click(within(link).getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(screen.queryByText(/needs you to sign in again/)).toBeNull());
     expect((await api.getFinanceOverview({ today: todayKey(4) })).items[0]!.status).toBe('ok');
+    // The Reconnect that opened Link is gone; focus lands on the page's next step, not <body>.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Refresh' })),
+    );
   });
 
   it('a first sync that fails right after connecting says nothing has synced yet', async () => {
@@ -426,6 +430,36 @@ describe('Finances page', () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Refresh' })),
     );
+  });
+
+  it('against a backend still syncing, a banner Try again leaves focus on a busy Refresh', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    // The real backend syncs later, so the page sees `syncing: true` first. The stub syncs inline;
+    // hold the overview in that state once Try again is pressed.
+    let hold = false;
+    const real = api.getFinanceOverview.bind(api);
+    vi.spyOn(api, 'getFinanceOverview').mockImplementation(async (a) => {
+      const o = await real(a);
+      return hold ? { ...o, sync: { ...o.sync, syncing: true } } : o;
+    });
+    renderApp({ api, path: '/finances' });
+    await screen.findByText(/since your .* payment/);
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'INSTITUTION_NOT_RESPONDING');
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sync didn’t finish' });
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    const again = await screen.findByRole('button', { name: 'Try again' });
+    await waitFor(() => expect(document.activeElement).toBe(again));
+    hold = true;
+    await user.click(again);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull());
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    await waitFor(() => expect(document.activeElement).toBe(refresh));
+    expect(refresh.getAttribute('aria-disabled')).toBe('true');
+    const ask = vi.spyOn(api, 'requestFinanceSync');
+    await user.click(refresh); // busy: does nothing
+    expect(ask).not.toHaveBeenCalled();
   });
 
   it('adding a rule with the button keeps focus in the pattern field', async () => {

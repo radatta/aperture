@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { cx } from '../../lib/cx';
 
 type Tone = 'ink' | 'muted' | 'subtle' | 'gold' | 'teal' | 'danger';
@@ -35,6 +35,10 @@ export interface TextProps {
   weight?: Weight;
   tabular?: boolean; // tabular-nums for data that shouldn't jitter
   id?: string; // so an aria-describedby/labelledby target can be a Text node
+  ref?: Ref<HTMLElement>; // a focus target (a page heading as the last resort)
+  tabIndex?: number;
+  'aria-live'?: 'polite';
+  'aria-hidden'?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -47,12 +51,18 @@ export function Text({
   weight = 'normal',
   tabular = false,
   id,
+  ref,
+  tabIndex,
   className,
   children,
+  ...aria
 }: TextProps) {
   return (
     <Tag
       id={id}
+      ref={ref as Ref<never>} // Tag is a union of elements; every one is an HTMLElement
+      tabIndex={tabIndex}
+      {...aria}
       className={cx(
         toneClass[tone],
         sizeClass[size],

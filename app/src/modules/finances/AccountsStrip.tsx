@@ -253,6 +253,9 @@ function SyncLine({
   // A cooldown is information, a failure is an error — only the second is red.
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
   const { lastSyncedAt, syncing, environment } = overview.sync;
+  // aria-disabled, not disabled: Refresh is where focus lands when a banner's Try again or Reconnect
+  // clears, and a disabled button can't hold it.
+  const busy = syncing || sync.isPending || watch.retrying;
   const status = syncing
     ? 'Syncing…'
     : lastSyncedAt === null
@@ -268,8 +271,9 @@ function SyncLine({
         data-sync-home
         size="sm"
         variant="quiet"
-        disabled={syncing || sync.isPending || watch.retrying}
+        aria-disabled={busy || undefined}
         onClick={() => {
+          if (busy) return;
           watch.arm(); // before the request: the stub syncs inline, so the result can land first
           sync.mutate(true, {
             onSuccess: (r) => {

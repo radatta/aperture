@@ -25,6 +25,8 @@ function recipe(variant: Variant, size: Size, className?: string) {
   return cx(
     base,
     'disabled:opacity-50 disabled:pointer-events-none',
+    // aria-disabled: busy but still focusable (it holds focus); the click handler ignores it.
+    'aria-disabled:opacity-50 aria-disabled:cursor-not-allowed',
     variantClass[variant],
     sizeClass[size],
     className,

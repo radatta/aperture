@@ -27,7 +27,7 @@ export function SyncFailedDialog({
   const close = () => {
     watch.dismiss();
     requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>('[data-sync-next-step]')?.focus(),
+      document.querySelector<HTMLElement>('[data-sync-next-step]:not(:disabled)')?.focus(),
     );
   };
   if (!failed) return null;
