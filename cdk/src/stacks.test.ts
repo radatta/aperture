@@ -519,10 +519,10 @@ describe('ApertureAppStack finance sync', () => {
     expect(JSON.stringify(mcp.Environment)).not.toMatch(/PLAID|FINANCE_SYNC/);
   });
 
-  it('schedules a sync 4×/day in LA time for the device user, never retried', () => {
+  it('schedules a sync 3×/day in LA time for the device user, never retried', () => {
     app.hasResourceProperties('AWS::Scheduler::Schedule', {
       Name: 'aperture-finance-sync-dev',
-      ScheduleExpression: 'cron(15 6,11,16,21 * * ? *)',
+      ScheduleExpression: 'cron(15 5,15,20 * * ? *)',
       ScheduleExpressionTimezone: 'America/Los_Angeles',
       FlexibleTimeWindow: { Mode: 'OFF' },
       Target: Match.objectLike({

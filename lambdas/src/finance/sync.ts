@@ -22,7 +22,7 @@ import { mapLimit } from '../util/mapLimit';
 import { PLAID_CALL_MAX_MS, PlaidApiError } from '../plaid/gateway';
 import type { PlaidGateway, PlaidItemHealth } from '../plaid/gateway';
 
-// The finance sync — one run per invoke (scheduled 4×/day, or after Refresh / connect / reconnect).
+// The finance sync — one run per invoke (scheduled 3×/day, or after Refresh / connect / reconnect).
 // Items run in parallel (each has its own lock; Plaid's limits are per item), all inside one deadline.
 // Per item, under the lock:
 //   1. accounts + item health first (a transaction never names an account the table lacks);

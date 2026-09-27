@@ -1,5 +1,5 @@
 // @aperture/lambdas — the finance sync Lambda (the third function; cdk/src/lib/finance-sync.ts). Invoked two
-// ways, both with a FinanceSyncEvent: by EventBridge Scheduler (6:15 / 11:15 / 16:15 / 21:15 LA, the
+// ways, both with a FinanceSyncEvent: by EventBridge Scheduler (5:15 / 15:15 / 20:15 LA, the
 // schedule's fixed input carries the user id) and asynchronously by the BFF after Refresh / connect /
 // reconnect. It never serves HTTP. The logic lives in finance/sync.ts; this is the AWS edge.
 import { createLiveDoc } from './ddb/LiveDoc';

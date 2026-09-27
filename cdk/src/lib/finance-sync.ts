@@ -24,8 +24,8 @@ export interface FinanceSyncProps {
 }
 
 // The finance sync Lambda (lambdas/src/financeSync.ts): invoked async by the BFF (Refresh / connect /
-// reconnect) and by EventBridge Scheduler 4×/day. No Function URL — it never serves HTTP. Cost at
-// single-user: ≤ 4 × 300 s × 0.5 GB/day, well inside the free tier (INFRA §11).
+// reconnect) and by EventBridge Scheduler 3×/day. No Function URL — it never serves HTTP. Cost at
+// single-user: scheduled runs ≤ 3 × 300 s × 0.5 GB/day, well inside the free tier (INFRA §11).
 export class FinanceSync extends Construct {
   readonly fn: NodejsFunction;
 
@@ -85,7 +85,7 @@ export class FinanceSync extends Construct {
         'Per-item Plaid access tokens live at .../plaid/items/<itemId>/access_token; the dynamic <itemId> needs the trailing wildcard.',
     });
 
-    // The scheduled sync: 6:15a / 11:15a / 4:15p / 9:15p LA. L1 with its own role so the invoke grant is
+    // The scheduled sync: 5:15a / 3:15p / 8:15p LA. L1 with its own role so the invoke grant is
     // the exact function ARN (the L2 target grants `arn:*`, another hash-embedded cdk-nag ack). Gated on
     // deviceUserId, like DEVICE_USER_ID: without it there's no user to sync.
     if (!deviceUserId) return;
@@ -108,7 +108,7 @@ export class FinanceSync extends Construct {
     );
     new scheduler.CfnSchedule(this, 'Schedule', {
       name: `aperture-finance-sync-${stage}`,
-      scheduleExpression: 'cron(15 6,11,16,21 * * ? *)',
+      scheduleExpression: 'cron(15 5,15,20 * * ? *)',
       scheduleExpressionTimezone: 'America/Los_Angeles',
       flexibleTimeWindow: { mode: 'OFF' },
       target: {
