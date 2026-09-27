@@ -20,16 +20,27 @@ export function AppShell() {
   // dock grows when a timer is running, when several run at once, and when the capture field wraps
   // to six lines — and whatever constant you pick, some combination reaches past it and starts
   // covering the last card on the page.
+  // The same height is published as --dock-h, which index.css turns into the root's
+  // scroll-padding-bottom — so anything scrolled into view (focus moves, scrollIntoView) lands above
+  // the dock instead of under it.
   useEffect(() => {
     const el = dockRef.current;
     if (!el) return;
+    const root = document.documentElement;
     // offsetHeight, not contentRect: contentRect is the CONTENT box and so excludes the dock's own
     // pb-safe. On a home-indicator iPhone that's ~34px the reserve would land short — precisely the
     // overlap this measurement exists to prevent.
-    const ro = new ResizeObserver(() => setDockHeight(el.offsetHeight));
+    const measure = () => {
+      setDockHeight(el.offsetHeight);
+      root.style.setProperty('--dock-h', `${el.offsetHeight}px`);
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setDockHeight(el.offsetHeight);
-    return () => ro.disconnect();
+    measure();
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty('--dock-h');
+    };
   }, []);
 
   return (

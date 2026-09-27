@@ -98,7 +98,11 @@ on close — except when the action removed that trigger (a destructive row acti
 left alone rather than aimed at a node about to unmount, or handed to the list container
 (`useRowAction`, `TaskModalHost`) — never `<body>`. After a mouse/touch close `useDisclosure` returns
 focus without the ring (only Tab counts as keyboard navigation). If you add another popover or
-collapse-in-place control, use `useDisclosure` rather than a bare `useState`.
+collapse-in-place control, use `useDisclosure` rather than a bare `useState`. When the focused
+element itself disappears (a banner that clears, a list row that re-renders), a page can install
+`lib/useFocusRescue` as the backstop: a frame later, if focus fell to `<body>`, it goes to the page's
+chosen fallback. Move focus with `lib/focus` `revealFocus`, which scrolls the target clear of the dock
+(the dock publishes its height as `--dock-h`, the root's `scroll-padding-bottom`).
 
 **Empty states go through `components/EmptyState`.** React Query defaults `data` to `[]`, so
 branching on `list.length === 0` alone asserts "Backlog is clear" while the query is still in flight.

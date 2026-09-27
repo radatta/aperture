@@ -5,6 +5,14 @@ import { renderApp } from '../test/utils';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
+describe('dock height', () => {
+  it('is published as --dock-h for the root scroll-padding', async () => {
+    renderApp({ path: '/settings' });
+    await screen.findByLabelText('Capture log');
+    expect(document.documentElement.style.getPropertyValue('--dock-h')).toMatch(/^\d+px$/);
+  });
+});
+
 describe('dock: idle Focus', () => {
   it('sits inside the capture panel while idle, and hands over to the timer row once started', async () => {
     const user = userEvent.setup();
