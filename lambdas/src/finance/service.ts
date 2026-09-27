@@ -5,6 +5,7 @@ import {
   detectInternalMoves,
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
+  duplicateItemMessage,
   isDuplicateItem,
   normalizeRulePattern,
   periodStartError,
@@ -284,7 +285,7 @@ export class FinanceService {
       this.repo.listFinanceAccounts(),
     ]);
     if (isDuplicateItem(items, accounts, input.institution.id, input.accounts))
-      throw new Error(`${input.institution.name} is already linked with these accounts`);
+      throw new Error(duplicateItemMessage(input.institution.name));
     const { itemId } = await this.d.plaid.exchangePublicToken(input.publicToken);
     const t = this.d.now();
     const item: FinanceItem = {
@@ -350,7 +351,9 @@ export class FinanceService {
     if (item.deletedAt === null) {
       await this.d.plaid.itemRemove(itemId);
       const t = this.d.now();
-      if (await this.repo.getFinanceSyncState(itemId))
+      // Consistent: a state row written moments ago (a fresh link) must get its tombstone, which the
+      // running sync's finish relies on to bury accounts it upserted.
+      if (await this.repo.getFinanceSyncState(itemId, { consistent: true }))
         await this.repo.casUpdate(
           this.repo.finSyncShape(itemId),
           itemId,

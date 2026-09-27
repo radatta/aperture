@@ -18,6 +18,7 @@ import type {
 } from '@aperture/shared';
 import type { Repo } from '../ddb/repo';
 import { ConflictError } from '../ddb/repo';
+import { mapLimit } from '../util/mapLimit';
 import { PLAID_CALL_MAX_MS, PlaidApiError } from '../plaid/gateway';
 import type { PlaidGateway, PlaidItemHealth } from '../plaid/gateway';
 
@@ -667,7 +668,8 @@ export async function upsertAccounts(
 // A bank removed while this run wrote its accounts: tombstone whatever it left alive. The remove
 // tombstones accounts last, so any upsert that beat that sweep is caught here (the finish saw the
 // state tombstone, which the remove writes first). `wrote`: the ids this run upserted — read
-// consistently, since the list query may not see a write this fresh.
+// consistently, since the list query may not see a write this fresh (and skipped if the upsert
+// failed before creating it).
 export async function buryAccounts(
   repo: Repo,
   itemId: string,
@@ -676,10 +678,14 @@ export async function buryAccounts(
 ): Promise<void> {
   const listed = (await repo.listFinanceAccounts()).filter((a) => a.itemId === itemId);
   const ids = [...new Set([...listed.map((a) => a.id), ...wrote])];
-  await repo.casMany(ids, (id) =>
+  const rows = await mapLimit(ids, 8, (id) => repo.getFinanceAccount(id, { consistent: true }));
+  const live = rows.filter(
+    (a): a is FinanceAccount => a !== null && a.deletedAt === null && a.itemId === itemId,
+  );
+  await repo.casMany(live, (a) =>
     repo.casUpdate(
-      repo.finAcctShape(id),
-      id,
+      repo.finAcctShape(a.id),
+      a.id,
       (fresh) =>
         fresh.deletedAt !== null || fresh.itemId !== itemId ? null : { ...fresh, deletedAt: t },
       t,

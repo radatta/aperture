@@ -46,15 +46,15 @@ describe('useFocusRescue', () => {
     outside.remove();
   });
 
-  it('rescues a focused control that turns disabled', async () => {
+  it('leaves a control that is only disabled while it saves alone', async () => {
     render(<Page />);
     const btn = screen.getByRole('button', { name: 'Try again' });
     act(() => btn.focus());
-    act(() => {
-      btn.setAttribute('disabled', '');
-      btn.blur();
-    });
-    await waitFor(() => expect(document.activeElement?.id).toBe('home'));
+    act(() => btn.setAttribute('disabled', ''));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    act(() => btn.removeAttribute('disabled'));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(document.activeElement).toBe(btn);
   });
 
   it('rescues a focused control inside a <dialog> that closes without unmounting', async () => {

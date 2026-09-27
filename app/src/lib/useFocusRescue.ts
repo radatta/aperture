@@ -3,9 +3,10 @@ import type { RefObject } from 'react';
 import { revealFocus } from './focus';
 
 // A page-level backstop for the focus-return contract (CONVENTIONS): when the element that had focus
-// inside `rootRef` is removed — a banner that clears, a dialog that unmounts its opener — or turns
-// disabled, or sits in a <dialog> that closed without unmounting, and focus has fallen to <body>,
-// hand it to `fallback()`. Checked a frame later, so a component's own
+// inside `rootRef` is removed — a banner that clears, a dialog that unmounts its opener — or sits in a
+// <dialog> that closed without unmounting, and focus has fallen to <body> (or stayed on it, as engines
+// that don't restore focus on close do), hand it to `fallback()`. A button merely disabled while it
+// saves is NOT lost: it gets focus back itself. Checked a frame later, so a component's own
 // focus-return (an effect, a layout effect) always wins; this only catches what nothing else did.
 export function useFocusRescue(
   rootRef: RefObject<HTMLElement | null>,
@@ -22,14 +23,9 @@ export function useFocusRescue(
     const check = () => {
       frame = 0;
       const active = document.activeElement;
-      const gone =
-        last !== null &&
-        (!last.isConnected ||
-          (last as HTMLButtonElement).disabled === true ||
-          last.closest('dialog:not([open])') !== null);
-      // Fallen to <body>, or still parked on the dead control (some engines keep focus on a button
-      // that turned disabled, or inside a <dialog> that closed).
-      const lost = active === null || active === document.body || active === last;
+      const closed = last !== null && last.closest('dialog:not([open])') !== null;
+      const gone = last !== null && (!last.isConnected || closed);
+      const lost = active === null || active === document.body || (closed && active === last);
       if (gone && lost) {
         last = null;
         revealFocus(fallback());
@@ -43,7 +39,7 @@ export function useFocusRescue(
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['open', 'disabled'],
+      attributeFilter: ['open'],
     });
     return () => {
       root.removeEventListener('focusin', onFocusIn);

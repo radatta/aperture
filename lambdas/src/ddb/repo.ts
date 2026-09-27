@@ -460,8 +460,11 @@ export class Repo {
   async listFinanceAccounts(): Promise<FinanceAccount[]> {
     return alive(await this.listFinanceAccountsAll());
   }
-  async getFinanceAccount(id: string): Promise<FinanceAccount | null> {
-    const it = await this.doc.get(this.p(), sk.finAcct(id));
+  async getFinanceAccount(
+    id: string,
+    opts?: { consistent?: boolean },
+  ): Promise<FinanceAccount | null> {
+    const it = await this.doc.get(this.p(), sk.finAcct(id), opts);
     return it ? toEntity<FinanceAccount>(it) : null;
   }
   // Alive rows dated in [from, to] (inclusive; `to` omitted = no upper bound) — the GSI date index.

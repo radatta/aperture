@@ -13,7 +13,14 @@ import { entityItem, financeTxnItem } from '../ddb/mapping';
 import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
 import { InMemoryPlaid } from '../plaid/gateway';
-import { itemStatus, MAX_PASSES, RUN_BUDGET_MS, runFinanceSync, upsertAccounts } from './sync';
+import {
+  buryAccounts,
+  itemStatus,
+  MAX_PASSES,
+  RUN_BUDGET_MS,
+  runFinanceSync,
+  upsertAccounts,
+} from './sync';
 import type { FinanceSyncMode, SyncDeps } from './sync';
 
 const U = 'u1';
@@ -509,6 +516,15 @@ describe('runFinanceSync — the review findings', () => {
     };
     const [r] = await run();
     expect(r!.outcome).toBe('removed');
+    expect(await repo.listFinanceAccounts()).toEqual([]);
+  });
+
+  it('burying accounts skips ids a failed upsert never created', async () => {
+    await link();
+    await run();
+    await expect(
+      buryAccounts(repo, FIXTURE_ITEM_ID, clock, ['acct-never-written']),
+    ).resolves.toBeUndefined();
     expect(await repo.listFinanceAccounts()).toEqual([]);
   });
 

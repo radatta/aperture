@@ -21,6 +21,7 @@ import {
   FIXTURE_ITEM_ID,
   FIXTURE_LINK_ACCOUNTS,
   fixturePageAfter,
+  duplicateItemMessage,
   isDuplicateItem,
   normalizeRulePattern,
   reconcileSyncPage,
@@ -1290,7 +1291,7 @@ class StubClient implements ApiClient {
   async exchangePlaidPublicToken(input: ExchangePublicTokenInput): Promise<FinanceItem> {
     const { financeItems, financeAccounts } = this.store;
     if (isDuplicateItem(financeItems, financeAccounts, input.institution.id, input.accounts))
-      throw new Error(`${input.institution.name} is already linked with these accounts`);
+      throw new Error(duplicateItemMessage(input.institution.name));
     return this.linkFixtureItem(input);
   }
   // Like the backend: the login is fixed, then a sync runs (which can fail again).

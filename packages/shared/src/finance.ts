@@ -844,6 +844,10 @@ export function groupByMerchant(
 // present (by name + mask, Plaid's recommended check). A same-bank item with no live accounts also
 // counts: the sync writes accounts, so until its first sync lands (or forever, if that failed) the
 // check above has nothing to compare, and letting it through spends a second slot on the same login.
+// Covers both refusals: the same accounts again, and a bank whose existing link hasn't synced yet.
+export const duplicateItemMessage = (bank: string): string =>
+  `${bank} is already linked — Refresh it, or remove it before linking again.`;
+
 export function isDuplicateItem(
   items: FinanceItem[],
   accounts: FinanceAccount[],
