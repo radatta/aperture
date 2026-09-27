@@ -22,25 +22,32 @@ import { PlaidApiError } from '../plaid/gateway';
 import type { PlaidGateway, PlaidItemHealth } from '../plaid/gateway';
 
 // The finance sync — one run per invoke (scheduled 4×/day, or after Refresh / connect / reconnect).
-// Per item, under a lock:
+// Items run in parallel (each has its own lock; Plaid's limits are per item), all inside one deadline.
+// Per item, under the lock:
 //   1. accounts + item health first (a transaction never names an account the table lacks);
-//   2. refresh at Plaid if asked (then poll: new data lands seconds to a minute later);
+//   2. refresh at Plaid if one is DUE (refreshRequestedAt > lastRefreshedAt — stored state, so whichever
+//      run holds the lock does it), then poll /item/get until Plaid says the refresh landed;
 //   3. gather EVERY /transactions/sync page, reconcile them all, write, and only then save the cursor
-//      — a failure anywhere writes nothing and the cursor stays put, so the next run replays safely;
-//   4. rerun flag: if a sync was requested after this pass started, run one more pass before unlocking
-//      (the request's own invoke found the lock held and exited), so no request is ever dropped.
+//      — a failure anywhere leaves the cursor put, so the next run replays safely;
+//   4. finish in ONE conditional write on the sync state: if a sync was requested after this pass
+//      started (its own invoke found the lock held and exited), renew and run another pass — on
+//      success and on failure alike; otherwise stamp the result and unlock. Because the check and the
+//      unlock are one compare-and-set, a request can't slip between them.
 // User fields are never overwritten: existing rows are written with casUpdate, merging the reconciled
-// Plaid fields over the FRESH row's user fields.
+// Plaid fields over the FRESH row's user fields; "new" rows are inserted only if absent.
 //
-// Stamps: `lastSyncedAt` / `lastSyncErrorAt` are the START time of the pass that set them, so a
-// request stamped mid-pass stays newer and the overview keeps reading `syncing` until the rerun.
+// Stamps (the overview's `syncing` contract): `lastSyncedAt` / `lastSyncErrorAt` are the START time of
+// the pass that set them, and a rerun starts at max(now, the request) — so a request always ends up
+// covered by a stamp at least as new, and `syncing` (request > max(stamps)) clears exactly then.
+//
+// The lock: `lockedUntil`'s value doubles as the holder's token. Renewing and finishing check it, so a
+// run that lost its lock (expired, taken over, or the bank was removed) writes nothing more.
 
 export type FinanceSyncMode = 'scheduled' | 'manual' | 'post-link';
 export interface FinanceSyncEvent {
   userId: string;
   mode: FinanceSyncMode;
   itemId?: string; // one item (post-link); otherwise every alive item
-  refresh?: boolean; // ask Plaid to re-pull from the bank first (Refresh button)
 }
 
 export interface SyncDeps {
@@ -49,11 +56,12 @@ export interface SyncDeps {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   userId: string;
+  deadline?: number; // absolute ms the whole run must finish by (the Lambda's remaining time)
 }
 
 export interface ItemSyncReport {
   itemId: string;
-  outcome: 'ok' | 'locked' | 'error';
+  outcome: 'ok' | 'locked' | 'removed' | 'error';
   code?: string;
   passes: number;
   written: number;
@@ -80,44 +88,246 @@ const pickUser = (t: FinanceTransaction): UserFields => ({
 const sameUser = (a: UserFields, b: UserFields) => USER_TXN_FIELDS.every((k) => a[k] === b[k]);
 
 export const MAX_PASSES = 3; // the first pass + up to two reruns for requests that landed mid-run
+export const RUN_BUDGET_MS = 290_000; // default deadline when the caller gives none
+export const PASS_RESERVE_MS = 40_000; // time one plain pass needs (3 × Plaid's 10 s timeout + writes)
 const MUTATION_RESTARTS = 3;
 const PENDING_DISCONNECT_MS = 7 * 24 * 60 * 60_000;
+const POLL_TRIES = Math.ceil(FINANCE_REFRESH_POLL_MAX_MS / FINANCE_REFRESH_POLL_MS);
+
+class LockLostError extends Error {
+  constructor() {
+    super('The sync lock was lost');
+    this.name = 'LockLostError';
+  }
+}
+class RemovedError extends Error {}
 
 const codeOf = (err: unknown): string =>
   err instanceof PlaidApiError
     ? err.code
     : err instanceof ConflictError
       ? err.code
-      : err instanceof Error && err.message.startsWith('Not found')
-        ? 'NOT_FOUND'
-        : 'INTERNAL_ERROR';
+      : err instanceof LockLostError
+        ? 'LOCK_LOST'
+        : err instanceof Error && err.message.startsWith('Not found')
+          ? 'NOT_FOUND'
+          : 'INTERNAL_ERROR';
+
+const refreshDue = (s: FinanceSyncState) => (s.refreshRequestedAt ?? 0) > (s.lastRefreshedAt ?? 0);
+
+interface Ctx extends SyncDeps {
+  deadline: number;
+}
 
 export async function runFinanceSync(
   deps: SyncDeps,
   e: FinanceSyncEvent,
 ): Promise<ItemSyncReport[]> {
+  const ctx: Ctx = { ...deps, deadline: deps.deadline ?? deps.now() + RUN_BUDGET_MS };
   const items = e.itemId
-    ? [await deps.repo.getFinanceItem(e.itemId)].filter(
+    ? [await deps.repo.getFinanceItem(e.itemId, { consistent: true })].filter(
         (i): i is FinanceItem => i !== null && i.deletedAt === null,
       )
     : await deps.repo.listFinanceItems();
-  const out: ItemSyncReport[] = [];
-  // One item's failure never blocks another.
-  for (const item of items) out.push(await syncItem(deps, item.id, e.refresh === true));
-  return out;
+  // In parallel, and one item's failure never blocks another.
+  return Promise.all(
+    items.map((item) =>
+      syncItem(ctx, item.id, e.mode).catch((err: unknown): ItemSyncReport => ({
+        itemId: item.id,
+        outcome: 'error',
+        code: codeOf(err),
+        passes: 0,
+        written: 0,
+      })),
+    ),
+  );
 }
 
-async function syncItem(
-  deps: SyncDeps,
-  itemId: string,
-  refreshFirst: boolean,
-): Promise<ItemSyncReport> {
-  const { repo, now } = deps;
+async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promise<ItemSyncReport> {
+  const { repo, now } = ctx;
   const report: ItemSyncReport = { itemId, outcome: 'ok', passes: 0, written: 0 };
   const shape = repo.finSyncShape(itemId);
-  const blank = (t: number): FinanceSyncState => ({
+  // Room to claim a refresh: its poll plus this pass plus one rerun must still fit.
+  const roomForRefresh = (t: number) =>
+    t + 2 * PASS_RESERVE_MS + FINANCE_REFRESH_POLL_MS <= ctx.deadline;
+
+  // 1. Acquire — a consistent read (a stale "held" would drop the request), atomic via the CAS.
+  //    Every fn below ASSIGNS all its outputs: casUpdate may run it more than once.
+  const t = now();
+  let acquired = false;
+  let removed = false;
+  let claim = false;
+  const taken = await repo.casUpdate(
+    shape,
+    itemId,
+    (fresh) => {
+      removed = fresh.deletedAt !== null;
+      acquired = !removed && !(fresh.lockedUntil !== null && fresh.lockedUntil > t);
+      claim = acquired && refreshDue(fresh) && roomForRefresh(t);
+      if (!acquired) return null;
+      return {
+        ...fresh,
+        lockedUntil: t + FINANCE_SYNC_LOCK_MS,
+        lastRefreshedAt: claim ? t : fresh.lastRefreshedAt,
+      };
+    },
+    t,
+    {
+      consistent: true,
+      allowDeleted: true,
+      create: () => {
+        acquired = true;
+        removed = false;
+        claim = false;
+        return { ...blankState(ctx.userId, itemId, t), lockedUntil: t + FINANCE_SYNC_LOCK_MS };
+      },
+    },
+  );
+  if (!acquired) return { ...report, outcome: removed ? 'removed' : 'locked' };
+
+  const lock = { token: taken.lockedUntil! };
+  const renew = () => renewLock(ctx, itemId, lock);
+  let passStart = t;
+  let refresh = claim;
+
+  for (;;) {
+    report.passes++;
+    let result: { ok: true } | { ok: false; code: string };
+    try {
+      // The bank may have been removed while we waited or ran — stop, and write nothing.
+      const item = await repo.getFinanceItem(itemId, { consistent: true });
+      if (!item || item.deletedAt !== null) throw new RemovedError();
+      const before = await refreshAccountsAndHealth(ctx, itemId, passStart);
+      if (refresh) {
+        try {
+          await ctx.plaid.transactionsRefresh(itemId);
+          await pollRefresh(ctx, itemId, before, renew);
+        } catch (err) {
+          if (err instanceof LockLostError) throw err;
+          // A refused refresh still leaves a normal sync worth running.
+          console.log(
+            JSON.stringify({ event: 'finance_refresh_failed', itemId, code: codeOf(err) }),
+          );
+        }
+      }
+      let pass = await syncPass(ctx, itemId, passStart);
+      report.written += pass.written;
+      // Right after a link Plaid may not be ready: poll until the history is in, or time runs out.
+      if (mode === 'post-link')
+        for (
+          let i = 0;
+          i < POLL_TRIES &&
+          pass.status !== null &&
+          pass.status !== 'HISTORICAL_UPDATE_COMPLETE' &&
+          now() + FINANCE_REFRESH_POLL_MS + PASS_RESERVE_MS <= ctx.deadline;
+          i++
+        ) {
+          await ctx.sleep(FINANCE_REFRESH_POLL_MS);
+          await renew();
+          pass = await syncPass(ctx, itemId, passStart);
+          report.written += pass.written;
+        }
+      // Never "synced" with nothing in it: not ready is a failure the page can say out loud.
+      if (pass.status === 'NOT_READY') throw new PlaidApiError('PRODUCT_NOT_READY');
+      result = { ok: true };
+    } catch (err) {
+      if (err instanceof RemovedError) return { ...report, outcome: 'removed' };
+      if (err instanceof LockLostError) return { ...report, outcome: 'error', code: 'LOCK_LOST' };
+      const code = codeOf(err);
+      result = { ok: false, code };
+      console.log(JSON.stringify({ event: 'finance_sync_failed', itemId, code }));
+      if (code === 'ITEM_LOGIN_REQUIRED')
+        await repo
+          .casUpdate(
+            repo.finItemShape(itemId),
+            itemId,
+            (fresh) => ({ ...fresh, status: 'login_required' as const, errorCode: code }),
+            now(),
+          )
+          .catch(() => {});
+    }
+
+    // 2. Finish: the rerun check and the unlock are ONE conditional write.
+    // Outputs of the finish fn (an object: TS can't see assignments made inside the callback).
+    const fin: {
+      decision: 'lost' | 'removed' | 'rerun' | 'done';
+      nextStart: number;
+      nextClaim: boolean;
+    } = { decision: 'lost', nextStart: passStart, nextClaim: false };
+    const finished = await repo
+      .casUpdate(
+        shape,
+        itemId,
+        (fresh) => {
+          const t2 = now();
+          fin.nextStart = passStart;
+          fin.nextClaim = false;
+          if (fresh.deletedAt !== null) {
+            fin.decision = 'removed';
+            return null;
+          }
+          if (fresh.lockedUntil !== lock.token) {
+            fin.decision = 'lost';
+            return null;
+          }
+          const asked = fresh.syncRequestedAt ?? 0;
+          if (
+            report.passes < MAX_PASSES &&
+            asked > passStart &&
+            t2 + PASS_RESERVE_MS <= ctx.deadline
+          ) {
+            fin.decision = 'rerun';
+            fin.nextStart = Math.max(t2, asked);
+            fin.nextClaim = refreshDue(fresh) && roomForRefresh(t2);
+            return {
+              ...fresh,
+              lockedUntil: t2 + FINANCE_SYNC_LOCK_MS,
+              lastRefreshedAt: fin.nextClaim ? fin.nextStart : fresh.lastRefreshedAt,
+            };
+          }
+          fin.decision = 'done';
+          return result.ok
+            ? {
+                ...fresh,
+                lastSyncedAt: passStart,
+                lastSyncError: null,
+                lastSyncErrorAt: null,
+                lockedUntil: null,
+              }
+            : {
+                ...fresh,
+                lastSyncError: result.code,
+                lastSyncErrorAt: passStart,
+                lockedUntil: null,
+              };
+        },
+        now(),
+        { consistent: true, allowDeleted: true },
+      )
+      .catch((err: unknown) => {
+        // Can't even finish (a write storm): the lock simply expires. Never throw past here.
+        console.log(
+          JSON.stringify({ event: 'finance_sync_unlock_failed', itemId, code: codeOf(err) }),
+        );
+        return null;
+      });
+    if (finished === null) return { ...report, outcome: 'error', code: 'UNLOCK_FAILED' };
+    if (fin.decision === 'removed') return { ...report, outcome: 'removed' };
+    if (fin.decision === 'lost') return { ...report, outcome: 'error', code: 'LOCK_LOST' };
+    if (fin.decision === 'rerun') {
+      passStart = fin.nextStart;
+      lock.token = finished.lockedUntil!;
+      refresh = fin.nextClaim;
+      continue;
+    }
+    return result.ok ? report : { ...report, outcome: 'error', code: result.code };
+  }
+}
+
+function blankState(userId: string, itemId: string, t: number): FinanceSyncState {
+  return {
     id: itemId,
-    userId: deps.userId,
+    userId,
     createdAt: t,
     updatedAt: t,
     deletedAt: null,
@@ -130,145 +340,73 @@ async function syncItem(
     refreshRequestedAt: null,
     lastRefreshedAt: null,
     lockedUntil: null,
-  });
+  };
+}
 
-  // Lock: atomic, because casUpdate is compare-and-set. Held → exit (the holder's rerun covers us).
-  let passStart = now();
-  let acquired = false;
-  const lock = repo.casUpdate(
-    shape,
+// Extend the lock — only if it's still ours (same token, bank not removed); otherwise stop the run.
+async function renewLock(ctx: Ctx, itemId: string, lock: { token: number }): Promise<void> {
+  const t = ctx.now();
+  let lost = false;
+  const out = await ctx.repo.casUpdate(
+    ctx.repo.finSyncShape(itemId),
     itemId,
     (fresh) => {
-      acquired = !(fresh.lockedUntil !== null && fresh.lockedUntil > passStart);
-      return acquired ? { ...fresh, lockedUntil: passStart + FINANCE_SYNC_LOCK_MS } : null;
+      lost = fresh.deletedAt !== null || fresh.lockedUntil !== lock.token;
+      return lost ? null : { ...fresh, lockedUntil: t + FINANCE_SYNC_LOCK_MS };
     },
-    passStart,
-    {
-      create: () => {
-        acquired = true;
-        return { ...blank(passStart), lockedUntil: passStart + FINANCE_SYNC_LOCK_MS };
-      },
-    },
-  );
-  try {
-    await lock;
-  } catch (err) {
-    // Couldn't even take the lock (a write conflict storm, a missing row): report, touch nothing.
-    return { ...report, outcome: 'error', code: codeOf(err) };
-  }
-  if (!acquired) return { ...report, outcome: 'locked' };
-
-  let refresh = refreshFirst;
-  try {
-    for (;;) {
-      report.passes++;
-      await refreshAccountsAndHealth(deps, itemId, passStart);
-      let refreshed = false;
-      if (refresh) {
-        try {
-          await deps.plaid.transactionsRefresh(itemId);
-          refreshed = true;
-        } catch (err) {
-          // A refused refresh still leaves a normal sync worth running; log it, don't fail the pass.
-          console.log(
-            JSON.stringify({ event: 'finance_refresh_failed', itemId, code: codeOf(err) }),
-          );
-        }
-      }
-      let written = await syncPass(deps, itemId, passStart);
-      if (refreshed) {
-        // Refreshed data lands later: poll until something arrives, the window closes, or a fixed
-        // number of tries (so a frozen test clock can't loop forever).
-        const until = passStart + FINANCE_REFRESH_POLL_MAX_MS;
-        const tries = Math.ceil(FINANCE_REFRESH_POLL_MAX_MS / FINANCE_REFRESH_POLL_MS);
-        for (let i = 0; written === 0 && i < tries && now() < until; i++) {
-          await deps.sleep(FINANCE_REFRESH_POLL_MS);
-          await renewLock(deps, itemId);
-          written = await syncPass(deps, itemId, passStart);
-        }
-      }
-      report.written += written;
-      // Rerun flag: a request newer than this pass's start means someone asked mid-run.
-      const state = await repo.getFinanceSyncState(itemId);
-      const asked = state?.syncRequestedAt ?? 0;
-      if (report.passes < MAX_PASSES && asked > passStart) {
-        refresh = (state?.refreshRequestedAt ?? 0) > passStart;
-        passStart = Math.max(now(), asked);
-        await renewLock(deps, itemId);
-        continue;
-      }
-      break;
-    }
-    await repo.casUpdate(
-      shape,
-      itemId,
-      (fresh) => ({
-        ...fresh,
-        lastSyncedAt: passStart,
-        lastSyncError: null,
-        lastSyncErrorAt: null,
-        lockedUntil: null,
-      }),
-      now(),
-    );
-  } catch (err) {
-    const code = codeOf(err);
-    report.outcome = 'error';
-    report.code = code;
-    console.log(JSON.stringify({ event: 'finance_sync_failed', itemId, code }));
-    if (code === 'ITEM_LOGIN_REQUIRED')
-      await repo
-        .casUpdate(
-          repo.finItemShape(itemId),
-          itemId,
-          (fresh) => ({ ...fresh, status: 'login_required' as const, errorCode: code }),
-          now(),
-        )
-        .catch(() => {});
-    // If even this write loses, the lock simply expires (FINANCE_SYNC_LOCK_MS) — never throw past here.
-    await repo
-      .casUpdate(
-        shape,
-        itemId,
-        (fresh) => ({
-          ...fresh,
-          lastSyncError: code,
-          lastSyncErrorAt: passStart,
-          lockedUntil: null,
-        }),
-        now(),
-      )
-      .catch((e: unknown) =>
-        console.log(
-          JSON.stringify({ event: 'finance_sync_unlock_failed', itemId, code: codeOf(e) }),
-        ),
-      );
-  }
-  return report;
-}
-
-async function renewLock(deps: SyncDeps, itemId: string): Promise<void> {
-  const t = deps.now();
-  await deps.repo.casUpdate(
-    deps.repo.finSyncShape(itemId),
-    itemId,
-    (fresh) => ({ ...fresh, lockedUntil: t + FINANCE_SYNC_LOCK_MS }),
     t,
+    { consistent: true, allowDeleted: true },
   );
+  if (lost) throw new LockLostError();
+  lock.token = out.lockedUntil!;
 }
 
-// One pass: every page from the saved cursor, reconciled together, written, then the cursor. Returns
-// how many rows it wrote (0 = nothing new at Plaid).
-async function syncPass(deps: SyncDeps, itemId: string, passStart: number): Promise<number> {
-  const { repo, plaid } = deps;
-  const state = await repo.getFinanceSyncState(itemId);
+// After /transactions/refresh, wait for Plaid to say the bank pull finished: its own
+// last_successful_update (or last_failed_update) moves past the value read before the refresh. That
+// compares Plaid's clock with Plaid's clock, and it moves even when nothing new was found — so a quiet
+// day doesn't poll to the cap. Bounded by the poll window and the run's deadline.
+async function pollRefresh(
+  ctx: Ctx,
+  itemId: string,
+  before: PlaidItemHealth,
+  renew: () => Promise<void>,
+): Promise<void> {
+  const horizon = Math.min(
+    ctx.now() + FINANCE_REFRESH_POLL_MAX_MS,
+    ctx.deadline - 2 * PASS_RESERVE_MS,
+  );
+  const after = (x: number | null, y: number | null) => x !== null && (y === null || x > y);
+  for (let i = 0; i < POLL_TRIES && ctx.now() + FINANCE_REFRESH_POLL_MS <= horizon; i++) {
+    await ctx.sleep(FINANCE_REFRESH_POLL_MS);
+    await renew();
+    const h = await ctx.plaid.itemGet(itemId);
+    if (after(h.lastSuccessfulUpdateAt, before.lastSuccessfulUpdateAt)) return;
+    if (after(h.lastFailedUpdateAt, before.lastFailedUpdateAt)) {
+      console.log(JSON.stringify({ event: 'finance_refresh_bank_failed', itemId }));
+      return;
+    }
+  }
+  console.log(JSON.stringify({ event: 'finance_refresh_unconfirmed', itemId }));
+}
+
+interface PassResult {
+  written: number;
+  status: string | null; // Plaid's transactions_update_status; null when it didn't say
+}
+
+// One pass: every page from the saved cursor, reconciled together, written, then the cursor.
+async function syncPass(ctx: Ctx, itemId: string, passStart: number): Promise<PassResult> {
+  const { repo, plaid } = ctx;
+  // Consistent reads throughout: a pass right after another must see its cursor and its rows.
+  const state = await repo.getFinanceSyncState(itemId, { consistent: true });
   const saved = state?.cursor ?? null;
-  const pages = await gatherPages(plaid, itemId, saved);
-  if (pages === null) return 0; // not ready yet at Plaid
+  const gathered = await gatherPages(plaid, itemId, saved);
+  if (gathered === null) return { written: 0, status: 'NOT_READY' };
+  const { pages, status } = gathered;
 
   const ids = [...new Set(pages.flatMap((p) => referencedTxnIds(p)))];
   const existing = ids.length
-    ? await repo.getFinanceTxns(ids)
+    ? await repo.getFinanceTxns(ids, { consistent: true })
     : new Map<string, FinanceTransaction>();
   const snapshot = new Map(existing);
   const rules = await repo.listFinanceRules();
@@ -280,7 +418,7 @@ async function syncPass(deps: SyncDeps, itemId: string, passStart: number): Prom
       rules,
       now: passStart,
       itemId,
-      userId: deps.userId,
+      userId: ctx.userId,
     }))
       touched.set(row.id, row);
 
@@ -295,11 +433,12 @@ async function syncPass(deps: SyncDeps, itemId: string, passStart: number): Prom
         freshUser.set(row.id, pickUser(fresh));
         return { ...row, ...pickUser(fresh), createdAt: fresh.createdAt };
       },
-      deps.now(),
-      { allowDeleted: true },
+      ctx.now(),
+      { allowDeleted: true, consistent: true },
     ),
   );
-  // New rows. One carried from a pending row that the user edited mid-sync takes the fresh edit.
+  // New rows, inserted only if still absent (else merged like an update). One carried from a pending
+  // row that the user edited mid-sync takes the fresh edit.
   const inserts = [...touched.values()]
     .filter((t) => !snapshot.has(t.id))
     .map((row) => {
@@ -308,7 +447,13 @@ async function syncPass(deps: SyncDeps, itemId: string, passStart: number): Prom
       const after = p ? freshUser.get(p) : undefined;
       return before && after && !sameUser(pickUser(before), after) ? { ...row, ...after } : row;
     });
-  await repo.insertFinanceTxns(inserts);
+  await repo.casMany(inserts, (row) =>
+    repo.insertFinanceTxn(row, (fresh) => ({
+      ...row,
+      ...pickUser(fresh),
+      createdAt: fresh.createdAt,
+    })),
+  );
 
   const next = pages.at(-1)!.next_cursor;
   if (next && next !== saved)
@@ -316,27 +461,29 @@ async function syncPass(deps: SyncDeps, itemId: string, passStart: number): Prom
       repo.finSyncShape(itemId),
       itemId,
       (fresh) => ({ ...fresh, cursor: next }),
-      deps.now(),
+      ctx.now(),
+      { consistent: true },
     );
-  return touched.size;
+  return { written: touched.size, status: status ?? null };
 }
 
 // All pages from `cursor` until has_more=false. Plaid can change data mid-pagination — then the whole
-// batch restarts from the SAVED cursor. Not ready yet (a fresh link) → null: nothing to apply.
+// batch restarts from the SAVED cursor. Not ready yet (a fresh link: empty arrays + NOT_READY) → null.
 async function gatherPages(
   plaid: PlaidGateway,
   itemId: string,
   cursor: string | null,
-): Promise<PlaidSyncResponse[] | null> {
+): Promise<{ pages: PlaidSyncResponse[]; status: string | undefined } | null> {
   for (let attempt = 0; attempt <= MUTATION_RESTARTS; attempt++) {
     const pages: PlaidSyncResponse[] = [];
     let c = cursor;
     try {
       for (;;) {
         const page = await plaid.transactionsSync(itemId, c, SYNC_PAGE_COUNT);
+        if (pages.length === 0 && page.transactions_update_status === 'NOT_READY') return null;
         pages.push(page);
         c = page.next_cursor || c;
-        if (!page.has_more) return pages;
+        if (!page.has_more) return { pages, status: page.transactions_update_status };
       }
     } catch (err) {
       if (err instanceof PlaidApiError && err.code === 'PRODUCT_NOT_READY') return null;
@@ -351,24 +498,33 @@ async function gatherPages(
   throw new PlaidApiError('TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION');
 }
 
-async function refreshAccountsAndHealth(deps: SyncDeps, itemId: string, t: number): Promise<void> {
+// Accounts and item health, before any transaction lands. Returns the health read BEFORE a refresh,
+// which pollRefresh compares against.
+async function refreshAccountsAndHealth(
+  ctx: Ctx,
+  itemId: string,
+  since: number,
+): Promise<PlaidItemHealth> {
   const [accounts, health] = await Promise.all([
-    deps.plaid.accountsGet(itemId),
-    deps.plaid.itemGet(itemId),
+    ctx.plaid.accountsGet(itemId),
+    ctx.plaid.itemGet(itemId),
   ]);
-  await upsertAccounts(deps.repo, deps.userId, itemId, accounts, t);
-  await applyItemHealth(deps.repo, itemId, health, t);
+  await upsertAccounts(ctx.repo, ctx.userId, itemId, accounts, since, { since });
+  await applyItemHealth(ctx.repo, itemId, health, since);
+  return health;
 }
 
 // Plaid owns the account fields; the user owns signOverride + hidden. A returning account revives
 // with its settings; one missing from the response is tombstoned — except when the response is empty
-// (a hiccup must not wipe the roster).
+// (a hiccup must not wipe the roster). `since`: an account tombstoned at or after it was removed WITH
+// its bank during this pass — never revive that one.
 export async function upsertAccounts(
   repo: Repo,
   userId: string,
   itemId: string,
   accounts: PlaidAccount[],
   t: number,
+  opts: { since?: number } = {},
 ): Promise<void> {
   if (accounts.length === 0) return;
   const plaidFields = (a: PlaidAccount) => ({
@@ -383,11 +539,14 @@ export async function upsertAccounts(
     availableCents: a.balances.available === null ? null : toCents(a.balances.available),
     balanceAt: t,
   });
+  const removedDuringPass = (a: FinanceAccount) =>
+    a.deletedAt !== null && opts.since !== undefined && a.deletedAt >= opts.since;
   await repo.casMany(accounts, (a) =>
     repo.casUpdate(
       repo.finAcctShape(a.account_id),
       a.account_id,
-      (fresh) => ({ ...fresh, ...plaidFields(a), deletedAt: null }),
+      (fresh) =>
+        removedDuringPass(fresh) ? null : { ...fresh, ...plaidFields(a), deletedAt: null },
       t,
       {
         allowDeleted: true,
@@ -409,7 +568,13 @@ export async function upsertAccounts(
     (a) => a.itemId === itemId && !present.has(a.id),
   );
   await repo.casMany(dropped, (a) =>
-    repo.casUpdate(repo.finAcctShape(a.id), a.id, (fresh) => ({ ...fresh, deletedAt: t }), t),
+    repo.casUpdate(
+      repo.finAcctShape(a.id),
+      a.id,
+      (fresh) => (fresh.deletedAt !== null ? null : { ...fresh, deletedAt: t }),
+      t,
+      { allowDeleted: true },
+    ),
   );
 }
 

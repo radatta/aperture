@@ -492,10 +492,6 @@ export class Repo {
     for (const r of rows) if (r) out.set(r.id, r);
     return out;
   }
-  // Brand-new rows only — anything that may already exist goes through casUpdate.
-  async insertFinanceTxns(txns: FinanceTransaction[]): Promise<void> {
-    if (txns.length) await this.writes.batchPut(txns.map((t) => financeTxnItem(this.userId, t)));
-  }
   // A row the caller believes is new: written only if absent. If it turns out to exist (a read that
   // missed it, a write that landed meanwhile), `merge(fresh)` decides the write instead, via casUpdate —
   // so a blind insert can never flatten a user's edit.
@@ -510,6 +506,7 @@ export class Repo {
       if (!(err instanceof ConditionFailedError)) throw err;
       return this.casUpdate(this.finTxnShape(row.id), row.id, merge, row.updatedAt, {
         allowDeleted: true,
+        consistent: true,
       });
     }
   }

@@ -126,7 +126,8 @@ describe('finance backend', () => {
     await connect();
     const r = await api.requestFinanceSync({ refresh: true });
     expect(r.accepted).toBe(true);
-    expect(invoked.at(-1)).toMatchObject({ mode: 'manual', refresh: true });
+    // The event carries no flag — the stamp makes the refresh due, and the run does it.
+    expect(invoked.at(-1)).toEqual({ userId: U, mode: 'manual' });
     expect(methods()).toContain('transactionsRefresh');
     expect((await api.requestFinanceSync({ refresh: true })).accepted).toBe(false);
   });

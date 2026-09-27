@@ -377,7 +377,9 @@ export class FinanceService {
       t,
       input.refresh,
     );
-    await this.d.invoker.invoke({ userId: this.d.userId, mode: 'manual', refresh: input.refresh });
+    // No refresh flag on the event: the stamp above makes a refresh DUE, and whichever run holds the
+    // lock does it (a scheduled run that beats this invoke included).
+    await this.d.invoker.invoke({ userId: this.d.userId, mode: 'manual' });
     return {
       accepted: true,
       nextAllowedAt: input.refresh ? t + FINANCE_REFRESH_COOLDOWN_MS : null,

@@ -1,25 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildFinanceOverview,
-  FINANCE_REFRESH_POLL_MAX_MS,
-  FINANCE_REFRESH_POLL_MS,
   FIXTURE_ACCOUNT_IDS,
   FIXTURE_ITEM_ID,
   fixtureHistory,
 } from '@aperture/shared';
 import type { FinanceItem, FinanceSyncState } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
+import type { Item } from '../ddb/DocClient';
 import { pk, sk } from '../ddb/keys';
 import { entityItem, financeTxnItem } from '../ddb/mapping';
 import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
 import { InMemoryPlaid } from '../plaid/gateway';
-import { itemStatus, runFinanceSync, upsertAccounts } from './sync';
-import type { SyncDeps } from './sync';
+import { itemStatus, MAX_PASSES, runFinanceSync, upsertAccounts } from './sync';
+import type { FinanceSyncMode, SyncDeps } from './sync';
 
 const U = 'u1';
 const TODAY = '2026-09-26';
 const T = 1_790_000_000_000;
+const DEADLINE = T + 290_000;
 
 let doc: InMemoryDoc;
 let repo: Repo;
@@ -28,68 +28,103 @@ let clock: number;
 let sleeps: number;
 let deps: SyncDeps;
 
+const itemRow = (itemId: string): FinanceItem => ({
+  id: itemId,
+  userId: U,
+  createdAt: T,
+  updatedAt: T,
+  deletedAt: null,
+  institutionId: 'ins_127989',
+  institutionName: 'Bank of America',
+  status: 'ok',
+  errorCode: null,
+  consentExpiresAt: null,
+  lastSuccessfulUpdateAt: null,
+  lastFailedUpdateAt: null,
+  consentedProducts: ['transactions'],
+});
+const stateRow = (itemId: string): FinanceSyncState => ({
+  id: itemId,
+  userId: U,
+  createdAt: T,
+  updatedAt: T,
+  deletedAt: null,
+  itemId,
+  cursor: null,
+  lastSyncedAt: null,
+  lastSyncError: null,
+  lastSyncErrorAt: null,
+  syncRequestedAt: T,
+  refreshRequestedAt: null,
+  lastRefreshedAt: null,
+  lockedUntil: null,
+});
+
 async function link(itemId = FIXTURE_ITEM_ID): Promise<void> {
   if (itemId === FIXTURE_ITEM_ID) await plaid.exchangePublicToken('pub');
-  const item: FinanceItem = {
-    id: itemId,
-    userId: U,
-    createdAt: T,
-    updatedAt: T,
-    deletedAt: null,
-    institutionId: 'ins_127989',
-    institutionName: 'Bank of America',
-    status: 'ok',
-    errorCode: null,
-    consentExpiresAt: null,
-    lastSuccessfulUpdateAt: null,
-    lastFailedUpdateAt: null,
-    consentedProducts: ['transactions'],
-  };
-  await doc.put(entityItem(U, sk.finItem(itemId), item));
-  const state: FinanceSyncState = {
-    id: itemId,
-    userId: U,
-    createdAt: T,
-    updatedAt: T,
-    deletedAt: null,
-    itemId,
-    cursor: null,
-    lastSyncedAt: null,
-    lastSyncError: null,
-    lastSyncErrorAt: null,
-    syncRequestedAt: T,
-    refreshRequestedAt: null,
-    lastRefreshedAt: null,
-    lockedUntil: null,
-  };
-  await doc.put(entityItem(U, sk.finSync(itemId), state));
+  await doc.put(entityItem(U, sk.finItem(itemId), itemRow(itemId)));
+  await doc.put(entityItem(U, sk.finSync(itemId), stateRow(itemId)));
 }
 
-const state = async (itemId = FIXTURE_ITEM_ID) => (await repo.getFinanceSyncState(itemId))!;
+const stateKey = (itemId = FIXTURE_ITEM_ID) => [pk(U), sk.finSync(itemId)] as const;
+const state = async (itemId = FIXTURE_ITEM_ID) =>
+  (await repo.getFinanceSyncState(itemId, { consistent: true }))!;
+// A write that lands "from outside" (the BFF, the user) — bumps updatedAt like any real write.
+function patchState(patch: Partial<FinanceSyncState>, itemId = FIXTURE_ITEM_ID): void {
+  const cur = doc.snapshot().find((i) => i.SK === sk.finSync(itemId))!;
+  doc.putNow({ ...cur, ...patch, updatedAt: (cur.updatedAt as number) + 1 } as Item);
+}
+// What requestFinanceSync does, then a run.
+function request(refresh = false, itemIds = [FIXTURE_ITEM_ID]): void {
+  for (const id of itemIds)
+    patchState({ syncRequestedAt: clock, ...(refresh ? { refreshRequestedAt: clock } : {}) }, id);
+}
+const run = (mode: FinanceSyncMode = 'manual', itemId?: string) =>
+  runFinanceSync(deps, { userId: U, mode, ...(itemId ? { itemId } : {}) });
 const txns = () => repo.listAllFinanceTxns();
-const sync = (refresh = false) => runFinanceSync(deps, { userId: U, mode: 'manual', refresh });
-const syncCalls = () => plaid.calls.filter((c) => c.method === 'transactionsSync').length;
+const count = (m: string) => plaid.calls.filter((c) => c.method === m).length;
 
 beforeEach(() => {
   doc = new InMemoryDoc();
   repo = new Repo(doc, liveWrites(doc), U);
-  plaid = new InMemoryPlaid({ today: () => TODAY });
   clock = T;
+  plaid = new InMemoryPlaid({ today: () => TODAY, now: () => clock });
   sleeps = 0;
   deps = {
     repo,
     plaid,
     now: () => clock,
-    sleep: async () => void sleeps++,
+    // Parallel sleepers share one clock: each wakes at its own target, never double-advancing it.
+    sleep: async (ms) => {
+      const to = clock + ms;
+      await Promise.resolve();
+      clock = Math.max(clock, to);
+      sleeps++;
+    },
     userId: U,
+    deadline: DEADLINE,
   };
 });
 
-describe('runFinanceSync', () => {
+function overviewSyncing(s: FinanceSyncState): boolean {
+  return buildFinanceOverview({
+    today: TODAY,
+    budgetCents: 60000,
+    paymentDay: 20,
+    items: [{ id: s.itemId, deletedAt: null } as FinanceItem],
+    accounts: [],
+    syncStates: [s],
+    txns: [],
+    environment: 'sandbox',
+    now: clock,
+  }).sync.syncing;
+}
+
+describe('runFinanceSync — the basics', () => {
   it('first sync: accounts, every page, cursor last, stamps the pass start', async () => {
     await link();
     clock = T + 5;
-    const [r] = await sync();
+    const [r] = await run();
     expect(r).toMatchObject({ outcome: 'ok', passes: 1 });
     expect((await txns()).length).toBe(fixtureHistory(TODAY).length);
     expect((await repo.listFinanceAccounts()).map((a) => a.id).sort()).toEqual(
@@ -112,7 +147,7 @@ describe('runFinanceSync', () => {
       if (++n === 2) plaid.failNext('transactionsSync', 'INSTITUTION_DOWN');
       return real(...a);
     };
-    const [r] = await sync();
+    const [r] = await run();
     expect(r).toMatchObject({ outcome: 'error', code: 'INSTITUTION_DOWN' });
     expect(await txns()).toEqual([]);
     const s = await state();
@@ -122,8 +157,7 @@ describe('runFinanceSync', () => {
       T,
       null,
     ]);
-    // The next run succeeds and clears both error fields.
-    await sync();
+    await run(); // the next run succeeds and clears both error fields
     const ok = await state();
     expect([ok.lastSyncError, ok.lastSyncErrorAt, ok.cursor]).toEqual([null, null, 'fx-cursor-2']);
   });
@@ -131,16 +165,12 @@ describe('runFinanceSync', () => {
   it('restarts the whole batch on a mid-pagination mutation, and gives up after three', async () => {
     await link();
     plaid.failNext('transactionsSync', 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION');
-    const [r] = await sync();
-    expect(r!.outcome).toBe('ok');
+    expect((await run())[0]!.outcome).toBe('ok');
     expect((await txns()).length).toBe(fixtureHistory(TODAY).length);
-
-    const fresh = new Repo(doc, liveWrites(doc), U);
-    await doc.put(entityItem(U, sk.finSync(FIXTURE_ITEM_ID), { ...(await state()), cursor: null }));
+    patchState({ cursor: null });
     for (let i = 0; i < 4; i++)
       plaid.failNext('transactionsSync', 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION');
-    const [r2] = await runFinanceSync({ ...deps, repo: fresh }, { userId: U, mode: 'manual' });
-    expect(r2).toMatchObject({
+    expect((await run())[0]).toMatchObject({
       outcome: 'error',
       code: 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION',
     });
@@ -148,7 +178,7 @@ describe('runFinanceSync', () => {
 
   it('replaying from a null cursor is harmless and keeps user fields', async () => {
     await link();
-    await sync();
+    await run();
     const before = await txns();
     const chip = before.find((t) => t.merchantName === 'Chipotle')!;
     await repo.casUpdate(
@@ -157,8 +187,8 @@ describe('runFinanceSync', () => {
       (t) => ({ ...t, bucket: 'i_pay' as const, bucketSetBy: 'user' as const }),
       clock,
     );
-    await doc.put(entityItem(U, sk.finSync(FIXTURE_ITEM_ID), { ...(await state()), cursor: null }));
-    await sync();
+    patchState({ cursor: null });
+    await run();
     const after = await txns();
     expect(after.length).toBe(before.length);
     expect(after.find((t) => t.id === chip.id)!.bucket).toBe('i_pay');
@@ -166,8 +196,7 @@ describe('runFinanceSync', () => {
 
   it('a bucket set while the sync writes a modified row survives, and so does the rename', async () => {
     await link();
-    await sync(); // → fx-cursor-2; the next page modifies fx-card-2
-    // The "user" write lands between the sync's read and its conditional put.
+    await run(); // → fx-cursor-2; the next page modifies fx-card-2
     const current = (await repo.getFinanceTxn('fx-card-2'))!;
     doc.interceptNextPutIf(pk(U), sk.finTxn('fx-card-2'), () =>
       doc.putNow(
@@ -179,7 +208,7 @@ describe('runFinanceSync', () => {
         }),
       ),
     );
-    await sync();
+    await run();
     const row = (await repo.getFinanceTxn('fx-card-2'))!;
     expect(row.bucket).toBe('budget');
     expect(row.merchantName).toMatch(/Mexican Grill$/);
@@ -187,7 +216,7 @@ describe('runFinanceSync', () => {
 
   it('an edit to the pending row mid-sync carries onto its posted replacement', async () => {
     await link();
-    await sync();
+    await run();
     const pending = (await repo.getFinanceTxn('fx-pending-1'))!;
     doc.interceptNextPutIf(pk(U), sk.finTxn('fx-pending-1'), () =>
       doc.putNow(
@@ -200,116 +229,283 @@ describe('runFinanceSync', () => {
         }),
       ),
     );
-    await sync();
+    await run();
     const posted = (await repo.getFinanceTxn('fx-posted-1'))!;
     expect([posted.bucket, posted.note]).toEqual(['parents_pay', 'dinner']);
     expect((await repo.getFinanceTxn('fx-pending-1'))!.deletedAt).not.toBeNull();
   });
 
-  it('a held lock means no Plaid sync calls at all', async () => {
+  it('a held lock means no Plaid sync calls at all; an expired one is taken over', async () => {
     await link();
-    await doc.put(
-      entityItem(U, sk.finSync(FIXTURE_ITEM_ID), { ...(await state()), lockedUntil: T + 60_000 }),
-    );
-    const [r] = await sync();
-    expect(r!.outcome).toBe('locked');
-    expect(syncCalls()).toBe(0);
-    clock = T + 60_001; // an expired lock (a crashed run) is taken over
-    expect((await sync())[0]!.outcome).toBe('ok');
+    patchState({ lockedUntil: T + 60_000 });
+    expect((await run())[0]!.outcome).toBe('locked');
+    expect(count('transactionsSync')).toBe(0);
+    clock = T + 60_001;
+    expect((await run())[0]!.outcome).toBe('ok');
   });
 
   it('two concurrent runs: exactly one proceeds', async () => {
     await link();
-    const [a, b] = await Promise.all([sync(), sync()]);
+    const [a, b] = await Promise.all([run(), run()]);
     expect([a![0]!.outcome, b![0]!.outcome].sort()).toEqual(['locked', 'ok']);
   });
 
-  it('rerun flag: a request stamped mid-pass gets a second pass, and the overview stays syncing until then', async () => {
+  it('a login error flags the item and records the error', async () => {
     await link();
-    // Stamp a request (as requestFinanceSync would) while the first pass writes its new rows.
-    const realInsert = repo.insertFinanceTxns.bind(repo);
-    let stamped = false;
-    repo.insertFinanceTxns = async (rows) => {
-      if (!stamped) {
-        stamped = true;
-        const s = await state();
-        doc.putNow(
-          entityItem(U, sk.finSync(FIXTURE_ITEM_ID), {
-            ...s,
-            syncRequestedAt: T + 1,
-            updatedAt: s.updatedAt + 1,
-          }),
-        );
-      }
-      return realInsert(rows);
-    };
-    const [r] = await sync();
+    plaid.failNext('transactionsSync', 'ITEM_LOGIN_REQUIRED');
+    await run();
+    expect((await repo.getFinanceItem(FIXTURE_ITEM_ID))!.status).toBe('login_required');
+    expect((await state()).lastSyncError).toBe('ITEM_LOGIN_REQUIRED');
+  });
+
+  it('one item erroring does not block another', async () => {
+    await link('item-orphan'); // no token at Plaid → ITEM_NOT_FOUND
+    await link();
+    const out = await run();
+    expect(out.find((o) => o.itemId === 'item-orphan')!.outcome).toBe('error');
+    expect(out.find((o) => o.itemId === FIXTURE_ITEM_ID)!.outcome).toBe('ok');
+  });
+});
+
+describe('runFinanceSync — the review findings', () => {
+  it('A1: a refresh on two banks runs them in parallel and finishes inside the deadline', async () => {
+    await link();
+    plaid.addItem('item-2');
+    await link('item-2');
+    await run(); // settle the first sync
+    plaid.refreshLandsAfter = null; // the refresh never confirms
+    request(true, [FIXTURE_ITEM_ID, 'item-2']);
+    const out = await run();
+    expect(out.map((o) => o.outcome)).toEqual(['ok', 'ok']);
+    expect(clock).toBeLessThanOrEqual(DEADLINE);
+    for (const id of [FIXTURE_ITEM_ID, 'item-2']) {
+      const s = await state(id);
+      expect(s.lockedUntil).toBeNull();
+      expect(s.lastSyncedAt).not.toBeNull();
+    }
+    // Interleaved health checks = the two polls ran side by side, not one after the other.
+    const gets = plaid.calls.filter((c) => c.method === 'itemGet').map((c) => c.itemId);
+    const firstOther = gets.indexOf('item-2');
+    expect(gets.slice(firstOther).includes(FIXTURE_ITEM_ID)).toBe(true);
+  });
+
+  it('A1: a refresh stops polling once Plaid says it landed, even with no new rows', async () => {
+    await link();
+    await run();
+    await run(); // past the update page: nothing new at Plaid
+    plaid.refreshLandsAfter = 2;
+    sleeps = 0;
+    request(true);
+    await run();
+    expect(count('transactionsRefresh')).toBe(1);
+    expect(sleeps).toBe(2);
+  });
+
+  it('A2: a request that lands between the rerun check and the unlock still gets a pass', async () => {
+    await link();
+    doc.interceptNextPutIf(
+      ...stateKey(),
+      () => patchState({ syncRequestedAt: T + 1 }),
+      (item) => item.lockedUntil === null, // the finishing write
+    );
+    const [r] = await run();
     expect(r!.passes).toBe(2);
     const s = await state();
     expect(s.lastSyncedAt).toBeGreaterThanOrEqual(T + 1);
     expect(overviewSyncing(s)).toBe(false);
   });
 
-  it('a first pass that fails with a request stamped mid-pass still reads as syncing', async () => {
+  it('A3: a stale read of the lock does not turn a free lock into "held"', async () => {
     await link();
-    const realGet = plaid.accountsGet.bind(plaid);
+    const cur = doc.snapshot().find((i) => i.SK === sk.finSync(FIXTURE_ITEM_ID))!;
+    doc.staleNextGets(...stateKey(), { ...cur, lockedUntil: T + 60_000 }, 5);
+    expect((await run())[0]!.outcome).toBe('ok');
+    const first = doc.gets.find((g) => g.key === `${pk(U)} ${sk.finSync(FIXTURE_ITEM_ID)}`)!;
+    expect(first.consistent).toBe(true);
+  });
+
+  it('A4: a failed pass with a request behind it reruns — and succeeds', async () => {
+    await link();
+    const real = plaid.accountsGet.bind(plaid);
+    let stamped = false;
     plaid.accountsGet = async (id) => {
-      const s = await state();
-      doc.putNow(
-        entityItem(U, sk.finSync(FIXTURE_ITEM_ID), {
-          ...s,
-          syncRequestedAt: T + 1,
-          updatedAt: s.updatedAt + 1,
-        }),
-      );
-      plaid.failNext('transactionsSync', 'INSTITUTION_DOWN');
-      return realGet(id);
+      if (!stamped) {
+        stamped = true;
+        patchState({ syncRequestedAt: T + 1 });
+        plaid.failNext('transactionsSync', 'INSTITUTION_DOWN');
+      }
+      return real(id);
     };
-    await sync();
+    const [r] = await run();
+    expect(r).toMatchObject({ outcome: 'ok', passes: 2 });
     const s = await state();
-    expect(s.lastSyncErrorAt).toBe(T); // the pass start, not its end
-    expect(overviewSyncing(s)).toBe(true);
+    expect([s.lastSyncError, s.lastSyncErrorAt]).toEqual([null, null]);
+    expect(s.lastSyncedAt).toBeGreaterThanOrEqual(T + 1);
   });
 
-  it('a login error marks the item and records the error', async () => {
+  it('A4: when it keeps failing, the error stamp covers the request so the popup can decide', async () => {
     await link();
-    plaid.failNext('transactionsSync', 'ITEM_LOGIN_REQUIRED');
-    await sync();
-    expect((await repo.getFinanceItem(FIXTURE_ITEM_ID))!.status).toBe('login_required');
-    expect((await state()).lastSyncError).toBe('ITEM_LOGIN_REQUIRED');
+    const real = plaid.accountsGet.bind(plaid);
+    let stamped = false;
+    plaid.accountsGet = async (id) => {
+      if (!stamped) {
+        stamped = true;
+        patchState({ syncRequestedAt: T + 1 });
+      }
+      plaid.failNext('transactionsSync', 'INSTITUTION_DOWN');
+      return real(id);
+    };
+    await run();
+    const s = await state();
+    expect(s.lastSyncError).toBe('INSTITUTION_DOWN');
+    expect(s.lastSyncErrorAt).toBeGreaterThanOrEqual(T + 1);
+    expect(overviewSyncing(s)).toBe(false);
   });
 
-  it('refresh: stops polling once data lands; with nothing new, polls to the cap', async () => {
+  it('A5: a scheduled run that grabs the lock first still does the requested refresh, once', async () => {
     await link();
-    await sync(); // → fx-cursor-2; the next page has the posted Sweetgreen
-    await sync(true);
-    expect(plaid.calls.some((c) => c.method === 'transactionsRefresh')).toBe(true);
-    expect(sleeps).toBe(0);
-    await sync(true); // nothing new past fx-cursor-3
-    expect(sleeps).toBe(Math.ceil(FINANCE_REFRESH_POLL_MAX_MS / FINANCE_REFRESH_POLL_MS));
+    await run();
+    request(true); // Refresh pressed at T
+    clock = T + 50;
+    const [sched, manual] = await Promise.all([run('scheduled'), run('manual')]);
+    expect([sched![0]!.outcome, manual![0]!.outcome].sort()).toEqual(['locked', 'ok']);
+    expect(count('transactionsRefresh')).toBe(1);
+    expect((await state()).lastRefreshedAt).toBe(T + 50);
+    await run('scheduled');
+    expect(count('transactionsRefresh')).toBe(1); // no longer due
   });
 
-  it('a failed refresh still runs a normal sync', async () => {
+  it('A6: right after a link, a not-ready Plaid is polled until the history arrives', async () => {
     await link();
-    plaid.failNext('transactionsRefresh', 'PRODUCT_NOT_SUPPORTED');
-    const [r] = await sync(true);
+    plaid.notReadyCalls = 2;
+    const [r] = await run('post-link', FIXTURE_ITEM_ID);
     expect(r!.outcome).toBe('ok');
-    expect((await txns()).length).toBeGreaterThan(0);
+    expect(sleeps).toBe(2);
+    expect((await txns()).length).toBe(fixtureHistory(TODAY).length);
+    expect((await state()).cursor).toBe('fx-cursor-2');
   });
 
-  it('one item erroring does not block another', async () => {
-    await link('item-orphan'); // no token at Plaid → ITEM_NOT_FOUND
+  it('A6: never ready → an error, not "synced with nothing"; scheduled runs don’t wait', async () => {
     await link();
-    const out = await sync();
-    expect(out.find((o) => o.itemId === 'item-orphan')!.outcome).toBe('error');
-    expect(out.find((o) => o.itemId === FIXTURE_ITEM_ID)!.outcome).toBe('ok');
+    plaid.notReadyCalls = 10_000;
+    const [r] = await run('post-link', FIXTURE_ITEM_ID);
+    expect(r).toMatchObject({ outcome: 'error', code: 'PRODUCT_NOT_READY' });
+    const s = await state();
+    expect([s.cursor, s.lastSyncedAt, s.lastSyncError]).toEqual([null, null, 'PRODUCT_NOT_READY']);
+    expect(clock).toBeLessThanOrEqual(DEADLINE);
+    sleeps = 0;
+    expect((await run('scheduled'))[0]).toMatchObject({ code: 'PRODUCT_NOT_READY' });
+    expect(sleeps).toBe(0);
+  });
+
+  it('A7: a "new" row that exists by write time keeps the user edit and takes Plaid’s fields', async () => {
+    await link();
+    const plaidRow = fixtureHistory(TODAY).find((p) => p.transaction_id === 'fx-card-2')!;
+    doc.interceptNextPutIf(pk(U), sk.finTxn('fx-card-2'), () =>
+      doc.putNow(
+        financeTxnItem(U, {
+          id: 'fx-card-2',
+          userId: U,
+          createdAt: 1,
+          updatedAt: 1,
+          deletedAt: null,
+          itemId: FIXTURE_ITEM_ID,
+          accountId: plaidRow.account_id,
+          date: plaidRow.date,
+          authorizedDate: null,
+          name: 'stale',
+          merchantName: null,
+          rawAmountCents: 1,
+          isoCurrency: 'USD',
+          pending: false,
+          pendingTransactionId: null,
+          pfcPrimary: null,
+          pfcDetailed: null,
+          paymentChannel: null,
+          source: 'plaid',
+          bucket: 'budget',
+          bucketSetBy: 'user',
+          periodOverride: null,
+          note: null,
+          refundOfId: null,
+          startsPeriod: false,
+        }),
+      ),
+    );
+    await run();
+    const txnGets = doc.gets.filter((g) => g.key.includes('fin#txn#')); // the sync's reads only
+    const row = (await repo.getFinanceTxn('fx-card-2'))!;
+    expect([row.bucket, row.rawAmountCents, row.name]).toEqual([
+      'budget',
+      Math.round(plaidRow.amount * 100),
+      plaidRow.name,
+    ]);
+    expect(txnGets.length).toBeGreaterThan(0);
+    expect(txnGets.every((g) => g.consistent)).toBe(true);
+  });
+
+  it('A10: removing the bank mid-sync is final — nothing revived, nothing stamped', async () => {
+    await link();
+    await run(); // accounts exist now
+    const syncedBefore = (await state()).lastSyncedAt;
+    const real = plaid.accountsGet.bind(plaid);
+    plaid.accountsGet = async (id) => {
+      const accounts = await real(id);
+      // removePlaidItem, landing while the sync holds the lock
+      for (const row of doc.snapshot())
+        if (/^fin#(item|sync|acct)#/.test(row.SK))
+          doc.putNow({
+            ...row,
+            deletedAt: clock,
+            ...(row.SK.startsWith('fin#sync#') ? { lockedUntil: null } : {}),
+            updatedAt: (row.updatedAt as number) + 1,
+          } as Item);
+      return accounts;
+    };
+    const [r] = await run();
+    expect(r!.outcome).toBe('removed');
+    expect(await repo.listFinanceAccounts()).toEqual([]);
+    const s = (await repo.getFinanceSyncState(FIXTURE_ITEM_ID, { consistent: true }))!;
+    expect([s.lastSyncedAt, s.lastSyncError]).toEqual([syncedBefore, null]);
+    expect(count('transactionsSync')).toBe(2); // the first run's two pages; none after the removal
+  });
+
+  it('a run that lost its lock stops and writes nothing more', async () => {
+    await link();
+    await run();
+    plaid.refreshLandsAfter = null;
+    request(true);
+    const realSleep = deps.sleep;
+    let stolen = false;
+    deps.sleep = async (ms) => {
+      if (!stolen) {
+        stolen = true;
+        patchState({ lockedUntil: T + 999_999 }); // another run took over
+      }
+      return realSleep(ms);
+    };
+    const [r] = await run();
+    expect(r).toMatchObject({ outcome: 'error', code: 'LOCK_LOST' });
+    expect((await state()).lockedUntil).toBe(T + 999_999);
+  });
+
+  it('never runs more than MAX_PASSES, even with requests arriving every pass', async () => {
+    await link();
+    const real = plaid.accountsGet.bind(plaid);
+    let n = 0;
+    plaid.accountsGet = async (id) => {
+      patchState({ syncRequestedAt: T + ++n * 1000 });
+      return real(id);
+    };
+    const [r] = await run();
+    expect(r!.passes).toBe(MAX_PASSES);
   });
 });
 
 describe('accounts + health', () => {
   it('upsert keeps flip/hide, revives a returning account, drops a missing one, ignores an empty list', async () => {
     await link();
-    await sync();
+    await run();
     const card = FIXTURE_ACCOUNT_IDS.card;
     await repo.casUpdate(
       repo.finAcctShape(card),
@@ -356,17 +552,3 @@ describe('accounts + health', () => {
     expect(itemStatus({ ...h, consentExpiresAt: T + 30 * 86_400_000 }, T)).toBe('ok');
   });
 });
-
-function overviewSyncing(s: FinanceSyncState): boolean {
-  return buildFinanceOverview({
-    today: TODAY,
-    budgetCents: 60000,
-    paymentDay: 20,
-    items: [{ id: s.itemId, deletedAt: null } as FinanceItem],
-    accounts: [],
-    syncStates: [s],
-    txns: [],
-    environment: 'sandbox',
-    now: clock,
-  }).sync.syncing;
-}

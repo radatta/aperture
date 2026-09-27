@@ -20,7 +20,8 @@ const plaid = createLivePlaid({
 
 const MODES = new Set(['scheduled', 'manual', 'post-link']);
 
-// Anything else is a malformed invoke — refuse it before touching the table or Plaid.
+// Anything else is a malformed invoke — refuse it before touching the table or Plaid. A `refresh` flag
+// from an older caller is ignored: whether to refresh is decided from the stored request.
 export function parseSyncEvent(raw: unknown): FinanceSyncEvent & { testMode?: boolean } {
   const e = (raw ?? {}) as Record<string, unknown>;
   if (typeof e.userId !== 'string' || e.userId.trim() === '')
@@ -29,13 +30,10 @@ export function parseSyncEvent(raw: unknown): FinanceSyncEvent & { testMode?: bo
     throw new Error('Invalid finance sync event: mode');
   if (e.itemId !== undefined && typeof e.itemId !== 'string')
     throw new Error('Invalid finance sync event: itemId');
-  if (e.refresh !== undefined && typeof e.refresh !== 'boolean')
-    throw new Error('Invalid finance sync event: refresh');
   return {
     userId: e.userId,
     mode: e.mode as FinanceSyncEvent['mode'],
     ...(e.itemId !== undefined ? { itemId: e.itemId as string } : {}),
-    ...(e.refresh !== undefined ? { refresh: e.refresh as boolean } : {}),
     ...(e.testMode === true ? { testMode: true } : {}),
   };
 }
@@ -46,7 +44,7 @@ export async function handleFinanceSync(
   table: DocClient,
   gateway: PlaidGateway,
   raw: unknown,
-  opts: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {},
+  opts: { now?: () => number; sleep?: (ms: number) => Promise<void>; deadline?: number } = {},
 ): Promise<ItemSyncReport[]> {
   const e = parseSyncEvent(raw);
   const repo = new Repo(table, e.testMode ? noopWrites() : liveWrites(table), e.userId);
@@ -57,6 +55,7 @@ export async function handleFinanceSync(
       now: opts.now ?? Date.now,
       sleep: opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
       userId: e.userId,
+      deadline: opts.deadline,
     },
     e,
   );
@@ -67,6 +66,13 @@ export async function handleFinanceSync(
   return report;
 }
 
-export async function handler(event: unknown): Promise<ItemSyncReport[]> {
-  return handleFinanceSync(doc, plaid, event);
+// Only what the handler reads from the Lambda context (no @types/aws-lambda for one method).
+export interface SyncContext {
+  getRemainingTimeInMillis(): number;
+}
+export const RUN_SAFETY_MS = 10_000; // finish stamps + logs before Lambda's own timeout
+
+export async function handler(event: unknown, ctx?: SyncContext): Promise<ItemSyncReport[]> {
+  const deadline = ctx ? Date.now() + ctx.getRemainingTimeInMillis() - RUN_SAFETY_MS : undefined;
+  return handleFinanceSync(doc, plaid, event, { deadline });
 }
