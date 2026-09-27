@@ -684,6 +684,59 @@ export function summarizePeriod(input: {
   };
 }
 
+// --- The page's view of the ledger -------------------------------------------
+// The same window the server's overview reads (FINANCE_OVERVIEW_LOOKBACK_DAYS back from today), so a
+// client's payment/transfer matching sees exactly the rows the server's did and the sort queue's count
+// can't drift from the header's.
+export function financeListRange(today: string, o: FinanceOverview): { from: string; to: string } {
+  return {
+    from: addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS),
+    to: o.period.end > today ? o.period.end : today,
+  };
+}
+
+// Not a DTO: carries functions, never serialized.
+export interface FinanceView {
+  accounts: Map<string, FinanceAccount>;
+  moves: InternalMoves;
+  txns: FinanceTransaction[]; // alive, inside the current or previous window, date desc
+  allTxns: FinanceTransaction[]; // the whole loaded range — refund suggestions look back further
+  sortable: FinanceTransaction[]; // allTxns on shown accounts, charges + refunds only
+  amount: (t: FinanceTransaction) => number; // normalised: positive = money out
+  kindOf: (t: FinanceTransaction) => FinanceTxnKind;
+  links: RefundLinks; // refund id → the charge it reverses
+  refunded: Map<string, number>; // charge id → cents refunded so far
+}
+
+// The overview plus the transactions of financeListRange, with the derived bits every tab (and the MCP
+// read tools) need. Moves and refund links are resolved over the same range and rows the server's
+// overview used (links over the linkable set, so a charge on a hidden account leaves its refund
+// unlinked), then rows outside both windows are dropped from `txns`. One function for the page and the
+// MCP, so the two can't disagree about a row's kind, bucket or period.
+export function deriveFinanceView(
+  overview: FinanceOverview,
+  loaded: FinanceTransaction[],
+): FinanceView {
+  const accounts = new Map(overview.accounts.map((a) => [a.id, a]));
+  const allTxns = loaded.filter((t) => accounts.has(t.accountId));
+  const moves = detectInternalMoves(allTxns, overview.accounts);
+  const amount = (t: FinanceTransaction) => amountOf(t, accounts.get(t.accountId));
+  const sortable = sortableTransactions(allTxns, overview.accounts, moves);
+  const linkable = linkableTransactions(allTxns, overview.accounts, moves);
+  const links = resolveRefundLinks(linkable, amount);
+  return {
+    accounts,
+    moves,
+    allTxns,
+    sortable,
+    txns: allTxns.filter((t) => periodOf(t, overview.period, links) !== null),
+    amount,
+    kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),
+    links,
+    refunded: refundedCentsByCharge(links, new Map(allTxns.map((t) => [t.id, t])), amount),
+  };
+}
+
 export function buildFinanceOverview(input: {
   today: string;
   budgetCents: number;

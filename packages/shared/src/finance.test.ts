@@ -9,6 +9,8 @@ import {
   detectInternalMoves,
   financeSyncErrorMessage,
   groupByMerchant,
+  deriveFinanceView,
+  financeListRange,
   isDuplicateItem,
   isPeriodStart,
   linkableTransactions,
@@ -30,7 +32,13 @@ import {
   summarizePeriod,
   toCents,
 } from './finance';
-import type { FinanceAccount, FinanceItem, FinanceRule, FinanceTransaction } from './finance';
+import type {
+  FinanceAccount,
+  FinanceItem,
+  FinanceOverview,
+  FinanceRule,
+  FinanceTransaction,
+} from './finance';
 import {
   FIXTURE_ACCOUNT_IDS,
   fixtureHistory,
@@ -993,5 +1001,40 @@ describe('refund links', () => {
     const row = existing.get('posted-refund')!;
     expect(row.refundOfId).toBe('c');
     expect(row.bucket).toBeNull();
+  });
+});
+
+describe('deriveFinanceView / financeListRange', () => {
+  const period = {
+    start: '2026-09-21',
+    end: '2026-10-20',
+    source: 'marked',
+    previous: { start: '2026-08-21', end: '2026-09-20' },
+  };
+  const overview = { period, accounts: [card, chk] } as unknown as FinanceOverview;
+
+  it('keeps rows of both windows on loaded accounts; allTxns keeps the older ones', () => {
+    const v = deriveFinanceView(overview, [
+      tx('now', 'card', '2026-09-25', 500),
+      tx('last', 'card', '2026-09-01', 500),
+      tx('old', 'card', '2026-07-01', 500),
+      tx('gone', 'removed-acct', '2026-09-25', 500),
+    ]);
+    expect(v.txns.map((t) => t.id)).toEqual(['now', 'last']);
+    expect(v.allTxns.map((t) => t.id)).toEqual(['now', 'last', 'old']);
+    expect(v.kindOf(v.txns[0]!)).toBe('expense');
+    expect(v.amount(v.txns[0]!)).toBe(500);
+  });
+
+  it('the list range runs to the period end when a payment marked today starts it tomorrow', () => {
+    expect(financeListRange('2026-09-25', overview)).toEqual({
+      from: '2026-05-28',
+      to: '2026-10-20',
+    });
+    const endsEarlier = {
+      ...overview,
+      period: { ...period, end: '2026-09-20' },
+    } as FinanceOverview;
+    expect(financeListRange('2026-09-25', endsEarlier).to).toBe('2026-09-25');
   });
 });

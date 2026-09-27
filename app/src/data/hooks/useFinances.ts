@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import { addDays, FINANCE_OVERVIEW_LOOKBACK_DAYS, todayKey } from '@aperture/shared';
+import { financeListRange, todayKey } from '@aperture/shared';
 import type {
   ExchangePublicTokenInput,
   FinanceAccountPatch,
@@ -31,16 +31,6 @@ export function useFinanceOverview() {
     queryFn: () => api.getFinanceOverview({ today }),
     refetchInterval: (q) => (q.state.data?.sync.syncing ? SYNC_POLL_MS : false),
   });
-}
-
-// The same window the server's overview reads (FINANCE_OVERVIEW_LOOKBACK_DAYS back from today), so
-// the client's payment/transfer matching sees exactly the rows the server's did and the sort queue's
-// count can't drift from the header's.
-export function financeListRange(today: string, o: FinanceOverview): { from: string; to: string } {
-  return {
-    from: addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS),
-    to: o.period.end > today ? o.period.end : today,
-  };
 }
 
 export function useFinanceTransactions(overview: FinanceOverview | undefined) {
