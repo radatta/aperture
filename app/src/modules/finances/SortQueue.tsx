@@ -20,7 +20,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useSetFinanceBucket } from '../../data/hooks/useFinances';
 import { revealFocus } from '../../lib/focus';
-import { fmtMoney } from './money';
+import { fmtSigned } from './money';
 import { TransactionDetail } from './TransactionDetail';
 import { refundMeta } from './refundMeta';
 import type { FinanceView } from './useFinanceData';
@@ -108,7 +108,10 @@ export function SortQueue({
     <div className="flex flex-col gap-3">
       <Text id="sort-help" size="sm" tone="muted">
         {groups.reduce((n, g) => n + g.txns.length, 0)} charges from {groups.length} places. Focus a
-        group and press <Kbd>1</Kbd> <Kbd>2</Kbd> <Kbd>3</Kbd>.
+        group and press{' '}
+        <span className="whitespace-nowrap">
+          <Kbd>1</Kbd> <Kbd>2</Kbd> <Kbd>3</Kbd>.
+        </span>
       </Text>
       {setBucket.isError && (
         <div role="alert">
@@ -194,7 +197,7 @@ function GroupCard({
       tabIndex={0}
       aria-keyshortcuts="1 2 3"
       aria-describedby="sort-help"
-      aria-label={`${group.label}, ${group.txns.length} charges, ${fmtMoney(group.totalCents)}`}
+      aria-label={`${group.label}, ${group.txns.length} ${group.txns.length === 1 ? 'charge' : 'charges'}, ${fmtSigned(group.totalCents)}`}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return; // keys typed into the checkbox etc. aren't sorts
         const n = Number(e.key);
@@ -215,7 +218,7 @@ function GroupCard({
           </Text>
         </div>
         <Text weight="medium" tabular>
-          {fmtMoney(group.totalCents)}
+          {fmtSigned(group.totalCents)}
         </Text>
       </div>
       {/* The charges themselves — tap one for its detail (bucket, period, note), like the All tab. */}
@@ -299,7 +302,7 @@ function ChargeRow({
           {txn.note ? ` · ${txn.note}` : ''}
         </Text>
         <Text size="sm" tabular>
-          {cents < 0 ? `+${fmtMoney(-cents)}` : fmtMoney(cents)}
+          {fmtSigned(cents)}
         </Text>
       </button>
     </li>

@@ -29,7 +29,7 @@ import {
   useSetFinancePeriodOverride,
   useSetFinancePeriodStart,
 } from '../../data/hooks/useFinances';
-import { fmtMoney } from './money';
+import { fmtMoney, fmtSigned } from './money';
 import type { FinanceView } from './useFinanceData';
 
 const KIND_LABEL: Record<FinanceTxnKind, string> = {
@@ -111,7 +111,7 @@ export function TransactionDetail({
               {txn.merchantName ?? txn.name}
             </Text>
             <Text size="lg" tabular>
-              {cents < 0 ? `+${fmtMoney(-cents)}` : fmtMoney(cents)}
+              {fmtSigned(cents)}
             </Text>
           </div>
           <Text size="sm" tone="muted">
@@ -285,8 +285,11 @@ function LinkedRefund({
     <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
       <div className="flex flex-wrap items-center gap-3">
         <Text size="sm" className="flex-1">
-          Refund of <Text weight="medium">{charge.merchantName ?? charge.name}</Text> ·{' '}
-          {fmtMonthShortDay(charge.date)} · {fmtMoney(view.amount(charge))}
+          Refund of{' '}
+          <Text as="span" size="sm" weight="medium">
+            {charge.merchantName ?? charge.name}
+          </Text>{' '}
+          · {fmtMonthShortDay(charge.date)} · {fmtMoney(view.amount(charge))}
         </Text>
         <Button size="sm" variant="ghost" disabled={busy} onClick={onUnlink} autoFocus={focus}>
           Unlink

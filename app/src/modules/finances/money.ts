@@ -8,6 +8,11 @@ const usdWhole = new Intl.NumberFormat('en-US', {
 
 export const fmtMoney = (cents: number): string => usd.format(cents / 100);
 
+// A row amount the way the page shows money in: a charge plain, a credit (negative cents) with a "+"
+// ("+$10.00"), never a minus sign.
+export const fmtSigned = (cents: number): string =>
+  cents < 0 ? `+${fmtMoney(-cents)}` : fmtMoney(cents);
+
 // Headline figures ("$412 left"): whole dollars, rounded toward zero so "left" never overstates.
 export const fmtMoneyWhole = (cents: number): string => usdWhole.format(Math.trunc(cents / 100));
 

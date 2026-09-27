@@ -256,7 +256,7 @@ describe('Finances page', () => {
     renderApp({ api, path: '/finances' });
     // The refund rides on its charge, and the charge it cancels in full nets to $0 — neither is asked
     // about. The older Amazon charge (last period) still is.
-    const amazon = await group(/^Amazon, 1 charges/);
+    const amazon = await group(/^Amazon, 1 charge,/);
     expect(within(amazon).queryByText(/\+\$34\.99/)).toBeNull();
     expect(within(amazon).queryByText(/refunded/)).toBeNull();
   });

@@ -21,7 +21,7 @@ import { useFinanceToday } from '../../data/hooks/useFinances';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { BucketTag } from './BucketTag';
-import { fmtMoney } from './money';
+import { fmtSigned } from './money';
 import { refundMeta } from './refundMeta';
 import { TransactionDetail } from './TransactionDetail';
 import type { FinanceView } from './useFinanceData';
@@ -116,11 +116,7 @@ export function TransactionList({
       aria-label="Transactions"
       className="flex flex-col gap-4 outline-none"
     >
-      <div
-        role="group"
-        aria-label="Filter"
-        className="no-scrollbar -mx-5 flex gap-1.5 overflow-x-auto px-5"
-      >
+      <div role="group" aria-label="Filter" className="flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
           <button
             key={f.value}
@@ -209,7 +205,7 @@ function TransactionRow({
           <Text size="sm" tone={expense ? 'ink' : 'muted'} className="truncate">
             {txn.merchantName ?? txn.name}
           </Text>
-          <Text size="xs" tone="muted" className="truncate">
+          <Text size="xs" tone="muted" className="line-clamp-2 break-words">
             {acct ? `${acct.name} ••${acct.mask}` : ''}
             {txn.pending ? ' · pending' : ''}
             {refundMeta(txn, kind, view)}
@@ -219,7 +215,7 @@ function TransactionRow({
           </Text>
         </span>
         <Text size="sm" tabular tone={expense ? 'ink' : 'muted'}>
-          {cents < 0 ? `+${fmtMoney(-cents)}` : fmtMoney(cents)}
+          {fmtSigned(cents)}
         </Text>
         <span className="w-24 shrink-0 text-right">
           {expense ? (
