@@ -176,6 +176,10 @@ export interface Settings extends BaseEntity {
   // Waking-window bounds (hours 0–23) for the shape read — SEPARATE from dayStartHour's 4am rollover.
   dayFocusStart: number; // default 8
   dayEndHour: number; // default 22
+  // Finances: the budget bucket's limit per billing period, and the calendar cycle day the period
+  // falls back to when no card payment is found (see finance.ts computeFinancePeriod).
+  financeBudgetCents: number; // default 60000
+  financeCycleDay: number; // default 23
 }
 
 // --- Calibration (derived, read-only) -------------------------------------

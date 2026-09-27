@@ -29,6 +29,22 @@ import type {
 } from './types';
 import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
+import type {
+  CreateLinkTokenInput,
+  ExchangePublicTokenInput,
+  FinanceAccount,
+  FinanceAccountPatch,
+  FinanceItem,
+  FinanceOverview,
+  FinancePeriodOverride,
+  FinanceRule,
+  FinanceSyncState,
+  FinanceTransaction,
+  LinkTokenResult,
+  RequestFinanceSyncResult,
+  SetFinanceBucketInput,
+  UpsertFinanceRuleInput,
+} from './finance';
 
 export interface CreateTaskInput {
   title: string;
@@ -167,6 +183,12 @@ export interface ExportBundle {
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
+  // Finances. Access tokens never leave SSM, so they're never exported.
+  financeItems: FinanceItem[];
+  financeSyncStates: FinanceSyncState[];
+  financeAccounts: FinanceAccount[];
+  financeTransactions: FinanceTransaction[];
+  financeRules: FinanceRule[];
   settings: Settings; // always materialised — never the stub's nullable storage state
 }
 
@@ -183,6 +205,8 @@ export type SettingsPatch = Partial<
     | 'calendarWriteDefault'
     | 'dayFocusStart'
     | 'dayEndHour'
+    | 'financeBudgetCents'
+    | 'financeCycleDay'
   >
 >;
 
@@ -367,6 +391,36 @@ export interface ApiClient {
   listAttachments(taskId?: string): Promise<Attachment[]>; // ready + alive; all tasks when omitted
   getAttachmentDownloadUrl(id: string): Promise<string>; // short-lived, minted per view
   deleteAttachment(id: string): Promise<void>;
+
+  // Finances — the three-bucket budget over Plaid-synced bank data (finance.ts). `today` is the client's
+  // day-key; the overview reads FINANCE_OVERVIEW_LOOKBACK_DAYS back from it. Every Plaid call is gated
+  // (noop in testMode). Plaid-owned rows use Plaid's ids.
+  getFinanceOverview(input: { today: string }): Promise<FinanceOverview>;
+  listFinanceTransactions(range: DateRange): Promise<FinanceTransaction[]>; // alive, date desc
+  // Batch bucket set (null = unsort). With `rule`, also saves the rule and applies it to every
+  // currently-unsorted match; returns every row it changed.
+  setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]>;
+  setFinancePeriodOverride(
+    id: string,
+    override: FinancePeriodOverride | null,
+  ): Promise<FinanceTransaction>;
+  setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction>;
+  listFinanceRules(): Promise<FinanceRule[]>; // alive, pattern asc
+  upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule>;
+  deleteFinanceRule(id: string): Promise<void>; // soft-delete
+  updateFinanceAccount(id: string, patch: FinanceAccountPatch): Promise<FinanceAccount>;
+  createPlaidLinkToken(input: CreateLinkTokenInput): Promise<LinkTokenResult>;
+  // Refuses a duplicate login BEFORE exchanging (Trial slots never come back), stores the item and
+  // its accounts, then starts the first sync.
+  exchangePlaidPublicToken(input: ExchangePublicTokenInput): Promise<FinanceItem>;
+  // After Link update mode (re-login / account selection): re-reads accounts + item health, no exchange.
+  completePlaidUpdate(itemId: string): Promise<FinanceItem>;
+  // /item/remove, drop the stored token, tombstone the item + its accounts + sync state. Transactions
+  // stay as history but drop out of the overview with their accounts.
+  removePlaidItem(itemId: string): Promise<void>;
+  // refresh=false: sync what Plaid already has. refresh=true: ask the bank for new data first (cooldown
+  // FINANCE_REFRESH_COOLDOWN_MS; a refused request returns accepted:false + when to retry).
+  requestFinanceSync(input: { refresh: boolean }): Promise<RequestFinanceSyncResult>;
 
   // Full data export (JSON) — the user owns their data. A snapshot of every entity.
   exportData(): Promise<ExportBundle>;
