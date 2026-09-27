@@ -2,7 +2,13 @@
 // have something honest to render. Without this, page-first validation would judge every data view
 // against an empty store. Values are index-derived (not random) so the seed is reproducible.
 
-import { addDays, dayKey, rollRepFields } from '@aperture/shared';
+import {
+  addDays,
+  dayKey,
+  FINANCE_DEFAULT_BUDGET_CENTS,
+  FINANCE_DEFAULT_CYCLE_DAY,
+  rollRepFields,
+} from '@aperture/shared';
 import type {
   BaseEntity,
   Category,
@@ -66,6 +72,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     calendarWriteDefault: { accountSub: 'seed-personal', calendarId: 'you@gmail.com' },
     dayFocusStart: 8,
     dayEndHour: 22,
+    financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
+    financeCycleDay: FINANCE_DEFAULT_CYCLE_DAY,
   };
 
   const estimates = [30, 45, 60, 90];

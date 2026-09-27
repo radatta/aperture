@@ -16,6 +16,7 @@ import {
   useUpsertCategory,
 } from '../../data/hooks/useCategories';
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
+import { fmtMoney, parseDollars } from '../../modules/finances/money';
 import {
   useConnectGoogle,
   useDisconnectGoogleAccount,
@@ -34,6 +35,7 @@ export function SettingsPage() {
       <CategoriesSection />
       <CalendarSection />
       <PreferencesSection />
+      <FinancesSection />
       <DataSection />
     </div>
   );
@@ -549,6 +551,56 @@ function PreferencesSection() {
             className="w-60"
           />
         </div>
+      </Card>
+    </section>
+  );
+}
+
+// The budget bucket's limit per billing period, and the cycle day used only when no card payment has
+// been found to anchor the period (finance.ts computeFinancePeriod).
+function FinancesSection() {
+  const { data: settings } = useSettings();
+  const update = useUpdateSettings();
+  const [budgetError, setBudgetError] = useState(false);
+  if (!settings) return null;
+  return (
+    <section className="flex flex-col gap-3">
+      <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
+        Finances
+      </Text>
+      <Card>
+        <div className="flex flex-wrap items-end gap-4">
+          <Field
+            label="Budget per cycle ($)"
+            inputMode="decimal"
+            defaultValue={(settings.financeBudgetCents / 100).toFixed(2)}
+            onBlur={(e) => {
+              const cents = parseDollars(e.target.value);
+              setBudgetError(cents === null);
+              if (cents !== null && cents !== settings.financeBudgetCents)
+                update.mutate({ financeBudgetCents: cents });
+            }}
+            aria-invalid={budgetError}
+            className="w-36"
+          />
+          <Field
+            label="Fallback cycle day"
+            type="number"
+            min={1}
+            max={31}
+            defaultValue={settings.financeCycleDay}
+            onBlur={(e) => {
+              const day = Math.round(Number(e.target.value));
+              if (day >= 1 && day <= 31) update.mutate({ financeCycleDay: day });
+            }}
+            className="w-36"
+          />
+        </div>
+        <Text size="xs" tone="muted" className="mt-2 block">
+          {budgetError
+            ? 'Enter an amount like 600 or 600.00.'
+            : `Now ${fmtMoney(settings.financeBudgetCents)}. The cycle day is only used until a card payment is found.`}
+        </Text>
       </Card>
     </section>
   );

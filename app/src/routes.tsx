@@ -10,6 +10,7 @@ import { HabitsPage } from './pages/Habits';
 import { RollsPage } from './pages/Rolls';
 import { InboxPage } from './pages/Inbox';
 import { SettingsPage } from './pages/Settings';
+import { FinancesAllTab, FinancesPage, FinancesRulesTab, FinancesSortTab } from './pages/Finances';
 
 // Route table, shared by the browser router (App) and the memory router used in tests. AppShell is
 // the layout; `/` is the glanceable home, the rest are deep views. Pomodoro + capture are not routes.
@@ -31,6 +32,15 @@ export const routes: RouteObject[] = [
       },
       { path: 'habits', element: <HabitsPage /> },
       { path: 'rolls', element: <RollsPage /> },
+      {
+        path: 'finances',
+        element: <FinancesPage />,
+        children: [
+          { index: true, element: <FinancesSortTab /> },
+          { path: 'all', element: <FinancesAllTab /> },
+          { path: 'rules', element: <FinancesRulesTab /> },
+        ],
+      },
       { path: 'inbox', element: <InboxPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
