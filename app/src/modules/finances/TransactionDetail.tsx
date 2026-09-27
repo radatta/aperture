@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   addDays,
   FINANCE_BUCKET_LABELS,
@@ -202,6 +202,7 @@ export function TransactionDetail({
           <>
             <Segmented
               label="Bucket"
+              autoFocus
               options={[
                 ...FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BUCKET_LABELS[b] })),
                 { value: null, label: 'Unsorted' },
@@ -458,29 +459,62 @@ function RefundsAgainst({ charge, view }: { charge: FinanceTransaction; view: Fi
   );
 }
 
+// A radiogroup per the WAI-ARIA pattern: one tab stop (the checked option, else the first), arrow keys
+// move AND select, Home/End jump. `autoFocus` makes the dialog open on the checked option.
 function Segmented<T extends string | null>({
   label,
   options,
   value,
   onChange,
+  autoFocus = false,
 }: {
   label: string;
   options: { value: T; label: string }[];
   value: T;
   onChange: (v: T) => void;
+  autoFocus?: boolean;
 }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const checked = options.findIndex((o) => o.value === value);
+  const stop = checked === -1 ? 0 : checked;
+  const select = (i: number) => {
+    const j = (i + options.length) % options.length;
+    onChange(options[j]!.value);
+    refs.current[j]?.focus();
+  };
+  const onKeyDown = (e: React.KeyboardEvent, i: number) => {
+    const to =
+      e.key === 'ArrowRight' || e.key === 'ArrowDown'
+        ? i + 1
+        : e.key === 'ArrowLeft' || e.key === 'ArrowUp'
+          ? i - 1
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? options.length - 1
+              : null;
+    if (to === null) return;
+    e.preventDefault();
+    select(to);
+  };
   return (
     <div role="radiogroup" aria-label={label} className="flex flex-col gap-1.5">
       <Text size="sm" tone="muted">
         {label}
       </Text>
       <div className="flex flex-wrap gap-1.5">
-        {options.map((o) => (
+        {options.map((o, i) => (
           <button
             key={o.label}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
             type="button"
             role="radio"
             aria-checked={value === o.value}
+            tabIndex={i === stop ? 0 : -1}
+            data-autofocus={autoFocus && i === stop ? '' : undefined}
+            onKeyDown={(e) => onKeyDown(e, i)}
             onClick={() => onChange(o.value)}
             className={cx(
               'rounded-xl border px-3 py-1.5 text-sm transition',

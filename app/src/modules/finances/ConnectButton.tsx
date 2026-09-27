@@ -33,6 +33,7 @@ export function ConnectButton({
       variant={variant}
       disabled={link.busy}
       onClick={() => link.start({ mode: 'connect' })}
+      data-connect
     >
       {link.busy ? 'Connecting…' : label}
     </Button>

@@ -317,6 +317,89 @@ describe('Finances page', () => {
     expect(within(dialog).getByText(/nothing has synced yet/)).toBeTruthy();
   });
 
+  it('closing an All-tab detail puts focus back on its row — even after it moves section', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const id = row.getAttribute('data-txn-id');
+    await user.click(row);
+    let dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-txn-id')).toBe(id));
+
+    await user.click(document.activeElement as HTMLElement);
+    dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
+    await user.click(within(dialog).getByRole('radio', { name: 'Last period' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-txn-id')).toBe(id));
+    const previous = screen.getByRole('region', { name: /^Last period/ });
+    expect(previous.contains(document.activeElement)).toBe(true);
+  });
+
+  it('the detail opens on the checked bucket, and arrow keys move and select', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await screen.findAllByRole('button', { name: /Uber/ }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /Uber/ });
+    const unsorted = within(dialog).getByRole('radio', { name: 'Unsorted' });
+    await waitFor(() => expect(document.activeElement).toBe(unsorted));
+    expect(
+      within(dialog)
+        .getAllByRole('radio')
+        .filter((r) => r.tabIndex === 0)
+        .map((r) => r.textContent),
+    ).toEqual(['Unsorted', 'By date']); // one tab stop per group
+    await user.keyboard('{ArrowRight}'); // wraps to the first
+    const parents = within(dialog).getByRole('radio', { name: 'Parents pay' });
+    await waitFor(() => expect(parents.getAttribute('aria-checked')).toBe('true'));
+    expect(document.activeElement).toBe(parents);
+  });
+
+  it('the Remove-bank confirm starts on Cancel, and Escape backs out to the menu', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances' });
+    await user.click(
+      await screen.findByRole('button', { name: 'More actions for Bank of America' }),
+    );
+    await user.click(await screen.findByRole('menuitem', { name: /Remove Bank of America/ }));
+    const confirm = await screen.findByRole('alertdialog', { name: /Remove Bank of America/ });
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('aria-label')).toBe(
+        'More actions for Bank of America',
+      ),
+    );
+  });
+
+  it('a banner Try again that works hands focus to Refresh, not the page', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances' });
+    await screen.findByText(/since your .* payment/);
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'INSTITUTION_NOT_RESPONDING');
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sync didn’t finish' });
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    const again = await screen.findByRole('button', { name: 'Try again' });
+    await waitFor(() => expect(document.activeElement).toBe(again));
+    await user.click(again);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Refresh' })),
+    );
+  });
+
+  it('adding a rule with the button keeps focus in the pattern field', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/rules' });
+    const input = await screen.findByLabelText('When the merchant contains');
+    await user.type(input, 'Netflix');
+    await user.click(screen.getByRole('button', { name: 'Add rule' }));
+    await screen.findByText('“netflix”');
+    await waitFor(() => expect(document.activeElement).toBe(input));
+  });
+
   it('rules tab adds and lists a rule', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/rules' });

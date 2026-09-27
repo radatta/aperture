@@ -26,8 +26,12 @@ export function Modal({ open, onClose, label, closeOnBackdrop = false, children 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (open && !el.open) el.showModal();
-    else if (!open && el.open) el.close();
+    if (open && !el.open) {
+      el.showModal();
+      // The browser focuses the first focusable element; a dialog can name a better start instead
+      // (e.g. the checked option of a radio group) with `data-autofocus`.
+      el.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    } else if (!open && el.open) el.close();
   }, [open]);
 
   return (

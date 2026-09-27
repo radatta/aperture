@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { financeSyncErrorMessage } from '@aperture/shared';
 import type { FinanceAccount, FinanceItem, FinanceOverview } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -107,6 +107,11 @@ function ItemAccounts({
   const remove = useRemovePlaidItem();
   const [confirming, setConfirming] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  // Bring the confirm clear of the dock (the root scroll-padding reserves it) as it opens.
+  useEffect(() => {
+    if (confirming) confirmRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [confirming]);
   // Cancel unmounts the strip; hand focus back to the menu trigger that opened it.
   function cancel() {
     setConfirming(false);
@@ -142,29 +147,36 @@ function ItemAccounts({
           <AccountChip key={a.id} account={a} />
         ))}
       </div>
-      {/* Same alertdialog strip as other destructive actions — no UI undo, so it asks first. */}
+      {/* Same alertdialog strip as other destructive actions — no UI undo, so it asks first. Unlike
+          the others, focus starts on Cancel: removing a bank is irreversible AND spends a Plaid
+          Trial slot, so a stray Enter must not do it. Escape cancels. */}
       {confirming && (
         <div
+          ref={confirmRef}
           role="alertdialog"
           aria-label={`Remove ${item.institutionName}?`}
           className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            cancel();
+          }}
         >
           <Text size="sm" tone="muted">
             Remove {item.institutionName}? Syncing stops and its accounts leave your totals.
             Plaid&apos;s free plan doesn&apos;t give the slot back: relinking uses a new one (10
             total), and its charges come back as new, unsorted rows.
           </Text>
+          <Button autoFocus variant="quiet" size="sm" onClick={cancel}>
+            Cancel
+          </Button>
           <Button
-            autoFocus
             variant="gold"
             size="sm"
             disabled={remove.isPending}
             onClick={() => remove.mutate(item.id)}
           >
             Remove
-          </Button>
-          <Button variant="quiet" size="sm" onClick={cancel}>
-            Cancel
           </Button>
           {remove.isError && (
             <Text size="sm" tone="danger" className="basis-full">
@@ -253,6 +265,7 @@ function SyncLine({
         {environment === 'sandbox' ? ' · Plaid Sandbox' : ''}
       </Text>
       <Button
+        data-sync-home
         size="sm"
         variant="quiet"
         disabled={syncing || sync.isPending || watch.retrying}

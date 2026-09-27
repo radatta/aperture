@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Outlet, useOutletContext, useSearchParams } from 'react-router';
 import type { FinanceOverview } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
@@ -14,6 +14,7 @@ import { SyncFailedDialog } from '../../modules/finances/SyncFailedDialog';
 import { useSyncWatch } from '../../modules/finances/useSyncWatch';
 import { useFinanceData } from '../../modules/finances/useFinanceData';
 import type { FinanceView } from '../../modules/finances/useFinanceData';
+import { useFocusRescue } from '../../lib/useFocusRescue';
 import { FinancesTabs } from './FinancesTabs';
 
 interface FinancesOutlet {
@@ -31,54 +32,69 @@ export function FinancesPage() {
   const watch = useSyncWatch(overview);
   const link = useBankLink(watch);
   useConnectFromUrl(link.start, overview !== undefined);
-
-  const heading = (
-    <Text as="h1" size="2xl" weight="semibold">
-      Finances
-    </Text>
+  // When the focused control vanishes (a banner's Try again that worked, a Reconnect that fixed the
+  // login, a removed bank), focus lands on the next useful thing instead of <body>.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLDivElement>(null);
+  useFocusRescue(
+    pageRef,
+    useCallback(() => {
+      const q = (sel: string) => pageRef.current?.querySelector<HTMLElement>(sel) ?? null;
+      return (
+        q('[data-sync-next-step]') ??
+        q('[data-sync-home]') ??
+        q('[data-connect]') ??
+        headingRef.current
+      );
+    }, []),
   );
-
-  if (!overview || overview.items.length === 0)
-    return (
-      <div className="flex flex-col gap-4">
-        {heading}
-        <EmptyState
-          pending={overviewQ.isPending}
-          error={overviewQ.isError}
-          title="No bank connected."
-          action={overview && <ConnectButton environment={overview.sync.environment} link={link} />}
-        >
-          Connect your bank once — checking, savings and the card — and charges sync four times a
-          day. Then sort them into Parents pay, Budget, or I pay whenever suits you.
-        </EmptyState>
-        {link.error && (
-          <Text size="sm" tone="danger">
-            {link.error}
-          </Text>
-        )}
-        {link.dialog}
-        {overview && <SyncFailedDialog watch={watch} overview={overview} link={link} />}
-      </div>
-    );
+  const linked = overview !== undefined && overview.items.length > 0;
 
   return (
-    <div className="flex flex-col gap-4">
-      {heading}
-      <PeriodHeader overview={overview} view={view} />
-      <AccountsStrip overview={overview} link={link} watch={watch} />
-      <FinancesTabs />
-      <Outlet
-        context={
-          {
-            overview,
-            view,
-            pending: txnsQ.isPending,
-            error: txnsQ.isError,
-          } satisfies FinancesOutlet
-        }
-      />
+    <div ref={pageRef} className="flex flex-col gap-4">
+      <div ref={headingRef} tabIndex={-1} className="outline-none">
+        <Text as="h1" size="2xl" weight="semibold">
+          Finances
+        </Text>
+      </div>
+      {linked ? (
+        <>
+          <PeriodHeader overview={overview} view={view} />
+          <AccountsStrip overview={overview} link={link} watch={watch} />
+          <FinancesTabs />
+          <Outlet
+            context={
+              {
+                overview,
+                view,
+                pending: txnsQ.isPending,
+                error: txnsQ.isError,
+              } satisfies FinancesOutlet
+            }
+          />
+        </>
+      ) : (
+        <>
+          <EmptyState
+            pending={overviewQ.isPending}
+            error={overviewQ.isError}
+            title="No bank connected."
+            action={
+              overview && <ConnectButton environment={overview.sync.environment} link={link} />
+            }
+          >
+            Connect your bank once — checking, savings and the card — and charges sync four times a
+            day. Then sort them into Parents pay, Budget, or I pay whenever suits you.
+          </EmptyState>
+          {link.error && (
+            <Text size="sm" tone="danger">
+              {link.error}
+            </Text>
+          )}
+        </>
+      )}
       {link.dialog}
-      <SyncFailedDialog watch={watch} overview={overview} link={link} />
+      {overview && <SyncFailedDialog watch={watch} overview={overview} link={link} />}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { FINANCE_BUCKET_LABELS, FINANCE_BUCKETS } from '@aperture/shared';
 import type { FinanceBucket, FinanceRule } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -23,6 +23,7 @@ export function RulesSection() {
   const upsert = useUpsertFinanceRule();
   const [pattern, setPattern] = useState('');
   const [bucket, setBucket] = useState<FinanceBucket>('budget');
+  const patternRef = useRef<HTMLInputElement>(null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -42,10 +43,20 @@ export function RulesSection() {
           className="flex flex-wrap items-end gap-3"
           onSubmit={(e) => {
             e.preventDefault();
-            upsert.mutate({ pattern, bucket }, { onSuccess: () => setPattern('') });
+            if (upsert.isPending || !pattern.trim()) return;
+            upsert.mutate(
+              { pattern, bucket },
+              {
+                onSuccess: () => {
+                  setPattern('');
+                  patternRef.current?.focus(); // ready for the next one, wherever you submitted from
+                },
+              },
+            );
           }}
         >
           <Field
+            ref={patternRef}
             label="When the merchant contains"
             value={pattern}
             onChange={(e) => setPattern(e.target.value)}
@@ -59,7 +70,13 @@ export function RulesSection() {
             options={BUCKET_OPTIONS}
             className="w-36"
           />
-          <Button type="submit" size="sm" disabled={!pattern.trim() || upsert.isPending}>
+          {/* Busy is aria-disabled, not disabled: a disabled button drops the focus it holds. */}
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!pattern.trim()}
+            aria-disabled={upsert.isPending || undefined}
+          >
             Add rule
           </Button>
           {upsert.isError && (

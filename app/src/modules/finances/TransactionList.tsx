@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   bucketOf,
   FINANCE_BUCKET_LABELS,
@@ -16,6 +16,7 @@ import type {
   FinanceTxnKind,
 } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
+import { revealFocus } from '../../lib/focus';
 import { useFinanceToday } from '../../data/hooks/useFinances';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
@@ -56,6 +57,30 @@ export function TransactionList({
   const [filter, setFilter] = useState<Filter>('all');
   const [openId, setOpenId] = useState<string | null>(null);
   const today = useFinanceToday();
+  // Closing the detail hands focus back to the row it opened from — found by id, because the row can
+  // re-render in the other section a moment later (a "Counts in" change). Sticky until focus goes
+  // anywhere else; if the row left the list (filtered, or moved out of both periods), the list itself.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const returnTo = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = returnTo.current;
+    if (openId !== null || id === null) return;
+    const row = [...(rootRef.current?.querySelectorAll<HTMLElement>('[data-txn-id]') ?? [])].find(
+      (el) => el.dataset.txnId === id,
+    );
+    if (!row) {
+      returnTo.current = null;
+      revealFocus(rootRef.current);
+    } else if (document.activeElement !== row) revealFocus(row);
+  });
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      const id = returnTo.current;
+      if (id !== null && (e.target as HTMLElement).dataset?.txnId !== id) returnTo.current = null;
+    };
+    document.addEventListener('focusin', onFocusIn);
+    return () => document.removeEventListener('focusin', onFocusIn);
+  }, []);
   if (!view)
     return <EmptyState pending={pending && !error} error={error} title="No transactions yet." />;
 
@@ -85,7 +110,12 @@ export function TransactionList({
   const open = openId ? view.allTxns.find((t) => t.id === openId) : undefined;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      aria-label="Transactions"
+      className="flex flex-col gap-4 outline-none"
+    >
       <div
         role="group"
         aria-label="Filter"
@@ -137,7 +167,10 @@ export function TransactionList({
           txn={open}
           view={view}
           overview={overview}
-          onClose={() => setOpenId(null)}
+          onClose={() => {
+            returnTo.current = open.id;
+            setOpenId(null);
+          }}
         />
       )}
     </div>
@@ -164,6 +197,7 @@ function TransactionRow({
     <li>
       <button
         type="button"
+        data-txn-id={txn.id}
         onClick={onOpen}
         disabled={!(expense || markable || kind === 'income')}
         className="flex w-full items-center gap-3 py-2 text-left enabled:hover:bg-panel-2"

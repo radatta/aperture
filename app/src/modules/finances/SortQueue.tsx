@@ -19,6 +19,7 @@ import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useSetFinanceBucket } from '../../data/hooks/useFinances';
+import { revealFocus } from '../../lib/focus';
 import { fmtMoney } from './money';
 import { TransactionDetail } from './TransactionDetail';
 import { refundMeta } from './refundMeta';
@@ -67,13 +68,13 @@ export function SortQueue({
     if (still !== -1) {
       if (!p.partial) return;
       pendingFocus.current = null;
-      refs.current.get(p.key)?.focus();
+      revealFocus(refs.current.get(p.key));
       return;
     }
     pendingFocus.current = null;
     const next = groups[Math.min(p.index, groups.length - 1)];
-    if (next) refs.current.get(next.key)?.focus();
-    else doneRef.current?.focus();
+    if (next) revealFocus(refs.current.get(next.key));
+    else revealFocus(doneRef.current);
   }
   useEffect(() => {
     if (openId === null) settleFocus();
