@@ -34,4 +34,7 @@ Until the user fills this in, assume little and ask.
 
 ### Observed usage baseline (append as the user shares it)
 
-_(empty — nothing observed yet as of 2026-08-09)_
+- **2026-09-23 — voice capture is a real surface.** The user adds tasks by voice through the Claude app
+  (Action Button → voice mode → MCP connector). When simulating a feature, also simulate it as one spoken
+  sentence with no screen; design implications live in
+  [areas/mcp/index.md → Voice](../areas/mcp/index.md#voice--a-live-capture-surface-no-code-of-its-own).

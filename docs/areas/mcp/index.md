@@ -234,6 +234,33 @@ claude.ai's live client enforces it yet is unconfirmed (cheap forward-compat, no
    `McpClientId`**, secret blank → Connect → hosted-UI login → tools list → `list_categories`, one write.
 4. After merge to `main`: repeat for prod with the prod client id. Phone inherits the connector.
 
+## Voice — a live capture surface (no code of its own)
+
+The user captures by voice: iPhone **Action Button → Claude app voice mode → the prod `aperture`
+claude.ai connector**, i.e. the phase-2 OAuth path above. No Siri, no Shortcuts, nothing voice-specific
+server-side. Observed 2026-09-23: "add get milk to aperture" created the task in one utterance; by 2026-09-26
+a fully specified one ("…, errands, 10 minutes, due Friday") also landed with category, estimate and due
+day — the model resolved the category label → id via `list_categories` unprompted.
+
+**Treat voice as a first-class surface when designing a feature.** It's one spoken sentence, no screen,
+the model as the only UI — so:
+
+- **If a feature adds something the user would want to say at capture time, make it sayable** — exposed on
+  `create_task` / `update_task`, with a tool description that lets the model map natural speech to it
+  (labels → ids, "Friday" → ISO date). A field reachable only from the app UI is invisible to voice.
+- **Ids are the friction.** Anything keyed by id (categories today) costs the model an extra lookup call;
+  a description that names the lookup tool is the minimum.
+- **Nothing is confirmed by eye.** Mishearing lands straight in prod, so destructive or calibration-feeding
+  tools (`delete_task`, `complete_task`) are the risky ones — prefer the claude.ai per-tool permission
+  "ask" for those. A new destructive tool inherits this concern.
+- **Logic that only runs when the app opens doesn't run for voice** (the stale-planned lag above is the
+  existing case).
+
+Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
+timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation
+configured), so the connector needs re-auth roughly monthly — the first thing to
+check if voice capture suddenly fails.
+
 ## Deferred
 
 - A rename does not sync to a linked calendar event (edit-sync — a pre-existing calendar gap).
