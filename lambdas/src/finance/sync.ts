@@ -176,6 +176,9 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
   let acquired = false;
   let removed = false;
   let claim = false;
+  // The refresh claim: lastRefreshedAt before it (to give it back if the call never goes out) and the
+  // value it wrote — at least the request, so a request stamped ahead of this clock isn't due again.
+  const claimed = { prev: null as number | null, at: 0 };
   const taken = await repo.casUpdate(
     shape,
     itemId,
@@ -183,11 +186,13 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       removed = fresh.deletedAt !== null;
       acquired = !removed && !(fresh.lockedUntil !== null && fresh.lockedUntil > t);
       claim = acquired && refreshDue(fresh) && roomForRefresh(t);
+      claimed.prev = fresh.lastRefreshedAt;
+      claimed.at = Math.max(t, fresh.refreshRequestedAt ?? 0);
       if (!acquired) return null;
       return {
         ...fresh,
         lockedUntil: t + FINANCE_SYNC_LOCK_MS,
-        lastRefreshedAt: claim ? t : fresh.lastRefreshedAt,
+        lastRefreshedAt: claim ? claimed.at : fresh.lastRefreshedAt,
       };
     },
     t,
@@ -212,6 +217,7 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
   for (;;) {
     report.passes++;
     let result: { ok: true } | { ok: false; code: string };
+    let refreshCalled = false;
     try {
       // The bank may have been removed while we waited or ran — stop, and write nothing.
       const item = await repo.getFinanceItem(itemId, { consistent: true });
@@ -221,6 +227,7 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       if (refresh) {
         try {
           guard(ctx, itemId, 'refresh');
+          refreshCalled = true; // from here the claim is spent, even if the call fails (2/min limit)
           await ctx.plaid.transactionsRefresh(itemId);
           await pollRefresh(ctx, itemId, before, renew);
         } catch (err) {
@@ -279,17 +286,30 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       decision: 'lost' | 'removed' | 'rerun' | 'done';
       nextStart: number;
       nextClaim: boolean;
+      nextClaimed: { prev: number | null; at: number };
       deferred: boolean;
-    } = { decision: 'lost', nextStart: passStart, nextClaim: false, deferred: false };
+    } = {
+      decision: 'lost',
+      nextStart: passStart,
+      nextClaim: false,
+      nextClaimed: { ...claimed },
+      deferred: false,
+    };
     const finished = await repo
       .casUpdate(
         shape,
         itemId,
-        (fresh) => {
+        (stored) => {
           const t2 = now();
           fin.nextStart = passStart;
           fin.nextClaim = false;
+          fin.nextClaimed = { ...claimed };
           fin.deferred = false;
+          // A claimed refresh that never went out (the pass failed first) is due again.
+          const fresh =
+            refresh && !refreshCalled && stored.lastRefreshedAt === claimed.at
+              ? { ...stored, lastRefreshedAt: claimed.prev }
+              : stored;
           if (fresh.deletedAt !== null) {
             fin.decision = 'removed';
             return null;
@@ -307,10 +327,14 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
             fin.decision = 'rerun';
             fin.nextStart = Math.max(t2, asked);
             fin.nextClaim = refreshDue(fresh) && roomForRefresh(t2);
+            fin.nextClaimed = {
+              prev: fresh.lastRefreshedAt,
+              at: Math.max(fin.nextStart, fresh.refreshRequestedAt ?? 0),
+            };
             return {
               ...fresh,
               lockedUntil: t2 + FINANCE_SYNC_LOCK_MS,
-              lastRefreshedAt: fin.nextClaim ? fin.nextStart : fresh.lastRefreshedAt,
+              lastRefreshedAt: fin.nextClaim ? fin.nextClaimed.at : fresh.lastRefreshedAt,
             };
           }
           fin.decision = 'done';
@@ -365,6 +389,7 @@ async function syncItem(ctx: Ctx, itemId: string, mode: FinanceSyncMode): Promis
       passStart = fin.nextStart;
       lock.token = finished.lockedUntil!;
       refresh = fin.nextClaim;
+      Object.assign(claimed, fin.nextClaimed);
       continue;
     }
     return result.ok ? report : { ...report, outcome: 'error', code: result.code };

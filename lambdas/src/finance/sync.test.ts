@@ -375,6 +375,26 @@ describe('runFinanceSync — the review findings', () => {
     expect(count('transactionsRefresh')).toBe(1); // no longer due
   });
 
+  it('a refresh claimed but never sent (the pass failed first) stays due', async () => {
+    await link();
+    plaid.failNext('accountsGet', 'INTERNAL_SERVER_ERROR');
+    request(true);
+    const [r] = await run();
+    expect(r!.outcome).toBe('error');
+    expect(count('transactionsRefresh')).toBe(0);
+    expect((await state()).lastRefreshedAt).toBeNull();
+    clock += 60_000;
+    await run('scheduled'); // whichever run holds the lock next does it
+    expect(count('transactionsRefresh')).toBe(1);
+  });
+
+  it('a request stamped ahead of the sync’s clock refreshes once, not twice', async () => {
+    await link();
+    patchState({ syncRequestedAt: clock + 5_000, refreshRequestedAt: clock + 5_000 });
+    await run();
+    expect(count('transactionsRefresh')).toBe(1);
+  });
+
   it('A6: right after a link, a not-ready Plaid is polled until the history arrives', async () => {
     await link();
     plaid.notReadyCalls = 2;
