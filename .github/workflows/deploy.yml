@@ -4,7 +4,8 @@ name: Deploy
 # the main ruleset is the safety valve). Push to dev → one-off dev deploy.
 # Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
-# changes → deploy each stage at the resulting tier.
+# changes → deploy each stage at the resulting tier. Exception: an app-only push to dev deploys straight
+# off the classification, in parallel with check (deploy-dev-fast).
 on:
   push:
     branches: [main, dev]
@@ -22,7 +23,8 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   # Classify the push once (docs / app-only / full) and assert dev is current with main. Runs in
-  # parallel with `check`, off the critical path — deploy-dev waits on both anyway.
+  # parallel with `check`; deploy-dev waits on both, while the dev fast path (deploy-dev-fast) waits on
+  # this job alone — so it's kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -45,30 +47,32 @@ jobs:
           git merge-base --is-ancestor origin/main HEAD || {
             echo "::error::dev is behind main — merge/rebase main in before pushing"; exit 1
           }
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
       # docs-only → none (deploy job still runs in its environment, so the deployment is still recorded
       # for the merge gate — nothing is actually deployed). app/** only → app. Anything else, or an
       # indeterminate base → full. The rule is a tested module, not an inline regex (see the classifier).
+      # No pnpm/setup-node/install (~20s): the classifier imports only node:fs, and the runner image's
+      # default Node (22.23.2 on ubuntu-24.04) strips TypeScript types natively. The constraints that puts
+      # on the classifier are in its header. `node --version` makes a runner-image Node change diagnosable.
       - name: Classify deployable changes
         id: detect
         run: |
+          node --version
           base="${{ github.event.before }}"
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "mode=full" >> "$GITHUB_OUTPUT"; echo "No usable base — full deploy."; exit 0
           fi
           changed=$(git diff --name-only "$base" "${{ github.sha }}")
           echo "Changed files:"; echo "$changed"
-          mode=$(printf '%s\n' "$changed" | pnpm --silent --filter @aperture/scripts exec tsx src/classify-changes.ts)
+          mode=$(printf '%s\n' "$changed" | node scripts/src/classify-changes.ts)
+          case "$mode" in none|app|full) ;; *) echo "::error::classifier returned '$mode'"; exit 1 ;; esac
           echo "Deploy mode: $mode"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
   deploy-dev:
     needs: [check, changes]
+    # A dev push classified `app` takes deploy-dev-fast instead. Everything else — infra/docs pushes to
+    # dev, and every main push — keeps the strict order check → deploy-dev → deploy-prod.
+    if: github.ref != 'refs/heads/dev' || needs.changes.outputs.mode != 'app'
     permissions:
       id-token: write
       contents: read
@@ -85,8 +89,34 @@ jobs:
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
 
+  # Dev fast path: an app-only push to `dev` publishes the frontend without waiting for `check`. dev is
+  # scratch — the user force-pushes it to see a branch on real infrastructure — so a build that later
+  # fails lint/tests gets a loud notification (see notify), not a rollback. Only `app` qualifies: it's an
+  # S3 sync + invalidation, and a vite build failure still fails this job. main never takes this path
+  # (ref check), and deploy-prod doesn't list this job in `needs`, so prod is unaffected.
+  deploy-dev-fast:
+    needs: [changes]
+    if: github.ref == 'refs/heads/dev' && needs.changes.outputs.mode == 'app'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      stage: dev
+      mode: app
+      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+      aws_region: ${{ vars.AWS_REGION }}
+      cert_arn: ${{ vars.CERT_ARN_DEV }}
+      device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
+    secrets:
+      origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
+      device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
+      agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
+
   deploy-prod:
-    needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode` output
+    # `changes` listed so this job can read its `mode` output. Never list deploy-dev-fast here — it's
+    # always skipped on main, and a skipped need skips this job.
+    needs: [deploy-dev, changes]
     if: github.ref == 'refs/heads/main' # dev-branch pushes stop at dev
     permissions:
       id-token: write
@@ -110,7 +140,7 @@ jobs:
   # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
   # until the secret is set, so it's safe to land before the topic exists.
   notify:
-    needs: [check, changes, deploy-dev, deploy-prod]
+    needs: [check, changes, deploy-dev, deploy-dev-fast, deploy-prod]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -120,21 +150,31 @@ jobs:
           CHECK_RESULT: ${{ needs.check.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           DEV_RESULT: ${{ needs.deploy-dev.result }}
+          DEV_FAST_RESULT: ${{ needs.deploy-dev-fast.result }}
           PROD_RESULT: ${{ needs.deploy-prod.result }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
+          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT fast=$DEV_FAST_RESULT prod=$PROD_RESULT  $SHA"
+          # Fast path landed on dev but the quality gate didn't pass (failure or cancelled): dev is serving
+          # an unvetted build. No rollback by design — make it impossible to miss instead. This job needs
+          # `check`, so the verdict here is final, never provisional.
+          if [ "$DEV_FAST_RESULT" = "success" ] && [ "$CHECK_RESULT" != "success" ]; then
+            curl -s -H "Title: 🚨 dev DEPLOYED but CI FAILED ($REF)" -H "Priority: urgent" -H "Tags: rotating_light" \
+              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+            exit 0
+          fi
           # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
-          # dev-branch push, and a docs-only fast-path job still reports success (steps just no-op).
+          # dev-branch push, the fast job on every main push and non-app dev push, deploy-dev on an
+          # app-only dev push; a docs-only job still reports success (steps just no-op).
           # `changes` is watched too: it holds the up-to-date-with-main gate, so its failure must not
           # slip through as a success just because the deploy jobs got skipped.
           failed=0
-          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
+          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$DEV_FAST_RESULT" "$PROD_RESULT"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
           done
-          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
           if [ "$failed" = "1" ]; then
             curl -s -H "Title: ❌ Aperture deploy FAILED ($REF)" -H "Priority: high" -H "Tags: warning" \
               -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
