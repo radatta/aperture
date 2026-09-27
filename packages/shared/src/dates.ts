@@ -36,6 +36,19 @@ export function dayKeyForOffset(
   return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
 }
 
+// Day bucketing on a server that knows the user's IANA zone but not their clock (the MCP tools): the
+// calendar date in `timeZone` of the instant `dayStartHour` hours earlier. Needs ICU time-zone data
+// (Node 22 ships it). Across a DST change the rollover lands an hour off for that one night.
+export function dayKeyInZone(epochMs: number, timeZone: string, dayStartHour: number): string {
+  // en-CA formats a date as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(epochMs - dayStartHour * MS_PER_HOUR));
+}
+
 // Parse a day key to a local Date at NOON — noon keeps ±day arithmetic safe across DST shifts.
 function keyToNoon(key: string): Date {
   const p = key.split('-');

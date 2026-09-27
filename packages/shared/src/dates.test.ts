@@ -3,6 +3,7 @@ import {
   addDays,
   dayKey,
   dayKeyForOffset,
+  dayKeyInZone,
   daysBetween,
   fmtDayHeading,
   fmtDueDay,
@@ -96,7 +97,8 @@ describe('fmtDueDay — relative deadline phrasing', () => {
   // The trap: at 2:30am the wall-clock date has rolled but the logical day (4am start) hasn't. A task
   // due "yesterday's calendar date" must still read "due today". The boundary lives in todayKey, and
   // fmtDueDay is pure over (dueDay, today) — so composing the two is the honest test.
-  const at = (y: number, mo: number, d: number, h: number) => new Date(y, mo - 1, d, h, 0, 0, 0).getTime();
+  const at = (y: number, mo: number, d: number, h: number) =>
+    new Date(y, mo - 1, d, h, 0, 0, 0).getTime();
   it('respects the dayStartHour rollover via todayKey', () => {
     expect(fmtDueDay('2026-06-06', todayKey(4, at(2026, 6, 7, 3)))).toBe('due today'); // 3am, pre-rollover
     expect(fmtDueDay('2026-06-06', todayKey(4, at(2026, 6, 7, 4)))).toBe('was due yesterday'); // 4am exactly
@@ -146,5 +148,26 @@ describe('localEpochFromDayTime', () => {
     expect(localEpochFromDayTime('2026-10-01', '09:30')).toBe(
       new Date(2026, 9, 1, 9, 30, 0, 0).getTime(),
     );
+  });
+});
+
+describe('dayKeyInZone', () => {
+  const LA = 'America/Los_Angeles';
+  const at = (iso: string) => Date.parse(iso);
+  it('is the calendar day in the zone, not UTC', () => {
+    expect(dayKeyInZone(at('2026-09-27T06:00:00Z'), LA, 0)).toBe('2026-09-26'); // 23:00 PDT
+    expect(dayKeyInZone(at('2026-09-27T08:00:00Z'), LA, 0)).toBe('2026-09-27'); // 01:00 PDT
+  });
+  it('rolls over at dayStartHour', () => {
+    expect(dayKeyInZone(at('2026-09-27T10:30:00Z'), LA, 4)).toBe('2026-09-26'); // 03:30 PDT
+    expect(dayKeyInZone(at('2026-09-27T11:30:00Z'), LA, 4)).toBe('2026-09-27'); // 04:30 PDT
+  });
+  it('follows standard time in winter', () => {
+    expect(dayKeyInZone(at('2026-12-15T07:30:00Z'), LA, 0)).toBe('2026-12-14'); // 23:30 PST
+    expect(dayKeyInZone(at('2026-12-15T08:30:00Z'), LA, 0)).toBe('2026-12-15'); // 00:30 PST
+  });
+  it('stays on the right day across both DST changes', () => {
+    expect(dayKeyInZone(at('2026-03-08T12:00:00Z'), LA, 4)).toBe('2026-03-08'); // 05:00 PDT
+    expect(dayKeyInZone(at('2026-11-01T12:00:00Z'), LA, 4)).toBe('2026-11-01'); // 04:00 PST
   });
 });
