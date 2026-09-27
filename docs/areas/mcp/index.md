@@ -238,9 +238,9 @@ claude.ai's live client enforces it yet is unconfirmed (cheap forward-compat, no
 
 The user captures by voice: iPhone **Action Button → Claude app voice mode → the prod `aperture`
 claude.ai connector**, i.e. the phase-2 OAuth path above. No Siri, no Shortcuts, nothing voice-specific
-server-side. Observed 2026-09-23: "add get milk to aperture" created the task in one utterance. Whether a
-fully specified utterance ("…, errands, 10 minutes, due Friday") resolves the category label → id via
-`list_categories` unprompted is **not yet verified**.
+server-side. Observed 2026-09-23: "add get milk to aperture" created the task in one utterance; by 2026-09-26
+a fully specified one ("…, errands, 10 minutes, due Friday") also landed with category, estimate and due
+day — the model resolved the category label → id via `list_categories` unprompted.
 
 **Treat voice as a first-class surface when designing a feature.** It's one spoken sentence, no screen,
 the model as the only UI — so:
