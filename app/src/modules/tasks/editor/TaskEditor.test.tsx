@@ -77,7 +77,10 @@ describe('TaskEditor', () => {
 
     expect(setTitle).toHaveBeenCalledWith(t.id, 'New name'); // trimmed
     await waitFor(async () => expect((await client.getTask(t.id))?.title).toBe('New name'));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // Save keeps the modal open and says so.
+    expect(await screen.findByText('Saved')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Title').value).toBe('New name');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('disables Save when the title is blank', async () => {
@@ -88,7 +91,7 @@ describe('TaskEditor', () => {
     expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
   });
 
-  it('saves only the changed field and closes', async () => {
+  it('saves only the changed field and stays open', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Edit me', estimateMin: 30 });
     const setDue = vi.spyOn(client, 'setTaskDueDay');
@@ -100,7 +103,32 @@ describe('TaskEditor', () => {
 
     expect(setDue).toHaveBeenCalledWith(t.id, '2026-10-01');
     expect(setEst).not.toHaveBeenCalled(); // estimate untouched
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(await screen.findByText('Saved')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLInputElement>('Due').value).toBe('2026-10-01');
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save.getAttribute('aria-disabled')).toBe('true'); // nothing left to save
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The next edit replaces "Saved" with "Unsaved changes".
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-02' } });
+    expect(screen.queryByText('Saved')).toBeNull();
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    expect(save.getAttribute('aria-disabled')).toBe('false');
+  });
+
+  it('keeps the edits and says so when a save fails', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Flaky' });
+    vi.spyOn(client, 'setTaskDueDay').mockRejectedValue(new Error('offline'));
+    const { onClose, user } = renderEditor(client, t);
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(/Couldn’t save/)).toBeTruthy();
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLInputElement>('Due').value).toBe('2026-10-01');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('makes estimate read-only once work has started, with the lock copy', async () => {
@@ -140,7 +168,7 @@ describe('TaskEditor', () => {
     expect(labels).not.toContain('Studying');
     expect(labels).not.toContain('Studying (retired)');
     // The retired option is the saved value, so the form opens clean.
-    expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Save' }).getAttribute('aria-disabled')).toBe('true');
   });
 
   it('hides Split on a finished task', async () => {
@@ -239,7 +267,13 @@ describe('TaskEditor', () => {
 
       expect(setNotes).toHaveBeenCalledWith(t.id, 'ch. 4 q1-8');
       await waitFor(async () => expect((await client.getTask(t.id))?.notes).toBe('ch. 4 q1-8'));
-      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      // Stays open, back on the rendered note, clean.
+      expect(await screen.findByText('Saved')).toBeTruthy();
+      expect(screen.queryByLabelText('Notes')).toBeNull();
+      expect(screen.getByText('ch. 4 q1-8')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Edit notes' })).toBeTruthy();
+      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+      expect(onClose).not.toHaveBeenCalled();
     });
 
     it('leaves notes alone when only another field changed', async () => {
@@ -249,7 +283,7 @@ describe('TaskEditor', () => {
       const first = renderEditor(client, t);
       fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
       await first.user.click(screen.getByRole('button', { name: 'Save' }));
-      await waitFor(() => expect(first.onClose).toHaveBeenCalled());
+      expect(await screen.findByText('Saved')).toBeTruthy();
       expect(setNotes).not.toHaveBeenCalled();
     });
 

@@ -165,6 +165,34 @@ describe('unsaved-changes guard', () => {
   });
 });
 
+describe('Save keeps the modal open', () => {
+  it('even when the save moves the row out of the list (Backlog → Week)', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Movable' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const d = await openEditor(user, 'Movable', 'Backlog');
+    fireEvent.change(d.getByLabelText('Due'), { target: { value: addDays(todayKey(4), 2) } });
+    await user.click(d.getByRole('button', { name: 'Save' }));
+
+    expect(await d.findByText('Saved')).toBeTruthy();
+    // The row leaves Backlog (it's due this week now) — the modal doesn't go with it.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Movable' })).toBeNull());
+    const dialog = screen.getByRole('dialog', { name: 'Task: Movable' });
+    expect(within(dialog).getByLabelText<HTMLTextAreaElement>('Title').value).toBe('Movable');
+
+    // Nothing unsaved, so Close doesn't prompt; with the row gone, focus lands on the list area.
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog', { name: /Discard unsaved changes/ })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: Movable' })).toBeNull());
+    await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
+
+    await user.click(screen.getByRole('button', { name: /^Week/ }));
+    expect(await screen.findByRole('button', { name: 'Movable' })).toBeTruthy();
+  });
+});
+
 describe('deleting a task', () => {
   it('asks first — the Delete action only opens a confirm, and focus lands on it', async () => {
     const api = freshApi();

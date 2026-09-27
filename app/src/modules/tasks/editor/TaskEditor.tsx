@@ -56,7 +56,7 @@ export function TaskEditor({
 }: {
   task: Task;
   intent: TaskEditorIntent;
-  onClose: () => void; // real close — after a Save/Drop/Delete, no guard
+  onClose: () => void; // real close — after Mark done / Drop, no guard (Save stays open)
   onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
   onDirtyChange: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
@@ -117,12 +117,7 @@ export function TaskEditor({
 
       {intent === 'finish' && finish}
 
-      <TaskDetailsForm
-        task={task}
-        onDone={onClose}
-        onDirtyChange={onDirtyChange}
-        estimateRef={estimateRef}
-      />
+      <TaskDetailsForm task={task} onDirtyChange={onDirtyChange} estimateRef={estimateRef} />
 
       {intent !== 'finish' && finish}
 

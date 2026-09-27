@@ -10,8 +10,9 @@ import type { TaskEditorIntent } from './editor/TaskEditor';
 //   - the field-focus for finish/scope intents (effect lives HERE, a parent of Modal, so it runs
 //     AFTER Modal's showModal() — child effects fire first, the ordering BulkAddDialog relies on);
 //   - the unsaved-changes guard: Esc / backdrop / Close all route through `requestClose`, which pops a
-//     confirm dialog when the details form is dirty. A real Save/Drop/Delete calls `onClose` directly
-//     (nothing unsaved), so it never prompts;
+//     confirm dialog when the details form is dirty. Mark done and Drop call `onClose` directly
+//     (nothing unsaved), so they never prompt; Delete closes via TaskModalHost once the task leaves
+//     the list; Save keeps the modal open;
 //   - resetting that guard state when the modal closes (the editor also unmounts, reseeding its form).
 export function TaskModal({
   task,

@@ -24,19 +24,22 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 // in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
 // Estimate + buffer edit only while backlog|planned; past that the calibration baseline is frozen
 // (canEditEstimate), so they show read-only. Category stays editable at any status; due locks once
-// finished. Notes edit at any status too. Save writes only what changed and closes; the modal's own
-// Close is the cancel.
+// finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
+// (showing "Saved"); the modal's own Close is the way out.
 export function TaskDetailsForm({
-  task,
-  onDone,
+  task: live,
   onDirtyChange,
   estimateRef,
 }: {
   task: Task;
-  onDone: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
+  // What the form compares against: the task the last Save's final write returned, until the refetch
+  // (or a newer edit from elsewhere) catches up — otherwise the fields would read dirty, and the old
+  // values would flash, for the moment between the write and the refetch.
+  const [saved, setSaved] = useState<Task | null>(null);
+  const task = saved && saved.updatedAt >= live.updatedAt ? saved : live;
   const categoryOptions = useCategoryOptions(task.categoryId);
   const setTitle = useSetTaskTitle();
   const setEstimate = useSetEstimate();
@@ -56,6 +59,9 @@ export function TaskDetailsForm({
   const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
+  // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   const estNum = estimate === '' ? null : Number(estimate);
   const titleTrimmed = title.trim();
@@ -71,38 +77,45 @@ export function TaskDetailsForm({
   const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
   const dirty =
     titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;
-  const pending =
-    setTitle.isPending ||
-    setEstimate.isPending ||
-    setCategory.isPending ||
-    setDueDay.isPending ||
-    setNotes.isPending;
 
   // Bubble dirtiness up so the modal's exit paths (Esc/backdrop/Close) can confirm before discarding.
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
 
+  // Writes what changed, in order, then reseeds every field from the task the last write returned
+  // (so "030" reads back as "30") and shows the rendered note again. Stays open; a failure keeps the
+  // edits and says so.
   async function save() {
-    if (titleDirty) {
-      await setTitle.mutateAsync({ id: task.id, title: titleTrimmed });
+    if (saving || !dirty) return;
+    setSaving(true);
+    setFailed(false);
+    try {
+      let next = task;
+      if (titleDirty) next = await setTitle.mutateAsync({ id: task.id, title: titleTrimmed });
+      // Never call setEstimate past planning — the machine throws on a frozen estimate.
+      if (estimateDirty)
+        next = await setEstimate.mutateAsync({
+          id: task.id,
+          estimateMin: estNum,
+          bufferMin: buffer === '' ? null : Number(buffer),
+        });
+      if ((task.categoryId ?? '') !== categoryId)
+        next = await setCategory.mutateAsync({ id: task.id, categoryId: categoryId || null });
+      if (dueDirty) next = await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
+      if (notesDirty)
+        next = await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
+      setTitle_(next.title);
+      setEstimate_(next.estimateMin?.toString() ?? '');
+      setBuffer(next.bufferMin?.toString() ?? '');
+      setCategoryId(next.categoryId ?? '');
+      setDueDay_(next.dueDay ?? '');
+      setNotes_(next.notes ?? '');
+      setEditingNotes(false);
+      setSaved(next);
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
     }
-    // Never call setEstimate past planning — the machine throws on a frozen estimate.
-    if (estimateDirty) {
-      await setEstimate.mutateAsync({
-        id: task.id,
-        estimateMin: estNum,
-        bufferMin: buffer === '' ? null : Number(buffer),
-      });
-    }
-    if ((task.categoryId ?? '') !== categoryId) {
-      await setCategory.mutateAsync({ id: task.id, categoryId: categoryId || null });
-    }
-    if (dueDirty) {
-      await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
-    }
-    if (notesDirty) {
-      await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
-    }
-    onDone();
   }
 
   return (
@@ -205,14 +218,30 @@ export function TaskDetailsForm({
         onChange={setNotes_}
       />
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={save} disabled={pending || !dirty || !titleTrimmed || notesOver}>
+        {/* Nothing to save (or mid-save) is aria-disabled, not disabled: a keyboard user who pressed
+            Save keeps focus on it instead of dropping to <body> as it disables itself. Invalid input
+            still really disables it. */}
+        <Button
+          size="sm"
+          onClick={save}
+          aria-disabled={saving || !dirty}
+          disabled={!titleTrimmed || notesOver}
+          className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+        >
           Save
         </Button>
-        {dirty && (
+        {dirty && !saving && (
           <Text size="xs" tone="muted">
             Unsaved changes
           </Text>
         )}
+        <span role="status">
+          {(failed || (saved && !dirty)) && (
+            <Text size="xs" tone={failed ? 'danger' : 'teal'}>
+              {failed ? 'Couldn’t save — try again.' : 'Saved'}
+            </Text>
+          )}
+        </span>
       </div>
     </section>
   );
