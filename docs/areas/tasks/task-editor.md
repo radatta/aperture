@@ -44,8 +44,14 @@ The card keeps only the actions you press without thinking. No overflow menu.
   (Save disables). This shipped in a second pass, after the branch rebased onto `#25` (the MCP server
   merge) which brought the `setTaskTitle` contract to `main`; the first pass left the title read-only
   to keep this change app-only until that method existed.
-- **Single diff-driven Save.** The details form writes only what changed, sequentially (the old
-  `ScopePanel.save` pattern), then closes. Estimate + buffer are **read-only once work has started** —
+- **Single diff-driven Save, and Save stays open.** The details form writes only what changed,
+  sequentially (the old `ScopePanel.save` pattern), then **keeps the modal open**: it reseeds every
+  field from the task the last write returned, puts notes back in their rendered view, and shows a
+  quiet "Saved" until the next edit (a failure keeps the edits and says "Couldn't save"). Until the
+  refetch lands, the form compares against that returned task (newer `updatedAt` wins), so nothing
+  reads dirty or flashes old values in between. Save is `aria-disabled` rather than `disabled` when
+  there's nothing to save, so a keyboard user keeps focus on it. The earlier "Save closes" was never
+  wanted (2026-09-27) — only Close / Esc / backdrop, Mark done, Drop and Delete leave. Estimate + buffer are **read-only once work has started** —
   `canEditEstimate` (backlog|planned only), because the machine freezes the calibration baseline and
   `withEstimate` throws past that. Category stays editable at any status (no machine guard); **due locks
   once the task is done or cancelled** — a UI rule (`isTerminal` in `TaskDetailsForm`), since re-dating
@@ -62,21 +68,30 @@ The card keeps only the actions you press without thinking. No overflow menu.
   would have dropped the only "this task is unscoped" signal and made scoping — the morning-pass
   signature move — a title-tap→edit→Save instead of one tap. An unscoped backlog task keeps a quiet
   "not scoped" meta line and a `Scope` button that opens the modal on the Estimate field.
+- **The page hosts the modal, not the row.** Save staying open means a save can move its row out of
+  the list (a due date moves Backlog → Week, a rename leaves a search, a category change leaves a
+  filter); a row-owned modal would vanish with it. `TaskModalHost` (on `/tasks`, around the lens
+  content) renders the one `TaskModal`, reading the task live from the tasks query by id; rows open it
+  through `useOpenTask` (a `TaskCard` outside any host hosts itself). It also closes the modal when the
+  task leaves the list while open — Delete has no `onDone`, and a delete can come from MCP or another
+  device.
 - **Focus-return via `useDisclosure`.** Native `<dialog>` restores focus to the invoker on `close()`,
-  but the jsdom test stub doesn't, and CONVENTIONS mandates `useDisclosure` — so the card holds one
-  disclosure whose `triggerRef` is the title button; every opener (title/Scope/Done) returns focus
-  there on close.
+  but the jsdom test stub doesn't, and CONVENTIONS mandates `useDisclosure` — so the host holds one
+  disclosure whose `triggerRef` is the opening row's title button; every opener (title/Scope/Done)
+  returns focus there on close. If that row has left the list, focus goes to the list area instead of
+  `<body>`. After a mouse/touch close the focus comes back without the ring (only Tab counts as
+  keyboard navigation), so the title doesn't sit outlined until you click elsewhere.
 - **Click-outside closes, but an unsaved edit confirms first.** The task modal opts into backdrop-close
   (an opt-in `closeOnBackdrop` flag on the shared `Modal`, so paste-heavy dialogs like bulk-add stay
   unaffected). Every *exit* path — Esc, backdrop, the Close button — routes through `requestClose`,
   which pops a "Discard changes?" confirm (a second `<dialog>` stacked on top) when the details form is
-  dirty. A *real action* (Save / Mark done / Drop / Delete) closes without the prompt, since it isn't an
-  abandon. "Dirty" is the details form only (title/estimate/category/due/notes); the Split/Calendar reveal
+  dirty. A *real action* (Mark done / Drop / Delete) closes without the prompt, since it isn't an
+  abandon; Save doesn't close at all. "Dirty" is the details form only (title/estimate/category/due/notes); the Split/Calendar reveal
   forms have their own Cancel. Backdrop-close requires press *and* release on the backdrop, so a
   text-selection drag-out can't dismiss.
 
 - **Notes live in the details form** ([notes.md](notes.md)): rendered, with Edit / "Add notes…";
-  once editing, a textarea until Save or Close. Editable at any status, like the title.
+  once editing, a textarea until Save (which shows the rendered note again) or Close. Editable at any status, like the title.
 
 ## Non-goals / deferred
 
@@ -90,6 +105,8 @@ The card keeps only the actions you press without thinking. No overflow menu.
 
 - New: `modules/tasks/editor/` (`TaskEditor`, `TaskDetailsForm`, `SplitForm`, `AddToCalendarForm`,
   `DeleteConfirm` + `DropConfirm`), `TaskModal`, `TaskTitleButton`.
+- Later (2026-09-27): `TaskModalHost` + `task-modal-context` (page-level modal), Save stays open
+  (`TaskDetailsForm`), quiet focus return (`useDisclosure`).
 - Changed: `TaskCard` (rewritten slim), `TaskMeta` ("not scoped" cue), `taskMath` (`statusLabel`,
   `scopeLabel`), `format` (`fmtDateTime`), `Field` (ref prop), `DoneForm` (`actualRef`),
   `useTasks` (`useSetTaskTitle`), `dates` (`localEpochFromDayTime`).

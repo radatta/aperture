@@ -95,7 +95,9 @@ wrapped capture. The column is `pointer-events-none`; each **panel** opts back i
 **Anything that dismisses something returns focus to what opened it.** `components/Menu` and
 `lib/useDisclosure` both hold this: a collapsed form's trigger, and a menu's trigger, are re-focused
 on close — except when the action removed that trigger (a destructive row action), where focus is
-left alone rather than aimed at a node about to unmount. If you add another popover or
+left alone rather than aimed at a node about to unmount, or handed to the list container
+(`useRowAction`, `TaskModalHost`) — never `<body>`. After a mouse/touch close `useDisclosure` returns
+focus without the ring (only Tab counts as keyboard navigation). If you add another popover or
 collapse-in-place control, use `useDisclosure` rather than a bare `useState`.
 
 **Empty states go through `components/EmptyState`.** React Query defaults `data` to `[]`, so

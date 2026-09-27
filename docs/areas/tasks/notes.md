@@ -41,7 +41,7 @@ Rendered by `modules/tasks/notes/` — `parseNotes.ts` (pure) and `NotesView.tsx
 
 - **Editor** ([task-editor.md](task-editor.md)): a Notes block in the details form. It shows the
   rendered note with an Edit button, or "Add notes…" when empty. Once editing, it stays a textarea until
-  Save or Close — no blur-to-render, no preview tab. The textarea grows with its text up to 40dvh (30dvh
+  Save (which keeps the modal open and shows the rendered note again) or Close — no blur-to-render, no preview tab. The textarea grows with its text up to 40dvh (30dvh
   below `sm`, so Save stays in reach on a phone), then scrolls, inside the 85dvh modal. A `n / 5,000`
   counter appears from 4,500 and turns red over the cap, where Save disables (a screen reader hears the crossing, not every keystroke); there's no `maxLength`,
   so a paste is never silently truncated. Notes join the dirty guard only while being edited — in view
