@@ -32,7 +32,7 @@ export class FinanceSync extends Construct {
   constructor(scope: Construct, id: string, props: FinanceSyncProps) {
     super(scope, id);
     const { stage, table, plaidEnv, plaidSsmBase, deviceUserId } = props;
-    const { region, account } = Stack.of(this);
+    const { partition, region, account } = Stack.of(this);
 
     // Created here (not left to Lambda) so it gets a retention; safe because the group is new.
     const logGroup = new logs.LogGroup(this, 'Logs', {
@@ -76,6 +76,8 @@ export class FinanceSync extends Construct {
         ],
       }),
     );
+    // cdk-nag matches acks by id across the whole app, so this duplicates the BFF's; kept so each
+    // function states its own wildcard. The IAM statements, not the acks, do the scoping.
     this.fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
       'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
         'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
@@ -89,7 +91,13 @@ export class FinanceSync extends Construct {
     if (!deviceUserId) return;
     const role = new iam.Role(this, 'ScheduleRole', {
       assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com', {
-        conditions: { StringEquals: { 'aws:SourceAccount': account } },
+        // Only this schedule may assume it (confused-deputy guard), not any schedule in the account.
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': account },
+          ArnLike: {
+            'aws:SourceArn': `arn:${partition}:scheduler:${region}:${account}:schedule/default/aperture-finance-sync-${stage}`,
+          },
+        },
       }),
     });
     role.addToPolicy(

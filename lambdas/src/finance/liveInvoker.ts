@@ -4,8 +4,9 @@ import type { FinanceSyncInvoker } from './invoker';
 type LambdaLike = Pick<LambdaClient, 'send'>;
 
 // Starts the sync Lambda asynchronously (InvocationType 'Event'): Lambda queues it and answers 202 at
-// once, so the RPC returns while the sync runs. Lambda retries a failed async run twice on its own —
-// harmless, the sync is idempotent and locked. `@aws-sdk/client-lambda` is here for SigV4 (dependency
+// once, so the RPC returns while the sync runs. Lambda never retries it (retryAttempts 0,
+// cdk/src/lib/finance-sync.ts): a failed run is already stamped for the page, and a retry could re-spend
+// a refresh. `@aws-sdk/client-lambda` is here for SigV4 (dependency
 // rule B); it ships in the Lambda runtime, so the bundle keeps it external.
 export function liveInvoker(
   functionName: string,

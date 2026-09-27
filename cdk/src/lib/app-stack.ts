@@ -411,7 +411,8 @@ export class ApertureAppStack extends Stack {
             fn,
             durationAlarm: { statistic: 'p99', thresholdMs: fnTimeout.toMilliseconds() * 0.8 },
           },
-          // Maximum ≥ 290 s: a run that ate its own safety margin (a real timeout also lands in Errors).
+          // Maximum ≥ 295 s: a run that ate most of its 10 s safety margin (a real timeout also lands in
+          // Errors).
           // Not p99-at-80%: a legitimate refresh poll runs for minutes. Errors here are infra faults
           // only — a bank's failure is a per-item report, not a throw.
           {
@@ -420,7 +421,7 @@ export class ApertureAppStack extends Stack {
             fn: financeSync.fn,
             durationAlarm: {
               statistic: 'Maximum',
-              thresholdMs: FINANCE_SYNC_TIMEOUT.toMilliseconds() - 10_000,
+              thresholdMs: FINANCE_SYNC_TIMEOUT.toMilliseconds() - 5_000,
             },
           },
         ],
