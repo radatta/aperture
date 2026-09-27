@@ -23,8 +23,9 @@ export interface MonitoringProps {
 // Prod-only runtime watch on the Lambdas (INFRA §9) — the only thing watching prod between deploys.
 // Three alarms per function → one SNS topic (one email confirmation) → email. Everything here is in
 // the stack's own region (us-west-1): the Lambda's AWS/Lambda metrics, the alarms, and the SNS topic
-// all co-locate, so there's no cross-region wiring. CloudFront 5xx is intentionally NOT alarmed (Option B) — those metrics publish only in
-// us-east-1, and the post-deploy synthetic check already proves the edge path at deploy time.
+// all co-locate, so there's no cross-region wiring. CloudFront 5xx is intentionally NOT alarmed
+// (Option B) — those metrics publish only in us-east-1, and the post-deploy synthetic check already
+// proves the edge path at deploy time.
 // treatMissingData = NOT_BREACHING because single-user traffic leaves long gaps with no datapoints.
 export class Monitoring extends Construct {
   constructor(scope: Construct, id: string, props: MonitoringProps) {

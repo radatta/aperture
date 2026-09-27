@@ -2,7 +2,7 @@
 
 Personal life-OS PWA. Web-first, installable. AWS-native serverless.
 
-**Build status (2026-09-23):** V1_PLAN phases **0–14 built**, all five packages green — **687 tests** in 83 files (app 361 · lambdas 187 · shared 90 · cdk 37 · scripts 12; earlier snapshots: 236 on 2026-08-11, 260 on 2026-09-07). Custom domains **live on both stages** since 2026-08 (arch/INFRA §8). Recruiting/LeetCode capture is merged (#2 on 2026-09-07, #10 on 2026-09-08) and in daily use since the signed extension install on 2026-09-08 ([recruiting/](areas/recruiting/index.md)). The one open item that isn't code is the **9.2 stub-validation gate** — dogfood a real morning + night (V1_PLAN header).
+**Build status (2026-09-27):** V1_PLAN phases **0–14 built**, plus Finances ([finances/](areas/finances/index.md)); all five packages green — **1,054 tests** in 101 files (app 484 · lambdas 330 · shared 182 · cdk 46 · scripts 12; earlier snapshots: 236 on 2026-08-11, 260 on 2026-09-07, 687 on 2026-09-23). Custom domains **live on both stages** since 2026-08 (arch/INFRA §8). Recruiting/LeetCode capture is merged (#2 on 2026-09-07, #10 on 2026-09-08) and in daily use since the signed extension install on 2026-09-08 ([recruiting/](areas/recruiting/index.md)). The one open item that isn't code is the **9.2 stub-validation gate** — dogfood a real morning + night (V1_PLAN header).
 
 Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built), **areas/** (per-domain design docs — the map of what exists), **ops/** (sandbox runbooks). `V1_PLAN.md` stays at the top level as the plan as written plus the per-phase as-built record — not a roadmap of what exists and not a second copy of the spec.
 
@@ -15,7 +15,7 @@ Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built),
 ## arch/ — how it's built
 
 - **[arch/TECH.md](arch/TECH.md)** — how it's built: stack, data model (logical + single-table DDB keys), routing/state and the session-renewal rules, folder structure, AI seam, and the **tech debt ledger** (currently the `uncheckHabit` hard-delete, which no contract test can detect).
-- **[arch/INFRA.md](arch/INFRA.md)** — the AWS blueprint as built: dev+prod, CDK stack split, Function URL (auth `NONE` + origin-secret header) behind CloudFront, Cognito, DynamoDB, GitHub OIDC CI (environment-scoped roles; the PR's required checks are the only merge gate; change-tiered deploys, the `dev` fast path, per-stage deploy serialisation, template diff + direct deploy, edge-polling health check), custom domains (live), secrets, cost.
+- **[arch/INFRA.md](arch/INFRA.md)** — the AWS blueprint as built: dev+prod, CDK stack split, Function URL (auth `NONE` + origin-secret header) behind CloudFront, Cognito, DynamoDB, GitHub OIDC CI (environment-scoped roles; the PR's required checks are the only merge gate; change-tiered deploys, the `dev` fast path, per-stage deploy serialisation, template diff + direct deploy, edge-polling health check), custom domains (live), the finance sync function + Scheduler + Plaid SSM, secrets, cost.
 - **[arch/CICD_HARDENING.md](arch/CICD_HARDENING.md)** — the seven CI/CD + ops additions (all $0): ntfy deploy notifications, cdk-nag, gitleaks, Dependabot, CloudWatch alarms, post-deploy health check, AWS budget — wired 2026-08-10, with the per-item plan and operator checklist. Read before touching any of the seven.
 
 ## areas/ — per-domain design docs
