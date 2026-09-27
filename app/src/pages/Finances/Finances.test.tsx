@@ -426,6 +426,41 @@ describe('Finances page', () => {
     expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Transactions' }));
   });
 
+  it('arrow presses in the detail save one after another, and the last press is what stays', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    const real = api.setFinanceBucket.bind(api);
+    const gates: (() => void)[] = [];
+    const save = vi.spyOn(api, 'setFinanceBucket').mockImplementation(async (input) => {
+      await new Promise<void>((r) => gates.push(r));
+      return real(input);
+    });
+    renderApp({ api, path: '/finances/all' });
+    const row = (await screen.findAllByRole('button', { name: /Uber/ }))[0]!;
+    const id = row.getAttribute('data-txn-id')!;
+    await user.click(row);
+    const dialog = await screen.findByRole('dialog', { name: /Uber/ });
+    const unsorted = within(dialog).getByRole('radio', { name: 'Unsorted' });
+    await waitFor(() => expect(document.activeElement).toBe(unsorted));
+    await user.keyboard('{ArrowRight}{ArrowRight}'); // wraps to Parents pay, then Budget
+    const budget = within(dialog).getByRole('radio', { name: 'Budget' });
+    expect(budget.getAttribute('aria-checked')).toBe('true'); // shown at once
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(save).toHaveBeenCalledTimes(1); // the second waits for the first
+    gates.shift()!();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(budget.getAttribute('aria-checked')).toBe('true'); // no flash back to Parents pay
+    gates.shift()!();
+    const range = { from: '2000-01-01', to: '2100-01-01' };
+    await waitFor(async () =>
+      expect((await api.listFinanceTransactions(range)).find((t) => t.id === id)?.bucket).toBe(
+        'budget',
+      ),
+    );
+    await waitFor(() => expect(budget.getAttribute('aria-checked')).toBe('true'));
+  });
+
   it('the detail opens on the checked bucket, and arrow keys move and select', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });

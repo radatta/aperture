@@ -66,10 +66,21 @@ function patchTxnCaches(qc: QueryClient, fn: (t: FinanceTransaction) => FinanceT
   qc.setQueriesData<FinanceTransaction[]>({ queryKey: ['finance', 'txns'] }, (old) => old?.map(fn));
 }
 
-export function useSetFinanceBucket() {
+// One transaction's detail edits run in order (a TanStack mutation scope): its arrow keys save on
+// every press, and saves racing on the server could leave a different option saved than the one
+// shown. While a later edit is queued, an earlier one neither patches nor refetches — the optimistic
+// value of the latest press stays on screen until the last save settles.
+const txnEditKey = (id: string) => ['finance', 'txn-edit', id];
+const txnScope = (id?: string) =>
+  id === undefined ? {} : { scope: { id: `finance-txn:${id}` }, mutationKey: txnEditKey(id) };
+const laterQueued = (qc: QueryClient, id?: string) =>
+  id !== undefined && qc.isMutating({ mutationKey: txnEditKey(id) }) > 1;
+
+export function useSetFinanceBucket(scopeId?: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
+    ...txnScope(scopeId),
     mutationFn: (input: SetFinanceBucketInput) => api.setFinanceBucket(input),
     onMutate: async (input) => {
       await qc.cancelQueries({ queryKey: ['finance', 'txns'] });
@@ -86,10 +97,11 @@ export function useSetFinanceBucket() {
       );
     },
     onSuccess: (changed) => {
+      if (laterQueued(qc, scopeId)) return;
       const byId = new Map(changed.map((t) => [t.id, t]));
       patchTxnCaches(qc, (t) => byId.get(t.id) ?? t);
     },
-    onSettled: () => invalidateFinance(qc),
+    onSettled: () => (laterQueued(qc, scopeId) ? undefined : invalidateFinance(qc)),
   });
 }
 
@@ -145,13 +157,18 @@ export function useSetFinancePeriodStart() {
   });
 }
 
-export function useSetFinancePeriodOverride() {
+export function useSetFinancePeriodOverride(scopeId?: string) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
+    ...txnScope(scopeId),
     mutationFn: (v: { id: string; override: FinancePeriodOverride | null }) =>
       api.setFinancePeriodOverride(v.id, v.override),
-    onSettled: () => invalidateFinance(qc),
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: ['finance', 'txns'] });
+      patchTxnCaches(qc, (t) => (t.id === v.id ? { ...t, periodOverride: v.override } : t));
+    },
+    onSettled: () => (laterQueued(qc, scopeId) ? undefined : invalidateFinance(qc)),
   });
 }
 

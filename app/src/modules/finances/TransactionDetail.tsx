@@ -57,8 +57,8 @@ export function TransactionDetail({
   overview: FinanceOverview;
   onClose: () => void;
 }) {
-  const setBucket = useSetFinanceBucket();
-  const setOverride = useSetFinancePeriodOverride();
+  const setBucket = useSetFinanceBucket(txn.id);
+  const setOverride = useSetFinancePeriodOverride(txn.id);
   const setNote = useSetFinanceNote();
   const link = useLinkFinanceRefund();
   const mark = useSetFinancePeriodStart();
