@@ -1,9 +1,11 @@
 import {
   ATTACHMENT_MAX_BYTES,
+  TASK_NOTES_MAX,
   UPLOAD_URL_TTL_MS,
   computeDayShape,
   isDayKey,
   normalizeContentType,
+  normalizeNotes,
 } from '@aperture/shared';
 import type {
   Attachment,
@@ -83,6 +85,20 @@ function nullableDay(args: Record<string, unknown>, key: string): string | null 
   if (v === null || v === undefined) return null;
   return reqDay(args, key);
 }
+// Notes are checked here, before any dispatch, so an over-cap note is a param error that lands nothing —
+// not a half-applied update_task. The value passed on is already normalized (trim, '' → null).
+function nullableNotes(args: Record<string, unknown>, key: string): string | null {
+  const v = args[key];
+  if (v !== null && v !== undefined && typeof v !== 'string')
+    throw new RpcParamError(`"${key}" must be a string or null`);
+  try {
+    return normalizeNotes(v);
+  } catch (e) {
+    throw new RpcParamError(`"${key}": ${e instanceof Error ? e.message : 'invalid'}`);
+  }
+}
+const NOTES_SCHEMA_DESC = `light markdown (**bold**, *italic*, \`code\`, - bullets, 1. lists, [text](https://…), bare URLs; newlines kept), at most ${TASK_NOTES_MAX} characters after trimming (the server checks)`;
+
 function enumArg<T extends string>(args: Record<string, unknown>, key: string, allowed: T[]): T {
   const s = reqStr(args, key);
   if (!(allowed as string[]).includes(s)) {
@@ -141,7 +157,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_task',
     description:
-      'Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD). The estimate stays editable until work starts.',
+      'Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); notes is free-form context (light markdown). The estimate stays editable until work starts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -150,6 +166,7 @@ export const TOOLS: Tool[] = [
         estimateMin: { type: 'integer', minimum: 0 },
         bufferMin: { type: 'integer', minimum: 0 },
         dueDay: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
       },
       required: ['title'],
       additionalProperties: false,
@@ -160,13 +177,14 @@ export const TOOLS: Tool[] = [
       if (present(args, 'estimateMin')) input.estimateMin = reqInt(args, 'estimateMin', 0);
       if (present(args, 'bufferMin')) input.bufferMin = reqInt(args, 'bufferMin', 0);
       if (present(args, 'dueDay')) input.dueDay = nullableDay(args, 'dueDay');
+      if (present(args, 'notes')) input.notes = nullableNotes(args, 'notes');
       return ctx.dispatch('createTask', [input]);
     },
   },
   {
     name: 'create_tasks',
     description:
-      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task. Use this for a study plan or a session backlog dump.',
+      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task. All-or-nothing on invalid input: one bad task (e.g. notes over the cap) creates none. Use this for a study plan or a session backlog dump.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -180,6 +198,7 @@ export const TOOLS: Tool[] = [
               estimateMin: { type: 'integer', minimum: 0 },
               bufferMin: { type: 'integer', minimum: 0 },
               dueDay: { type: 'string' },
+              notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
             },
             required: ['title'],
           },
@@ -201,6 +220,7 @@ export const TOOLS: Tool[] = [
         if (present(row, 'estimateMin')) input.estimateMin = reqInt(row, 'estimateMin', 0);
         if (present(row, 'bufferMin')) input.bufferMin = reqInt(row, 'bufferMin', 0);
         if (present(row, 'dueDay')) input.dueDay = nullableDay(row, 'dueDay');
+        if (present(row, 'notes')) input.notes = nullableNotes(row, 'notes');
         return input;
       });
       return ctx.dispatch('createTasks', [inputs]);
@@ -209,7 +229,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears; ISO date), estimateMin (+optional bufferMin), status. Fields apply in order title→categoryId→dueDay→estimate→status. The estimate is frozen once work starts — setting it then errors. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
+      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears; ISO date), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin (+optional bufferMin), status. Fields apply in order title→categoryId→dueDay→notes→estimate→status. The estimate is frozen once work starts — setting it then errors. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -217,6 +237,10 @@ export const TOOLS: Tool[] = [
         title: { type: 'string' },
         categoryId: { type: ['string', 'null'] },
         dueDay: { type: ['string', 'null'], description: 'ISO date YYYY-MM-DD, or null to clear' },
+        notes: {
+          type: ['string', 'null'],
+          description: `${NOTES_SCHEMA_DESC}; replaces the whole note, null clears`,
+        },
         estimateMin: { type: 'integer', minimum: 0 },
         bufferMin: { type: 'integer', minimum: 0 },
         status: { type: 'string', enum: TASK_STATUSES },
@@ -226,10 +250,19 @@ export const TOOLS: Tool[] = [
     },
     async run(args, ctx) {
       const id = reqStr(args, 'id');
-      const fields = ['title', 'categoryId', 'dueDay', 'estimateMin', 'bufferMin', 'status'];
+      const fields = [
+        'title',
+        'categoryId',
+        'dueDay',
+        'notes',
+        'estimateMin',
+        'bufferMin',
+        'status',
+      ];
       if (!fields.some((f) => present(args, f))) {
         throw new RpcParamError('update_task needs at least one field to change');
       }
+      const notes = present(args, 'notes') ? nullableNotes(args, 'notes') : undefined; // before any write
       const applied: string[] = [];
       try {
         if (present(args, 'title')) {
@@ -243,6 +276,10 @@ export const TOOLS: Tool[] = [
         if (present(args, 'dueDay')) {
           await ctx.dispatch('setTaskDueDay', [id, nullableDay(args, 'dueDay')]);
           applied.push('dueDay');
+        }
+        if (notes !== undefined) {
+          await ctx.dispatch('setTaskNotes', [id, notes]);
+          applied.push('notes');
         }
         if (present(args, 'estimateMin')) {
           const buf = optInt(args, 'bufferMin', 0) ?? 0;

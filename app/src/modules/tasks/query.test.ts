@@ -6,6 +6,7 @@ import {
   inDueBucket,
   isNarrowing,
   LENS_PRESET,
+  matchedInNotes,
   matchesText,
   normalize,
   overrideChips,
@@ -28,6 +29,7 @@ const task = (over: Partial<Task>): Task => ({
   status: 'backlog',
   categoryId: null,
   dueDay: null,
+  notes: null,
   seriesId: null,
   rollId: null,
   estimateMin: null,
@@ -111,6 +113,28 @@ describe('text search', () => {
   });
   it('t4 blank text matches everything', () => {
     expect(matchesText(task({}), '   ', labelOf)).toBe(true);
+  });
+  it('t5 matches words in the notes, mixed with the title, accent-blind', () => {
+    const t = task({ title: 'pset 4', notes: 'Q6: use the **Lemma**\nCafé hours Thu' });
+    expect(matchesText(t, 'lemma', labelOf)).toBe(true);
+    expect(matchesText(t, 'pset cafe', labelOf)).toBe(true); // title + notes, AND across both
+    expect(matchesText(t, 'pset zebra', labelOf)).toBe(false);
+    expect(matchesText(t, 'lemma', labelOf, false)).toBe(false); // the add-to-today picker opts out
+  });
+  it('t6 flags a match only the notes explain', () => {
+    const t = task({ title: 'pset 4', categoryId: 'c1', notes: 'use the lemma' });
+    expect(matchedInNotes(t, 'lemma', labelOf)).toBe(true);
+    expect(matchedInNotes(t, 'pset lemma', labelOf)).toBe(true);
+    expect(matchedInNotes(t, 'csen pset', labelOf)).toBe(false); // title + category explain it
+    expect(matchedInNotes(t, 'zebra', labelOf)).toBe(false); // no match at all
+    expect(matchedInNotes(t, '  ', labelOf)).toBe(false);
+    expect(matchedInNotes(task({ title: 'x' }), 'x', labelOf)).toBe(false);
+  });
+  it('t7 a legacy task with no notes field still searches by title', () => {
+    const legacy = task({ title: 'old row' });
+    delete (legacy as { notes?: unknown }).notes;
+    expect(matchesText(legacy, 'old', labelOf)).toBe(true);
+    expect(matchesText(legacy, 'lemma', labelOf)).toBe(false);
   });
 });
 

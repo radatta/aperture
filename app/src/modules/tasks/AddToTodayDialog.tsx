@@ -127,7 +127,10 @@ function DialogBody({
   const onToday = new Set(plans.map((p) => p.taskId));
   const matches = byDueHint(
     tasks.filter(
-      (t) => isOpen(t) && (!onToday.has(t.id) || added.has(t.id)) && matchesText(t, text, labelOf),
+      (t) =>
+        isOpen(t) &&
+        (!onToday.has(t.id) || added.has(t.id)) &&
+        matchesText(t, text, labelOf, false),
     ),
   );
   const typed = text.trim();

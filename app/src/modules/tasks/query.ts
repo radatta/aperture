@@ -72,16 +72,45 @@ export function normalize(s: string): string {
   return s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-// Every word must appear somewhere in the title or the category label.
+// Notes can run to 5,000 characters, so each task object's normalized notes are computed once, not per
+// keystroke. A refetch hands back new objects, so an edited note is never read stale.
+const notesHay = new WeakMap<Task, string>();
+function notesOf(task: Task): string {
+  if (!task.notes) return '';
+  let hay = notesHay.get(task);
+  if (hay === undefined) notesHay.set(task, (hay = normalize(task.notes)));
+  return hay;
+}
+
+const tokensOf = (text: string) => normalize(text).split(' ').filter(Boolean);
+const titleHay = (task: Task, labelOf: (id: string | null) => string) =>
+  normalize(`${task.title} ${labelOf(task.categoryId)}`);
+
+// Every word must appear somewhere in the title, the category label, or (unless withNotes is off) the
+// notes. The add-to-today picker turns notes off: it finds-or-creates by title.
 export function matchesText(
   task: Task,
   text: string,
   labelOf: (id: string | null) => string,
+  withNotes = true,
 ): boolean {
-  const tokens = normalize(text).split(' ').filter(Boolean);
+  const tokens = tokensOf(text);
   if (tokens.length === 0) return true;
-  const hay = normalize(`${task.title} ${labelOf(task.categoryId)}`);
-  return tokens.every((t) => hay.includes(t));
+  const hay = titleHay(task, labelOf);
+  const notes = withNotes ? notesOf(task) : '';
+  return tokens.every((t) => hay.includes(t) || notes.includes(t));
+}
+
+// The row's "in notes" hint: the search matches, but the title and category alone don't explain it.
+export function matchedInNotes(
+  task: Task,
+  text: string,
+  labelOf: (id: string | null) => string,
+): boolean {
+  const tokens = tokensOf(text);
+  if (tokens.length === 0 || !task.notes) return false;
+  const hay = titleHay(task, labelOf);
+  return !tokens.every((t) => hay.includes(t)) && matchesText(task, text, labelOf);
 }
 
 function matchesStatus(task: Task, statuses: StatusChip[]): boolean {

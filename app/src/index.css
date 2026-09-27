@@ -49,6 +49,10 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+  /* Focus handed back after a mouse/touch close (useDisclosure) keeps its place but not the ring. */
+  [data-focus-quiet]:focus-visible {
+    outline: none;
+  }
 
   ::selection {
     background: var(--teal-soft);

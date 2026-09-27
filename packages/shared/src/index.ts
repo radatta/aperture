@@ -9,6 +9,7 @@ export * from './leetcode';
 export * from './stories';
 export * from './rolls';
 export * from './attachments';
+export * from './taskNotes';
 export * from './api';
 export * from './bulkTasks';
 export * from './rpc';

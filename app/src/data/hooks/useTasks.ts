@@ -75,6 +75,16 @@ export function useSetTaskTitle() {
   });
 }
 
+// Notes. Like the title, settable at any status and never part of the estimate lock (see setTaskNotes).
+export function useSetTaskNotes() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; notes: string | null }) => api.setTaskNotes(v.id, v.notes),
+    onSettled: () => invalidateTaskData(qc),
+  });
+}
+
 // The lifecycle move. Crossing out of planning (→ in_progress|done) freezes estimateLockedMin inside
 // the shared machine — this hook doesn't need to know, it just calls it.
 export function useTransitionTask() {

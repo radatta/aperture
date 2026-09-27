@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient } from './api';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
+import { TASK_NOTES_MAX } from './taskNotes';
 
 // ONE behavior suite, run against every ApiClient implementation — the in-memory stub, the in-process
 // Lambda (BackendClient over an in-memory table), and any future transport. If the swap is faithful,
@@ -363,6 +364,62 @@ export function runApiContract(
       expect(again.estimateLockedMin).toBe(30); // rename ≠ scope change
 
       await expect(api.setTaskTitle(t.id, '   ')).rejects.toThrow(); // empty/whitespace rejected
+    });
+
+    it('tasks: notes default null, trim, set at any status without touching the lock, and clear', async () => {
+      const t = await api.createTask({ title: 'with context', estimateMin: 30, bufferMin: 0 });
+      expect(t.notes).toBeNull();
+      expect((await api.createTask({ title: 'blank', notes: '  \n ' })).notes).toBeNull();
+      expect((await api.createTask({ title: 'noted', notes: ' ch. 4\n' })).notes).toBe('ch. 4');
+
+      const set = await api.setTaskNotes(t.id, '  **q6** hint\n- use the lemma  ');
+      expect(set.notes).toBe('**q6** hint\n- use the lemma'); // trimmed, inner newlines kept
+      expect((await api.getTask(t.id))?.notes).toBe('**q6** hint\n- use the lemma');
+
+      const started = await api.transitionTask(t.id, 'in_progress');
+      expect(started.estimateLockedMin).toBe(30);
+      const mid = await api.setTaskNotes(t.id, 'mid-flight');
+      expect(mid.notes).toBe('mid-flight');
+      expect(mid.estimateLockedMin).toBe(30); // notes ≠ scope change
+      const done = await api.transitionTask(t.id, 'done');
+      expect((await api.setTaskNotes(done.id, 'after the fact')).notes).toBe('after the fact');
+
+      expect((await api.setTaskNotes(t.id, 'a\r\nb\rc')).notes).toBe('a\nb\nc'); // CRLF → LF
+      // A call that lost its second argument (JSON has no undefined) is an error, never a silent clear.
+      const setMissing = api.setTaskNotes as (id: string) => Promise<unknown>;
+      await expect(setMissing(t.id)).rejects.toThrow();
+      expect((await api.getTask(t.id))?.notes).toBe('a\nb\nc');
+
+      expect((await api.setTaskNotes(t.id, null)).notes).toBeNull();
+      await api.setTaskNotes(t.id, 'back');
+      expect((await api.setTaskNotes(t.id, '')).notes).toBeNull();
+      expect((await api.listTasks()).find((x) => x.id === t.id)?.notes).toBeNull();
+    });
+
+    it('tasks: notes cap at TASK_NOTES_MAX on set, create, and createTasks (whole batch)', async () => {
+      const t = await api.createTask({ title: 'capped', notes: 'keep me' });
+      const max = 'x'.repeat(TASK_NOTES_MAX);
+      expect((await api.setTaskNotes(t.id, max)).notes).toHaveLength(TASK_NOTES_MAX);
+      await api.setTaskNotes(t.id, 'keep me');
+      await expect(api.setTaskNotes(t.id, `${max}y`)).rejects.toThrow();
+      expect((await api.getTask(t.id))?.notes).toBe('keep me'); // the rejected write changed nothing
+
+      await expect(api.createTask({ title: 'too long', notes: `${max}y` })).rejects.toThrow();
+      await expect(
+        api.createTasks([{ title: 'fine' }, { title: 'too long', notes: `${max}y` }]),
+      ).rejects.toThrow();
+      const titles = (await api.listTasks()).map((x) => x.title);
+      expect(titles).not.toContain('too long');
+      expect(titles).not.toContain('fine'); // one bad line creates nothing
+    });
+
+    it('tasks: split carries notes to the follow-up, and export includes them', async () => {
+      const t = await api.createTask({ title: 'Big thing', notes: 'links + context' });
+      await api.transitionTask(t.id, 'in_progress');
+      const { followUp } = await api.splitTask(t.id, 'done', 'Big thing, part 2');
+      expect(followUp.notes).toBe('links + context');
+      const data = await api.exportData();
+      expect(data.tasks.find((x) => x.id === t.id)?.notes).toBe('links + context');
     });
 
     it('sessions: several run at once, a task dedups, and work time accrues to the task', async () => {

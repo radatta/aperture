@@ -26,6 +26,7 @@ export function TaskTitleButton({
       type="button"
       onClick={onOpen}
       aria-haspopup="dialog"
+      data-task-id={task.id}
       title={task.title}
       className={cx('min-w-0 max-w-full text-left hover:underline', className)}
     >

@@ -68,8 +68,13 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 - **`complete_task` requires `actualMin`** — completing feeds calibration, and a 0-actual completion would
   pollute the signature metric. It chains `→ in_progress → done` (freezing the estimate) and **replaces**
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
-- **`update_task`** fan-out order is title → categoryId → dueDay → estimate → status; the estimate throws
-  if frozen, and the error names which fields already applied.
+- **`update_task`** fan-out order is title → categoryId → dueDay → notes → estimate → status; the estimate
+  throws if frozen, and the error names which fields already applied.
+- **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`
+  (`notes: null` or `""` clears; an update replaces the whole note). They're checked before any dispatch,
+  so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of
+  it in an `update_task`, and every task in a `create_tasks` batch. `list_tasks` / `list_backlog` return
+  full notes (up to 5 KB each); trimming them in the list tools is a deferred option if that gets heavy.
 - **`update_category`** (rename / reorder / `isWork` / retire) merges `label` + `isWork` over the current
   row, since `upsertCategory` requires both; `order` and `active` are patch-style in the contract (omitted
   keeps the current value), so they're sent only when given. `active:false` **retires** the category —

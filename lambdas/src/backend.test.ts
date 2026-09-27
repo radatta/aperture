@@ -229,3 +229,24 @@ describe('backend task delete', () => {
     expect(await live.getTask(task.id)).not.toBeNull(); // nothing tombstoned
   });
 });
+
+// Rows written before notes existed have no attribute at all, so they read back undefined (not null).
+// The contract suite only ever sees fresh rows; this proves a legacy row still reads and takes notes.
+describe('backend task notes on a legacy row', () => {
+  it('reads back undefined, and can have notes set', async () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+    });
+    const task = await backend.createTask({ title: 'from before notes' });
+    const raw = await doc.get('u#local', sk.task(task.id));
+    const legacy = { ...raw! };
+    delete legacy.notes;
+    await doc.put(legacy);
+
+    expect((await backend.getTask(task.id))?.notes).toBeUndefined();
+    expect((await backend.setTaskNotes(task.id, 'added later')).notes).toBe('added later');
+    expect((await backend.getTask(task.id))?.notes).toBe('added later');
+  });
+});

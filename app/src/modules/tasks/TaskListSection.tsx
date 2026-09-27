@@ -8,7 +8,7 @@ import { ChevronRightIcon, PlusIcon } from '../../components/icons';
 import { cx } from '../../lib/cx';
 import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
-import { applyQuery, isNarrowing, resetToLens } from './query';
+import { applyQuery, isNarrowing, labelOfFrom, matchedInNotes, resetToLens } from './query';
 import type { Place, QueryCtx, TaskGroup, TaskQuery } from './query';
 import { useCollapsedGroups } from './useTaskQuery';
 import { TaskCard } from './TaskCard';
@@ -78,6 +78,7 @@ export function TaskListSection({
   // Search and narrowing filters open every group; a sort or grouping change doesn't.
   const narrowing = isNarrowing(query);
   const planByTask = new Map(plans.map((p) => [p.taskId, p]));
+  const labelOf = labelOfFrom(ctx.categories);
 
   // Every branch renders inside the same focusable wrapper: when the last row leaves, focus still
   // has somewhere to land.
@@ -102,7 +103,7 @@ export function TaskListSection({
           error={error}
           title={`Nothing matches “${query.text.trim()}”.`}
         >
-          Search covers titles and category names.
+          Search covers titles, category names, and notes.
         </EmptyState>,
       );
     if (narrowing)
@@ -159,7 +160,8 @@ export function TaskListSection({
         <span className="max-sm:hidden">Today</span>
       </Button>
     ) : undefined;
-    return <TaskCard key={task.id} task={task} actions={actions} />;
+    const notesHit = result.searching && matchedInNotes(task, query.text, labelOf);
+    return <TaskCard key={task.id} task={task} actions={actions} notesHit={notesHit} />;
   };
 
   const groups = place === 'done' ? capGroups(result.groups, limit) : result.groups;

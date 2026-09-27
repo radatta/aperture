@@ -4,16 +4,19 @@ import { Modal } from '../../components/Modal';
 import { Text } from '../../components/Text';
 import { Button } from '../../components/Button';
 import { Textarea } from '../../components/Textarea';
+import { NoteIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
 import { useActiveCategories } from '../../data/hooks/useCategories';
 import { useAllTasks, useCreateTasks } from '../../data/hooks/useTasks';
 
 const PLACEHOLDER = `email coach
 finish 214 pset | ~90 #"Deep Work" due:2026-09-25
-book flight | due:2026-10-02`;
+book flight | due:2026-10-02
+read ch. 4 | notes:"q6: use the lemma\\nhttps://example.edu/pset4"`;
 
 // Bulk add — the plan-pass surface (PRODUCT §2: batch entry is the morning plan, not capture). One line
-// = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category, due:YYYY-MM-DD).
+// = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category, due:YYYY-MM-DD,
+// notes:"…").
 // The preview parses live: red errors gate submit, gold warnings don't (the task is created anyway). The
 // grammar is meant to be GENERATED (by Claude), so it's strict — operator reference: docs/areas/tasks/bulk-add.md.
 export function BulkAddDialog({
@@ -138,6 +141,12 @@ export function BulkAddDialog({
                   {l.dueDay !== null && (
                     <Text size="xs" tone="teal">
                       {fmtMonthDayYear(l.dueDay)}
+                    </Text>
+                  )}
+                  {l.notes !== null && (
+                    <Text size="xs" tone="teal" className="inline-flex items-center gap-0.5">
+                      <NoteIcon size={11} />
+                      notes
                     </Text>
                   )}
                 </div>

@@ -6,8 +6,8 @@ import { useDeleteTask, useTransitionTask } from '../../../data/hooks/useTasks';
 
 // Permanent delete — a real destructive action, so it asks first (alertdialog + autoFocus on the
 // confirm, since it reveals below the row the trigger is in). The copy warns when there's logged
-// time (calibration) and when a calendar event will go with it. A successful delete unmounts the
-// card (and the modal with it), so there's no onDone.
+// time (calibration) and when a calendar event will go with it. No onDone: once the task leaves the
+// list, TaskModalHost closes the modal.
 export function DeleteConfirm({ task, onCancel }: { task: Task; onCancel: () => void }) {
   const del = useDeleteTask();
   return (
