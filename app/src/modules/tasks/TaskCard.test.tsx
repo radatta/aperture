@@ -193,6 +193,29 @@ describe('Save keeps the modal open', () => {
   });
 });
 
+describe('focus after the row re-renders', () => {
+  it('finds the title again when a save moves the row to another group', async () => {
+    const api = freshApi();
+    const a = await api.upsertCategory({ label: 'Alpha', isWork: true });
+    await api.upsertCategory({ label: 'Beta', isWork: true });
+    await api.createTask({ title: 'Mover', categoryId: a.id, dueDay: addDays(todayKey(4), 1) });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=week' });
+
+    await user.click(await screen.findByRole('button', { name: 'Mover' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Mover' }));
+    await user.selectOptions(d.getByLabelText('Category'), 'Beta');
+    await user.click(d.getByRole('button', { name: 'Save' }));
+    expect(await d.findByText('Saved')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Beta · 1/ })).toBeTruthy());
+
+    await user.click(d.getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Mover' })),
+    );
+  });
+});
+
 describe('deleting a task', () => {
   it('asks first — the Delete action only opens a confirm, and focus lands on it', async () => {
     const api = freshApi();

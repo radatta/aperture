@@ -33,6 +33,8 @@ export const resetInputModality = () => {
 // Focus without the ring: marks the element so index.css hides its outline until it blurs, or until a
 // key is pressed on it (Tab away, Enter to reopen) — then the ring is wanted again.
 function focusQuietly(el: HTMLElement) {
+  el.focus();
+  if (document.activeElement !== el) return; // didn't take (disabled/inert) — no mark to strand
   el.setAttribute('data-focus-quiet', '');
   const clear = () => {
     el.removeAttribute('data-focus-quiet');
@@ -41,7 +43,13 @@ function focusQuietly(el: HTMLElement) {
   };
   el.addEventListener('blur', clear);
   el.addEventListener('keydown', clear);
-  el.focus();
+}
+
+// Hand focus back after a close: with the ring for a keyboard navigator, quietly otherwise. Also used
+// by TaskModalHost when the trigger it returns to has been re-rendered.
+export function returnFocus(el: HTMLElement) {
+  if (keyboardNav) el.focus();
+  else focusQuietly(el);
 }
 
 export function useDisclosure(): Disclosure {
@@ -54,9 +62,7 @@ export function useDisclosure(): Disclosure {
     if (open || !refocus.current) return;
     refocus.current = false;
     const el = triggerRef.current;
-    if (!el) return;
-    if (keyboardNav) el.focus();
-    else focusQuietly(el);
+    if (el) returnFocus(el);
   }, [open]);
 
   const onOpen = useCallback(() => setOpen(true), []);

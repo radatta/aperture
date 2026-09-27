@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Ref } from 'react';
 import { canEditEstimate, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -79,13 +79,24 @@ export function TaskDetailsForm({
     titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;
 
   // Bubble dirtiness up so the modal's exit paths (Esc/backdrop/Close) can confirm before discarding.
-  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  // Not while saving: those edits are already on their way, so "Discard" would be a lie.
+  const reportDirty = dirty && !saving;
+  useEffect(() => onDirtyChange?.(reportDirty), [reportDirty, onDirtyChange]);
 
-  // Writes what changed, in order, then reseeds every field from the task the last write returned
-  // (so "030" reads back as "30") and shows the rendered note again. Stays open; a failure keeps the
-  // edits and says so.
+  // The fields as they are right now, readable after the save's awaits (the closure's are stale).
+  const fields = { title, estimate, buffer, categoryId, dueDay, notes };
+  const current = useRef(fields);
+  useEffect(() => {
+    current.current = fields;
+  });
+
+  // Writes what changed, in order, then reseeds each field from the task the last write returned (so
+  // "030" reads back as "30") and shows the rendered note again — but only fields the user hasn't
+  // touched since pressing Save, so typing during a slow save is never overwritten. Stays open; a
+  // failure keeps the edits and says so.
   async function save() {
     if (saving || !dirty) return;
+    const sent = fields;
     setSaving(true);
     setFailed(false);
     try {
@@ -103,13 +114,17 @@ export function TaskDetailsForm({
       if (dueDirty) next = await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
       if (notesDirty)
         next = await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
-      setTitle_(next.title);
-      setEstimate_(next.estimateMin?.toString() ?? '');
-      setBuffer(next.bufferMin?.toString() ?? '');
-      setCategoryId(next.categoryId ?? '');
-      setDueDay_(next.dueDay ?? '');
-      setNotes_(next.notes ?? '');
-      setEditingNotes(false);
+      const now = current.current;
+      const untouched = (k: keyof typeof sent) => now[k] === sent[k];
+      if (untouched('title')) setTitle_(next.title);
+      if (untouched('estimate')) setEstimate_(next.estimateMin?.toString() ?? '');
+      if (untouched('buffer')) setBuffer(next.bufferMin?.toString() ?? '');
+      if (untouched('categoryId')) setCategoryId(next.categoryId ?? '');
+      if (untouched('dueDay')) setDueDay_(next.dueDay ?? '');
+      if (untouched('notes')) {
+        setNotes_(next.notes ?? '');
+        setEditingNotes(false);
+      }
       setSaved(next);
     } catch {
       setFailed(true);
@@ -236,7 +251,7 @@ export function TaskDetailsForm({
           </Text>
         )}
         <span role="status">
-          {(failed || (saved && !dirty)) && (
+          {((failed && dirty) || (!failed && saved && !dirty)) && (
             <Text size="xs" tone={failed ? 'danger' : 'teal'}>
               {failed ? 'Couldn’t save — try again.' : 'Saved'}
             </Text>

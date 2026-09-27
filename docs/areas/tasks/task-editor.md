@@ -78,8 +78,11 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - **Focus-return via `useDisclosure`.** Native `<dialog>` restores focus to the invoker on `close()`,
   but the jsdom test stub doesn't, and CONVENTIONS mandates `useDisclosure` — so the host holds one
   disclosure whose `triggerRef` is the opening row's title button; every opener (title/Scope/Done)
-  returns focus there on close. If that row has left the list, focus goes to the list area instead of
-  `<body>`. After a mouse/touch close the focus comes back without the ring (only Tab counts as
+  returns focus there on close. If a save re-rendered the row (moved it to another group), its title
+  is found again by task id (`data-task-id`); if the row has left the list, focus goes to the list
+  area instead of `<body>`. While a save is in flight the form doesn't report dirty (closing then
+  lets the save finish rather than offering a false "Discard"), and typing during it is kept — only
+  fields untouched since Save are reseeded. After a mouse/touch close the focus comes back without the ring (only Tab counts as
   keyboard navigation), so the title doesn't sit outlined until you click elsewhere.
 - **Click-outside closes, but an unsaved edit confirms first.** The task modal opts into backdrop-close
   (an opt-in `closeOnBackdrop` flag on the shared `Modal`, so paste-heavy dialogs like bulk-add stay

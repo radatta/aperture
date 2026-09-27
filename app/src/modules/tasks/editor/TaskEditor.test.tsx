@@ -116,6 +116,30 @@ describe('TaskEditor', () => {
     expect(save.getAttribute('aria-disabled')).toBe('false');
   });
 
+  it('never overwrites typing done while a slow save is in flight', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Slow' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = client.setTaskTitle.bind(client);
+    vi.spyOn(client, 'setTaskTitle').mockImplementation((id, title) =>
+      gate.then(() => original(id, title)),
+    );
+    const { onDirtyChange, user } = renderEditor(client, t);
+
+    const field = screen.getByLabelText('Title');
+    await user.type(field, ' one');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    // Mid-save the form doesn't claim unsaved edits (a "Discard" now would be a lie)…
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
+    await user.type(field, ' two'); // …but typing is still allowed, and must survive the save.
+    release();
+
+    expect(await screen.findByText('Unsaved changes')).toBeTruthy();
+    expect(screen.getByLabelText<HTMLTextAreaElement>('Title').value).toBe('Slow one two');
+    expect((await client.getTask(t.id))?.title).toBe('Slow one');
+  });
+
   it('keeps the edits and says so when a save fails', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Flaky' });
