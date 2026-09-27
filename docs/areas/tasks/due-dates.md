@@ -83,7 +83,7 @@ makes that real in the UI.
 *Rejected:* (a) API-only editing for in-progress tasks — a real capability with no button is a lie in
 the design; (b) ungating `ScopePanel` — it would try to re-lock the estimate and throw.
 *Since superseded:* the task editor modal ([task-editor.md](task-editor.md)) deleted `ScopePanel` and the
-overflow menu; category + due are edited there at any status. D3 still holds; D4 is the decision as made
+overflow menu; category is edited there at any status, due until the task is done or cancelled (`isTerminal`, see task-editor.md). D3 still holds; D4 is the decision as made
 at the time.
 
 **D5 — Flat, subtle display; no aggregate, ever.**
@@ -160,7 +160,7 @@ Callable at any status; never touches `estimateLockedMin`. Setting `null` clears
 
 ## 6. UX surfaces & display
 
-- **Set it** — now in the task editor modal at any status ([task-editor.md](task-editor.md)); originally
+- **Set it** — now in the task editor modal, until the task is done or cancelled ([task-editor.md](task-editor.md)); originally
   `ScopePanel` (backlog/planned) plus an in-progress overflow "Due day…" → `DueDayForm` (D4). Either way
   a native `<input type="date">` — roll-our-own, no date-picker dependency.
 - **Display** as relative phrasing at `ink-subtle`, computed by `fmtDueDay(dueDay, today)`:

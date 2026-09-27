@@ -1148,8 +1148,7 @@ Unrelated to the `coi audit` read-path defect in Incident E; both stand.
 # Incident G — 2026-09-07: forks on every resume; dotfiles that evaporate
 
 **2026-09-07, afternoon.** An afternoon of `.coi/config.toml` iteration, each change needing a new
-container, surfaced two container-lifecycle costs that had been misattributed. Neither is a COI
-defect. The procedures live in `COI-SANDBOX.md` → *Start here → 1*; the evidence is here.
+container, surfaced two container-lifecycle costs. Neither is a COI defect. The procedures live in `COI-SANDBOX.md` → *Start here → 1*; the evidence is here.
 
 ## G.1 Session forks
 

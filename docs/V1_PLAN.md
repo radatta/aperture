@@ -110,12 +110,12 @@ runner later — the whole point of the pnpm/Vitest call.
 - **TS pinned to 6, not 7:** `typescript-eslint@8.65` peers `typescript <6.1.0`, so TS 7 (the
   native-compiler rewrite) breaks type-aware lint. Bump when typescript-eslint supports TS 7.
 - **Node 22, not 24:** matches the dev environment and the Lambda runtime; keeps dev == deploy target.
-- **Internal packages resolve from source; command shape; dual Vitest envs** — as recorded in
-  `product/CONVENTIONS.md` → *Monorepo*: `@aperture/shared` exports `./src/index.ts` and consumers
-  transpile it (**no build step in the dev/test loop**); `shared` emits a gitignored `dist/` only for
-  TS project references (a *referenced* composite project can't be `noEmit` — TS6310; nothing imports
-  it); typecheck = one root `tsc -b`, lint = one root `eslint .` (flat config), `test`/`build` fan out
-  per-package (`pnpm -r`); jsdom (`app`), node (rest).
+- **Internal packages resolve from source:** `@aperture/shared` exports `./src/index.ts`; `app`/`lambdas`
+  import it directly and their bundler transpiles it — **no build step in the dev/test loop**. `shared`
+  emits a gitignored `dist/` only to satisfy TS project references (a *referenced* composite project
+  can't be `noEmit` — TS6310). Nothing imports that `dist/`. (Rule: `product/CONVENTIONS.md` → *Monorepo*.)
+- **Structure:** typecheck = one root `tsc -b` (project references); lint = one root `eslint .` (flat
+  config); `test`/`build` fan out per-package (`pnpm -r`). Dual Vitest envs — jsdom (`app`), node (rest).
 
 ---
 

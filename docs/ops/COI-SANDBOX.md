@@ -344,10 +344,12 @@ To relaunch Claude this way instead of `bash`, add the token env var — see *Op
 
 # ── in the VM ──  ONLY when you actually want the container GONE —
 #    a .coi/config.toml change, or reclaiming disk. Not a routine step.
+# 3. coi shutdown — exports nothing itself; run it only after step 2.
 coi shutdown coi-88cded0c-1               # DELETES the container, persistent ones included. Name
                                           # REQUIRED (or --all). `coi close` is an alias. --force skips the prompt.
 
 # ── on the Mac ──  (only if you're done for the day — frees the VM's RAM/battery)
+# 4.
 limactl stop incus
 ```
 

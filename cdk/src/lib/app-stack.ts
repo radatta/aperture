@@ -330,7 +330,7 @@ export class ApertureAppStack extends Stack {
       preventUserExistenceErrors: true,
       // 7 days (Cognito allows up to 3650): the refresh token sits in browser localStorage, so a leaked one
       // stays useful for at most a week, at the cost of a weekly sign-in. Access/ID stay at the 1-hour
-      // default (cheap to renew). Why: TECH §3.
+      // default (they cross the network on every request and are cheap to renew). Why: TECH §3.
       refreshTokenValidity: Duration.days(7),
       oAuth: {
         flows: { authorizationCodeGrant: true },

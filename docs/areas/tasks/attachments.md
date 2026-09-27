@@ -157,7 +157,7 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
   - `data-stack.ts` — the `Files` bucket (RETAIN, versioned, BLOCK_ALL, CORS PUT/GET/HEAD, lifecycle) + `allowedOrigins` prop. `app-stack.ts` — `filesBucket` prop, `FILES_BUCKET` env, the object-scoped `s3:PutObject/GetObject` grant, a granular IAM5 ack. `bin/aperture.ts` — derive `allowedOrigins` from `domainConfigFor` and pass it into the data stack (before the app stack, to avoid the cross-stack cycle); a data-stack `AwsSolutions-S1` ack. `stacks.test.ts` — thread `filesBucket`/`allowedOrigins`; assert the bucket + the scoped grant + the env var. `cdk synth` clean.
     - ↳ *The IAM5 finding id embeds the Files bucket's logical-id hash (`…Files8E6940B8Arn…`), read verbatim from synth's "Acknowledge with '…'" hint — same brittleness as the existing table IAM5 ack.*
     - ↳ *`AwsSolutions-S1` is already acked at app-stack scope for the Site bucket, but the new Files bucket is in the DATA stack, so it needed its own `ack(data, …)`.*
-    - ↳ *`cdk synth` proves the template only; the real presigned round-trip, CORS from the domained origin, and the runtime S3 SDK at cold start were validated later on `dev` (Phase 6).*
+    - ↳ *`cdk synth` proves the template only; the real presigned round-trip was confirmed later on `dev` (Phase 6); CORS from the domained origin and the runtime S3 SDK at cold start are exercised by that round-trip.*
 
 - [x] **Phase 5 — docs + gate**
   - `docs/areas/tasks/attachments.md` (this doc), `docs/index.md`, `docs/arch/TECH.md` (entity + key line), `docs/arch/INFRA.md` (the files bucket in the data stack).
