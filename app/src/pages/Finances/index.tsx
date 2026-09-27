@@ -10,6 +10,8 @@ import { RulesSection } from '../../modules/finances/RulesSection';
 import { SortQueue } from '../../modules/finances/SortQueue';
 import { TransactionList } from '../../modules/finances/TransactionList';
 import { useBankLink } from '../../modules/finances/useBankLink';
+import { SyncFailedDialog } from '../../modules/finances/SyncFailedDialog';
+import { useSyncWatch } from '../../modules/finances/useSyncWatch';
 import { useFinanceData } from '../../modules/finances/useFinanceData';
 import type { FinanceView } from '../../modules/finances/useFinanceData';
 import { FinancesTabs } from './FinancesTabs';
@@ -26,7 +28,8 @@ interface FinancesOutlet {
 // and Rules. Tabs are real routes, like Recruiting.
 export function FinancesPage() {
   const { overview, overviewQ, txnsQ, view } = useFinanceData();
-  const link = useBankLink();
+  const watch = useSyncWatch(overview);
+  const link = useBankLink(watch);
   useConnectFromUrl(link.start, overview !== undefined);
 
   const heading = (
@@ -54,6 +57,7 @@ export function FinancesPage() {
           </Text>
         )}
         {link.dialog}
+        {overview && <SyncFailedDialog watch={watch} overview={overview} link={link} />}
       </div>
     );
 
@@ -61,7 +65,7 @@ export function FinancesPage() {
     <div className="flex flex-col gap-4">
       {heading}
       <PeriodHeader overview={overview} view={view} />
-      <AccountsStrip overview={overview} link={link} />
+      <AccountsStrip overview={overview} link={link} watch={watch} />
       <FinancesTabs />
       <Outlet
         context={
@@ -74,6 +78,7 @@ export function FinancesPage() {
         }
       />
       {link.dialog}
+      <SyncFailedDialog watch={watch} overview={overview} link={link} />
     </div>
   );
 }

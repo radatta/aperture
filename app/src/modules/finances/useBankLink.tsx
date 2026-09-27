@@ -8,14 +8,17 @@ import { openPlaidLink } from './usePlaidLink';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
-// The whole connect/reconnect flow: link token → Link (real, or the stub's fake dialog) → exchange
-// (connect) or completePlaidUpdate (update mode). Render `dialog` somewhere on the page.
-export function useBankLink(): {
+export interface BankLink {
   start: (input: CreateLinkTokenInput) => void;
   busy: boolean;
   error: string | null;
   dialog: ReactNode;
-} {
+}
+
+// The whole connect/reconnect flow: link token → Link (real, or the stub's fake dialog) → exchange
+// (connect) or completePlaidUpdate (update mode). Render `dialog` somewhere on the page. Both end in a
+// sync; `watch` hears about it once Link has succeeded (a cancelled Link starts nothing).
+export function useBankLink(watch?: { arm: () => void; disarm: () => void }): BankLink {
   const api = useApi();
   const exchange = useExchangePublicToken();
   const complete = useCompletePlaidUpdate();
@@ -24,6 +27,7 @@ export function useBankLink(): {
   const [error, setError] = useState<string | null>(null);
 
   async function finish(input: CreateLinkTokenInput, publicToken: string, md: LinkSuccessMetadata) {
+    watch?.arm();
     try {
       if (input.mode === 'update') await complete.mutateAsync(input.itemId);
       else
@@ -36,6 +40,7 @@ export function useBankLink(): {
           accounts: md.accounts,
         });
     } catch (e) {
+      watch?.disarm();
       setError(message(e));
     } finally {
       setBusy(false);

@@ -875,6 +875,7 @@ export function runApiContract(
       expect(o.leftCents).toBe(60000);
       expect(o.unsortedCount).toBe(0);
       expect(o.sync.lastSyncedAt).toBeNull();
+      expect([o.sync.lastError, o.sync.lastErrorAt]).toEqual([null, null]);
     });
 
     it('finance: connect → sync → list → bucket → overview', async () => {

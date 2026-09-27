@@ -171,6 +171,20 @@ export interface StubOptions {
   seed?: boolean;
 }
 
+// Dev/test hook: set this localStorage key to a Plaid error code (e.g. INSTITUTION_NOT_RESPONDING, or
+// ITEM_LOGIN_REQUIRED) and the stub's next finance sync fails with it, once. Stub-only — the real
+// failure paths are Plaid's.
+export const STUB_FAIL_NEXT_SYNC_KEY = 'aperture:stub:failNextFinanceSync';
+function takeStubSyncFailure(): string | null {
+  try {
+    const code = globalThis.localStorage?.getItem(STUB_FAIL_NEXT_SYNC_KEY) ?? null;
+    if (code) globalThis.localStorage?.removeItem(STUB_FAIL_NEXT_SYNC_KEY);
+    return code || null;
+  } catch {
+    return null;
+  }
+}
+
 export function createStubClient(options: StubOptions = {}): ApiClient {
   return new StubClient(options);
 }
@@ -216,6 +230,10 @@ class StubClient implements ApiClient {
         ...t,
         refundOfId: t.refundOfId ?? null,
         startsPeriod: t.startsPeriod ?? false,
+      }));
+      store.financeSyncStates = store.financeSyncStates.map((x) => ({
+        ...x,
+        lastSyncErrorAt: x.lastSyncErrorAt ?? null,
       }));
       return store;
     } catch {
@@ -998,6 +1016,22 @@ class StubClient implements ApiClient {
     const t = this.now();
     const state = this.find(this.store.financeSyncStates, itemId);
     if (!state) return;
+    const failure = takeStubSyncFailure();
+    if (failure) {
+      // A failed run changes nothing but the error — the cursor and lastSyncedAt stay put.
+      this.writes.put(this.store.financeSyncStates, {
+        ...state,
+        lastSyncError: failure,
+        lastSyncErrorAt: t,
+        updatedAt: t,
+      });
+      if (failure === 'ITEM_LOGIN_REQUIRED')
+        this.writes.patch(this.store.financeItems, itemId, {
+          status: 'login_required',
+          errorCode: failure,
+        });
+      return;
+    }
     const accountIds = new Set(
       this.alive(this.store.financeAccounts)
         .filter((a) => a.itemId === itemId)
@@ -1027,6 +1061,7 @@ class StubClient implements ApiClient {
       cursor,
       lastSyncedAt: t,
       lastSyncError: null,
+      lastSyncErrorAt: null,
       updatedAt: t,
     });
   }
@@ -1073,6 +1108,7 @@ class StubClient implements ApiClient {
       cursor: null,
       lastSyncedAt: null,
       lastSyncError: null,
+      lastSyncErrorAt: null,
       syncRequestedAt: t,
       refreshRequestedAt: null,
       lockedUntil: null,
@@ -1252,9 +1288,15 @@ class StubClient implements ApiClient {
       throw new Error(`${input.institution.name} is already linked with these accounts`);
     return this.linkFixtureItem(input);
   }
+  // Like the backend: the login is fixed, then a sync runs (which can fail again).
   async completePlaidUpdate(itemId: string): Promise<FinanceItem> {
     this.mustFind(this.store.financeItems, itemId);
-    return this.writes.patch(this.store.financeItems, itemId, { status: 'ok', errorCode: null });
+    this.writes.patch(this.store.financeItems, itemId, { status: 'ok', errorCode: null });
+    const state = this.find(this.store.financeSyncStates, itemId);
+    if (state)
+      this.writes.put(this.store.financeSyncStates, { ...state, syncRequestedAt: this.now() });
+    this.syncItem(itemId);
+    return this.mustFind(this.store.financeItems, itemId);
   }
   async removePlaidItem(itemId: string): Promise<void> {
     for (const a of this.alive(this.store.financeAccounts).filter((x) => x.itemId === itemId))

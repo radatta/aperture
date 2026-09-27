@@ -42,7 +42,8 @@ export interface FinanceSyncState extends BaseEntity {
   itemId: string;
   cursor: string | null;
   lastSyncedAt: number | null;
-  lastSyncError: string | null;
+  lastSyncError: string | null; // the Plaid error code of the last failed run; null after a success
+  lastSyncErrorAt: number | null; // when that run failed — lets the page tell a new failure from an old one
   syncRequestedAt: number | null;
   refreshRequestedAt: number | null;
   lockedUntil: number | null;
@@ -132,7 +133,8 @@ export interface FinanceOverview {
   sync: {
     lastSyncedAt: number | null;
     syncing: boolean;
-    lastError: string | null;
+    lastError: string | null; // a Plaid error code — financeSyncErrorMessage turns it into words
+    lastErrorAt: number | null;
     environment: PlaidEnvironment;
   };
 }
@@ -700,17 +702,50 @@ export function buildFinanceOverview(input: {
       // The oldest item's sync — "last synced" should never overstate freshness.
       lastSyncedAt:
         synced.length === 0 || synced.includes(null) ? null : Math.min(...(synced as number[])),
-      // A request newer than the last success, and young enough that the run can't have died — a
-      // failed run never advances lastSyncedAt, so without the age cap it would read as syncing forever.
+      // A request newer than the run that last finished — a success OR a failure — and young enough
+      // that the run can't have died (a crashed run records neither, so without the age cap it would
+      // read as syncing forever).
       syncing: syncs.some(
         (s) =>
-          (s.syncRequestedAt ?? 0) > (s.lastSyncedAt ?? 0) &&
+          (s.syncRequestedAt ?? 0) > Math.max(s.lastSyncedAt ?? 0, s.lastSyncErrorAt ?? 0) &&
           input.now - (s.syncRequestedAt ?? 0) < FINANCE_SYNCING_MAX_MS,
       ),
-      lastError: syncs.find((s) => s.lastSyncError)?.lastSyncError ?? null,
+      ...lastSyncError(syncs),
       environment: input.environment,
     },
   };
+}
+
+// The newest failure across items (one bank's error shouldn't hide another's newer one).
+function lastSyncError(syncs: FinanceSyncState[]): {
+  lastError: string | null;
+  lastErrorAt: number | null;
+} {
+  let worst: FinanceSyncState | null = null;
+  for (const s of syncs)
+    if (s.lastSyncError && (!worst || (s.lastSyncErrorAt ?? 0) > (worst.lastSyncErrorAt ?? 0)))
+      worst = s;
+  return { lastError: worst?.lastSyncError ?? null, lastErrorAt: worst?.lastSyncErrorAt ?? null };
+}
+
+// A sync failure in plain words. Codes are Plaid's (plus CONFLICT from our own write retries).
+const SYNC_ERROR_TEXT: Record<string, string> = {
+  ITEM_LOGIN_REQUIRED: '{bank} needs you to sign in again.',
+  PENDING_EXPIRATION: '{bank} needs you to sign in again soon.',
+  INSTITUTION_NOT_RESPONDING: '{bank} isn’t responding right now.',
+  INSTITUTION_DOWN: '{bank} is down right now.',
+  INSTITUTION_NOT_AVAILABLE: '{bank} isn’t available right now.',
+  PLANNED_MAINTENANCE: 'The bank connection is down for maintenance.',
+  RATE_LIMIT_EXCEEDED: 'Too many requests to the bank — it’ll catch up on the next sync.',
+  INTERNAL_SERVER_ERROR: 'The bank connection had a hiccup.',
+  TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION: '{bank} changed its data mid-sync.',
+  ITEM_NOT_FOUND: 'This bank connection no longer exists — remove it and connect again.',
+  CONFLICT: 'Your edits and the sync collided.',
+};
+
+export function financeSyncErrorMessage(code: string, bank = 'The bank'): string {
+  const text = SYNC_ERROR_TEXT[code];
+  return text ? text.replace('{bank}', bank) : `The sync failed (${code}).`;
 }
 
 // --- Rules -----------------------------------------------------------------

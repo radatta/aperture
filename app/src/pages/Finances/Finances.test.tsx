@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS, todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
-import { createStubClient } from '../../data/stubClient';
+import { createStubClient, STUB_FAIL_NEXT_SYNC_KEY } from '../../data/stubClient';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -259,6 +259,62 @@ describe('Finances page', () => {
     const amazon = await group(/^Amazon, 1 charges/);
     expect(within(amazon).queryByText(/\+\$34\.99/)).toBeNull();
     expect(within(amazon).queryByText(/refunded/)).toBeNull();
+  });
+
+  it('a Refresh that fails pops "Sync didn’t finish", and Try again clears it', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances' });
+    await screen.findByText(/since your .* payment/);
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'INSTITUTION_NOT_RESPONDING');
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sync didn’t finish' });
+    expect(within(dialog).getByText('Bank of America isn’t responding right now.')).toBeTruthy();
+    expect(within(dialog).getByText(/Nothing changed — last synced/)).toBeTruthy();
+    // The banner carries it behind the dialog, too.
+    const banner = screen
+      .getAllByRole('alert')
+      .find((a) => /isn’t responding/.test(a.textContent ?? ''));
+    expect(banner).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Sync didn/ })).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/isn’t responding/)).toBeNull());
+  });
+
+  it('a failure you didn’t start shows only the banner', async () => {
+    const api = await linked();
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'INSTITUTION_DOWN');
+    await api.requestFinanceSync({ refresh: false }); // a scheduled run, as far as the page knows
+    renderApp({ api, path: '/finances' });
+    expect(await screen.findByText(/Bank of America is down right now\. Last synced/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: /Sync didn/ })).toBeNull();
+  });
+
+  it('a login failure offers Reconnect, which fixes the login and syncs', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    renderApp({ api, path: '/finances' });
+    await screen.findByText(/since your .* payment/);
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'ITEM_LOGIN_REQUIRED');
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sync didn’t finish' });
+    expect(within(dialog).getByText('Bank of America needs you to sign in again.')).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Reconnect' }));
+    const link = await screen.findByRole('dialog', { name: /Connect a bank/ });
+    await user.click(within(link).getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(screen.queryByText(/needs you to sign in again/)).toBeNull());
+    expect((await api.getFinanceOverview({ today: todayKey(4) })).items[0]!.status).toBe('ok');
+  });
+
+  it('a first sync that fails right after connecting says nothing has synced yet', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: fresh(), path: '/finances' });
+    await user.click(await screen.findByRole('button', { name: 'Connect a bank' }));
+    const link = await screen.findByRole('dialog', { name: /Connect a bank/ });
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'INSTITUTION_NOT_RESPONDING');
+    await user.click(within(link).getByRole('button', { name: 'Continue' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sync didn’t finish' });
+    expect(within(dialog).getByText(/nothing has synced yet/)).toBeTruthy();
   });
 
   it('rules tab adds and lists a rule', async () => {

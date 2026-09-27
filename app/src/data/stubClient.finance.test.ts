@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { todayKey } from '@aperture/shared';
-import { createStubClient } from './stubClient';
+import { createStubClient, STUB_FAIL_NEXT_SYNC_KEY } from './stubClient';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -20,6 +20,23 @@ describe('stub finances', () => {
       'spotify',
       "trader joe's",
     ]);
+  });
+
+  it('the fail-next-sync hook fails one run without touching data, then clears', async () => {
+    const api = createStubClient({ storageKey: `fin-fail-${Math.random()}` });
+    const today = todayKey(4);
+    const before = await api.getFinanceOverview({ today });
+    const count = (await api.exportData()).financeTransactions.length;
+    localStorage.setItem(STUB_FAIL_NEXT_SYNC_KEY, 'INSTITUTION_DOWN');
+    await api.requestFinanceSync({ refresh: false });
+    const failed = await api.getFinanceOverview({ today });
+    expect([failed.sync.lastError, failed.sync.syncing]).toEqual(['INSTITUTION_DOWN', false]);
+    expect(failed.sync.lastSyncedAt).toBe(before.sync.lastSyncedAt);
+    expect((await api.exportData()).financeTransactions.length).toBe(count);
+    expect(localStorage.getItem(STUB_FAIL_NEXT_SYNC_KEY)).toBeNull(); // once
+    await api.requestFinanceSync({ refresh: false });
+    const ok = await api.getFinanceOverview({ today });
+    expect([ok.sync.lastError, ok.sync.lastErrorAt]).toEqual([null, null]);
   });
 
   it('a store persisted before finances existed gains the collections and settings defaults', async () => {

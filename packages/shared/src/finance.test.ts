@@ -7,6 +7,7 @@ import {
   classifyTransaction,
   computeFinancePeriod,
   detectInternalMoves,
+  financeSyncErrorMessage,
   groupByMerchant,
   isDuplicateItem,
   isPeriodStart,
@@ -418,6 +419,7 @@ describe('buildFinanceOverview', () => {
     cursor: null,
     lastSyncedAt: 100,
     lastSyncError: null,
+    lastSyncErrorAt: null,
     syncRequestedAt: 50,
     refreshRequestedAt: null,
     lockedUntil: null,
@@ -440,6 +442,15 @@ describe('buildFinanceOverview', () => {
     expect(build().sync.syncing).toBe(false);
     expect(build([sync({ syncRequestedAt: 200 })]).sync.syncing).toBe(true);
   });
+  it('a run that failed after the request is finished, not syncing', () => {
+    const failed = sync({
+      syncRequestedAt: 200,
+      lastSyncError: 'INSTITUTION_DOWN',
+      lastSyncErrorAt: 210,
+    });
+    expect(build([failed]).sync.syncing).toBe(false);
+    expect(build([{ ...failed, syncRequestedAt: 220 }]).sync.syncing).toBe(true); // asked again since
+  });
   it('a request that outlived the sync timeout stops reading as syncing', () => {
     const stale = buildFinanceOverview({
       today: '2026-09-26',
@@ -456,6 +467,20 @@ describe('buildFinanceOverview', () => {
   });
   it('drops accounts of a removed item', () => {
     expect(build(undefined, [{ ...item, deletedAt: 1 }]).accounts).toEqual([]);
+  });
+  it('reports the newest failure across items, and none after a success', () => {
+    expect([build().sync.lastError, build().sync.lastErrorAt]).toEqual([null, null]);
+    const two = build([
+      sync({ id: 'a', itemId: 'item', lastSyncError: 'INSTITUTION_DOWN', lastSyncErrorAt: 10 }),
+      sync({ id: 'b', itemId: 'item', lastSyncError: 'ITEM_LOGIN_REQUIRED', lastSyncErrorAt: 20 }),
+    ]);
+    expect([two.sync.lastError, two.sync.lastErrorAt]).toEqual(['ITEM_LOGIN_REQUIRED', 20]);
+  });
+  it('financeSyncErrorMessage names the bank, and falls back to the code', () => {
+    expect(financeSyncErrorMessage('INSTITUTION_NOT_RESPONDING', 'Bank of America')).toBe(
+      'Bank of America isn’t responding right now.',
+    );
+    expect(financeSyncErrorMessage('WEIRD_CODE')).toBe('The sync failed (WEIRD_CODE).');
   });
   it('last synced is null until every item has synced', () => {
     expect(build([sync({ lastSyncedAt: null })]).sync.lastSyncedAt).toBeNull();

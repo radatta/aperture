@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { financeSyncErrorMessage } from '@aperture/shared';
 import type { FinanceAccount, FinanceItem, FinanceOverview } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Menu } from '../../components/Menu';
@@ -12,18 +13,44 @@ import {
 import { fmtAgo, fmtMinutesUntil, nowMs } from './ago';
 import { fmtMoney } from './money';
 import { ConnectButton } from './ConnectButton';
-import type { useBankLink } from './useBankLink';
+import type { BankLink } from './useBankLink';
+import type { SyncWatch } from './useSyncWatch';
 
-type BankLink = ReturnType<typeof useBankLink>;
-
-// Balances, sync freshness + Refresh, the reconnect banner, and per-account controls (flip the sign
-// convention, hide from totals). Removing a bank lives here too, behind a confirm.
-export function AccountsStrip({ overview, link }: { overview: FinanceOverview; link: BankLink }) {
+// Balances, sync freshness + Refresh, the reconnect and sync-failed banners, and per-account controls
+// (flip the sign convention, hide from totals). Removing a bank lives here too, behind a confirm.
+export function AccountsStrip({
+  overview,
+  link,
+  watch,
+}: {
+  overview: FinanceOverview;
+  link: BankLink;
+  watch: SyncWatch;
+}) {
   const needsLogin = overview.items.filter(
     (i) => i.status === 'login_required' || i.status === 'pending_disconnect',
   );
+  const { lastError, lastSyncedAt, syncing } = overview.sync;
+  // A login error is the reconnect banner's job; any other failure gets its own.
+  const failed = lastError && !syncing && lastError !== 'ITEM_LOGIN_REQUIRED' ? lastError : null;
   return (
     <section aria-label="Accounts" className="flex flex-col gap-2">
+      {failed && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-danger px-4 py-2"
+        >
+          <Text size="sm">
+            {financeSyncErrorMessage(failed, overview.items[0]?.institutionName)}{' '}
+            {lastSyncedAt === null
+              ? 'Nothing has synced yet.'
+              : `Last synced ${fmtAgo(lastSyncedAt, nowMs())}.`}
+          </Text>
+          <Button size="sm" variant="ghost" onClick={watch.retry} data-sync-next-step>
+            Try again
+          </Button>
+        </div>
+      )}
       {needsLogin.map((item) => (
         <div
           key={item.id}
@@ -37,6 +64,7 @@ export function AccountsStrip({ overview, link }: { overview: FinanceOverview; l
             size="sm"
             variant="gold"
             disabled={link.busy}
+            data-sync-next-step
             onClick={() => link.start({ mode: 'update', itemId: item.id })}
           >
             Reconnect
@@ -51,7 +79,7 @@ export function AccountsStrip({ overview, link }: { overview: FinanceOverview; l
           link={link}
         />
       ))}
-      <SyncLine overview={overview} link={link} />
+      <SyncLine overview={overview} link={link} watch={watch} />
     </section>
   );
 }
@@ -189,11 +217,19 @@ function AccountChip({ account: a }: { account: FinanceAccount }) {
   );
 }
 
-function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLink }) {
+function SyncLine({
+  overview,
+  link,
+  watch,
+}: {
+  overview: FinanceOverview;
+  link: BankLink;
+  watch: SyncWatch;
+}) {
   const sync = useRequestFinanceSync();
   // A cooldown is information, a failure is an error — only the second is red.
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
-  const { lastSyncedAt, syncing, lastError, environment } = overview.sync;
+  const { lastSyncedAt, syncing, environment } = overview.sync;
   const status = syncing
     ? 'Syncing…'
     : lastSyncedAt === null
@@ -203,16 +239,17 @@ function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLin
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <Text size="xs" tone="muted" aria-live="polite">
         {status}
-        {lastError && !syncing ? ` · last attempt failed (${lastError})` : ''}
         {environment === 'sandbox' ? ' · Plaid Sandbox' : ''}
       </Text>
       <Button
         size="sm"
         variant="quiet"
         disabled={syncing || sync.isPending}
-        onClick={() =>
+        onClick={() => {
+          watch.arm(); // before the request: the stub syncs inline, so the result can land first
           sync.mutate(true, {
-            onSuccess: (r) =>
+            onSuccess: (r) => {
+              if (!r.accepted) watch.disarm();
               setNote(
                 r.accepted || r.nextAllowedAt === null
                   ? null
@@ -220,10 +257,14 @@ function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLin
                       text: `Asked the bank recently — try again in ${fmtMinutesUntil(r.nextAllowedAt, nowMs())}.`,
                       error: false,
                     },
-              ),
-            onError: () => setNote({ text: 'Couldn’t reach the server — try again.', error: true }),
-          })
-        }
+              );
+            },
+            onError: () => {
+              watch.disarm();
+              setNote({ text: 'Couldn’t reach the server — try again.', error: true });
+            },
+          });
+        }}
       >
         Refresh
       </Button>

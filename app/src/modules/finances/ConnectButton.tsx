@@ -1,6 +1,6 @@
 import type { PlaidEnvironment } from '@aperture/shared';
 import { Button } from '../../components/Button';
-import type { useBankLink } from './useBankLink';
+import type { BankLink } from './useBankLink';
 import { isStandalonePwa } from './usePlaidLink';
 
 // Connect a (new) bank. Inside an installed PWA it's a link that opens /finances?link=connect in a
@@ -12,7 +12,7 @@ export function ConnectButton({
   variant = 'primary',
 }: {
   environment: PlaidEnvironment;
-  link: ReturnType<typeof useBankLink>;
+  link: BankLink;
   label?: string;
   variant?: 'primary' | 'quiet';
 }) {
