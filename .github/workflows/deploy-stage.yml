@@ -5,8 +5,8 @@ name: Deploy stage
 # stage, the change tier (`mode`), and which secrets/vars to hand in.
 #
 # `mode` gates the work:
-#   none → record the deployment only (the job still runs in `environment:`, satisfying the main
-#          ruleset's required_deployments; nothing is built or deployed — the docs-only fast-path)
+#   none → nothing is built or deployed (the docs-only fast-path). The job still runs in `environment:`, so
+#          GitHub records a deployment that deploys nothing — a vestige of the retired gate (INFRA §9)
 #   app  → frontend only: fetch stack outputs, build, S3 sync, invalidate (not awaited), health check. No CDK.
 #   full → everything: cdk synth/diff/deploy (writes the outputs file) + smoke, then publish + health.
 on:
@@ -46,8 +46,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Records a GitHub deployment against this stage → satisfies `required_deployments: [dev]` on main,
-    # AND scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to).
+    # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to). Also
+    # records a GitHub deployment against the stage, which nothing consumes since main dropped
+    # `required_deployments` (INFRA §9).
     environment: ${{ inputs.stage }}
     # One deploy per STAGE at a time, across refs. The caller's workflow-level group is per ref, so a main
     # push (which deploys dev first) and a dev push could otherwise hit the dev stack at once. Queue, never

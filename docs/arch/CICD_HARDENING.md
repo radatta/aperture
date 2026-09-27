@@ -13,27 +13,27 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 ## Status
 
 - **Batch 1 wired (2026-08-10):** #3 gitleaks (`.github/workflows/gitleaks.yml`), #4 Dependabot (`.github/dependabot.yml`), #1 ntfy notify job (`.github/workflows/deploy.yml`). `gitleaks-action` tag confirmed **`v3`** (v3.0.0). The ntfy job **no-ops until `NTFY_TOPIC` is set** — activates once the operator creates the topic + adds the secret (done: secret set, subscribed on desktop).
-- **Batch 2 wired (2026-08-10):** #6 health check (`/api/health` route + `FunctionUrl` output + `publish-frontend.mjs` invalidation-wait + `health-check.mjs` + deploy.yml steps — the wait was dropped 2026-09-26 for an edge poll in `health-check.mjs`; current design: INFRA §9 → *Publish + health check*), #5 CloudWatch alarms (`monitoring.ts`, prod-only, **Option B** — Lambda alarms only, no CloudFront), #7 billing stack (`billing-stack.ts`, hand-deploy), #2 cdk-nag (`cdk-nag@3.0.2`, AwsSolutions pack, wired in `bin/aperture.ts`; suppressions + two enforce-SSL fixes; see the workaround note in item 2). All synth clean on dev+prod; tests + typecheck + lint green.
-- **Operator manual steps:** all done 2026-08-10 — the list and its closure are under *Open items*.
+- **Batch 2 wired (2026-08-10):** #6 health check (`/api/health` route + `FunctionUrl` output + `publish-frontend.mjs` invalidation-wait + `health-check.mjs` + deploy.yml steps — the wait was dropped 2026-09-26 for an edge poll in `health-check.mjs`; current design: INFRA §9 → _Publish + health check_), #5 CloudWatch alarms (`monitoring.ts`, prod-only, **Option B** — Lambda alarms only, no CloudFront), #7 billing stack (`billing-stack.ts`, hand-deploy), #2 cdk-nag (`cdk-nag@3.0.2`, AwsSolutions pack, wired in `bin/aperture.ts`; suppressions + two enforce-SSL fixes; see the workaround note in item 2). All synth clean on dev+prod; tests + typecheck + lint green.
+- **Operator manual steps:** all done 2026-08-10 — the list and its closure are under _Open items_.
 - **Billing stack fix (2026-08-10):** anomaly monitor dropped after `AlreadyExists` — see item 7.
 
 ## Cost — all $0
 
-| # | Item | Cost | Why |
-|---|------|------|-----|
-| 1 | Deploy notifications (ntfy) | $0 | Public ntfy free; `curl` runs in existing CI minutes |
-| 2 | cdk-nag | $0 | Build-time only, no AWS calls |
-| 3 | gitleaks | $0 | Free for personal repos; CI minutes |
-| 4 | Dependabot | $0 | GitHub-native, runs off GitHub infra (not your Actions minutes) |
-| 5 | CloudWatch alarms | $0 | ≤10 alarms/month free (we use 3–4); SNS email 1,000/month free |
-| 6 | Post-deploy synthetic check | $0 | `curl` in CI; extra Lambda/CloudFront hits are free-tier / fractions of a cent |
-| 7 | Budget | $0 | Notification-only budgets free & unlimited (anomaly monitor dropped — see item 7) |
+| #   | Item                        | Cost | Why                                                                               |
+| --- | --------------------------- | ---- | --------------------------------------------------------------------------------- |
+| 1   | Deploy notifications (ntfy) | $0   | Public ntfy free; `curl` runs in existing CI minutes                              |
+| 2   | cdk-nag                     | $0   | Build-time only, no AWS calls                                                     |
+| 3   | gitleaks                    | $0   | Free for personal repos; CI minutes                                               |
+| 4   | Dependabot                  | $0   | GitHub-native, runs off GitHub infra (not your Actions minutes)                   |
+| 5   | CloudWatch alarms           | $0   | ≤10 alarms/month free (we use 3–4); SNS email 1,000/month free                    |
+| 6   | Post-deploy synthetic check | $0   | `curl` in CI; extra Lambda/CloudFront hits are free-tier / fractions of a cent    |
+| 7   | Budget                      | $0   | Notification-only budgets free & unlimited (anomaly monitor dropped — see item 7) |
 
 **The only things that would cost money are deliberately out of scope:** auto-remediating "budget actions" ($0.10/day), CloudWatch Synthetics canaries (~$10/mo), and any alarm past the 10-free tier. GitHub Actions free private-repo tier is 2,000 min/month — these add ~a couple minutes per run.
 
 ## Repo realities discovered (deviations from the naive plan)
 
-*As found at planning time (2026-08-10); items 2–4 were resolved by item 6.*
+_As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 1. **Region split breaks a single shared SNS topic.** Stacks pin `region: 'us-west-1'` (`cdk/src/bin/aperture.ts:29`), so the BFF Lambda's metrics are in us-west-1, but **CloudFront metrics publish only in us-east-1**. An alarm can only evaluate metrics in its own region and only publish to an SNS topic in its own region. → the CloudFront 5xx alarm cannot share the Lambda alarms' topic. See item 5's decision.
 2. **No `/health` route exists.** `lambdas/src/index.ts` dispatches only `/api/<method>` via `handleRpc`, gated by the shared allowlist (`packages/shared/src/rpc.ts` `isApiMethod`); a JWT-less non-testMode call 401s at `resolveUserId`. Item 6 adds a short-circuit **after** the origin-secret gate and **before** `resolveUserId`.
@@ -80,7 +80,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 **Files:** `cdk/package.json` (add `cdk-nag` devDep — **dependency to justify first**), `cdk/src/bin/aperture.ts` (wire at the `App` created ~line 27), inline `NagSuppressions` in `app-stack.ts` / data stack / the new monitoring construct.
 
 - **API (confirmed, v3.0.2):** `Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }))` (v3 dropped the classic `Aspects.of().add()`), suppress with `Validations.of(construct).acknowledge({ id, reason })`. Base rule ids work for non-granular findings.
-- **⚠️ Granular IAM4/IAM5 suppression — upstream bug workaround.** `acknowledge()` splits the id on `::` and rejects granular finding ids that embed an ARN (IAM4 managed-policy ARN, IAM5 resource ARN) — an open cdk-nag v3 bug ([cdklabs/cdk-nag#2359](https://github.com/cdklabs/cdk-nag/issues/2359), [#2351](https://github.com/cdklabs/cdk-nag/issues/2351)). Base rule ids are *accepted but don't suppress* granular findings. Workaround (in `app-stack.ts`): write the acknowledgment metadata cdk-nag reads directly — `fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, { '<exact finding id from synth>': reason })`. The IAM5 id embeds the cross-stack table export (`ApertureData-${stage}:ExportsOutput…TableCD117FA1…/index/*`) so it's stage-interpolated and drifts if the table construct id changes (synth re-flags → update). Revisit when #2359 lands a fix. Pinned `cdk-nag` exact (`3.0.2`) so a patch can't silently change the metadata contract.
+- **⚠️ Granular IAM4/IAM5 suppression — upstream bug workaround.** `acknowledge()` splits the id on `::` and rejects granular finding ids that embed an ARN (IAM4 managed-policy ARN, IAM5 resource ARN) — an open cdk-nag v3 bug ([cdklabs/cdk-nag#2359](https://github.com/cdklabs/cdk-nag/issues/2359), [#2351](https://github.com/cdklabs/cdk-nag/issues/2351)). Base rule ids are _accepted but don't suppress_ granular findings. Workaround (in `app-stack.ts`): write the acknowledgment metadata cdk-nag reads directly — `fn.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, { '<exact finding id from synth>': reason })`. The IAM5 id embeds the cross-stack table export (`ApertureData-${stage}:ExportsOutput…TableCD117FA1…/index/*`) so it's stage-interpolated and drifts if the table construct id changes (synth re-flags → update). Revisit when #2359 lands a fix. Pinned `cdk-nag` exact (`3.0.2`) so a patch can't silently change the metadata contract.
 - **Suppressions (~11) + 2 fixes:** suppressed fine-by-design — COG1/COG2/COG8 (single-user pool), IAM4/IAM5 (above), L1 (Node 22 LTS target), S1/CFR1/CFR2/CFR3 (no access logs/WAF/geo), CFR4 (default cert only in pre-domain synth). **Fixed rather than suppressed:** S10 (`enforceSSL` on the S3 bucket) and SNS3 (`enforceSSL` on the alarm topic) — genuine cheap hardening. OAC + PITR pass already → the regression guards we wanted.
 - Runs inside the existing `cdk synth` step in both deploy jobs — no workflow change.
 - Planned ~8–12 one-time suppressions, each with a real reason string (the planning list also anticipated Lambda no-DLQ/basic-exec-role, Function URL `authType: NONE` behind the origin-secret gate, and the `grantReadWriteData` wildcard on index ARNs — real, so suppress with justification or scope down); the actual set is above.
@@ -100,7 +100,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 
 - **`github-actions`** ecosystem, `directory: "/"`, weekly, one group matching `"*"` → all action bumps in a single weekly PR (keeps `aws-actions/configure-aws-credentials`, `pnpm/action-setup`, `actions/*` current).
 - **`npm`** ecosystem, `directory: "/"`, `open-pull-requests-limit: 0` → suppresses routine version updates so **only security PRs** come through (security updates ignore the limit). Dependabot's npm updater handles the pnpm workspace / `pnpm-lock.yaml`.
-- **Merge workflow for a Dependabot PR** (the real friction, from the `required_deployments:[dev]` ruleset): Dependabot can't push to `dev` to record the required dev deployment, so — (a) push the PR's SHA to `dev` first (triggers `deploy-dev`, records the deployment, must pass the "Branch is up to date with main" step in deploy.yml's `changes` job), then (b) merge to main. No restricted-secret concern (deploy is push-triggered).
+- **Merge workflow for a Dependabot PR:** merge normally once the required checks pass. (While the `required_deployments:[dev]` rule was enforced — retired 2026-09-10, INFRA §9 — Dependabot couldn't record the dev deployment itself, so the PR's SHA had to be pushed to `dev` first, passing the "Branch is up to date with main" step in deploy.yml's `changes` job; that is now optional, useful only to validate an action bump on real infra.) No restricted-secret concern (deploy is push-triggered).
 
 ## Item 5 — CloudWatch alarms (prod-only)
 
@@ -126,7 +126,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 - **`/api/health`:** in `handler`, after the origin-secret gate (~`index.ts:51-54`) and **before** `resolveUserId`, short-circuit `method === 'health'` → `200 {ok:true, stage}`. No JWT, no `doc`, no writes (respects the no-side-effect pattern). Stays behind the origin gate, so a headerless request still 403s (the negative test). Don't route it through `handleRpc`/`isApiMethod`. Add a test mirroring the existing 403 test (header present → 200; absent → 403).
 - **`FunctionUrl` output:** in `app-stack.ts` after `fnUrl` (~line 60): `new CfnOutput(this, 'FunctionUrl', { value: fnUrl.url })`.
 - **Invalidation ID:** modify `publish-frontend.mjs` to capture `create-invalidation` JSON (`.Invalidation.Id`) and echo it for the workflow to capture into `$GITHUB_OUTPUT` (or run the wait inside the script).
-- **Workflow steps** *(plan-time design; step 1's wait is gone as of 2026-09-26 — see INFRA §9)* (after "Publish frontend", both jobs, same `if: steps.changes.outputs.deploy == 'true'`; read outputs from `cdk/cdk-outputs.<stage>.json` with `node -e`, no `jq`):
+- **Workflow steps** _(plan-time design; step 1's wait is gone as of 2026-09-26 — see INFRA §9)_ (after "Publish frontend", both jobs, same `if: steps.changes.outputs.deploy == 'true'`; read outputs from `cdk/cdk-outputs.<stage>.json` with `node -e`, no `jq`):
   1. `aws cloudfront wait invalidation-completed --distribution-id <DistributionId> --id <captured>`
   2. `curl --fail --retry 5 --retry-all-errors https://<AppUrl>/` → shell 200
   3. `curl --fail -sI https://<AppUrl>/manifest.webmanifest` → assert `content-type: application/manifest+json`
@@ -149,6 +149,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 ## Dependencies to justify before wiring
 
 Per project dependency discipline, surface these before adding:
+
 - **`cdk-nag`** (`3.0.2`, devDep in `cdk/`) — item 2.
 - **`gitleaks/gitleaks-action`** (GitHub Action, pin by verified tag/SHA) — item 3.
 
@@ -159,4 +160,3 @@ Everything else uses the existing `aws-cdk-lib` (`aws-cloudwatch`, `aws-cloudwat
 - **Operator manual steps** (blocking full activation): confirm the **one** SNS email subscription to `rahul3datta@gmail.com` — the prod alarm topic, which fires its confirmation on the first prod deploy. The budget subscriber is direct `EMAIL` (not SNS) → no confirmation. Flip the AWS root billing-access toggle, then `cdk deploy ApertureBilling -c billing=true`. **(All done as of 2026-08-10 — merged to main, prod deployed, alarm sub confirmed, ntfy verified on dev+prod.)**
 - **cdk-nag #2359 watch:** when the upstream granular-acknowledge bug is fixed, replace the `addMetadata` workaround in `app-stack.ts` with the normal `Validations.of(fn).acknowledge(...)`.
 - Email address is now filled (`rahul3datta@gmail.com`, personal) in `monitoring.ts` + `billing-stack.ts` — not a work address.
-

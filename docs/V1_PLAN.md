@@ -63,19 +63,19 @@ citation; only the retrofit cost is kept here.
 Default is **roll our own**; a dep needs an explicit (A)/(B) case per `product/CONVENTIONS.md`. Every
 tempting point is flagged here so it can't sneak in.
 
-| Candidate | Verdict | Rationale |
-|---|---|---|
-| `react`, `react-dom`, `react-router-dom`, `@tanstack/react-query`, `vite`, `tailwindcss` v4, `typescript`, `vitest`, `eslint`, `prettier` | **Baseline** | Framework/tooling floor, fixed by TECH §1/§4. Not discretionary. |
-| `react-oidc-context` (+ `oidc-client-ts`) | **Add — (B)** | OIDC/PKCE flow + silent token refresh is security-critical and subtle; do not hand-roll. Penciled in by CONVENTIONS + TECH §3 + INFRA §6. Adds `oidc-client-ts` transitive; acceptable. |
-| `vite-plugin-pwa` (Workbox) | **Add — (A)/(B)** | Service-worker + manifest generation is substantial standards logic (precache, SW lifecycle) we should not own. Config only; app-shell precache, data stays network-first. TECH §1. |
-| `aws-jwt-verify` (Lambda) | **Add — (B)** | Cognito JWT signature + issuer/expiry verification against JWKS is security-critical; AWS-maintained, zero-dep. Beats hand-rolling JWKS/RS256. INFRA §4. |
-| `@aws-sdk/client-dynamodb` + `lib-dynamodb` (Lambda) | **Add — necessary** | AWS-provided DDB access. Bundled out of the Node 22 Lambda by esbuild if needed. |
-| `aws-cdk-lib` + `constructs` (cdk/) | **Add — necessary** | IaC per INFRA. |
-| **ULID generation** | **Rolled our own** (`packages/shared/src/ulid.ts`) | ~50 lines: Crockford base32 + monotonic factory (same-ms increment) seeded from `crypto.getRandomValues`. Correctness (monotonicity/entropy) is subtle → **covered with Vitest property tests**. Fall back to the `ulid` npm pkg *only* if monotonicity proves fiddly. CONVENTIONS worked-call. |
-| **Date helpers** | **Roll our own** | `dayBoundary`, ISO-week, add/format are small and targeted (TECH §1). Reach for a date lib *only* if DST edges prove genuinely gnarly — flag before adding. |
-| **Charts / viz** | **No dep — roll our own** | v1 viz (planned-vs-available bar, estimate-vs-actual, habit calendar) is hand-rolled CSS/SVG. Charts deferred entirely. TECH §1. |
-| State mgmt lib (Redux/Zustand/etc.) | **No dep** | UI/session state = React Context + hooks; server state = React Query. TECH §3. |
-| Component/UI kit (MUI/shadcn/etc.) | **No dep** | Anti-generic is a v1 requirement (PRODUCT §5). Build the small primitive layer ourselves on Tailwind tokens. |
+| Candidate                                                                                                                                 | Verdict                                            | Rationale                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `react`, `react-dom`, `react-router-dom`, `@tanstack/react-query`, `vite`, `tailwindcss` v4, `typescript`, `vitest`, `eslint`, `prettier` | **Baseline**                                       | Framework/tooling floor, fixed by TECH §1/§4. Not discretionary.                                                                                                                                                                                                                                |
+| `react-oidc-context` (+ `oidc-client-ts`)                                                                                                 | **Add — (B)**                                      | OIDC/PKCE flow + silent token refresh is security-critical and subtle; do not hand-roll. Penciled in by CONVENTIONS + TECH §3 + INFRA §6. Adds `oidc-client-ts` transitive; acceptable.                                                                                                         |
+| `vite-plugin-pwa` (Workbox)                                                                                                               | **Add — (A)/(B)**                                  | Service-worker + manifest generation is substantial standards logic (precache, SW lifecycle) we should not own. Config only; app-shell precache, data stays network-first. TECH §1.                                                                                                             |
+| `aws-jwt-verify` (Lambda)                                                                                                                 | **Add — (B)**                                      | Cognito JWT signature + issuer/expiry verification against JWKS is security-critical; AWS-maintained, zero-dep. Beats hand-rolling JWKS/RS256. INFRA §4.                                                                                                                                        |
+| `@aws-sdk/client-dynamodb` + `lib-dynamodb` (Lambda)                                                                                      | **Add — necessary**                                | AWS-provided DDB access. Bundled out of the Node 22 Lambda by esbuild if needed.                                                                                                                                                                                                                |
+| `aws-cdk-lib` + `constructs` (cdk/)                                                                                                       | **Add — necessary**                                | IaC per INFRA.                                                                                                                                                                                                                                                                                  |
+| **ULID generation**                                                                                                                       | **Rolled our own** (`packages/shared/src/ulid.ts`) | ~50 lines: Crockford base32 + monotonic factory (same-ms increment) seeded from `crypto.getRandomValues`. Correctness (monotonicity/entropy) is subtle → **covered with Vitest property tests**. Fall back to the `ulid` npm pkg _only_ if monotonicity proves fiddly. CONVENTIONS worked-call. |
+| **Date helpers**                                                                                                                          | **Roll our own**                                   | `dayBoundary`, ISO-week, add/format are small and targeted (TECH §1). Reach for a date lib _only_ if DST edges prove genuinely gnarly — flag before adding.                                                                                                                                     |
+| **Charts / viz**                                                                                                                          | **No dep — roll our own**                          | v1 viz (planned-vs-available bar, estimate-vs-actual, habit calendar) is hand-rolled CSS/SVG. Charts deferred entirely. TECH §1.                                                                                                                                                                |
+| State mgmt lib (Redux/Zustand/etc.)                                                                                                       | **No dep**                                         | UI/session state = React Context + hooks; server state = React Query. TECH §3.                                                                                                                                                                                                                  |
+| Component/UI kit (MUI/shadcn/etc.)                                                                                                        | **No dep**                                         | Anti-generic is a v1 requirement (PRODUCT §5). Build the small primitive layer ourselves on Tailwind tokens.                                                                                                                                                                                    |
 
 ---
 
@@ -85,6 +85,7 @@ tempting point is flagged here so it can't sneak in.
 packages. No product code yet.
 
 **Milestones & tasks**
+
 - **0.1 Monorepo skeleton** — `pnpm-workspace.yaml` (`app`, `lambdas`, `cdk`, `packages/*`, `scripts`);
   root `package.json` with `-r` scripts (`build`, `test`, `lint`, `typecheck`); `.nvmrc`/`engines`
   pinning Node 22 to match the Lambda runtime; `.gitignore`.
@@ -104,6 +105,7 @@ packages. No product code yet.
 runner later — the whole point of the pnpm/Vitest call.
 
 **As built (2026-08-03):** green end to end — `install · typecheck · lint · test · build · dev` all pass.
+
 - **Pins** (resolved via `npm show`, not guessed): Node **22** (`.nvmrc`, `engines >=22.12`, Lambda
   `nodejs22.x`) · pnpm **11.18** (corepack) · TypeScript **6.0.3** · Vite **8.2** · Vitest **4.1** ·
   React **19.2** · ESLint **10.8** + typescript-eslint **8.65** · Prettier **3.9**.
@@ -112,8 +114,8 @@ runner later — the whole point of the pnpm/Vitest call.
 - **Node 22, not 24:** matches the dev environment and the Lambda runtime; keeps dev == deploy target.
 - **Internal packages resolve from source:** `@aperture/shared` exports `./src/index.ts`; `app`/`lambdas`
   import it directly and their bundler transpiles it — **no build step in the dev/test loop**. `shared`
-  emits a gitignored `dist/` only to satisfy TS project references (a *referenced* composite project
-  can't be `noEmit` — TS6310). Nothing imports that `dist/`. (Rule: `product/CONVENTIONS.md` → *Monorepo*.)
+  emits a gitignored `dist/` only to satisfy TS project references (a _referenced_ composite project
+  can't be `noEmit` — TS6310). Nothing imports that `dist/`. (Rule: `product/CONVENTIONS.md` → _Monorepo_.)
 - **Structure:** typecheck = one root `tsc -b` (project references); lint = one root `eslint .` (flat
   config); `test`/`build` fan out per-package (`pnpm -r`). Dual Vitest envs — jsdom (`app`), node (rest).
 
@@ -123,12 +125,13 @@ runner later — the whole point of the pnpm/Vitest call.
 
 **Goal:** the single most important phase for page-first. Define every entity type and the `ApiClient`
 interface in `packages/shared`, then implement an **in-process stub** that fully satisfies it — so the
-app runs against realistic data with zero backend. The real Lambda later implements the *same*
+app runs against realistic data with zero backend. The real Lambda later implements the _same_
 interface; swapping is one module.
 
 **Milestones & tasks**
+
 - **1.1 Entity types** — in `packages/shared/src/types.ts`: `LogEntry, Task, TaskPlan, TaskSeries,
-  Idea, Habit, HabitCheck, PomodoroSession, Day, Category, Settings` on a `BaseEntity`
+Idea, Habit, HabitCheck, PomodoroSession, Day, Category, Settings` on a `BaseEntity`
   (`id · createdAt · updatedAt · deletedAt · userId`), encoding the order-sensitive fields from §A
   (`estimateLockedMin`, `wasWork`, `lastHeartbeatAt`, `status` unions, `rule` union, etc.).
 - **1.2 State machines & invariants** — pure helpers in shared: `taskTransition()`,
@@ -153,7 +156,7 @@ interface; swapping is one module.
 `app/data/seed.ts`, `app/src/lib/{ulid,dates}.ts`.
 **Depends on:** Phase 0. **Implements:** TECH §2 (whole), §3 (data layer), §A (all).
 **Critical files:** `packages/shared/src/types.ts`, `packages/shared/src/api.ts`, `app/data/stubClient.ts`.
-**Trade-off:** effort spent making the stub *faithful* (real helpers, writes-object, lazy recurrence)
+**Trade-off:** effort spent making the stub _faithful_ (real helpers, writes-object, lazy recurrence)
 is what makes the page-first validation trustworthy and the backend swap mechanical. A lazy stub
 would defer the hard modeling questions to the expensive phase — exactly what CONVENTIONS forbids.
 
@@ -161,10 +164,11 @@ would defer the hard modeling questions to the expensive phase — exactly what 
 
 ## Phase 2 — Design system, theme & primitives
 
-**Goal:** the anti-generic visual foundation. Aesthetic is a v1 *requirement*, not polish-later
+**Goal:** the anti-generic visual foundation. Aesthetic is a v1 _requirement_, not polish-later
 (PRODUCT §2.2, §5) — every page is built on these tokens, so they come before pages.
 
 **Milestones & tasks**
+
 - **2.1 Theme tokens** — the PRODUCT §5 palette (from `localNotes/preview.webp`) as CSS custom
   properties (`--surface`, `--fg`, `--accent-gold`, …) in `app/src/styles/`, light + dark sets;
   **auto-theme is a one-line data-attribute flip** driven later by home mode. (TECH §1, PRODUCT §5)
@@ -189,6 +193,7 @@ would defer the hard modeling questions to the expensive phase — exactly what 
 below memory cost.
 
 **Milestones & tasks**
+
 - **3.1 Global capture bar** — `modules/capture/CaptureBar.tsx`: the always-present
   `[ Log | Task | Idea ]` bar (global focus hotkey on web, bottom-fixed thumb-reach layout on narrow
   viewports), behaving exactly as PRODUCT §2 specifies — Log default, snap-back after submit, never
@@ -213,6 +218,7 @@ below memory cost.
 per mode, glanceable in ~2s. This is a primary validation target.
 
 **Milestones & tasks**
+
 - **4.1 Home-mode context** — `modules/home/HomeModeProvider.tsx`: derives mode from clock via
   `dayBoundary`-aware windows; manual override; drives ThemeProvider (light morning/day, dark night).
 - **4.2 Mode layouts** — `pages/Home.tsx` with the three PRODUCT §3 layouts composed, each ≤5
@@ -236,11 +242,12 @@ per PRODUCT §3/§6 (balance lives via habits only in v1).
 validation target.
 
 **Milestones & tasks**
+
 - **5.1 Task lifecycle** — `modules/tasks/`: `backlog → planned → in_progress → done` (+ `cancelled`),
   driven by shared `taskTransition()`, with the estimate lock + split-not-edit rule. (PRODUCT §4a, §A.5)
 - **5.2 Morning plan pass** — `modules/calibration/PlanToday.tsx`: pull backlog tasks in, set estimate
-  + buffer + category, write `taskPlans` rows (multi-day, manual `order`); live **planned hours vs
-  hours available** from `day.capacityHours`. (PRODUCT §3 ☀️, §4a)
+  - buffer + category, write `taskPlans` rows (multi-day, manual `order`); live **planned hours vs
+    hours available** from `day.capacityHours`. (PRODUCT §3 ☀️, §4a)
 - **5.3 Buffer nudge** — flat **+25%** suggestion in v1 (personalized-from-bias is parked). (PRODUCT §4a)
 - **5.4 Actual-time capture** — on "done," the hybrid prompt (one number, pomodoro-prefilled, editable);
   records `actualAccruedMin`. (PRODUCT §4a, §A.5)
@@ -267,6 +274,7 @@ whole integrity of the calibration — "so hindsight can't launder the calibrati
 **Goal:** minimal timer that feeds calibration, with a robust orphan story.
 
 **Milestones & tasks**
+
 - **6.1 Timer engine** — `modules/pomodoro/`: configurable work/break (default 25/5), `kind: work|break`
   with the accrual, category-follows-task and `wasWork` rules of TECH §2.2. (PRODUCT §4b, §A.6)
 - **6.2 Persistence + heartbeat** — running session persisted with `lastHeartbeatAt`; pauses excluded;
@@ -288,6 +296,7 @@ double-counts work sessions poisons the one signal v1 exists to produce.
 **Goal:** the supportive, non-policing modules — the only v1 vehicle for non-work balance.
 
 **Milestones & tasks**
+
 - **7.1 Habits** — `modules/habits/`: weekly-cadence (`cadencePerWeek`), calendar view, night check;
   `habitChecks` unique on `(habitId, date)`; no streaks, may hold non-work items. (PRODUCT §4b, §3 🌙)
 - **7.2 Habits deep view** — `pages/Habits.tsx`: create/edit habits, calendar history.
@@ -297,7 +306,7 @@ double-counts work sessions poisons the one signal v1 exists to produce.
 **Key files:** `app/src/modules/habits/*`, `app/src/pages/Habits.tsx`, `app/src/modules/inbox/*`,
 `app/src/pages/Inbox.tsx`.
 **Depends on:** Phases 1, 4. **Implements:** PRODUCT §4b, §3.
-**Trade-off:** habits carry the *entire* non-work presence in v1 by design — the analytical weekly
+**Trade-off:** habits carry the _entire_ non-work presence in v1 by design — the analytical weekly
 balance view is parked to v1.1 (PRODUCT §6.1). Do not add a daily non-work checkbox; that's the
 guilt-nag the identity forbids.
 
@@ -308,6 +317,7 @@ guilt-nag the identity forbids.
 **Goal:** the config the above modules read. (Partly built earlier as stubs; this phase completes it.)
 
 **Milestones & tasks**
+
 - **8.1 Categories manager** — `pages/Settings.tsx`: the PRODUCT §4 starting set, editable, `order`,
   `isWork`; the id-referenced / reassign-on-delete / backfill-on-flip rules of §A.12. (TECH §2.2)
 - **8.2 Day capacity + intent + reflection** — `days` singleton editors: `capacityHours` (manual —
@@ -327,12 +337,13 @@ if scheduling sequences it earlier.
 **Goal:** installable app shell, then a hard **go/no-go on product feel** before any backend spend.
 
 **Milestones & tasks**
+
 - **9.1 PWA** — `vite-plugin-pwa`: manifest (name, icons from the gold/teal identity), service worker
   precaching the **app shell only** (data stays network-first — online-first per TECH §1/offline stance).
   Verify installable on phone + desktop. (TECH §1)
 - **9.2 Validation gate (page-first payoff)** — dogfood against the stub for a real morning + night.
   Judge against PRODUCT's own bar: does the home **earn the open**? Is capture below memory cost? Does
-  the calibration surface land as *evidence, not judgment*? Fix UX here — cheap against a stub. Only
+  the calibration surface land as _evidence, not judgment_? Fix UX here — cheap against a stub. Only
   pass this gate to proceed to backend. (CONVENTIONS build-order rationale)
 
 **Key files:** `app/vite.config.ts` (PWA), `app/public/manifest` + icons.
@@ -348,6 +359,7 @@ the product is wrong against a stub than against real infra."
 `stubClient` → `httpClient`; UI unchanged.
 
 **Milestones & tasks**
+
 - **10.1 Single-table mapping** — `lambdas/src/ddb/`: keys per TECH §2.4 (`PK=u#<userId>`, the
   type-prefixed SKs) + **GSI1** (`u#<userId>#done` / `<completedAt>`) for calibration. Denormalized
   `task.actualAccruedMin`.
@@ -374,6 +386,7 @@ the product is wrong against a stub than against real infra."
 **Goal:** real identity; `userId` = Cognito `sub` scoping every item (previously a single fixed id).
 
 **Milestones & tasks**
+
 - **11.1 App auth** — `app/auth/`: `react-oidc-context` + Cognito Hosted UI (PKCE SPA client, no
   secret); AuthProvider context; attach JWT to `httpClient`; protected routes; silent refresh. (§B, TECH §3, INFRA §6)
 - **11.2 In-handler JWT validation** — `aws-jwt-verify` in the Lambda, `sub` → `userId`. (INFRA §4, §B)
@@ -395,18 +408,19 @@ build (INFRA §6).
 data. No custom domain yet.
 
 **Milestones & tasks**
+
 - **12.1 Stack split** — `cdk/`: **`ApertureData-<env>`** = DynamoDB (single table, on-demand, **PITR
   on**, `RETAIN`) + Cognito User Pool (`RETAIN`); **`ApertureApp-<env>`** = Lambda + Function URL
   (`AWS_IAM`) + S3 (private) + CloudFront (OAC; default→S3, `/api/*`→Function URL; **403/404→`/index.html`**
-  SPA fallback). Stateful never endangered by app redeploys. (INFRA §3/§4/§5/§7) *(As built: the
+  SPA fallback). Stateful never endangered by app redeploys. (INFRA §3/§4/§5/§7) _(As built: the
   Function URL is auth `NONE` behind a CloudFront-stamped origin-secret header, OAC fronts only S3 —
-  INFRA §4.)*
+  INFRA §4.)_
 - **12.2 Lambda packaging** — esbuild-via-CDK `NodejsFunction`, Node 22, ~15s / 512MB, no warming;
-  env `TABLE_NAME · USER_POOL_ID · USER_POOL_CLIENT_ID · STAGE`. (INFRA §4) *(As built: the env var
-  list is in INFRA §4.)*
+  env `TABLE_NAME · USER_POOL_ID · USER_POOL_CLIENT_ID · STAGE`. (INFRA §4) _(As built: the env var
+  list is in INFRA §4.)_
 - **12.3 Config wiring** — app build consumes CDK outputs (pool id, client id, CloudFront/api base).
 - **12.4 Region** — everything in `us-east-1` (also where the CloudFront ACM cert must live later). (INFRA intro)
-  *(As built: `us-west-1`; only the ACM certs and the billing stack are in `us-east-1` — INFRA intro/§8.)*
+  _(As built: `us-west-1`; only the ACM certs and the billing stack are in `us-east-1` — INFRA intro/§8.)_
 - **12.5 Deploy dev + smoke** — `cdk deploy` both dev stacks; invoke Lambda with a `testMode` payload
   (writes-object guarantees no side effects); Vite build → S3 sync → CloudFront invalidate; verify on
   the CloudFront default domain + PWA install with zero DNS. (INFRA §7/§9)
@@ -415,8 +429,8 @@ data. No custom domain yet.
 **Depends on:** Phases 10–11. **Implements:** INFRA §1–7, §9 (smoke).
 **Critical files:** `cdk/lib/data-stack.ts`, `cdk/lib/app-stack.ts`.
 **Trade-off:** Function URL + CloudFront OAC over API Gateway = no per-request cost; the raw URL can't
-be called directly. Locked by INFRA §4. *(As built: it is the origin-secret header, not OAC, that makes
-the raw URL useless — INFRA §4.)*
+be called directly. Locked by INFRA §4. _(As built: it is the origin-secret header, not OAC, that makes
+the raw URL useless — INFRA §4.)_
 
 ---
 
@@ -425,22 +439,23 @@ the raw URL useless — INFRA §4.)*
 **Goal:** hands-off, keyless deploys; PRs gated on lint/test.
 
 **Milestones & tasks**
+
 - **13.1 OIDC roles** — GitHub OIDC trust: dev role ← `refs/heads/dev`, prod role ← `main`. **No static
-  keys.** (INFRA §9) *(As built: the trust subs are `environment:dev` / `environment:prod`; the cutover
-  `refs/heads/*` subs were pruned 2026-08 — INFRA §9.)*
+  keys.** (INFRA §9) _(As built: the trust subs are `environment:dev` / `environment:prod`; the cutover
+  `refs/heads/*` subs were pruned 2026-08 — INFRA §9.)_
 - **13.2 PR workflow** — feature branch → PR runs **lint + typecheck + test only** (pnpm + Vitest);
   squash to `main`. (INFRA §9)
 - **13.3 main pipeline** — lint/typecheck/test → `cdk deploy ApertureData-dev` + `ApertureApp-dev` →
   smoke dev → build app (env from CDK outputs) → S3 sync + invalidate → **manual approval** → same for
-  prod. `dev` branch → one-off dev deploy. (INFRA §9) *(As built: no approval pause — prod follows dev
-  automatically; INFRA §9 caveat.)*
+  prod. `dev` branch → one-off dev deploy. (INFRA §9) _(As built: no approval pause — prod follows dev
+  automatically; INFRA §9 caveat.)_
 
 **Key files:** `.github/workflows/pr.yml`, `.github/workflows/deploy.yml`, `scripts/src/smoke.ts`,
 `cdk/lib/cicd-stack.ts`.
 **Depends on:** Phase 12. **Implements:** INFRA §9, CONVENTIONS (pnpm/Vitest in CI).
 **Trade-off:** manual approval before prod is the guardrail on the `RETAIN` data stack — an app bug
-can't silently reach real data. *(As built: the `required_deployments:[dev]` merge gate is the guardrail
-instead — INFRA §9.)*
+can't silently reach real data. _(As built: no manual approval. A `required_deployments:[dev]` merge gate stood in for it until it was
+switched off 2026-09-10, so now the PR's required checks are the only gate and dev → prod is automatic. INFRA §9.)_
 **Status: LIVE (2026-08).** Roles (assume-bootstrap-roles), workflows, and smoke runner built + green;
 dev + prod deployed. Prod trust bound to the `prod` GitHub environment (scopes the prod role to
 `environment:prod` jobs). Account/GitHub setup done: `ApertureCicd` deployed, repo vars (role ARNs,
@@ -458,6 +473,7 @@ the account is on Pro; the current state and the untested option are in INFRA §
 critical path; wired right before real daily use.
 
 **Milestones & tasks**
+
 - **14.1 Prod stacks** — ✅ done (CI go-live): `ApertureData-prod` + `ApertureApp-prod` via the approval
   gate; prod user admin-created (invite-only).
 - **CDK wiring for 14.2–14.4** — ✅ done: `cdk/src/config/domains.ts` (stage→domain, cert ARN from
@@ -480,26 +496,30 @@ on `*.cloudfront.net` from Phase 12.
 
 ## C. Definition of Done for v1
 
-v1 is shipped when all are true (ties back to PRODUCT §1 success criteria — *less stress + honest
-scoping*, and **earning the morning + night ritual**):
+v1 is shipped when all are true (ties back to PRODUCT §1 success criteria — _less stress + honest
+scoping_, and **earning the morning + night ritual**):
 
 **Ritual (the #1 job)**
+
 - [ ] Home auto-switches morning/day/night by clock (manual override), ≤5 elements per mode, glanceable
       in ~2s, auto teal→gold theme following the mode.
 - [ ] After a week of self-use, the **morning + night** touchpoints happen because the home is worth
       opening — **no streaks, no guilt mechanics** anywhere.
 
 **Capture (below memory cost)**
+
 - [ ] One global capture bar, Log default, `[Log|Task|Idea]` Tab-cycle + Enter, snaps back to Log after
       submit; **never asks for structure**; reachable by hotkey (web) and thumb bar (phone).
 
 **Honest scoping (the signature payoff)**
+
 - [ ] Morning plan pass shows **planned hours vs available** and catches under-scoping before it's stress.
 - [ ] Estimate **freezes at start-of-work**; scope change is a **split**, not an edit.
 - [ ] "Done" captures actual (pomodoro-prefilled, editable); night review shows **per-task
       estimate-vs-actual** + a simple aggregate ratio (honestly sparse early). `cancelled` excluded.
 
 **Modules & data integrity**
+
 - [ ] Interstitial log (append-only, no backdating), pomodoro (heartbeat, pauses excluded, keep/discard
       orphans), habits (weekly-cadence, no streaks, may hold non-work), inbox triage — all working.
 - [ ] Multi-day scheduling (`taskPlans`) + recurrence (`taskSeries`, lazy-on-read) each yield their own
@@ -507,12 +527,14 @@ scoping*, and **earning the morning + night ritual**):
 - [ ] Every entity: ULID, `userId`-scoped, soft-delete, `dayStartHour`-bucketed. Nothing hard-deletes.
 
 **Platform**
+
 - [ ] Installable PWA (app shell offline; data online-first).
 - [ ] Cognito-authed (invite-only), dev + prod on CDK (split stateful/replaceable, PITR on), keyless
       OIDC CI green, live on the custom domain.
 - [ ] Same `ApiClient` contract passes against both stub and real backend (contract tests green).
 
 **Feel (the anti-bland requirement)**
+
 - [ ] Quiet field-notebook aesthetic from `preview.webp` holds up in-hand; calibration reads as
       **evidence, not judgment**; non-work life is invited (via habits), never policed.
 

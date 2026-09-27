@@ -56,7 +56,9 @@ export class ApertureCicdStack extends Stack {
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter'],
-          resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${CDK_QUALIFIER}/version`],
+          resources: [
+            `arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${CDK_QUALIFIER}/version`,
+          ],
         }),
       );
       // Frontend publish (S3 sync + CloudFront invalidate) + smoke (direct Lambda invoke) — outside CFN,
@@ -64,7 +66,10 @@ export class ApertureCicdStack extends Stack {
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['s3:PutObject', 's3:DeleteObject', 's3:GetObject', 's3:ListBucket'],
-          resources: [`arn:aws:s3:::apertureapp-${stage}-*`, `arn:aws:s3:::apertureapp-${stage}-*/*`],
+          resources: [
+            `arn:aws:s3:::apertureapp-${stage}-*`,
+            `arn:aws:s3:::apertureapp-${stage}-*/*`,
+          ],
         }),
       );
       role.addToPolicy(
@@ -100,10 +105,8 @@ export class ApertureCicdStack extends Stack {
       role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
         [`AwsSolutions-IAM5[Resource::arn:aws:iam::<AWS::AccountId>:role/cdk-${CDK_QUALIFIER}-*-<AWS::AccountId>-${region}]`]:
           'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
-        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]:
-          `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
-        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]:
-          `Object-level access to the same ${stage} site bucket.`,
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]: `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]: `Object-level access to the same ${stage} site bucket.`,
         [`AwsSolutions-IAM5[Resource::arn:aws:cloudfront::<AWS::AccountId>:distribution/*]`]:
           'CloudFront invalidation; the distribution id is not known until the app stack deploys.',
         [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:<AWS::AccountId>:stack/ApertureApp-${stage}/*]`]:
@@ -114,10 +117,9 @@ export class ApertureCicdStack extends Stack {
       return role;
     };
 
-    // dev: the `deploy-dev` job always runs in the `dev` GitHub environment (so it records a deployment for
-    // the `required_deployments: [dev]` branch ruleset), which makes its OIDC sub `…:environment:dev` on
-    // BOTH the `dev`- and `main`-branch pushes. That's the only path that assumes this role, so the trust is
-    // scoped to the environment alone. (The old `ref:refs/heads/{dev,main}` subs were a cutover superset,
+    // dev: the `deploy-dev` job always runs in the `dev` GitHub environment, which makes its OIDC sub
+    // `…:environment:dev` on BOTH the `dev`- and `main`-branch pushes. That's the only path that assumes
+    // this role, so the trust is scoped to the environment alone. (The old `ref:refs/heads/{dev,main}` subs were a cutover superset,
     // pruned 2026-08 once every deploy-dev run was confirmed environment-scoped.) The `dev` environment must
     // allow the `dev` AND `main` branches, since deploy-dev runs from both.
     const devRole = makeRole(
@@ -126,7 +128,8 @@ export class ApertureCicdStack extends Stack {
       [`repo:${githubSubject}:environment:dev`],
       'dev',
     );
-    // prod: environment-based — only a job running in the approval-gated `prod` environment gets this sub.
+    // prod: environment-based — only a job running in the `prod` environment gets this sub (no
+    // required reviewers are configured on it today — INFRA §9 caveat).
     const prodRole = makeRole(
       'DeployProd',
       'aperture-github-deploy-prod',
