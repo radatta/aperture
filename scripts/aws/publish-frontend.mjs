@@ -1,6 +1,7 @@
 // Publish the dashboard to a deployed env: build with that env's CDK outputs baked in, sync to S3,
 // invalidate CloudFront. Reads cdk/cdk-outputs.<stage>.json (written by `cdk deploy`). Needs AWS creds
-// + the `aws` CLI (only for the sync/invalidate).
+// + the `aws` CLI (only for the sync/invalidate). Creates the invalidation and returns without waiting —
+// health-check.mjs polls the edge for the new shell instead.
 // Usage: node scripts/aws/publish-frontend.mjs [dev|prod] [--profile <name>]
 // If your creds live in a named profile (no default), pass --profile — it's applied ONLY to the aws
 // commands (vite has its own --profile CPU-profiling flag, so never let it leak into the build). You can
@@ -41,11 +42,12 @@ console.log(`\n▶ Syncing to s3://${bucket}`);
 run(
   `aws s3 sync app/dist/assets "s3://${bucket}/assets" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
 );
-// Everything else (index.html, sw.js, manifest, icons) must revalidate: a cached index.html would point
-// at asset hashes the --delete already pruned → white screen. --exclude assets/* leaves the immutable
-// pass above untouched (and never deletes old hashes, so in-flight clients can still load old chunks).
+// Everything else (index.html, icons, …) must revalidate so a client never holds a stale shell.
+// --exclude assets/* leaves the immutable pass above untouched and means old hashes are never deleted, so
+// in-flight clients can still load old chunks. sw.js and the manifest are excluded here (and so from
+// --delete) because the two cp's below upload them with a pinned Content-Type — one PUT each, not two.
 run(
-  `aws s3 sync app/dist "s3://${bucket}" --delete --exclude "assets/*" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
+  `aws s3 sync app/dist "s3://${bucket}" --delete --exclude "assets/*" --exclude "manifest.webmanifest" --exclude "sw.js" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
 );
 // Pin Content-Type on the PWA files — s3 sync guesses by extension and can serve .webmanifest as
 // octet-stream (Chrome ignores it → no install). Host-independent; no-cache so SW/manifest updates
@@ -58,14 +60,16 @@ run(
 );
 
 console.log(`\n▶ Invalidating CloudFront ${app.DistributionId}`);
-// Capture the invalidation id (JSON, not inherited stdout) so we can wait for it — the post-deploy health
-// check needs the edge serving the new build, not a stale cached shell.
+// Fire and forget. The shell is uploaded no-store, the default behaviour's min TTL is 1s and the SPA
+// error-fallback responses have ttl 0, so the edge serves the new build within ~1s regardless. Waiting
+// cost a flat 20–22s per stage (the CLI waiter polls every 20s) and proved nothing the health check's
+// shell poll doesn't prove directly. The id is logged for `aws cloudfront get-invalidation`.
 const invJson = execSync(
   `aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*" --output json${profileFlag}`,
   { cwd: root, encoding: 'utf8' },
 );
-const invalidationId = JSON.parse(invJson).Invalidation.Id;
-console.log(`  invalidation ${invalidationId} created — waiting for it to complete...`);
-run(`aws cloudfront wait invalidation-completed --distribution-id ${app.DistributionId} --id ${invalidationId}${profileFlag}`);
+console.log(
+  `  invalidation ${JSON.parse(invJson).Invalidation.Id} created — not waiting; health-check polls the edge`,
+);
 
 console.log(`\n✓ Published ${stage} → ${app.AppUrl}\n`);

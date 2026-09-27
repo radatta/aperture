@@ -2,9 +2,12 @@
 // CloudFront → Function URL → Lambda path (and the origin-secret gate) works end-to-end — something the
 // `aws lambda invoke` smoke test can't see, since it bypasses CloudFront entirely. Reads AppUrl +
 // FunctionUrl from cdk-outputs.<stage>.json (written by `cdk deploy`). Exits non-zero on any failed check.
-// Uses Node's global fetch (Node 22) — no curl/jq. Assumes the CloudFront invalidation is already
-// complete (publish-frontend.mjs waits for it before this runs).
+// Uses Node's global fetch (Node 22) — no curl/jq. The first check polls `/` until the edge serves the
+// shell publish just built (asset refs from app/dist/index.html), bounded at ~60s — publish doesn't wait
+// for its invalidation — so every later check runs against a settled edge.
 // Usage: node scripts/aws/health-check.mjs [dev|prod]
+// Run it right after publish-frontend.mjs, in the same checkout: the shell check compares the edge against
+// that build's app/dist/index.html. A missing, stale or other-stage build fails it as "edge still stale".
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -33,9 +36,52 @@ const check = async (name, fn) => {
 
 console.log(`\n▶ Health check ${stage} → ${appUrl}`);
 
-await check('app shell 200', async () => {
-  const r = await fetch(`${appUrl}/`);
-  expect(r.status === 200, `expected 200, got ${r.status}`);
+// Vite emits absolute /assets/<name>-<hash>.<ext> refs, so the set of them fingerprints the shell: if the
+// edge returns all of them, it's serving THIS build.
+const shellPath = `${root}/app/dist/index.html`;
+const assetRefs = (html) =>
+  [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]);
+const expectedRefs = assetRefs(readFileSync(shellPath, 'utf8'));
+if (expectedRefs.length === 0)
+  throw new Error(`no /assets/ refs in ${shellPath} — was the app built?`);
+
+// Plain `/`: the default behaviour ignores query strings, so a cache-buster would be theatre. The shell is
+// no-store with a 1s min TTL, so attempt 1–2 normally succeeds. Backoff 1 → 8s, ~60s budget.
+const POLL_BUDGET_MS = 60_000;
+await check(`edge serves the new shell (${expectedRefs.length} asset refs)`, async () => {
+  const start = Date.now();
+  let delay = 1000;
+  for (let attempt = 1; ; attempt++) {
+    // A network error or a hung request is "not yet", not a failure — the timeout keeps the budget real.
+    let status;
+    let xCache = '';
+    let seen = [];
+    try {
+      const r = await fetch(`${appUrl}/`, { signal: AbortSignal.timeout(10_000) });
+      status = r.status;
+      xCache = r.headers.get('x-cache') ?? '';
+      if (r.status === 200) seen = assetRefs(await r.text());
+    } catch (err) {
+      status = `error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    const missing = expectedRefs.filter((ref) => !seen.includes(ref));
+    if (status === 200 && missing.length === 0) {
+      if (attempt > 1)
+        console.log(
+          `    fresh shell on attempt ${attempt} (${((Date.now() - start) / 1000).toFixed(1)}s)`,
+        );
+      return;
+    }
+    if (Date.now() - start + delay > POLL_BUDGET_MS) {
+      throw new Error(
+        `edge still stale after ${attempt} attempts / ${Math.round((Date.now() - start) / 1000)}s — ` +
+          `status ${status}, x-cache "${xCache}", missing ${missing.join(', ')}; ` +
+          `saw ${seen.join(', ') || 'no /assets/ refs'}. Check the invalidation id in the publish step.`,
+      );
+    }
+    await new Promise((res) => setTimeout(res, delay));
+    delay = Math.min(delay * 2, 8000);
+  }
 });
 
 await check('manifest served as application/manifest+json', async () => {
