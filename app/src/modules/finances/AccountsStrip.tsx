@@ -96,7 +96,9 @@ function ItemAccounts({
           ]}
         />
       </div>
-      <div className="no-scrollbar -mx-5 flex gap-2 overflow-x-auto px-5">
+      {/* A wrapping grid, not a sideways scroller: each chip's ··· menu drops below it, and an
+          overflow container would clip the menu and scroll the strip out from under it. */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {accounts.map((a) => (
           <AccountChip key={a.id} account={a} />
         ))}
@@ -143,14 +145,20 @@ function AccountChip({ account: a }: { account: FinanceAccount }) {
   return (
     <div
       className={cx(
-        'flex min-w-[11rem] shrink-0 items-start justify-between gap-2 rounded-2xl border border-line bg-panel px-3 py-2',
+        'flex min-w-0 items-start justify-between gap-2 rounded-2xl border border-line bg-panel px-3 py-2',
         a.hidden && 'border-dashed',
       )}
     >
       <div className="flex min-w-0 flex-col">
-        <Text size="sm" className="truncate">
-          {a.name} <Text tone="muted">••{a.mask}</Text>
-        </Text>
+        {/* The name truncates, never the mask — the last four digits are how you tell accounts apart. */}
+        <span className="flex min-w-0 items-baseline gap-1">
+          <Text size="sm" className="truncate">
+            {a.name}
+          </Text>
+          <Text size="sm" tone="muted" className="shrink-0">
+            ••{a.mask}
+          </Text>
+        </span>
         <Text size="sm" tabular tone={a.hidden ? 'muted' : 'ink'}>
           {a.currentCents === null ? '—' : fmtMoney(a.currentCents)}
           {credit && a.currentCents !== null ? ' owed' : ''}
@@ -167,7 +175,7 @@ function AccountChip({ account: a }: { account: FinanceAccount }) {
         label={`More actions for ${a.name}`}
         items={[
           {
-            label: flipped ? 'Un-flip amounts' : 'Flip amounts (if charges read as money in)',
+            label: flipped ? 'Un-flip amounts' : 'Flip amounts',
             onSelect: () =>
               update.mutate({ id: a.id, patch: { signOverride: flipped ? 'auto' : 'flip' } }),
           },
@@ -183,7 +191,8 @@ function AccountChip({ account: a }: { account: FinanceAccount }) {
 
 function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLink }) {
   const sync = useRequestFinanceSync();
-  const [note, setNote] = useState<string | null>(null);
+  // A cooldown is information, a failure is an error — only the second is red.
+  const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
   const { lastSyncedAt, syncing, lastError, environment } = overview.sync;
   const status = syncing
     ? 'Syncing…'
@@ -207,18 +216,26 @@ function SyncLine({ overview, link }: { overview: FinanceOverview; link: BankLin
               setNote(
                 r.accepted || r.nextAllowedAt === null
                   ? null
-                  : `Asked the bank recently — try again in ${fmtMinutesUntil(r.nextAllowedAt, nowMs())}.`,
+                  : {
+                      text: `Asked the bank recently — try again in ${fmtMinutesUntil(r.nextAllowedAt, nowMs())}.`,
+                      error: false,
+                    },
               ),
-            onError: () => setNote('Couldn’t reach the server — try again.'),
+            onError: () => setNote({ text: 'Couldn’t reach the server — try again.', error: true }),
           })
         }
       >
         Refresh
       </Button>
       <ConnectButton environment={environment} link={link} label="Add a bank" variant="quiet" />
-      {(note ?? link.error) && (
+      {note && (
+        <Text size="xs" tone={note.error ? 'danger' : 'muted'} className="basis-full">
+          {note.text}
+        </Text>
+      )}
+      {link.error && (
         <Text size="xs" tone="danger" className="basis-full">
-          {note ?? link.error}
+          {link.error}
         </Text>
       )}
     </div>

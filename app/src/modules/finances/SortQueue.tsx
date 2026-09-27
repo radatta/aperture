@@ -17,9 +17,9 @@ import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
-import { cx } from '../../lib/cx';
 import { useSetFinanceBucket } from '../../data/hooks/useFinances';
 import { fmtMoney } from './money';
+import { TransactionDetail } from './TransactionDetail';
 import type { FinanceView } from './useFinanceData';
 
 // The batch sort: every unsorted charge in the current AND previous period, grouped by merchant,
@@ -53,7 +53,11 @@ export function SortQueue({
   const pendingFocus = useRef<{ key: string; index: number; partial: boolean } | null>(null);
   const doneRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  // Runs after every render while no detail is open: focus can't leave a modal, so a sort made
+  // inside the detail is settled once it closes.
+  function settleFocus() {
     const p = pendingFocus.current;
     if (!p) return;
     const still = groups.findIndex((g) => g.key === p.key);
@@ -67,7 +71,10 @@ export function SortQueue({
     const next = groups[Math.min(p.index, groups.length - 1)];
     if (next) refs.current.get(next.key)?.focus();
     else doneRef.current?.focus();
-  }, [groups]);
+  }
+  useEffect(() => {
+    if (openId === null) settleFocus();
+  });
 
   function sort(
     group: MerchantGroup,
@@ -80,7 +87,9 @@ export function SortQueue({
     setBucket.mutate({ ids, bucket, rule: rulePattern ? { pattern: rulePattern } : undefined });
   }
 
-  if (groups.length === 0)
+  const open = openId ? view?.txns.find((t) => t.id === openId) : undefined;
+
+  if (groups.length === 0 && !open)
     return (
       <div ref={doneRef} tabIndex={-1} className="outline-none">
         <EmptyState pending={!error && (pending || !view)} error={error} title="All sorted.">
@@ -115,8 +124,22 @@ export function SortQueue({
             else refs.current.delete(g.key);
           }}
           onSort={(ids, bucket, rule) => sort(g, i, ids, bucket, rule)}
+          onOpen={(id) => {
+            // Closing the detail returns focus to this group — or, if the charge was sorted and the
+            // group emptied, to the one that took its place.
+            pendingFocus.current = { key: g.key, index: i, partial: true };
+            setOpenId(id);
+          }}
         />
       ))}
+      {open && (
+        <TransactionDetail
+          txn={open}
+          view={view!}
+          overview={overview}
+          onClose={() => setOpenId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -129,21 +152,25 @@ function Kbd({ children }: { children: string }) {
   );
 }
 
+const PREVIEW_ROWS = 3;
+
 function GroupCard({
   group,
   overview,
   view,
   cardRef,
   onSort,
+  onOpen,
 }: {
   group: MerchantGroup;
   overview: FinanceOverview;
   view: FinanceView;
   cardRef: (el: HTMLDivElement | null) => void;
   onSort: (ids: string[], bucket: FinanceBucket, rulePattern: string | null) => void;
+  onOpen: (txnId: string) => void;
 }) {
   const [always, setAlways] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const ids = group.txns.map((t) => t.id);
   const dates = group.txns.map((t) => t.date).sort();
   const span =
@@ -152,6 +179,8 @@ function GroupCard({
       : `${fmtMonthShortDay(dates[0]!)} – ${fmtMonthShortDay(dates[dates.length - 1]!)}`;
   const sortAll = (b: FinanceBucket) => onSort(ids, b, always ? group.key : null);
   const listId = `grp-${group.key.replace(/\W+/g, '-')}`;
+  const rows = showAll ? group.txns : group.txns.slice(0, PREVIEW_ROWS);
+  const hidden = group.txns.length - PREVIEW_ROWS;
 
   return (
     <Card
@@ -169,28 +198,44 @@ function GroupCard({
           sortAll(FINANCE_BUCKETS[n - 1]!);
         }
       }}
-      className="flex flex-col gap-3 outline-none focus-visible:border-teal"
+      className="flex flex-col gap-3 outline-none focus-visible:ring-2 focus-visible:ring-teal"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col">
           <Text weight="medium" className="truncate">
             {group.label}
           </Text>
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-controls={listId}
-            onClick={() => setOpen((o) => !o)}
-            className="self-start text-sm text-ink-muted hover:text-ink"
-          >
-            {group.txns.length} {group.txns.length === 1 ? 'charge' : 'charges'} · {span}{' '}
-            {open ? '▴' : '▾'}
-          </button>
+          <Text size="sm" tone="muted">
+            {group.txns.length} {group.txns.length === 1 ? 'charge' : 'charges'} · {span}
+          </Text>
         </div>
         <Text weight="medium" tabular>
           {fmtMoney(group.totalCents)}
         </Text>
       </div>
+      {/* The charges themselves — tap one for its detail (bucket, period, note), like the All tab. */}
+      <ul id={listId} className="-mx-2 flex flex-col">
+        {rows.map((t) => (
+          <ChargeRow
+            key={t.id}
+            txn={t}
+            view={view}
+            previous={periodOf(t, overview.period) === 'previous'}
+            onOpen={() => onOpen(t.id)}
+          />
+        ))}
+      </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          aria-expanded={showAll}
+          aria-controls={listId}
+          onClick={() => setShowAll((v) => !v)}
+          className="self-start text-sm text-ink-muted hover:text-ink"
+        >
+          {showAll ? 'Show fewer' : `Show ${hidden} more`}
+        </button>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {FINANCE_BUCKETS.map((b, i) => (
           <Button key={b} size="sm" variant="ghost" onClick={() => sortAll(b)}>
@@ -213,19 +258,6 @@ function GroupCard({
           Saves a rule: anything matching “{group.key}” sorts itself from now on.
         </Text>
       )}
-      {open && (
-        <ul id={listId} className="flex flex-col divide-y divide-line border-t border-line">
-          {group.txns.map((t) => (
-            <ChargeRow
-              key={t.id}
-              txn={t}
-              view={view}
-              previous={periodOf(t, overview.period) === 'previous'}
-              onSort={(b) => onSort([t.id], b, null)}
-            />
-          ))}
-        </ul>
-      )}
     </Card>
   );
 }
@@ -234,41 +266,37 @@ function ChargeRow({
   txn,
   view,
   previous,
-  onSort,
+  onOpen,
 }: {
   txn: FinanceTransaction;
   view: FinanceView;
   previous: boolean;
-  onSort: (b: FinanceBucket) => void;
+  onOpen: () => void;
 }) {
   const acct = view.accounts.get(txn.accountId);
+  const cents = view.amount(txn);
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-      <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
-        {fmtMonthShortDay(txn.date)}
-      </Text>
-      <Text size="sm" tone="muted" className={cx('min-w-0 flex-1 truncate')}>
-        {txn.name}
-        {acct?.mask ? ` · ••${acct.mask}` : ''}
-        {txn.pending ? ' · pending' : ''}
-        {previous ? ' · last period' : ''}
-      </Text>
-      <Text size="sm" tabular>
-        {fmtMoney(view.amount(txn))}
-      </Text>
-      <div className="flex gap-1">
-        {FINANCE_BUCKETS.map((b) => (
-          <Button
-            key={b}
-            size="sm"
-            variant="quiet"
-            onClick={() => onSort(b)}
-            aria-label={`${FINANCE_BUCKET_LABELS[b]}: ${txn.name}`}
-          >
-            {FINANCE_BUCKET_LABELS[b]}
-          </Button>
-        ))}
-      </div>
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left hover:bg-panel-2"
+      >
+        <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
+          {fmtMonthShortDay(txn.date)}
+        </Text>
+        <Text size="sm" tone="muted" className="min-w-0 flex-1 truncate">
+          {txn.name}
+          {acct?.mask ? ` · ••${acct.mask}` : ''}
+          {txn.pending ? ' · pending' : ''}
+          {cents < 0 ? ' · refund' : ''}
+          {previous ? ' · last period' : ''}
+          {txn.note ? ` · ${txn.note}` : ''}
+        </Text>
+        <Text size="sm" tabular>
+          {cents < 0 ? `+${fmtMoney(-cents)}` : fmtMoney(cents)}
+        </Text>
+      </button>
     </li>
   );
 }

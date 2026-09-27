@@ -211,7 +211,7 @@ export function fixtureInitialPages(today: string): PlaidSyncResponse[] {
 }
 
 // The next sync: the pending Sweetgreen charge posts (new id, pending_transaction_id → the old one,
-// with a tip added), a merchant name gets cleaned up, and the pending row is removed.
+// with a tip added), a merchant name gets enriched, and the pending row is removed.
 export function fixtureUpdatePage(today: string): PlaidSyncResponse {
   const { card } = FIXTURE_ACCOUNT_IDS;
   const posted = txn(
@@ -229,7 +229,7 @@ export function fixtureUpdatePage(today: string): PlaidSyncResponse {
   const renamed = fixtureHistory(today).find((t) => t.transaction_id === 'fx-card-2')!;
   return {
     added: [posted],
-    modified: [{ ...renamed, merchant_name: `${renamed.merchant_name} (updated)` }],
+    modified: [{ ...renamed, merchant_name: `${renamed.merchant_name} Mexican Grill` }],
     removed: [{ transaction_id: 'fx-pending-1' }],
     next_cursor: 'fx-cursor-3',
     has_more: false,

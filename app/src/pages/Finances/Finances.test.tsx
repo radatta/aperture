@@ -74,6 +74,21 @@ describe('Finances page', () => {
     expect(sorted.length).toBeGreaterThan(0);
   });
 
+  it('clicking a charge in the sort queue opens its detail, and sorting there clears the group', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances' });
+    const uber = await group(/^Uber, /);
+    const label = uber.getAttribute('aria-label')!;
+    const rows = within(uber).getAllByRole('button', { name: /UBER/ });
+    await user.click(rows[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /Uber/ });
+    await user.click(within(dialog).getByRole('radio', { name: 'I pay' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    if (rows.length === 1)
+      await waitFor(() => expect(screen.queryByRole('group', { name: label })).toBeNull());
+    else await waitFor(() => expect(screen.getByRole('group', { name: /^Uber, / })).toBeTruthy());
+  });
+
   it('a failed sort says so instead of silently snapping back', async () => {
     const user = userEvent.setup();
     const api = await linked();
