@@ -65,8 +65,14 @@ const txnScope = (id?: string) =>
   id === undefined ? {} : { scope: { id: `finance-txn:${id}` }, mutationKey: txnEditKey(id) };
 const laterQueued = (qc: QueryClient, id?: string) =>
   id !== undefined && qc.isMutating({ mutationKey: txnEditKey(id) }) > 1;
+// Another row's edit still in flight (the All tab's brush paints rows back to back): hold the refetch
+// for the last one, or it lands before that row's save and flips its tag back for a moment.
+const otherEditsInFlight = (qc: QueryClient, id?: string) =>
+  id !== undefined && qc.isMutating({ mutationKey: ['finance', 'txn-edit'] }) > 1;
 
-export function useSetFinanceBucket(scopeId?: string) {
+// onError is hook-level, not per-mutate: TanStack runs it even after the row unmounted (a painted row
+// dropped from the list when the brush is put down), so a failed sort is never silent.
+export function useSetFinanceBucket(scopeId?: string, opts: { onError?: () => void } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
@@ -91,7 +97,14 @@ export function useSetFinanceBucket(scopeId?: string) {
       const byId = new Map(changed.map((t) => [t.id, t]));
       patchTxnCaches(qc, (t) => byId.get(t.id) ?? t);
     },
-    onSettled: () => (laterQueued(qc, scopeId) ? undefined : invalidateFinance(qc)),
+    // A failure refetches at once, whatever else is in flight: the row must stop showing the bucket
+    // that didn't save.
+    onError: () => {
+      void invalidateFinance(qc);
+      opts.onError?.();
+    },
+    onSettled: (_d, error) =>
+      error || otherEditsInFlight(qc, scopeId) ? undefined : invalidateFinance(qc),
   });
 }
 
@@ -158,7 +171,7 @@ export function useSetFinancePeriodOverride(scopeId?: string) {
       await qc.cancelQueries({ queryKey: ['finance', 'txns'] });
       patchTxnCaches(qc, (t) => (t.id === v.id ? { ...t, periodOverride: v.override } : t));
     },
-    onSettled: () => (laterQueued(qc, scopeId) ? undefined : invalidateFinance(qc)),
+    onSettled: () => (otherEditsInFlight(qc, scopeId) ? undefined : invalidateFinance(qc)),
   });
 }
 

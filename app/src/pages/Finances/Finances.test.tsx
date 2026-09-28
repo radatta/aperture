@@ -83,6 +83,45 @@ describe('Finances page', () => {
     expect(sorted.length).toBeGreaterThan(0);
   });
 
+  it('pressing 4 files a group as Not spending: it leaves the queue, and the budget doesn’t move', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    renderApp({ api, path: '/finances' });
+    const inv = await group(/^Brokerage, /);
+    const before = screen.getByRole('link', { name: /to sort ·/ }).textContent;
+    inv.focus();
+    await user.keyboard('4');
+    await waitFor(() => expect(screen.queryByRole('group', { name: /^Brokerage, / })).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: /to sort ·/ }).textContent).not.toBe(before),
+    );
+    expect(screen.getByText('$600 left')).toBeTruthy();
+    const all = await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' });
+    expect(all.find((t) => t.id === 'fx-brokerage')!.bucket).toBe('not_spending');
+  });
+
+  it('All lists Not-spending rows under their chip; picking Unsorted in the detail sends one back', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.setFinanceBucket({ ids: ['fx-brokerage'], bucket: 'not_spending' });
+    renderApp({ api, path: '/finances/all' });
+    const show = await screen.findByRole('group', { name: 'Show' });
+    await user.click(within(show).getByRole('button', { name: 'Not spending', pressed: false }));
+    const row = await screen.findByRole('button', { name: /Brokerage/ });
+    expect(within(row).getByText('Not spending')).toBeTruthy();
+    await user.click(row);
+    const dialog = await screen.findByRole('dialog', { name: /Brokerage/ });
+    expect(
+      within(dialog).getByRole('radio', { name: 'Not spending' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    await user.click(within(dialog).getByRole('radio', { name: 'Unsorted' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await waitFor(async () => {
+      const all = await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' });
+      expect(all.find((t) => t.id === 'fx-brokerage')!.bucket).toBeNull();
+    });
+  });
+
   it('clicking a charge in the sort queue opens its detail, and sorting there clears the group', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances' });
@@ -121,6 +160,20 @@ describe('Finances page', () => {
       expect((await api.listFinanceRules()).map((r) => r.pattern)).toEqual(['uber']),
     );
     await waitFor(() => expect(screen.queryByRole('group', { name: /^Uber, / })).toBeNull());
+  });
+
+  it('a refund of a Not-spending charge says it’s outside every total', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+    await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'not_spending' });
+    renderApp({ api, path: '/finances/all' });
+    await screen.findAllByRole('button', { name: /Amazon/ });
+    await user.click(document.querySelector('[data-txn-id="fx-refund-1"]') as HTMLElement);
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(/Not spending, like its charge — outside every total/),
+    ).toBeTruthy();
   });
 
   it('a period override in the detail changes the header total', async () => {
@@ -580,6 +633,192 @@ describe('Finances page', () => {
     await user.type(screen.getByLabelText('When the merchant contains'), 'Netflix');
     await user.click(screen.getByRole('button', { name: 'Add rule' }));
     expect(await screen.findByText('“netflix”')).toBeTruthy();
+  });
+});
+
+describe('All tab: sort into and search', () => {
+  const row = (id: string) => document.querySelector<HTMLElement>(`[data-txn-id="${id}"]`);
+  const ids = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-txn-id]')].map((el) => el.dataset.txnId);
+  const brushBtn = (name: string) =>
+    within(screen.getByRole('group', { name: 'Sort into' })).getByRole('button', {
+      name: new RegExp(name),
+    });
+  const showChip = (name: string) =>
+    within(screen.getByRole('group', { name: 'Show' })).getByRole('button', { name });
+  const bucketOnServer = async (api: ApiClient, id: string) =>
+    (await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' })).find(
+      (t) => t.id === id,
+    )!.bucket;
+  const openAll = async (prepare?: (api: ApiClient) => Promise<unknown>) => {
+    const api = await linked();
+    await prepare?.(api);
+    renderApp({ api, path: '/finances/all' });
+    await screen.findByRole('group', { name: 'Sort into' });
+    return api;
+  };
+
+  it('arming a bucket makes a tap sort the row instead of opening it', async () => {
+    const user = userEvent.setup();
+    const api = await openAll();
+    await user.click(brushBtn('Budget'));
+    expect(brushBtn('Budget').getAttribute('aria-pressed')).toBe('true');
+    expect(showChip('Budget').getAttribute('aria-pressed')).toBe('false'); // a different control
+    expect(document.getElementById('ledger-brush-hint')?.textContent).toMatch(
+      /^Sorting into Budget/,
+    );
+    await user.click(row('fx-card-2')!);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(async () => expect(await bucketOnServer(api, 'fx-card-2')).toBe('budget'));
+    expect(within(row('fx-card-2')!).getByText('Budget')).toBeTruthy();
+  });
+
+  it('painted rows stay put under an Unsorted filter until you stop', async () => {
+    const user = userEvent.setup();
+    const api = await openAll();
+    await user.click(showChip('Unsorted'));
+    await user.keyboard('2');
+    const before = ids();
+    await user.click(row('fx-card-2')!);
+    await user.click(row('fx-card-4')!);
+    await waitFor(async () => expect(await bucketOnServer(api, 'fx-card-4')).toBe('budget'));
+    expect(ids()).toEqual(before);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(row('fx-card-2')).toBeNull());
+    expect(row('fx-card-4')).toBeNull();
+    expect(brushBtn('Budget').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('Enter paints the focused row; Escape stops and keeps focus on a row', async () => {
+    const user = userEvent.setup();
+    const api = await openAll();
+    await user.click(showChip('Unsorted'));
+    await user.keyboard('3');
+    row('fx-card-2')!.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect(await bucketOnServer(api, 'fx-card-2')).toBe('i_pay'));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(row('fx-card-2')).toBeNull());
+    expect(document.activeElement?.hasAttribute('data-txn-id')).toBe(true);
+  });
+
+  it('rows that can’t take a bucket go inert while armed', async () => {
+    const user = userEvent.setup();
+    const api = await openAll();
+    const spy = vi.spyOn(api, 'setFinanceBucket');
+    await user.click(brushBtn('Parents pay'));
+    const payroll = row('fx-pay-3')!;
+    expect(payroll.getAttribute('aria-disabled')).toBe('true');
+    await user.click(payroll);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('tapping a row again with the same brush sets it back to Unsorted', async () => {
+    const user = userEvent.setup();
+    const api = await openAll();
+    await user.click(brushBtn('Budget'));
+    await user.click(row('fx-card-2')!);
+    await user.click(row('fx-card-2')!);
+    await waitFor(async () => expect(await bucketOnServer(api, 'fx-card-2')).toBeNull());
+    expect(within(row('fx-card-2')!).getByText('Unsorted')).toBeTruthy();
+  });
+
+  it('number keys toggle the brush, but not while typing in search', async () => {
+    const user = userEvent.setup();
+    await openAll();
+    await user.keyboard('3');
+    expect(brushBtn('I pay').getAttribute('aria-pressed')).toBe('true');
+    await user.keyboard('3');
+    expect(brushBtn('I pay').getAttribute('aria-pressed')).toBe('false');
+    await user.keyboard('12');
+    expect(brushBtn('Budget').getAttribute('aria-pressed')).toBe('true');
+    expect(brushBtn('Parents pay').getAttribute('aria-pressed')).toBe('false');
+    await user.keyboard('{Escape}');
+    const search = screen.getByRole('searchbox', { name: 'Search transactions' });
+    await user.type(search, 'chipotle 2');
+    expect((search as HTMLInputElement).value).toBe('chipotle 2');
+    expect(brushBtn('Budget').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('"/" focuses search here, not capture; Escape clears it, then stops the brush', async () => {
+    const user = userEvent.setup();
+    await openAll();
+    const search = screen.getByRole('searchbox', { name: 'Search transactions' });
+    await user.keyboard('1');
+    await user.keyboard('/');
+    expect(document.activeElement).toBe(search);
+    await user.keyboard('uber');
+    await user.keyboard('{Escape}');
+    expect((search as HTMLInputElement).value).toBe('');
+    expect(document.activeElement).toBe(search);
+    expect(brushBtn('Parents pay').getAttribute('aria-pressed')).toBe('true');
+    await user.keyboard('{Escape}');
+    expect(brushBtn('Parents pay').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('search matches merchant, bank text and note, combines with Show, and sums what’s shown', async () => {
+    const user = userEvent.setup();
+    const api = await openAll((a) => a.setFinanceNote('fx-card-6', 'split with sam'));
+    const search = screen.getByRole('searchbox', { name: 'Search transactions' });
+    expect(screen.queryByText(/\d+ rows? · /)).toBeNull(); // nothing narrowed, no summary
+    await user.type(search, 'chipotle');
+    const shown = ids();
+    expect(shown).toContain('fx-card-2'); // merchant
+    expect(shown.some((id) => id !== undefined && /^fx-card-(b-)?\d+$/.test(id))).toBe(true);
+    const txns = await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' });
+    // DoorDash's descriptor is "DD *DOORDASH CHIPOTLE" — the bank text matches too.
+    const doordash = txns.filter((t) => t.merchantName === 'DoorDash').map((t) => t.id);
+    expect(shown.some((id) => doordash.includes(id!))).toBe(true);
+    expect(screen.getByText(new RegExp(`^${shown.length} rows · \\$`))).toBeTruthy();
+    await user.click(showChip('Budget'));
+    await waitFor(() => expect(ids()).toEqual([]));
+    await user.click(showChip('All'));
+    await user.clear(search);
+    await waitFor(() => expect(row('fx-card-6')).toBeTruthy());
+    await user.type(search, 'sam');
+    await waitFor(() => expect(ids()).toEqual(['fx-card-6']));
+    expect(screen.getByText(/^1 row · /)).toBeTruthy();
+  });
+
+  it('changing the search ends the painted rows’ stay, and the detail opens again once stopped', async () => {
+    const user = userEvent.setup();
+    const api = await openAll();
+    await user.click(showChip('Unsorted'));
+    await user.click(brushBtn('Budget'));
+    await user.click(row('fx-card-2')!);
+    await waitFor(async () => expect(await bucketOnServer(api, 'fx-card-2')).toBe('budget'));
+    await user.type(screen.getByRole('searchbox', { name: 'Search transactions' }), 'c');
+    await waitFor(() => expect(row('fx-card-2')).toBeNull());
+    // jsdom focuses a clicked button, so Done hands focus to its toggle here; Safari focuses nothing on
+    // a tap, so there the plan never runs and focus stays where the tap left it.
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(document.activeElement).toBe(brushBtn('Budget'));
+    await user.click(row('fx-card-4')!);
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+  });
+});
+
+describe('All tab: a failed paint', () => {
+  it('still alerts after the row left the list, and the row goes back to what’s saved', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    let reject!: (e: Error) => void;
+    vi.spyOn(api, 'setFinanceBucket').mockImplementation(
+      () => new Promise((_, rej) => (reject = rej)),
+    );
+    renderApp({ api, path: '/finances/all' });
+    const show = await screen.findByRole('group', { name: 'Show' });
+    await user.click(within(show).getByRole('button', { name: 'Unsorted' }));
+    await user.keyboard('2');
+    const painted = document.querySelector<HTMLElement>('[data-txn-id="fx-card-2"]')!;
+    await user.click(painted);
+    await user.keyboard('{Escape}'); // the brush is down: the painted row leaves the Unsorted list
+    await waitFor(() => expect(document.querySelector('[data-txn-id="fx-card-2"]')).toBeNull());
+    await act(async () => reject(new Error('offline')));
+    expect(await screen.findByText(/Couldn.t save that sort/)).toBeTruthy();
+    // The refetch puts it back where the server has it: unsorted, so listed again.
+    await waitFor(() => expect(document.querySelector('[data-txn-id="fx-card-2"]')).toBeTruthy());
   });
 });
 

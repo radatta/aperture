@@ -26,9 +26,9 @@ import { refundMeta } from './refundMeta';
 import type { FinanceView } from './useFinanceData';
 
 // The batch sort: every unsorted charge in the current AND previous period, grouped by merchant,
-// biggest first. One press sorts a whole group (keys 1/2/3 when it has focus), "Always" also saves a
-// rule so that merchant never comes back, and focus moves on to the next group — built for sitting
-// down mid- or end-of-cycle and clearing the lot, not for sorting as charges land.
+// biggest first. One press sorts a whole group (keys 1–4 when it has focus; 4 = Not spending),
+// "Always" also saves a rule so that merchant never comes back, and focus moves on to the next group —
+// built for sitting down mid- or end-of-cycle and clearing the lot, not for sorting as charges land.
 export function SortQueue({
   overview,
   view,
@@ -110,8 +110,9 @@ export function SortQueue({
         {groups.reduce((n, g) => n + g.txns.length, 0)} charges from {groups.length} places. Focus a
         group and press{' '}
         <span className="whitespace-nowrap">
-          <Kbd>1</Kbd> <Kbd>2</Kbd> <Kbd>3</Kbd>.
+          <Kbd>1</Kbd> <Kbd>2</Kbd> <Kbd>3</Kbd>
         </span>
+        , or <Kbd>4</Kbd> if it isn&apos;t spending.
       </Text>
       {setBucket.isError && (
         <div role="alert">
@@ -195,7 +196,7 @@ function GroupCard({
       ref={cardRef}
       role="group"
       tabIndex={0}
-      aria-keyshortcuts="1 2 3"
+      aria-keyshortcuts={FINANCE_BUCKETS.map((_, i) => i + 1).join(' ')}
       aria-describedby="sort-help"
       aria-label={`${group.label}, ${group.txns.length} ${group.txns.length === 1 ? 'charge' : 'charges'}, ${fmtSigned(group.totalCents)}`}
       onKeyDown={(e) => {
@@ -246,7 +247,14 @@ function GroupCard({
       )}
       <div className="flex flex-wrap items-center gap-2">
         {FINANCE_BUCKETS.map((b, i) => (
-          <Button key={b} size="sm" variant="ghost" onClick={() => sortAll(b)}>
+          <Button
+            key={b}
+            size="sm"
+            variant="ghost"
+            // Set apart: Not spending isn't a fourth spending bucket.
+            className={b === 'not_spending' ? 'sm:ml-2' : undefined}
+            onClick={() => sortAll(b)}
+          >
             <span className="mr-1.5 text-xs text-ink-muted">{i + 1}</span>
             {FINANCE_BUCKET_LABELS[b]}
           </Button>

@@ -114,8 +114,10 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   those match the page; a `from`/`to` window reaching past that range derives only the outside rows
   separately (over the window padded back 31 days) and never re-derives the page's. Without a window,
   `unsorted: true` is exactly the Sort queue (= the overview's `toSort.count`) and `bucket` is the page's
-  bucket chip (hidden-account rows included, flagged). `merchant` is a case-insensitive substring, and
-  `totalUsd` is the net sum of **every** match — the answer to "how much at X", even when the list is
+  bucket chip (hidden-account rows included, flagged; `not_spending` too — sorted, but in none of the
+  overview's `buckets` totals). `merchant` is a case-insensitive substring, and
+  `totalUsd` is the net sum of **every** match (`netCents`; the bucket and merchant filters are the All tab's
+  `matchesFinanceFilter` / `matchesFinanceText`, without notes) — the answer to "how much at X", even when the list is
   truncated. Hidden accounts are listed with `hidden: true` and excluded from the overview's totals.
   **`today`** is optional: omitted, the server takes the user's day in `USER_TIME_ZONE`
   (America/Los_Angeles) at their `dayStartHour` (`dayKeyInZone`), and the result says which

@@ -166,6 +166,12 @@ export function fixtureHistory(today: string): PlaidTransaction[] {
       'TRANSFER_OUT',
       'TRANSFER_OUT_ACCOUNT_TRANSFER',
     ]),
+    // Money out that isn't spending: a brokerage deposit from savings, no matching inflow — the
+    // row "Not spending" exists for.
+    txn('fx-brokerage', savings, addDays(today, -6), 350, 'BROKERAGE DES:FUNDS', 'Brokerage', [
+      'TRANSFER_OUT',
+      'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS',
+    ]),
     // Card credits: the Amazon order from 8 days ago returned in full, and a partial Target refund
     // of a charge from the previous period. Both land unsorted until linked to their charges.
     txn('fx-refund-1', card, addDays(today, -3), -34.99, 'AMAZON MKTPL*2K4LQ09', 'Amazon', [

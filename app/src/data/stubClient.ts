@@ -16,6 +16,7 @@ import {
   FINANCE_DEFAULT_PAYMENT_DAY,
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
+  financeBucketError,
   FIXTURE_ACCOUNTS,
   FIXTURE_INSTITUTION,
   FIXTURE_ITEM_ID,
@@ -1183,6 +1184,8 @@ class StubClient implements ApiClient {
       .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   }
   async setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]> {
+    const bucketError = financeBucketError(input.bucket, { nullable: true });
+    if (bucketError) throw new Error(bucketError);
     if (input.rule && input.bucket === null) throw new Error('A rule needs a bucket');
     for (const id of input.ids) this.mustFind(this.store.financeTransactions, id);
     const changed = new Map<string, FinanceTransaction>();
@@ -1270,6 +1273,8 @@ class StubClient implements ApiClient {
   }
   // One live rule per pattern: saving an existing pattern updates it.
   async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
+    const bucketError = financeBucketError(input.bucket, { nullable: false });
+    if (bucketError) throw new Error(bucketError);
     const pattern = normalizeRulePattern(input.pattern);
     if (!pattern) throw new Error('A rule needs a pattern');
     const fields = { pattern, bucket: input.bucket, active: input.active ?? true };

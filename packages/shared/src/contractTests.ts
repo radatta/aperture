@@ -953,6 +953,53 @@ export function runApiContract(
       ).rejects.toThrow();
     });
 
+    it('finance: "Not spending" leaves every total and the queue; Always makes it stick', async () => {
+      await connect();
+      const o = await api.getFinanceOverview({ today: finToday() });
+      const txns = await api.listFinanceTransactions(await finRange());
+      const uber = txns.filter((t) => t.merchantName === 'Uber' && t.bucket === null);
+      expect(uber.length).toBeGreaterThan(0);
+      const changed = await api.setFinanceBucket({
+        ids: [uber[0]!.id],
+        bucket: 'not_spending',
+        rule: { pattern: 'uber' },
+      });
+      expect(changed.every((t) => t.bucket === 'not_spending')).toBe(true);
+      const changedIds = changed.map((t) => t.id);
+      for (const t of uber) expect(changedIds).toContain(t.id); // the sweep reached every one
+      expect(changed.find((t) => t.id === uber[0]!.id)!.bucketSetBy).toBe('user');
+      expect(
+        changed.filter((t) => t.id !== uber[0]!.id).every((t) => t.bucketSetBy === 'rule'),
+      ).toBe(true);
+      expect((await api.listFinanceRules()).map((r) => [r.pattern, r.bucket])).toEqual([
+        ['uber', 'not_spending'],
+      ]);
+      const after = await api.getFinanceOverview({ today: finToday() });
+      expect(after.unsortedCount).toBe(o.unsortedCount - uber.length);
+      expect(after.unsortedCents).toBe(
+        o.unsortedCents - uber.reduce((n, t) => n + t.rawAmountCents, 0),
+      );
+      expect(after.buckets).toEqual(o.buckets);
+      expect(after.spentCents).toBe(o.spentCents);
+
+      // Budget → Not spending puts spent back exactly where it was.
+      const inv = txns.find((t) => t.id === 'fx-brokerage')!;
+      await api.setFinanceBucket({ ids: [inv.id], bucket: 'budget' });
+      const inBudget = await api.getFinanceOverview({ today: finToday() });
+      expect(inBudget.spentCents).toBe(after.spentCents + inv.rawAmountCents);
+      await api.setFinanceBucket({ ids: [inv.id], bucket: 'not_spending' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        after.spentCents,
+      );
+
+      await expect(
+        api.setFinanceBucket({ ids: [inv.id], bucket: 'bogus' as never }),
+      ).rejects.toThrow('Unknown bucket: bogus');
+      await expect(
+        api.upsertFinanceRule({ pattern: 'x', bucket: 'bogus' as never }),
+      ).rejects.toThrow('Unknown bucket: bogus');
+    });
+
     it('finance: refuses to link the same accounts twice', async () => {
       await connect();
       await expect(connect()).rejects.toThrow(/already/i);
@@ -972,6 +1019,15 @@ export function runApiContract(
       expect(posted.bucket).toBe('parents_pay');
       expect(posted.note).toBe('dinner');
       expect(posted.pending).toBe(false);
+    });
+
+    it('finance: a posted charge inherits a pending row’s Not spending', async () => {
+      await connect();
+      await api.setFinanceBucket({ ids: ['fx-pending-1'], bucket: 'not_spending' });
+      advance(1000);
+      await api.requestFinanceSync({ refresh: false });
+      const txns = await api.listFinanceTransactions(await finRange());
+      expect(txns.find((t) => t.id === 'fx-posted-1')!.bucket).toBe('not_spending');
     });
 
     it('finance: refresh has a cooldown', async () => {

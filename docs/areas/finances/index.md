@@ -8,7 +8,7 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 ## 1. Shape
 
 - **Page:** `/finances` with tabs **Sort** (the batch queue), **All** (the ledger of the current and
-  previous period) and **Rules** — real routes, like Recruiting. It's an AppNav link, not a dock item (one
+  previous period, with search and a "Sort into" brush — below) and **Rules** — real routes, like Recruiting. It's an AppNav link, not a dock item (one
   dock, [CONVENTIONS](../../product/CONVENTIONS.md)).
 - **Home:** one line, never a card (why: [PRODUCT §4b](../../product/PRODUCT.md#4b-the-lighter-modules)).
   Morning: "$X left of $600 · N to sort"; Night: "N charges to sort", only when non-zero
@@ -17,10 +17,36 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - **Header:** budget left, the period and its day, and a nudge to mark a detected card payment — a newer
   payment on a marked period, or on the payment-day fallback the last one (when a card is linked).
 
+### The All tab: sort into and search
+
+- **Sort into** (a brush): press **1–4** or tap a bucket to arm it, then tap rows to sort them one at a
+  time — the fix for rows the Sort tab's merchant grouping can't batch (peer-to-peer payments each carry their own name).
+  Tapping a row that already has the armed bucket sets it back to Unsorted. Only rows the Sort tab could
+  sort take paint (`view.sortable`, minus refunds riding a charge); the rest go inert (`aria-disabled`)
+  while armed. No rules from here — **Always** stays a Sort-tab thing. Esc, **Done**, or the armed key
+  again stops it.
+- **Painted rows stay put** until you stop or change the Show chip or search, so the list never moves
+  under your finger (a painted row may no longer match the chip). Each row saves through its own
+  per-transaction queue; the refetch waits for the last row's save (`otherEditsInFlight`), so a quick run
+  of paints never flickers a tag back.
+- **Search** (`/` focuses it on this tab — see CONVENTIONS → Page keyboard shortcuts): a case-insensitive
+  substring of the merchant, the bank's descriptor, or the note (`matchesFinanceText`), combined with the
+  **Show** chip (`matchesFinanceFilter`). While either narrows the list it shows "N rows · $X", the **net**
+  of what's shown (`netCents`: money in subtracts) — the same total the MCP's `totalUsd` uses. Search covers
+  the two loaded periods only. While the brush holds painted rows in place, the count includes them even
+  if they no longer match the chip; it agrees again once you stop.
+
 ## 2. Buckets and money
 
 - Buckets `parents_pay` / `budget` / `i_pay` (keys **1 / 2 / 3** on a focused Sort group). Only **Budget**
   counts against the budget; the other two are tracked, not limited.
+- **Not spending** (`not_spending`, key **4**) is for money out that isn't spending — a brokerage deposit,
+  a cash withdrawal, a top-up of a payment app. Sorting a row there takes it out of the queue and out of every
+  total (`summarizePeriod` skips it; the overview's `buckets` stay the three spending ones). It's a stored
+  bucket value, not a flag, so rules, **Always** and pending→posted carry it like the others. Real data
+  needs it: an outflow to an account you haven't linked can't pair as a transfer, so it lands in Sort as a
+  charge. On **All** these rows stay listed (the ledger matches the bank), muted like transfers.
+  `financeBucketError` makes both ApiClient impls refuse an unknown bucket the same way.
 - **Sign:** `rawAmountCents` stores Plaid's number, **positive = money out**. Normalisation is read-time:
   `amountOf` applies the account's `signOverride` (`flip`), so flipping an account changes nothing stored.
 - **To sort** counts unsorted charges in the current **and** previous period (both are sortable).
@@ -54,6 +80,7 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   `chargeSideError`, so the page never offers a link the server refuses): both sides on shown accounts, no
   payment or transfer, the refund no larger than the charge, and the charge dated no more than
   `REFUND_DATE_SLACK_DAYS` (3) after the refund.
+- A refund linked to a **Not spending** charge is Not spending too — out of every total, like its charge.
 - Suggestions (`suggestRefundMatches`) look back `REFUND_MATCH_WINDOW_DAYS` (90): same-merchant charges
   first, otherwise any merchant, top five — ranked same account → smallest leftover (an exact match
   first) → nearest date → posted before pending → id.
@@ -65,7 +92,8 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 "Always put *pattern* in *bucket*": a case-insensitive substring of the merchant; the longest active
 pattern wins (`applyRules`, also matched against the digit-stripped `merchantKey`). New rows get rules at
 sync time. Ticking **Always** while sorting saves the rule and sorts every currently-unsorted match (skipping
-linked refunds and period marks). A rule never re-sorts a charge you sorted by hand.
+linked refunds and period marks). A rule never re-sorts a charge you sorted by hand. A rule can target Not
+spending ("always the brokerage"); retargeting a rule doesn't re-sort rows it already sorted.
 
 ## 6. Sync
 
@@ -176,9 +204,15 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **Bank of America:** `ins_127989`, OAuth. BofA hosts its own account picker — tick checking, savings
   and the card. Deposit history ~18 months; card = current cycle + 11 previous. Consent lasts 12 months;
   `PENDING_DISCONNECT` a week before, then `ITEM_LOGIN_REQUIRED` → reconnect.
-- **Unverified until the first real sync:** the card-payment sign (Plaid's docs disagree), whether BofA
-  sends pending rows, the checking-side payment descriptor, refresh latency, and how long NOT_READY lasts
-  after linking.
+- **Seen on the first real BofA sync (2026-09-28):** a card payment arrives as a pair whose descriptors
+  share one confirmation code — card side money in (category `TRANSFER_IN_ACCOUNT_TRANSFER`), checking
+  side money out (`LOAN_PAYMENTS_CREDIT_CARD_PAYMENT`). Purchases are positive on the card, refunds negative, and the card's
+  `current` balance is what's owed — no flip needed. BofA **does** send pending rows. Still unmeasured:
+  refresh latency and how long NOT_READY lasts after linking. (Sandbox's canned "AUTOMATIC PAYMENT" is
+  money out on the card — Sandbox data, not BofA's shape.) Consequence (inferred, not yet seen): only the
+  checking side carries the card-payment category, so a card side that can't pair — checking hidden or
+  unlinked, or the two posted more than 3 days apart — reads as a **refund** and lands in Sort. Mark it as
+  the period start, or teach the payment hint `TRANSFER_IN_ACCOUNT_TRANSFER` on a credit account.
 - **Why Plaid:** Teller announced it was withdrawing its API (2026-07); SimpleFIN Bridge costs money,
   allows ~24 requests a day with no on-demand refresh, and carries no categories. Plaid Trial is $0 with
   real production data, refresh and categories.
@@ -222,7 +256,9 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   4. Remove the bank in the app — revokes at Plaid, deletes the token, tombstones the rows; the slot stays
      spent.
   5. Revert the PR — remove the bank first, since the revert removes the code that calls `/item/remove`.
-     The `fin#` rows (RETAIN table) and the SSM credentials stay.
+     The `fin#` rows (RETAIN table) and the SSM credentials stay. Reverting past Not spending: first set
+     every Not-spending row back to Unsorted and delete or retarget Not-spending rules — older code throws on
+     the unknown bucket and the overview 500s.
 
 ## 13. What each test surface proves
 
