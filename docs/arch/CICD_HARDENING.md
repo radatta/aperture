@@ -96,6 +96,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 - Dedicated workflow (not folded into PR-only `pr.yml`): triggers `pull_request` + `push`.
 - `actions/checkout@v7` with `fetch-depth: 0` (full history), then `gitleaks/gitleaks-action@<verified-tag>`. No license key for a personal repo.
 - False positives → `.gitleaksignore` fingerprints. Repo already keeps secrets out of git (`.secrets/`, `cdk-outputs.*.json` gitignored; origin secret injected via env), so findings should be rare.
+  - **Prefer a secret-value allowlist in `.gitleaks.toml`** (default rules kept via `[extend] useDefault`). A fingerprint pins commit + line, so it stops matching once the PR is squash-merged. First entry (2026-09-28): the RPC name `exchangePlaidPublicToken` is exactly 24 alphanumerics, which trips `plaid-client-id`.
 - **Dependency to justify first** (it's a GitHub Action, not npm, but still a supply-chain surface — pin by tag/SHA).
 
 ## Item 4 — Dependabot (scoped)

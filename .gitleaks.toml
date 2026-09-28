@@ -1,0 +1,9 @@
+# gitleaks config (CI: .github/workflows/gitleaks.yml). Default rules, plus allowlisted false positives.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known false positives"
+# plaid-client-id matches "…Plaid…'," followed by any 24-char alphanumeric; the RPC method name
+# exchangePlaidPublicToken is exactly 24 chars (packages/shared/src/rpc.ts). Not a credential.
+regexes = ['''^exchangePlaidPublicToken$''']
