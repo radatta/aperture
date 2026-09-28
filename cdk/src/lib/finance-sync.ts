@@ -32,7 +32,7 @@ export class FinanceSync extends Construct {
   constructor(scope: Construct, id: string, props: FinanceSyncProps) {
     super(scope, id);
     const { stage, table, plaidEnv, plaidSsmBase, deviceUserId } = props;
-    const { partition, region, account } = Stack.of(this);
+    const { region, account } = Stack.of(this);
 
     // Created here (not left to Lambda) so it gets a retention; safe because the group is new.
     const logGroup = new logs.LogGroup(this, 'Logs', {
@@ -89,13 +89,18 @@ export class FinanceSync extends Construct {
     // the exact function ARN (the L2 target grants `arn:*`, another hash-embedded cdk-nag ack). Gated on
     // deviceUserId, like DEVICE_USER_ID: without it there's no user to sync.
     if (!deviceUserId) return;
+    // Its own group: Scheduler checks the trust policy against the schedule-group ARN, never the
+    // schedule's (a schedule-scoped SourceArn fails CreateSchedule), so a one-schedule group is the
+    // only way to keep "only this schedule may assume the role" (confused-deputy guard).
+    const group = new scheduler.CfnScheduleGroup(this, 'ScheduleGroup', {
+      name: `aperture-finance-${stage}`,
+    });
     const role = new iam.Role(this, 'ScheduleRole', {
       assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com', {
-        // Only this schedule may assume it (confused-deputy guard), not any schedule in the account.
         conditions: {
-          StringEquals: { 'aws:SourceAccount': account },
-          ArnLike: {
-            'aws:SourceArn': `arn:${partition}:scheduler:${region}:${account}:schedule/default/aperture-finance-sync-${stage}`,
+          StringEquals: {
+            'aws:SourceAccount': account,
+            'aws:SourceArn': group.attrArn,
           },
         },
       }),
@@ -108,6 +113,7 @@ export class FinanceSync extends Construct {
     );
     new scheduler.CfnSchedule(this, 'Schedule', {
       name: `aperture-finance-sync-${stage}`,
+      groupName: group.ref, // Ref is the group name; also orders the schedule after the group
       scheduleExpression: 'cron(15 5,15,20 * * ? *)',
       scheduleExpressionTimezone: 'America/Los_Angeles',
       flexibleTimeWindow: { mode: 'OFF' },

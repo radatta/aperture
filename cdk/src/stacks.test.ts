@@ -531,10 +531,10 @@ describe('ApertureAppStack finance sync', () => {
         RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 },
       }),
     });
-    expect(JSON.stringify(app.findResources('AWS::IAM::Role'))).toContain(
-      ':schedule/default/aperture-finance-sync-dev',
-    );
+    app.hasResourceProperties('AWS::Scheduler::ScheduleGroup', { Name: 'aperture-finance-dev' });
     const schedule = Object.values(app.findResources('AWS::Scheduler::Schedule'))[0]!;
+    const [groupId] = Object.keys(app.findResources('AWS::Scheduler::ScheduleGroup'));
+    expect((schedule.Properties as { GroupName: unknown }).GroupName).toEqual({ Ref: groupId });
     const roleArn = (schedule.Properties as { Target: { RoleArn: unknown } }).Target.RoleArn;
     expect(policiesOfRole(roleArn)).toEqual([
       {
@@ -543,19 +543,14 @@ describe('ApertureAppStack finance sync', () => {
         Resource: { 'Fn::GetAtt': [syncFn().id, 'Arn'] },
       },
     ]);
-    app.hasResourceProperties('AWS::IAM::Role', {
-      AssumeRolePolicyDocument: {
-        Statement: [
-          Match.objectLike({
-            Principal: { Service: 'scheduler.amazonaws.com' },
-            Condition: {
-              StringEquals: { 'aws:SourceAccount': '111111111111' },
-              ArnLike: { 'aws:SourceArn': Match.anyValue() },
-            },
-          }),
-        ],
-      },
-    });
+    const roleId = (roleArn as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
+    const role = app.findResources('AWS::IAM::Role')[roleId]!;
+    const [trust] = role.Properties.AssumeRolePolicyDocument.Statement;
+    expect(trust.Principal).toEqual({ Service: 'scheduler.amazonaws.com' });
+    expect(Object.keys(trust.Condition)).toEqual(['StringEquals']);
+    expect(trust.Condition.StringEquals['aws:SourceAccount']).toBe('111111111111');
+    // Scheduler matches SourceArn against the schedule group; a schedule ARN fails CreateSchedule.
+    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({ 'Fn::GetAtt': [groupId, 'Arn'] });
   });
 });
 
@@ -596,6 +591,7 @@ describe('ApertureAppStack finance sync by stage', () => {
   it('no device user → no schedule (the sync still runs on Refresh)', () => {
     const t = build('dev');
     t.resourceCountIs('AWS::Scheduler::Schedule', 0);
+    t.resourceCountIs('AWS::Scheduler::ScheduleGroup', 0);
     t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'aperture-finance-sync-dev' });
   });
 });

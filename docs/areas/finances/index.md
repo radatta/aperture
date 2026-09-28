@@ -213,8 +213,8 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   what you owe. If the card reads inverted, flip it in the accounts strip.
 - **Disabling, least to most:**
   1. Flip a mis-signed account.
-  2. Disable the schedule: `aws scheduler update-schedule --region us-west-1 --name
-     aperture-finance-sync-<stage> --state DISABLED --schedule-expression 'cron(15 5,15,20 * * ? *)'
+  2. Disable the schedule: `aws scheduler update-schedule --region us-west-1 --group-name
+     aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED --schedule-expression 'cron(15 5,15,20 * * ? *)'
      --schedule-expression-timezone America/Los_Angeles --flexible-time-window Mode=OFF --target
      '<Target JSON from get-schedule>'`. This drifts from CloudFormation — a later deploy that touches the
      schedule may re-enable it.
