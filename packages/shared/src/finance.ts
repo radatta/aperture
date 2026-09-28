@@ -1,4 +1,4 @@
-// Finances — the three-bucket budget (ported from penny-pilot) over Plaid-synced bank data.
+// Finances — the three-bucket budget, plus Not spending (ported from penny-pilot) over Plaid-synced bank data.
 // Entities, DTOs, and every pure rule both ApiClient impls share: sign normalisation, internal-move
 // matching, the billing period, the overview numbers, rules, and sync-page reconciliation.
 //
@@ -11,13 +11,28 @@ import type { PlaidTransaction } from './plaidTypes';
 import { addDays, daysBetween } from './dates';
 
 // --- Entities --------------------------------------------------------------
-export type FinanceBucket = 'parents_pay' | 'budget' | 'i_pay';
-export const FINANCE_BUCKETS: FinanceBucket[] = ['parents_pay', 'budget', 'i_pay']; // order = keys 1/2/3
+// not_spending: money out that isn't spending (a brokerage deposit, a cash withdrawal) — sorted, so it
+// leaves the queue, but in no total. A stored bucket value, so rules and sync carry it like the others.
+export type FinanceBucket = 'parents_pay' | 'budget' | 'i_pay' | 'not_spending';
+export type FinanceSpendBucket = Exclude<FinanceBucket, 'not_spending'>;
+export const FINANCE_SPEND_BUCKETS: FinanceSpendBucket[] = ['parents_pay', 'budget', 'i_pay'];
+export const FINANCE_BUCKETS: FinanceBucket[] = [...FINANCE_SPEND_BUCKETS, 'not_spending']; // order = keys 1–4
 export const FINANCE_BUCKET_LABELS: Record<FinanceBucket, string> = {
   parents_pay: 'Parents pay',
   budget: 'Budget',
   i_pay: 'I pay',
+  not_spending: 'Not spending',
 };
+export const isFinanceBucket = (v: unknown): v is FinanceBucket =>
+  typeof v === 'string' && (FINANCE_BUCKETS as string[]).includes(v);
+// A membership test, not `!== 'not_spending'`, so a stray stored value is skipped rather than totalled.
+export const isSpendBucket = (b: FinanceBucket): b is FinanceSpendBucket =>
+  (FINANCE_SPEND_BUCKETS as string[]).includes(b);
+// Both ApiClient impls check a written bucket with this, so they refuse the same values the same way.
+export function financeBucketError(v: unknown, opts: { nullable: boolean }): string | null {
+  if (v === null && opts.nullable) return null;
+  return isFinanceBucket(v) ? null : `Unknown bucket: ${String(v)}`;
+}
 
 export type FinanceSource = 'plaid'; // 'csv' reserved
 export type FinancePeriodOverride = 'current' | 'previous';
@@ -138,7 +153,7 @@ export interface FinanceOverview {
   budgetCents: number;
   spentCents: number; // the budget bucket's total
   leftCents: number; // budgetCents - spentCents (negative = over)
-  buckets: Record<FinanceBucket, FinanceBucketTotal>;
+  buckets: Record<FinanceSpendBucket, FinanceBucketTotal>; // not_spending is in no total
   unsortedCount: number; // current AND previous window — both are sortable
   unsortedCents: number;
   accounts: FinanceAccount[];
@@ -644,7 +659,7 @@ export function summarizePeriod(input: {
   const { period, txns, accounts, budgetCents } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const moves = detectInternalMoves(txns, accounts);
-  const buckets: Record<FinanceBucket, FinanceBucketTotal> = {
+  const buckets: Record<FinanceSpendBucket, FinanceBucketTotal> = {
     parents_pay: { totalCents: 0, count: 0 },
     budget: { totalCents: 0, count: 0 },
     i_pay: { totalCents: 0, count: 0 },
@@ -665,6 +680,7 @@ export function summarizePeriod(input: {
     const cents = amount(t);
     const linked = links.has(t.id); // rides on its charge: nets its money, never adds to a count
     const bucket = bucketOf(t, links);
+    if (bucket !== null && !isSpendBucket(bucket)) continue; // not spending: no total, never to sort
     if (bucket === null) {
       if (needsSorting(t, links, refunded, cents)) unsortedCount += 1;
       unsortedCents += cents;
@@ -736,6 +752,39 @@ export function deriveFinanceView(
     refunded: refundedCentsByCharge(links, new Map(allTxns.map((t) => [t.id, t])), amount),
   };
 }
+
+// --- List filters (the All tab and the MCP list tool share them) ------------
+export type FinanceListFilter = 'all' | 'unsorted' | FinanceBucket;
+
+// A bucket chip (or Unsorted) only shows rows that can carry a bucket: charges, card credits, and
+// deposits linked as refunds (which take their charge's bucket).
+export function matchesFinanceFilter(
+  t: FinanceTransaction,
+  view: Pick<FinanceView, 'kindOf' | 'links'>,
+  f: FinanceListFilter,
+): boolean {
+  if (f === 'all') return true;
+  if (!isSortableKind(view.kindOf(t)) && !view.links.has(t.id)) return false;
+  return f === 'unsorted' ? isUnsorted(t, view.links) : bucketOf(t, view.links) === f;
+}
+
+// A case-insensitive substring of the merchant or the bank's descriptor (`needle` already lowercased),
+// and of the note when asked — the page searches notes, the MCP `merchant` filter doesn't.
+export function matchesFinanceText(
+  t: FinanceTransaction,
+  needle: string,
+  opts: { note?: boolean } = {},
+): boolean {
+  return (
+    merchantText(t).includes(needle) ||
+    t.name.toLowerCase().includes(needle) ||
+    (opts.note === true && t.note !== null && t.note.toLowerCase().includes(needle))
+  );
+}
+
+// The one list-total rule: net, so money in subtracts. The All tab's summary and the MCP's totalUsd.
+export const netCents = <T>(rows: T[], cents: (r: T) => number): number =>
+  rows.reduce((n, r) => n + cents(r), 0);
 
 export function buildFinanceOverview(input: {
   today: string;

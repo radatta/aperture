@@ -1,5 +1,6 @@
 import {
   FINANCE_BUCKETS,
+  FINANCE_SPEND_BUCKETS,
   FINANCE_BUCKET_LABELS,
   addDays,
   bucketOf,
@@ -9,9 +10,10 @@ import {
   financeListRange,
   financeSyncErrorMessage,
   isDayKey,
-  isSortableKind,
-  merchantText,
+  matchesFinanceFilter,
+  matchesFinanceText,
   needsSorting,
+  netCents,
   periodOf,
 } from '@aperture/shared';
 import type {
@@ -94,7 +96,7 @@ export const FINANCE_TOOLS: Tool[] = [
   {
     name: 'get_finance_overview',
     description: [
-      'The budget at a glance — "how much budget is left?". The current billing period (from the card payment the user marked, else their payment day), budget / spent / left (left < 0 = over), totals per bucket (parents_pay "Parents pay", budget "Budget", i_pay "I pay"), how many charges are still to sort, account balances, and each bank\'s sync status.',
+      'The budget at a glance — "how much budget is left?". The current billing period (from the card payment the user marked, else their payment day), budget / spent / left (left < 0 = over), totals per bucket (parents_pay "Parents pay", budget "Budget", i_pay "I pay"; rows the user sorted as not_spending "Not spending" — a brokerage deposit, a cash withdrawal — are in no total), how many charges are still to sort, account balances, and each bank\'s sync status.',
       "Hidden accounts are listed (hidden: true) but excluded from every total. A credit account's balance is the amount owed.",
       SIGN,
       TODAY_ARG,
@@ -139,7 +141,7 @@ export const FINANCE_TOOLS: Tool[] = [
         leftUsd: usd(o.leftCents),
         overBudget: o.leftCents < 0,
         buckets: Object.fromEntries(
-          FINANCE_BUCKETS.map((b) => [
+          FINANCE_SPEND_BUCKETS.map((b) => [
             b,
             {
               label: FINANCE_BUCKET_LABELS[b],
@@ -192,7 +194,7 @@ export const FINANCE_TOOLS: Tool[] = [
     description: [
       'Bank/card transactions with how the user sorted them — "what did I spend at Amazon this period?", "what\'s still unsorted?".',
       'Default: the current and previous billing periods. Or pass from + to (YYYY-MM-DD, both or neither, ≤ 366 days).',
-      'unsorted: true → the app\'s to-sort queue (without from/to, exactly get_finance_overview toSort.count). bucket → one bucket (parents_pay | budget | i_pay), like the app\'s bucket chips; not with unsorted. merchant → a case-insensitive substring of the merchant/name ("amazon").',
+      'unsorted: true → the app\'s to-sort queue (without from/to, exactly get_finance_overview toSort.count). bucket → one bucket (parents_pay | budget | i_pay | not_spending), like the app\'s bucket chips; not with unsorted. not_spending rows are sorted but outside every total. merchant → a case-insensitive substring of the merchant/name ("amazon").',
       'totalUsd is the net sum of EVERY match (not just the returned page) — use it for "how much did I spend at X", never a sum of a truncated list.',
       "kind: expense (a charge) | refund | income | transfer (between the user's own accounts) | card_payment. Only expense and refund rows (and deposits linked as refunds) count toward buckets.",
       "bucket is resolved through refund links (a linked refund takes its charge's bucket); period is which billing period it counts in (current | previous | outside).",
@@ -262,12 +264,8 @@ export const FINANCE_TOOLS: Tool[] = [
         (r) =>
           (!unsorted ||
             (isSortable(r) && needsSorting(r.t, r.v.links, r.v.refunded, r.v.amount(r.t)))) &&
-          (!bucket ||
-            ((isSortableKind(r.v.kindOf(r.t)) || r.v.links.has(r.t.id)) &&
-              bucketOf(r.t, r.v.links) === bucket)) &&
-          (!merchant ||
-            merchantText(r.t).includes(merchant) ||
-            r.t.name.toLowerCase().includes(merchant)),
+          (!bucket || matchesFinanceFilter(r.t, r.v, bucket)) &&
+          (!merchant || matchesFinanceText(r.t, merchant)),
       );
 
       const shown = rows.slice(0, limit);
@@ -277,7 +275,7 @@ export const FINANCE_TOOLS: Tool[] = [
         period: { start: o.period.start, end: o.period.end, previous: o.period.previous },
         range: window ?? { from: o.period.previous.start, to: o.period.end },
         total: rows.length,
-        totalUsd: usd(rows.reduce((sum, { t, v }) => sum + v.amount(t), 0)), // net, every match
+        totalUsd: usd(netCents(rows, ({ t, v }) => v.amount(t))), // every match, like the All tab
         returned: shown.length,
         truncated: rows.length > shown.length,
         transactions: shown.map(({ t, v }) => {

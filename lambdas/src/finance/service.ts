@@ -5,6 +5,7 @@ import {
   detectInternalMoves,
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
+  financeBucketError,
   duplicateItemMessage,
   isDuplicateItem,
   normalizeRulePattern,
@@ -96,6 +97,8 @@ export class FinanceService {
 
   // All-or-nothing on unknown ids: every id is checked before the first write.
   async setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]> {
+    const bucketError = financeBucketError(input.bucket, { nullable: true });
+    if (bucketError) throw new Error(bucketError);
     if (input.rule && input.bucket === null) throw new Error('A rule needs a bucket');
     const found = await this.repo.getFinanceTxns(input.ids);
     for (const id of input.ids)
@@ -218,6 +221,8 @@ export class FinanceService {
 
   // One live rule per pattern: saving an existing pattern updates it.
   async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
+    const bucketError = financeBucketError(input.bucket, { nullable: false });
+    if (bucketError) throw new Error(bucketError);
     const pattern = normalizeRulePattern(input.pattern);
     if (!pattern) throw new Error('A rule needs a pattern');
     const fields = { pattern, bucket: input.bucket, active: input.active ?? true };

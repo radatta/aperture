@@ -121,8 +121,9 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
   - Deliberately off the daily home; it's a review surface, not a ritual one.
 - **Finances** — where the money went this billing period. Bank of America syncs in (Plaid) and every
   charge gets sorted into **Parents pay · Budget · I pay**; only Budget counts against the per-period
-  budget ($600). You mark the card payment that ends a period, link refunds to the charges they reverse,
-  and teach it rules ("always put Uber in I pay"). Sorting is a batch pass (keys 1/2/3), not a per-charge
+  budget ($600). Money out that isn't spending (moving money into investments, a cash withdrawal) goes to **Not
+  spending**, in no total. You mark the card payment that ends a period, link refunds to the charges they
+  reverse, and teach it rules ("always put Uber in I pay"). Sorting is a batch pass (keys 1–4), not a per-charge
   chore. The home gets **one line, never a card** — budget left + what's waiting to sort in the morning,
   the sort count at night — because Morning is at its ≤5-element cap. Full design:
   **[finances/](../areas/finances/index.md)**.

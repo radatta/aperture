@@ -10,6 +10,7 @@ import { useCreateLogEntry } from '../../data/hooks/useLog';
 import { useCreateTask } from '../../data/hooks/useTasks';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { useCreateIdea } from '../../data/hooks/useIdeas';
+import { isTypingTarget } from '../../lib/keys';
 import { useAutoGrow } from './useAutoGrow';
 import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode } from './mode';
 
@@ -49,12 +50,12 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
 
   useAutoGrow(inputRef, text);
 
-  // "/" focuses capture from anywhere, unless you're already typing.
+  // "/" focuses capture from anywhere, unless you're already typing or a page claimed it first (the
+  // Finances All tab's search, in the capture phase).
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
-      if (e.key !== '/') return;
-      const el = document.activeElement;
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      if (e.key !== '/' || e.defaultPrevented) return;
+      if (isTypingTarget(document.activeElement)) return;
       e.preventDefault();
       inputRef.current?.focus();
     }

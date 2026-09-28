@@ -217,6 +217,26 @@ describe('list_finance_transactions', () => {
     expect(budget.transactions.every((x) => x.bucket === 'budget')).toBe(true);
   });
 
+  it('Not spending: out of the overview totals and the queue, listed by its own bucket', async () => {
+    const before = await call<OverviewOut>('get_finance_overview');
+    await setup.setFinanceBucket({ ids: ['fx-brokerage'], bucket: 'not_spending' });
+    const o = await overview();
+    const r = await call<OverviewOut>('get_finance_overview');
+    expect(Object.keys(r.buckets).sort()).toEqual(['budget', 'i_pay', 'parents_pay']);
+    expect(r.buckets).toEqual(before.buckets);
+    expect(r.toSort).toEqual({ count: o.unsortedCount, totalUsd: o.unsortedCents / 100 });
+    const q = await call<TxnsOut>('list_finance_transactions', { unsorted: true, limit: 300 });
+    expect(q.transactions.map((x) => x.id)).not.toContain('fx-brokerage');
+    const ns = await call<TxnsOut>('list_finance_transactions', { bucket: 'not_spending' });
+    expect(ns.transactions.map((x) => [x.id, x.bucket])).toEqual([
+      ['fx-brokerage', 'not_spending'],
+    ]);
+    expect(ns.totalUsd).toBe(350);
+    await expect(call('list_finance_transactions', { bucket: 'nope' })).rejects.toThrow(
+      'parents_pay, budget, i_pay, not_spending',
+    );
+  });
+
   it('a from/to window, the limit, and bad args', async () => {
     const w = await call<TxnsOut>('list_finance_transactions', {
       from: '2026-09-20',

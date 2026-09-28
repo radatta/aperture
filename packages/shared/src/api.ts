@@ -392,12 +392,13 @@ export interface ApiClient {
   getAttachmentDownloadUrl(id: string): Promise<string>; // short-lived, minted per view
   deleteAttachment(id: string): Promise<void>;
 
-  // Finances — the three-bucket budget over Plaid-synced bank data (finance.ts). `today` is the client's
+  // Finances — the three-bucket budget (plus Not spending) over Plaid-synced bank data (finance.ts). `today` is the client's
   // day-key; the overview reads FINANCE_OVERVIEW_LOOKBACK_DAYS back from it. Every Plaid call is gated
   // (noop in testMode). Plaid-owned rows use Plaid's ids.
   getFinanceOverview(input: { today: string }): Promise<FinanceOverview>;
   listFinanceTransactions(range: DateRange): Promise<FinanceTransaction[]>; // alive, date desc
-  // Batch bucket set (null = unsort). With `rule`, also saves the rule and applies it to every
+  // Batch bucket set (null = unsort; not_spending = sorted, in no total; an unknown bucket is refused
+  // with financeBucketError's text). With `rule`, also saves the rule and applies it to every
   // currently-unsorted match; returns every row it changed.
   setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]>;
   setFinancePeriodOverride(

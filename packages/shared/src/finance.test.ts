@@ -7,15 +7,20 @@ import {
   classifyTransaction,
   computeFinancePeriod,
   detectInternalMoves,
+  financeBucketError,
   financeSyncErrorMessage,
   groupByMerchant,
+  isFinanceBucket,
   deriveFinanceView,
   financeListRange,
   isDuplicateItem,
   isPeriodStart,
   linkableTransactions,
+  matchesFinanceFilter,
+  matchesFinanceText,
   merchantKey,
   normalizeAmountCents,
+  netCents,
   periodOf,
   periodStartError,
   reconcileSyncPage,
@@ -404,6 +409,112 @@ describe('periodOf + summarizePeriod', () => {
       budgetCents: 60000,
     });
     expect(s.spentCents).toBe(0);
+  });
+});
+
+describe('not_spending', () => {
+  const sum = (txns: FinanceTransaction[]) =>
+    summarizePeriod({ period, txns, accounts: [chk, sav, card], budgetCents: 60000 });
+  const mixed = [
+    ...payments,
+    tx('b1', 'card', '2026-09-20', 4200, { bucket: 'budget' }),
+    tx('p1', 'card', '2026-09-22', 9000, { bucket: 'parents_pay' }),
+    tx('i1', 'card', '2026-09-22', 1200, { bucket: 'i_pay' }),
+    tx('u1', 'card', '2026-09-23', 700),
+  ];
+
+  it('is in no total and never to sort, in either window', () => {
+    const s = sum([
+      ...mixed,
+      tx('inv', 'sav', '2026-09-22', 25000, { bucket: 'not_spending' }), // current
+      tx('cash', 'chk', '2026-09-02', 1500, { bucket: 'not_spending' }), // previous
+    ]);
+    expect(s).toEqual(sum(mixed));
+  });
+
+  it('moving a charge from Budget to Not spending drops spent by exactly its amount', () => {
+    const before = sum([...mixed, tx('x', 'card', '2026-09-21', 2500, { bucket: 'budget' })]);
+    const after = sum([...mixed, tx('x', 'card', '2026-09-21', 2500, { bucket: 'not_spending' })]);
+    expect(before.spentCents - after.spentCents).toBe(2500);
+    expect(after.buckets.budget.count).toBe(before.buckets.budget.count - 1);
+  });
+
+  it('a refund linked to a Not-spending charge follows it out of every total', () => {
+    const charge = tx('c', 'card', '2026-09-20', 5000, { bucket: 'not_spending' });
+    const refund = tx('r', 'card', '2026-09-22', -2000, { refundOfId: 'c' });
+    const links = resolveRefundLinks([charge, refund], (t) => t.rawAmountCents);
+    expect(bucketOf(refund, links)).toBe('not_spending');
+    expect(isUnsorted(refund, links)).toBe(false);
+    expect(isUnsorted(charge, links)).toBe(false);
+    expect(sum([...mixed, charge, refund])).toEqual(sum(mixed));
+  });
+
+  it('a stray stored bucket is skipped, not totalled and not thrown on', () => {
+    const bogus = tx('z', 'card', '2026-09-21', 999, { bucket: 'bogus' as never });
+    expect(sum([...mixed, bogus])).toEqual(sum(mixed));
+  });
+
+  it('a rule can put new rows in Not spending at sync time', () => {
+    const [p1] = fixtureInitialPages('2026-09-26');
+    const rows = reconcileSyncPage({
+      existing: new Map(),
+      page: p1!,
+      rules: [rule('chipotle', 'not_spending')],
+      now: 1000,
+      itemId: 'item',
+      userId: 'u',
+    });
+    const chip = rows.find((t) => t.merchantName === 'Chipotle')!;
+    expect(chip.bucket).toBe('not_spending');
+    expect(chip.bucketSetBy).toBe('rule');
+  });
+
+  it('isFinanceBucket / financeBucketError accept the four buckets and nothing else', () => {
+    for (const b of ['parents_pay', 'budget', 'i_pay', 'not_spending']) {
+      expect(isFinanceBucket(b)).toBe(true);
+      expect(financeBucketError(b, { nullable: false })).toBeNull();
+    }
+    for (const v of ['bogus', '', null, undefined, 3]) expect(isFinanceBucket(v)).toBe(false);
+    expect(financeBucketError(null, { nullable: true })).toBeNull();
+    expect(financeBucketError(null, { nullable: false })).toBe('Unknown bucket: null');
+    expect(financeBucketError('bogus', { nullable: true })).toBe('Unknown bucket: bogus');
+  });
+});
+
+describe('list filters: matchesFinanceFilter / matchesFinanceText / netCents', () => {
+  const charge = tx('c', 'card', '2026-09-20', 3499, { bucket: 'budget', merchantName: 'Amazon' });
+  const refund = tx('r', 'card', '2026-09-22', -1000, { refundOfId: 'c', merchantName: 'Amazon' });
+  const xfer = tx('x', 'chk', '2026-09-21', 5000, { pfcPrimary: 'TRANSFER_OUT' });
+  const inn = tx('y', 'sav', '2026-09-21', -5000, { pfcPrimary: 'TRANSFER_IN' });
+  const loose = tx('u', 'card', '2026-09-21', 700, { name: 'DD *DOORDASH CHIPOTLE', note: null });
+  const all = [charge, refund, xfer, inn, loose];
+  const view = deriveFinanceView(
+    {
+      period,
+      accounts: [chk, sav, card],
+    } as FinanceOverview,
+    all,
+  );
+
+  it('a bucket chip shows a linked refund under its charge, never a transfer', () => {
+    expect(matchesFinanceFilter(refund, view, 'budget')).toBe(true);
+    expect(matchesFinanceFilter(xfer, view, 'budget')).toBe(false);
+    expect(matchesFinanceFilter(xfer, view, 'unsorted')).toBe(false);
+    expect(matchesFinanceFilter(xfer, view, 'all')).toBe(true);
+    expect(matchesFinanceFilter(loose, view, 'unsorted')).toBe(true);
+  });
+
+  it('text matches merchant or bank descriptor, and the note only when asked', () => {
+    expect(matchesFinanceText(charge, 'amaz')).toBe(true);
+    expect(matchesFinanceText(loose, 'chipotle')).toBe(true); // descriptor, not merchant
+    const noted = { ...charge, note: 'Split with Sam' };
+    expect(matchesFinanceText(noted, 'sam')).toBe(false);
+    expect(matchesFinanceText(noted, 'sam', { note: true })).toBe(true);
+  });
+
+  it('netCents is net: money in subtracts', () => {
+    expect(netCents([charge, refund], (t) => t.rawAmountCents)).toBe(2499);
+    expect(netCents([], (t: FinanceTransaction) => t.rawAmountCents)).toBe(0);
   });
 });
 

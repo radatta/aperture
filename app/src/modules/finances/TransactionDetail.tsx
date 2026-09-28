@@ -301,13 +301,19 @@ function LinkedRefund({
         </Button>
       </div>
       <Text size="sm" tone="muted">
-        Counts as {charge.bucket ? FINANCE_BUCKET_LABELS[charge.bucket] : 'unsorted'},{' '}
-        {which === 'current'
-          ? 'this period'
-          : which === 'previous'
-            ? 'last period'
-            : 'an earlier period'}{' '}
-        — it follows the charge.
+        {charge.bucket === 'not_spending' ? (
+          'Not spending, like its charge — outside every total.'
+        ) : (
+          <>
+            Counts as {charge.bucket ? FINANCE_BUCKET_LABELS[charge.bucket] : 'unsorted'},{' '}
+            {which === 'current'
+              ? 'this period'
+              : which === 'previous'
+                ? 'last period'
+                : 'an earlier period'}{' '}
+            — it follows the charge.
+          </>
+        )}
       </Text>
     </div>
   );

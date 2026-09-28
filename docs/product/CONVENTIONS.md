@@ -104,6 +104,10 @@ element itself disappears (a banner that clears, a list row that re-renders), a 
 chosen fallback. Move focus with `lib/focus` `revealFocus`, which scrolls the target clear of the dock
 (the dock publishes its height as `--dock-h`, the root's `scroll-padding-bottom`).
 
+**Page keyboard shortcuts** skip typing targets (`lib/keys` `isTypingTarget`), open dialogs, modified
+keys and keys already handled (`defaultPrevented`). `/` belongs to capture (CaptureBar) unless a page
+has its own search, which claims it in the capture phase — today only the Finances All tab.
+
 **Empty states go through `components/EmptyState`.** React Query defaults `data` to `[]`, so
 branching on `list.length === 0` alone asserts "Backlog is clear" while the query is still in flight.
 `EmptyState` takes `pending`/`error` and is the one place that knows the three states.

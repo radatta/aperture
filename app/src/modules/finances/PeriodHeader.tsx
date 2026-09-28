@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { Link } from 'react-router';
 import {
   FINANCE_BUCKET_LABELS,
-  FINANCE_BUCKETS,
+  FINANCE_SPEND_BUCKETS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   fmtMonthShortDay,
   suggestPeriodStart,
@@ -92,7 +92,7 @@ export function PeriodHeader({
         />
       </div>
       <dl className="grid grid-cols-3 gap-2">
-        {FINANCE_BUCKETS.map((b) => (
+        {FINANCE_SPEND_BUCKETS.map((b) => (
           <div key={b} className="flex flex-col gap-0.5">
             <dt className="flex items-center gap-1.5">
               <span aria-hidden className={cx('h-2 w-2 rounded-full', bucketFillClass[b])} />
