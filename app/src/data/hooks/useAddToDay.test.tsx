@@ -170,4 +170,16 @@ describe('useAddToDay', () => {
     expect(out?.planned).toBe(false);
     expect((await api.listTasks()).map((t) => t.title)).toContain('call bank');
   });
+
+  it('createToday takes a full input; its estimate sets plannedMinutes', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+
+    await act(
+      async () =>
+        void (await hook.result.current.createToday({ title: 'stamps', estimateMin: 20 })),
+    );
+    const [plan] = await plansFor(api, todayKey(4));
+    expect(plan?.plannedMinutes).toBe(20);
+  });
 });

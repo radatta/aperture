@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { todayKey } from '@aperture/shared';
 import { renderWithProviders } from '../../test/utils';
@@ -7,6 +8,18 @@ import { createStubClient } from '../../data/stubClient';
 import { CaptureBar } from './CaptureBar';
 
 beforeEach(() => globalThis.localStorage?.clear());
+
+// A fresh stub with one category, in Task mode — the setup every token test starts from.
+async function taskBar(opts: { hangCategories?: boolean } = {}) {
+  const api = createStubClient({ seed: false, storageKey: `cap-tok-${Math.random()}` });
+  await api.upsertCategory({ label: 'Admin', isWork: true });
+  if (opts.hangCategories) vi.spyOn(api, 'listCategories').mockReturnValue(new Promise(() => {}));
+  const user = userEvent.setup();
+  renderWithProviders(<CaptureBar />, { api });
+  await user.click(screen.getByRole('button', { name: 'Task' }));
+  const box = () => screen.getByLabelText('Capture task') as HTMLTextAreaElement;
+  return { api, user, box };
+}
 
 function field() {
   return screen.getByLabelText('Capture log') as HTMLTextAreaElement;
@@ -149,6 +162,151 @@ describe('CaptureBar', () => {
     await waitFor(async () => {
       const entries = await api.listLogEntries(todayKey(4));
       expect(entries.map((e) => e.text)).toContain('tapped, not typed');
+    });
+  });
+
+  describe('Task tokens', () => {
+    it('parses optional tokens after " | " into the created task', async () => {
+      const { api, user, box } = await taskBar();
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
+      await user.type(box(), 'draft memo | ~30 #admin due:2026-10-03 notes:"x"');
+      expect(await screen.findByText('#admin')).toBeTruthy();
+      await user.keyboard('{Enter}');
+
+      await waitFor(async () => {
+        const [t] = await api.listTasks();
+        expect(t).toMatchObject({ title: 'draft memo', estimateMin: 30, dueDay: '2026-10-03' });
+        expect(t?.categoryId).toEqual(expect.any(String));
+        expect(t?.notes).toBe('x');
+      });
+      expect(box().value).toBe('');
+      expect(await screen.findByText(/Task added/)).toBeTruthy();
+    });
+
+    it('without " | " a title is literal and nothing is previewed', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'fix issue #42 ~5');
+      expect(box().getAttribute('aria-describedby')).toBeNull();
+      await user.keyboard('{Enter}');
+      await user.type(box(), 'a|b');
+      await user.keyboard('{Enter}');
+
+      await waitFor(async () => {
+        const titles = (await api.listTasks()).map((t) => t.title).sort();
+        expect(titles).toEqual(['a|b', 'fix issue #42 ~5']);
+      });
+      expect((await api.listTasks()).every((t) => t.estimateMin === null)).toBe(true);
+    });
+
+    it('a red error refuses Enter and Send, keeps the text, and says so', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'x | ~30m');
+      expect(await screen.findByText(/invalid estimate/)).toBeTruthy();
+      expect(box().getAttribute('aria-invalid')).toBe('true');
+
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      await user.click(screen.getByLabelText('Save task'));
+      expect(box().value).toBe('x | ~30m');
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('an unknown label warns before submit, then saves uncategorised', async () => {
+      const { api, user, box } = await taskBar();
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
+      await user.type(box(), 'x | #Nope');
+      expect(await screen.findByText(/no category 'Nope'/)).toBeTruthy();
+      await user.keyboard('{Enter}');
+
+      await waitFor(async () => {
+        const [t] = await api.listTasks();
+        expect(t).toMatchObject({ title: 'x', categoryId: null });
+      });
+    });
+
+    it('"→ today" with an estimate plans that many minutes', async () => {
+      const { api, user, box } = await taskBar();
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'buy stamps | ~20');
+      await user.keyboard('{Enter}');
+
+      await waitFor(async () => {
+        const [plan] = await api.listPlansForDay(todayKey(4));
+        expect(plan?.plannedMinutes).toBe(20);
+      });
+      expect(screen.getByRole('button', { name: 'today' }).getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+    });
+
+    it('waits for categories before a #label line can save', async () => {
+      const { api, user, box } = await taskBar({ hangCategories: true });
+      await user.type(box(), 'x | #Admin');
+      expect(await screen.findByText('Loading categories…')).toBeTruthy();
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(box().value).toBe('x | #Admin');
+      expect(await api.listTasks()).toHaveLength(0);
+
+      // A line without a label doesn't need them.
+      await user.clear(box());
+      await user.type(box(), 'y | ~5');
+      await user.keyboard('{Enter}');
+      await waitFor(async () => expect((await api.listTasks()).map((t) => t.title)).toEqual(['y']));
+    });
+
+    it('tokens across a line break are refused, not split', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'a');
+      await user.keyboard('{Shift>}{Enter}{/Shift}');
+      await user.type(box(), 'b | ~5');
+      expect(await screen.findByText(/single line/)).toBeTruthy();
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('a failed write puts the tokenised text back', async () => {
+      const { api, user, box } = await taskBar();
+      api.createTask = () => Promise.reject(new Error('offline'));
+      await user.type(box(), 'memo | ~30');
+      await user.keyboard('{Enter}');
+
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('memo | ~30'));
+    });
+
+    it('a refusal announces its reason and clears once the cause is gone', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'x | ~30m');
+      await user.keyboard('{Enter}');
+      const status = await screen.findByRole('status');
+      await waitFor(() => expect(status.textContent).toMatch(/Not saved.*invalid estimate/));
+
+      await user.click(screen.getByRole('button', { name: 'Log' }));
+      await waitFor(() => expect(status.textContent).not.toMatch(/Not saved/));
+    });
+
+    it('a failed category refetch keeps the loaded list usable', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'memo | #Admin');
+      expect(await screen.findByText('#Admin')).toBeTruthy(); // loaded + matched (teal chip)
+      // A focus-driven refetch fails: status goes to error, the cached list stays.
+      const spy = vi.spyOn(api, 'listCategories').mockRejectedValue(new Error('offline'));
+      try {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        await waitFor(() => expect(spy).toHaveBeenCalled());
+        await expect(spy.mock.results[0]!.value).rejects.toThrow();
+        await new Promise((r) => setTimeout(r, 0)); // let the query settle into its error state
+      } finally {
+        focusManager.setFocused(undefined);
+      }
+      await user.keyboard('{Enter}');
+      await waitFor(async () => {
+        const [t] = await api.listTasks();
+        expect(t?.categoryId).toEqual(expect.any(String));
+      });
     });
   });
 });

@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { todayKey } from '@aperture/shared';
-import type { Task, TaskPlan } from '@aperture/shared';
+import type { CreateTaskInput, Task, TaskPlan } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { plannedDefault } from '../../modules/tasks/taskMath';
@@ -115,8 +115,11 @@ export function useAddToDay(day?: string) {
 
   // Create + plan in one gesture. Two writes, not atomic: if planning fails the task still exists
   // (in the backlog), and the caller says so rather than pretending it landed on the day.
-  async function createToday(title: string): Promise<{ task: Task; planned: boolean }> {
-    const task = await createTask.mutateAsync(title);
+  // A tokenised capture's estimate flows into plannedMinutes via plannedDefault, same as any add.
+  async function createToday(
+    input: string | CreateTaskInput,
+  ): Promise<{ task: Task; planned: boolean }> {
+    const task = await createTask.mutateAsync(input);
     try {
       await addToDay(task);
       return { task, planned: true };
