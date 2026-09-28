@@ -9,21 +9,27 @@ import { Construct } from 'constructs';
 // Where prod alarms land. Personal email by design — this is a personal project.
 const ALERT_EMAIL = 'rahul3datta@gmail.com';
 
-export interface MonitoringProps {
+export interface MonitoredFunction {
+  id: string; // alarm-id prefix; '' for the BFF keeps its original ids (Errors, Throttles, …)
+  label: string;
   fn: lambda.IFunction;
-  timeout: Duration; // the BFF's configured timeout — the duration alarm fires at 80% of it
+  durationAlarm: { statistic: string; thresholdMs: number };
 }
 
-// Prod-only runtime watch on the BFF Lambda (INFRA §9) — the only thing watching prod between deploys.
-// Three alarms → one SNS topic → email. Everything here is in the stack's own region (us-west-1): the
-// Lambda's AWS/Lambda metrics, the alarms, and the SNS topic all co-locate, so there's no cross-region
-// wiring. CloudFront 5xx is intentionally NOT alarmed (Option B) — those metrics publish only in
-// us-east-1, and the post-deploy synthetic check already proves the edge path at deploy time.
+export interface MonitoringProps {
+  functions: MonitoredFunction[];
+}
+
+// Prod-only runtime watch on the Lambdas (INFRA §9) — the only thing watching prod between deploys.
+// Three alarms per function → one SNS topic (one email confirmation) → email. Everything here is in
+// the stack's own region (us-west-1): the Lambda's AWS/Lambda metrics, the alarms, and the SNS topic
+// all co-locate, so there's no cross-region wiring. CloudFront 5xx is intentionally NOT alarmed
+// (Option B) — those metrics publish only in us-east-1, and the post-deploy synthetic check already
+// proves the edge path at deploy time.
 // treatMissingData = NOT_BREACHING because single-user traffic leaves long gaps with no datapoints.
 export class Monitoring extends Construct {
   constructor(scope: Construct, id: string, props: MonitoringProps) {
     super(scope, id);
-    const { fn, timeout } = props;
 
     const topic = new sns.Topic(this, 'AlarmTopic', { displayName: 'Aperture prod alarms', enforceSSL: true });
     topic.addSubscription(new subscriptions.EmailSubscription(ALERT_EMAIL));
@@ -42,13 +48,15 @@ export class Monitoring extends Construct {
     };
 
     const period = Duration.minutes(5);
-    alarm('Errors', fn.metricErrors({ period }), 1, 'BFF Lambda returned an error');
-    alarm('Throttles', fn.metricThrottles({ period }), 1, 'BFF Lambda was throttled');
-    alarm(
-      'DurationNearTimeout',
-      fn.metricDuration({ period, statistic: 'p99' }),
-      timeout.toMilliseconds() * 0.8,
-      'BFF Lambda p99 duration approaching the configured timeout',
-    );
+    for (const { id: p, label, fn, durationAlarm } of props.functions) {
+      alarm(`${p}Errors`, fn.metricErrors({ period }), 1, `${label} Lambda returned an error`);
+      alarm(`${p}Throttles`, fn.metricThrottles({ period }), 1, `${label} Lambda was throttled`);
+      alarm(
+        p ? `${p}DurationOverBudget` : 'DurationNearTimeout',
+        fn.metricDuration({ period, statistic: durationAlarm.statistic }),
+        durationAlarm.thresholdMs,
+        `${label} Lambda ${durationAlarm.statistic} duration near its timeout`,
+      );
+    }
   }
 }

@@ -20,4 +20,9 @@ export const qk = {
   googleStatus: () => ['googleStatus'] as const,
   googleCalendars: () => ['googleCalendars'] as const,
   calendarBusy: (day: string) => ['calendarBusy', day] as const,
+  // Every finance key starts with 'finance', so one invalidation refreshes the whole page.
+  finance: () => ['finance'] as const,
+  financeOverview: (today: string) => ['finance', 'overview', today] as const,
+  financeTxns: (from: string, to: string) => ['finance', 'txns', from, to] as const,
+  financeRules: () => ['finance', 'rules'] as const,
 };

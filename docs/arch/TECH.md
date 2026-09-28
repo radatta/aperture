@@ -45,7 +45,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 Logical entities below are **storage-agnostic**; the physical DynamoDB shape is §2.4 (single-table, as built).
 
 ### 2.1 Global conventions
-- **IDs:** client-generated **ULIDs** (unique across devices, time-sortable).
+- **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items and their sync states, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
 - **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. One live violation — see **[Tech debt](#tech-debt)**.
@@ -113,7 +113,9 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `id · taskId · filename · contentType · size · s3Key · status(pending|ready)` — metadata only; the bytes live in a separate **precious S3 bucket** at `u/<userId>/<taskId>/<id>`, never in DynamoDB.
 - Bytes move browser↔S3 directly via **presigned URLs** the Lambda signs but never carries — the JSON RPC edge stays binary-free. `pending` until the browser confirms the PUT; only `ready` rows list/export. Soft-delete tombstones the metadata and orphans the object. Full design: **[tasks/attachments.md](../areas/tasks/attachments.md)**.
 
-**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, etc.
+**finance** — Plaid-synced bank data: `financeItems` (a bank login), `financeSyncStates` (per item: cursor, lock, request/refresh stamps), `financeAccounts`, `financeTransactions`, `financeRules` (ULID ids). Transaction fields are Plaid-owned (amount, date, merchant…) except the **user-owned** ones a sync never overwrites: `bucket · bucketSetBy · periodOverride · note · refundOfId · startsPeriod`. Design: [finances/](../areas/finances/index.md).
+
+**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` (default 60000), `financePaymentDay` (default 20), etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
 1. Estimate freezes on first exit from planning; calibration uses the frozen value; scope change ⇒ split.
@@ -137,12 +139,13 @@ SK (type-prefixed range keys):
   day#<date>                    day singleton (direct get)
   attach#<taskId>#<ulid>        a task's attachments        (begins_with attach#<taskId>)
   habit#<id> · roll#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
+  fin#item#<id> · fin#sync#<itemId> · fin#acct#<id> · fin#txn#<id> · fin#rule#<ulid>   finances
 ```
-- **One GSI** (calibration — done tasks by completion date): `GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`.
+- **One GSI, two key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms).
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".
 - **Balance / time-budget aggregate in the Lambda** over the day/week range (no GSI needed at this volume).
-- Access patterns as built: the keys above satisfy them with prefix reads + the one GSI.
+- Access patterns as built: the keys above satisfy them with prefix reads + the one GSI's two key spaces.
 
 ---
 
@@ -150,7 +153,7 @@ SK (type-prefixed range keys):
 
 **Routes (React Router):**
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /recruiting (+ /recruiting/stories) · /habits · /rolls · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, manage habits, manage rolls + their contact sheets, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /recruiting (+ /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route.
 

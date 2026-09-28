@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient } from './api';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX } from './taskNotes';
+import { addDays, todayKey } from './dates';
+import { FINANCE_REFRESH_COOLDOWN_MS, resolveRefundLinks } from './finance';
+import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS } from './financeFixtures';
 
 // ONE behavior suite, run against every ApiClient implementation — the in-memory stub, the in-process
 // Lambda (BackendClient over an in-memory table), and any future transport. If the swap is faithful,
@@ -726,6 +729,10 @@ export function runApiContract(
       const updated = await api.updateSettings({ dayStartHour: 5, pomodoroWorkMin: 50 });
       expect(updated.dayStartHour).toBe(5);
       expect(updated.pomodoroWorkMin).toBe(50);
+      expect(s.financeBudgetCents).toBe(60000);
+      expect(s.financePaymentDay).toBe(20);
+      const fin = await api.updateSettings({ financeBudgetCents: 45000 });
+      expect(fin.financeBudgetCents).toBe(45000);
     });
 
     // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked
@@ -760,6 +767,11 @@ export function runApiContract(
           'categories',
           'days',
           'exportedAt',
+          'financeAccounts',
+          'financeItems',
+          'financeRules',
+          'financeSyncStates',
+          'financeTransactions',
           'habitChecks',
           'habits',
           'ideas',
@@ -828,6 +840,372 @@ export function runApiContract(
       expect(data.tasks.map((t) => t.id)).toContain(task.id); // the task itself survives
       expect(data.attachments.map((a) => a.id)).not.toContain(goneAtt.id); // tombstoned
       expect(data.attachments.map((a) => a.id)).not.toContain(pendingAtt.id); // never confirmed
+    });
+
+    // --- Finances ------------------------------------------------------------
+    // Both impls replay the shared Sandbox-shaped fixtures (financeFixtures.ts) anchored to the same
+    // day, and both run the sync inline here (stub: in-process; lambda: InlineInvoker + InMemoryPlaid),
+    // so the whole connect → sync → sort loop is compared end to end.
+    const finToday = () => todayKey(4, clock);
+    const connectBare = () =>
+      api.exchangePlaidPublicToken({
+        publicToken: 'public-fixture',
+        institution: FIXTURE_INSTITUTION,
+        accounts: FIXTURE_LINK_ACCOUNTS,
+      });
+    // Connect, then mark both fixture card payments — the period starts today−8, previous today−38.
+    const connect = async () => {
+      const item = await connectBare();
+      for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+        await api.setFinancePeriodStart(id, true);
+      return item;
+    };
+    const finRange = async () => {
+      const o = await api.getFinanceOverview({ today: finToday() });
+      return { from: o.period.previous.start, to: o.period.end };
+    };
+
+    it('finance: an empty overview falls back to the payment day and the default budget', async () => {
+      const o = await api.getFinanceOverview({ today: finToday() });
+      expect(o.items).toEqual([]);
+      expect(o.accounts).toEqual([]);
+      expect(o.period.source).toBe('payment_day');
+      expect(o.period.lastPaymentDate).toBeNull();
+      expect(o.budgetCents).toBe(60000);
+      expect(o.leftCents).toBe(60000);
+      expect(o.unsortedCount).toBe(0);
+      expect(o.sync.lastSyncedAt).toBeNull();
+      expect([o.sync.lastError, o.sync.lastErrorAt]).toEqual([null, null]);
+    });
+
+    it('finance: connect → sync → list → bucket → overview', async () => {
+      const link = await api.createPlaidLinkToken({ mode: 'connect' });
+      expect(link.linkToken).toBeTruthy();
+      const item = await connect();
+      expect(item.institutionName).toBe('Bank of America');
+      expect(item.status).toBe('ok');
+
+      const o = await api.getFinanceOverview({ today: finToday() });
+      expect(o.accounts).toHaveLength(3);
+      expect(o.period.source).toBe('marked');
+      expect(o.unsortedCount).toBeGreaterThan(0);
+      expect(o.sync.lastSyncedAt).not.toBeNull();
+      expect(o.sync.syncing).toBe(false);
+
+      const txns = await api.listFinanceTransactions(await finRange());
+      const chipotle = txns.filter(
+        (t) => t.merchantName === 'Chipotle' && t.date >= o.period.start,
+      );
+      expect(chipotle.length).toBeGreaterThan(0);
+      expect(txns.map((t) => t.date)).toEqual([...txns.map((t) => t.date)].sort().reverse()); // date desc
+
+      const set = await api.setFinanceBucket({ ids: chipotle.map((t) => t.id), bucket: 'budget' });
+      expect(set.every((t) => t.bucket === 'budget' && t.bucketSetBy === 'user')).toBe(true);
+      const total = chipotle.reduce((n, t) => n + t.rawAmountCents, 0);
+      const after = await api.getFinanceOverview({ today: finToday() });
+      expect(after.spentCents).toBe(total);
+      expect(after.leftCents).toBe(60000 - total);
+      expect(after.unsortedCount).toBe(o.unsortedCount - chipotle.length);
+
+      // Push one charge into the previous period → it leaves the current total.
+      await api.setFinancePeriodOverride(chipotle[0]!.id, 'previous');
+      const moved = await api.getFinanceOverview({ today: finToday() });
+      expect(moved.spentCents).toBe(total - chipotle[0]!.rawAmountCents);
+
+      const noted = await api.setFinanceNote(chipotle[0]!.id, 'split with sam');
+      expect(noted.note).toBe('split with sam');
+      const unsorted = await api.setFinanceBucket({ ids: [chipotle[0]!.id], bucket: null });
+      expect(unsorted[0]!.bucketSetBy).toBeNull();
+    });
+
+    it('finance: "Always" saves a rule and applies it to every unsorted match', async () => {
+      await connect();
+      const txns = await api.listFinanceTransactions({
+        from: addDays(finToday(), -400),
+        to: finToday(),
+      });
+      const uber = txns.filter((t) => t.merchantName === 'Uber');
+      expect(uber.length).toBeGreaterThan(1);
+      const changed = await api.setFinanceBucket({
+        ids: [uber[0]!.id],
+        bucket: 'i_pay',
+        rule: { pattern: '  Uber ' },
+      });
+      expect(changed.map((t) => t.id).sort()).toEqual(uber.map((t) => t.id).sort());
+      expect(changed.find((t) => t.id === uber[0]!.id)!.bucketSetBy).toBe('user');
+      expect(
+        changed.filter((t) => t.id !== uber[0]!.id).every((t) => t.bucketSetBy === 'rule'),
+      ).toBe(true);
+      const rules = await api.listFinanceRules();
+      expect(rules.map((r) => [r.pattern, r.bucket])).toEqual([['uber', 'i_pay']]);
+
+      // Saving the same pattern again updates the rule instead of duplicating it.
+      await api.upsertFinanceRule({ pattern: 'UBER', bucket: 'budget' });
+      expect((await api.listFinanceRules()).map((r) => [r.pattern, r.bucket])).toEqual([
+        ['uber', 'budget'],
+      ]);
+      const extra = await api.upsertFinanceRule({ pattern: 'amazon', bucket: 'parents_pay' });
+      await api.deleteFinanceRule(extra.id);
+      expect((await api.listFinanceRules()).map((r) => r.pattern)).toEqual(['uber']);
+      await expect(api.upsertFinanceRule({ pattern: '   ', bucket: 'budget' })).rejects.toThrow();
+      await expect(
+        api.setFinanceBucket({ ids: [uber[0]!.id], bucket: null, rule: { pattern: 'uber' } }),
+      ).rejects.toThrow();
+    });
+
+    it('finance: refuses to link the same accounts twice', async () => {
+      await connect();
+      await expect(connect()).rejects.toThrow(/already/i);
+      expect((await api.getFinanceOverview({ today: finToday() })).items).toHaveLength(1);
+    });
+
+    it("finance: a posted charge inherits the pending row's bucket and note", async () => {
+      await connect();
+      await api.setFinanceBucket({ ids: ['fx-pending-1'], bucket: 'parents_pay' });
+      await api.setFinanceNote('fx-pending-1', 'dinner');
+      advance(1000);
+      const r = await api.requestFinanceSync({ refresh: false });
+      expect(r.accepted).toBe(true);
+      const txns = await api.listFinanceTransactions(await finRange());
+      expect(txns.find((t) => t.id === 'fx-pending-1')).toBeUndefined();
+      const posted = txns.find((t) => t.id === 'fx-posted-1')!;
+      expect(posted.bucket).toBe('parents_pay');
+      expect(posted.note).toBe('dinner');
+      expect(posted.pending).toBe(false);
+    });
+
+    it('finance: refresh has a cooldown', async () => {
+      await connect();
+      expect((await api.requestFinanceSync({ refresh: true })).accepted).toBe(true);
+      const refused = await api.requestFinanceSync({ refresh: true });
+      expect(refused.accepted).toBe(false);
+      expect(refused.nextAllowedAt).toBeGreaterThan(clock);
+      advance(FINANCE_REFRESH_COOLDOWN_MS);
+      expect((await api.requestFinanceSync({ refresh: true })).accepted).toBe(true);
+    });
+
+    it('finance: account flip/hide persist, and removing the item drops it from the overview', async () => {
+      const item = await connect();
+      const o = await api.getFinanceOverview({ today: finToday() });
+      const card = o.accounts.find((a) => a.type === 'credit')!;
+      const flipped = await api.updateFinanceAccount(card.id, { signOverride: 'flip' });
+      expect(flipped.signOverride).toBe('flip');
+      const hidden = await api.updateFinanceAccount(card.id, { hidden: true });
+      expect(hidden.hidden).toBe(true);
+      expect(hidden.signOverride).toBe('flip');
+
+      const updated = await api.completePlaidUpdate(item.id);
+      expect(updated.id).toBe(item.id);
+
+      await api.removePlaidItem(item.id);
+      const gone = await api.getFinanceOverview({ today: finToday() });
+      expect(gone.items).toEqual([]);
+      expect(gone.accounts).toEqual([]);
+      expect(gone.unsortedCount).toBe(0);
+    });
+
+    it('finance: hidden and flipped accounts change the totals the same way everywhere', async () => {
+      await connect();
+      const o = await api.getFinanceOverview({ today: finToday() });
+      const card = o.accounts.find((a) => a.type === 'credit')!;
+      const txns = await api.listFinanceTransactions(await finRange());
+      const charge = txns.find(
+        (t) => t.accountId === card.id && t.rawAmountCents > 0 && t.date >= o.period.start,
+      )!;
+      await api.setFinanceBucket({ ids: [charge.id], bucket: 'budget' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        charge.rawAmountCents,
+      );
+
+      // Flipped, the charge reads as a card credit (a refund) and nets negative.
+      await api.updateFinanceAccount(card.id, { signOverride: 'flip' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        -charge.rawAmountCents,
+      );
+
+      await api.updateFinanceAccount(card.id, { signOverride: 'auto', hidden: true });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
+    });
+
+    it('finance: a "current" override pulls a last-period charge into this period', async () => {
+      await connect();
+      const o = await api.getFinanceOverview({ today: finToday() });
+      const txns = await api.listFinanceTransactions(await finRange());
+      const old = txns.find(
+        (t) =>
+          t.accountId === 'acct-fixture-card' && t.rawAmountCents > 0 && t.date < o.period.start,
+      )!;
+      await api.setFinanceBucket({ ids: [old.id], bucket: 'budget' });
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
+      await api.setFinancePeriodOverride(old.id, 'current');
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(
+        old.rawAmountCents,
+      );
+    });
+
+    it('finance: unknown ids — bucket sets are all-or-nothing, account patch throws, remove is a no-op', async () => {
+      await connect();
+      const [first] = await api.listFinanceTransactions(await finRange());
+      await expect(
+        api.setFinanceBucket({ ids: [first!.id, 'nope'], bucket: 'budget' }),
+      ).rejects.toThrow();
+      const again = await api.listFinanceTransactions(await finRange());
+      expect(again.find((t) => t.id === first!.id)!.bucket).toBe(first!.bucket); // untouched
+      await expect(api.updateFinanceAccount('nope', { hidden: true })).rejects.toThrow();
+      await api.removePlaidItem('nope');
+      expect((await api.getFinanceOverview({ today: finToday() })).items).toHaveLength(1);
+    });
+
+    it('finance: linking a refund nets it against the charge’s bucket and period', async () => {
+      await connect();
+      await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
+      const before = await api.getFinanceOverview({ today: finToday() });
+      expect(before.spentCents).toBe(3499);
+
+      const linked = await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      expect(linked.refundOfId).toBe('fx-card-8');
+      expect(linked.bucket).toBeNull();
+      const after = await api.getFinanceOverview({ today: finToday() });
+      expect(after.spentCents).toBe(0);
+      expect(after.unsortedCount).toBe(before.unsortedCount - 1);
+
+      await api.linkFinanceRefund('fx-refund-1', null);
+      const unlinked = await api.getFinanceOverview({ today: finToday() });
+      expect(unlinked.spentCents).toBe(3499);
+      expect(unlinked.unsortedCount).toBe(before.unsortedCount);
+    });
+
+    it('finance: a partial refund nets partially and follows the charge into its period', async () => {
+      await connect();
+      await api.linkFinanceRefund('fx-refund-2', 'fx-card-14');
+      await api.setFinanceBucket({ ids: ['fx-card-14'], bucket: 'budget' });
+      // The charge is in the previous period — so is its refund, though it's dated this period.
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(0);
+      await api.setFinancePeriodOverride('fx-card-14', 'current');
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(2689 - 1000);
+    });
+
+    it('finance: refund link validation', async () => {
+      await connect();
+      await expect(api.linkFinanceRefund('fx-card-8', 'fx-card-2')).rejects.toThrow(); // charge as refund
+      await expect(api.linkFinanceRefund('fx-refund-1', 'fx-refund-2')).rejects.toThrow(); // onto a credit
+      await expect(api.linkFinanceRefund('fx-refund-1', 'fx-refund-1')).rejects.toThrow(); // self
+      await expect(api.linkFinanceRefund('fx-refund-2', 'fx-card-10')).rejects.toThrow(); // $10 > $6.75
+      await expect(api.linkFinanceRefund('fx-ccpay-card-10', 'fx-card-8')).rejects.toThrow(); // a payment
+      await expect(api.linkFinanceRefund('nope', 'fx-card-8')).rejects.toThrow();
+      await expect(api.linkFinanceRefund('fx-refund-1', 'nope')).rejects.toThrow();
+      await expect(api.linkFinanceRefund('fx-refund-2', 'fx-xfer-chk')).rejects.toThrow(); // transfer out
+
+      await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      // "Always" for the merchant sorts the other Amazon charges but leaves the linked refund alone.
+      await api.setFinanceBucket({
+        ids: ['fx-card-28'],
+        bucket: 'i_pay',
+        rule: { pattern: 'amazon' },
+      });
+      const txns = await api.listFinanceTransactions({
+        from: addDays(finToday(), -400),
+        to: finToday(),
+      });
+      const refund = txns.find((t) => t.id === 'fx-refund-1')!;
+      expect(refund.bucket).toBeNull();
+      expect(refund.refundOfId).toBe('fx-card-8');
+
+      // Sorting or moving a linked refund yourself unlinks it.
+      const [sorted] = await api.setFinanceBucket({ ids: ['fx-refund-1'], bucket: 'budget' });
+      expect([sorted!.bucket, sorted!.refundOfId]).toEqual(['budget', null]);
+      await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      const moved = await api.setFinancePeriodOverride('fx-refund-1', 'current');
+      expect(moved.refundOfId).toBeNull();
+    });
+
+    it('finance: a refund link survives its charge going pending→posted', async () => {
+      await connect();
+      await api.linkFinanceRefund('fx-refund-2', 'fx-pending-1');
+      await api.setFinanceBucket({ ids: ['fx-pending-1'], bucket: 'parents_pay' });
+      advance(1000);
+      await api.requestFinanceSync({ refresh: false });
+      const txns = await api.listFinanceTransactions(await finRange());
+      expect(resolveRefundLinks(txns).get('fx-refund-2')?.id).toBe('fx-posted-1');
+      const o = await api.getFinanceOverview({ today: finToday() });
+      expect(o.buckets.parents_pay.totalCents).toBe(2450 - 1000);
+      expect(
+        (await api.exportData()).financeTransactions.find((t) => t.id === 'fx-refund-2')!
+          .refundOfId,
+      ).toBe('fx-pending-1');
+    });
+
+    it('finance: marking the card payment sets the period; unmarking falls back', async () => {
+      await connectBare();
+      const today = finToday();
+      expect((await api.getFinanceOverview({ today })).period.source).toBe('payment_day');
+
+      const marked = await api.setFinancePeriodStart('fx-ccpay-card-10', true);
+      expect(marked.startsPeriod).toBe(true);
+      const one = (await api.getFinanceOverview({ today })).period;
+      expect([one.source, one.start, one.previous.end]).toEqual([
+        'marked',
+        addDays(today, -8),
+        addDays(today, -9),
+      ]);
+      await api.setFinancePeriodStart('fx-ccpay-card-40', true);
+      expect((await api.getFinanceOverview({ today })).period.previous.start).toBe(
+        addDays(today, -38),
+      );
+      await api.setFinancePeriodStart('fx-ccpay-card-10', false);
+      expect((await api.getFinanceOverview({ today })).period.start).toBe(addDays(today, -38));
+
+      await expect(api.setFinancePeriodStart('fx-card-8', true)).rejects.toThrow(); // a charge
+      await expect(api.setFinancePeriodStart('fx-ccpay-chk-10', true)).rejects.toThrow(); // checking
+      await expect(api.setFinancePeriodStart('nope', true)).rejects.toThrow();
+      const data = await api.exportData();
+      expect(data.financeTransactions.find((t) => t.id === 'fx-ccpay-card-40')!.startsPeriod).toBe(
+        true,
+      );
+    });
+
+    it('finance: marking a linked card credit clears its bucket and link and moves the period', async () => {
+      await connect();
+      await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
+      const marked = await api.setFinancePeriodStart('fx-refund-1', true);
+      expect([marked.startsPeriod, marked.bucket, marked.refundOfId]).toEqual([true, null, null]);
+      const o = await api.getFinanceOverview({ today: finToday() });
+      expect(o.period.start).toBe(addDays(finToday(), -2)); // the day after the new mark
+      await expect(api.linkFinanceRefund('fx-refund-1', 'fx-card-8')).rejects.toThrow();
+
+      // Unmarking leaves it a plain, unsorted card credit — the old link isn't restored.
+      const back = await api.setFinancePeriodStart('fx-refund-1', false);
+      expect([back.startsPeriod, back.refundOfId]).toEqual([false, null]);
+    });
+
+    it('finance: a checking refund links to its debit charge and nets it', async () => {
+      await connect();
+      await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
+      const before = await api.getFinanceOverview({ today: finToday() });
+      expect(before.spentCents).toBe(3861);
+
+      await api.linkFinanceRefund('fx-refund-3', 'fx-safeway');
+      const after = await api.getFinanceOverview({ today: finToday() });
+      expect(after.spentCents).toBe(0);
+      expect(after.unsortedCount).toBe(before.unsortedCount); // a deposit was never in the queue
+
+      await api.linkFinanceRefund('fx-refund-3', null);
+      expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(3861);
+
+      await api.linkFinanceRefund('fx-refund-1', 'fx-safeway'); // a card credit → a debit charge
+      await expect(api.linkFinanceRefund('fx-xfer-sav', 'fx-safeway')).rejects.toThrow(); // transfer in
+      await expect(api.linkFinanceRefund('fx-refund-3', 'fx-venmo')).rejects.toThrow(); // transfer out
+      await expect(api.linkFinanceRefund('fx-ccpay-card-10', 'fx-card-8')).rejects.toThrow(); // marked
+    });
+
+    it('finance: export carries items, accounts, transactions and rules', async () => {
+      await connect();
+      await api.upsertFinanceRule({ pattern: 'netflix', bucket: 'i_pay' });
+      const data = await api.exportData();
+      expect(data.financeItems).toHaveLength(1);
+      expect(data.financeAccounts).toHaveLength(3);
+      expect(data.financeTransactions.length).toBeGreaterThan(10);
+      expect(data.financeRules.map((r) => r.pattern)).toEqual(['netflix']);
     });
   });
 }

@@ -23,6 +23,9 @@ export const SMOKE_CALLS: SmokeCall[] = [
   { method: 'getGoogleStatus', args: [] },
   // Also proves the S3 SDK loaded at cold start (listAttachments is a plain read; no presign, no bytes).
   { method: 'listAttachments', args: [] },
+  // Finance: proves the finance service path, and that the Lambda SDK client (the sync invoker) and the
+  // live Plaid gateway load at cold start — testMode swaps both for noops, so no SSM read, no Plaid call.
+  { method: 'listFinanceRules', args: [] },
 ];
 
 // The direct-invoke event shape the handler understands (no requestContext.http → skips the origin gate).

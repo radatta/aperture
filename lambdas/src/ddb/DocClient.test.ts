@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { InMemoryDoc } from './DocClient';
+import { ConditionFailedError, InMemoryDoc } from './DocClient';
 import type { Item } from './DocClient';
 
 const item = (over: Partial<Item> & Pick<Item, 'PK' | 'SK'>): Item => ({ ...over });
@@ -58,5 +58,64 @@ describe('InMemoryDoc', () => {
   it('batchPut writes all', async () => {
     await db.batchPut([item({ PK: 'u#1', SK: 'cat#a' }), item({ PK: 'u#1', SK: 'cat#b' })]);
     expect((await db.query('u#1', 'cat#')).length).toBe(2);
+  });
+
+  describe('putIf', () => {
+    it('null expects no row — a tombstone counts as a row', async () => {
+      await db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 1 }), null);
+      await expect(
+        db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 2 }), null),
+      ).rejects.toThrow(ConditionFailedError);
+      await db.put(item({ PK: 'u#1', SK: 'fin#txn#b', updatedAt: 1, deletedAt: 5 }));
+      await expect(db.putIf(item({ PK: 'u#1', SK: 'fin#txn#b' }), null)).rejects.toThrow(
+        ConditionFailedError,
+      );
+    });
+
+    it('writes only when the stored updatedAt still matches', async () => {
+      await db.put(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 10, v: 'old' }));
+      await expect(
+        db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 12, v: 'stale' }), 9),
+      ).rejects.toThrow(ConditionFailedError);
+      expect((await db.get('u#1', 'fin#txn#a'))?.v).toBe('old');
+      await db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 11, v: 'new' }), 10);
+      expect((await db.get('u#1', 'fin#txn#a'))?.v).toBe('new');
+    });
+
+    it('an intercept lands a concurrent write between the read and the write, once', async () => {
+      await db.put(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 10 }));
+      db.interceptNextPutIf('u#1', 'fin#txn#a', () =>
+        db.putNow(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 11, v: 'theirs' })),
+      );
+      await expect(
+        db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 11, v: 'mine' }), 10),
+      ).rejects.toThrow(ConditionFailedError);
+      await db.putIf(item({ PK: 'u#1', SK: 'fin#txn#a', updatedAt: 12, v: 'mine' }), 11);
+      expect((await db.get('u#1', 'fin#txn#a'))?.v).toBe('mine');
+    });
+  });
+
+  it('staleNextGets serves an old version to non-consistent reads only, then expires', async () => {
+    await db.put(item({ PK: 'u#1', SK: 'fin#sync#a', v: 'new' }));
+    db.staleNextGets('u#1', 'fin#sync#a', item({ PK: 'u#1', SK: 'fin#sync#a', v: 'old' }), 1);
+    expect((await db.get('u#1', 'fin#sync#a', { consistent: true }))?.v).toBe('new');
+    expect((await db.get('u#1', 'fin#sync#a'))?.v).toBe('old');
+    expect((await db.get('u#1', 'fin#sync#a'))?.v).toBe('new');
+    expect(db.gets.map((g) => g.consistent)).toEqual([true, false, false]);
+  });
+
+  it('an intercept with `when` waits for the matching write', async () => {
+    await db.put(item({ PK: 'u#1', SK: 'k', updatedAt: 1 }));
+    let fired = 0;
+    db.interceptNextPutIf(
+      'u#1',
+      'k',
+      () => void fired++,
+      (it) => it.v === 'target',
+    );
+    await db.putIf(item({ PK: 'u#1', SK: 'k', updatedAt: 2, v: 'other' }), 1);
+    expect(fired).toBe(0);
+    await db.putIf(item({ PK: 'u#1', SK: 'k', updatedAt: 3, v: 'target' }), 2);
+    expect(fired).toBe(1);
   });
 });

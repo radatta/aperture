@@ -7,6 +7,8 @@ import {
   dayKey,
   dayKeyForOffset,
   discardSession,
+  FINANCE_DEFAULT_BUDGET_CENTS,
+  FINANCE_DEFAULT_PAYMENT_DAY,
   findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
@@ -35,6 +37,7 @@ import type {
   CalibrationPoint,
   Category,
   CreateAttachmentInput,
+  CreateLinkTokenInput,
   CreateTaskInput,
   DateRange,
   Day,
@@ -42,7 +45,19 @@ import type {
   GoogleCalendar,
   GoogleStatus,
   InsertCalendarEventInput,
+  ExchangePublicTokenInput,
   ExportBundle,
+  FinanceAccount,
+  FinanceAccountPatch,
+  FinanceItem,
+  FinanceOverview,
+  FinancePeriodOverride,
+  FinanceRule,
+  FinanceTransaction,
+  LinkTokenResult,
+  RequestFinanceSyncResult,
+  SetFinanceBucketInput,
+  UpsertFinanceRuleInput,
   Habit,
   HabitCheck,
   Idea,
@@ -69,6 +84,11 @@ import type {
   UpsertSeriesInput,
 } from '@aperture/shared';
 import type { Repo } from './ddb/repo';
+import { FinanceService } from './finance/service';
+import { noopInvoker } from './finance/invoker';
+import type { FinanceSyncInvoker } from './finance/invoker';
+import { noopPlaid } from './plaid/gateway';
+import type { PlaidGateway } from './plaid/gateway';
 import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
@@ -80,6 +100,8 @@ export interface BackendOptions {
   google?: GoogleGateway; // gated external calendar seam; defaults to the inert noop
   stateSecret?: string; // HMAC key for the OAuth state (derived from ORIGIN_SECRET in prod)
   presigner?: Presigner;
+  plaid?: PlaidGateway; // gated Plaid seam; defaults to the inert noop
+  financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
 }
 
 // Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
@@ -104,6 +126,7 @@ export class BackendClient implements ApiClient {
   private readonly google: GoogleGateway;
   private readonly stateSecret: string;
   private readonly presigner: Presigner;
+  private readonly finance: FinanceService;
 
   constructor(
     private readonly repo: Repo,
@@ -115,6 +138,15 @@ export class BackendClient implements ApiClient {
     this.google = opts.google ?? noopGoogle();
     this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
     this.presigner = opts.presigner ?? unconfiguredPresigner;
+    this.finance = new FinanceService({
+      repo,
+      userId: this.userId,
+      now: this.now,
+      ulid: this.ulid,
+      plaid: opts.plaid ?? noopPlaid(),
+      invoker: opts.financeInvoker ?? noopInvoker(),
+      settings: () => this.ensureSettings(),
+    });
   }
 
   private baseAt(t: number): BaseEntity {
@@ -159,6 +191,8 @@ export class BackendClient implements ApiClient {
       calendarWriteDefault: null,
       dayFocusStart: 8,
       dayEndHour: 22,
+      financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
+      financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
     };
     const row = await this.repo.getSettingsRow();
     // Backfill defaults over an existing row: fields added later (the calendar set) read as their
@@ -982,7 +1016,61 @@ export class BackendClient implements ApiClient {
       leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
       stories: await this.repo.listStories(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
+      ...(await this.finance.exportCollections()),
       settings: await this.ensureSettings(),
     };
+  }
+
+  // --- Finances (finance/service.ts) ---
+  getFinanceOverview(input: { today: string }): Promise<FinanceOverview> {
+    return this.finance.getFinanceOverview(input);
+  }
+  listFinanceTransactions(range: DateRange): Promise<FinanceTransaction[]> {
+    return this.finance.listFinanceTransactions(range);
+  }
+  setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]> {
+    return this.finance.setFinanceBucket(input);
+  }
+  setFinancePeriodOverride(
+    id: string,
+    override: FinancePeriodOverride | null,
+  ): Promise<FinanceTransaction> {
+    return this.finance.setFinancePeriodOverride(id, override);
+  }
+  setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction> {
+    return this.finance.setFinanceNote(id, note);
+  }
+  setFinancePeriodStart(id: string, marked: boolean): Promise<FinanceTransaction> {
+    return this.finance.setFinancePeriodStart(id, marked);
+  }
+  linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
+    return this.finance.linkFinanceRefund(refundId, chargeId);
+  }
+  listFinanceRules(): Promise<FinanceRule[]> {
+    return this.finance.listFinanceRules();
+  }
+  upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
+    return this.finance.upsertFinanceRule(input);
+  }
+  deleteFinanceRule(id: string): Promise<void> {
+    return this.finance.deleteFinanceRule(id);
+  }
+  updateFinanceAccount(id: string, patch: FinanceAccountPatch): Promise<FinanceAccount> {
+    return this.finance.updateFinanceAccount(id, patch);
+  }
+  createPlaidLinkToken(input: CreateLinkTokenInput): Promise<LinkTokenResult> {
+    return this.finance.createPlaidLinkToken(input);
+  }
+  exchangePlaidPublicToken(input: ExchangePublicTokenInput): Promise<FinanceItem> {
+    return this.finance.exchangePlaidPublicToken(input);
+  }
+  completePlaidUpdate(itemId: string): Promise<FinanceItem> {
+    return this.finance.completePlaidUpdate(itemId);
+  }
+  removePlaidItem(itemId: string): Promise<void> {
+    return this.finance.removePlaidItem(itemId);
+  }
+  requestFinanceSync(input: { refresh: boolean }): Promise<RequestFinanceSyncResult> {
+    return this.finance.requestFinanceSync(input);
   }
 }

@@ -16,6 +16,7 @@ import {
   useUpsertCategory,
 } from '../../data/hooks/useCategories';
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
+import { fmtMoney, parseDollars } from '../../modules/finances/money';
 import {
   useConnectGoogle,
   useDisconnectGoogleAccount,
@@ -34,6 +35,7 @@ export function SettingsPage() {
       <CategoriesSection />
       <CalendarSection />
       <PreferencesSection />
+      <FinancesSection />
       <DataSection />
     </div>
   );
@@ -549,6 +551,78 @@ function PreferencesSection() {
             className="w-60"
           />
         </div>
+      </Card>
+    </section>
+  );
+}
+
+// The budget bucket's limit per billing period, and the card payment day the period falls back to
+// until you mark a payment (finance.ts computeFinancePeriod). A bad value says so and isn't saved; it
+// stays in the field so it can be fixed.
+function FinancesSection() {
+  const { data: settings } = useSettings();
+  const update = useUpdateSettings();
+  const [budgetError, setBudgetError] = useState(false);
+  const [dayError, setDayError] = useState(false);
+  if (!settings) return null;
+  return (
+    <section className="flex flex-col gap-3">
+      <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
+        Finances
+      </Text>
+      <Card>
+        <div className="flex flex-wrap items-end gap-4">
+          <Field
+            label="Budget per period ($)"
+            inputMode="decimal"
+            defaultValue={(settings.financeBudgetCents / 100).toFixed(2)}
+            onBlur={(e) => {
+              const cents = parseDollars(e.target.value);
+              setBudgetError(cents === null);
+              if (cents !== null && cents !== settings.financeBudgetCents)
+                update.mutate({ financeBudgetCents: cents });
+            }}
+            aria-invalid={budgetError}
+            aria-describedby={budgetError ? 'fin-budget-error' : undefined}
+            className="w-36"
+          />
+          <Field
+            label="Card payment day"
+            type="number"
+            min={1}
+            max={31}
+            defaultValue={settings.financePaymentDay}
+            onBlur={(e) => {
+              const raw = e.target.value.trim();
+              const day = Number(raw);
+              const ok = raw !== '' && Number.isInteger(day) && day >= 1 && day <= 31;
+              setDayError(!ok);
+              if (ok && day !== settings.financePaymentDay)
+                update.mutate({ financePaymentDay: day });
+            }}
+            aria-invalid={dayError}
+            aria-describedby={dayError ? 'fin-day-error' : undefined}
+            className="w-36"
+          />
+        </div>
+        {budgetError && (
+          <div role="alert" className="mt-2">
+            <Text id="fin-budget-error" size="xs" tone="danger">
+              Enter a dollar amount, like 600 or 600.00.
+            </Text>
+          </div>
+        )}
+        {dayError && (
+          <div role="alert" className="mt-2">
+            <Text id="fin-day-error" size="xs" tone="danger">
+              Enter a day from 1 to 31.
+            </Text>
+          </div>
+        )}
+        <Text size="xs" tone="muted" className="mt-2 block">
+          Now {fmtMoney(settings.financeBudgetCents)}, payment day {settings.financePaymentDay}. The
+          payment day is used until you mark a payment — the period starts the day after it.
+        </Text>
       </Card>
     </section>
   );

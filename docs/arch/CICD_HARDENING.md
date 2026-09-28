@@ -25,7 +25,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 | 2   | cdk-nag                     | $0   | Build-time only, no AWS calls                                                     |
 | 3   | gitleaks                    | $0   | Free for personal repos; CI minutes                                               |
 | 4   | Dependabot                  | $0   | GitHub-native, runs off GitHub infra (not your Actions minutes)                   |
-| 5   | CloudWatch alarms           | $0   | ≤10 alarms/month free (we use 3–4); SNS email 1,000/month free                    |
+| 5   | CloudWatch alarms           | $0   | ≤10 alarms/month free (we use 6); SNS email 1,000/month free                      |
 | 6   | Post-deploy synthetic check | $0   | `curl` in CI; extra Lambda/CloudFront hits are free-tier / fractions of a cent    |
 | 7   | Budget                      | $0   | Notification-only budgets free & unlimited (anomaly monitor dropped — see item 7) |
 
@@ -77,6 +77,10 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 ## Item 2 — cdk-nag (AwsSolutions pack only)
 
+> **Note (2026-09, finances):** acknowledgements match by id across the whole app, not per construct — the
+> Plaid `items/*` IAM5 ack sits on both the BFF and the finance-sync function, and either alone would pass
+> synth. The IAM statements do the scoping, not the acks.
+
 **Files:** `cdk/package.json` (add `cdk-nag` devDep — **dependency to justify first**), `cdk/src/bin/aperture.ts` (wire at the `App` created ~line 27), inline `NagSuppressions` in `app-stack.ts` / data stack / the new monitoring construct.
 
 - **API (confirmed, v3.0.2):** `Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }))` (v3 dropped the classic `Aspects.of().add()`), suppress with `Validations.of(construct).acknowledge({ id, reason })`. Base rule ids work for non-granular findings.
@@ -92,6 +96,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 - Dedicated workflow (not folded into PR-only `pr.yml`): triggers `pull_request` + `push`.
 - `actions/checkout@v7` with `fetch-depth: 0` (full history), then `gitleaks/gitleaks-action@<verified-tag>`. No license key for a personal repo.
 - False positives → `.gitleaksignore` fingerprints. Repo already keeps secrets out of git (`.secrets/`, `cdk-outputs.*.json` gitignored; origin secret injected via env), so findings should be rare.
+  - **Prefer a secret-value allowlist in `.gitleaks.toml`** (default rules kept via `[extend] useDefault`). A fingerprint pins commit + line, so it stops matching once the PR is squash-merged. First entry (2026-09-28): the RPC name `exchangePlaidPublicToken` is exactly 24 alphanumerics, which trips `plaid-client-id`.
 - **Dependency to justify first** (it's a GitHub Action, not npm, but still a supply-chain surface — pin by tag/SHA).
 
 ## Item 4 — Dependabot (scoped)
@@ -111,6 +116,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
   - `fn.metricThrottles()` ≥ 1
   - `fn.metricDuration({ statistic: 'p99' })` ≥ ~12000ms (80% of the 15s timeout at `app-stack.ts:46`)
   - each `.addAlarmAction(new cw_actions.SnsAction(topic))`
+  - **Since 2026-09 (finances):** `Monitoring` takes a list of functions — three alarms each, one topic, one email confirmation. The finance sync adds `FinanceSyncErrors`, `FinanceSyncThrottles` and `FinanceSyncDurationOverBudget` (`Maximum` ≥ 295 s, not p99 — a legitimate refresh poll runs for minutes); the BFF's alarm ids are unchanged. 6 alarms in prod.
 - **Skip DynamoDB throttle alarms** (on-demand + a known CDK math-expression limitation make them not worth it).
 
 ### DECISION — CloudFront 5xx alarm: **Option B chosen** (skip it), 2026-08-10.

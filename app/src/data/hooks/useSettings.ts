@@ -13,6 +13,11 @@ export function useUpdateSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (patch: SettingsPatch) => api.updateSettings(patch),
-    onSuccess: (next) => qc.setQueryData(qk.settings(), next),
+    onSuccess: (next, patch) => {
+      qc.setQueryData(qk.settings(), next);
+      // The finance overview is computed from the budget and payment day — re-read it.
+      if ('financeBudgetCents' in patch || 'financePaymentDay' in patch)
+        void qc.invalidateQueries({ queryKey: qk.finance() });
+    },
   });
 }

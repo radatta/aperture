@@ -66,3 +66,32 @@ describe('categories: retire / restore', () => {
     expect((await api.listCategories()).find((c) => c.id === hw.id)?.active).toBe(false);
   });
 });
+
+describe('finances settings', () => {
+  it('says why a bad value isn’t saved, keeps it for fixing, and saves a good one', async () => {
+    const api = createStubClient({ seed: false, storageKey: `settings-fin-${Math.random()}` });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    const day = await screen.findByLabelText('Card payment day');
+    await user.clear(day);
+    await user.type(day, '40');
+    await user.tab();
+    expect(await screen.findByText('Enter a day from 1 to 31.')).toBeTruthy();
+    expect(day.getAttribute('aria-invalid')).toBe('true');
+    expect((day as HTMLInputElement).value).toBe('40');
+    expect((await api.getSettings()).financePaymentDay).toBe(20);
+
+    const budget = screen.getByLabelText('Budget per period ($)');
+    await user.clear(budget);
+    await user.type(budget, '-5');
+    await user.tab();
+    expect(await screen.findByText('Enter a dollar amount, like 600 or 600.00.')).toBeTruthy();
+    expect(screen.getByText(/Now \$600\.00, payment day 20/)).toBeTruthy(); // still shows
+
+    await user.clear(day);
+    await user.type(day, '15');
+    await user.tab();
+    await waitFor(async () => expect((await api.getSettings()).financePaymentDay).toBe(15));
+    expect(screen.queryByText('Enter a day from 1 to 31.')).toBeNull();
+  });
+});

@@ -49,6 +49,16 @@ every task/log/story/settings row, calendar event inserts on the connected Googl
 - **touch S3 keys outside `u/<sub>/`** — keys are minted server-side; IAM is object-scoped to `u/*`.
 - **delete a calendar event Aperture didn't create** — the pointer rule (only events whose `eventId`
   Aperture stored).
+- **reach Plaid or change anything financial** — the MCP role has no Plaid SSM path or Lambda-invoke IAM,
+  and the edge pins the Plaid gateway + sync invoker to no-ops (cdk `stacks.test` "the MCP function gets
+  nothing Plaid"; `mcp/index.test` drives a finance tool through the edge and asserts the live ones are
+  never built). The finance tools only read rows already synced.
+
+**Privacy — finance data leaves the app here.** The finance tools put merchant names, amounts, notes,
+account names + last 4 digits, and balances into the Claude conversation (and so claude.ai's history and
+retention, and the phone). Full account numbers and Plaid tokens are never stored or exposed. To keep
+finances out of voice, disable the three tools on the claude.ai connector if it offers per-tool control
+(unverified), or remove them from `FINANCE_TOOLS`.
 
 Revocation is one secret rotation + redeploy + re-register, independent of the recruiting `DEVICE_TOKEN`.
 (Rejected alternative: a DynamoDB-only ceiling — the user wanted calendar + attachments too.)
@@ -62,6 +72,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy`                                                                  |
 | attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`            |
+| finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`           |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -96,6 +107,22 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   args are model output tokens, so this is a small-text-artifact path) and the Lambda PUTs it to the
   presigned URL; `create_attachment_upload` returns a presigned URL for a real file (up to 20 MB) that a
   shell PUTs directly. Both reuse the existing size-cap + pending→ready flow — **no new IAM**.
+- **Finances are read-only** (`lambdas/src/mcp/financeTools.ts`). Sorting, marking, linking, rules and
+  Refresh stay app-only. Money is US dollars as numbers (`…Usd`, summed in cents first): positive = money
+  out, negative = money in, after an account's sign flip. Every row in the page's range gets its `kind` /
+  resolved `bucket` / `period` from `deriveFinanceView` (shared) over exactly the rows the page loads, so
+  those match the page; a `from`/`to` window reaching past that range derives only the outside rows
+  separately (over the window padded back 31 days) and never re-derives the page's. Without a window,
+  `unsorted: true` is exactly the Sort queue (= the overview's `toSort.count`) and `bucket` is the page's
+  bucket chip (hidden-account rows included, flagged). `merchant` is a case-insensitive substring, and
+  `totalUsd` is the net sum of **every** match — the answer to "how much at X", even when the list is
+  truncated. Hidden accounts are listed with `hidden: true` and excluded from the overview's totals.
+  **`today`** is optional: omitted, the server takes the user's day in `USER_TIME_ZONE`
+  (America/Los_Angeles) at their `dayStartHour` (`dayKeyInZone`), and the result says which
+  (`todaySource`) — so "how much budget is left?" works as one spoken sentence. Pass `today` when
+  travelling. (The finance sync's schedule is the other place Pacific time is fixed — cdk
+  `finance-sync.ts`.) The overview omits the Plaid environment (the MCP's gateway is inert, so it would
+  always read "sandbox"). Data is as fresh as the last bank sync; voice can't trigger one.
 
 ## Dependency note — the MCP protocol is hand-rolled (no SDK)
 
@@ -113,6 +140,9 @@ transport. See `lambdas/src/mcp/protocol.ts`.
 
 - `lambdas/src/mcp/protocol.ts` — pure JSON-RPC core, `handleMcpMessage(msg, ctx)`.
 - `lambdas/src/mcp/tools.ts` — the tool table; each `run` dispatches through `ctx.dispatch` (= `handleRpc`).
+- `lambdas/src/mcp/financeTools.ts` — the read-only finance tools, over `deriveFinanceView` /
+  `financeListRange` (`packages/shared/src/finance.ts`, shared with the page) and `dayKeyInZone`
+  (`packages/shared/src/dates.ts`).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
   become `isError` results the model self-corrects from).
 - `lambdas/src/mcp/index.ts` — the AWS/HTTP + auth edge (origin gate, well-known routes, credential fork,
@@ -260,6 +290,10 @@ the model as the only UI — so:
   "ask" for those. A new destructive tool inherits this concern.
 - **Logic that only runs when the app opens doesn't run for voice** (the stale-planned lag above is the
   existing case).
+- **Finances by voice are questions, not edits:** "how much budget is left?" → `get_finance_overview` with
+  no arguments; "what did I spend at Amazon?" → `list_finance_transactions {merchant: "amazon"}` and its
+  `totalUsd`. Nothing finance-related is
+  writable from here.
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
 timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation

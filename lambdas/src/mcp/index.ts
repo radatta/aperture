@@ -11,6 +11,8 @@ import type { Verifier } from '../auth/verify';
 import { handleRpc } from '../handler';
 import { createLiveGoogle } from '../google/liveGoogle';
 import { createS3Presigner } from '../s3/presigner';
+import { noopPlaid } from '../plaid/gateway';
+import { noopInvoker } from '../finance/invoker';
 import { handleMcpMessage } from './protocol';
 import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
@@ -150,7 +152,13 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
 
   const ctx: ToolContext = {
     dispatch: (method: ApiMethod, args: unknown[]) =>
-      handleRpc(doc, { userId, method, args, google, stateSecret: process.env.ORIGIN_SECRET }, { presigner }),
+      // Plaid + the sync invoker are pinned inert: the MCP role has no Plaid IAM (cdk stacks.test "the
+      // MCP function gets nothing Plaid"), and its finance tools read only what's in the table.
+      handleRpc(
+        doc,
+        { userId, method, args, google, stateSecret: process.env.ORIGIN_SECRET },
+        { presigner, plaid: noopPlaid(), financeInvoker: noopInvoker() },
+      ),
     upload: uploadToPresigned,
   };
 

@@ -136,6 +136,9 @@ Both pairs are load-bearing, and they fail in different ways:
 - `DEVICE_USER_ID_*` unset → the handler falls back to userId `'local'`, so attempts are written under
   `u#local` while the page reads under `u#<your sub>`. **Capture works, the page stays empty, and
   nothing errors anywhere.** This is the single most confusing failure mode in the feature.
+- `DEVICE_USER_ID_*` also gates the **finance sync schedule** ([finances/](../finances/index.md)): unset →
+  no scheduled sync on that stage (Refresh still works); wrong → the schedule syncs an empty partition,
+  silently.
 
 Find your `sub`: sign in to the app, then decode the access token's payload, or read it from the Cognito
 console (User pools → your pool → Users → the user → "sub" attribute).

@@ -1,5 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import { ConditionFailedError } from './DocClient';
 import type { DocClient, IndexRange, Item } from './DocClient';
 
 // The real DynamoDB single-table DocClient — the deploy-time (Phase 12) implementation of the same
@@ -23,12 +24,38 @@ export function createLiveDoc(tableName: string): DocClient {
   }
 
   return {
-    async get(pk, sk) {
-      const res = await doc.get({ TableName: tableName, Key: { PK: pk, SK: sk } });
+    async get(pk, sk, opts) {
+      const res = await doc.get({
+        TableName: tableName,
+        Key: { PK: pk, SK: sk },
+        ConsistentRead: opts?.consistent === true,
+      });
       return (res.Item as Item | undefined) ?? null;
     },
     async put(item) {
       await doc.put({ TableName: tableName, Item: item });
+    },
+    async putIf(item, expectedUpdatedAt) {
+      try {
+        await doc.put(
+          expectedUpdatedAt === null
+            ? { TableName: tableName, Item: item, ConditionExpression: 'attribute_not_exists(PK)' }
+            : {
+                TableName: tableName,
+                Item: item,
+                ConditionExpression: 'updatedAt = :u',
+                ExpressionAttributeValues: { ':u': expectedUpdatedAt },
+              },
+        );
+      } catch (err) {
+        const name = err instanceof Error ? err.name : '';
+        if (
+          err instanceof ConditionalCheckFailedException ||
+          name === 'ConditionalCheckFailedException'
+        )
+          throw new ConditionFailedError();
+        throw err;
+      }
     },
     async query(pk, skPrefix) {
       return queryAll({

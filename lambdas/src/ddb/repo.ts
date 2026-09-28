@@ -1,6 +1,12 @@
 import type {
   Attachment,
+  BaseEntity,
   Category,
+  FinanceAccount,
+  FinanceItem,
+  FinanceRule,
+  FinanceSyncState,
+  FinanceTransaction,
   Day,
   Habit,
   HabitCheck,
@@ -15,13 +21,40 @@ import type {
   TaskPlan,
   TaskSeries,
 } from '@aperture/shared';
+import { ConditionFailedError } from './DocClient';
 import type { DocClient, Item } from './DocClient';
 import type { Writes } from './writes';
 import { gsi1, pk, sk } from './keys';
-import { entityItem, taskItem, toEntity } from './mapping';
+import {
+  entityItem,
+  financeTxnItem,
+  taskItem,
+  toEntity,
+  toFinanceSyncState,
+  toFinanceTxn,
+} from './mapping';
+import { mapLimit } from '../util/mapLimit';
 
 type Deletable = { deletedAt: number | null };
 const alive = <T extends Deletable>(rows: T[]): T[] => rows.filter((r) => r.deletedAt === null);
+
+// A conditional write kept losing — another writer is hammering the row. Surfaces to the caller.
+export class ConflictError extends Error {
+  readonly code = 'CONFLICT';
+  constructor() {
+    super('Conflict — try again');
+    this.name = 'ConflictError';
+  }
+}
+export const CAS_ATTEMPTS = 4;
+const FIN_CONCURRENCY = 25;
+
+// One casUpdate target: how to read the row and how to write it back.
+interface CasShape<T> {
+  sk: string;
+  read: (item: Item) => T;
+  toItem: (t: T) => Item;
+}
 
 // The persistence facade the routes sit on: reads go straight to the DocClient, every write goes
 // through `writes` (the single audit point). Entities keyed as `type#<id>` get a direct read; the few
@@ -148,9 +181,7 @@ export class Repo {
 
   // --- Stories ---
   async listStories(): Promise<Story[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.storyPrefix())).map((i) => toEntity<Story>(i)),
-    );
+    return alive((await this.doc.query(this.p(), sk.storyPrefix())).map((i) => toEntity<Story>(i)));
   }
   // getTask-style (re-filter tombstones → null), so updateStory on a deleted row throws — parity with
   // the stub's `patch`, which refuses a tombstoned id.
@@ -310,6 +341,193 @@ export class Repo {
   async putCategory(c: Category): Promise<Category> {
     await this.writes.put(entityItem(this.userId, sk.cat(c.id), c));
     return c;
+  }
+
+  // --- Finances ---
+  // Every write to an existing finance row is a casUpdate: read → change → conditional put on the
+  // updatedAt it read, retried on a lost race — so a sync never clobbers a bucket set mid-run and a
+  // user edit never writes back a stale Plaid amount. Brand-new transaction rows batch (the sync lock
+  // is the only writer that can create them).
+
+  // Read `fresh`, apply `fn`, write only if nobody changed the row in between; retry (strongly
+  // consistent) on a lost race. `fn` returning null means "nothing to do" (the fresh row is returned
+  // as-is); it always sees the freshest row, so its checks re-run each attempt. A missing row throws
+  // `Not found`, or is created from `create()` when given (itself conditional — absent only). A
+  // tombstoned row throws unless `allowDeleted`. updatedAt is bumped strictly past the read value, so
+  // two writes in the same millisecond (or under a frozen test clock) can't both pass the condition.
+  // `consistent` makes the FIRST read strongly consistent too — for decisions taken on a read that
+  // may never be written back (fn → null), like "is the sync lock held?".
+  async casUpdate<T extends BaseEntity>(
+    shape: CasShape<T>,
+    id: string,
+    fn: (fresh: T) => T | null,
+    now: number,
+    opts: { allowDeleted?: boolean; create?: () => T; consistent?: boolean } = {},
+  ): Promise<T> {
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+      const item = await this.doc.get(this.p(), shape.sk, {
+        consistent: attempt > 0 || opts.consistent === true,
+      });
+      if (!item) {
+        if (!opts.create) throw new Error(`Not found: ${id}`);
+        const created = opts.create();
+        try {
+          await this.writes.putIf(shape.toItem(created), null);
+          return created;
+        } catch (err) {
+          if (err instanceof ConditionFailedError) continue;
+          throw err;
+        }
+      }
+      const fresh = shape.read(item);
+      if (fresh.deletedAt !== null && !opts.allowDeleted) throw new Error(`Not found: ${id}`);
+      const next = fn(fresh);
+      if (next === null) return fresh;
+      const stamped = { ...next, updatedAt: Math.max(now, fresh.updatedAt + 1) };
+      try {
+        await this.writes.putIf(shape.toItem(stamped), fresh.updatedAt);
+        return stamped;
+      } catch (err) {
+        if (err instanceof ConditionFailedError) continue;
+        throw err;
+      }
+    }
+    throw new ConflictError();
+  }
+
+  finItemShape(id: string): CasShape<FinanceItem> {
+    return {
+      sk: sk.finItem(id),
+      read: (i) => toEntity<FinanceItem>(i),
+      toItem: (t) => entityItem(this.userId, sk.finItem(t.id), t),
+    };
+  }
+  finSyncShape(itemId: string): CasShape<FinanceSyncState> {
+    return {
+      sk: sk.finSync(itemId),
+      read: toFinanceSyncState,
+      toItem: (t) => entityItem(this.userId, sk.finSync(t.itemId), t),
+    };
+  }
+  finAcctShape(id: string): CasShape<FinanceAccount> {
+    return {
+      sk: sk.finAcct(id),
+      read: (i) => toEntity<FinanceAccount>(i),
+      toItem: (t) => entityItem(this.userId, sk.finAcct(t.id), t),
+    };
+  }
+  finTxnShape(id: string): CasShape<FinanceTransaction> {
+    return {
+      sk: sk.finTxn(id),
+      read: toFinanceTxn,
+      toItem: (t) => financeTxnItem(this.userId, t),
+    };
+  }
+  finRuleShape(id: string): CasShape<FinanceRule> {
+    return {
+      sk: sk.finRule(id),
+      read: (i) => toEntity<FinanceRule>(i),
+      toItem: (t) => entityItem(this.userId, sk.finRule(t.id), t),
+    };
+  }
+
+  // Tombstones included: callers decide (a removed item is a no-op; a returning account revives).
+  async getFinanceItem(id: string, opts?: { consistent?: boolean }): Promise<FinanceItem | null> {
+    const it = await this.doc.get(this.p(), sk.finItem(id), opts);
+    return it ? toEntity<FinanceItem>(it) : null;
+  }
+  async listFinanceItems(): Promise<FinanceItem[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.finItemPrefix())).map((i) => toEntity<FinanceItem>(i)),
+    );
+  }
+  async getFinanceSyncState(
+    itemId: string,
+    opts?: { consistent?: boolean },
+  ): Promise<FinanceSyncState | null> {
+    const it = await this.doc.get(this.p(), sk.finSync(itemId), opts);
+    return it ? toFinanceSyncState(it) : null;
+  }
+  async listFinanceSyncStates(): Promise<FinanceSyncState[]> {
+    return alive((await this.doc.query(this.p(), sk.finSyncPrefix())).map(toFinanceSyncState));
+  }
+  // Tombstones included (the sync revives a returning account, keeping its flip/hide).
+  async listFinanceAccountsAll(): Promise<FinanceAccount[]> {
+    return (await this.doc.query(this.p(), sk.finAcctPrefix())).map((i) =>
+      toEntity<FinanceAccount>(i),
+    );
+  }
+  async listFinanceAccounts(): Promise<FinanceAccount[]> {
+    return alive(await this.listFinanceAccountsAll());
+  }
+  async getFinanceAccount(
+    id: string,
+    opts?: { consistent?: boolean },
+  ): Promise<FinanceAccount | null> {
+    const it = await this.doc.get(this.p(), sk.finAcct(id), opts);
+    return it ? toEntity<FinanceAccount>(it) : null;
+  }
+  // Alive rows dated in [from, to] (inclusive; `to` omitted = no upper bound) — the GSI date index.
+  async listFinanceTxnsInRange(from: string, to?: string): Promise<FinanceTransaction[]> {
+    const rows = await this.doc.queryIndex(gsi1.finTxnPk(this.userId), {
+      from: gsi1.finTxnSk(from),
+      to: to === undefined ? undefined : gsi1.finTxnSk(to),
+    });
+    return alive(rows.map(toFinanceTxn));
+  }
+  async listAllFinanceTxns(): Promise<FinanceTransaction[]> {
+    return alive((await this.doc.query(this.p(), sk.finTxnPrefix())).map(toFinanceTxn));
+  }
+  async getFinanceTxn(
+    id: string,
+    opts?: { consistent?: boolean },
+  ): Promise<FinanceTransaction | null> {
+    const it = await this.doc.get(this.p(), sk.finTxn(id), opts);
+    return it ? toFinanceTxn(it) : null;
+  }
+  // Each id's row, tombstones included (a posted row inherits from an already-removed pending one).
+  async getFinanceTxns(
+    ids: string[],
+    opts?: { consistent?: boolean },
+  ): Promise<Map<string, FinanceTransaction>> {
+    const rows = await mapLimit(ids, FIN_CONCURRENCY, (id) => this.getFinanceTxn(id, opts));
+    const out = new Map<string, FinanceTransaction>();
+    for (const r of rows) if (r) out.set(r.id, r);
+    return out;
+  }
+  // A row the caller believes is new: written only if absent. If it turns out to exist (a read that
+  // missed it, a write that landed meanwhile), `merge(fresh)` decides the write instead, via casUpdate —
+  // so a blind insert can never flatten a user's edit.
+  async insertFinanceTxn(
+    row: FinanceTransaction,
+    merge: (fresh: FinanceTransaction) => FinanceTransaction,
+  ): Promise<FinanceTransaction> {
+    try {
+      await this.writes.putIf(financeTxnItem(this.userId, row), null);
+      return row;
+    } catch (err) {
+      if (!(err instanceof ConditionFailedError)) throw err;
+      return this.casUpdate(this.finTxnShape(row.id), row.id, merge, row.updatedAt, {
+        allowDeleted: true,
+        consistent: true,
+      });
+    }
+  }
+  async listFinanceRules(): Promise<FinanceRule[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.finRulePrefix())).map((i) => toEntity<FinanceRule>(i)),
+    );
+  }
+  async getFinanceRule(id: string): Promise<FinanceRule | null> {
+    const it = await this.doc.get(this.p(), sk.finRule(id));
+    return it ? toEntity<FinanceRule>(it) : null;
+  }
+  // casUpdate a batch of rows, a bounded number at a time.
+  async casMany<T extends BaseEntity, U>(
+    items: readonly U[],
+    each: (u: U) => Promise<T>,
+  ): Promise<T[]> {
+    return mapLimit(items, FIN_CONCURRENCY, each);
   }
 
   // --- Settings singleton ---

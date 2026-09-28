@@ -7,7 +7,28 @@
 //   - LAZY stale sweep: getDay() also returns planned tasks with no plan row on/after the day to backlog.
 
 import {
+  addDays,
+  applyRules,
   assertAttachmentAllowed,
+  buildFinanceOverview,
+  detectInternalMoves,
+  FINANCE_DEFAULT_BUDGET_CENTS,
+  FINANCE_DEFAULT_PAYMENT_DAY,
+  FINANCE_OVERVIEW_LOOKBACK_DAYS,
+  FINANCE_REFRESH_COOLDOWN_MS,
+  FIXTURE_ACCOUNTS,
+  FIXTURE_INSTITUTION,
+  FIXTURE_ITEM_ID,
+  FIXTURE_LINK_ACCOUNTS,
+  fixturePageAfter,
+  duplicateItemMessage,
+  isDuplicateItem,
+  normalizeRulePattern,
+  reconcileSyncPage,
+  periodStartError,
+  refundLinkError,
+  todayKey,
+  toCents,
   assertCategoryDeletable,
   completeSession,
   countsTowardCap,
@@ -41,8 +62,22 @@ import type {
   CalibrationPoint,
   Category,
   CreateAttachmentInput,
+  CreateLinkTokenInput,
   CreateTaskInput,
   DateRange,
+  ExchangePublicTokenInput,
+  FinanceAccount,
+  FinanceAccountPatch,
+  FinanceItem,
+  FinanceOverview,
+  FinancePeriodOverride,
+  FinanceRule,
+  FinanceSyncState,
+  FinanceTransaction,
+  LinkTokenResult,
+  RequestFinanceSyncResult,
+  SetFinanceBucketInput,
+  UpsertFinanceRuleInput,
   GetCalendarBusyInput,
   GoogleCalendar,
   GoogleStatus,
@@ -77,6 +112,10 @@ import type {
 import { seedStore } from './seed';
 
 const USER_ID = 'local';
+const FINANCE_SETTINGS_DEFAULTS = {
+  financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
+  financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
+};
 const STORAGE_KEY = 'aperture.stub.v1';
 
 export interface Store {
@@ -94,6 +133,11 @@ export interface Store {
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[];
+  financeItems: FinanceItem[];
+  financeSyncStates: FinanceSyncState[];
+  financeAccounts: FinanceAccount[];
+  financeTransactions: FinanceTransaction[];
+  financeRules: FinanceRule[];
   settings: Settings | null;
 }
 
@@ -113,6 +157,11 @@ export function emptyStore(): Store {
     leetcodeAttempts: [],
     stories: [],
     attachments: [],
+    financeItems: [],
+    financeSyncStates: [],
+    financeAccounts: [],
+    financeTransactions: [],
+    financeRules: [],
     settings: null,
   };
 }
@@ -121,6 +170,20 @@ export interface StubOptions {
   now?: () => number;
   storageKey?: string;
   seed?: boolean;
+}
+
+// Dev/test hook: set this localStorage key to a Plaid error code (e.g. INSTITUTION_NOT_RESPONDING, or
+// ITEM_LOGIN_REQUIRED) and the stub's next finance sync fails with it, once. Stub-only — the real
+// failure paths are Plaid's.
+export const STUB_FAIL_NEXT_SYNC_KEY = 'aperture:stub:failNextFinanceSync';
+function takeStubSyncFailure(): string | null {
+  try {
+    const code = globalThis.localStorage?.getItem(STUB_FAIL_NEXT_SYNC_KEY) ?? null;
+    if (code) globalThis.localStorage?.removeItem(STUB_FAIL_NEXT_SYNC_KEY);
+    return code || null;
+  } catch {
+    return null;
+  }
 }
 
 export function createStubClient(options: StubOptions = {}): ApiClient {
@@ -142,7 +205,10 @@ class StubClient implements ApiClient {
       this.store = loaded;
     } else {
       this.store = emptyStore();
-      if (opts.seed !== false) seedStore(this.store, this.now(), this.ulid);
+      if (opts.seed !== false) {
+        seedStore(this.store, this.now(), this.ulid);
+        this.seedFinance();
+      }
       this.persist();
     }
   }
@@ -153,7 +219,25 @@ class StubClient implements ApiClient {
       const raw = globalThis.localStorage?.getItem(this.key);
       // Coalesce over emptyStore() so a pre-existing persisted store gains new collections (e.g.
       // leetcodeAttempts) without a wipe or an undefined.push crash.
-      return raw ? { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) } : null;
+      if (!raw) return null;
+      const store = { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) };
+      // Settings gain fields over time; a persisted row from before them reads the defaults.
+      if (store.settings) {
+        store.settings = { ...FINANCE_SETTINGS_DEFAULTS, ...store.settings };
+        delete (store.settings as { financeCycleDay?: number }).financeCycleDay; // → financePaymentDay
+      }
+      // Rows persisted before refund linking / period marks existed read as unlinked and unmarked.
+      store.financeTransactions = store.financeTransactions.map((t) => ({
+        ...t,
+        refundOfId: t.refundOfId ?? null,
+        startsPeriod: t.startsPeriod ?? false,
+      }));
+      store.financeSyncStates = store.financeSyncStates.map((x) => ({
+        ...x,
+        lastSyncErrorAt: x.lastSyncErrorAt ?? null,
+        lastRefreshedAt: x.lastRefreshedAt ?? null,
+      }));
+      return store;
     } catch {
       return null;
     }
@@ -259,6 +343,7 @@ class StubClient implements ApiClient {
       calendarWriteDefault: null,
       dayFocusStart: 8,
       dayEndHour: 22,
+      ...FINANCE_SETTINGS_DEFAULTS,
     };
     this.store.settings = settings;
     this.persist();
@@ -920,6 +1005,336 @@ class StubClient implements ApiClient {
     this.persist();
   }
 
+  // --- Finances (stub: Plaid is faked with the shared fixtures) -----------------------------------
+  // Link is a FakeLinkDialog (environment 'stub'), the exchange "returns" the fixture BofA login, and a
+  // sync replays fixture pages by cursor — the same pages the lambdas' InMemoryPlaid serves, through
+  // the same reconcileSyncPage. Syncs run inline, so `syncing` is never observed here.
+  private finToday(): string {
+    return todayKey(this.dayStartHour(), this.now());
+  }
+  // Page through the fixture from the saved cursor until has_more=false; the cursor is saved last.
+  // Only the accounts ticked at link time come through, like a real consented Item.
+  private syncItem(itemId: string): void {
+    const t = this.now();
+    const state = this.find(this.store.financeSyncStates, itemId);
+    if (!state) return;
+    // A login that needs fixing keeps failing until update mode (completePlaidUpdate) fixes it — as
+    // at Plaid, where every call on the item returns ITEM_LOGIN_REQUIRED.
+    const loginNeeded = this.find(this.store.financeItems, itemId)?.status === 'login_required';
+    const failure = loginNeeded ? 'ITEM_LOGIN_REQUIRED' : takeStubSyncFailure();
+    if (failure) {
+      // A failed run changes nothing but the error — the cursor and lastSyncedAt stay put.
+      this.writes.put(this.store.financeSyncStates, {
+        ...state,
+        lastSyncError: failure,
+        lastSyncErrorAt: t,
+        updatedAt: t,
+      });
+      if (failure === 'ITEM_LOGIN_REQUIRED')
+        this.writes.patch(this.store.financeItems, itemId, {
+          status: 'login_required',
+          errorCode: failure,
+        });
+      return;
+    }
+    const accountIds = new Set(
+      this.alive(this.store.financeAccounts)
+        .filter((a) => a.itemId === itemId)
+        .map((a) => a.id),
+    );
+    const keep = <T extends { account_id: string }>(xs: T[]) =>
+      xs.filter((x) => accountIds.has(x.account_id));
+    const existing = new Map(this.store.financeTransactions.map((x) => [x.id, x]));
+    const rules = this.alive(this.store.financeRules);
+    let cursor = state.cursor;
+    for (;;) {
+      const page = fixturePageAfter(cursor, this.finToday());
+      const rows = reconcileSyncPage({
+        existing,
+        page: { added: keep(page.added), modified: keep(page.modified), removed: page.removed },
+        rules,
+        now: t,
+        itemId,
+        userId: USER_ID,
+      });
+      for (const r of rows) this.writes.put(this.store.financeTransactions, r);
+      cursor = page.next_cursor;
+      if (!page.has_more) break;
+    }
+    this.writes.put(this.store.financeSyncStates, {
+      ...state,
+      cursor,
+      lastSyncedAt: t,
+      lastSyncError: null,
+      lastSyncErrorAt: null,
+      updatedAt: t,
+    });
+  }
+  // Link + first sync, shared by exchangePlaidPublicToken and the dev seed.
+  private linkFixtureItem(input: ExchangePublicTokenInput): FinanceItem {
+    const t = this.now();
+    const ticked = new Set(input.accounts.map((a) => a.id));
+    const stamp = { userId: USER_ID, createdAt: t, updatedAt: t, deletedAt: null };
+    const item = this.writes.put(this.store.financeItems, {
+      ...stamp,
+      id: FIXTURE_ITEM_ID,
+      institutionId: input.institution.id,
+      institutionName: input.institution.name,
+      status: 'ok',
+      errorCode: null,
+      consentExpiresAt: null,
+      lastSuccessfulUpdateAt: t,
+      lastFailedUpdateAt: null,
+      consentedProducts: ['transactions'],
+    });
+    for (const a of FIXTURE_ACCOUNTS.filter((x) => ticked.has(x.account_id))) {
+      const prev = this.store.financeAccounts.find((x) => x.id === a.account_id);
+      this.writes.put(this.store.financeAccounts, {
+        ...stamp,
+        id: a.account_id,
+        itemId: item.id,
+        name: a.name,
+        officialName: a.official_name,
+        mask: a.mask,
+        type: a.type,
+        subtype: a.subtype,
+        isoCurrency: a.balances.iso_currency_code,
+        currentCents: a.balances.current === null ? null : toCents(a.balances.current),
+        availableCents: a.balances.available === null ? null : toCents(a.balances.available),
+        balanceAt: t,
+        signOverride: prev?.signOverride ?? 'auto',
+        hidden: prev?.hidden ?? false,
+      });
+    }
+    this.writes.put(this.store.financeSyncStates, {
+      ...stamp,
+      id: item.id,
+      itemId: item.id,
+      cursor: null,
+      lastSyncedAt: null,
+      lastSyncError: null,
+      lastSyncErrorAt: null,
+      syncRequestedAt: t,
+      refreshRequestedAt: null,
+      lastRefreshedAt: null,
+      lockedUntil: null,
+    });
+    this.syncItem(item.id);
+    return item;
+  }
+  // Dev seed: a linked BofA with three rules, both card payments marked, older history sorted, and
+  // the recent weeks mostly not.
+  private seedFinance(): void {
+    for (const [pattern, bucket] of [
+      ['spotify', 'i_pay'],
+      ['netflix', 'i_pay'],
+      ["trader joe's", 'parents_pay'],
+    ] as const)
+      this.writes.insert(this.store.financeRules, {
+        ...this.base(),
+        pattern,
+        bucket,
+        active: true,
+      });
+    this.linkFixtureItem({
+      publicToken: 'seed',
+      institution: FIXTURE_INSTITUTION,
+      accounts: FIXTURE_LINK_ACCOUNTS,
+    });
+    for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+      this.writes.patch(this.store.financeTransactions, id, { startsPeriod: true });
+    const cutoff = addDays(this.finToday(), -12);
+    const sortedRecently = ['Chipotle', 'Blue Bottle Coffee'];
+    for (const x of this.alive(this.store.financeTransactions)) {
+      if (
+        x.bucket !== null ||
+        x.rawAmountCents <= 0 ||
+        x.accountId !== FIXTURE_ACCOUNTS[2]!.account_id
+      )
+        continue;
+      if (x.date >= cutoff && !sortedRecently.includes(x.merchantName ?? '')) continue;
+      this.writes.patch(this.store.financeTransactions, x.id, {
+        bucket: 'budget',
+        bucketSetBy: 'user',
+      });
+    }
+  }
+
+  async getFinanceOverview(input: { today: string }): Promise<FinanceOverview> {
+    const settings = this.ensureSettings();
+    const from = addDays(input.today, -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+    return buildFinanceOverview({
+      today: input.today,
+      budgetCents: settings.financeBudgetCents,
+      paymentDay: settings.financePaymentDay,
+      items: this.alive(this.store.financeItems),
+      accounts: this.alive(this.store.financeAccounts),
+      syncStates: this.alive(this.store.financeSyncStates),
+      txns: this.alive(this.store.financeTransactions).filter(
+        (x) => x.date >= from && x.date <= input.today,
+      ),
+      environment: 'stub',
+      now: this.now(),
+    });
+  }
+  async listFinanceTransactions(range: DateRange): Promise<FinanceTransaction[]> {
+    return this.alive(this.store.financeTransactions)
+      .filter((x) => x.date >= range.from && x.date <= range.to)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  }
+  async setFinanceBucket(input: SetFinanceBucketInput): Promise<FinanceTransaction[]> {
+    if (input.rule && input.bucket === null) throw new Error('A rule needs a bucket');
+    for (const id of input.ids) this.mustFind(this.store.financeTransactions, id);
+    const changed = new Map<string, FinanceTransaction>();
+    for (const id of input.ids)
+      changed.set(
+        id,
+        this.writes.patch(this.store.financeTransactions, id, {
+          bucket: input.bucket,
+          bucketSetBy: input.bucket ? 'user' : null,
+          refundOfId: null, // sorting a refund yourself unlinks it
+        }),
+      );
+    if (input.rule && input.bucket) {
+      const rule = await this.upsertFinanceRule({
+        pattern: input.rule.pattern,
+        bucket: input.bucket,
+      });
+      for (const x of this.alive(this.store.financeTransactions)) {
+        if (x.bucket !== null || x.refundOfId !== null || x.startsPeriod) continue;
+        if (!applyRules([rule], x)) continue;
+        changed.set(
+          x.id,
+          this.writes.patch(this.store.financeTransactions, x.id, {
+            bucket: rule.bucket,
+            bucketSetBy: 'rule',
+          }),
+        );
+      }
+    }
+    return [...changed.values()];
+  }
+  async setFinancePeriodOverride(
+    id: string,
+    override: FinancePeriodOverride | null,
+  ): Promise<FinanceTransaction> {
+    return this.writes.patch(this.store.financeTransactions, id, {
+      periodOverride: override,
+      refundOfId: null, // moving a refund yourself unlinks it
+    });
+  }
+  async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
+    const refund = this.mustFind(this.store.financeTransactions, refundId);
+    if (chargeId === null)
+      return this.writes.patch(this.store.financeTransactions, refundId, { refundOfId: null });
+    const charge = this.mustFind(this.store.financeTransactions, chargeId);
+    const accounts = this.alive(this.store.financeAccounts);
+    // Moves over the same window the overview reads, so pairing at the edge matches the page.
+    const from = addDays(this.finToday(), -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+    const recent = this.alive(this.store.financeTransactions).filter((x) => x.date >= from);
+    const error = refundLinkError({
+      refund,
+      refundAccount: accounts.find((a) => a.id === refund.accountId),
+      charge,
+      chargeAccount: accounts.find((a) => a.id === charge.accountId),
+      moves: detectInternalMoves(recent, accounts),
+    });
+    if (error) throw new Error(error);
+    return this.writes.patch(this.store.financeTransactions, refundId, {
+      refundOfId: chargeId,
+      bucket: null,
+      bucketSetBy: null,
+      periodOverride: null,
+    });
+  }
+  async setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction> {
+    return this.writes.patch(this.store.financeTransactions, id, { note: note?.trim() || null });
+  }
+  async setFinancePeriodStart(id: string, marked: boolean): Promise<FinanceTransaction> {
+    const txn = this.mustFind(this.store.financeTransactions, id);
+    if (!marked)
+      return this.writes.patch(this.store.financeTransactions, id, { startsPeriod: false });
+    const account = this.store.financeAccounts.find((a) => a.id === txn.accountId);
+    const error = periodStartError(txn, account);
+    if (error) throw new Error(error);
+    return this.writes.patch(this.store.financeTransactions, id, {
+      startsPeriod: true,
+      bucket: null, // it's a payment now
+      bucketSetBy: null,
+      periodOverride: null,
+      refundOfId: null,
+    });
+  }
+  async listFinanceRules(): Promise<FinanceRule[]> {
+    return this.alive(this.store.financeRules).sort((a, b) => a.pattern.localeCompare(b.pattern));
+  }
+  // One live rule per pattern: saving an existing pattern updates it.
+  async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
+    const pattern = normalizeRulePattern(input.pattern);
+    if (!pattern) throw new Error('A rule needs a pattern');
+    const fields = { pattern, bucket: input.bucket, active: input.active ?? true };
+    const id =
+      input.id ?? this.alive(this.store.financeRules).find((r) => r.pattern === pattern)?.id;
+    if (id) return this.writes.patch(this.store.financeRules, id, fields);
+    return this.writes.insert(this.store.financeRules, { ...this.base(), ...fields });
+  }
+  async deleteFinanceRule(id: string): Promise<void> {
+    this.writes.softDelete(this.store.financeRules, id);
+  }
+  async updateFinanceAccount(id: string, patch: FinanceAccountPatch): Promise<FinanceAccount> {
+    return this.writes.patch(this.store.financeAccounts, id, patch);
+  }
+  async createPlaidLinkToken(input: CreateLinkTokenInput): Promise<LinkTokenResult> {
+    if (input.mode === 'update') this.mustFind(this.store.financeItems, input.itemId);
+    return { linkToken: `link-stub-${this.ulid()}`, environment: 'stub' };
+  }
+  async exchangePlaidPublicToken(input: ExchangePublicTokenInput): Promise<FinanceItem> {
+    const { financeItems, financeAccounts } = this.store;
+    if (isDuplicateItem(financeItems, financeAccounts, input.institution.id, input.accounts))
+      throw new Error(duplicateItemMessage(input.institution.name));
+    return this.linkFixtureItem(input);
+  }
+  // Like the backend: the login is fixed, then a sync runs (which can fail again).
+  async completePlaidUpdate(itemId: string): Promise<FinanceItem> {
+    this.mustFind(this.store.financeItems, itemId);
+    this.writes.patch(this.store.financeItems, itemId, { status: 'ok', errorCode: null });
+    const state = this.find(this.store.financeSyncStates, itemId);
+    if (state)
+      this.writes.put(this.store.financeSyncStates, { ...state, syncRequestedAt: this.now() });
+    this.syncItem(itemId);
+    return this.mustFind(this.store.financeItems, itemId);
+  }
+  async removePlaidItem(itemId: string): Promise<void> {
+    for (const a of this.alive(this.store.financeAccounts).filter((x) => x.itemId === itemId))
+      this.writes.softDelete(this.store.financeAccounts, a.id);
+    this.writes.softDelete(this.store.financeSyncStates, itemId);
+    this.writes.softDelete(this.store.financeItems, itemId);
+  }
+  async requestFinanceSync(input: { refresh: boolean }): Promise<RequestFinanceSyncResult> {
+    const t = this.now();
+    const states = this.alive(this.store.financeSyncStates);
+    if (states.length === 0) return { accepted: false, nextAllowedAt: null };
+    if (input.refresh) {
+      const last = Math.max(...states.map((s) => s.refreshRequestedAt ?? -Infinity));
+      if (t - last < FINANCE_REFRESH_COOLDOWN_MS)
+        return { accepted: false, nextAllowedAt: last + FINANCE_REFRESH_COOLDOWN_MS };
+    }
+    for (const s of states) {
+      this.writes.put(this.store.financeSyncStates, {
+        ...s,
+        syncRequestedAt: t,
+        refreshRequestedAt: input.refresh ? t : s.refreshRequestedAt,
+        lastRefreshedAt: input.refresh ? t : s.lastRefreshedAt, // the inline sync "refreshes"
+        updatedAt: t,
+      });
+      this.syncItem(s.itemId);
+    }
+    return {
+      accepted: true,
+      nextAllowedAt: input.refresh ? t + FINANCE_REFRESH_COOLDOWN_MS : null,
+    };
+  }
+
   // --- Calibration ---------------------------------------------------------
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = this.dayStartHour();
@@ -957,6 +1372,11 @@ class StubClient implements ApiClient {
       leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
       stories: this.alive(this.store.stories),
       attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
+      financeItems: this.alive(this.store.financeItems),
+      financeSyncStates: this.alive(this.store.financeSyncStates),
+      financeAccounts: this.alive(this.store.financeAccounts),
+      financeTransactions: this.alive(this.store.financeTransactions),
+      financeRules: this.alive(this.store.financeRules),
       settings: this.ensureSettings(),
     };
     // Store is the source of truth for what a full snapshot holds, so this is where a new collection

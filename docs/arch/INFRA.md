@@ -18,6 +18,9 @@ GitHub Actions ──(OIDC, no static keys)──► cdk deploy + app build/depl
                                             │  validates Cognito JWT in-handler
                                             ▼
                                      DynamoDB (single table, on-demand, PITR)
+                                            ▲
+   Lambda BFF ──async invoke──► finance-sync Lambda ◄── EventBridge Scheduler (3×/day)
+        └──HTTPS──► Plaid ◄──HTTPS──┘   (BFF: link token, exchange, remove; sync: accounts, refresh, sync)
 
    Cognito User Pool (per env, invite-only, PKCE SPA client) ──JWT──► the app
 ```
@@ -47,13 +50,14 @@ Rationale: never let an app redeploy endanger the stateful resources.
 - **One multi-route BFF Lambda** per env (all routes in a single handler). Node 22 runtime, esbuild-bundled via CDK.
 - **Lambda Function URL**, auth type **`NONE`**, fronted by CloudFront. Not OAC: CloudFront OAC can't SigV4-sign POST bodies to a Function URL. Instead CloudFront stamps a shared **origin-secret header** (`ORIGIN_SECRET`) on every origin request and the handler 403s anything without it, so the raw URL is useless directly. Defense-in-depth only — the in-handler Cognito JWT check is the real auth gate. The MCP Lambda's URL works the same way. (`cdk/src/lib/app-stack.ts` class comment.)
 - **Auth:** validate the Cognito JWT **in-handler** (JWKS signature + issuer/expiry), extract `sub` → `userId` scoping every DynamoDB item.
-- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `MCP_CLIENT_ID`, `STAGE`, `ORIGIN_SECRET`, `DEVICE_TOKEN` (+ optional `DEVICE_USER_ID`). The BFF verifier is deliberately **not** bound to one app client (D14) — `MCP_CLIENT_ID` is the claude.ai MCP client, and the BFF **rejects** tokens minted for it (the MCP Lambda does the opposite: it accepts only that client).
+- Config: ~15s timeout, 512 MB, **no warming** (single user — cold starts are fine). Env vars: `TABLE_NAME`, `FILES_BUCKET`, `USER_POOL_ID`, `MCP_CLIENT_ID`, `STAGE`, `ORIGIN_SECRET`, `DEVICE_TOKEN`, `PLAID_ENV`, `FINANCE_SYNC_FN` (+ optional `DEVICE_USER_ID`). The BFF verifier is deliberately **not** bound to one app client (D14) — `MCP_CLIENT_ID` is the claude.ai MCP client, and the BFF **rejects** tokens minted for it (the MCP Lambda does the opposite: it accepts only that client).
 - **Writes-object pattern** enforced (single audit point for all side effects; guarantees no writes during smoke tests).
-- **Recurrence generation: lazy on read** — when a day loads, materialize any due `taskSeries` occurrences. No cron/EventBridge.
+- **Recurrence generation: lazy on read** — when a day loads, materialize any due `taskSeries` occurrences. No cron for recurrence.
+- **Three functions:** the BFF, the MCP server (`aperture-mcp-<stage>`, [mcp/](../areas/mcp/index.md)), and the **finance sync** (`aperture-finance-sync-<stage>`, `cdk/src/lib/finance-sync.ts`): 300 s, 512 MB, no Function URL, invoked only asynchronously — by the BFF after a sync request, connect or reconnect, and by **EventBridge Scheduler** at 5:15a / 3:15p / 8:15p LA (the one scheduled job; created only when `DEVICE_USER_ID` is set). It sits alone in schedule group `aperture-finance-<stage>` because Scheduler checks its role's `aws:SourceArn` against the group ARN, never the schedule's; the one-schedule group keeps the role assumable by that job only. Never retried by Lambda; 30-day log group; no reserved concurrency (a per-item CAS lock is the concurrency control). Its IAM is GetItem/PutItem/Query on the table + Plaid SSM read. `PLAID_ENV` is `production` on prod, else `sandbox`; the BFF may invoke exactly this function. Timing and design: [finances/](../areas/finances/index.md).
 
 ## 5. Data — DynamoDB
 
-Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-day continuous backup — the safety net), `RETAIN`. Keys/GSI per `TECH.md §2.4`. One GSI (calibration). Reads/aggregation in the Lambda.
+Single table per env (`aperture-<env>`), **on-demand** billing, **PITR on** (35-day continuous backup — the safety net), `RETAIN`. Keys/GSI per `TECH.md §2.4`. One GSI, two key spaces (calibration's done tasks; finance transactions by date). Reads/aggregation in the Lambda.
 
 ## 6. Auth — Cognito
 
@@ -110,7 +114,7 @@ No static credentials — OIDC role assumption. GitHub Flow, simplified:
     - **`full`** (anything else, `packages/shared`/`scripts`/root config/`.github` included, or an indeterminate base) → synth + diff + deploy + smoke, then publish + health check.
 - OIDC provider + both roles live in a one-off, hand-deployed `ApertureCicd` stack; the pipeline never touches it. **Deploy it with BOTH context flags:** `cdk deploy ApertureCicd -c githubRepo=radatta/aperture -c githubSubject=radatta@52138736/aperture@1321047340`. This repo's OIDC `sub` claim uses the **ID-embedded** form (`owner@ownerid/repo@repoid`), so `githubSubject` is **not** optional here — omit it and the trust policy is rebuilt with the plain `radatta/aperture` slug, which no live token matches → every CI AssumeRole (dev + prod) breaks silently. The subject is account-specific, so it's passed at deploy time, never committed. The roles also carry cdk-nag `AwsSolutions-IAM5` acknowledgements for their deliberate wildcards (bootstrap-role assumption, the stage's hashed site bucket, CloudFront invalidation, `DescribeStacks`) — see `cicd-stack.ts`.
 - **Origin secret** reaches CI as a GitHub secret (`ORIGIN_SECRET_DEV/PROD` → `APERTURE_ORIGIN_SECRET`), so it's stable across runs. The **device token** works identically (`DEVICE_TOKEN_DEV/PROD` → `APERTURE_DEVICE_TOKEN`), alongside the repo **var** `DEVICE_USER_ID_DEV/PROD` → `APERTURE_DEVICE_USER_ID`; both pairs must be set — the two silent failure modes: [recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup).
-- **Smoke tests** invoke the Lambda by **direct `aws lambda invoke`** with a `testMode` payload (synthetic user, writes-object no-ops) → no side effects, even against prod.
+- **Smoke tests** invoke the Lambda by **direct `aws lambda invoke`** with a `testMode` payload (synthetic user, writes-object no-ops) → no side effects, even against prod. The list includes `listFinanceRules`, which proves the finance path and that the Lambda SDK client + Plaid gateway load at cold start (testMode swaps both for no-ops — no SSM read, no Plaid call). The finance sync function is never smoke-invoked, and the CI role wasn't widened for it.
 - **Deploy-time safety checks:**
   - **Single synth, shared by diff + deploy** — each stage runs `cdk synth … --no-lookups` once to `cdk.out`, then `cdk diff --app cdk.out` and `cdk deploy --app cdk.out` consume that same assembly. No double esbuild bundle, and the diff you read is byte-identical to what deploys. `--no-lookups` fails loudly if an (unexpected) context lookup is ever introduced.
   - **`cdk diff` before every `cdk deploy`** (informational, both stages, `--method=template`: compares the synthesized template with the deployed one via the lookup role). It was `--method=change-set`, chosen so the diff failed under the real deploy role rather than silently falling back to a template diff — but the deploy then built a second, identical change set (5–19 s per stage), and the deploy itself now exercises the deploy role moments later. Given up: CloudFormation's own change-set analysis; property-level "requires replacement" still comes from CDK's resource spec. If a template diff shows every resource of an existing stack as added, distrust it — it couldn't read the deployed template — rather than the stack. Since no prod approval pause is configured, the diff in the run log is the visible record of what each deploy is about to change to infra — and the only thing standing between a bad CDK edit and a real bill. **Read it on the dev run before merging to `main`.** A clean one looks like the 2026-09-07 device-token deploy: `Number of stacks with differences: 1`, two `[+] Added:` env vars, no resources.
@@ -121,14 +125,15 @@ No static credentials — OIDC role assumption. GitHub Flow, simplified:
 
 ## 10. Secrets
 
-- v1: none in the app path (Cognito public keys are public; no static creds anywhere).
+- No static AWS creds anywhere (Cognito public keys are public).
+- **Third-party credentials live in SSM Parameter Store** (SecureString, Standard tier, the default `aws/ssm` key — no KMS statement needed): Google under `/aperture/<stage>/google/*` ([calendar/](../areas/calendar/index.md)); Plaid under `/aperture/<stage>/plaid/` — `client_id` + `secret` written once by the operator, `items/<itemId>/access_token` written/deleted by the BFF and read by the sync; the MCP function gets none of Plaid ([finances/ → Operator checklist](../areas/finances/index.md#12-operator-checklist)).
 - **Origin secret** — CloudFront→Lambda origin lockdown. A plain Lambda env var, sourced from `APERTURE_ORIGIN_SECRET` (CI) or a gitignored `cdk/.secrets/` file. Anti-abuse only; the JWT is the real gate.
 - **Device token** — auth for the extension's LeetCode ingest endpoint. **Same class and same pattern as the origin secret** (single-user, one write method, tiny blast radius) → a plain env var from `APERTURE_DEVICE_TOKEN` / a gitignored file, deliberately **not** Secrets Manager. Paired with `APERTURE_DEVICE_USER_ID` (not secret, but account-specific → also uncommitted). What happens when either is unset in CI, plus the operator checklist: **[recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup)**.
 - v1.1 AI: the model API key goes in **Secrets Manager**, fetched at Lambda cold start. Never in env vars or CDK config.
 
 ## 11. Cost
 
-Effectively free at single-user scale: DynamoDB / Lambda / Cognito within always-free tiers; S3 + CloudFront in cents; Function URLs add no per-request cost. **No Route 53** (DNS is at Netlify/NS1; the domain is registered at Porkbun — §8). Only real line item: S3/CloudFront, pennies.
+Effectively free at single-user scale: DynamoDB / Lambda / Cognito within always-free tiers; S3 + CloudFront in cents; Function URLs add no per-request cost. **No Route 53** (DNS is at Netlify/NS1; the domain is registered at Porkbun — §8). Only real line item: S3/CloudFront, pennies. The finance sync (3 scheduled runs a day, ~5–20 s each), EventBridge Scheduler and the three extra alarms sit inside the free tiers; Plaid Trial is $0 with a hard cap of 10 linked bank logins.
 
 ---
 

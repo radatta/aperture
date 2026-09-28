@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
@@ -5,10 +6,18 @@ import { ApertureDataStack } from './lib/data-stack';
 import { ApertureAppStack } from './lib/app-stack';
 import { ApertureBillingStack } from './lib/billing-stack';
 
+// cdk.json's feature flags, so a test synthesizes what `cdk synth` does (e.g. minimizePolicies merges
+// IAM statements — a test app without it asserts a policy shape that never deploys).
+const CDK_FLAGS = (
+  JSON.parse(readFileSync(new URL('../cdk.json', import.meta.url), 'utf8')) as {
+    context: Record<string, unknown>;
+  }
+).context;
+
 // Assert the synthesized CloudFormation, with asset bundling skipped so the tests are fast + offline
 // (the real esbuild bundling is exercised by `cdk synth`). One app so the cross-stack refs resolve.
 function templates() {
-  const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
+  const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
   const env = { account: '111111111111', region: 'us-west-1' };
   const data = new ApertureDataStack(app, 'ApertureData-dev', {
     stage: 'dev',
@@ -97,16 +106,19 @@ describe('ApertureAppStack', () => {
     app.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: Match.arrayWith([
+          // minimizePolicies merges the Google and Plaid paths into one statement per action set.
           Match.objectLike({
             Action: 'ssm:GetParameter',
-            Resource: {
-              'Fn::Join': [
-                '',
-                Match.arrayWith([Match.stringLikeRegexp('parameter/aperture/dev/google/\\*')]),
-              ],
-            },
+            Resource: Match.arrayWith([
+              {
+                'Fn::Join': [
+                  '',
+                  Match.arrayWith([Match.stringLikeRegexp('parameter/aperture/dev/google/\\*')]),
+                ],
+              },
+            ]),
           }),
-          Match.objectLike({ Action: Match.arrayWith(['ssm:PutParameter', 'ssm:DeleteParameter']) }),
+          Match.objectLike({ Action: ['ssm:DeleteParameter', 'ssm:PutParameter'] }),
         ]),
       },
     });
@@ -120,7 +132,7 @@ describe('ApertureAppStack', () => {
     app.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: Match.arrayWith([
-          Match.objectLike({ Action: Match.arrayWith(['s3:PutObject', 's3:GetObject']) }),
+          Match.objectLike({ Action: ['s3:GetObject', 's3:PutObject'] }), // sorted by minimizePolicies
         ]),
       },
     });
@@ -311,7 +323,7 @@ describe('ApertureAppStack', () => {
 describe('ApertureAppStack with a custom domain (Phase 14)', () => {
   // A stage wired with a us-east-1 ACM cert ARN: CloudFront gets the alias + cert, and the app client's
   // callbacks include BOTH the custom domain and the CloudFront default (redirect_uri = location.origin).
-  const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
+  const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
   const env = { account: '111111111111', region: 'us-west-1' };
   const certArn = 'arn:aws:acm:us-east-1:111111111111:certificate/abcd-1234';
   const data = new ApertureDataStack(app, 'ApertureData-dev', {
@@ -368,7 +380,7 @@ describe('ApertureAppStack with a custom domain (Phase 14)', () => {
 
 describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
   const build = (stage: string) => {
-    const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
+    const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
     const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
       stage,
@@ -389,9 +401,14 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     return Template.fromStack(appStack);
   };
 
-  it('adds three Lambda alarms + an SNS email topic in prod', () => {
+  it('adds three alarms per Lambda (BFF + finance sync) on one SNS email topic in prod', () => {
     const t = build('prod');
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 6);
+    t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      Threshold: 295000,
+      Statistic: 'Maximum',
+      MetricName: 'Duration',
+    });
     t.resourceCountIs('AWS::SNS::Topic', 1);
     t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
   });
@@ -400,6 +417,182 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     const t = build('dev');
     t.resourceCountIs('AWS::CloudWatch::Alarm', 0);
     t.resourceCountIs('AWS::SNS::Topic', 0);
+  });
+});
+
+describe('ApertureAppStack finance sync', () => {
+  const { app } = templates();
+  const syncFn = () => {
+    const fns = app.findResources('AWS::Lambda::Function', {
+      Properties: { FunctionName: 'aperture-finance-sync-dev' },
+    });
+    const [id, res] = Object.entries(fns)[0]!;
+    return { id, props: res.Properties as Record<string, unknown> };
+  };
+  // A function's Role is { Fn::GetAtt: [roleId, 'Arn'] }; a policy attaches by { Ref: roleId }.
+  const policiesOfRole = (fnRole: unknown) =>
+    Object.values(app.findResources('AWS::IAM::Policy'))
+      .filter((p) =>
+        JSON.stringify(p.Properties.Roles).includes(
+          JSON.stringify({ Ref: (fnRole as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0] }),
+        ),
+      )
+      .flatMap(
+        (p) => p.Properties.PolicyDocument.Statement as { Action: unknown; Resource: unknown }[],
+      );
+
+  it('runs a third function, 300 s / 512 MB on Node 22, with no Function URL', () => {
+    app.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'aperture-finance-sync-dev',
+      Runtime: 'nodejs22.x',
+      Timeout: 300,
+      MemorySize: 512,
+    });
+    app.resourceCountIs('AWS::Lambda::Url', 2); // BFF + MCP only
+    expect(syncFn().props.ReservedConcurrentExecutions).toBeUndefined();
+  });
+
+  it('gets only the table, stage and Plaid env — no auth secrets', () => {
+    const env = (syncFn().props.Environment as { Variables: Record<string, unknown> }).Variables;
+    expect(Object.keys(env).sort()).toEqual(['PLAID_ENV', 'STAGE', 'TABLE_NAME']);
+    expect(env.PLAID_ENV).toBe('sandbox');
+  });
+
+  it('is never retried by Lambda, and keeps logs for 30 days', () => {
+    app.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+      MaximumRetryAttempts: 0,
+      MaximumEventAgeInSeconds: 60,
+    });
+    app.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/aws/lambda/aperture-finance-sync-dev',
+      RetentionInDays: 30,
+    });
+  });
+
+  it('its role gets GetItem/PutItem/Query, Plaid SSM read-only, and no invoke or S3', () => {
+    const stmts = policiesOfRole(syncFn().props.Role);
+    const actions = stmts.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    expect(actions.filter((a) => String(a).startsWith('dynamodb:')).sort()).toEqual([
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:Query',
+    ]);
+    expect(actions).toContain('ssm:GetParameter');
+    for (const bad of ['ssm:PutParameter', 'ssm:DeleteParameter', 'lambda:InvokeFunction'])
+      expect(actions).not.toContain(bad);
+    expect(actions.some((a) => String(a).startsWith('s3:'))).toBe(false);
+    expect(JSON.stringify(stmts)).toMatch(/parameter\/aperture\/dev\/plaid\/items\/\*/);
+    expect(JSON.stringify(stmts)).not.toMatch(/google/);
+  });
+
+  it('the BFF gets Plaid env, the sync function name, token writes, and invoke on exactly that ARN', () => {
+    const bff = Object.values(
+      app.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: 'aperture-bff-dev' },
+      }),
+    )[0]!.Properties as Record<string, unknown>;
+    const env = (bff.Environment as { Variables: Record<string, unknown> }).Variables;
+    expect(env.PLAID_ENV).toBe('sandbox');
+    expect(env.FINANCE_SYNC_FN).toEqual({ Ref: syncFn().id });
+    const stmts = policiesOfRole(bff.Role);
+    const resourcesFor = (action: string) =>
+      JSON.stringify(
+        stmts.filter((st) => (Array.isArray(st.Action) ? st.Action : [st.Action]).includes(action)),
+      );
+    for (const leaf of ['plaid/client_id', 'plaid/secret', 'plaid/items/*'])
+      expect(resourcesFor('ssm:GetParameter')).toContain(`aperture/dev/${leaf}`);
+    for (const action of ['ssm:PutParameter', 'ssm:DeleteParameter'])
+      expect(resourcesFor(action)).toContain('aperture/dev/plaid/items/*');
+    const invoke = stmts.filter((st) => st.Action === 'lambda:InvokeFunction');
+    expect(invoke).toHaveLength(1);
+    expect(invoke[0]!.Resource).toEqual({ 'Fn::GetAtt': [syncFn().id, 'Arn'] }); // never `arn:*`
+  });
+
+  it('the MCP function gets nothing Plaid', () => {
+    const mcp = Object.values(
+      app.findResources('AWS::Lambda::Function', {
+        Properties: { FunctionName: 'aperture-mcp-dev' },
+      }),
+    )[0]!.Properties as Record<string, unknown>;
+    expect(policiesOfRole(mcp.Role).length).toBeGreaterThan(0);
+    expect(JSON.stringify(policiesOfRole(mcp.Role))).not.toMatch(/plaid|InvokeFunction/);
+    expect(JSON.stringify(mcp.Environment)).not.toMatch(/PLAID|FINANCE_SYNC/);
+  });
+
+  it('schedules a sync 3×/day in LA time for the device user, never retried', () => {
+    app.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: 'aperture-finance-sync-dev',
+      ScheduleExpression: 'cron(15 5,15,20 * * ? *)',
+      ScheduleExpressionTimezone: 'America/Los_Angeles',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      Target: Match.objectLike({
+        Arn: { 'Fn::GetAtt': [syncFn().id, 'Arn'] },
+        Input: Match.serializedJson({ userId: 'test-device-user', mode: 'scheduled' }),
+        RetryPolicy: { MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60 },
+      }),
+    });
+    app.hasResourceProperties('AWS::Scheduler::ScheduleGroup', { Name: 'aperture-finance-dev' });
+    const schedule = Object.values(app.findResources('AWS::Scheduler::Schedule'))[0]!;
+    const [groupId] = Object.keys(app.findResources('AWS::Scheduler::ScheduleGroup'));
+    expect((schedule.Properties as { GroupName: unknown }).GroupName).toEqual({ Ref: groupId });
+    const roleArn = (schedule.Properties as { Target: { RoleArn: unknown } }).Target.RoleArn;
+    expect(policiesOfRole(roleArn)).toEqual([
+      {
+        Action: 'lambda:InvokeFunction',
+        Effect: 'Allow',
+        Resource: { 'Fn::GetAtt': [syncFn().id, 'Arn'] },
+      },
+    ]);
+    const roleId = (roleArn as { 'Fn::GetAtt': string[] })['Fn::GetAtt'][0]!;
+    const role = app.findResources('AWS::IAM::Role')[roleId]!;
+    const [trust] = role.Properties.AssumeRolePolicyDocument.Statement;
+    expect(trust.Principal).toEqual({ Service: 'scheduler.amazonaws.com' });
+    expect(Object.keys(trust.Condition)).toEqual(['StringEquals']);
+    expect(trust.Condition.StringEquals['aws:SourceAccount']).toBe('111111111111');
+    // Scheduler matches SourceArn against the schedule group; a schedule ARN fails CreateSchedule.
+    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({ 'Fn::GetAtt': [groupId, 'Arn'] });
+  });
+});
+
+describe('ApertureAppStack finance sync by stage', () => {
+  const build = (stage: string, deviceUserId?: string) => {
+    const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
+    const env = { account: '111111111111', region: 'us-west-1' };
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
+      stage,
+      env,
+      allowedOrigins: ['*'],
+    });
+    return Template.fromStack(
+      new ApertureAppStack(app, `ApertureApp-${stage}`, {
+        stage,
+        env,
+        table: data.table,
+        userPool: data.userPool,
+        filesBucket: data.filesBucket,
+        cognitoDomain: data.cognitoDomain,
+        originSecret: 'o',
+        deviceToken: 'd',
+        agentToken: 'a',
+        ...(deviceUserId ? { deviceUserId } : {}),
+      }),
+    );
+  };
+
+  it('prod uses Plaid Production on both functions', () => {
+    const t = build('prod', 'u');
+    for (const name of ['aperture-bff-prod', 'aperture-finance-sync-prod'])
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: name,
+        Environment: { Variables: Match.objectLike({ PLAID_ENV: 'production' }) },
+      });
+  });
+
+  it('no device user → no schedule (the sync still runs on Refresh)', () => {
+    const t = build('dev');
+    t.resourceCountIs('AWS::Scheduler::Schedule', 0);
+    t.resourceCountIs('AWS::Scheduler::ScheduleGroup', 0);
+    t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'aperture-finance-sync-dev' });
   });
 });
 
