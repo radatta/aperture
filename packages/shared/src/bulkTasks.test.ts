@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseBulkTasks, toCreateInputs } from './bulkTasks';
+import {
+  hasTaskTokens,
+  parseBulkTasks,
+  parseTaskLine,
+  toCreateInput,
+  toCreateInputs,
+} from './bulkTasks';
 
 const CATS = [
   { id: 'c1', label: 'Admin' },
@@ -234,5 +240,42 @@ describe('parseBulkTasks — notes token', () => {
     expect(only('t | notes:"show \\\\nabla f \\\\neq 0"').notes).toBe('show \\nabla f \\neq 0');
     expect(only('t | notes:"C:\\\\\\\\new"').notes).toBe('C:\\\\new');
     expect(only('t | notes:"a\\\\\\nb"').notes).toBe('a\\\nb'); // \\ then \n
+  });
+});
+
+describe('parseTaskLine — capture', () => {
+  it('matches parseBulkTasks on a single line', () => {
+    for (const raw of [
+      'email coach',
+      'pset | ~90 #"Deep Work" due:2026-09-25',
+      'x | ~30m',
+      'x | #Nope',
+      'read | notes:"a\\nb"',
+    ])
+      expect(parseTaskLine(raw, CATS)).toEqual(only(raw));
+  });
+  it('a line break is a hard error, never split', () => {
+    const l = parseTaskLine('a\nb | ~5', CATS);
+    expect(l.errors.some((e) => e.includes('single line'))).toBe(true);
+  });
+  it('never warns about duplicate titles', () => {
+    expect(parseTaskLine('email coach', CATS).warnings).toEqual([]);
+  });
+  it('hasTaskTokens gates on the exact separator, untrimmed', () => {
+    expect(hasTaskTokens('a | ~5')).toBe(true);
+    expect(hasTaskTokens('a | ')).toBe(true);
+    expect(hasTaskTokens('a|b')).toBe(false);
+    expect(hasTaskTokens('a |')).toBe(false);
+  });
+  it('toCreateInput maps every field', () => {
+    expect(
+      toCreateInput(parseTaskLine('memo | ~30 #admin due:2026-10-03 notes:"x"', CATS)),
+    ).toEqual({
+      title: 'memo',
+      categoryId: 'c1',
+      estimateMin: 30,
+      dueDay: '2026-10-03',
+      notes: 'x',
+    });
   });
 });

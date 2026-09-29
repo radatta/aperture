@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fmtMonthDayYear, parseBulkTasks, toCreateInputs } from '@aperture/shared';
+import { parseBulkTasks, toCreateInputs } from '@aperture/shared';
 import { Modal } from '../../components/Modal';
 import { Text } from '../../components/Text';
 import { Button } from '../../components/Button';
 import { Textarea } from '../../components/Textarea';
-import { NoteIcon } from '../../components/icons';
-import { fmtDuration } from '../../lib/format';
 import { useActiveCategories } from '../../data/hooks/useCategories';
 import { useAllTasks, useCreateTasks } from '../../data/hooks/useTasks';
+import { TaskTokenChips } from './TaskTokenChips';
 
 const PLACEHOLDER = `email coach
 finish 214 pset | ~90 #"Deep Work" due:2026-09-25
@@ -128,27 +127,7 @@ export function BulkAddDialog({
                   <Text size="sm" tone={l.errors.length ? 'muted' : 'ink'}>
                     {l.title || '(no title)'}
                   </Text>
-                  {l.estimateMin !== null && (
-                    <Text size="xs" tone="teal">
-                      {fmtDuration(l.estimateMin)}
-                    </Text>
-                  )}
-                  {l.categoryLabel !== null && (
-                    <Text size="xs" tone={l.categoryId ? 'teal' : 'muted'}>
-                      #{l.categoryLabel}
-                    </Text>
-                  )}
-                  {l.dueDay !== null && (
-                    <Text size="xs" tone="teal">
-                      {fmtMonthDayYear(l.dueDay)}
-                    </Text>
-                  )}
-                  {l.notes !== null && (
-                    <Text size="xs" tone="teal" className="inline-flex items-center gap-0.5">
-                      <NoteIcon size={11} />
-                      notes
-                    </Text>
-                  )}
+                  <TaskTokenChips line={l} />
                 </div>
                 {l.errors.map((e, i) => (
                   <Text key={`e${i}`} size="xs" tone="danger">

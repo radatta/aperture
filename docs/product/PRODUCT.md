@@ -50,11 +50,13 @@ Stay ambitious and productive **and** get more mindful/balanced — with a hard 
 
 ### What each mode creates
 - **Log** → timestamped entry in today's timeline. No other fields.
-- **Task** → **title only, unscoped**, into a backlog. Scoped later in the morning pass (estimate + buffer nudge → feeds the estimation-bias calibration).
+- **Task** → **title only, unscoped**, into a backlog. Scoped later in the morning pass (estimate + buffer nudge → feeds the estimation-bias calibration). *Optionally*, a ` | ` after the title takes one line of the bulk-add token grammar (`memo | ~30 #Admin due:2026-10-03`) — see [bulk-add.md](../areas/tasks/bulk-add.md).
 - **Idea** → inbox, triaged whenever.
 
 ### Hard rule
-Capture **never** asks for structure. No estimate, no due date, no category at capture time — enrichment is always a separate, later action. This is what keeps capture cost below memory cost, which is the whole game.
+Capture **never** asks for structure. No estimate, no due date, no category *prompt* at capture time — enrichment is otherwise a separate, later action. This is what keeps capture cost below memory cost, which is the whole game.
+
+*Amended 2026-09-28:* Task mode accepts optional inline tokens after ` | `. Nothing prompts for them and a bare capture costs exactly what it did, so the rule's point — capture never *asks* — stands. A malformed token refuses the submit with an inline error and keeps the text; capture never fails silently.
 
 ---
 

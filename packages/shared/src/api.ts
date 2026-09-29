@@ -51,7 +51,7 @@ export interface CreateTaskInput {
   categoryId?: string | null;
   estimateMin?: number | null;
   bufferMin?: number | null;
-  dueDay?: string | null; // day-granular deadline; honored by both creates — bulk-add sets it, no single-create caller does yet
+  dueDay?: string | null; // day-granular deadline; honored by both creates — bulk-add and capture tokens set it
   notes?: string | null; // normalized like setTaskNotes; createTasks rejects the whole batch if any is over the cap
 }
 

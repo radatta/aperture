@@ -10,13 +10,14 @@ export function useAllTasks() {
   return useQuery({ queryKey: qk.tasks(), queryFn: () => api.listTasks() });
 }
 
-// Capture creates title-only backlog tasks — never asks for structure (estimate/category come later
-// in the plan pass).
+// Capture creates backlog tasks and never asks for structure: a bare string is title-only, and a Task
+// capture's optional ' | ' tokens (the bulk grammar, parsed before this) arrive as a full input.
 export function useCreateTask() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (title: string) => api.createTask({ title }),
+    mutationFn: (input: string | CreateTaskInput) =>
+      api.createTask(typeof input === 'string' ? { title: input } : input),
     onSettled: () => invalidateTaskData(qc),
   });
 }

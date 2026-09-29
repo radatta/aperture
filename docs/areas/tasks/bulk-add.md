@@ -3,6 +3,7 @@
 A "Bulk add" button on the Tasks-page header opens a modal: paste many lines, one task per line, each
 line optionally carrying inline tokens (`~estimate #category due:date notes:"…"`). A live preview parses as you
 type — red errors gate submit, gold warnings don't. All lines commit in one batch as `backlog` tasks.
+The same grammar, one line at a time, also works in the capture bar's Task mode (§2, 2026-09-28).
 
 **The operator is Claude, not thumbs.** Rahul asks Claude to generate the paste; he does not hand-type
 it. That single fact drives the whole design: the grammar is strict and concrete (no natural-language
@@ -16,10 +17,33 @@ structure-free — it never asks for estimate/category/due. Bulk add is the oppo
 reviewable sit-down where structure is welcome. So tokens-at-entry here is not a violation of the
 capture rule; it's the plan pass wearing a keyboard.
 
+Capture later took the same grammar as an *optional* single line (2026-09-28): typing `#Aperture` at
+capture time was wanted, and an opt-in token asks nothing of a bare capture.
+
 ## 2. Decision log
 
 - **Dedicated modal, not the capture bar.** The capture bar stays structure-free (its whole premise).
-  Bulk add is a separate, roomy surface — the app's first `<dialog>`.
+  Bulk add is a separate, roomy surface — the app's first `<dialog>`. *Superseded in part 2026-09-28:*
+  bulk add is still the many-lines surface, but capture's Task mode now takes one line of the grammar.
+- **Capture tokens (2026-09-28).** Task mode only; Log and Idea are untouched.
+  - **Gated on ` | ` in the raw text.** Without it nothing is parsed — `a|b`, `- milk`, `fix #42 ~5`
+    save literally, exactly as before. The raw (not trimmed) text, so `milk | ` is the red "nothing
+    after" error rather than a task titled `milk |`. Cost: a capture title can no longer contain ` | `.
+  - **Never fails silently.** A red error refuses Enter *and* the Send tap, keeps the text, and the
+    receipt says "Not saved" (the full reason is in the preview row, and in the status
+    region for screen readers). Send is `aria-disabled`, not `disabled`, so a tap still explains. The
+    notice clears once its cause is gone (line fixed, categories arrived, mode switched). Gold warnings
+    show in the preview row before submit and don't block.
+  - **One line only.** Tokens plus a line break is red — splitting would turn one capture into N tasks,
+    truncating would drop text. Bulk add takes many. Multi-line captures *without* ` | ` are unchanged.
+  - **Waits for categories.** A `#label` line before the list first loads is refused ("Loading
+    categories…", or a red "couldn't load" on a query error) instead of parsing as unknown and landing
+    uncategorised — the dialog's guard, keyed on *having data* rather than `isSuccess`, so a failed
+    background refetch over a good cached list doesn't refuse. Label-free lines save meanwhile.
+  - **No duplicate-title warning** — repeating a title is normal in quick capture, and it would need
+    the full task list in an always-mounted component.
+  - **"→ today" composes:** the estimate flows into `plannedMinutes` via `plannedDefault`.
+  - The placeholder stays "New task…" — teaching syntax there is the structure prompt §2 forbids.
 - **Explicit ` | ` separator** (space-pipe-space) between title and tokens. The one grammar with zero
   ambiguity: a `#`/`~`/`due:` in a *title* is literal and never parsed; any junk after the pipe is a
   loud red error. Cost: a title can't contain ` | ` (it errors; the operator re-emits). Chosen over
@@ -60,7 +84,10 @@ capture rule; it's the plan pass wearing a keyboard.
 - `repo.putTasks` → `writes.batchPut`. `noopWrites.batchPut` already no-ops, so a testMode/smoke run
   writes nothing.
 - The parser is pure and lives in `packages/shared/src/bulkTasks.ts` (`parseBulkTasks`, `toCreateInputs`)
-  — the contract package, so a future non-browser operator (CLI/MCP) posts the same grammar. `isDayKey`
+  — the contract package, so a future non-browser operator (CLI/MCP) posts the same grammar. Capture
+  uses `hasTaskTokens` (the ` | ` gate), `parseTaskLine` (one line, red on a line break) and
+  `toCreateInput`; still one validator. `useCreateTask` / `createToday` take `string | CreateTaskInput`.
+  The chip preview is `app/src/modules/tasks/TaskTokenChips.tsx`, shared by both surfaces. `isDayKey`
   (the `due:` validator) is in `packages/shared/src/dates.ts`.
 
 ## 4. Operator reference
@@ -111,6 +138,10 @@ read ch. 4 | ~30 notes:"q1–8\n- q6: use the lemma\nhttps://example.edu/pset4"
 
 The category labels are shown live in the dialog header — read the valid set off the screen.
 
+**In capture (Task mode):** exactly one line of the above, one task per capture — e.g.
+`draft memo | ~30 #Admin due:2026-10-03`. Same red/gold rules, minus the duplicate-title warning; a
+line break alongside ` | ` is red.
+
 ## 5. Build record
 
 Page-first, one atomic contract change so `tsc -b` stays green. ~20 files across four packages:
@@ -127,6 +158,13 @@ Page-first, one atomic contract change so `tsc -b` stays green. ~20 files across
 Tests: parser table-driven unit tests; `isDayKey`; `createTasks` in the cross-impl contract suite (stub
 + lambda + handler); a `BulkAddDialog` integration test (gating, submit-in-order, warning-still-submits,
 cancel-drops-draft + focus-return, failure-keeps-text).
+
+**Capture tokens (2026-09-28):** shared `hasTaskTokens`/`parseTaskLine`/`toCreateInput` (+ tests);
+`useCreateTask` and `createToday` widened to `string | CreateTaskInput`; `CaptureBar` preview row +
+refusal notice; `TaskTokenChips` extracted from `BulkAddDialog`. Tests: parser parity with
+`parseBulkTasks`, and `CaptureBar` cases for parse, literal bare titles, refused red/Send, unknown
+label, "→ today" minutes, categories loading, failed refetch over cached data, line break, refusal
+announce + clear, and failure-restores-text.
 
 ## 6. Deferred / out of scope
 

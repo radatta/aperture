@@ -14,6 +14,9 @@
 // errors[] are RED (blocking — gate submit); warnings[] are YELLOW (non-blocking — the task is still
 // created). A token that declares intent but can't be parsed is red; one that parses but doesn't match
 // (an unknown #label) is yellow. Titles are NEVER rewritten — a list marker or stray '|' is an error.
+//
+// The capture bar's Task mode takes ONE line of the same grammar (parseTaskLine), gated on ' | ' so a
+// bare capture never meets it — still one validator, two surfaces.
 
 import { isDayKey } from './dates';
 import { TASK_NOTES_MAX } from './taskNotes';
@@ -224,14 +227,34 @@ export function parseBulkTasks(
   return { lines, errorCount, canSubmit: errorCount === 0 && lines.length > 0 };
 }
 
-// The create inputs for a clean parse. The caller checks `canSubmit` first; an unmatched #label leaves
-// categoryId null (created uncategorised, by design).
-export function toCreateInputs(parse: BulkParse): CreateTaskInput[] {
-  return parse.lines.map((l) => ({
-    title: l.title,
-    categoryId: l.categoryId,
-    estimateMin: l.estimateMin,
-    dueDay: l.dueDay,
-    notes: l.notes,
-  }));
+// Capture's gate: tokens only apply once the text carries the separator, so a bare capture ("a|b",
+// "- milk", "fix #42") keeps saving literally. Raw text, not trimmed — "milk | " must hit the red
+// "nothing after ' | '" error, not save as "milk |".
+export const hasTaskTokens = (text: string): boolean => text.includes(SEP);
+
+// One capture = one line of the grammar. A line break is red, never split or truncated: splitting would
+// turn one capture into N tasks and truncating would drop text — Bulk add is the many-lines surface.
+// No duplicate-title warnings here; repeating a title is normal in quick capture.
+export function parseTaskLine(
+  raw: string,
+  categories: readonly Pick<Category, 'id' | 'label'>[],
+): BulkLine {
+  const out = parseLine(raw, 1, categories);
+  if (raw.includes('\n'))
+    out.errors.push('tokens need a single line — remove the line break (Bulk add takes many)');
+  return out;
 }
+
+// The create input for one clean line. An unmatched #label leaves categoryId null (created
+// uncategorised, by design).
+export const toCreateInput = (l: BulkLine): CreateTaskInput => ({
+  title: l.title,
+  categoryId: l.categoryId,
+  estimateMin: l.estimateMin,
+  dueDay: l.dueDay,
+  notes: l.notes,
+});
+
+// The create inputs for a clean parse. The caller checks `canSubmit` first.
+export const toCreateInputs = (parse: BulkParse): CreateTaskInput[] =>
+  parse.lines.map(toCreateInput);
