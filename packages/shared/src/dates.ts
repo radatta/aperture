@@ -153,6 +153,36 @@ export function fmtDueDay(dueDay: string, today: string): string {
   return n > 0 ? `due ${fmtMonthShortDay(dueDay)}` : `was due ${fmtMonthShortDay(dueDay)}`;
 }
 
+// Capture's due: suggestion chips: today, tomorrow, the first five Mon–Fri days in today+1..+7, and
+// today+7 — deduped by day, ascending. Labels tier like fmtDueDay, so a merged day has one label.
+export interface DuePreset {
+  day: string;
+  label: string;
+}
+export function duePresets(today: string): DuePreset[] {
+  const days = new Set([today, addDays(today, 1), addDays(today, 7)]);
+  for (let n = 1, picked = 0; n <= 7 && picked < 5; n++) {
+    const d = addDays(today, n);
+    const wd = weekdayOf(d);
+    if (wd >= 1 && wd <= 5) {
+      days.add(d);
+      picked++;
+    }
+  }
+  return [...days].sort().map((day) => {
+    const n = daysBetween(today, day);
+    const label =
+      n === 0
+        ? 'Today'
+        : n === 1
+          ? 'Tomorrow'
+          : n <= 6
+            ? fmtWeekdayShort(day)
+            : fmtMonthShortDay(day);
+    return { day, label };
+  });
+}
+
 // Header form: "Saturday, Aug 2" — the glanceable date for the home.
 export function fmtDayHeading(key: string): string {
   const p = key.split('-');

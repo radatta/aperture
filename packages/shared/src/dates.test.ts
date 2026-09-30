@@ -5,6 +5,7 @@ import {
   dayKeyForOffset,
   dayKeyInZone,
   daysBetween,
+  duePresets,
   fmtDayHeading,
   fmtDueDay,
   localEpochFromDayTime,
@@ -169,5 +170,52 @@ describe('dayKeyInZone', () => {
   it('stays on the right day across both DST changes', () => {
     expect(dayKeyInZone(at('2026-03-08T12:00:00Z'), LA, 4)).toBe('2026-03-08'); // 05:00 PDT
     expect(dayKeyInZone(at('2026-11-01T12:00:00Z'), LA, 4)).toBe('2026-11-01'); // 04:00 PST
+  });
+});
+
+describe('duePresets', () => {
+  const at = (y: number, mo: number, d: number, h: number) =>
+    new Date(y, mo - 1, d, h, 0, 0, 0).getTime();
+  const flat = (today: string) => duePresets(today).map((p) => `${p.day} ${p.label}`);
+
+  it('Wednesday: Thursday merges into Tomorrow, +7 is a date', () => {
+    expect(flat('2026-09-30')).toEqual([
+      '2026-09-30 Today',
+      '2026-10-01 Tomorrow',
+      '2026-10-02 Fri',
+      '2026-10-05 Mon',
+      '2026-10-06 Tue',
+      '2026-10-07 Oct 7',
+    ]);
+  });
+  it('Friday: the fifth weekday is +7, labelled as a date', () => {
+    const p = flat('2026-10-02');
+    expect(p).toHaveLength(7);
+    expect(p.at(-1)).toBe('2026-10-09 Oct 9');
+  });
+  it('Saturday: eight chips, Tomorrow is Sunday', () => {
+    const p = flat('2026-10-03');
+    expect(p).toHaveLength(8);
+    expect(p[1]).toBe('2026-10-04 Tomorrow');
+    expect(p.at(-1)).toBe('2026-10-10 Oct 10');
+  });
+  it('Sunday: Monday is labelled Tomorrow', () => {
+    const p = flat('2026-10-04');
+    expect(p).toHaveLength(7);
+    expect(p[1]).toBe('2026-10-05 Tomorrow');
+  });
+  it('crosses the year boundary', () => {
+    const p = flat('2026-12-31');
+    expect(p[1]).toBe('2027-01-01 Tomorrow');
+    expect(p.at(-1)).toBe('2027-01-07 Jan 7');
+  });
+  it('respects the dayStartHour rollover via todayKey', () => {
+    expect(duePresets(todayKey(4, at(2026, 10, 3, 2)))[0]!.day).toBe('2026-10-02');
+    expect(duePresets(todayKey(0, at(2026, 10, 3, 2)))[0]!.day).toBe('2026-10-03');
+  });
+  it('stays on consecutive keys across DST', () => {
+    const days = duePresets('2026-10-31').map((p) => p.day);
+    expect(days).toContain('2026-11-02');
+    expect(days.at(-1)).toBe('2026-11-07');
   });
 });

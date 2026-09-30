@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { todayKey } from '@aperture/shared';
@@ -10,9 +10,10 @@ import { CaptureBar } from './CaptureBar';
 beforeEach(() => globalThis.localStorage?.clear());
 
 // A fresh stub with one category, in Task mode — the setup every token test starts from.
-async function taskBar(opts: { hangCategories?: boolean } = {}) {
+async function taskBar(opts: { hangCategories?: boolean; categories?: string[] } = {}) {
   const api = createStubClient({ seed: false, storageKey: `cap-tok-${Math.random()}` });
-  await api.upsertCategory({ label: 'Admin', isWork: true });
+  for (const label of opts.categories ?? ['Admin'])
+    await api.upsertCategory({ label, isWork: true });
   if (opts.hangCategories) vi.spyOn(api, 'listCategories').mockReturnValue(new Promise(() => {}));
   const user = userEvent.setup();
   renderWithProviders(<CaptureBar />, { api });
@@ -307,6 +308,107 @@ describe('CaptureBar', () => {
         const [t] = await api.listTasks();
         expect(t?.categoryId).toEqual(expect.any(String));
       });
+    });
+  });
+
+  describe('Token suggestions', () => {
+    const chips = () => screen.queryByRole('group', { name: 'Suggestions' });
+    const chip = (label: string) =>
+      within(screen.getByRole('group', { name: 'Suggestions' })).getByText(label, {
+        selector: 'button',
+      });
+
+    it('a tapped category chip completes the token and keeps focus', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | #ad');
+      await user.click(await waitFor(() => chip('Admin')));
+      expect(box().value).toBe('memo | #Admin ');
+      expect(document.activeElement).toBe(box());
+      expect(box().selectionStart).toBe(box().value.length);
+    });
+
+    it('matches a later word and quotes a multi-word label', async () => {
+      const { user, box } = await taskBar({ categories: ['Admin', 'Deep Work'] });
+      await user.type(box(), 'memo | #work');
+      await user.click(await waitFor(() => chip('Deep Work')));
+      expect(box().value).toBe('memo | #"Deep Work" ');
+      expect(await screen.findByText('#Deep Work')).toBeTruthy();
+    });
+
+    it('due chips insert the concrete date', async () => {
+      vi.setSystemTime(new Date(2026, 8, 30, 12)); // a Wednesday; reset by setup's useRealTimers
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | due:');
+      const names = within(chips()!)
+        .getAllByRole('button')
+        .map((b) => b.textContent);
+      expect(names).toEqual(['Today', 'Tomorrow', 'Fri', 'Mon', 'Tue', 'Oct 7']);
+      await user.click(chip('Fri'));
+      expect(box().value).toBe('memo | due:2026-10-02 ');
+      expect(await screen.findByText('10/2/2026')).toBeTruthy();
+    });
+
+    it('Tab accepts while chips show, and switches mode when they do not', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | ~');
+      await user.keyboard('{Tab}');
+      expect(box().value).toBe('memo | ~15 ');
+      await user.keyboard('{Tab}');
+      expect(screen.getByLabelText('Capture idea')).toBeTruthy();
+    });
+
+    it('Shift+Tab switches mode even with chips showing', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | ~');
+      await user.keyboard('{Shift>}{Tab}{/Shift}');
+      expect((screen.getByLabelText('Capture log') as HTMLTextAreaElement).value).toBe('memo | ~');
+    });
+
+    it('offers nothing outside a token after " | "', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), '#ad memo');
+      expect(chips()).toBeNull();
+      await user.clear(box());
+      await user.type(box(), 'memo | notes:"#ad');
+      expect(chips()).toBeNull();
+      await user.clear(box());
+      await user.click(screen.getByRole('button', { name: 'Log' }));
+      await user.type(screen.getByLabelText('Capture log'), 'memo | #ad');
+      expect(chips()).toBeNull();
+    });
+
+    it('completes a token in the middle of the line', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | #ad ~3');
+      await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}');
+      await user.click(await waitFor(() => chip('Admin')));
+      expect(box().value).toBe('memo | #Admin ~3');
+      expect(box().selectionStart).toBe(14);
+    });
+
+    it('accepting an already-complete token still places the caret', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | #Admin ~3');
+      await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}'); // caret at the end of #Admin
+      await user.keyboard('{Tab}');
+      expect(box().value).toBe('memo | #Admin ~3');
+      expect(box().selectionStart).toBe(14);
+      await user.keyboard('0');
+      expect(box().value).toBe('memo | #Admin 0~3'); // typing lands at the placed caret, no jump
+    });
+
+    it('chips carry a standalone accessible name', async () => {
+      vi.setSystemTime(new Date(2026, 8, 30, 12));
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | due:2026-10-02');
+      expect(screen.getByRole('button', { name: 'Due Friday, Oct 2' })).toBeTruthy();
+    });
+
+    it('Escape still blurs the field', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'memo | #ad');
+      await user.keyboard('{Escape}');
+      expect(document.activeElement).not.toBe(box());
     });
   });
 });

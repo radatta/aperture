@@ -44,6 +44,29 @@ capture time was wanted, and an opt-in token asks nothing of a bare capture.
     the full task list in an always-mounted component.
   - **"→ today" composes:** the estimate flows into `plannedMinutes` via `plannedDefault`.
   - The placeholder stays "New task…" — teaching syntax there is the structure prompt §2 forbids.
+- **Token autocomplete in capture (2026-09-30).** Chips under the field complete the token under the
+  caret; a tap (or Tab) types the *literal* token, so the grammar and parser are unchanged.
+  - **Only once a token is started** — `#`, `~` or `due:` after the first ` | `, never inside
+    `notes:"…"`. No starter chips at an empty position: a bare `~ # due:` row is a structure prompt
+    (PRODUCT §2), and it would claim Tab everywhere after ` | `.
+  - **`#`** — active categories, case-insensitive **word-start** match (`#work` → Deep Work; `#e`
+    doesn't light up everything), in category order. Multi-word labels insert `#"Deep Work"`; a label
+    containing `"` is omitted (the grammar can't write it). Nothing shows until categories load — the
+    preview row already says so.
+  - **`due:`** — Today, Tomorrow, the first five Mon–Fri days in today+1..+7, and +1 week, deduped by
+    day. Labels tier like `fmtDueDay` (weekday for +2..+6, `Oct 7` for +7), inserted as ISO. Built by
+    `duePresets(todayKey(dayStartHour))`, so the rollover is `todayKey`'s job. Typed digits filter.
+  - **`~`** — fixed 15 · 30 · 45 · 60 · 90 · 120, filtered by digit prefix.
+  - **Keys:** Tab accepts the first chip while chips show, else cycles mode; Shift+Tab always cycles
+    (the escape hatch). No arrow-key highlight — arrows move the caret in a textarea; type one more
+    letter to narrow. Escape and Enter unchanged.
+  - **A11y:** a `role="group"` of plain buttons, not a combobox (no highlight to promise, and the
+    textarea already carries `aria-describedby`/`aria-invalid`). Not a live region — it changes per
+    keystroke. Each chip has a standalone name ("Estimate 15m", "Due Friday, Oct 2") since "15m" or
+    "Fri" alone means nothing. Chips `preventDefault` on mousedown so an iPhone tap keeps the keyboard
+    up. Tab is ignored mid-IME-composition.
+  - **Caret placement is keyed on an accept nonce, not the text** — accepting an already-complete token
+    changes nothing, and a text-keyed effect would skip it and jump the caret on the next keystroke.
 - **Explicit ` | ` separator** (space-pipe-space) between title and tokens. The one grammar with zero
   ambiguity: a `#`/`~`/`due:` in a *title* is literal and never parsed; any junk after the pipe is a
   loud red error. Cost: a title can't contain ` | ` (it errors; the operator re-emits). Chosen over
@@ -89,6 +112,9 @@ capture time was wanted, and an opt-in token asks nothing of a bare capture.
   `toCreateInput`; still one validator. `useCreateTask` / `createToday` take `string | CreateTaskInput`.
   The chip preview is `app/src/modules/tasks/TaskTokenChips.tsx`, shared by both surfaces. `isDayKey`
   (the `due:` validator) is in `packages/shared/src/dates.ts`.
+- Autocomplete: `tokenAtCaret` sits beside `scanTokens` in `bulkTasks.ts` (spans, so it shares the
+  quoting rules exactly) and `duePresets` in `dates.ts`; the chip builders and `applySuggestion` are
+  app-side in `app/src/modules/capture/suggestions.ts`, rendered by `TokenSuggestions.tsx`.
 
 ## 4. Operator reference
 
@@ -140,7 +166,8 @@ The category labels are shown live in the dialog header — read the valid set o
 
 **In capture (Task mode):** exactly one line of the above, one task per capture — e.g.
 `draft memo | ~30 #Admin due:2026-10-03`. Same red/gold rules, minus the duplicate-title warning; a
-line break alongside ` | ` is red.
+line break alongside ` | ` is red. The suggestion chips are a thumb aid that type these same tokens —
+the contract above is unchanged.
 
 ## 5. Build record
 
@@ -166,6 +193,14 @@ refusal notice; `TaskTokenChips` extracted from `BulkAddDialog`. Tests: parser p
 label, "→ today" minutes, categories loading, failed refetch over cached data, line break, refusal
 announce + clear, and failure-restores-text.
 
+**Token autocomplete (2026-09-30):** shared `scanTokens` → spans + `tokenAtCaret`, `duePresets`
+(+ tests: caret table incl. quotes/notes/second ` | `; presets across weekdays, year end, DST,
+day-start rollover); app `suggestions.ts` (+ test), `TokenSuggestions.tsx`, `CaptureBar` caret
+tracking + Tab. `CaptureBar` cases: tap completes + keeps focus, word-start + quoting, due chips under
+a fixed clock, Tab accept vs mode cycle, Shift+Tab, none outside a token, mid-line completion,
+no-op accept places the caret (fails against the text-keyed version), standalone chip names, Escape
+still blurs.
+
 ## 6. Deferred / out of scope
 
 - A formal `{created, failed}` per-line failure report (additive to `createTasks` if partial failures
@@ -173,3 +208,6 @@ announce + clear, and failure-restores-text.
 - Setting `bufferMin` from a token (bulk sets estimate only).
 - A `\"` escape inside `notes:"…"` (reword, or use `'`).
 - Per-line editing in the preview (fix the textarea instead — it's a paste, re-pasting is free).
+- Capture autocomplete: `~` presets ordered by what I actually use / calibration history (fixed for
+  now); starter chips at an empty token position; completing the `due:` keyword from `d`; an
+  arrow-key highlight.
