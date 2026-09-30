@@ -216,6 +216,9 @@ export const PAYMENT_MATCH_WINDOW_DAYS = 3;
 export const REFUND_MATCH_WINDOW_DAYS = 90;
 // Bank dates are posting dates, so a same-day return can post before its charge does.
 export const REFUND_DATE_SLACK_DAYS = 3;
+// A charge is still suggested when the refund overshoots it by at most this share of the charge (a
+// reimbursement rounded up). The server takes any size; the overshoot never counts (capRefunds).
+export const REFUND_OVER_RATIO = 0.1;
 export const SYNC_PAGE_COUNT = 500;
 // How far back the overview reads: two billing periods plus slack. A mark older than this isn't
 // loaded, so the period falls back to the payment day.
@@ -513,25 +516,55 @@ export function isUnsorted(t: FinanceTransaction, links: RefundLinks): boolean {
   return !links.has(t.id) && t.bucket === null;
 }
 
-// charge id → cents already refunded (positive), summed over its linked refunds.
-export function refundedCentsByCharge(
+// A charge's linked refunds count in date order (then id), each only up to what's left of the
+// charge, so charge + refunds net to exactly $0, never below. byCharge: charge id → cents refunded
+// (≤ the charge); byRefund: refund id → the cents it counts (positive, ≤ its own size; 0 once the
+// charge is used up). The overshoot stays money in, outside every total.
+export function capRefunds(
   links: RefundLinks,
   txnsById: Map<string, FinanceTransaction>,
   amount: (t: FinanceTransaction) => number,
-): Map<string, number> {
-  const out = new Map<string, number>();
+): { byCharge: Map<string, number>; byRefund: Map<string, number> } {
+  const perCharge = new Map<
+    string,
+    { charge: FinanceTransaction; refunds: FinanceTransaction[] }
+  >();
   for (const [refundId, charge] of links) {
     const refund = txnsById.get(refundId);
-    if (refund) out.set(charge.id, (out.get(charge.id) ?? 0) - amount(refund));
+    if (!refund) continue;
+    const entry = perCharge.get(charge.id) ?? { charge, refunds: [] };
+    entry.refunds.push(refund);
+    perCharge.set(charge.id, entry);
   }
-  return out;
+  const byCharge = new Map<string, number>();
+  const byRefund = new Map<string, number>();
+  for (const { charge, refunds } of perCharge.values()) {
+    refunds.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+    let left = Math.max(amount(charge), 0);
+    for (const r of refunds) {
+      const counted = Math.min(-amount(r), left);
+      byRefund.set(r.id, counted);
+      left -= counted;
+    }
+    byCharge.set(charge.id, Math.max(amount(charge), 0) - left);
+  }
+  return { byCharge, byRefund };
 }
+
+// charge id → cents refunded (positive), capped at the charge.
+export const refundedCentsByCharge = (
+  links: RefundLinks,
+  txnsById: Map<string, FinanceTransaction>,
+  amount: (t: FinanceTransaction) => number,
+): Map<string, number> => capRefunds(links, txnsById, amount).byCharge;
 
 // Charges this refund could reverse, best first: an alive expense at the same merchant, dated at most
 // REFUND_DATE_SLACK_DAYS after the refund and REFUND_MATCH_WINDOW_DAYS before it, with enough left
-// unrefunded to cover it. Works for card credits and checking/savings deposits alike.
-// Ranked: same account → smallest leftover (exact first) → nearer date → posted → id. `anyMerchant`
-// drops the merchant match — the fallback when a card credit's descriptor doesn't match its charge.
+// unrefunded to cover it — or overshot by at most REFUND_OVER_RATIO of the charge (a rounded-up
+// reimbursement). Works for card credits and checking/savings deposits alike.
+// Ranked: same account → closest either way (exact first; under beats over) → nearer date → posted →
+// id. `anyMerchant` drops the merchant match — the fallback when a card credit's descriptor doesn't
+// match its charge.
 export function suggestRefundMatches(input: {
   refund: FinanceTransaction;
   txns: FinanceTransaction[];
@@ -555,11 +588,15 @@ export function suggestRefundMatches(input: {
         c.date <= addDays(refund.date, REFUND_DATE_SLACK_DAYS) &&
         daysBetween(c.date, refund.date) <= REFUND_MATCH_WINDOW_DAYS,
     )
-    .map((c) => ({ c, left: amount(c) - (refunded.get(c.id) ?? 0) - size }))
-    .filter((x) => x.left >= 0);
+    .map((c) => {
+      const remaining = amount(c) - (refunded.get(c.id) ?? 0);
+      return { c, remaining, left: remaining - size };
+    })
+    .filter((x) => x.remaining > 0 && (x.left >= 0 || -x.left <= amount(x.c) * REFUND_OVER_RATIO));
   const rank = (x: { c: FinanceTransaction; left: number }) => [
     x.c.accountId === refund.accountId ? 0 : 1,
-    x.left,
+    Math.abs(x.left),
+    x.left < 0 ? 1 : 0,
     Math.abs(daysBetween(x.c.date, refund.date)),
     x.c.pending ? 1 : 0,
   ];
@@ -581,9 +618,11 @@ const isMoveOrMark = (t: FinanceTransaction, moves: InternalMoves | undefined) =
   isMovePfc(t) || t.startsPeriod || (moves?.has(t.id) ?? false);
 
 // Why this row can't be the refund side of a link, or null: it must be alive money coming in on a
-// shown card or bank account, and not a payment, transfer or period mark (a flipped card's dormant
-// mark still counts — unmark it first). `moves`, when the caller has it, also rules out detected moves.
-// The page uses this to decide whether to offer linking at all.
+// shown card or bank account, and not a payment or period mark (a flipped card's dormant mark still
+// counts — unmark it first). A transfer-tagged deposit (TRANSFER_IN) may be a refund — someone paying
+// you back from an account you haven't linked — unless it paired as a move between your own accounts,
+// which `moves` (when the caller has it) rules out. The page uses this to decide whether to offer
+// linking at all.
 export function refundSideError(
   refund: FinanceTransaction,
   account: FinanceAccount | undefined,
@@ -594,7 +633,8 @@ export function refundSideError(
   if (!moneyAccount(account) || amountOf(refund, account) >= 0)
     return 'Only money coming in — a card credit or a deposit — can be linked as a refund';
   if (refund.startsPeriod) return 'That’s the card payment that starts your period';
-  if (isMoveOrMark(refund, moves)) return 'A card payment or transfer isn’t a refund';
+  if (moves?.has(refund.id) || (isMovePfc(refund) && refund.pfcPrimary !== 'TRANSFER_IN'))
+    return 'A card payment or transfer isn’t a refund';
   return null;
 }
 
@@ -613,9 +653,9 @@ export function chargeSideError(
 }
 
 // Structural checks both ApiClient impls run before linking; the error text, or null when valid: each
-// side's own check, the charge dated at most REFUND_DATE_SLACK_DAYS after its refund, and the refund
-// no larger than the charge. "Remaining unrefunded" is the suggestion list's job — the server only
-// caps at the full charge.
+// side's own check, and the charge dated at most REFUND_DATE_SLACK_DAYS after its refund. Any size:
+// a refund larger than what's left of its charge counts only up to it (capRefunds), so the overshoot
+// is inert. Which charges to offer is the suggestion list's job.
 export function refundLinkError(input: {
   refund: FinanceTransaction;
   refundAccount: FinanceAccount | undefined;
@@ -630,8 +670,6 @@ export function refundLinkError(input: {
   if (error) return error;
   if (charge.date > addDays(refund.date, REFUND_DATE_SLACK_DAYS))
     return 'The charge has to come before its refund';
-  if (-amountOf(refund, refundAccount) > amountOf(charge, chargeAccount))
-    return 'The refund is larger than the charge';
   return null;
 }
 
@@ -670,15 +708,17 @@ export function summarizePeriod(input: {
   const linkable = linkableTransactions(txns, accounts, moves);
   // Built over the linkable set, so a refund whose charge is on a hidden account counts as unlinked.
   const links = resolveRefundLinks(linkable, amount);
-  const refunded = refundedCentsByCharge(links, new Map(linkable.map((t) => [t.id, t])), amount);
+  const capped = capRefunds(links, new Map(linkable.map((t) => [t.id, t])), amount);
+  const refunded = capped.byCharge;
   for (const t of linkable) {
     // A deposit counts only as a linked refund; otherwise it's income, outside the budget.
     if (classifyTransaction(t, byId.get(t.accountId), moves) === 'income' && !links.has(t.id))
       continue;
     const which = periodOf(t, period, links);
     if (which === null) continue;
-    const cents = amount(t);
     const linked = links.has(t.id); // rides on its charge: nets its money, never adds to a count
+    // A linked refund counts only up to what's left of its charge, so no bucket goes below $0.
+    const cents = linked ? -(capped.byRefund.get(t.id) ?? 0) : amount(t);
     const bucket = bucketOf(t, links);
     if (bucket !== null && !isSpendBucket(bucket)) continue; // not spending: no total, never to sort
     if (bucket === null) {
@@ -721,7 +761,8 @@ export interface FinanceView {
   amount: (t: FinanceTransaction) => number; // normalised: positive = money out
   kindOf: (t: FinanceTransaction) => FinanceTxnKind;
   links: RefundLinks; // refund id → the charge it reverses
-  refunded: Map<string, number>; // charge id → cents refunded so far
+  refunded: Map<string, number>; // charge id → cents refunded so far (capped at the charge)
+  counted: Map<string, number>; // linked refund id → the cents it counts (≤ its size; capRefunds)
 }
 
 // The overview plus the transactions of financeListRange, with the derived bits every tab (and the MCP
@@ -740,6 +781,7 @@ export function deriveFinanceView(
   const sortable = sortableTransactions(allTxns, overview.accounts, moves);
   const linkable = linkableTransactions(allTxns, overview.accounts, moves);
   const links = resolveRefundLinks(linkable, amount);
+  const capped = capRefunds(links, new Map(allTxns.map((t) => [t.id, t])), amount);
   return {
     accounts,
     moves,
@@ -749,7 +791,8 @@ export function deriveFinanceView(
     amount,
     kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),
     links,
-    refunded: refundedCentsByCharge(links, new Map(allTxns.map((t) => [t.id, t])), amount),
+    refunded: capped.byCharge,
+    counted: capped.byRefund,
   };
 }
 

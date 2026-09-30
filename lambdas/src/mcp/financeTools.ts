@@ -197,6 +197,7 @@ export const FINANCE_TOOLS: Tool[] = [
       'unsorted: true → the app\'s to-sort queue (without from/to, exactly get_finance_overview toSort.count). bucket → one bucket (parents_pay | budget | i_pay | not_spending), like the app\'s bucket chips; not with unsorted. not_spending rows are sorted but outside every total. merchant → a case-insensitive substring of the merchant/name ("amazon").',
       'totalUsd is the net sum of EVERY match (not just the returned page) — use it for "how much did I spend at X", never a sum of a truncated list.',
       "kind: expense (a charge) | refund | income | transfer (between the user's own accounts) | card_payment. Only expense and refund rows (and deposits linked as refunds) count toward buckets.",
+      "A linked refund larger than what's left of its charge counts only that much: countedUsd says how much (else all of amountUsd counts); a charge's refundedUsd never exceeds its amount.",
       "bucket is resolved through refund links (a linked refund takes its charge's bucket); period is which billing period it counts in (current | previous | outside).",
       "category is Plaid's (e.g. FOOD_AND_DRINK / FOOD_AND_DRINK_RESTAURANT). Newest first; limit defaults to 100 (max 300), truncated says if more matched.",
       SIGN,
@@ -281,6 +282,7 @@ export const FINANCE_TOOLS: Tool[] = [
         transactions: shown.map(({ t, v }) => {
           const acct = v.accounts.get(t.accountId);
           const refunded = v.refunded.get(t.id) ?? 0;
+          const counted = v.counted.get(t.id);
           return {
             id: t.id,
             date: t.date,
@@ -306,6 +308,10 @@ export const FINANCE_TOOLS: Tool[] = [
             refundOfId: t.refundOfId,
             linkedChargeId: v.links.get(t.id)?.id ?? null,
             ...(refunded > 0 ? { refundedUsd: usd(refunded) } : {}),
+            // A linked refund larger than what was left of its charge counts only that much.
+            ...(counted !== undefined && counted < -v.amount(t)
+              ? { countedUsd: usd(-counted) }
+              : {}),
             startsPeriod: t.startsPeriod,
           };
         }),

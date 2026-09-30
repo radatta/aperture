@@ -116,7 +116,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   `unsorted: true` is exactly the Sort queue (= the overview's `toSort.count`) and `bucket` is the page's
   bucket chip (hidden-account rows included, flagged; `not_spending` too — sorted, but in none of the
   overview's `buckets` totals). `merchant` is a case-insensitive substring, and
-  `totalUsd` is the net sum of **every** match (`netCents`; the bucket and merchant filters are the All tab's
+  a linked refund larger than what was left of its charge carries `countedUsd` (the part that counts), and a
+  charge's `refundedUsd` never exceeds it. `totalUsd` is the net sum of **every** match (`netCents`; the bucket and merchant filters are the All tab's
   `matchesFinanceFilter` / `matchesFinanceText`, without notes) — the answer to "how much at X", even when the list is
   truncated. Hidden accounts are listed with `hidden: true` and excluded from the overview's totals.
   **`today`** is optional: omitted, the server takes the user's day in `USER_TIME_ZONE`

@@ -176,6 +176,33 @@ describe('Finances page', () => {
     ).toBeTruthy();
   });
 
+  it('a transfer-tagged deposit offers Link as a refund, finds the smaller charge, and nets the budget', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.setFinanceBucket({ ids: ['fx-rent'], bucket: 'budget' });
+    renderApp({ api, path: '/finances/all' });
+    expect(await screen.findByText('$400 over')).toBeTruthy(); // $1,000.00 of rent in Budget
+    await user.click((await screen.findAllByRole('button', { name: /Family/ }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    expect(within(dialog).getByText(/No Family charge found/)).toBeTruthy();
+    expect(within(dialog).getByText(/\$0\.50 more than what's left of the charge/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: /Link to Roommate/ }));
+    expect(await within(dialog).findByText(/Only \$1,000\.00 of it counts/)).toBeTruthy();
+    expect(await screen.findByText('$600 left')).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    const row = document.querySelector<HTMLElement>('[data-txn-id="fx-reimburse"]')!;
+    expect(within(row).getByText(/counts \$1,000\.00/)).toBeTruthy();
+    // The charge's detail lists the refund with what it counts.
+    const rentRow = (await screen.findAllByRole('button', { name: /Roommate/ })).find(
+      (el) => el.dataset.txnId === 'fx-rent',
+    )!;
+    await user.click(rentRow);
+    const charge = await screen.findByRole('dialog', { name: /Roommate/ });
+    expect(within(charge).getByText(/Refunded \$1,000\.00 of \$1,000\.00/)).toBeTruthy();
+    expect(within(charge).getByText(/\(counts \$1,000\.00\)/)).toBeTruthy();
+  });
+
   it('a period override in the detail changes the header total', async () => {
     const user = userEvent.setup();
     const api = await linked();

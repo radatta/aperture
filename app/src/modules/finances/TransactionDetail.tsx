@@ -125,6 +125,7 @@ export function TransactionDetail({
 
         {linkedTo && (
           <LinkedRefund
+            refund={txn}
             charge={linkedTo}
             view={view}
             overview={overview}
@@ -174,7 +175,8 @@ export function TransactionDetail({
           ) : (
             <div className="flex flex-col gap-1">
               <Text size="sm" tone="muted">
-                Money in stays out of the budget — unless it&apos;s a refund of a charge.
+                Money in stays out of the budget — unless it reverses a charge: a refund, or someone
+                paying you back.
               </Text>
               <Button
                 ref={incomeLink.triggerRef}
@@ -271,6 +273,7 @@ export function TransactionDetail({
 }
 
 function LinkedRefund({
+  refund,
   charge,
   view,
   overview,
@@ -278,6 +281,7 @@ function LinkedRefund({
   focus,
   onUnlink,
 }: {
+  refund: FinanceTransaction;
   charge: FinanceTransaction;
   view: FinanceView;
   overview: FinanceOverview;
@@ -286,6 +290,8 @@ function LinkedRefund({
   onUnlink: () => void;
 }) {
   const which = periodOf(charge, overview.period);
+  const counted = view.counted.get(refund.id) ?? 0;
+  const capped = counted < -view.amount(refund);
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
       <div className="flex flex-wrap items-center gap-3">
@@ -315,6 +321,12 @@ function LinkedRefund({
           </>
         )}
       </Text>
+      {capped && (
+        <Text size="sm" tone="muted">
+          Only {fmtMoney(counted)} of it counts — that&apos;s all that was left of the charge. The
+          rest stays money in, outside the budget.
+        </Text>
+      )}
     </div>
   );
 }
@@ -337,6 +349,9 @@ function RefundSuggestions({
   onLink: (chargeId: string) => void;
   onCancel?: () => void; // a collapsible list gets a way back (and a focus target when it's empty)
 }) {
+  // How far this refund overshoots what's left of a charge (the overshoot won't count).
+  const over = (c: FinanceTransaction) =>
+    -view.amount(refund) - (view.amount(c) - (view.refunded.get(c.id) ?? 0));
   // Charges on shown accounts only — a hidden account's rows never resolve as a link target.
   const suggest = (anyMerchant: boolean) =>
     suggestRefundMatches({
@@ -395,6 +410,13 @@ function RefundSuggestions({
                 >
                   Link
                 </Button>
+                {/* Its own line: the row above truncates on a phone, and this is why it only counts
+                    part of the money. */}
+                {over(c) > 0 && (
+                  <Text size="xs" tone="muted" className="w-full">
+                    {fmtMoney(over(c))} more than what&apos;s left of the charge — only that counts.
+                  </Text>
+                )}
               </li>
             );
           })}
@@ -464,11 +486,15 @@ function RefundsAgainst({ charge, view }: { charge: FinanceTransaction; view: Fi
       <Text size="sm">
         Refunded {fmtMoney(total)} of {fmtMoney(view.amount(charge))}
       </Text>
-      {refunds.map((r) => (
-        <Text key={r.id} size="sm" tone="muted" tabular>
-          {fmtMonthShortDay(r.date)} · +{fmtMoney(-view.amount(r))}
-        </Text>
-      ))}
+      {refunds.map((r) => {
+        const counted = view.counted.get(r.id) ?? 0;
+        return (
+          <Text key={r.id} size="sm" tone="muted" tabular>
+            {fmtMonthShortDay(r.date)} · +{fmtMoney(-view.amount(r))}
+            {counted < -view.amount(r) ? ` (counts ${fmtMoney(counted)})` : ''}
+          </Text>
+        );
+      })}
     </div>
   );
 }
