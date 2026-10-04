@@ -90,7 +90,13 @@ above the capture bar. Never add a second `fixed` bottom-anchored element — th
 timers ended up covering the capture bar and the page's last card. The shell measures the dock
 (`offsetHeight`, *not* `contentRect`, which excludes `pb-safe`) and reserves that much bottom
 padding, because the dock's height varies from ~112px idle to ~400px with several timers and a
-wrapped capture. The column is `pointer-events-none`; each **panel** opts back in.
+wrapped capture. The column is `pointer-events-none`; each **panel** opts back in. With the on-screen
+keyboard up **and focus in the dock**, `lib/useKeyboardInset` lifts it by the gap below
+`visualViewport`: iOS Safari doesn't resize the page for the keyboard, so a plain `bottom: 0` sits
+behind it and anything below the caret — capture's token chips and preview row — was hidden (seen
+2026-10-04). Only while the dock has focus (lifting for a page field's keyboard would cover that
+field), never when pinch-zoomed, and capped to the visible strip, clipping the dock's top (timers)
+in landscape.
 
 **Anything that dismisses something returns focus to what opened it.** `components/Menu` and
 `lib/useDisclosure` both hold this: a collapsed form's trigger, and a menu's trigger, are re-focused
