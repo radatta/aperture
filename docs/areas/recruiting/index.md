@@ -358,10 +358,12 @@ largest line item in this project.
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
 - ~~Not signed yet.~~ **Done 2026-09-08** (*Firefox: signing via AMO* → Status). Superseded as the
   daily driver by Safari on 2026-10-04 (*Safari: free signing*).
-- **Is the free build really permanent past 7 days?** Free Personal Team provisioning profiles expire after
-  7 days on iOS; whether macOS enforces that on this extension is unverified. The installed build was
-  signed 2026-09-27 and captured fine on 2026-10-04 — re-check capture after **2026-10-05**, and record the
-  embedded profile's `ExpirationDate` (`security cms -D -i "/Applications/Aperture LeetCode.app/Contents/PlugIns/Aperture LeetCode Extension.appex/Contents/embedded.provisionprofile"`, if the file exists).
+- ~~Is the free build really permanent past 7 days?~~ **No 7-day clock (2026-10-04).** Free Personal Team
+  *provisioning profiles* expire after 7 days on iOS, but this build embeds none: no
+  `embedded.provisionprofile` in the app or the `.appex`, and the extension's entitlements are only
+  `app-sandbox`, `files.user-selected.read-only` and `get-task-allow` (`codesign -d --entitlements -`),
+  none of which needs a profile on macOS. Only the certificate's 2027-09-28 expiry applies. Re-check if a
+  future build adds a capability (App Groups, etc.) — that would embed a profile.
 - **Does the saved token survive a Safari rebuild?** Same bundle ID and team should keep the extension's
   storage, but that's unverified — check after the first rebuild, and record it here.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
