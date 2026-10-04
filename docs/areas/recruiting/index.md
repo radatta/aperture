@@ -272,6 +272,7 @@ third one is ongoing work, and only for these events:
 | New browser / profile / machine | paste the token there — `storage.local` is per-profile |
 | Browser restart (temporary extension only) | re-add it. The installed apps / signed add-on are unaffected |
 | Free Apple certificate expiry (2027-09-28) | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData |
+| Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |
 | Extension code change | rebuild per README → *Build it for Safari* (prod: re-copy files first; both: redo step 4) |
 
 Storage is keyed by extension ID, so the saved token should survive a temporary→signed transition with
@@ -362,7 +363,9 @@ largest line item in this project.
   *provisioning profiles* expire after 7 days on iOS, but this build embeds none: no
   `embedded.provisionprofile` in the app or the `.appex`, and the extension's entitlements are only
   `app-sandbox`, `files.user-selected.read-only` and `get-task-allow` (`codesign -d --entitlements -`),
-  none of which needs a profile on macOS. Only the certificate's 2027-09-28 expiry applies. Re-check if a
+  none of which needs a profile on macOS (Apple TN3125; Apple DTS on forum thread 705932: free profiles
+  last 7 days on macOS too, but "if there's no profile then the only thing that could expire is the
+  signing identity's certificate"). Only the certificate's 2027-09-28 expiry — or its revocation — applies. Re-check if a
   future build adds a capability (App Groups, etc.) — that would embed a profile.
 - **Does the saved token survive a Safari rebuild?** Same bundle ID and team should keep the extension's
   storage, but that's unverified — check after the first rebuild, and record it here.
