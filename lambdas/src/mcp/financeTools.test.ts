@@ -237,6 +237,27 @@ describe('list_finance_transactions', () => {
     );
   });
 
+  it('a capped refund reports countedUsd; its charge’s refundedUsd never exceeds the charge', async () => {
+    await setup.setFinanceBucket({ ids: ['fx-rent'], bucket: 'budget' });
+    await setup.linkFinanceRefund('fx-reimburse', 'fx-rent');
+    await setup.linkFinanceRefund('fx-refund-1', 'fx-card-8'); // an exact refund: no countedUsd
+    const all = await call<TxnsOut>('list_finance_transactions', { limit: 300 });
+    const back = all.transactions.find((x) => x.id === 'fx-reimburse')! as TxnRow & {
+      countedUsd?: number;
+    };
+    expect(back).toMatchObject({
+      kind: 'income',
+      bucket: 'budget',
+      linkedChargeId: 'fx-rent',
+      amountUsd: -1000.5,
+      countedUsd: -1000,
+    });
+    expect(all.transactions.find((x) => x.id === 'fx-rent')!.refundedUsd).toBe(1000);
+    expect(all.transactions.find((x) => x.id === 'fx-refund-1')).not.toHaveProperty('countedUsd');
+    const o = await call<OverviewOut>('get_finance_overview');
+    expect(o.spentUsd).toBe(0); // Budget holds only the rent, netted to $0 by the capped refund
+  });
+
   it('a from/to window, the limit, and bad args', async () => {
     const w = await call<TxnsOut>('list_finance_transactions', {
       from: '2026-09-20',

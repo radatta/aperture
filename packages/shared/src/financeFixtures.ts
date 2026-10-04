@@ -172,6 +172,21 @@ export function fixtureHistory(today: string): PlaidTransaction[] {
       'TRANSFER_OUT',
       'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS',
     ]),
+    // Rent by peer-to-peer from checking, then a rounded-up reimbursement into the same account from an
+    // account that isn't linked: Plaid tags it a transfer, so it's money in until linked as the refund.
+    txn('fx-rent', checking, addDays(today, -5), 1000, 'ZELLE PAYMENT TO ROOMMATE', 'Roommate', [
+      'RENT_AND_UTILITIES',
+      'RENT_AND_UTILITIES_RENT',
+    ]),
+    txn(
+      'fx-reimburse',
+      checking,
+      addDays(today, -3),
+      -1000.5,
+      'ZELLE PAYMENT FROM FAMILY',
+      'Family',
+      ['TRANSFER_IN', 'TRANSFER_IN_ACCOUNT_TRANSFER'],
+    ),
     // Card credits: the Amazon order from 8 days ago returned in full, and a partial Target refund
     // of a charge from the previous period. Both land unsorted until linked to their charges.
     txn('fx-refund-1', card, addDays(today, -3), -34.99, 'AMAZON MKTPL*2K4LQ09', 'Amazon', [

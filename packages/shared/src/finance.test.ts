@@ -31,8 +31,10 @@ import {
   suggestPeriodStart,
   suggestRefundMatches,
   bucketOf,
+  capRefunds,
   chargeSideError,
   refundSideError,
+  REFUND_OVER_RATIO,
   isUnsorted,
   summarizePeriod,
   toCents,
@@ -957,9 +959,8 @@ describe('refund links', () => {
     expect(refundLinkError({ ...ok, refund: { ...refund, pfcPrimary: 'LOAN_PAYMENTS' } })).toMatch(
       /payment/,
     );
-    expect(refundLinkError({ ...ok, refund: { ...refund, rawAmountCents: -5000 } })).toMatch(
-      /larger/,
-    );
+    // Any size: the overshoot never counts (capRefunds).
+    expect(refundLinkError({ ...ok, refund: { ...refund, rawAmountCents: -5000 } })).toBeNull();
     expect(refundLinkError({ ...ok, charge: { ...charge, deletedAt: 1 } })).toMatch(/gone/);
   });
 
@@ -992,7 +993,9 @@ describe('refund links', () => {
     expect(refundLinkError(ok)).toBeNull();
     expect(refundLinkError({ ...ok, refundAccount: card })).toBeNull(); // a card credit → debit
     expect(refundLinkError({ ...ok, refundAccount: sav })).toBeNull();
-    expect(refundLinkError({ ...ok, refund: { ...back, pfcPrimary: 'TRANSFER_IN' } })).toMatch(
+    // Someone paying you back from an account you haven't linked: Plaid calls it a transfer.
+    expect(refundLinkError({ ...ok, refund: { ...back, pfcPrimary: 'TRANSFER_IN' } })).toBeNull();
+    expect(refundLinkError({ ...ok, refund: { ...back, pfcPrimary: 'TRANSFER_OUT' } })).toMatch(
       /isn’t a refund/,
     );
   });
@@ -1041,10 +1044,114 @@ describe('refund links', () => {
     expect(suggestRefundMatches({ ...args, anyMerchant: true }).map((t) => t.id)).toEqual(['real']);
     expect(chargeSideError(txns[1]!, chk)).toMatch(/not a payment/);
     expect(chargeSideError(txns[2]!, card)).toMatch(/not a payment/);
-    expect(refundSideError({ ...refund, pfcPrimary: 'TRANSFER_IN' }, chk)).toMatch(
-      /isn’t a refund/,
-    );
+    expect(refundSideError({ ...refund, pfcPrimary: 'TRANSFER_IN' }, chk)).toBeNull();
+    // …unless it paired as a move between your own accounts.
+    expect(
+      refundSideError({ ...refund, pfcPrimary: 'TRANSFER_IN' }, chk, new Map([['r', 'transfer']])),
+    ).toMatch(/isn’t a refund/);
+    expect(refundSideError({ ...refund, pfcPrimary: 'TRANSFER_IN' }, card)).toBeNull(); // unpaired card side
     expect(refundSideError(refund, chk)).toBeNull();
+  });
+
+  it('capRefunds: refunds count in date order, only up to what’s left of the charge', () => {
+    const charge = tx('c', 'chk', '2026-09-20', 100000);
+    const over = tx('r', 'chk', '2026-09-24', -100050, { refundOfId: 'c' });
+    let txns = [charge, over];
+    let got = capRefunds(
+      resolveRefundLinks(txns),
+      new Map(txns.map((t) => [t.id, t])),
+      (t) => t.rawAmountCents,
+    );
+    expect(got.byCharge.get('c')).toBe(100000);
+    expect(got.byRefund.get('r')).toBe(100000);
+
+    const first = tx('r1', 'card', '2026-09-21', -3499, { refundOfId: 'c2' });
+    const second = tx('r2', 'card', '2026-09-22', -1000, { refundOfId: 'c2' });
+    txns = [tx('c2', 'card', '2026-09-20', 3499), first, second];
+    const run = (rows: FinanceTransaction[]) =>
+      capRefunds(
+        resolveRefundLinks(rows),
+        new Map(rows.map((t) => [t.id, t])),
+        (t) => t.rawAmountCents,
+      );
+    got = run(txns);
+    expect([got.byCharge.get('c2'), got.byRefund.get('r1'), got.byRefund.get('r2')]).toEqual([
+      3499, 3499, 0,
+    ]);
+    // Swap the dates: the other refund is now first and uses the charge up.
+    got = run([txns[0]!, { ...first, date: '2026-09-23' }, second]);
+    expect([got.byRefund.get('r2'), got.byRefund.get('r1')]).toEqual([1000, 2499]);
+    // A date tie falls back to id.
+    got = run([txns[0]!, { ...first, date: '2026-09-22' }, second]);
+    expect([got.byRefund.get('r1'), got.byRefund.get('r2')]).toEqual([3499, 0]);
+  });
+
+  it('an over-refund nets its charge to exactly $0 — in a bucket or unsorted, never below', () => {
+    const rent = tx('rent', 'chk', '2026-09-21', 100000, { pfcPrimary: 'RENT_AND_UTILITIES' });
+    const back = tx('back', 'chk', '2026-09-23', -100050, {
+      pfcPrimary: 'TRANSFER_IN',
+      refundOfId: 'rent',
+    });
+    const accounts = [chk, card];
+    const sorted = summarizePeriod({
+      period,
+      txns: [...payments, { ...rent, bucket: 'budget' }, back],
+      accounts,
+      budgetCents: 60000,
+    });
+    expect([sorted.spentCents, sorted.buckets.budget.count]).toEqual([0, 1]);
+    const unsorted = summarizePeriod({
+      period,
+      txns: [...payments, rent, back],
+      accounts,
+      budgetCents: 60000,
+    });
+    expect([unsorted.unsortedCount, unsorted.unsortedCents]).toEqual([0, 0]);
+    // Unlinked, the transfer-tagged deposit is plain money in: out of every total.
+    const alone = summarizePeriod({
+      period,
+      txns: [...payments, { ...back, refundOfId: null }],
+      accounts,
+      budgetCents: 60000,
+    });
+    expect([alone.spentCents, alone.unsortedCents]).toEqual([0, 0]);
+  });
+
+  it('suggestions offer a charge a refund overshoots by at most REFUND_OVER_RATIO', () => {
+    const refund = tx('r', 'chk', '2026-09-24', -100050, {
+      merchantName: 'Family',
+      pfcPrimary: 'TRANSFER_IN',
+    });
+    const txns = [
+      refund,
+      tx('rent', 'chk', '2026-09-21', 100000, { merchantName: 'Roommate' }),
+      tx('exact', 'chk', '2026-09-20', 100050, { merchantName: 'Landlord' }),
+      tx('way-under', 'chk', '2026-09-20', 80000, { merchantName: 'Store' }), // over by 25% of it
+    ];
+    const ids = suggestRefundMatches({
+      refund,
+      txns,
+      accounts: [chk],
+      moves: new Map(),
+      links: new Map(),
+      anyMerchant: true,
+    }).map((t) => t.id);
+    expect(ids).toEqual(['exact', 'rent']);
+    expect(REFUND_OVER_RATIO).toBe(0.1);
+    // Equally far either way: the charge the refund falls short of comes before the one it overshoots.
+    const tie = tx('t', 'chk', '2026-09-24', -10000, { merchantName: 'X' });
+    const tieIds = suggestRefundMatches({
+      refund: tie,
+      txns: [
+        tie,
+        tx('over', 'chk', '2026-09-20', 9500, { merchantName: 'X' }),
+        tx('under', 'chk', '2026-09-20', 10500, { merchantName: 'X' }),
+      ],
+      accounts: [chk],
+      moves: new Map(),
+      links: new Map(),
+    }).map((t) => t.id);
+    expect(tieIds).toEqual(['under', 'over']);
   });
 
   it('suggestRefundMatches offers the same-account checking charge first', () => {

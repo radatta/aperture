@@ -52,7 +52,8 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 - **To sort** counts unsorted charges in the current **and** previous period (both are sortable).
 - **Kinds** (`classifyTransaction`): `expense` (a charge), `refund` (money into a card), `income` (money
   into checking/savings), `transfer` (between your own accounts), `card_payment`. Only expenses and
-  refunds are sortable; a deposit counts only once linked as a refund.
+  refunds are sortable; a deposit (transfer-tagged or not, unless it paired as a move) counts only once
+  linked as a refund.
 - **Internal moves** (`detectInternalMoves`) pair a depository outflow with an equal inflow on another of
   your accounts within `PAYMENT_MATCH_WINDOW_DAYS` (3), nearest date first, needing a transfer/loan-payment
   Plaid category (or a period mark) on one side. An unpaired row whose Plaid category is
@@ -75,17 +76,28 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
 
 - A refund (card credit, or a checking/savings deposit) is linked to the charge it reverses; it then takes
   the charge's bucket and period, nets against it, and leaves the sort queue. An unlinked deposit is
-  income, outside the budget.
+  income, outside the budget. That includes **someone paying you back** — e.g. a family member covering a
+  bill: Plaid tags it a transfer (`TRANSFER_IN`) because it comes from an account you haven't linked, and
+  linking it to the bill nets the bill out.
 - `refundLinkError` (run by both the stub and the server; the suggestions filter with its
-  `chargeSideError`, so the page never offers a link the server refuses): both sides on shown accounts, no
-  payment or transfer, the refund no larger than the charge, and the charge dated no more than
-  `REFUND_DATE_SLACK_DAYS` (3) after the refund.
+  `chargeSideError`, so the page never offers a link the server refuses): both sides on shown accounts,
+  and the charge dated no more than `REFUND_DATE_SLACK_DAYS` (3) after the refund. The refund side is
+  money in that isn't a payment or a period mark, and isn't a move `detectInternalMoves` paired between
+  your own accounts — a `TRANSFER_IN` deposit is allowed; `LOAN_PAYMENTS`/`TRANSFER_OUT` money in isn't.
+  The charge side stays strict: never a payment or transfer. **Any size:** a refund larger than its charge
+  links.
+- **The cap** (`capRefunds`): a charge's refunds count in date order (then id), each only up to what's
+  left of the charge, so charge + refunds net to exactly $0, never below. The overshoot stays money in,
+  outside every total. The row says "counts $X", the detail "Only $X of it counts", and MCP rows carry
+  `countedUsd`; a charge's `refunded` (MCP `refundedUsd`) never exceeds it.
 - A refund linked to a **Not spending** charge is Not spending too — out of every total, like its charge.
 - Suggestions (`suggestRefundMatches`) look back `REFUND_MATCH_WINDOW_DAYS` (90): same-merchant charges
-  first, otherwise any merchant, top five — ranked same account → smallest leftover (an exact match
-  first) → nearest date → posted before pending → id.
+  first, otherwise any merchant, top five. A charge is offered when the refund fits what's left of it, or
+  overshoots by at most `REFUND_OVER_RATIO` (10%) of it (a rounded-up reimbursement) — bounded so a
+  paycheck's "Link as a refund" doesn't list every charge. Ranked same account → closest either way (exact
+  first; under beats over) → nearest date → posted before pending → id.
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
-  loaded range reads as unlinked. Over-refunding one charge via two refunds isn't blocked (accepted).
+  loaded range reads as unlinked. Two refunds on one charge are fine; the cap applies across them.
 
 ## 5. Rules
 
@@ -287,7 +299,12 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 
 - **Accepted:** a late BFF invoke after a deferred request can show a "try again" the data didn't need;
   `SYNC_DEFERRED` after a pass that did land data shows as a red banner; **Always** scans every
-  transaction row (fine at one user); cdk-nag acks match by id app-wide.
+  transaction row (fine at one user); cdk-nag acks match by id app-wide. The All tab's "N rows · $X" is
+  the raw net of the rows shown, so a capped refund's overshoot shows there (the row's "counts $X"
+  explains it) though no bucket total includes it. A refund overshooting a charge by more than 10% isn't
+  suggested; linking it needs "Show other charges" (below). A transfer-tagged deposit is refused as a
+  refund only when it pairs as a move; its other half dated just before the 120-day lookback can't pair,
+  so such a deposit can be linked — a wrong link is one Unlink away.
 - **Deferred (v2):**
   - "Show other charges" when linking a refund — today a same-merchant match hides other merchants and
     anything past the top five (prod Aperture task `01M3GR4B48QB2088DNT9NHC5VR`).
