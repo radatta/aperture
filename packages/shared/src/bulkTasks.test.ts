@@ -5,6 +5,7 @@ import {
   parseTaskLine,
   toCreateInput,
   toCreateInputs,
+  tokenAtCaret,
 } from './bulkTasks';
 
 const CATS = [
@@ -277,5 +278,44 @@ describe('parseTaskLine — capture', () => {
       dueDay: '2026-10-03',
       notes: 'x',
     });
+  });
+});
+
+describe('tokenAtCaret', () => {
+  // '^' marks the caret; it's removed before the call.
+  const at = (marked: string) => {
+    const caret = marked.indexOf('^');
+    return tokenAtCaret(marked.replace('^', ''), caret);
+  };
+  const tok = (kind: string, partial: string, replaceStart: number, replaceEnd: number) => ({
+    kind,
+    partial,
+    replaceStart,
+    replaceEnd,
+  });
+
+  it.each([
+    ['milk^', null],
+    ['mi^lk | #ad', null],
+    ['milk |^ #ad', null],
+    ['milk | #ad^', tok('category', 'ad', 7, 10)],
+    ['milk | #^ad', tok('category', '', 7, 10)],
+    ['milk | #^', tok('category', '', 7, 8)],
+    ['milk | #"Deep W^', tok('category', 'Deep W', 7, 15)],
+    ['milk | #"Deep^ Work" ~3', tok('category', 'Deep', 7, 19)],
+    ['milk | #"Deep Work"^', tok('category', 'Deep Work', 7, 19)],
+    ['milk | ~3^', tok('estimate', '3', 7, 9)],
+    ['milk | ~30^ #ad', tok('estimate', '30', 7, 10)],
+    ['milk | due:^', tok('due', '', 7, 11)],
+    ['milk | due:2026-1^', tok('due', '2026-1', 7, 17)],
+    ['milk | notes:"a |^ b"', null],
+    ['milk | notes:"open^', null],
+    ['milk | ^', null],
+    ['milk | ~30 ^#ad', tok('category', '', 11, 14)],
+    ['milk | foo^', null],
+    ['milk | Due:x^', null],
+    ['milk | x | #a^', tok('category', 'a', 11, 13)],
+  ])('%s', (marked, want) => {
+    expect(at(marked)).toEqual(want);
   });
 });

@@ -4,6 +4,8 @@ import { AppHeader } from './AppHeader';
 import { AppNav } from './AppNav';
 import { CaptureBar } from '../modules/capture/CaptureBar';
 import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
+import { useKeyboardInset } from '../lib/useKeyboardInset';
+import { cx } from '../lib/cx';
 
 // The layout every route renders inside: header + deep-view nav + the routed page, above a single
 // fixed bottom dock.
@@ -15,6 +17,8 @@ import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
 export function AppShell() {
   const dockRef = useRef<HTMLDivElement>(null);
   const [dockHeight, setDockHeight] = useState(0);
+  // Lifts the dock above the iOS keyboard while you type in it (a fixed bottom sits behind it).
+  const lifted = useKeyboardInset(dockRef);
 
   // Reserve exactly as much room as the dock currently needs. A fixed padding can't be right: the
   // dock grows when a timer is running, when several run at once, and when the capture field wraps
@@ -60,12 +64,18 @@ export function AppShell() {
         // Selector for the out-of-repo browser harness that asserts nothing on a page is ever
         // covered by the dock. Not used by app code or CSS.
         data-dock
-        className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-4 pb-safe"
+        // Lifted: the home indicator is under the keyboard, so pb-safe would only leave a gap; and
+        // the hook caps max-height, so overflow clips from the top (justify-end) — only then, since
+        // overflow-hidden would also clip the panel's shadow. bottom/max-height are set by the hook.
+        className={cx(
+          'pointer-events-none fixed inset-x-0 bottom-0 z-30 flex flex-col justify-end px-4',
+          lifted ? 'overflow-hidden pb-2' : 'pb-safe',
+        )}
       >
         {/* This column stays pointer-events-none and each PANEL opts back in. The timer stack is
             only sm:w-80, so an auto-everywhere column would swallow clicks on the page showing
             through the transparent strip beside it. */}
-        <div className="mx-auto flex max-w-3xl flex-col gap-2">
+        <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-2">
           <TimerBar />
           <CaptureBar trailing={<IdleFocus />} />
         </div>

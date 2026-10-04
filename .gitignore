@@ -19,3 +19,5 @@ nohup.out
 .local/
 
 .claude/worktrees
+
+.metals

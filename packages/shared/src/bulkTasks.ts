@@ -46,11 +46,12 @@ const SEP = ' | ';
 const LIST_MARKER = /^([-*+•]|\d+[.)])\s/;
 const NOTES_OPEN = /^notes:"/i; // case-insensitive here so `Notes:` gets its own error, not "unrecognized"
 
-// Split the token region into raw token strings, keeping a #"quoted label" or notes:"…" (both contain
+// Split the token region into token spans, keeping a #"quoted label" or notes:"…" (both contain
 // spaces) whole. An unclosed quote runs to the end of the region and is flagged at classify time.
 // Text glued to a notes closing quote stays in the token, so an embedded '"' is reported as one.
-function scanTokens(region: string): string[] {
-  const out: string[] = [];
+// Spans, not strings, so tokenAtCaret shares these exact quoting rules.
+function scanTokens(region: string): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
   const n = region.length;
   let i = 0;
   while (i < n) {
@@ -66,7 +67,7 @@ function scanTokens(region: string): string[] {
     } else {
       while (i < n && !/\s/.test(region[i]!)) i++;
     }
-    out.push(region.slice(start, i));
+    out.push({ start, end: i });
   }
   return out;
 }
@@ -129,7 +130,7 @@ function parseLine(
     return true;
   };
 
-  for (const tok of scanTokens(region)) {
+  for (const tok of scanTokens(region).map((s) => region.slice(s.start, s.end))) {
     if (tok.startsWith('~')) {
       if (!once('estimate', 'estimate (~)')) continue;
       const rest = tok.slice(1);
@@ -225,6 +226,39 @@ export function parseBulkTasks(
 
   const errorCount = lines.filter((l) => l.errors.length > 0).length;
   return { lines, errorCount, canSubmit: errorCount === 0 && lines.length > 0 };
+}
+
+export type CaretTokenKind = 'category' | 'estimate' | 'due';
+export interface CaretToken {
+  kind: CaretTokenKind;
+  partial: string; // typed so far, after the prefix (and an opening '#"' quote)
+  replaceStart: number; // absolute [start, end) of the whole token in the text
+  replaceEnd: number;
+}
+
+// The completable token under the caret, for capture's suggestion chips — or null. Only in the region
+// after the FIRST ' | ', only #/~/due: (never inside notes:"…"), and a caret at a token's end counts.
+export function tokenAtCaret(text: string, caret: number): CaretToken | null {
+  const idx = text.indexOf(SEP);
+  if (idx === -1) return null;
+  const base = idx + SEP.length;
+  if (caret < base) return null;
+  const rel = caret - base;
+  const span = scanTokens(text.slice(base)).find((s) => s.start <= rel && rel <= s.end);
+  if (!span) return null;
+  const tok = text.slice(base + span.start, base + span.end);
+  const [kind, prefixLen]: [CaretTokenKind, number] | [null, 0] = tok.startsWith('#"')
+    ? ['category', 2]
+    : tok.startsWith('#')
+      ? ['category', 1]
+      : tok.startsWith('~')
+        ? ['estimate', 1]
+        : tok.startsWith('due:')
+          ? ['due', 4]
+          : [null, 0];
+  if (!kind) return null;
+  const partial = text.slice(base + span.start + prefixLen, caret).replace(/"$/, '');
+  return { kind, partial, replaceStart: base + span.start, replaceEnd: base + span.end };
 }
 
 // Capture's gate: tokens only apply once the text carries the separator, so a bare capture ("a|b",
