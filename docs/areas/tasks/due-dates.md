@@ -1,4 +1,4 @@
-# Task Due Dates
+# Task Due Dates (+ times)
 
 **Area:** tasks · **Branch:** `task-due-dates`
 
@@ -11,7 +11,10 @@ A day-granular **due date** on a task — *when it's due*, distinct from *when I
 model had scheduling (`taskPlans.day`) and estimates, but no deadline concept. This adds one, as free
 metadata, without turning the app into a nag.
 
-Permanent design-of-record: §3 is the decision log, §7 the build record. Where this doc and the code
+**Due times: built 2026-10-05** (branch `task-due-times`) — an optional `dueTime` beside `dueDay`, an
+urgency colour for timed tasks, and calendar auto-sync. Revisits D1 and D5; build record §10.
+
+Permanent design-of-record: §3 is the decision log, §7 and §10 the build records. Where this doc and the code
 disagree, fix whichever is wrong and say so here.
 
 ---
@@ -45,9 +48,9 @@ date reads exactly like a rollover — flat, quiet, un-emphasised.
 ```
 
 They are deliberately different fields. You can schedule a task onto Wednesday (`taskPlans.day`) while
-it's due Friday (`dueDay`); you can have a due date and no plan yet, or a plan and no due date. Clock
-precision (a 3pm OA) is **not** this field's job — that lives in Google Calendar (see the calendar
-area). Due dates stay day-granular, matching `taskPlans.day`'s `YYYY-MM-DD` shape.
+it's due Friday (`dueDay`); you can have a due date and no plan yet, or a plan and no due date. `dueDay`
+stays day-granular, matching `taskPlans.day`'s `YYYY-MM-DD` shape; a clock time (a 4pm submission) is a
+**separate, optional** `dueTime` on that day (D1 revisited).
 
 ## 3. Decision log
 
@@ -59,6 +62,14 @@ A deadline is a day (`YYYY-MM-DD`, same shape as `taskPlans.day`), never a clock
 *Why:* a pset is "due Friday", not "due 3:14pm Friday" — clock precision would be fabricated.
 *Rejected:* a `dueTime` / full datetime. Clock-time events are Google Calendar's job; keeping this
 day-granular is what keeps the two concepts (and the two areas) cleanly separated.
+**Revisited 2026-10-05 — an optional `dueTime` is added.** Real use said otherwise: titles like
+"Prep case study (due 4pm)" and "P1 proposal (due 12pm)" were carrying the clock by hand, and timed
+reminders need it. The time is a deadline (submit by), not an appointment. It is a **second field**
+(`"HH:MM"`, 24h local wall clock), not a datetime: every consumer that treats `dueDay` as a day — the
+Week lens cutoff (`dueDay <= today+6` as a string compare), Coming up, `fmtDueDay`, the date input,
+`isDayKey` validation, presets, split — stays untouched, and sorting is one comparator. A combined
+`YYYY-MM-DDTHH:MM` would have silently dropped a timed task on the week's last day out of Week, and a
+rename to `due` would have needed a prod backfill. `dueDay` itself is still day-granular.
 
 **D2 — Enrichment-only, never on the capture bar.**
 You add a due date in the scope/plan pass, not when you capture the task.
@@ -94,6 +105,14 @@ guilt machinery the no-scold posture forbids (`product/PRODUCT.md`). A lapsed du
 rollover — honest, quiet — not like a reprimand.
 *Rejected:* the entire default vocabulary of todo apps (countdowns, colour-coded urgency, an overdue
 counter). Deliberately, not by omission.
+**Revisited 2026-10-05 — urgency colour for TIMED tasks.** With a clock time, a flat label "means
+nothing" two hours out (the user's words). A timed row now colours: **gold edge ≤6h, gold fill ≤1h, red
+fill once past**, and the red **stays** (across days) until the task is done, cancelled or moved —
+`dueUrgency` in `packages/shared/src/due.ts`, looks in `app/src/modules/tasks/dueStyle.ts`. Untimed
+deadlines keep D5 exactly (flat, `ink-subtle`); done/cancelled never colour; the label text stays quiet
+("due today 4pm" until the 4am rollover, D6); still no countdown and no aggregate/overdue count anywhere.
+Edge-then-fill rather than a gold→orange→red ramp: three warm tints are hard to tell apart (dark mode
+especially) and a new orange token would need its own contrast pass.
 
 **D6 — "Today" is the 4am logical day, not local midnight.**
 The relative formatter compares against `todayKey(dayStartHour)` (4am rollover).
@@ -123,6 +142,9 @@ already order-sorted, so there is no task where a manual order and the due-hint 
 *Rejected:* due date as the primary sort key across all task lists (briefly considered, reversed — it
 would silently reorder lists the user had hand-ordered).
 
+**D11 — Sort within a day: timed by time, then untimed (2026-10-05).** `byDueHint` keys on
+`(dueDay, dueTime ?? '99:99')`. D9 still holds — manual order wins wherever set.
+
 **D10 — No GSI; in-memory sort.**
 *Why:* single user, small N. A `dueDay`-keyed query earns nothing here and adds a schema surface.
 *Deferred (not rejected):* a `dueDay` GSI + a "this week's dues" view move to the calibration area,
@@ -130,11 +152,16 @@ where cross-task deadline queries actually pay off.
 
 ## 4. Data model
 
-One nullable field on the existing task item — no new key, no GSI:
+Nullable fields on the existing task item — no new key, no GSI:
 
 ```ts
-Task { …existing… , dueDay: string | null }   // "YYYY-MM-DD", same shape as taskPlans.day
+Task { …existing… , dueDay: string | null,    // "YYYY-MM-DD", same shape as taskPlans.day
+                    dueTime: string | null }   // "HH:MM" 24h local, only with dueDay (2026-10-05)
 ```
+
+- **Invariant (one gate, `normalizeDue` in `due.ts`):** a time needs a day; clearing the day clears the
+  time; both must be well-formed (`isDayKey`, `isTimeKey`). Both creates and `setTaskDue` run it before
+  any write. Old rows read `dueTime` back `undefined` → untimed (readers use `!dueTime`).
 
 - `createTask` defaults `dueDay: null` (mirrors `estimateMin`/`categoryId` defaulting).
 - Persists for free: `taskItem` mapping is `{ PK, SK, ...task }` (a spread), and the read path
@@ -158,6 +185,12 @@ async setTaskDueDay(id: string, dueDay: string | null): Promise<Task> {
 Registered in `API_METHODS` (`packages/shared/src/rpc.ts`) immediately after `setTaskCategory`.
 Callable at any status; never touches `estimateLockedMin`. Setting `null` clears it.
 
+**2026-10-05:** `setTaskDue(id, { dueDay, dueTime? })` is the write; `setTaskDueDay` is kept as
+`setTaskDue(id, { dueDay })` (cached app shells, older callers). Object-shaped on purpose: RPC args are
+a JSON array, so a trailing optional `dueTime` would arrive as `null` (clear) instead of absent (keep);
+in an object an omitted key stays omitted. A due write then runs calendar auto-sync
+([calendar → Auto-sync](../calendar/index.md)).
+
 ## 6. UX surfaces & display
 
 - **Set it** — now in the task editor modal, until the task is done or cancelled ([task-editor.md](task-editor.md)); originally
@@ -175,9 +208,13 @@ Callable at any status; never touches `estimateLockedMin`. Setting `null` clears
   | −2 … −6 | `was due Tue` (weekday) |
   | ≤ −7 | `was due Jun 8` (month + day) |
 
-  (Why this shape: D8.)
-- **Shown in two places:** `TaskCard`'s meta line, and the Home "+ Add" dialog's rows. Same subtle
-  tone in both. (`/tasks` lists are all `TaskCard` now — [lenses.md](lenses.md).)
+  (Why this shape: D8.) A timed task appends the clock on every branch — `due Fri 4pm`,
+  `due today 11:59pm`, `was due Tue 9:30am` (`fmtClock12`). The time is set in the editor's **Due time**
+  field (disabled without a date), via `due:YYYY-MM-DD@HH:MM` in bulk add / capture
+  ([bulk-add.md](bulk-add.md)), or `dueTime` over MCP.
+- **Shown in:** `TaskCard`'s meta line, the Home "+ Add" dialog's rows, Coming up, and (timed only)
+  the Right-now rows. Same subtle tone throughout; a timed row's **urgency colour** (D5 revisited) is on
+  the row, re-read every minute (`useNow`), with the same signal in screen-reader text. (`/tasks` lists are all `TaskCard` now — [lenses.md](lenses.md).)
 - **Dark theme:** a native date input's picker glyphs often need `color-scheme` set; if it looks wrong,
   fix with CSS, don't pull a picker dependency.
 
@@ -244,7 +281,9 @@ full-`Task` literal (the `Plan` pass's original "~5–7" missed that fan-out and
 
 - `dueDay`-keyed GSI + a "this week's dues" deep view → calibration area.
 - gcal "add to calendar" off a `dueDay` → calendar area (this feature lands first so that has a date).
-- Clock-time / `dueTime` on the task → never; that's gcal's job.
+- ~~Clock-time / `dueTime` on the task → never~~ — built 2026-10-05 (D1 revisited).
+- Timed reminders / notifications — the separate Reminders task; `dueTime` is its prerequisite.
+- Due times on recurring series templates.
 
 ## 9. Sibling-PR conflicts (merge coordination)
 
@@ -256,3 +295,29 @@ Expected conflicts, resolved by the human at merge:
   lines; it should rebase onto this PR and add its fields beside `dueDay: null`.
 - `api.ts`, `backend.ts`, `stubClient.ts`, `useTasks.ts`, `contractTests.ts` — near the same task-section
   lines; the mid-file inserts help.
+
+## 10. Build record — due times (2026-10-05)
+
+Planned by the `Plan` agent (~60 files). One branch, page-first; shared → stub/app → lambdas → docs.
+
+- **shared:** `Task.dueTime` + `gcalSyncError`, `Settings.autoCalendar`; `setTaskDue` + `syncCalendarEvent`
+  (`api.ts`, `rpc.ts`); `dates.ts` — `isTimeKey`, `fmtClock12`, `hhmmOfEpoch`, `DUE_TIME_PRESETS`,
+  `USER_TIME_ZONE` (moved from the MCP finance tools), `zonedEpoch`, `fmtDueDay(…, dueTime)`; new
+  `due.ts` (`normalizeDue`, `eventWindow`, `dueUrgency`) and `calendarSync.ts` (the planner); the
+  `@HH:MM` grammar; `splitFollowUp` carries the time. Contract cases: set/keep/clear, validation,
+  bulk, split, settings default.
+  - ↳ *`zonedEpoch` exists because the Lambda is UTC — `localEpochFromDayTime` there would put every
+    event 7–8 hours off. Tested on both DST-change days.*
+- **app:** editor **Due time** field (one `setTaskDue` write); urgency colour on `TaskCard`, Coming up and
+  Right now via `dueStyle.ts` + the new `useNow` hook (lifted from `HomeModeProvider`); `--danger-soft`
+  token; capture time chips; sync-failure line + Retry in the editor, "calendar sync failed" on the row;
+  Settings toggle; add-to-calendar prefills the block ending at the deadline; seed has three timed tasks
+  (imminent, soon, past).
+  - ↳ *The colour classes must beat `Card`'s own `border-line`/`bg-panel` (`cx` is a plain join, no
+    merge): the edge is an important border colour, the fill an inset shadow over the background.*
+- **lambdas:** `setTaskDue`, `syncCalendar` routed through every task write that can change the event;
+  gateway `patchEvent` + `EventGoneError`; MCP `dueTime` on the three task tools.
+- **Tests:** shared (dates/DST, due, planner, grammar, contract) · lambdas (auto-sync scenarios incl.
+  failure + retry, deleted-in-Google, toggle off, bulk, split, testMode; MCP) · app (editor, capture chips,
+  urgency classes, Coming up order + colour, Settings toggle, stub parity, `useNow`).
+

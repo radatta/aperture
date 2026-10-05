@@ -79,8 +79,14 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 - **`complete_task` requires `actualMin`** — completing feeds calibration, and a 0-actual completion would
   pollute the signature metric. It chains `→ in_progress → done` (freezing the estimate) and **replaces**
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
-- **`update_task`** fan-out order is title → categoryId → dueDay → notes → estimate → status; the estimate
+- **`update_task`** fan-out order is title → categoryId → due → notes → estimate → status; the estimate
   throws if frozen, and the error names which fields already applied.
+- **Due times** ([tasks/due-dates.md](../tasks/due-dates.md)): `dueTime` (`HH:MM`, 24h, the user's local
+  time) rides on `create_task`, `create_tasks` and `update_task`, validated before any dispatch. In
+  `update_task`, `dueDay` and `dueTime` go out as **one** `setTaskDue` write: time-only keeps the task's
+  day, day-only keeps its time, `dueDay: null` clears both, and a time on an undated task is an execution
+  error naming what already applied. A timed task syncs to Google Calendar
+  ([calendar → Auto-sync](../calendar/index.md)); a failure comes back as `gcalSyncError` on the task.
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`
   (`notes: null` or `""` clears; an update replaces the whole note). They're checked before any dispatch,
   so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of
@@ -99,8 +105,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
   (`seriesId` set), matching the UI — `getDay` would respawn it; cancel it instead.
-- **Rename** is a new contract method, `setTaskTitle` (allowed at any status; it does NOT rename a linked
-  calendar event — edit-sync is a deferred gap). Exposed as `update_task.title`.
+- **Rename** is a new contract method, `setTaskTitle` (allowed at any status; with auto-sync on it also
+  renames a linked calendar event). Exposed as `update_task.title`.
 - **Calendar** events are created **from a task only** (the schema has nowhere to pin a standalone event).
   Times are ISO 8601 **with an explicit offset** — no timezone inference.
 - **Attachments** — two byte paths: `attach_file` sends content inline (base64, capped **64 KB** — tool
@@ -278,7 +284,8 @@ The user captures by voice: iPhone **Action Button → Claude app voice mode →
 claude.ai connector**, i.e. the phase-2 OAuth path above. No Siri, no Shortcuts, nothing voice-specific
 server-side. Observed 2026-09-23: "add get milk to aperture" created the task in one utterance; by 2026-09-26
 a fully specified one ("…, errands, 10 minutes, due Friday") also landed with category, estimate and due
-day — the model resolved the category label → id via `list_categories` unprompted.
+day — the model resolved the category label → id via `list_categories` unprompted. Since 2026-10-05 a
+clock time is sayable too ("due Friday at 4pm" → `dueDay` + `dueTime: "16:00"`).
 
 **Treat voice as a first-class surface when designing a feature.** It's one spoken sentence, no screen,
 the model as the only UI — so:
@@ -305,7 +312,6 @@ check if voice capture suddenly fails.
 
 ## Deferred
 
-- A rename does not sync to a linked calendar event (edit-sync — a pre-existing calendar gap).
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
 - Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).

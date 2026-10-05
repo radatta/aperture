@@ -56,10 +56,11 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **logEntries** — `id · createdAt · day · text`. Edit allowed; soft-delete allowed.
 
 **tasks** — the signature module.
-- `id · title · status · categoryId · seriesId? · rollId? · dueDay? · notes? · createdAt · startedAt? · completedAt? · cancelledAt?`
+- `id · title · status · categoryId · seriesId? · rollId? · dueDay? · dueTime? · notes? · createdAt · startedAt? · completedAt? · cancelledAt?`
 - `rollId` (id | null) — set when the task is a **rep** of a [Roll](../areas/home/rolls.md). Required-nullable; readers compare `=== id` / `!rollId` (pre-existing rows read back `undefined`). The contact-sheet momentum is derived from done tasks carrying this — no counter.
 - `status`: `backlog | planned | in_progress | done | cancelled`.
 - `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (*when I'll work it*). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
+- `dueTime` (`HH:MM` 24h local | null) — the deadline's clock time, only with a `dueDay` (clearing the day clears it). Drives the urgency colour and calendar auto-sync (`gcalSyncError` holds a failed sync; `Settings.autoCalendar` is the toggle — [areas/calendar/index.md](../areas/calendar/index.md) → Auto-sync).
 - `notes` (string | null, ≤ 5,000 chars) — free-form light markdown, editable at any status, **never part of the estimate lock**. Required-nullable; pre-existing rows read back `undefined`, so readers use `!notes`. Design: [areas/tasks/notes.md](../areas/tasks/notes.md).
 - **Estimate handling:** `estimateMin` + `bufferMin` are editable while `status ∈ {backlog, planned}`. On the **first transition out of planning** (→ `in_progress` or `done`), `estimateLockedMin` is snapshotted and frozen. **Calibration = `actualAccruedMin` vs `estimateLockedMin`.** Scope changes are handled by **splitting** (finish/cancel + spawn a follow-up), never by editing the locked estimate.
 - `actualAccruedMin` — **denormalized**, bumped when a *work* session closes (excludes breaks + paused time). Avoids scanning sessions.

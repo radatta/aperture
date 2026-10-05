@@ -56,6 +56,9 @@ capture time was wanted, and an opt-in token asks nothing of a bare capture.
   - **`due:`** — Today, Tomorrow, the first five Mon–Fri days in today+1..+7, and +1 week, deduped by
     day. Labels tier like `fmtDueDay` (weekday for +2..+6, `Oct 7` for +7), inserted as ISO. Built by
     `duePresets(todayKey(dayStartHour))`, so the rollover is `todayKey`'s job. Typed digits filter.
+    Once the day is whole (caret at the end of `due:2026-10-09`) or carries an `@`, the chips switch to
+    **times** — 9am · 12pm · 5pm · 11:59pm (`DUE_TIME_PRESETS`), filtered by what follows the `@`, each
+    typing the full `due:<day>@HH:MM` ("Due Friday, Oct 9 at 5pm"). Added 2026-10-05.
   - **`~`** — fixed 15 · 30 · 45 · 60 · 90 · 120, filtered by digit prefix.
   - **Keys:** Tab accepts the first chip while chips show, else cycles mode; Shift+Tab always cycles
     (the escape hatch). No arrow-key highlight — arrows move the caret in a textarea; type one more
@@ -73,6 +76,9 @@ capture time was wanted, and an opt-in token asks nothing of a bare capture.
   trailing-tokens ("fix issue #42" silently reading `#42` as a category).
 - **ISO-only dates, no keywords.** `due:2026-09-25` only — no `fri`/`tomorrow`. The operator is Claude,
   which knows today's date and emits a concrete one; friendly shortcuts buy nothing and add ambiguity.
+- **Due time as an `@HH:MM` suffix (2026-10-05).** `due:2026-09-25@17:00` — 24h, zero-padded, no
+  `am`/`pm`, same strictness. A suffix on the one `due:` token (not a separate `at:` token) because a time
+  only means something on its day ([due-dates.md](due-dates.md) D1 revisited).
 - **Quoted multi-word labels:** `#"Deep Work"`. What's between the quotes is the label; only case is
   folded to match.
 - **`#label` no-match is a warning, not an error.** The task is created uncategorised (categoryId null);
@@ -130,6 +136,7 @@ One task per line. A line is:   <title>[ | <tokens>]
              #<label>          single word               e.g. #Admin
              #"<label>"        multi-word, quoted        e.g. #"Deep Work"
              due:<YYYY-MM-DD>  real calendar date, ISO   e.g. due:2026-09-25
+             due:<YYYY-MM-DD>@<HH:MM>  + a 24h deadline time   e.g. due:2026-09-25@17:00
              notes:"<text>"    quoted; \n = a newline    e.g. notes:"Ch. 4\nq6: use the lemma"
 ```
 
@@ -143,6 +150,7 @@ Rules that produce a **red error** (blocks the entire submit — fix or remove):
 - empty title; a leading list marker (`- `, `* `, `1. `); a `|` in the title; ` | ` with nothing after it
 - `~` that isn't a whole minute ≥ 1 (`~30m`, `~0`, `~1.5`, `~`)
 - `due:` that isn't a real ISO date (`due:2026-02-30`, `due:2026-2-5`); a capitalized `Due:`
+- an `@` time that isn't zero-padded 24h `HH:MM` (`@5pm`, `@5:00`, `@24:00`, a bare `@`)
 - an unterminated `#"quote`; a label that matches two categories; any unrecognized token
 - the same kind of token twice on one line
 - `notes:` without quotes; an unterminated `notes:"…`; empty notes (`notes:""`); a `"` inside the
@@ -156,7 +164,7 @@ Rules that produce a **gold warning** (task still created):
 Good paste:
 ```
 email coach
-finish 214 pset | ~90 #"Deep Work" due:2026-09-25
+finish 214 pset | ~90 #"Deep Work" due:2026-09-25@17:00
 book flight | due:2026-10-02
 review the RFC | ~45 #Admin
 read ch. 4 | ~30 notes:"q1–8\n- q6: use the lemma\nhttps://example.edu/pset4"
@@ -185,6 +193,11 @@ Page-first, one atomic contract change so `tsc -b` stays green. ~20 files across
 Tests: parser table-driven unit tests; `isDayKey`; `createTasks` in the cross-impl contract suite (stub
 + lambda + handler); a `BulkAddDialog` integration test (gating, submit-in-order, warning-still-submits,
 cancel-drops-draft + focus-return, failure-keeps-text).
+
+**Due times (2026-10-05):** the `@HH:MM` suffix in `parseLine` (`isTimeKey`), `BulkLine.dueTime` →
+`toCreateInput`; time chips in `suggestions.ts`; `TaskTokenChips` shows the time. A timed line is
+auto-synced to the calendar by `createTasks` ([calendar → Auto-sync](../calendar/index.md)). Tests:
+parse/red cases, literal inside notes, the caret token after `@`, and a `CaptureBar` chip → task case.
 
 **Capture tokens (2026-09-28):** shared `hasTaskTokens`/`parseTaskLine`/`toCreateInput` (+ tests);
 `useCreateTask` and `createToday` widened to `string | CreateTaskInput`; `CaptureBar` preview row +

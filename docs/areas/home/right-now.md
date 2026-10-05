@@ -98,6 +98,10 @@ so a naive read under-reports mid-work. We add the running work timer's `activeS
 
 **D7 — Radar is capped, gentle, and de-duplicated.** ≤3 soonest-first, then "+N more this week"; no red,
 no overdue tally; excludes anything already on the tight plane (today's plan + in-progress).
+*Revisited 2026-10-05:* a **timed** task's row (here, and the Right-now hero/rows) takes the deadline
+urgency colour — gold edge ≤6h, gold fill ≤1h, red once past ([due-dates.md](../tasks/due-dates.md) D5
+revisited); Right-now rows also show its "due today 4pm" phrase. The hero's count-up stays flat — the
+colour is about the deadline, never the estimate. Still no tally.
 *Rejected:* the full dues list on the home — that's pr-d's grouped-by-course *deep view*, and PRODUCT §3
 caps the home at ~5 elements. This is the glance; pr-d is the drill-down.
 

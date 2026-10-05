@@ -22,7 +22,7 @@ card (lifecycle only)                     modal (everything else)
 ──────────────────────                    ──────────────────────────────
 title ── opens ──▶ ┐                       full title (read-only for now)
 Scope (if unscoped)┤                       status · category · recurs
-Start / Focus / Done ┘                     Details  — estimate/buffer/category/due, notes (Save)
+Start / Focus / Done ┘                     Details  — estimate/buffer/category/due (+ time), notes (Save)
 + section actions slot                     Time     — logged/remaining/locked/timestamps/Δ (read-only)
                                            Files · Calendar
                                            Manage   — Split / Drop / Delete
@@ -98,8 +98,8 @@ The card keeps only the actions you press without thinking. No overflow menu.
 
 ## Non-goals / deferred
 
-- **Rename sync** — renaming a task does *not* rename its recurring series template or its linked
-  Google Calendar event. Calendar edit-sync is already a deferred gap (`docs/areas/calendar/`).
+- **Rename sync** — renaming a task does *not* rename its recurring series template. Its linked Google
+  Calendar event *is* renamed when auto-sync is on (since 2026-10-05 — `docs/areas/calendar/` → Auto-sync).
 - **Home rows** are not yet wired to the modal. `TaskTitleButton` is the seam — those truncated title
   spots can adopt it later with no new plumbing. (On `/tasks` every row is a `TaskCard`, and a click
   anywhere on the row opens the modal.)
