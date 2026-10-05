@@ -108,6 +108,13 @@ describe('due times — isTimeKey, fmtClock12, zonedEpoch', () => {
     expect(zonedEpoch('2026-11-01', '03:00', LA)).toBe(Date.UTC(2026, 10, 1, 11, 0)); // PST
     expect(zonedEpoch('2026-10-05', '16:00', 'UTC')).toBe(Date.UTC(2026, 9, 5, 16, 0));
   });
+  it('zonedEpoch agrees with the browser on a nonexistent and a repeated wall time', () => {
+    const LA = 'America/Los_Angeles';
+    // 2:30am doesn't exist on spring-forward day → 3:30am PDT (what new Date(y, m, d, 2, 30) gives).
+    expect(zonedEpoch('2027-03-14', '02:30', LA)).toBe(Date.UTC(2027, 2, 14, 10, 30));
+    // 1:30am happens twice on fall-back day → the first (PDT) one.
+    expect(zonedEpoch('2026-11-01', '01:30', LA)).toBe(Date.UTC(2026, 10, 1, 8, 30));
+  });
 });
 
 describe('fmtDueDay — relative deadline phrasing', () => {

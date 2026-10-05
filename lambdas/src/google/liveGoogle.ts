@@ -41,6 +41,10 @@ class InvalidGrantError extends Error {
   }
 }
 
+// Per-call cap on a Google fetch. Calendar writes now ride task writes (auto-sync): a hung call must fail
+// into gcalSyncError well inside the Lambda's own timeout, not take the whole request down with it.
+const GOOGLE_TIMEOUT_MS = 5_000;
+
 export class LiveGoogle implements GoogleGateway {
   private clientCreds: { clientId: string; clientSecret: string } | null = null;
   private readonly access = new Map<string, AccessCacheEntry>();
@@ -94,6 +98,7 @@ export class LiveGoogle implements GoogleGateway {
     const { clientId, clientSecret } = await this.getClientCreds();
 
     const res = await fetch(TOKEN_URL, {
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -119,6 +124,7 @@ export class LiveGoogle implements GoogleGateway {
   private async api(sub: string, path: string, init?: RequestInit): Promise<Response> {
     const token = await this.getAccessToken(sub);
     return fetch(`${API}${path}`, {
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
       ...init,
       headers: { authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
     });

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { dueUrgency, fmtDueDay, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtClock12, fmtDueDay, todayKey } from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
@@ -38,14 +38,18 @@ function useUrgency(t: Task): DueUrgency {
   return dueUrgency(t, useNow());
 }
 
-// The deadline phrase, on timed tasks only — the day's plan already says "today" for the rest.
+// The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact for a
+// today deadline ("by 4:30pm") so a phone-width row keeps room for its title.
 function DueTime({ task }: { task: Task }) {
   const { data: settings } = useSettings();
   const label = urgencyLabel(useUrgency(task));
   if (!task.dueDay || !task.dueTime) return null;
+  const today = todayKey(settings?.dayStartHour ?? 4);
   return (
     <Text size="xs" tone="subtle" className="shrink-0">
-      {fmtDueDay(task.dueDay, todayKey(settings?.dayStartHour ?? 4), task.dueTime)}
+      {task.dueDay === today
+        ? `by ${fmtClock12(task.dueTime)}`
+        : fmtDueDay(task.dueDay, today, task.dueTime)}
       {label && <span className="sr-only">, {label}</span>}
     </Text>
   );

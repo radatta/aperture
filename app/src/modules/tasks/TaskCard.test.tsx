@@ -338,9 +338,9 @@ describe('due-time urgency', () => {
     expect(rowOf('Later').className).not.toMatch(/border-(gold|danger)/);
     expect(rowOf('Untimed').className).not.toMatch(/border-(gold|danger)/);
     expect(rowOf('Soon').className).toMatch(/border-gold!/);
-    expect(rowOf('Soon').className).not.toMatch(/gold-soft/);
-    expect(rowOf('Imminent').className).toMatch(/border-gold!.*gold-soft/);
-    expect(rowOf('Past').className).toMatch(/border-danger!.*danger-soft/);
+    expect(rowOf('Soon').className).not.toMatch(/fill/);
+    expect(rowOf('Imminent').className).toMatch(/border-gold!.*due-imminent-fill/);
+    expect(rowOf('Past').className).toMatch(/border-danger!.*due-past-fill/);
     // The same signal for a screen reader, beside the time label.
     expect(within(rowOf('Imminent')).getByText(/due within the hour/)).toBeTruthy();
     expect(within(rowOf('Past')).getByText(/past due/)).toBeTruthy();

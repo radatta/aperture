@@ -179,8 +179,9 @@ export class InMemoryGoogle implements GoogleGateway {
   async deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void> {
     this.mustAccount(input.sub);
     const evt = this.events.get(input.eventId);
+    if (!evt) throw new EventGoneError(input.eventId); // the live gateway treats 404/410 as success
     // Safety: only ever delete an event we inserted, on the account+calendar it lives on.
-    if (!evt || evt.sub !== input.sub || evt.calendarId !== input.calendarId) {
+    if (evt.sub !== input.sub || evt.calendarId !== input.calendarId) {
       throw new Error(`Refusing to delete unknown event: ${input.eventId}`);
     }
     this.events.delete(input.eventId);

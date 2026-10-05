@@ -450,7 +450,7 @@ function CalendarSection() {
               <input
                 type="checkbox"
                 className="mt-1"
-                checked={settings.autoCalendar !== false}
+                checked={!!settings.calendarWriteDefault && settings.autoCalendar !== false}
                 disabled={!settings.calendarWriteDefault}
                 onChange={(e) => update.mutate({ autoCalendar: e.target.checked })}
               />

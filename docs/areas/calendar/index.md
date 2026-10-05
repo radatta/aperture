@@ -128,13 +128,23 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   keeps deleted events restorable) is treated as gone: the pointer is dropped and the event is not
   resurrected; a later time change creates a fresh one. Two-way sync is a follow-up.
 - **Failure never fails the task write.** The task is saved first; a gateway error lands on the task as
-  `gcalSyncError` (logged as `gcal_sync_failed`), shown on the row and in the editor with **Retry**
-  (`syncCalendarEvent` — an "ensure" pass of the planner). The next successful sync, or the task no longer
-  needing one, clears it.
+  `gcalSyncError` ("Couldn’t add/update/remove the calendar event (…)", logged as `gcal_sync_failed`),
+  shown on the row and in the editor with **Retry** (`syncCalendarEvent` — an "ensure" pass of the
+  planner). A failed **remove** keeps the event linked (never a silent orphan), and its note is how the
+  retry knows to finish the removal (`isPendingRemoval`). The note clears on the next success, or once
+  there's nothing to retry (no time + no event, sync off, task finished). Unlike delete-on-cancel, the
+  auto-sync remove does not swallow Google errors.
+- **Writes only the calendar fields, onto a fresh read** (`putGcal`) — the sync spans a Google round-trip,
+  and a write that lands meanwhile (a session closing) must survive it.
+- **Every Google fetch has a 5 s timeout** (`LiveGoogle`), so a hung call fails into `gcalSyncError` well
+  inside the 15 s Lambda timeout.
+- **A timed task with no event** (timed while sync was off — no backfill — or its event removed) shows
+  "Not on your calendar" + **Add to calendar** in the editor, which runs the same ensure pass.
 - **Timezone.** The Lambda is UTC, so it resolves `dueDay`+`dueTime` via `zonedEpoch(…, USER_TIME_ZONE)`
   (`America/Los_Angeles`, shared `dates.ts`; DST-correct); the browser uses `localEpochFromDayTime`.
-- **Bulk creates** sync timed rows one at a time (a Google round-trip each), untimed rows skip it.
-- **Split** with cancel drops the original's event; a timed follow-up gets its own.
+- **Bulk creates** sync timed rows four at a time (a Google round-trip each); untimed rows skip it.
+- **Split** (done or cancel) moves the event's link to the follow-up, which then renames/re-times it —
+  never a delete + re-create, never a duplicate block over the same window.
 
 ## Resilience (the Cognito model, per account)
 

@@ -176,6 +176,22 @@ describe('TaskEditor', () => {
     expect(sync).toHaveBeenCalledWith(t.id);
   });
 
+  it('a timed task with no event (timed while sync was off) offers a one-tap add', async () => {
+    const client = api();
+    await client.updateSettings({
+      calendarWriteDefault: { accountSub: 'a', calendarId: 'me@example.com' },
+      autoCalendar: false,
+    });
+    const t = await client.createTask({ title: 'Late add', dueDay: '2026-10-01', dueTime: '16:00' });
+    expect(t.gcalEventId).toBeNull();
+    await client.updateSettings({ autoCalendar: true });
+    const sync = vi.spyOn(client, 'syncCalendarEvent');
+    const { user } = renderEditor(client, t);
+    expect(await screen.findByText('Not on your calendar.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Add to calendar' }));
+    expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
   it('keeps the edits and says so when a save fails', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Flaky' });

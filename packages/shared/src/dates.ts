@@ -98,8 +98,9 @@ export const DUE_TIME_PRESETS = ['09:00', '12:00', '17:00', '23:59'] as const;
 export const USER_TIME_ZONE = 'America/Los_Angeles';
 
 // Epoch of wall-clock `hhmm` on `dayKey` in `timeZone` — the server-side twin of localEpochFromDayTime
-// (the Lambda's own clock is UTC). Two passes over the zone's offset so a DST-boundary day lands right;
-// a nonexistent spring-forward time resolves an hour later, like a browser does.
+// (the Lambda's own clock is UTC). Two passes over the zone's offset so a DST-boundary day lands right.
+// Matches the browser on the two edge cases: a repeated fall-back time takes its first (earlier)
+// instant, and a nonexistent spring-forward time (2:30am) moves an hour later (3:30am).
 export function zonedEpoch(dayKey: string, hhmm: string, timeZone: string): number {
   const [y, mo, d] = dayKey.split('-').map(Number) as [number, number, number];
   const [hh, mm] = hhmm.split(':').map(Number) as [number, number];
@@ -118,7 +119,10 @@ export function zonedEpoch(dayKey: string, hhmm: string, timeZone: string): numb
     return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute')) - ms;
   };
   const first = wall - offsetAt(wall);
-  return wall - offsetAt(first);
+  const second = wall - offsetAt(first);
+  // `second` is right unless the wall time doesn't exist (its offset round-trip disagrees) — then the
+  // later candidate is the browser's answer.
+  return second + offsetAt(second) === wall ? second : Math.max(first, second);
 }
 
 // 0 = Sunday … 6 = Saturday (JS convention), for weekly recurrence rules.

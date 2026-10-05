@@ -9,6 +9,7 @@ import {
   dayKeyForOffset,
   discardSession,
   eventWindow,
+  gcalSyncMessage,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   findOpenRollTask,
@@ -125,6 +126,9 @@ const unconfiguredPresigner: Presigner = {
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
 // behavior is identical to the stub by construction. The one thing SK order doesn't give for free is
 // the stub's explicit list sorts, so each list method re-applies them for byte-for-byte parity.
+// Calendar inserts in flight at once for a bulk create (createTasks).
+const SYNC_CONCURRENCY = 4;
+
 export class BackendClient implements ApiClient {
   private readonly userId: string;
   private readonly now: () => number;
@@ -215,72 +219,91 @@ export class BackendClient implements ApiClient {
 
   // Calendar auto-sync after a task write (shared calendarSyncPlan decides; docs/areas/calendar →
   // Auto-sync). The task is already saved: a Google failure never fails the write — it lands on the
-  // task as gcalSyncError (shown with a retry) and is logged. Returns the task as it now stands.
+  // task as gcalSyncError (shown with a retry) and is logged, and a failed remove keeps the event linked
+  // so the retry can finish it. Returns the task as it now stands.
   private async syncCalendar(prev: Task | null, task: Task, ensure = false): Promise<Task> {
     // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
-    const action = calendarSyncPlan(prev, task, await this.ensureSettings(), this.dueEpoch, {
-      ensure,
-    });
+    const settings = await this.ensureSettings();
+    const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
     if (action.kind === 'none') {
-      // Nothing left to sync (time cleared, unlinked) → a stale failure note goes too.
-      const moot = task.gcalSyncError && !task.gcalEventId && !eventWindow(task, this.dueEpoch);
-      return moot
-        ? this.repo.putTask({ ...task, gcalSyncError: null, updatedAt: this.now() })
-        : task;
+      // A stale failure note goes once nothing is left to sync: no event and no time, sync turned off,
+      // or the task finished — otherwise it'd sit there with a Retry that can't do anything.
+      const moot =
+        task.gcalSyncError &&
+        ((!task.gcalEventId && !eventWindow(task, this.dueEpoch)) ||
+          settings.autoCalendar === false ||
+          task.status === 'done' ||
+          task.status === 'cancelled');
+      return moot ? this.putGcal(task, { gcalSyncError: null }) : task;
     }
+    const unlinked = {
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+      gcalSyncError: null,
+    };
     try {
-      if (action.kind === 'delete') return await this.deleteCalendarEvent(task.id);
-      if (action.kind === 'patch') {
-        if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
-        try {
-          await this.google.patchEvent({
-            sub: task.gcalAccountId,
-            calendarId: task.gcalCalendarId,
-            eventId: task.gcalEventId,
-            title: action.title,
-            startMs: action.startMs,
-            endMs: action.endMs,
-          });
-        } catch (e) {
-          if (!(e instanceof EventGoneError)) throw e;
-          // Deleted in Google on purpose — drop the dead pointer, don't resurrect it. A later time change
-          // creates a fresh one.
-          return this.repo.putTask({
-            ...task,
-            gcalAccountId: null,
-            gcalCalendarId: null,
-            gcalEventId: null,
-            gcalSyncError: null,
-            updatedAt: this.now(),
-          });
-        }
-        return task.gcalSyncError
-          ? this.repo.putTask({ ...task, gcalSyncError: null, updatedAt: this.now() })
-          : task;
+      if (action.kind === 'create') {
+        const { eventId } = await this.google.insertEvent({
+          sub: action.target.accountSub,
+          calendarId: action.target.calendarId,
+          title: action.title,
+          startMs: action.startMs,
+          endMs: action.endMs,
+        });
+        return this.putGcal(task, {
+          gcalAccountId: action.target.accountSub,
+          gcalCalendarId: action.target.calendarId,
+          gcalEventId: eventId,
+          gcalSyncError: null,
+        });
       }
-      const { eventId } = await this.google.insertEvent({
-        sub: action.target.accountSub,
-        calendarId: action.target.calendarId,
-        title: action.title,
-        startMs: action.startMs,
-        endMs: action.endMs,
-      });
-      return this.repo.putTask({
-        ...task,
-        gcalAccountId: action.target.accountSub,
-        gcalCalendarId: action.target.calendarId,
-        gcalEventId: eventId,
-        gcalSyncError: null,
-        updatedAt: this.now(),
-      });
+      if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
+      const ref = {
+        sub: task.gcalAccountId,
+        calendarId: task.gcalCalendarId,
+        eventId: task.gcalEventId,
+      };
+      // Not via deleteCalendarEvent: that swallows Google errors (right for cancel/delete, where the
+      // task is going away) — here a failed remove must surface. An already-gone event is a success.
+      if (action.kind === 'delete') {
+        await this.google.deleteEvent(ref).catch((e: unknown) => {
+          if (!(e instanceof EventGoneError)) throw e;
+        });
+        return this.putGcal(task, unlinked);
+      }
+      try {
+        await this.google.patchEvent({
+          ...ref,
+          title: action.title,
+          startMs: action.startMs,
+          endMs: action.endMs,
+        });
+      } catch (e) {
+        if (!(e instanceof EventGoneError)) throw e;
+        // Deleted in Google on purpose — drop the dead pointer, don't resurrect it. A later time change
+        // creates a fresh one.
+        return this.putGcal(task, unlinked);
+      }
+      return task.gcalSyncError ? this.putGcal(task, { gcalSyncError: null }) : task;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const detail = e instanceof Error ? e.message : String(e);
       console.log(
-        JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, message }),
+        JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, detail }),
       );
-      return this.repo.putTask({ ...task, gcalSyncError: message, updatedAt: this.now() });
+      return this.putGcal(task, { gcalSyncError: gcalSyncMessage(action.kind, detail) });
     }
+  }
+  // Write only the calendar fields, onto a FRESH read: the sync spans a Google round-trip, and a
+  // concurrent write (a session closing, an edit from another device) must not be overwritten by it.
+  // (No row — a testMode write that never landed — falls back to the task in hand.)
+  private async putGcal(
+    task: Task,
+    fields: Partial<Pick<Task, 'gcalAccountId' | 'gcalCalendarId' | 'gcalEventId' | 'gcalSyncError'>>,
+  ): Promise<Task> {
+    const fresh = (await this.repo.getTask(task.id)) ?? task;
+    return this.repo.putTask({ ...fresh, ...fields, updatedAt: this.now() });
   }
   private async mustTask(id: string): Promise<Task> {
     const t = await this.repo.getTask(id);
@@ -454,9 +477,17 @@ export class BackendClient implements ApiClient {
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     const saved = await this.repo.putTasks(tasks);
-    // Timed tasks get their events one at a time (each a Google round-trip); untimed skip the planner.
-    const out: Task[] = [];
-    for (const task of saved) out.push(task.dueTime ? await this.syncCalendar(null, task) : task);
+    // Timed tasks get their events a few at a time — each is a Google round-trip, and a long timed
+    // paste done serially could outrun the Lambda timeout. Untimed rows skip the planner entirely.
+    const out = [...saved];
+    let next = 0;
+    const worker = async () => {
+      while (next < out.length) {
+        const i = next++;
+        if (out[i]!.dueTime) out[i] = await this.syncCalendar(null, out[i]!);
+      }
+    };
+    await Promise.all(Array.from({ length: SYNC_CONCURRENCY }, worker));
     return out;
   }
   async setTaskEstimate(
@@ -511,13 +542,26 @@ export class BackendClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
-    let original = await this.repo.putTask(taskTransition(task, finishStatus, this.now()));
-    // A cancelled original drops its event like any cancel; the follow-up gets its own when it's timed.
-    if (finishStatus === 'cancelled' && task.gcalEventId)
-      original = await this.deleteCalendarEvent(id);
+    // The remaining work carries the deadline, so it carries the calendar event too: the link moves to
+    // the follow-up (and the sync renames/re-times it), rather than a cancel deleting it and the
+    // follow-up re-creating it — or a done original keeping a duplicate block over the same window.
+    const moved = task.gcalEventId
+      ? {
+          gcalAccountId: task.gcalAccountId,
+          gcalCalendarId: task.gcalCalendarId,
+          gcalEventId: task.gcalEventId,
+        }
+      : {};
+    const original = await this.repo.putTask({
+      ...taskTransition(task, finishStatus, this.now()),
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+      gcalSyncError: null,
+    });
     const followUp = await this.syncCalendar(
       null,
-      await this.repo.putTask({ ...this.base(), ...splitFollowUp(task, followUpTitle) }),
+      await this.repo.putTask({ ...this.base(), ...splitFollowUp(task, followUpTitle), ...moved }),
     );
     return { original, followUp };
   }

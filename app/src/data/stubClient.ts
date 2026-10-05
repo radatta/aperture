@@ -327,12 +327,15 @@ class StubClient implements ApiClient {
   // id (no Google here). The browser's clock is the user's, so the local epoch is the right one.
   private syncCalendar(prev: Task | null, task: Task, ensure = false): Task {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
-    const action = calendarSyncPlan(prev, task, this.ensureSettings(), localEpochFromDayTime, {
-      ensure,
-    });
+    const settings = this.ensureSettings();
+    const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, { ensure });
     if (action.kind === 'none') {
       const moot =
-        task.gcalSyncError && !task.gcalEventId && !eventWindow(task, localEpochFromDayTime);
+        task.gcalSyncError &&
+        ((!task.gcalEventId && !eventWindow(task, localEpochFromDayTime)) ||
+          settings.autoCalendar === false ||
+          task.status === 'done' ||
+          task.status === 'cancelled');
       return moot ? this.writes.patch(this.store.tasks, task.id, { gcalSyncError: null }) : task;
     }
     if (action.kind === 'delete') return this.clearCalendarPointers(task.id);
@@ -575,16 +578,22 @@ class StubClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = this.mustFind(this.store.tasks, id);
-    let original = this.writes.put(
-      this.store.tasks,
-      taskTransition(task, finishStatus, this.now()),
-    );
-    if (finishStatus === 'cancelled' && task.gcalEventId) original = this.clearCalendarPointers(id);
+    // Parity with the backend: the event's link moves to the follow-up (never deleted + re-created).
+    const original = this.writes.put(this.store.tasks, {
+      ...taskTransition(task, finishStatus, this.now()),
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+      gcalSyncError: null,
+    });
     const followUp = this.syncCalendar(
       null,
       this.writes.insert(this.store.tasks, {
         ...this.base(),
         ...splitFollowUp(task, followUpTitle),
+        gcalAccountId: task.gcalAccountId,
+        gcalCalendarId: task.gcalCalendarId,
+        gcalEventId: task.gcalEventId,
       }),
     );
     return { original, followUp };

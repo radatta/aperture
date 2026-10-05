@@ -145,7 +145,7 @@ describe('stub calendar auto-sync parity', () => {
     expect((await api.createTask({ title: 'n', dueDay: '2026-10-09', dueTime: '12:00' })).gcalEventId).toBeNull();
     expect((await api.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null })).gcalEventId).toBe(t.gcalEventId);
   });
-  it('createTasks links only the timed rows; split-cancel moves the link to the timed follow-up', async () => {
+  it('createTasks links only the timed rows; a split moves the link to the follow-up', async () => {
     const api = stub();
     const made = await api.createTasks([
       { title: 'a', dueDay: '2026-10-09', dueTime: '10:00' },
@@ -154,7 +154,6 @@ describe('stub calendar auto-sync parity', () => {
     expect(made.map((t) => !!t.gcalEventId)).toEqual([true, false]);
     const { original, followUp } = await api.splitTask(made[0]!.id, 'cancelled', 'a, part 2');
     expect(original.gcalEventId).toBeNull();
-    expect(followUp.gcalEventId).toBeTruthy();
-    expect(followUp.gcalEventId).not.toBe(made[0]!.gcalEventId);
+    expect(followUp.gcalEventId).toBe(made[0]!.gcalEventId);
   });
 });

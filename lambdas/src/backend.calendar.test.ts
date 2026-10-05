@@ -386,9 +386,9 @@ describe('calendar auto-sync (timed tasks)', () => {
     const { g, b } = await connected();
     g.markDead('A');
     const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
-    expect(t.gcalSyncError).toBe('invalid_grant');
+    expect(t.gcalSyncError).toBe('Couldn’t add the calendar event (invalid_grant)');
     expect(t.gcalEventId).toBeNull();
-    expect((await b.getTask(t.id))!.gcalSyncError).toBe('invalid_grant'); // persisted
+    expect((await b.getTask(t.id))!.gcalSyncError).toBe(t.gcalSyncError); // persisted
     await b.completeGoogleConnect('A'); // reconnect revives the token
     const retried = await b.syncCalendarEvent(t.id);
     expect(retried).toMatchObject({ gcalSyncError: null });
@@ -417,15 +417,60 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(g.events.size).toBe(1);
   });
 
-  it('split: a cancelled original drops its event; a timed follow-up gets its own', async () => {
+  it('split (cancel or done) moves the event to the follow-up — renamed, never duplicated', async () => {
+    for (const finish of ['cancelled', 'done'] as const) {
+      const { g, b } = await connected();
+      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+      if (finish === 'done') await b.transitionTask(t.id, 'in_progress');
+      const { original, followUp } = await b.splitTask(t.id, finish, 'x, part 2');
+      expect(original.gcalEventId).toBeNull();
+      expect(followUp.gcalEventId).toBe(t.gcalEventId);
+      expect(g.events.size).toBe(1);
+      expect(only(g)[1].title).toBe('x, part 2');
+    }
+  });
+
+  it('a failed remove keeps the event linked and says so; the retry finishes the removal', async () => {
     const { g, b } = await connected();
     const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
-    const first = t.gcalEventId!;
-    const { original, followUp } = await b.splitTask(t.id, 'cancelled', 'x, part 2');
-    expect(original.gcalEventId).toBeNull();
-    expect(followUp.gcalEventId).not.toBeNull();
-    expect(g.events.has(first)).toBe(false);
+    g.markDead('A');
+    const failed = await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
+    expect(failed.gcalEventId).toBe(t.gcalEventId); // still linked — nothing silently orphaned
+    expect(failed.gcalSyncError).toMatch(/^Couldn’t remove the calendar event/);
     expect(g.events.size).toBe(1);
+    await b.completeGoogleConnect('A');
+    const retried = await b.syncCalendarEvent(t.id);
+    expect(retried).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+  });
+
+  it('a failure note with nothing left to retry clears (toggle off, or the task finished)', async () => {
+    const { g, b } = await connected();
+    g.markDead('A');
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    expect(t.gcalSyncError).not.toBeNull();
+    await b.updateSettings({ autoCalendar: false });
+    expect((await b.syncCalendarEvent(t.id)).gcalSyncError).toBeNull();
+  });
+
+  it('the sync writes only calendar fields onto a fresh read (a concurrent write survives)', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const realPatch = g.patchEvent.bind(g);
+    g.patchEvent = async (input) => {
+      await b.setTaskActual(t.id, 42); // lands while Google is in flight
+      return realPatch(input);
+    };
+    await b.setTaskTitle(t.id, 'y');
+    g.markDead('A'); // force the failure path's write too
+    await b.setTaskTitle(t.id, 'z');
+    expect((await b.getTask(t.id))!.actualAccruedMin).toBe(42);
+  });
+
+  it('an estimate of 0 gets the default block', async () => {
+    const { g, b } = await connected();
+    await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '09:00', estimateMin: 0 });
+    expect(only(g)[1].startMs).toBe(at('2026-10-09', '08:30'));
   });
 
   it('testMode: a timed create touches no Google and persists nothing', async () => {

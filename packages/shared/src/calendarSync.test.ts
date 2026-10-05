@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calendarSyncPlan } from './calendarSync';
+import { calendarSyncPlan, gcalSyncMessage, isPendingRemoval } from './calendarSync';
 import type { DueEpoch } from './due';
 import type { Task } from './types';
 
@@ -9,7 +9,8 @@ const epoch: DueEpoch = (day, hhmm) => {
 };
 const REF = { accountSub: 'acct', calendarId: 'me@example.com' };
 const ON = { autoCalendar: true, calendarWriteDefault: REF };
-type T = Pick<Task, 'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin' | 'gcalEventId'>;
+type T = Pick<Task, 'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin' | 'gcalEventId'> &
+  Partial<Pick<Task, 'gcalSyncError'>>;
 const task = (over: Partial<T> = {}): T => ({
   title: 'pset',
   status: 'backlog',
@@ -99,6 +100,22 @@ describe('calendarSyncPlan', () => {
     ).toBe('none');
     const legacy = { calendarWriteDefault: REF } as unknown as typeof ON;
     expect(calendarSyncPlan(null, task(), legacy, epoch).kind).toBe('create');
+  });
+  it('a retry after a failed remove finishes the removal; other retries on an untimed event only rename', () => {
+    const pending = linked({
+      dueTime: null,
+      gcalSyncError: gcalSyncMessage('delete', 'invalid_grant'),
+    });
+    expect(calendarSyncPlan(null, pending, ON, epoch, { ensure: true }).kind).toBe('delete');
+    const renameFailed = linked({ dueTime: null, gcalSyncError: gcalSyncMessage('patch', 'x') });
+    expect(calendarSyncPlan(null, renameFailed, ON, epoch, { ensure: true }).kind).toBe('patch');
+    expect(isPendingRemoval(pending.gcalSyncError)).toBe(true);
+    expect(isPendingRemoval(null)).toBe(false);
+  });
+  it('an estimate change from none to 0 still re-times the event (0 ≠ null)', () => {
+    expect(
+      calendarSyncPlan(linked({ estimateMin: null }), linked({ estimateMin: 0 }), ON, epoch).kind,
+    ).toBe('patch');
   });
   it('ensure (the retry) syncs to the task as it is now', () => {
     expect(calendarSyncPlan(task(), task(), ON, epoch, { ensure: true }).kind).toBe('create');

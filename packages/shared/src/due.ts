@@ -1,7 +1,7 @@
 // A task's deadline as a day plus an optional clock time (docs/areas/tasks/due-dates.md). Pure helpers
 // shared by the app, the stub and the Lambda, so the invariant and the urgency tiers live in one place.
 
-import { isDayKey, isTimeKey, localEpochFromDayTime } from './dates';
+import { hhmmOfEpoch, isDayKey, isTimeKey, localEpochFromDayTime } from './dates';
 import type { Task } from './types';
 
 // Epoch of a wall-clock day+time. The browser passes localEpochFromDayTime; the (UTC) Lambda passes a
@@ -37,7 +37,14 @@ export function eventWindow(
 ): { startMs: number; endMs: number } | null {
   if (!task.dueDay || !task.dueTime) return null;
   const endMs = epoch(task.dueDay, task.dueTime);
-  return { startMs: endMs - (task.estimateMin ?? DEFAULT_EVENT_MIN) * 60_000, endMs };
+  return { startMs: endMs - (task.estimateMin || DEFAULT_EVENT_MIN) * 60_000, endMs }; // 0 → default
+}
+
+// The manual add-to-calendar prefill (browser-local): the "HH:MM" a block of `durationMin` starts at to
+// END at the deadline — clamped to midnight rather than starting the day before (a 00:15 deadline).
+export function blockStartBefore(dueDay: string, dueTime: string, durationMin: number): string {
+  const start = localEpochFromDayTime(dueDay, dueTime) - durationMin * 60_000;
+  return start < localEpochFromDayTime(dueDay, '00:00') ? '00:00' : hhmmOfEpoch(start);
 }
 
 // Timed tasks only, never once finished. soon = within 6h, imminent = within 1h, past = the time has

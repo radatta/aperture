@@ -40,6 +40,10 @@ describe('eventWindow', () => {
       eventWindow({ dueDay: '2026-10-05', dueTime: '16:00', estimateMin: null }, epoch)!.startMs,
     ).toBe(end - DEFAULT_EVENT_MIN * 60_000);
   });
+  it('an estimate of 0 gets the default length, not a zero-length block', () => {
+    const w = eventWindow({ dueDay: '2026-10-05', dueTime: '16:00', estimateMin: 0 }, epoch)!;
+    expect(w.endMs - w.startMs).toBe(DEFAULT_EVENT_MIN * 60_000);
+  });
   it('is null for an untimed task', () => {
     expect(eventWindow({ dueDay: '2026-10-05', dueTime: null, estimateMin: 30 }, epoch)).toBeNull();
   });

@@ -176,10 +176,22 @@ export function TaskEditor({
             </Button>
           </div>
         ) : task.dueDay && task.dueTime && autoCalendar && !isTerminal ? (
+          // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
+          // hand or in Google) — one tap creates it, ending at the deadline.
           !task.gcalSyncError && (
-            <Text size="sm" tone="muted">
-              Timed tasks go on your calendar automatically.
-            </Text>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Text size="sm" tone="muted">
+                Not on your calendar.
+              </Text>
+              <Button
+                variant="quiet"
+                size="sm"
+                disabled={syncEvent.isPending}
+                onClick={() => syncEvent.mutate(task.id)}
+              >
+                Add to calendar
+              </Button>
+            </div>
           )
         ) : task.dueDay && !isTerminal ? (
           reveal === 'calendar' ? (

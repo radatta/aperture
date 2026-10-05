@@ -19,9 +19,23 @@ export type CalendarSyncAction =
 type SyncFields = Pick<
   Task,
   'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin' | 'gcalEventId'
->;
+> &
+  Partial<Pick<Task, 'gcalSyncError'>>;
 
 const NONE: CalendarSyncAction = { kind: 'none' };
+
+// The failure note stored on the task (gcalSyncError). A failed REMOVE keeps the event linked, and its
+// note is how the retry knows to finish the removal (an untimed linked task could otherwise be a manual
+// event that should stay).
+const FAILED: Record<'create' | 'patch' | 'delete', string> = {
+  create: 'Couldn’t add the calendar event',
+  patch: 'Couldn’t update the calendar event',
+  delete: 'Couldn’t remove the calendar event',
+};
+export const gcalSyncMessage = (kind: 'create' | 'patch' | 'delete', detail: string): string =>
+  `${FAILED[kind]} (${detail})`;
+export const isPendingRemoval = (gcalSyncError: string | null | undefined): boolean =>
+  !!gcalSyncError?.startsWith(FAILED.delete);
 
 // `prev` null = a fresh create; `ensure` = the explicit retry (sync to the task as it is now).
 export function calendarSyncPlan(
@@ -36,7 +50,8 @@ export function calendarSyncPlan(
   if (next.status === 'done' || next.status === 'cancelled') return NONE;
   const ensure = !!opts.ensure;
   const window = eventWindow(next, epoch);
-  const changed = (k: keyof SyncFields) => prev === null || (prev[k] || null) !== (next[k] || null);
+  // `?? null` so an older row's undefined equals null (and an estimate of 0 stays distinct from none).
+  const changed = (k: keyof SyncFields) => prev === null || (prev[k] ?? null) !== (next[k] ?? null);
   const whenChanged = changed('dueDay') || changed('dueTime');
 
   if (next.gcalEventId) {
@@ -44,7 +59,7 @@ export function calendarSyncPlan(
     if (!window) {
       // Lost its time → the event it auto-synced goes. An untimed task with a manual event: gcal owns
       // that clock, so only a rename reaches it.
-      if (wasTimed) return { kind: 'delete' };
+      if (wasTimed || (ensure && isPendingRemoval(next.gcalSyncError))) return { kind: 'delete' };
       return ensure || changed('title') ? { kind: 'patch', title: next.title } : NONE;
     }
     if (ensure || whenChanged || changed('estimateMin') || changed('title'))

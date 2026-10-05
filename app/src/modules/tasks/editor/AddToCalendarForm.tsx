@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import {
+  blockStartBefore,
   DEFAULT_EVENT_MIN,
   fmtClock12,
-  hhmmOfEpoch,
   localEpochFromDayTime,
 } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -21,12 +21,13 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
   const { data: calendars = [] } = useGoogleCalendars((settings?.googleAccounts.length ?? 0) > 0);
   const insert = useInsertCalendarEvent();
   const [durationMin, setDurationMin] = useState<number>(task.estimateMin ?? DEFAULT_EVENT_MIN);
-  const [time, setTime] = useState(() => {
-    if (!task.dueDay || !task.dueTime) return '09:00';
-    const start = localEpochFromDayTime(task.dueDay, task.dueTime) - durationMin * 60_000;
-    // A block that would start the day before (a 00:15 deadline) starts at midnight instead.
-    return start < localEpochFromDayTime(task.dueDay, '00:00') ? '00:00' : hhmmOfEpoch(start);
-  });
+  // With a due time the start follows the duration (so the block keeps ending at the deadline) until
+  // you pick a start yourself.
+  const [pickedTime, setTime] = useState<string | null>(null);
+  const time =
+    pickedTime ??
+    (task.dueDay && task.dueTime ? blockStartBefore(task.dueDay, task.dueTime, durationMin) : '09:00');
+
   const [calIdx, setCalIdx] = useState<number>(-1);
 
   if (!task.dueDay) return null;

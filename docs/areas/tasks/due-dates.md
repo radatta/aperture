@@ -111,8 +111,10 @@ fill once past**, and the red **stays** (across days) until the task is done, ca
 `dueUrgency` in `packages/shared/src/due.ts`, looks in `app/src/modules/tasks/dueStyle.ts`. Untimed
 deadlines keep D5 exactly (flat, `ink-subtle`); done/cancelled never colour; the label text stays quiet
 ("due today 4pm" until the 4am rollover, D6); still no countdown and no aggregate/overdue count anywhere.
-Edge-then-fill rather than a gold→orange→red ramp: three warm tints are hard to tell apart (dark mode
-especially) and a new orange token would need its own contrast pass.
+Edge-then-fill rather than a gold→orange→red ramp: three warm tints are hard to tell apart. The two
+fills are their own contrast-checked tokens — olive-amber and red-brown, darker than the ground in dark
+mode — after the first pass's translucent gold and salmon read as the same grey in dark mode (headless
+UI pass, 2026-10-05); a coloured row lifts its `ink-subtle` text to `ink-muted`.
 
 **D6 — "Today" is the 4am logical day, not local midnight.**
 The relative formatter compares against `todayKey(dayStartHour)` (4am rollover).
@@ -309,8 +311,8 @@ Planned by the `Plan` agent (~60 files). One branch, page-first; shared → stub
   - ↳ *`zonedEpoch` exists because the Lambda is UTC — `localEpochFromDayTime` there would put every
     event 7–8 hours off. Tested on both DST-change days.*
 - **app:** editor **Due time** field (one `setTaskDue` write); urgency colour on `TaskCard`, Coming up and
-  Right now via `dueStyle.ts` + the new `useNow` hook (lifted from `HomeModeProvider`); `--danger-soft`
-  token; capture time chips; sync-failure line + Retry in the editor, "calendar sync failed" on the row;
+  Right now via `dueStyle.ts` + the new `useNow` hook (one shared ticker, lifted from `HomeModeProvider`); the
+  `--due-imminent-fill` / `--due-past-fill` tokens; capture time chips; sync-failure line + Retry in the editor, "calendar sync failed" on the row;
   Settings toggle; add-to-calendar prefills the block ending at the deadline; seed has three timed tasks
   (imminent, soon, past).
   - ↳ *The colour classes must beat `Card`'s own `border-line`/`bg-panel` (`cx` is a plain join, no
