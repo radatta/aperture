@@ -17,6 +17,7 @@
   --color-gold: var(--gold);
   --color-gold-soft: var(--gold-soft);
   --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
 
   /* Self-hosted via @fontsource-variable/hanken-grotesk (imported in main.tsx); Vite bundles
      the .woff2 into dist/assets — no runtime CDN. */

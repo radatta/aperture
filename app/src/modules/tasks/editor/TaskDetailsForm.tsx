@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Ref } from 'react';
-import { canEditEstimate, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
+import { canEditEstimate, fmtClock12, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -10,7 +10,7 @@ import { Textarea } from '../../../components/Textarea';
 import { useCategoryOptions } from '../../../data/hooks/useCategories';
 import {
   useSetCategory,
-  useSetDueDay,
+  useSetDue,
   useSetEstimate,
   useSetTaskNotes,
   useSetTaskTitle,
@@ -44,7 +44,7 @@ export function TaskDetailsForm({
   const setTitle = useSetTaskTitle();
   const setEstimate = useSetEstimate();
   const setCategory = useSetCategory();
-  const setDueDay = useSetDueDay();
+  const setDue = useSetDue();
   const setNotes = useSetTaskNotes();
 
   const editEstimate = canEditEstimate(task);
@@ -57,6 +57,7 @@ export function TaskDetailsForm({
   const [buffer, setBuffer] = useState<string>(task.bufferMin?.toString() ?? '');
   const [categoryId, setCategoryId] = useState<string>(task.categoryId ?? '');
   const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
+  const [dueTime, setDueTime] = useState<string>(task.dueTime ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
@@ -69,7 +70,8 @@ export function TaskDetailsForm({
   const estimateDirty =
     editEstimate &&
     (String(task.estimateMin ?? '') !== estimate || String(task.bufferMin ?? '') !== buffer);
-  const dueDirty = !isTerminal && (task.dueDay ?? '') !== dueDay;
+  const dueDirty =
+    !isTerminal && ((task.dueDay ?? '') !== dueDay || (task.dueTime ?? '') !== dueTime);
   const notesTrimmed = notesValue(notes);
   // Only a draft being edited counts: in view mode the field shows the live task.notes, so a stale draft
   // must never read as a change (or be saved back over a newer note).
@@ -84,7 +86,7 @@ export function TaskDetailsForm({
   useEffect(() => onDirtyChange?.(reportDirty), [reportDirty, onDirtyChange]);
 
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
-  const fields = { title, estimate, buffer, categoryId, dueDay, notes };
+  const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes };
   const current = useRef(fields);
   useEffect(() => {
     current.current = fields;
@@ -111,7 +113,11 @@ export function TaskDetailsForm({
         });
       if ((task.categoryId ?? '') !== categoryId)
         next = await setCategory.mutateAsync({ id: task.id, categoryId: categoryId || null });
-      if (dueDirty) next = await setDueDay.mutateAsync({ id: task.id, dueDay: dueDay || null });
+      if (dueDirty)
+        next = await setDue.mutateAsync({
+          id: task.id,
+          due: { dueDay: dueDay || null, dueTime: (dueDay && dueTime) || null },
+        });
       if (notesDirty)
         next = await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
       const now = current.current;
@@ -121,6 +127,7 @@ export function TaskDetailsForm({
       if (untouched('buffer')) setBuffer(next.bufferMin?.toString() ?? '');
       if (untouched('categoryId')) setCategoryId(next.categoryId ?? '');
       if (untouched('dueDay')) setDueDay_(next.dueDay ?? '');
+      if (untouched('dueTime')) setDueTime(next.dueTime ?? '');
       if (untouched('notes')) {
         setNotes_(next.notes ?? '');
         setEditingNotes(false);
@@ -210,16 +217,35 @@ export function TaskDetailsForm({
             <Text size="sm" tone="muted">
               Due
             </Text>
-            <Text tabular>{task.dueDay ? fmtMonthDayYear(task.dueDay) : 'No due date'}</Text>
+            <Text tabular>
+              {task.dueDay
+                ? `${fmtMonthDayYear(task.dueDay)}${task.dueTime ? ` · ${fmtClock12(task.dueTime)}` : ''}`
+                : 'No due date'}
+            </Text>
           </div>
         ) : (
-          <Field
-            label="Due"
-            type="date"
-            value={dueDay}
-            onChange={(e) => setDueDay_(e.target.value)}
-            className="w-40"
-          />
+          <>
+            <Field
+              label="Due"
+              type="date"
+              value={dueDay}
+              onChange={(e) => {
+                setDueDay_(e.target.value);
+                if (!e.target.value) setDueTime(''); // a time never outlives its day
+              }}
+              className="w-40"
+            />
+            {/* Optional deadline time. Needs a day; clearing the day clears it. */}
+            <Field
+              label="Due time"
+              type="time"
+              step={60}
+              value={dueTime}
+              disabled={!dueDay}
+              onChange={(e) => setDueTime(e.target.value)}
+              className="w-32"
+            />
+          </>
         )}
       </div>
       <NotesField

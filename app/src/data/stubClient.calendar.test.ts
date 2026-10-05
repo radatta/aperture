@@ -119,3 +119,42 @@ describe('stub Google Calendar parity', () => {
     expect(s.calendarWriteDefault?.accountSub).not.toBe('seed-personal');
   });
 });
+
+// Auto-sync parity with lambdas/src/backend.calendar.test.ts → "calendar auto-sync". The seed sets a
+// write default (seed-personal) and leaves auto-sync on.
+describe('stub calendar auto-sync parity', () => {
+  it('a timed create links an event; untimed does not', async () => {
+    const api = stub();
+    expect((await api.createTask({ title: 'u', dueDay: '2026-10-09' })).gcalEventId).toBeNull();
+    const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
+    expect(t).toMatchObject({ gcalAccountId: 'seed-personal', gcalSyncError: null });
+    expect(t.gcalEventId).toBeTruthy();
+  });
+  it('edits keep the same event; clearing the time unlinks it', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
+    const moved = await api.setTaskDue(t.id, { dueDay: '2026-10-10', dueTime: '18:00' });
+    expect(moved.gcalEventId).toBe(t.gcalEventId);
+    expect((await api.setTaskTitle(t.id, 'renamed')).gcalEventId).toBe(t.gcalEventId);
+    expect((await api.setTaskDue(t.id, { dueDay: '2026-10-10', dueTime: null })).gcalEventId).toBeNull();
+  });
+  it('toggle off: no create, and an existing link is left alone', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
+    await api.updateSettings({ autoCalendar: false });
+    expect((await api.createTask({ title: 'n', dueDay: '2026-10-09', dueTime: '12:00' })).gcalEventId).toBeNull();
+    expect((await api.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null })).gcalEventId).toBe(t.gcalEventId);
+  });
+  it('createTasks links only the timed rows; split-cancel moves the link to the timed follow-up', async () => {
+    const api = stub();
+    const made = await api.createTasks([
+      { title: 'a', dueDay: '2026-10-09', dueTime: '10:00' },
+      { title: 'b', dueDay: '2026-10-09' },
+    ]);
+    expect(made.map((t) => !!t.gcalEventId)).toEqual([true, false]);
+    const { original, followUp } = await api.splitTask(made[0]!.id, 'cancelled', 'a, part 2');
+    expect(original.gcalEventId).toBeNull();
+    expect(followUp.gcalEventId).toBeTruthy();
+    expect(followUp.gcalEventId).not.toBe(made[0]!.gcalEventId);
+  });
+});

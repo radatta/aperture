@@ -15,6 +15,7 @@ import {
   needsSorting,
   netCents,
   periodOf,
+  USER_TIME_ZONE,
 } from '@aperture/shared';
 import type {
   FinanceBucket,
@@ -34,8 +35,7 @@ import type { Tool, ToolContext } from './types';
 // Money is US dollars as JSON numbers (`…Usd`), summed in cents first: positive = money out (spending),
 // negative = money in — the page's convention after an account's sign flip.
 
-// The user's zone, for "today" when the caller doesn't say. One user; they can pass `today` if travelling.
-export const USER_TIME_ZONE = 'America/Los_Angeles';
+// The user's zone (USER_TIME_ZONE, shared) gives "today" when the caller doesn't say; they can pass `today` if travelling.
 const MAX_SPAN_DAYS = 366;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 300;

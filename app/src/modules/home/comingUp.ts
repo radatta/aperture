@@ -2,8 +2,9 @@ import type { Task } from '@aperture/shared';
 import { daysBetween } from '@aperture/shared';
 import { byDueHint } from '../tasks/taskMath';
 
-// The gentle deadline radar: a capped, soonest-due-first glance you plan FROM — never a scold. No red,
-// no countdown, no overdue tally (due-dates D5). Overdue sorts first only because it's the soonest date.
+// The deadline radar: a capped, soonest-due-first glance you plan FROM. No countdown, no overdue tally
+// (due-dates D5); a TIMED row takes the urgency colour (D5 revisited, due.ts) — untimed stay flat.
+// Overdue sorts first only because it's the soonest date.
 export const RADAR_CAP = 3;
 
 export interface ComingUp {

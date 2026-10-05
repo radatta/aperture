@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import { localEpochFromDayTime } from '@aperture/shared';
+import {
+  DEFAULT_EVENT_MIN,
+  fmtClock12,
+  hhmmOfEpoch,
+  localEpochFromDayTime,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -8,14 +13,20 @@ import { Text } from '../../../components/Text';
 import { useGoogleCalendars, useInsertCalendarEvent } from '../../../data/hooks/useCalendar';
 import { useSettings } from '../../../data/hooks/useSettings';
 
-// Add-to-calendar: pick a calendar (default = the settings write-default), a start time on the due
-// day, and a duration. Time feeds the event only — it's never stored on the task (gcal owns the clock).
+// Add-to-calendar (the manual path — timed tasks with auto-sync on get theirs automatically): pick a
+// calendar (default = the settings write-default), a start time on the due day, and a duration. A task
+// with a due time prefills the block that ENDS at the deadline; the picked start feeds the event only.
 export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => void }) {
   const { data: settings } = useSettings();
   const { data: calendars = [] } = useGoogleCalendars((settings?.googleAccounts.length ?? 0) > 0);
   const insert = useInsertCalendarEvent();
-  const [time, setTime] = useState('09:00');
-  const [durationMin, setDurationMin] = useState<number>(task.estimateMin ?? 30);
+  const [durationMin, setDurationMin] = useState<number>(task.estimateMin ?? DEFAULT_EVENT_MIN);
+  const [time, setTime] = useState(() => {
+    if (!task.dueDay || !task.dueTime) return '09:00';
+    const start = localEpochFromDayTime(task.dueDay, task.dueTime) - durationMin * 60_000;
+    // A block that would start the day before (a 00:15 deadline) starts at midnight instead.
+    return start < localEpochFromDayTime(task.dueDay, '00:00') ? '00:00' : hhmmOfEpoch(start);
+  });
   const [calIdx, setCalIdx] = useState<number>(-1);
 
   if (!task.dueDay) return null;
@@ -62,6 +73,11 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
           className="w-28"
         />
       </div>
+      {task.dueTime && (
+        <Text size="xs" tone="muted">
+          Due at {fmtClock12(task.dueTime)} — the block ends there.
+        </Text>
+      )}
       <div className="flex gap-2">
         <Button
           size="sm"

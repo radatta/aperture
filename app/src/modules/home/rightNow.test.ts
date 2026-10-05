@@ -16,6 +16,7 @@ function mkTask(id: string, status: TaskStatus, over: Partial<Task> = {}): Task 
     seriesId: null,
     rollId: null,
     dueDay: null,
+    dueTime: null,
     notes: null,
     estimateMin: 30,
     bufferMin: null,
@@ -27,6 +28,7 @@ function mkTask(id: string, status: TaskStatus, over: Partial<Task> = {}): Task 
     gcalAccountId: null,
     gcalCalendarId: null,
     gcalEventId: null,
+    gcalSyncError: null,
     ...over,
   };
 }

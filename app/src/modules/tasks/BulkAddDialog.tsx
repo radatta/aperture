@@ -9,13 +9,13 @@ import { useAllTasks, useCreateTasks } from '../../data/hooks/useTasks';
 import { TaskTokenChips } from './TaskTokenChips';
 
 const PLACEHOLDER = `email coach
-finish 214 pset | ~90 #"Deep Work" due:2026-09-25
+finish 214 pset | ~90 #"Deep Work" due:2026-09-25@17:00
 book flight | due:2026-10-02
 read ch. 4 | notes:"q6: use the lemma\\nhttps://example.edu/pset4"`;
 
 // Bulk add — the plan-pass surface (PRODUCT §2: batch entry is the morning plan, not capture). One line
-// = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category, due:YYYY-MM-DD,
-// notes:"…").
+// = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category,
+// due:YYYY-MM-DD[@HH:MM], notes:"…").
 // The preview parses live: red errors gate submit, gold warnings don't (the task is created anyway). The
 // grammar is meant to be GENERATED (by Claude), so it's strict — operator reference: docs/areas/tasks/bulk-add.md.
 export function BulkAddDialog({
@@ -95,8 +95,8 @@ export function BulkAddDialog({
             Bulk add tasks
           </Text>
           <Text size="sm" tone="muted">
-            One line each — <code>title | ~30 #Admin due:2026-09-25</code> (estimate, category, due
-            date).
+            One line each — <code>title | ~30 #Admin due:2026-09-25@17:00</code> (estimate,
+            category, due date with an optional 24h time).
           </Text>
           {categories.length > 0 && (
             <Text size="xs" tone="subtle">

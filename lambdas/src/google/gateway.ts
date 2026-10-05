@@ -39,6 +39,25 @@ export interface GoogleGateway {
     endMs: number;
   }): Promise<{ eventId: string }>;
   deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void>;
+  // Partial update (events.patch) — only the given fields change. Throws EventGoneError when the event
+  // no longer exists (deleted in Google), so the caller can drop its pointer and re-create.
+  patchEvent(input: PatchEventInput): Promise<void>;
+}
+
+export interface PatchEventInput {
+  sub: string;
+  calendarId: string;
+  eventId: string;
+  title?: string;
+  startMs?: number;
+  endMs?: number;
+}
+
+export class EventGoneError extends Error {
+  constructor(eventId: string) {
+    super(`Calendar event ${eventId} no longer exists`);
+    this.name = 'EventGoneError';
+  }
 }
 
 // testMode/smoke: every method is inert. A smoke run of any calendar method touches nothing external —
@@ -58,6 +77,7 @@ export function noopGoogle(): GoogleGateway {
     listBusy: async () => ({ intervals: [], allDayCount: 0 }),
     insertEvent: async () => off(),
     deleteEvent: async () => off(),
+    patchEvent: async () => off(),
   };
 }
 
@@ -86,7 +106,13 @@ export class InMemoryGoogle implements GoogleGateway {
 
   // --- test helpers ---
   seedAccount(sub: string, email: string, calendars: CalendarInfo[] = []): void {
-    this.accounts.set(sub, { email, refreshToken: `rt-${sub}`, dead: false, calendars, busy: new Map() });
+    this.accounts.set(sub, {
+      email,
+      refreshToken: `rt-${sub}`,
+      dead: false,
+      calendars,
+      busy: new Map(),
+    });
   }
   seedBusy(sub: string, calendarId: string, result: BusyResult): void {
     this.accounts.get(sub)!.busy.set(calendarId, result);
@@ -118,7 +144,9 @@ export class InMemoryGoogle implements GoogleGateway {
         email: `${sub}@example.com`,
         refreshToken,
         dead: false,
-        calendars: [{ calendarId: `${sub}@example.com`, summary: `${sub}@example.com`, primary: true }],
+        calendars: [
+          { calendarId: `${sub}@example.com`, summary: `${sub}@example.com`, primary: true },
+        ],
         busy: new Map(),
       });
     }
@@ -156,5 +184,16 @@ export class InMemoryGoogle implements GoogleGateway {
       throw new Error(`Refusing to delete unknown event: ${input.eventId}`);
     }
     this.events.delete(input.eventId);
+  }
+  async patchEvent(input: PatchEventInput): Promise<void> {
+    this.mustAccount(input.sub);
+    const evt = this.events.get(input.eventId);
+    if (!evt) throw new EventGoneError(input.eventId);
+    // Same safety rule as delete: only an event we inserted, where it lives.
+    if (evt.sub !== input.sub || evt.calendarId !== input.calendarId)
+      throw new Error(`Refusing to patch unknown event: ${input.eventId}`);
+    if (input.title !== undefined) evt.title = input.title;
+    if (input.startMs !== undefined) evt.startMs = input.startMs;
+    if (input.endMs !== undefined) evt.endMs = input.endMs;
   }
 }

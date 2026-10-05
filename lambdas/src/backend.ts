@@ -1,17 +1,20 @@
 import {
   assertAttachmentAllowed,
   assertCategoryDeletable,
+  calendarSyncPlan,
   completeSession,
   countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
   discardSession,
+  eventWindow,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
+  normalizeDue,
   normalizeNotes,
   normalizeVerdict,
   resolveStaleSession,
@@ -25,8 +28,10 @@ import {
   stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
+  USER_TIME_ZONE,
   viewableInline,
   withEstimate,
+  zonedEpoch,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -57,6 +62,7 @@ import type {
   LinkTokenResult,
   RequestFinanceSyncResult,
   SetFinanceBucketInput,
+  SetTaskDueInput,
   UpsertFinanceRuleInput,
   Habit,
   HabitCheck,
@@ -89,7 +95,7 @@ import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
-import { noopGoogle } from './google/gateway';
+import { EventGoneError, noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
 import type { Presigner } from './s3/presigner';
@@ -163,7 +169,7 @@ export class BackendClient implements ApiClient {
       title: input.title,
       status: 'backlog',
       categoryId: input.categoryId ?? null,
-      dueDay: input.dueDay ?? null,
+      ...normalizeDue(input.dueDay ?? null, input.dueTime ?? null),
       notes: normalizeNotes(input.notes),
       seriesId: null,
       rollId: null,
@@ -177,6 +183,7 @@ export class BackendClient implements ApiClient {
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
     };
   }
   private async ensureSettings(): Promise<Settings> {
@@ -189,6 +196,7 @@ export class BackendClient implements ApiClient {
       googleAccounts: [],
       calendarShapeRefs: [],
       calendarWriteDefault: null,
+      autoCalendar: true,
       dayFocusStart: 8,
       dayEndHour: 22,
       financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
@@ -200,6 +208,79 @@ export class BackendClient implements ApiClient {
     if (row) return { ...def, ...row };
     await this.repo.putSettings(def);
     return def;
+  }
+  // The Lambda's clock is UTC — a task's wall-clock deadline is resolved in the user's zone, never locally.
+  private readonly dueEpoch = (day: string, hhmm: string): number =>
+    zonedEpoch(day, hhmm, USER_TIME_ZONE);
+
+  // Calendar auto-sync after a task write (shared calendarSyncPlan decides; docs/areas/calendar →
+  // Auto-sync). The task is already saved: a Google failure never fails the write — it lands on the
+  // task as gcalSyncError (shown with a retry) and is logged. Returns the task as it now stands.
+  private async syncCalendar(prev: Task | null, task: Task, ensure = false): Promise<Task> {
+    // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
+    if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
+    const action = calendarSyncPlan(prev, task, await this.ensureSettings(), this.dueEpoch, {
+      ensure,
+    });
+    if (action.kind === 'none') {
+      // Nothing left to sync (time cleared, unlinked) → a stale failure note goes too.
+      const moot = task.gcalSyncError && !task.gcalEventId && !eventWindow(task, this.dueEpoch);
+      return moot
+        ? this.repo.putTask({ ...task, gcalSyncError: null, updatedAt: this.now() })
+        : task;
+    }
+    try {
+      if (action.kind === 'delete') return await this.deleteCalendarEvent(task.id);
+      if (action.kind === 'patch') {
+        if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
+        try {
+          await this.google.patchEvent({
+            sub: task.gcalAccountId,
+            calendarId: task.gcalCalendarId,
+            eventId: task.gcalEventId,
+            title: action.title,
+            startMs: action.startMs,
+            endMs: action.endMs,
+          });
+        } catch (e) {
+          if (!(e instanceof EventGoneError)) throw e;
+          // Deleted in Google on purpose — drop the dead pointer, don't resurrect it. A later time change
+          // creates a fresh one.
+          return this.repo.putTask({
+            ...task,
+            gcalAccountId: null,
+            gcalCalendarId: null,
+            gcalEventId: null,
+            gcalSyncError: null,
+            updatedAt: this.now(),
+          });
+        }
+        return task.gcalSyncError
+          ? this.repo.putTask({ ...task, gcalSyncError: null, updatedAt: this.now() })
+          : task;
+      }
+      const { eventId } = await this.google.insertEvent({
+        sub: action.target.accountSub,
+        calendarId: action.target.calendarId,
+        title: action.title,
+        startMs: action.startMs,
+        endMs: action.endMs,
+      });
+      return this.repo.putTask({
+        ...task,
+        gcalAccountId: action.target.accountSub,
+        gcalCalendarId: action.target.calendarId,
+        gcalEventId: eventId,
+        gcalSyncError: null,
+        updatedAt: this.now(),
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.log(
+        JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, message }),
+      );
+      return this.repo.putTask({ ...task, gcalSyncError: message, updatedAt: this.now() });
+    }
   }
   private async mustTask(id: string): Promise<Task> {
     const t = await this.repo.getTask(id);
@@ -366,36 +447,46 @@ export class BackendClient implements ApiClient {
     return this.repo.getTask(id);
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
-    return this.repo.putTask(this.newTask(input, this.now()));
+    return this.syncCalendar(null, await this.repo.putTask(this.newTask(input, this.now())));
   }
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     if (inputs.length === 0) return [];
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
-    return this.repo.putTasks(tasks);
+    const saved = await this.repo.putTasks(tasks);
+    // Timed tasks get their events one at a time (each a Google round-trip); untimed skip the planner.
+    const out: Task[] = [];
+    for (const task of saved) out.push(task.dueTime ? await this.syncCalendar(null, task) : task);
+    return out;
   }
   async setTaskEstimate(
     id: string,
     estimateMin: number | null,
     bufferMin: number | null,
   ): Promise<Task> {
-    return this.repo.putTask(
-      withEstimate(await this.mustTask(id), estimateMin, bufferMin, this.now()),
-    );
+    const prev = await this.mustTask(id);
+    const next = await this.repo.putTask(withEstimate(prev, estimateMin, bufferMin, this.now()));
+    return this.syncCalendar(prev, next);
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, categoryId, updatedAt: this.now() });
   }
   async setTaskDueDay(id: string, dueDay: string | null): Promise<Task> {
-    const t = await this.mustTask(id);
-    return this.repo.putTask({ ...t, dueDay, updatedAt: this.now() });
+    return this.setTaskDue(id, { dueDay });
+  }
+  async setTaskDue(id: string, due: SetTaskDueInput): Promise<Task> {
+    const prev = await this.mustTask(id);
+    const fields = normalizeDue(due.dueDay, due.dueTime, prev.dueTime); // throws before any write
+    const next = await this.repo.putTask({ ...prev, ...fields, updatedAt: this.now() });
+    return this.syncCalendar(prev, next);
   }
   async setTaskTitle(id: string, title: string): Promise<Task> {
     const trimmed = title.trim();
     if (!trimmed) throw new Error('Title is required');
-    const t = await this.mustTask(id);
-    return this.repo.putTask({ ...t, title: trimmed, updatedAt: this.now() });
+    const prev = await this.mustTask(id);
+    const next = await this.repo.putTask({ ...prev, title: trimmed, updatedAt: this.now() });
+    return this.syncCalendar(prev, next);
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
     const normalized = setNotesArg(notes); // throws (missing, over the cap) before any read or write
@@ -420,11 +511,14 @@ export class BackendClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
-    const original = await this.repo.putTask(taskTransition(task, finishStatus, this.now()));
-    const followUp = await this.repo.putTask({
-      ...this.base(),
-      ...splitFollowUp(task, followUpTitle),
-    });
+    let original = await this.repo.putTask(taskTransition(task, finishStatus, this.now()));
+    // A cancelled original drops its event like any cancel; the follow-up gets its own when it's timed.
+    if (finishStatus === 'cancelled' && task.gcalEventId)
+      original = await this.deleteCalendarEvent(id);
+    const followUp = await this.syncCalendar(
+      null,
+      await this.repo.putTask({ ...this.base(), ...splitFollowUp(task, followUpTitle) }),
+    );
     return { original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
@@ -698,6 +792,7 @@ export class BackendClient implements ApiClient {
         status: 'planned',
         categoryId: series.categoryId,
         dueDay: null,
+        dueTime: null,
         notes: null,
         seriesId: series.id,
         rollId: null,
@@ -711,6 +806,7 @@ export class BackendClient implements ApiClient {
         gcalAccountId: null,
         gcalCalendarId: null,
         gcalEventId: null,
+        gcalSyncError: null,
       });
       await this.repo.putPlan({
         ...this.base(),
@@ -960,8 +1056,13 @@ export class BackendClient implements ApiClient {
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
       updatedAt: this.now(),
     });
+  }
+
+  async syncCalendarEvent(taskId: string): Promise<Task> {
+    return this.syncCalendar(null, await this.mustTask(taskId), true);
   }
 
   async disconnectGoogleAccount(accountSub: string): Promise<void> {

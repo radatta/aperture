@@ -31,12 +31,16 @@ import {
   todayKey,
   toCents,
   assertCategoryDeletable,
+  calendarSyncPlan,
   completeSession,
   countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
   discardSession,
+  eventWindow,
+  localEpochFromDayTime,
+  normalizeDue,
   findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
@@ -78,6 +82,7 @@ import type {
   LinkTokenResult,
   RequestFinanceSyncResult,
   SetFinanceBucketInput,
+  SetTaskDueInput,
   UpsertFinanceRuleInput,
   GetCalendarBusyInput,
   GoogleCalendar,
@@ -301,7 +306,7 @@ class StubClient implements ApiClient {
       title: input.title,
       status: 'backlog',
       categoryId: input.categoryId ?? null,
-      dueDay: input.dueDay ?? null,
+      ...normalizeDue(input.dueDay ?? null, input.dueTime ?? null),
       notes: normalizeNotes(input.notes),
       seriesId: null,
       rollId: null,
@@ -315,7 +320,40 @@ class StubClient implements ApiClient {
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
     };
+  }
+  // Calendar auto-sync parity with the backend: the same shared planner, executed against a fake event
+  // id (no Google here). The browser's clock is the user's, so the local epoch is the right one.
+  private syncCalendar(prev: Task | null, task: Task, ensure = false): Task {
+    if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
+    const action = calendarSyncPlan(prev, task, this.ensureSettings(), localEpochFromDayTime, {
+      ensure,
+    });
+    if (action.kind === 'none') {
+      const moot =
+        task.gcalSyncError && !task.gcalEventId && !eventWindow(task, localEpochFromDayTime);
+      return moot ? this.writes.patch(this.store.tasks, task.id, { gcalSyncError: null }) : task;
+    }
+    if (action.kind === 'delete') return this.clearCalendarPointers(task.id);
+    if (action.kind === 'patch')
+      return task.gcalSyncError
+        ? this.writes.patch(this.store.tasks, task.id, { gcalSyncError: null })
+        : task;
+    return this.writes.patch(this.store.tasks, task.id, {
+      gcalAccountId: action.target.accountSub,
+      gcalCalendarId: action.target.calendarId,
+      gcalEventId: `stub-event-${this.ulid()}`,
+      gcalSyncError: null,
+    });
+  }
+  private clearCalendarPointers(taskId: string): Task {
+    return this.writes.patch(this.store.tasks, taskId, {
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+      gcalSyncError: null,
+    });
   }
   private alive<T extends BaseEntity>(coll: T[]): T[] {
     return coll.filter((x) => x.deletedAt === null);
@@ -342,6 +380,7 @@ class StubClient implements ApiClient {
       googleAccounts: [],
       calendarShapeRefs: [],
       calendarWriteDefault: null,
+      autoCalendar: true,
       dayFocusStart: 8,
       dayEndHour: 22,
       ...FINANCE_SETTINGS_DEFAULTS,
@@ -478,12 +517,15 @@ class StubClient implements ApiClient {
     return this.find(this.store.tasks, id) ?? null;
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
-    return this.writes.insert(this.store.tasks, this.newTask(input, this.now()));
+    return this.syncCalendar(
+      null,
+      this.writes.insert(this.store.tasks, this.newTask(input, this.now())),
+    );
   }
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
-    return tasks.map((task) => this.writes.insert(this.store.tasks, task));
+    return tasks.map((task) => this.syncCalendar(null, this.writes.insert(this.store.tasks, task)));
   }
   async setTaskEstimate(
     id: string,
@@ -491,21 +533,28 @@ class StubClient implements ApiClient {
     bufferMin: number | null,
   ): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
-    return this.writes.put(
+    const next = this.writes.put(
       this.store.tasks,
       withEstimate(task, estimateMin, bufferMin, this.now()),
     );
+    return this.syncCalendar(task, next);
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { categoryId });
   }
   async setTaskDueDay(id: string, dueDay: string | null): Promise<Task> {
-    return this.writes.patch(this.store.tasks, id, { dueDay });
+    return this.setTaskDue(id, { dueDay });
+  }
+  async setTaskDue(id: string, due: SetTaskDueInput): Promise<Task> {
+    const prev = this.mustFind(this.store.tasks, id);
+    const fields = normalizeDue(due.dueDay, due.dueTime, prev.dueTime); // throws before any write
+    return this.syncCalendar(prev, this.writes.patch(this.store.tasks, id, fields));
   }
   async setTaskTitle(id: string, title: string): Promise<Task> {
     const trimmed = title.trim();
     if (!trimmed) throw new Error('Title is required');
-    return this.writes.patch(this.store.tasks, id, { title: trimmed });
+    const prev = this.mustFind(this.store.tasks, id);
+    return this.syncCalendar(prev, this.writes.patch(this.store.tasks, id, { title: trimmed }));
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { notes: setNotesArg(notes) });
@@ -526,14 +575,18 @@ class StubClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = this.mustFind(this.store.tasks, id);
-    const original = this.writes.put(
+    let original = this.writes.put(
       this.store.tasks,
       taskTransition(task, finishStatus, this.now()),
     );
-    const followUp = this.writes.insert(this.store.tasks, {
-      ...this.base(),
-      ...splitFollowUp(task, followUpTitle),
-    });
+    if (finishStatus === 'cancelled' && task.gcalEventId) original = this.clearCalendarPointers(id);
+    const followUp = this.syncCalendar(
+      null,
+      this.writes.insert(this.store.tasks, {
+        ...this.base(),
+        ...splitFollowUp(task, followUpTitle),
+      }),
+    );
     return { original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
@@ -809,6 +862,7 @@ class StubClient implements ApiClient {
         status: 'planned',
         categoryId: series.categoryId,
         dueDay: null,
+        dueTime: null,
         notes: null,
         seriesId: series.id,
         rollId: null,
@@ -822,6 +876,7 @@ class StubClient implements ApiClient {
         gcalAccountId: null,
         gcalCalendarId: null,
         gcalEventId: null,
+        gcalSyncError: null,
       });
       this.writes.insert(this.store.plans, {
         ...this.base(),
@@ -984,11 +1039,10 @@ class StubClient implements ApiClient {
   }
   async deleteCalendarEvent(taskId: string): Promise<Task> {
     this.mustFind(this.store.tasks, taskId);
-    return this.writes.patch(this.store.tasks, taskId, {
-      gcalAccountId: null,
-      gcalCalendarId: null,
-      gcalEventId: null,
-    });
+    return this.clearCalendarPointers(taskId);
+  }
+  async syncCalendarEvent(taskId: string): Promise<Task> {
+    return this.syncCalendar(null, this.mustFind(this.store.tasks, taskId), true);
   }
   async disconnectGoogleAccount(accountSub: string): Promise<void> {
     const current = this.ensureSettings();

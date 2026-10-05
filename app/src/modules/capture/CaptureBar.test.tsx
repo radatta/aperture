@@ -400,8 +400,25 @@ describe('CaptureBar', () => {
     it('chips carry a standalone accessible name', async () => {
       vi.setSystemTime(new Date(2026, 8, 30, 12));
       const { user, box } = await taskBar();
-      await user.type(box(), 'memo | due:2026-10-02');
+      await user.type(box(), 'memo | due:2026-10-0');
       expect(screen.getByRole('button', { name: 'Due Friday, Oct 2' })).toBeTruthy();
+    });
+
+    it('a whole day offers time chips that type the @HH:MM form', async () => {
+      vi.setSystemTime(new Date(2026, 8, 30, 12));
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'memo | due:2026-10-02');
+      const names = within(chips()!)
+        .getAllByRole('button')
+        .map((b) => b.textContent);
+      expect(names).toEqual(['9am', '12pm', '5pm', '11:59pm']);
+      await user.click(screen.getByRole('button', { name: 'Due Friday, Oct 2 at 5pm' }));
+      expect(box().value).toBe('memo | due:2026-10-02@17:00 ');
+      await user.keyboard('{Enter}');
+      await waitFor(async () => {
+        const t = (await api.listTasks()).find((x) => x.title === 'memo');
+        expect(t).toMatchObject({ dueDay: '2026-10-02', dueTime: '17:00' });
+      });
     });
 
     it('Escape still blurs the field', async () => {

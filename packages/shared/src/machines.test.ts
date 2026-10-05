@@ -23,6 +23,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     status: 'planned',
     categoryId: null,
     dueDay: null,
+    dueTime: null,
     notes: null,
     seriesId: null,
     rollId: null,
@@ -36,6 +37,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     gcalAccountId: null,
     gcalCalendarId: null,
     gcalEventId: null,
+    gcalSyncError: null,
     ...over,
   };
 }

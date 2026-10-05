@@ -444,6 +444,26 @@ function CalendarSection() {
               onChange={(ref) => update.mutate({ calendarWriteDefault: ref })}
             />
 
+            {/* Auto-sync (docs/areas/calendar → Auto-sync). Needs a default calendar to write to; off
+                leaves existing events where they are and stops syncing them. Old rows read undefined = on. */}
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={settings.autoCalendar !== false}
+                disabled={!settings.calendarWriteDefault}
+                onChange={(e) => update.mutate({ autoCalendar: e.target.checked })}
+              />
+              <span className="flex flex-col">
+                <Text size="sm">Add tasks with a due time to this calendar automatically</Text>
+                <Text size="xs" tone="muted">
+                  The event ends at the deadline and lasts as long as the estimate (30 min if none).
+                  Moving, renaming or re-estimating the task moves the event; clearing the time
+                  removes it.
+                </Text>
+              </span>
+            </label>
+
             <div className="flex flex-wrap items-end gap-4">
               <Field
                 label="Waking hours start"

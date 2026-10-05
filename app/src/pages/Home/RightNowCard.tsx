@@ -1,10 +1,15 @@
 import { useState } from 'react';
-import type { Task } from '@aperture/shared';
+import type { ReactNode } from 'react';
+import { dueUrgency, fmtDueDay, todayKey } from '@aperture/shared';
+import type { DueUrgency, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { fmtDuration, fmtTime } from '../../lib/format';
+import { useNow } from '../../lib/useNow';
+import { useSettings } from '../../data/hooks/useSettings';
+import { urgencyClass, urgencyLabel } from '../../modules/tasks/dueStyle';
 import { useUpsertPlan } from '../../data/hooks/usePlans';
 import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
 import { usePomodoro } from '../../modules/pomodoro/pomodoro-context';
@@ -25,6 +30,26 @@ const PROMPT_COPY: Record<'pick' | 'next' | 'all-done', string> = {
 };
 
 const estimateOf = (t: Task): number | null => t.estimateLockedMin ?? t.estimateMin;
+
+// A TIMED task's row takes the urgency colour (dueStyle.ts); every row carries a transparent border so
+// the colour never shifts layout. Re-read every minute.
+const ROW = '-mx-2 rounded-lg border border-transparent px-2';
+function useUrgency(t: Task): DueUrgency {
+  return dueUrgency(t, useNow());
+}
+
+// The deadline phrase, on timed tasks only — the day's plan already says "today" for the rest.
+function DueTime({ task }: { task: Task }) {
+  const { data: settings } = useSettings();
+  const label = urgencyLabel(useUrgency(task));
+  if (!task.dueDay || !task.dueTime) return null;
+  return (
+    <Text size="xs" tone="subtle" className="shrink-0">
+      {fmtDueDay(task.dueDay, todayKey(settings?.dayStartHour ?? 4), task.dueTime)}
+      {label && <span className="sr-only">, {label}</span>}
+    </Text>
+  );
+}
 
 // The daytime hero: what's happening right now (the in-progress task, count-up vs estimate) over the
 // Big 3, then the rest of today. Replaces the old FocusCard + TodayTasksCard.
@@ -76,7 +101,7 @@ export function RightNowCard() {
     <HomeCard title="Right now" aside={<Asides />}>
       <div className="flex flex-col gap-3">
         {hero ? (
-          <div className="flex flex-col gap-1">
+          <Hero task={hero}>
             <Text size="lg" weight="semibold" className="truncate">
               {hero.title}
             </Text>
@@ -84,6 +109,7 @@ export function RightNowCard() {
               <CategoryTag categoryId={hero.categoryId} />
               <RollTag rollId={hero.rollId} />
               {/* Count-UP vs the estimate, flat — no bar, no colour flip past 100%, no countdown. */}
+              <DueTime task={hero} />
               <Text size="sm" tone="muted" tabular>
                 {fmtDuration(heroElapsed)}
                 {estimateOf(hero) != null ? ` of ~${fmtDuration(estimateOf(hero)!)}` : ' logged'}
@@ -122,7 +148,7 @@ export function RightNowCard() {
                 onDone={() => setDoneInitial(null)}
               />
             )}
-          </div>
+          </Hero>
         ) : (
           rn.nextPrompt && <Text tone="muted">{PROMPT_COPY[rn.nextPrompt]}</Text>
         )}
@@ -163,8 +189,9 @@ export function RightNowCard() {
 // A Big-3 row that isn't the hero: done (struck), in-progress (elapsed), or ready-to-start.
 function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) => void }) {
   const t = row.task;
+  const u = useUrgency(t);
   return (
-    <div className="flex items-center justify-between gap-3">
+    <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
       <div className="flex min-w-0 items-center gap-2">
         <Text
           size="sm"
@@ -174,6 +201,7 @@ function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) =>
         </Text>
         <CategoryTag categoryId={t.categoryId} />
         <RollTag rollId={t.rollId} />
+        <DueTime task={t} />
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'done' ? (
@@ -206,8 +234,9 @@ function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) =>
 function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => void }) {
   const t = row.task;
   const canFocus = row.plan != null && (t.status === 'backlog' || t.status === 'planned');
+  const u = useUrgency(t);
   return (
-    <div className="flex items-center justify-between gap-3">
+    <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
       <div className="flex min-w-0 items-center gap-2">
         <Text
           size="sm"
@@ -218,6 +247,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
         </Text>
         <CategoryTag categoryId={t.categoryId} />
         <RollTag rollId={t.rollId} />
+        <DueTime task={t} />
         {row.unplanned && (
           <Text size="xs" tone="subtle">
             not planned today
@@ -236,6 +266,14 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+function Hero({ task, children }: { task: Task; children: ReactNode }) {
+  return (
+    <div className={cx('flex flex-col gap-1 py-1', ROW, urgencyClass(useUrgency(task)))}>
+      {children}
     </div>
   );
 }

@@ -50,3 +50,29 @@ describe('Coming up radar', () => {
     expect(await screen.findByText('No deadlines on the radar.')).toBeTruthy();
   });
 });
+
+describe('Coming up — due times', () => {
+  it('shows the time, sorts a timed task before an untimed one that day, and colours a past one', async () => {
+    const api = createStubClient({ seed: false, storageKey: `cu-t-${Math.random()}` });
+    const tomorrow = addDays(TODAY, 1);
+    await api.createTask({ title: 'Untimed tomorrow', dueDay: tomorrow });
+    await api.createTask({ title: 'Timed tomorrow', dueDay: tomorrow, dueTime: '23:59' });
+    await api.createTask({ title: 'Long gone', dueDay: addDays(TODAY, -2), dueTime: '09:00' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+
+    await screen.findByText('Timed tomorrow');
+    const titles = ['Long gone', 'Timed tomorrow', 'Untimed tomorrow'].map((t) =>
+      screen.getByText(t),
+    );
+    // Document order = radar order.
+    expect(
+      titles[1]!.compareDocumentPosition(titles[2]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText(/due tomorrow 11:59pm/)).toBeTruthy();
+    const pastRow = titles[0]!.closest('.rounded-lg') as HTMLElement;
+    expect(pastRow.className).toMatch(/border-danger!/);
+    expect(pastRow.textContent).toMatch(/past due/);
+  });
+});

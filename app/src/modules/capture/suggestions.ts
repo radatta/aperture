@@ -1,4 +1,10 @@
-import { duePresets, fmtDayHeading } from '@aperture/shared';
+import {
+  DUE_TIME_PRESETS,
+  duePresets,
+  fmtClock12,
+  fmtDayHeading,
+  isDayKey,
+} from '@aperture/shared';
 import type { CaretToken } from '@aperture/shared';
 import { fmtDuration } from '../../lib/format';
 
@@ -44,7 +50,20 @@ export function estimateSuggestions(partial: string): Suggestion[] {
   }));
 }
 
+// Day chips while the day is being typed; once it's a whole day (`due:2026-10-09`, caret at its end) or
+// carries an '@', time chips — each types the full `due:<day>@HH:MM`.
 export function dueSuggestions(partial: string, today: string): Suggestion[] {
+  const at = partial.indexOf('@');
+  const day = at === -1 ? partial : partial.slice(0, at);
+  if (isDayKey(day) && (at !== -1 || partial === day)) {
+    const typed = at === -1 ? '' : partial.slice(at + 1);
+    return DUE_TIME_PRESETS.filter((t) => t.startsWith(typed)).map((t) => ({
+      key: `t:${t}`,
+      label: fmtClock12(t),
+      a11y: `Due ${fmtDayHeading(day)} at ${fmtClock12(t)}`,
+      insert: `due:${day}@${t}`,
+    }));
+  }
   return duePresets(today)
     .filter((p) => p.day.startsWith(partial))
     .map((p) => ({

@@ -5,6 +5,8 @@ import { liveWrites } from './ddb/writes';
 import { BackendClient } from './backend';
 import { InMemoryGoogle } from './google/gateway';
 import { handleRpc } from './handler';
+import { USER_TIME_ZONE, zonedEpoch } from '@aperture/shared';
+import type { Task } from '@aperture/shared';
 
 function makeBackend(google: InMemoryGoogle) {
   const doc = new InMemoryDoc();
@@ -251,5 +253,200 @@ describe('testMode makes zero external Google calls', () => {
     });
     expect(await call('listGoogleCalendars')).toEqual([]);
     expect(await call('googleConnectUrl')).toEqual({ url: '#google-connect-disabled-in-testmode' });
+  });
+});
+
+// Auto-sync for timed tasks (shared calendarSyncPlan; docs/areas/calendar → Auto-sync). The event ENDS
+// at the deadline in the user's zone, as long as the estimate (30 min without one). Parity scenarios:
+// app/src/data/stubClient.calendar.test.ts.
+describe('calendar auto-sync (timed tasks)', () => {
+  const at = (day: string, hhmm: string) => zonedEpoch(day, hhmm, USER_TIME_ZONE);
+  async function connected() {
+    const g = new InMemoryGoogle();
+    const b = makeBackend(g);
+    await b.completeGoogleConnect('A'); // primary becomes the write default; auto-sync defaults on
+    return { g, b };
+  }
+  const only = (g: InMemoryGoogle) => [...g.events.entries()][0]!;
+
+  it('a timed create makes one event ending at the deadline; untimed makes none', async () => {
+    const { g, b } = await connected();
+    await b.createTask({ title: 'untimed', dueDay: '2026-10-09' });
+    expect(g.events.size).toBe(0);
+    const t = await b.createTask({
+      title: 'pset',
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+      estimateMin: 45,
+    });
+    expect(g.events.size).toBe(1);
+    const [id, evt] = only(g);
+    expect(evt).toMatchObject({
+      sub: 'A',
+      calendarId: 'A@example.com',
+      title: 'pset',
+      startMs: at('2026-10-09', '15:15'),
+      endMs: at('2026-10-09', '16:00'),
+    });
+    expect(t).toMatchObject({ gcalEventId: id, gcalAccountId: 'A', gcalSyncError: null });
+  });
+
+  it('no estimate → a 30-minute block', async () => {
+    const { g, b } = await connected();
+    await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '09:00' });
+    expect(only(g)[1].startMs).toBe(at('2026-10-09', '08:30'));
+  });
+
+  it('day, time, estimate and title edits move/rename the SAME event', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({
+      title: 'pset',
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+      estimateMin: 60,
+    });
+    const id = t.gcalEventId;
+    await b.setTaskDue(t.id, { dueDay: '2026-10-10' });
+    expect(only(g)[1].endMs).toBe(at('2026-10-10', '16:00'));
+    await b.setTaskDue(t.id, { dueDay: '2026-10-10', dueTime: '18:30' });
+    expect(only(g)[1].endMs).toBe(at('2026-10-10', '18:30'));
+    await b.setTaskEstimate(t.id, 90, 0);
+    expect(only(g)[1].startMs).toBe(at('2026-10-10', '17:00'));
+    await b.setTaskTitle(t.id, 'pset 3');
+    expect(only(g)[1].title).toBe('pset 3');
+    expect(g.events.size).toBe(1);
+    expect((await b.getTask(t.id))!.gcalEventId).toBe(id);
+  });
+
+  it('clearing the time (or the day) removes the event and the pointers', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const cleared = await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
+    expect(g.events.size).toBe(0);
+    expect(cleared).toMatchObject({ gcalEventId: null, gcalAccountId: null, gcalCalendarId: null });
+    const t2 = await b.createTask({ title: 'y', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.setTaskDueDay(t2.id, null);
+    expect(g.events.size).toBe(0);
+  });
+
+  it('a manually added event moves to end at the deadline when the task gains a time — no duplicate', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', estimateMin: 60 });
+    await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'x',
+      startMs: at('2026-10-09', '09:00'),
+      endMs: at('2026-10-09', '10:00'),
+    });
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '17:00' });
+    expect(g.events.size).toBe(1);
+    expect(only(g)[1]).toMatchObject({
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+  });
+
+  it('done leaves the event; cancel removes it (pre-existing delete-on-cancel)', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t.id, 'in_progress');
+    await b.transitionTask(t.id, 'done');
+    expect(g.events.size).toBe(1);
+    const t2 = await b.createTask({ title: 'y', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t2.id, 'cancelled');
+    expect(g.events.size).toBe(1);
+  });
+
+  it('toggle off: no create, and existing events stay put (no patch, no delete)', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.updateSettings({ autoCalendar: false });
+    await b.createTask({ title: 'new', dueDay: '2026-10-09', dueTime: '12:00' });
+    await b.setTaskTitle(t.id, 'renamed');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
+    expect(g.events.size).toBe(1);
+    expect(only(g)[1]).toMatchObject({ title: 'x', endMs: at('2026-10-09', '16:00') });
+  });
+
+  it('createTasks makes events for the timed rows only', async () => {
+    const { g, b } = await connected();
+    const made = await b.createTasks([
+      { title: 'a', dueDay: '2026-10-09', dueTime: '10:00' },
+      { title: 'b', dueDay: '2026-10-09' },
+      { title: 'c' },
+      { title: 'd', dueDay: '2026-10-10', dueTime: '23:59' },
+    ]);
+    expect(g.events.size).toBe(2);
+    expect(made.map((t) => !!t.gcalEventId)).toEqual([true, false, false, true]);
+  });
+
+  it('a Google failure never fails the write: it lands as gcalSyncError, and the retry clears it', async () => {
+    const { g, b } = await connected();
+    g.markDead('A');
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    expect(t.gcalSyncError).toBe('invalid_grant');
+    expect(t.gcalEventId).toBeNull();
+    expect((await b.getTask(t.id))!.gcalSyncError).toBe('invalid_grant'); // persisted
+    await b.completeGoogleConnect('A'); // reconnect revives the token
+    const retried = await b.syncCalendarEvent(t.id);
+    expect(retried).toMatchObject({ gcalSyncError: null });
+    expect(retried.gcalEventId).not.toBeNull();
+    expect(g.events.size).toBe(1);
+  });
+
+  it('a stale failure note clears once there is nothing left to sync', async () => {
+    const { g, b } = await connected();
+    g.markDead('A');
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    expect(t.gcalSyncError).not.toBeNull();
+    expect(
+      (await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null })).gcalSyncError,
+    ).toBeNull();
+  });
+
+  it('an event deleted in Google is unlinked, not resurrected; a later time change makes a new one', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.events.clear(); // the user deleted it in Google
+    const renamed = await b.setTaskTitle(t.id, 'y');
+    expect(renamed).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '17:00' });
+    expect(g.events.size).toBe(1);
+  });
+
+  it('split: a cancelled original drops its event; a timed follow-up gets its own', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const first = t.gcalEventId!;
+    const { original, followUp } = await b.splitTask(t.id, 'cancelled', 'x, part 2');
+    expect(original.gcalEventId).toBeNull();
+    expect(followUp.gcalEventId).not.toBeNull();
+    expect(g.events.has(first)).toBe(false);
+    expect(g.events.size).toBe(1);
+  });
+
+  it('testMode: a timed create touches no Google and persists nothing', async () => {
+    const g = new InMemoryGoogle();
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const b = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+      google: g,
+    });
+    await b.completeGoogleConnect('A');
+    const res = (await handleRpc(doc, {
+      userId: 'local',
+      method: 'createTask',
+      args: [{ title: 'smoke', dueDay: '2026-10-09', dueTime: '16:00' }],
+      now,
+      testMode: true,
+      google: g,
+    })) as Task;
+    expect(g.events.size).toBe(0); // noopGoogle
+    expect(await b.getTask(res.id)).toBeNull(); // noopWrites
   });
 });

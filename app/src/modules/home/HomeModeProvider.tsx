@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { HomeMode } from '../../styles/theme';
 import { useSettings } from '../../data/hooks/useSettings';
+import { useNow } from '../../lib/useNow';
 import { HomeModeContext } from './home-context';
 import { homeModeForHour } from './homeMode';
 
@@ -13,19 +14,8 @@ export function HomeModeProvider({ children }: { children: ReactNode }) {
   const { data: settings } = useSettings();
   const dayStartHour = settings?.dayStartHour ?? 4;
 
-  const [now, setNow] = useState(() => Date.now());
+  const now = useNow();
   const [override, setOverride] = useState<HomeMode | null>(null);
-
-  useEffect(() => {
-    const tick = () => setNow(Date.now());
-    const id = setInterval(tick, 60_000);
-    const onVisible = () => document.visibilityState === 'visible' && tick();
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, []);
 
   const autoMode = homeModeForHour(new Date(now).getHours(), dayStartHour);
   const mode = override ?? autoMode;

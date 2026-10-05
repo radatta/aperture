@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CreateTaskInput, TaskStatus } from '@aperture/shared';
+import type { CreateTaskInput, SetTaskDueInput, TaskStatus } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { invalidateTaskData } from './invalidate';
@@ -57,11 +57,12 @@ export function useSetCategory() {
 }
 
 // Due date — day-granular deadline metadata. No freeze constraint: settable at any status.
-export function useSetDueDay() {
+// Deadline day + optional time, one write (and one calendar sync — see setTaskDue).
+export function useSetDue() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { id: string; dueDay: string | null }) => api.setTaskDueDay(v.id, v.dueDay),
+    mutationFn: (v: { id: string; due: SetTaskDueInput }) => api.setTaskDue(v.id, v.due),
     onSettled: () => invalidateTaskData(qc),
   });
 }

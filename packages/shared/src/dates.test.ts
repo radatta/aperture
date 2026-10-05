@@ -7,8 +7,12 @@ import {
   daysBetween,
   duePresets,
   fmtDayHeading,
+  fmtClock12,
   fmtDueDay,
+  hhmmOfEpoch,
+  isTimeKey,
   localEpochFromDayTime,
+  zonedEpoch,
   fmtMonthDay,
   fmtMonthDayYear,
   fmtMonthShortDay,
@@ -76,6 +80,36 @@ describe('iso week & formatting', () => {
   });
 });
 
+describe('due times — isTimeKey, fmtClock12, zonedEpoch', () => {
+  it('isTimeKey accepts only zero-padded 24h HH:MM', () => {
+    for (const ok of ['00:00', '09:30', '16:00', '23:59']) expect(isTimeKey(ok)).toBe(true);
+    for (const bad of ['4:00', '24:00', '23:60', '16:0', '16:00:00', '4pm', ''])
+      expect(isTimeKey(bad)).toBe(false);
+  });
+  it('fmtClock12 drops :00 and names am/pm, including the 12s', () => {
+    expect(fmtClock12('16:00')).toBe('4pm');
+    expect(fmtClock12('09:30')).toBe('9:30am');
+    expect(fmtClock12('00:00')).toBe('12am');
+    expect(fmtClock12('12:00')).toBe('12pm');
+    expect(fmtClock12('23:59')).toBe('11:59pm');
+  });
+  it('hhmmOfEpoch inverts localEpochFromDayTime', () => {
+    expect(hhmmOfEpoch(localEpochFromDayTime('2026-10-05', '07:05'))).toBe('07:05');
+  });
+  // The Lambda is UTC, so a wall-clock deadline must resolve in the user's zone — including on the
+  // two DST-change days, where a fixed offset would be an hour off.
+  it('zonedEpoch resolves a wall clock in the given zone, across DST', () => {
+    const LA = 'America/Los_Angeles';
+    expect(zonedEpoch('2026-10-05', '16:00', LA)).toBe(Date.UTC(2026, 9, 5, 23, 0)); // PDT, -7
+    expect(zonedEpoch('2026-12-01', '16:00', LA)).toBe(Date.UTC(2026, 11, 2, 0, 0)); // PST, -8
+    expect(zonedEpoch('2026-03-08', '03:00', LA)).toBe(Date.UTC(2026, 2, 8, 10, 0)); // first PDT hour
+    expect(zonedEpoch('2026-03-08', '01:00', LA)).toBe(Date.UTC(2026, 2, 8, 9, 0)); // still PST
+    expect(zonedEpoch('2026-11-01', '00:30', LA)).toBe(Date.UTC(2026, 10, 1, 7, 30)); // PDT
+    expect(zonedEpoch('2026-11-01', '03:00', LA)).toBe(Date.UTC(2026, 10, 1, 11, 0)); // PST
+    expect(zonedEpoch('2026-10-05', '16:00', 'UTC')).toBe(Date.UTC(2026, 9, 5, 16, 0));
+  });
+});
+
 describe('fmtDueDay — relative deadline phrasing', () => {
   // 2026-06-15 is a Monday (2026-06-07 is a Sunday, per weekdayOf above).
   const today = '2026-06-15';
@@ -93,6 +127,15 @@ describe('fmtDueDay — relative deadline phrasing', () => {
   it('falls back to month/day beyond a week either direction', () => {
     expect(fmtDueDay('2026-06-22', today)).toBe('due Jun 22'); // +7
     expect(fmtDueDay('2026-06-08', today)).toBe('was due Jun 8'); // -7
+  });
+  it('appends the clock time on every branch when the task has one', () => {
+    expect(fmtDueDay(today, today, '16:00')).toBe('due today 4pm');
+    expect(fmtDueDay('2026-06-16', today, '09:30')).toBe('due tomorrow 9:30am');
+    expect(fmtDueDay('2026-06-14', today, '12:00')).toBe('was due yesterday 12pm');
+    expect(fmtDueDay('2026-06-19', today, '17:00')).toBe('due Fri 5pm');
+    expect(fmtDueDay('2026-06-09', today, '16:00')).toBe('was due Tue 4pm');
+    expect(fmtDueDay('2026-06-22', today, '23:59')).toBe('due Jun 22 11:59pm');
+    expect(fmtDueDay('2026-06-22', today, null)).toBe('due Jun 22'); // untimed unchanged
   });
 
   // The trap: at 2:30am the wall-clock date has rolled but the logical day (4am start) hasn't. A task

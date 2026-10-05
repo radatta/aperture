@@ -52,7 +52,15 @@ export interface CreateTaskInput {
   estimateMin?: number | null;
   bufferMin?: number | null;
   dueDay?: string | null; // day-granular deadline; honored by both creates — bulk-add and capture tokens set it
+  dueTime?: string | null; // "HH:MM" on dueDay; requires dueDay (normalizeDue). A timed task auto-syncs to gcal
   notes?: string | null; // normalized like setTaskNotes; createTasks rejects the whole batch if any is over the cap
+}
+
+// The deadline as one write. Object-shaped (not positional) so an OMITTED dueTime survives JSON: absent
+// = keep the task's current time; null = clear it. dueDay null always clears the time too.
+export interface SetTaskDueInput {
+  dueDay: string | null;
+  dueTime?: string | null;
 }
 
 export interface UpsertPlanInput {
@@ -203,6 +211,7 @@ export type SettingsPatch = Partial<
     | 'theme'
     | 'calendarShapeRefs'
     | 'calendarWriteDefault'
+    | 'autoCalendar'
     | 'dayFocusStart'
     | 'dayEndHour'
     | 'financeBudgetCents'
@@ -236,8 +245,8 @@ export interface GetCalendarBusyInput {
   windowStartMs: number;
   windowEndMs: number;
 }
-// Event write, routed to the target calendar's owning account. Time feeds the event ONLY — never
-// denormalized onto the task (the task stays day-granular; gcal is the source of record for the clock).
+// Manual event write, routed to the target calendar's owning account. The start/end feed the event only;
+// a task's own deadline clock is dueTime (auto-sync derives the event window from it — calendarSync.ts).
 export interface InsertCalendarEventInput {
   taskId: string;
   accountSub: string;
@@ -269,10 +278,14 @@ export interface ApiClient {
   setTaskCategory(id: string, categoryId: string | null): Promise<Task>;
   // Deadline metadata (day-granular). Settable at ANY status — a moved deadline is not a scope
   // change, so this never touches estimateLockedMin.
+  // Day-only form, kept for back-compat (cached app shells, older callers): = setTaskDue(id, { dueDay }),
+  // so it keeps the current time unless the day is cleared.
   setTaskDueDay(id: string, dueDay: string | null): Promise<Task>;
+  // Day + optional clock time in one write (and one calendar sync). Any status; never touches the lock.
+  setTaskDue(id: string, due: SetTaskDueInput): Promise<Task>;
   // Rename. Display text, not part of the estimate lock or calibration (points carry taskId, not title)
-  // — so it's settable at ANY status, like the deadline. Trims; rejects an empty/whitespace title. Does
-  // not rename a linked calendar event (edit-sync is a deferred gap).
+  // — so it's settable at ANY status, like the deadline. Trims; rejects an empty/whitespace title.
+  // Renames a linked calendar event when auto-sync is on (calendarSync.ts).
   setTaskTitle(id: string, title: string): Promise<Task>;
   // Notes (light markdown). Like the title, settable at ANY status and never touches the estimate lock.
   // Trims; empty/whitespace or null clears to null; over TASK_NOTES_MAX rejects and writes nothing.
@@ -364,6 +377,8 @@ export interface ApiClient {
   getCalendarBusy(input: GetCalendarBusyInput): Promise<CalendarBusy>; // raw intervals; client computes shape
   insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task>; // creates the event, stores pointers
   deleteCalendarEvent(taskId: string): Promise<Task>; // delete-on-cancel; clears the pointers
+  // Retry for a failed auto-sync (task.gcalSyncError): creates or patches the event to match the task now.
+  syncCalendarEvent(taskId: string): Promise<Task>;
   disconnectGoogleAccount(accountSub: string): Promise<void>; // drop the token + settings entry
 
   // Calibration (derived, read-only)

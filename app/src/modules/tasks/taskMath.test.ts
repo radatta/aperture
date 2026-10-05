@@ -20,6 +20,7 @@ const task = (over: Partial<Task>): Task => ({
   status: 'backlog',
   categoryId: null,
   dueDay: null,
+  dueTime: null,
   notes: null,
   seriesId: null,
   rollId: null,
@@ -33,6 +34,7 @@ const task = (over: Partial<Task>): Task => ({
   gcalAccountId: null,
   gcalCalendarId: null,
   gcalEventId: null,
+  gcalSyncError: null,
   ...over,
 });
 
@@ -68,6 +70,18 @@ describe('byDueHint', () => {
       task({ id: 'soon', dueDay: '2026-06-10' }),
     ];
     expect(byDueHint(input).map((t) => t.id)).toEqual(['soon', 'far', 'no1', 'no2']);
+  });
+  it('within a day: timed by time, then untimed (old rows without dueTime count as untimed)', () => {
+    const legacy = { ...task({ id: 'legacy', dueDay: '2026-06-10' }) } as Task;
+    delete (legacy as { dueTime?: unknown }).dueTime;
+    const input = [
+      task({ id: 'next', dueDay: '2026-06-11', dueTime: '08:00' }),
+      legacy,
+      task({ id: 'eve', dueDay: '2026-06-10', dueTime: '17:00' }),
+      task({ id: 'untimed', dueDay: '2026-06-10' }),
+      task({ id: 'morn', dueDay: '2026-06-10', dueTime: '09:00' }),
+    ];
+    expect(byDueHint(input).map((t) => t.id)).toEqual(['morn', 'eve', 'legacy', 'untimed', 'next']);
   });
   it('treats an undefined dueDay (pre-migration rows) as undated', () => {
     const legacy = { ...task({ id: 'legacy' }) } as Task;
