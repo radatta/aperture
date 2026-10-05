@@ -168,10 +168,12 @@ describe('TaskEditor', () => {
   it('a failed calendar sync is said in the editor, with a retry', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Synced', dueDay: '2026-10-01', dueTime: '16:00' });
-    const failed = { ...t, gcalSyncError: 'invalid_grant' };
+    const failed = { ...t, gcalSyncError: 'Couldn’t add the calendar event (invalid_grant)' };
     const sync = vi.spyOn(client, 'syncCalendarEvent');
     const { user } = renderEditor(client, failed);
-    expect(screen.getByRole('alert').textContent).toMatch(/Calendar sync failed: invalid_grant/);
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Couldn’t add the calendar event \(invalid_grant\)/,
+    );
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(sync).toHaveBeenCalledWith(t.id);
   });
@@ -182,7 +184,11 @@ describe('TaskEditor', () => {
       calendarWriteDefault: { accountSub: 'a', calendarId: 'me@example.com' },
       autoCalendar: false,
     });
-    const t = await client.createTask({ title: 'Late add', dueDay: '2026-10-01', dueTime: '16:00' });
+    const t = await client.createTask({
+      title: 'Late add',
+      dueDay: '2026-10-01',
+      dueTime: '16:00',
+    });
     expect(t.gcalEventId).toBeNull();
     await client.updateSettings({ autoCalendar: true });
     const sync = vi.spyOn(client, 'syncCalendarEvent');
@@ -190,6 +196,18 @@ describe('TaskEditor', () => {
     expect(await screen.findByText('Not on your calendar.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Add to calendar' }));
     expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('says so when the calendar retry itself fails', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Offline', dueDay: '2026-10-01', dueTime: '16:00' });
+    vi.spyOn(client, 'syncCalendarEvent').mockRejectedValue(new Error('offline'));
+    const { user } = renderEditor(client, {
+      ...t,
+      gcalSyncError: 'Couldn’t add the calendar event (x)',
+    });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/Couldn’t reach the calendar sync/)).toBeTruthy();
   });
 
   it('keeps the edits and says so when a save fails', async () => {

@@ -121,8 +121,10 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 
 - **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
   creates one (so an event you removed by hand isn't resurrected).
-- **Toggle off → nothing syncs**: no create, patch or delete; existing events stay where they are. No
-  backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
+- **Toggle off → nothing auto-syncs**: no create, patch or delete; existing events stay where they are.
+  No backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
+  Not gated by it: delete-on-cancel (above), and a split moving a timed task's link to its follow-up
+  (no Google call — the pointer just moves).
 - **One-way.** The task is the source of record; an event edited in Google is overwritten by the next
   task change. An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google
   keeps deleted events restorable) is treated as gone: the pointer is dropped and the event is not
@@ -130,21 +132,28 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 - **Failure never fails the task write.** The task is saved first; a gateway error lands on the task as
   `gcalSyncError` ("Couldn’t add/update/remove the calendar event (…)", logged as `gcal_sync_failed`),
   shown on the row and in the editor with **Retry** (`syncCalendarEvent` — an "ensure" pass of the
-  planner). A failed **remove** keeps the event linked (never a silent orphan), and its note is how the
-  retry knows to finish the removal (`isPendingRemoval`). The note clears on the next success, or once
-  there's nothing to retry (no time + no event, sync off, task finished). Unlike delete-on-cancel, the
-  auto-sync remove does not swallow Google errors.
+  planner). A failed **remove** keeps the event linked (never a silent orphan), and its note marks it as
+  still owed a removal (`isPendingRemoval`): the next sync of any kind — the retry, or just a rename —
+  finishes it, never adopting the event as a manual one. The note clears on the next success, or once
+  there's nothing to retry (no time + no event, sync off, or the task is done/cancelled — a finish clears
+  it directly). Unlike delete-on-cancel, the auto-sync remove does not swallow Google errors.
 - **Writes only the calendar fields, onto a fresh read** (`putGcal`) — the sync spans a Google round-trip,
   and a write that lands meanwhile (a session closing) must survive it.
-- **Every Google fetch has a 5 s timeout** (`LiveGoogle`), so a hung call fails into `gcalSyncError` well
-  inside the 15 s Lambda timeout.
+- **Every Google fetch has a 4 s timeout** (`LiveGoogle`), so one sync's worst case (token refresh +
+  call, ~8 s; the SSM token read has none) fails into `gcalSyncError` inside the 15 s Lambda timeout.
 - **A timed task with no event** (timed while sync was off — no backfill — or its event removed) shows
   "Not on your calendar" + **Add to calendar** in the editor, which runs the same ensure pass.
 - **Timezone.** The Lambda is UTC, so it resolves `dueDay`+`dueTime` via `zonedEpoch(…, USER_TIME_ZONE)`
   (`America/Los_Angeles`, shared `dates.ts`; DST-correct); the browser uses `localEpochFromDayTime`.
-- **Bulk creates** sync timed rows four at a time (a Google round-trip each); untimed rows skip it.
-- **Split** (done or cancel) moves the event's link to the follow-up, which then renames/re-times it —
-  never a delete + re-create, never a duplicate block over the same window.
+- **Bulk creates** sync timed rows four at a time (a Google round-trip each; settings read once) within a
+  5 s budget: no new Google call starts after it, or after the first failure (Google is likely down for
+  all of them) — the remaining timed rows are saved with a "not attempted — retry" note instead. The
+  tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
+  resubmit. Untimed rows skip it.
+- **Split.** A **timed** task's event (the block before its deadline) moves with the deadline: the link
+  goes to the follow-up, which renames/re-times it — no delete + re-create, no duplicate block. Any other
+  linked event (a manual one; a record of work done) stays on the original: kept on done, removed on
+  cancel (or when a removal was already owed).
 
 ## Resilience (the Cognito model, per account)
 

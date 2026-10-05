@@ -446,7 +446,7 @@ function CalendarSection() {
 
             {/* Auto-sync (docs/areas/calendar → Auto-sync). Needs a default calendar to write to; off
                 leaves existing events where they are and stops syncing them. Old rows read undefined = on. */}
-            <label className="flex items-start gap-2">
+            <label className="flex items-start gap-2 has-[:disabled]:opacity-60">
               <input
                 type="checkbox"
                 className="mt-1"

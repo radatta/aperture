@@ -10,6 +10,7 @@ import {
   discardSession,
   eventWindow,
   gcalSyncMessage,
+  isPendingRemoval,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   findOpenRollTask,
@@ -126,8 +127,11 @@ const unconfiguredPresigner: Presigner = {
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
 // behavior is identical to the stub by construction. The one thing SK order doesn't give for free is
 // the stub's explicit list sorts, so each list method re-applies them for byte-for-byte parity.
-// Calendar inserts in flight at once for a bulk create (createTasks).
+// Calendar inserts in flight at once for a bulk create (createTasks), and how long new ones may start
+// for: with GOOGLE_TIMEOUT_MS (liveGoogle.ts) per fetch, budget + one sync's worst case stays inside the
+// 15 s Lambda timeout.
 const SYNC_CONCURRENCY = 4;
+const BULK_SYNC_BUDGET_MS = 5_000;
 
 export class BackendClient implements ApiClient {
   private readonly userId: string;
@@ -221,10 +225,15 @@ export class BackendClient implements ApiClient {
   // Auto-sync). The task is already saved: a Google failure never fails the write — it lands on the
   // task as gcalSyncError (shown with a retry) and is logged, and a failed remove keeps the event linked
   // so the retry can finish it. Returns the task as it now stands.
-  private async syncCalendar(prev: Task | null, task: Task, ensure = false): Promise<Task> {
+  private async syncCalendar(
+    prev: Task | null,
+    task: Task,
+    ensure = false,
+    known?: Settings, // a batch reads settings once
+  ): Promise<Task> {
     // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
-    const settings = await this.ensureSettings();
+    const settings = known ?? (await this.ensureSettings());
     const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
     if (action.kind === 'none') {
       // A stale failure note goes once nothing is left to sync: no event and no time, sync turned off,
@@ -300,7 +309,9 @@ export class BackendClient implements ApiClient {
   // (No row — a testMode write that never landed — falls back to the task in hand.)
   private async putGcal(
     task: Task,
-    fields: Partial<Pick<Task, 'gcalAccountId' | 'gcalCalendarId' | 'gcalEventId' | 'gcalSyncError'>>,
+    fields: Partial<
+      Pick<Task, 'gcalAccountId' | 'gcalCalendarId' | 'gcalEventId' | 'gcalSyncError'>
+    >,
   ): Promise<Task> {
     const fresh = (await this.repo.getTask(task.id)) ?? task;
     return this.repo.putTask({ ...fresh, ...fields, updatedAt: this.now() });
@@ -477,14 +488,29 @@ export class BackendClient implements ApiClient {
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     const saved = await this.repo.putTasks(tasks);
-    // Timed tasks get their events a few at a time — each is a Google round-trip, and a long timed
-    // paste done serially could outrun the Lambda timeout. Untimed rows skip the planner entirely.
+    if (!saved.some((t) => t.dueTime)) return saved;
+    // Timed tasks get their events a few at a time, inside a time budget: the tasks are already saved,
+    // so the Lambda timing out now would report a failed paste (and invite a duplicating resubmit). No
+    // new Google call starts after the budget, or once one has failed (Google is likely down for all
+    // of them) — the rest are marked for Retry instead. Worst case: budget + one sync's timeouts.
+    const settings = await this.ensureSettings();
+    const deadline = Date.now() + BULK_SYNC_BUDGET_MS;
+    let tripped = false;
     const out = [...saved];
     let next = 0;
     const worker = async () => {
       while (next < out.length) {
         const i = next++;
-        if (out[i]!.dueTime) out[i] = await this.syncCalendar(null, out[i]!);
+        const task = out[i]!;
+        if (!task.dueTime) continue;
+        if (tripped || Date.now() > deadline) {
+          out[i] = await this.putGcal(task, {
+            gcalSyncError: gcalSyncMessage('create', 'not attempted — retry'),
+          });
+          continue;
+        }
+        out[i] = await this.syncCalendar(null, task, false, settings);
+        if (out[i]!.gcalSyncError) tripped = true;
       }
     };
     await Promise.all(Array.from({ length: SYNC_CONCURRENCY }, worker));
@@ -526,7 +552,12 @@ export class BackendClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
-    const next = await this.repo.putTask(taskTransition(task, to, this.now()));
+    // A finished task has nothing left to sync, so a failure note (and its Retry) goes with it.
+    const finished = to === 'done' || to === 'cancelled';
+    const next = await this.repo.putTask({
+      ...taskTransition(task, to, this.now()),
+      ...(finished && task.gcalSyncError ? { gcalSyncError: null } : {}),
+    });
     // Delete-on-cancel: dropping a task removes its calendar event (via the owning account) and clears
     // the pointers. Guarded by gcalEventId, so tasks without an event are unaffected.
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
@@ -542,26 +573,31 @@ export class BackendClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
-    // The remaining work carries the deadline, so it carries the calendar event too: the link moves to
-    // the follow-up (and the sync renames/re-times it), rather than a cancel deleting it and the
-    // follow-up re-creating it — or a done original keeping a duplicate block over the same window.
-    const moved = task.gcalEventId
-      ? {
-          gcalAccountId: task.gcalAccountId,
-          gcalCalendarId: task.gcalCalendarId,
-          gcalEventId: task.gcalEventId,
-        }
-      : {};
-    const original = await this.repo.putTask({
+    // A TIMED task's event is the block before its deadline, and the remaining work carries that
+    // deadline — so the link moves to the follow-up (which renames/re-times it): no delete + re-create
+    // on cancel, no duplicate block on done. Any other linked event (a manual one, a record of work
+    // done) stays with the original, which then behaves like any finish: cancel removes it.
+    const timed = !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    const link = {
+      gcalAccountId: task.gcalAccountId,
+      gcalCalendarId: task.gcalCalendarId,
+      gcalEventId: task.gcalEventId,
+    };
+    const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
+    let original = await this.repo.putTask({
       ...taskTransition(task, finishStatus, this.now()),
-      gcalAccountId: null,
-      gcalCalendarId: null,
-      gcalEventId: null,
+      ...(timed ? unlinked : {}),
       gcalSyncError: null,
     });
+    const owesRemoval = finishStatus === 'cancelled' || isPendingRemoval(task.gcalSyncError);
+    if (!timed && task.gcalEventId && owesRemoval) original = await this.deleteCalendarEvent(id);
     const followUp = await this.syncCalendar(
       null,
-      await this.repo.putTask({ ...this.base(), ...splitFollowUp(task, followUpTitle), ...moved }),
+      await this.repo.putTask({
+        ...this.base(),
+        ...splitFollowUp(task, followUpTitle),
+        ...(timed ? link : {}),
+      }),
     );
     return { original, followUp };
   }

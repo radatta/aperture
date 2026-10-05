@@ -101,12 +101,16 @@ describe('calendarSyncPlan', () => {
     const legacy = { calendarWriteDefault: REF } as unknown as typeof ON;
     expect(calendarSyncPlan(null, task(), legacy, epoch).kind).toBe('create');
   });
-  it('a retry after a failed remove finishes the removal; other retries on an untimed event only rename', () => {
+  it('a failed remove is finished by the next sync of any kind; other untimed events only rename', () => {
     const pending = linked({
       dueTime: null,
       gcalSyncError: gcalSyncMessage('delete', 'invalid_grant'),
     });
     expect(calendarSyncPlan(null, pending, ON, epoch, { ensure: true }).kind).toBe('delete');
+    // An ordinary rename must not quietly "adopt" the event as a manual one.
+    expect(calendarSyncPlan(pending, { ...pending, title: 'renamed' }, ON, epoch).kind).toBe(
+      'delete',
+    );
     const renameFailed = linked({ dueTime: null, gcalSyncError: gcalSyncMessage('patch', 'x') });
     expect(calendarSyncPlan(null, renameFailed, ON, epoch, { ensure: true }).kind).toBe('patch');
     expect(isPendingRemoval(pending.gcalSyncError)).toBe(true);

@@ -43,7 +43,7 @@ class InvalidGrantError extends Error {
 
 // Per-call cap on a Google fetch. Calendar writes now ride task writes (auto-sync): a hung call must fail
 // into gcalSyncError well inside the Lambda's own timeout, not take the whole request down with it.
-const GOOGLE_TIMEOUT_MS = 5_000;
+const GOOGLE_TIMEOUT_MS = 4_000;
 
 export class LiveGoogle implements GoogleGateway {
   private clientCreds: { clientId: string; clientSecret: string } | null = null;

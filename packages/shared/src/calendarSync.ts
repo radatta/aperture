@@ -25,8 +25,8 @@ type SyncFields = Pick<
 const NONE: CalendarSyncAction = { kind: 'none' };
 
 // The failure note stored on the task (gcalSyncError). A failed REMOVE keeps the event linked, and its
-// note is how the retry knows to finish the removal (an untimed linked task could otherwise be a manual
-// event that should stay).
+// note is what marks it as still owed a removal (an untimed linked task could otherwise be a manual
+// event that should stay) — every later sync, not just the retry, finishes the removal.
 const FAILED: Record<'create' | 'patch' | 'delete', string> = {
   create: 'Couldn’t add the calendar event',
   patch: 'Couldn’t update the calendar event',
@@ -59,7 +59,7 @@ export function calendarSyncPlan(
     if (!window) {
       // Lost its time → the event it auto-synced goes. An untimed task with a manual event: gcal owns
       // that clock, so only a rename reaches it.
-      if (wasTimed || (ensure && isPendingRemoval(next.gcalSyncError))) return { kind: 'delete' };
+      if (wasTimed || isPendingRemoval(next.gcalSyncError)) return { kind: 'delete' };
       return ensure || changed('title') ? { kind: 'patch', title: next.title } : NONE;
     }
     if (ensure || whenChanged || changed('estimateMin') || changed('title'))

@@ -39,6 +39,7 @@ import {
   dayKeyForOffset,
   discardSession,
   eventWindow,
+  isPendingRemoval,
   localEpochFromDayTime,
   normalizeDue,
   findOpenRollTask,
@@ -564,7 +565,11 @@ class StubClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
-    const next = this.writes.put(this.store.tasks, taskTransition(task, to, this.now()));
+    const finished = to === 'done' || to === 'cancelled';
+    const next = this.writes.put(this.store.tasks, {
+      ...taskTransition(task, to, this.now()),
+      ...(finished && task.gcalSyncError ? { gcalSyncError: null } : {}), // nothing left to retry
+    });
     // Delete-on-cancel parity with the backend: dropping a task clears its calendar event pointers.
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
     return next;
@@ -578,22 +583,28 @@ class StubClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = this.mustFind(this.store.tasks, id);
-    // Parity with the backend: the event's link moves to the follow-up (never deleted + re-created).
-    const original = this.writes.put(this.store.tasks, {
+    // Parity with the backend: a TIMED task's event moves with the deadline to the follow-up; any other
+    // linked event stays on the original (kept on done, removed on cancel or when a removal is owed).
+    const timed = !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    const link = {
+      gcalAccountId: task.gcalAccountId,
+      gcalCalendarId: task.gcalCalendarId,
+      gcalEventId: task.gcalEventId,
+    };
+    const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
+    let original = this.writes.put(this.store.tasks, {
       ...taskTransition(task, finishStatus, this.now()),
-      gcalAccountId: null,
-      gcalCalendarId: null,
-      gcalEventId: null,
+      ...(timed ? unlinked : {}),
       gcalSyncError: null,
     });
+    const owesRemoval = finishStatus === 'cancelled' || isPendingRemoval(task.gcalSyncError);
+    if (!timed && task.gcalEventId && owesRemoval) original = this.clearCalendarPointers(id);
     const followUp = this.syncCalendar(
       null,
       this.writes.insert(this.store.tasks, {
         ...this.base(),
         ...splitFollowUp(task, followUpTitle),
-        gcalAccountId: task.gcalAccountId,
-        gcalCalendarId: task.gcalCalendarId,
-        gcalEventId: task.gcalEventId,
+        ...(timed ? link : {}),
       }),
     );
     return { original, followUp };

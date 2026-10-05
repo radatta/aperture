@@ -151,10 +151,18 @@ export function TaskEditor({
       <section className="flex flex-col gap-2">
         <SectionHeading>Calendar</SectionHeading>
         {/* A failed auto-sync never fails the task write — it's said here, with a retry. */}
+        {/* The retry/add call itself failing (offline, 5xx) is said too — never a dead button. */}
+        {syncEvent.isError && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn’t reach the calendar sync — try again.
+            </Text>
+          </div>
+        )}
         {task.gcalSyncError && (
           <div role="alert" className="flex flex-wrap items-center justify-between gap-2">
             <Text size="sm" tone="danger">
-              Calendar sync failed: {task.gcalSyncError}
+              {task.gcalSyncError}
             </Text>
             <Button
               variant="ghost"

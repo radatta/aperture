@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { dueUrgency, fmtClock12, fmtDueDay, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtClock12, fmtWeekdayShort, todayKey } from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
@@ -38,8 +38,9 @@ function useUrgency(t: Task): DueUrgency {
   return dueUrgency(t, useNow());
 }
 
-// The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact for a
-// today deadline ("by 4:30pm") so a phone-width row keeps room for its title.
+// The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact, so a
+// phone-width row keeps room for its title: "by 4:30pm" today, else "Sun 6:16pm" (whether that's past
+// is the row's colour, and the screen-reader text).
 function DueTime({ task }: { task: Task }) {
   const { data: settings } = useSettings();
   const label = urgencyLabel(useUrgency(task));
@@ -49,7 +50,7 @@ function DueTime({ task }: { task: Task }) {
     <Text size="xs" tone="subtle" className="shrink-0">
       {task.dueDay === today
         ? `by ${fmtClock12(task.dueTime)}`
-        : fmtDueDay(task.dueDay, today, task.dueTime)}
+        : `${fmtWeekdayShort(task.dueDay)} ${fmtClock12(task.dueTime)}`}
       {label && <span className="sr-only">, {label}</span>}
     </Text>
   );

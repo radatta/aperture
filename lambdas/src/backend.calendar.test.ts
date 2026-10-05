@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
@@ -442,6 +442,67 @@ describe('calendar auto-sync (timed tasks)', () => {
     const retried = await b.syncCalendarEvent(t.id);
     expect(retried).toMatchObject({ gcalEventId: null, gcalSyncError: null });
     expect(g.events.size).toBe(0);
+  });
+
+  it('a pending removal survives an ordinary edit — the next sync removes it, never adopts it', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.markDead('A');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
+    await b.completeGoogleConnect('A');
+    const renamed = await b.setTaskTitle(t.id, 'renamed'); // not a retry
+    expect(renamed).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+  });
+
+  it('split keeps a manual event on an untimed original (done), and removes it on cancel', async () => {
+    for (const finish of ['done', 'cancelled'] as const) {
+      const { g, b } = await connected();
+      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09' });
+      await b.insertCalendarEvent({
+        taskId: t.id,
+        accountSub: 'A',
+        calendarId: 'A@example.com',
+        title: 'x',
+        startMs: at('2026-10-08', '14:00'),
+        endMs: at('2026-10-08', '15:00'),
+      });
+      await b.transitionTask(t.id, 'in_progress');
+      const { original, followUp } = await b.splitTask(t.id, finish, 'x, part 2');
+      expect(followUp.gcalEventId).toBeNull();
+      if (finish === 'done') {
+        expect(original.gcalEventId).not.toBeNull();
+        expect(only(g)[1].title).toBe('x'); // the record of the work done, untouched
+      } else {
+        expect(original.gcalEventId).toBeNull();
+        expect(g.events.size).toBe(0);
+      }
+    }
+  });
+
+  it('bulk create: once Google fails, the rest are marked for Retry without being attempted', async () => {
+    const { g, b } = await connected();
+    g.markDead('A');
+    const insert = vi.spyOn(g, 'insertEvent');
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      title: `t${i}`,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    }));
+    const made = await b.createTasks([...rows, { title: 'untimed' }]);
+    expect(made).toHaveLength(11);
+    expect(made.slice(0, 10).every((t) => t.gcalSyncError)).toBe(true);
+    expect(made[10]!.gcalSyncError).toBeNull();
+    expect(insert.mock.calls.length).toBeLessThanOrEqual(4); // the first wave only
+    expect(made.some((t) => /not attempted/.test(t.gcalSyncError ?? ''))).toBe(true);
+  });
+
+  it('finishing a task clears its failure note', async () => {
+    const { g, b } = await connected();
+    g.markDead('A');
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t.id, 'in_progress');
+    expect((await b.transitionTask(t.id, 'done')).gcalSyncError).toBeNull();
   });
 
   it('a failure note with nothing left to retry clears (toggle off, or the task finished)', async () => {

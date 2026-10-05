@@ -145,7 +145,7 @@ describe('stub calendar auto-sync parity', () => {
     expect((await api.createTask({ title: 'n', dueDay: '2026-10-09', dueTime: '12:00' })).gcalEventId).toBeNull();
     expect((await api.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null })).gcalEventId).toBe(t.gcalEventId);
   });
-  it('createTasks links only the timed rows; a split moves the link to the follow-up', async () => {
+  it('createTasks links only the timed rows; a timed split moves the link to the follow-up', async () => {
     const api = stub();
     const made = await api.createTasks([
       { title: 'a', dueDay: '2026-10-09', dueTime: '10:00' },
@@ -155,5 +155,23 @@ describe('stub calendar auto-sync parity', () => {
     const { original, followUp } = await api.splitTask(made[0]!.id, 'cancelled', 'a, part 2');
     expect(original.gcalEventId).toBeNull();
     expect(followUp.gcalEventId).toBe(made[0]!.gcalEventId);
+  });
+  it('split keeps a manual event on an untimed original when done, removes it on cancel', async () => {
+    for (const finish of ['done', 'cancelled'] as const) {
+      const api = stub();
+      const t = await api.createTask({ title: 'u', dueDay: '2026-10-09' });
+      await api.insertCalendarEvent({
+        taskId: t.id,
+        accountSub: 'seed-personal',
+        calendarId: 'you@gmail.com',
+        title: 'u',
+        startMs: 1000,
+        endMs: 2000,
+      });
+      await api.transitionTask(t.id, 'in_progress');
+      const { original, followUp } = await api.splitTask(t.id, finish, 'u, part 2');
+      expect(followUp.gcalEventId).toBeNull();
+      expect(!!original.gcalEventId).toBe(finish === 'done');
+    }
   });
 });
