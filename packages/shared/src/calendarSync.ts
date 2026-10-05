@@ -46,10 +46,12 @@ export function calendarSyncPlan(
   opts: { ensure?: boolean } = {},
 ): CalendarSyncAction {
   // Old settings rows read back undefined → on (the default).
+  // A removal already owed (it failed earlier) is carried out on the next sync whatever else holds —
+  // finished, or sync turned off since: the user asked for it while sync was on.
+  if (next.gcalEventId && isPendingRemoval(next.gcalSyncError) && !eventWindow(next, epoch))
+    return { kind: 'delete' };
   if (settings.autoCalendar === false) return NONE;
-  // A finished task syncs nothing — except a removal it still owes, which is honoured either way.
-  if (next.status === 'done' || next.status === 'cancelled')
-    return next.gcalEventId && isPendingRemoval(next.gcalSyncError) ? { kind: 'delete' } : NONE;
+  if (next.status === 'done' || next.status === 'cancelled') return NONE;
   const ensure = !!opts.ensure;
   const window = eventWindow(next, epoch);
   // `?? null` so an older row's undefined equals null (and an estimate of 0 stays distinct from none).
@@ -61,7 +63,7 @@ export function calendarSyncPlan(
     if (!window) {
       // Lost its time → the event it auto-synced goes. An untimed task with a manual event: gcal owns
       // that clock, so only a rename reaches it.
-      if (wasTimed || isPendingRemoval(next.gcalSyncError)) return { kind: 'delete' };
+      if (wasTimed) return { kind: 'delete' };
       return ensure || changed('title') ? { kind: 'patch', title: next.title } : NONE;
     }
     if (ensure || whenChanged || changed('estimateMin') || changed('title'))

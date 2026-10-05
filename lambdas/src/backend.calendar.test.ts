@@ -522,6 +522,18 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(g.events.size).toBe(1);
   });
 
+  it('an owed removal is still carried out on cancel after sync was turned off', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.markDead('A');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
+    await b.completeGoogleConnect('A');
+    await b.updateSettings({ autoCalendar: false });
+    const cancelled = await b.transitionTask(t.id, 'cancelled');
+    expect(cancelled).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+  });
+
   it('finishing a task clears its failure note', async () => {
     const { g, b } = await connected();
     g.markDead('A');

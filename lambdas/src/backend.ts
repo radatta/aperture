@@ -128,9 +128,9 @@ const unconfiguredPresigner: Presigner = {
 // behavior is identical to the stub by construction. The one thing SK order doesn't give for free is
 // the stub's explicit list sorts, so each list method re-applies them for byte-for-byte parity.
 // Calendar inserts in flight at once for a bulk create (createTasks), and how long — measured from the
-// call's start, so the task writes count — new ones may start for. Budget + one sync's worst case (SSM
-// read + token refresh + insert at GOOGLE_TIMEOUT_MS each, liveGoogle.ts, + two DDB writes) stays
-// inside the 15 s Lambda timeout.
+// call's start, so the task writes count — new ones may start for. Worst case: budget (3 s) + one
+// sync's two Google fetches at GOOGLE_TIMEOUT_MS each (token refresh + insert, liveGoogle.ts) = 11 s,
+// plus the uncapped-but-fast SSM token read and a few DynamoDB writes — inside the 15 s Lambda timeout.
 const SYNC_CONCURRENCY = 4;
 const BULK_SYNC_BUDGET_MS = 3_000;
 
@@ -514,15 +514,12 @@ export class BackendClient implements ApiClient {
       }
     };
     await Promise.all(Array.from({ length: SYNC_CONCURRENCY }, worker));
-    // The skipped rows were written moments ago and nothing else knows their ids yet — one batch write
-    // marks them all for Retry, not a read+write each.
-    if (skipped.length > 0) {
-      const note = gcalSyncMessage('create', 'not attempted — retry');
-      const marked = await this.repo.putTasks(
-        skipped.map((i) => ({ ...out[i]!, gcalSyncError: note, updatedAt: this.now() })),
-      );
-      skipped.forEach((i, k) => (out[i] = marked[k]!));
-    }
+    // Mark the skipped rows for Retry — in parallel, each onto a fresh read (putGcal): they've been
+    // listable since putTasks, so another device may have touched one meanwhile.
+    const note = gcalSyncMessage('create', 'not attempted — retry');
+    await Promise.all(
+      skipped.map(async (i) => (out[i] = await this.putGcal(out[i]!, { gcalSyncError: note }))),
+    );
     return out;
   }
   async setTaskEstimate(

@@ -123,8 +123,9 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   creates one (so an event you removed by hand isn't resurrected).
 - **Toggle off → nothing auto-syncs**: no create, patch or delete; existing events stay where they are.
   No backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
-  Not gated by it: delete-on-cancel (above), and a split moving a timed task's link to its follow-up
-  (no Google call — the pointer just moves).
+  Not gated by it: delete-on-cancel (above), a split moving a timed task's link to its follow-up (no
+  Google call — the pointer just moves), and an **owed removal** (below) — asked for while sync was on,
+  it's carried out on the next sync either way.
 - **One-way.** The task is the source of record; an event edited in Google is overwritten by the next
   task change. An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google
   keeps deleted events restorable) is treated as gone: the pointer is dropped and the event is not
@@ -150,7 +151,8 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 - **Bulk creates** sync timed rows four at a time (a Google round-trip each; settings read once) within a
   3 s budget measured from the call's start: no new Google call starts after it, or after the first
   failure (Google is likely down for all of them) — the remaining timed rows get a "not attempted — retry"
-  note in one batch write instead. The
+  note instead (each onto a fresh read). Worst case ≈ 3 s + one sync's two 4 s fetches = 11 s, plus a fast
+  SSM read and a few DynamoDB writes. The
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
 - **Split.** A **timed** task's event (the block before its deadline) moves with the deadline: the link
