@@ -367,8 +367,8 @@ largest line item in this project.
   last 7 days on macOS too, but "if there's no profile then the only thing that could expire is the
   signing identity's certificate"). Only the certificate's 2027-09-28 expiry — or its revocation — applies. Re-check if a
   future build adds a capability (App Groups, etc.) — that would embed a profile.
-- **Does the saved token survive a Safari rebuild?** Same bundle ID and team should keep the extension's
-  storage, but that's unverified — check after the first rebuild, and record it here.
+- ~~Does the saved token survive a Safari rebuild?~~ **Yes (2026-10-05)** — regenerating the prod project
+  with the same bundle ID and team kept the saved origin and token.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
   fallback, but neither has been run.
 - **No aggregate views.** No per-topic breakdown, no difficulty mix, no time-to-solve. V2, and per
