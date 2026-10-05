@@ -497,6 +497,31 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(made.some((t) => /not attempted/.test(t.gcalSyncError ?? ''))).toBe(true);
   });
 
+  it('finishing a task with an owed removal carries it out; if Google still fails the note stays', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.markDead('A');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null }); // remove fails → owed
+    await b.transitionTask(t.id, 'in_progress');
+    const stillDown = await b.transitionTask(t.id, 'done');
+    expect(stillDown.gcalEventId).toBe(t.gcalEventId);
+    expect(stillDown.gcalSyncError).toMatch(/^Couldn’t remove/); // not silently dropped
+    await b.completeGoogleConnect('A');
+    expect(await b.syncCalendarEvent(t.id)).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+  });
+
+  it('a split with an owed removal reports a failure instead of orphaning the event', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.markDead('A');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
+    const { original } = await b.splitTask(t.id, 'cancelled', 'x, part 2');
+    expect(original.gcalEventId).toBe(t.gcalEventId);
+    expect(original.gcalSyncError).toMatch(/^Couldn’t remove/);
+    expect(g.events.size).toBe(1);
+  });
+
   it('finishing a task clears its failure note', async () => {
     const { g, b } = await connected();
     g.markDead('A');

@@ -136,7 +136,9 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   still owed a removal (`isPendingRemoval`): the next sync of any kind — the retry, or just a rename —
   finishes it, never adopting the event as a manual one. The note clears on the next success, or once
   there's nothing to retry (no time + no event, sync off, or the task is done/cancelled — a finish clears
-  it directly). Unlike delete-on-cancel, the auto-sync remove does not swallow Google errors.
+  it directly). The exception is an **owed removal**: finishing (or splitting) the task carries it out
+  through the same reporting path, so it's never dropped. Unlike delete-on-cancel — still best-effort,
+  as is the cancel half of a split — the auto-sync remove does not swallow Google errors.
 - **Writes only the calendar fields, onto a fresh read** (`putGcal`) — the sync spans a Google round-trip,
   and a write that lands meanwhile (a session closing) must survive it.
 - **Every Google fetch has a 4 s timeout** (`LiveGoogle`), so one sync's worst case (token refresh +
@@ -146,14 +148,15 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 - **Timezone.** The Lambda is UTC, so it resolves `dueDay`+`dueTime` via `zonedEpoch(…, USER_TIME_ZONE)`
   (`America/Los_Angeles`, shared `dates.ts`; DST-correct); the browser uses `localEpochFromDayTime`.
 - **Bulk creates** sync timed rows four at a time (a Google round-trip each; settings read once) within a
-  5 s budget: no new Google call starts after it, or after the first failure (Google is likely down for
-  all of them) — the remaining timed rows are saved with a "not attempted — retry" note instead. The
+  3 s budget measured from the call's start: no new Google call starts after it, or after the first
+  failure (Google is likely down for all of them) — the remaining timed rows get a "not attempted — retry"
+  note in one batch write instead. The
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
 - **Split.** A **timed** task's event (the block before its deadline) moves with the deadline: the link
   goes to the follow-up, which renames/re-times it — no delete + re-create, no duplicate block. Any other
   linked event (a manual one; a record of work done) stays on the original: kept on done, removed on
-  cancel (or when a removal was already owed).
+  cancel (best-effort), and an owed removal is carried out (reporting) either way.
 
 ## Resilience (the Cognito model, per account)
 

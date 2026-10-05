@@ -81,6 +81,11 @@ describe('calendarSyncPlan', () => {
       calendarSyncPlan(linked(), linked({ dueDay: null, dueTime: null }), ON, epoch).kind,
     ).toBe('delete');
   });
+  it('a finished task still honours an owed removal', () => {
+    const owed = linked({ dueTime: null, gcalSyncError: gcalSyncMessage('delete', 'x') });
+    expect(calendarSyncPlan(owed, { ...owed, status: 'done' }, ON, epoch).kind).toBe('delete');
+    expect(calendarSyncPlan(owed, { ...owed, status: 'cancelled' }, ON, epoch).kind).toBe('delete');
+  });
   it('done and cancelled are left alone (cancel deletes elsewhere)', () => {
     expect(calendarSyncPlan(linked(), linked({ status: 'done', title: 'x' }), ON, epoch).kind).toBe(
       'none',

@@ -565,11 +565,14 @@ class StubClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
+    // Parity with the backend: a finish drops a failure note, but carries out an owed removal.
     const finished = to === 'done' || to === 'cancelled';
+    const owed = task.gcalEventId && isPendingRemoval(task.gcalSyncError);
     const next = this.writes.put(this.store.tasks, {
       ...taskTransition(task, to, this.now()),
-      ...(finished && task.gcalSyncError ? { gcalSyncError: null } : {}), // nothing left to retry
+      ...(finished && task.gcalSyncError && !owed ? { gcalSyncError: null } : {}),
     });
+    if (finished && owed) return this.syncCalendar(task, next);
     // Delete-on-cancel parity with the backend: dropping a task clears its calendar event pointers.
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
     return next;
@@ -592,13 +595,15 @@ class StubClient implements ApiClient {
       gcalEventId: task.gcalEventId,
     };
     const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
+    const owed = !timed && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
     let original = this.writes.put(this.store.tasks, {
       ...taskTransition(task, finishStatus, this.now()),
       ...(timed ? unlinked : {}),
-      gcalSyncError: null,
+      gcalSyncError: owed ? task.gcalSyncError : null,
     });
-    const owesRemoval = finishStatus === 'cancelled' || isPendingRemoval(task.gcalSyncError);
-    if (!timed && task.gcalEventId && owesRemoval) original = this.clearCalendarPointers(id);
+    if (owed) original = this.syncCalendar(task, original);
+    else if (!timed && task.gcalEventId && finishStatus === 'cancelled')
+      original = this.clearCalendarPointers(id);
     const followUp = this.syncCalendar(
       null,
       this.writes.insert(this.store.tasks, {

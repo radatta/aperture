@@ -127,11 +127,12 @@ const unconfiguredPresigner: Presigner = {
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
 // behavior is identical to the stub by construction. The one thing SK order doesn't give for free is
 // the stub's explicit list sorts, so each list method re-applies them for byte-for-byte parity.
-// Calendar inserts in flight at once for a bulk create (createTasks), and how long new ones may start
-// for: with GOOGLE_TIMEOUT_MS (liveGoogle.ts) per fetch, budget + one sync's worst case stays inside the
-// 15 s Lambda timeout.
+// Calendar inserts in flight at once for a bulk create (createTasks), and how long — measured from the
+// call's start, so the task writes count — new ones may start for. Budget + one sync's worst case (SSM
+// read + token refresh + insert at GOOGLE_TIMEOUT_MS each, liveGoogle.ts, + two DDB writes) stays
+// inside the 15 s Lambda timeout.
 const SYNC_CONCURRENCY = 4;
-const BULK_SYNC_BUDGET_MS = 5_000;
+const BULK_SYNC_BUDGET_MS = 3_000;
 
 export class BackendClient implements ApiClient {
   private readonly userId: string;
@@ -487,6 +488,7 @@ export class BackendClient implements ApiClient {
     if (inputs.length === 0) return [];
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
+    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     const saved = await this.repo.putTasks(tasks);
     if (!saved.some((t) => t.dueTime)) return saved;
     // Timed tasks get their events a few at a time, inside a time budget: the tasks are already saved,
@@ -494,9 +496,9 @@ export class BackendClient implements ApiClient {
     // new Google call starts after the budget, or once one has failed (Google is likely down for all
     // of them) — the rest are marked for Retry instead. Worst case: budget + one sync's timeouts.
     const settings = await this.ensureSettings();
-    const deadline = Date.now() + BULK_SYNC_BUDGET_MS;
     let tripped = false;
     const out = [...saved];
+    const skipped: number[] = [];
     let next = 0;
     const worker = async () => {
       while (next < out.length) {
@@ -504,9 +506,7 @@ export class BackendClient implements ApiClient {
         const task = out[i]!;
         if (!task.dueTime) continue;
         if (tripped || Date.now() > deadline) {
-          out[i] = await this.putGcal(task, {
-            gcalSyncError: gcalSyncMessage('create', 'not attempted — retry'),
-          });
+          skipped.push(i);
           continue;
         }
         out[i] = await this.syncCalendar(null, task, false, settings);
@@ -514,6 +514,15 @@ export class BackendClient implements ApiClient {
       }
     };
     await Promise.all(Array.from({ length: SYNC_CONCURRENCY }, worker));
+    // The skipped rows were written moments ago and nothing else knows their ids yet — one batch write
+    // marks them all for Retry, not a read+write each.
+    if (skipped.length > 0) {
+      const note = gcalSyncMessage('create', 'not attempted — retry');
+      const marked = await this.repo.putTasks(
+        skipped.map((i) => ({ ...out[i]!, gcalSyncError: note, updatedAt: this.now() })),
+      );
+      skipped.forEach((i, k) => (out[i] = marked[k]!));
+    }
     return out;
   }
   async setTaskEstimate(
@@ -552,12 +561,15 @@ export class BackendClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
-    // A finished task has nothing left to sync, so a failure note (and its Retry) goes with it.
+    // A finished task has nothing left to sync, so a failure note (and its Retry) goes with it — unless
+    // it's an owed removal, which the finish carries out (reporting, not swallowing, a failure).
     const finished = to === 'done' || to === 'cancelled';
+    const owed = task.gcalEventId && isPendingRemoval(task.gcalSyncError);
     const next = await this.repo.putTask({
       ...taskTransition(task, to, this.now()),
-      ...(finished && task.gcalSyncError ? { gcalSyncError: null } : {}),
+      ...(finished && task.gcalSyncError && !owed ? { gcalSyncError: null } : {}),
     });
+    if (finished && owed) return this.syncCalendar(task, next);
     // Delete-on-cancel: dropping a task removes its calendar event (via the owning account) and clears
     // the pointers. Guarded by gcalEventId, so tasks without an event are unaffected.
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
@@ -584,13 +596,17 @@ export class BackendClient implements ApiClient {
       gcalEventId: task.gcalEventId,
     };
     const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
+    const owed = !timed && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
     let original = await this.repo.putTask({
       ...taskTransition(task, finishStatus, this.now()),
       ...(timed ? unlinked : {}),
-      gcalSyncError: null,
+      gcalSyncError: owed ? task.gcalSyncError : null,
     });
-    const owesRemoval = finishStatus === 'cancelled' || isPendingRemoval(task.gcalSyncError);
-    if (!timed && task.gcalEventId && owesRemoval) original = await this.deleteCalendarEvent(id);
+    // An owed removal goes through the reporting sync path (a failure keeps the note); otherwise a
+    // cancel removes the event best-effort, exactly like delete-on-cancel.
+    if (owed) original = await this.syncCalendar(task, original);
+    else if (!timed && task.gcalEventId && finishStatus === 'cancelled')
+      original = await this.deleteCalendarEvent(id);
     const followUp = await this.syncCalendar(
       null,
       await this.repo.putTask({

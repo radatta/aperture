@@ -47,7 +47,9 @@ export function calendarSyncPlan(
 ): CalendarSyncAction {
   // Old settings rows read back undefined → on (the default).
   if (settings.autoCalendar === false) return NONE;
-  if (next.status === 'done' || next.status === 'cancelled') return NONE;
+  // A finished task syncs nothing — except a removal it still owes, which is honoured either way.
+  if (next.status === 'done' || next.status === 'cancelled')
+    return next.gcalEventId && isPendingRemoval(next.gcalSyncError) ? { kind: 'delete' } : NONE;
   const ensure = !!opts.ensure;
   const window = eventWindow(next, epoch);
   // `?? null` so an older row's undefined equals null (and an estimate of 0 stays distinct from none).
