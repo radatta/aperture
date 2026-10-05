@@ -5,6 +5,7 @@ import { setAuthToken, setReauthHandler } from '../auth/tokenStore';
 import { forgetStubBlobs } from '../data/attachmentTransport';
 import { resetInputModality } from '../lib/useDisclosure';
 import { forgetPlaidScript } from '../modules/finances/usePlaidLink';
+import { forgetAudio } from '../modules/pomodoro/chime';
 
 // Files share one jsdom and one module graph (isolate: false), so whatever a test leaves behind is the
 // next file's starting state. One hook, not several: after-hooks run in reverse, and the unmount (RTL
@@ -19,6 +20,7 @@ afterEach(() => {
   forgetStubBlobs();
   resetInputModality();
   forgetPlaidScript();
+  forgetAudio();
   localStorage.clear();
   sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');

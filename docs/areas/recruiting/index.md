@@ -105,7 +105,7 @@ storage — a different risk class from a JWT. A device token sent to any other 
 
 | Path | What |
 | --- | --- |
-| `extension/` | Firefox MV3 add-on. No deps, no bundler, no build step. `README.md` there is the wire contract. |
+| `extension/` | MV3 web extension — Safari daily (wrapped in an Xcode app), Firefox AMO-signed. No deps, no bundler, no build step. `README.md` there is the wire contract and the Safari build steps. |
 | `packages/shared/src/types.ts` | `LeetcodeAttempt`, `LeetcodeVerdict` |
 | `packages/shared/src/api.ts` | `RecordLeetcodeAttemptInput`, the two `ApiClient` methods |
 | `packages/shared/src/leetcode.ts` | `normalizeVerdict` — status_code first, status_msg fallback |
@@ -163,27 +163,53 @@ nothing on the other end. "Dev" here always means the deployed AWS stage, never 
 
 ### Three layers, each matched to its job
 
-**1. Daily driver — one signed extension, prod origin, your main Firefox profile.**
-This is the only one that needs to be permanent, and it genuinely does: a temporary add-on you forgot to
-re-load after a restart doesn't error, it just silently stops capturing. Same silent-failure family as
-the identity seam, and the reason signing is worth the one-time effort.
+Safari has been the daily browser since 2026-10-04; the Firefox install below is retained, not in use.
 
-**2. Stage validation — a temporary add-on in a SEPARATE Firefox profile, dev origin.**
-`about:profiles` → create a profile → load the add-on there from `about:debugging`. Separate profiles
-have separate extension storage, so there's no ID collision with the signed copy and no chance of your
-real practice landing in dev. This is where the four ingest checks get run.
+**1. Daily driver — the Safari prod app, prod origin, your personal Safari profile.**
+This is the only one that needs to be permanent, and it genuinely does: a temporary extension you forgot
+to re-load after a restart doesn't error, it just silently stops capturing. Same silent-failure family as
+the identity seam. Build: `extension/README.md` → *Build it for Safari*.
 
-**3. Extension code iteration — temporary add-on, no endpoint needed.** See *Testing* → "Extension
-against no live endpoint" (the log strings, and how the capture half was verified on 2026-08-09).
+**2. Stage validation — the Safari dev app (red icon), dev origin, an "Aperture Dev" Safari profile.**
+A second app with its own bundle ID (`…ApertureLeetCodeDev`), so its options are separate, and enabled
+only in that profile while prod is disabled there — exactly one capture path per profile, so real
+practice never lands in dev. Its Xcode project references `extension/` live, so picking up a code change
+is a rebuild plus the re-copy (README step 4). This is where the four ingest checks get run.
 
-### Loading a temporary add-on (layers 2 and 3)
+**3. Extension code iteration — the dev app, or a temporary extension, no endpoint needed.** See
+*Testing* → "Extension against no live endpoint" (the log strings, and how the capture half was verified
+on 2026-08-09).
 
-Steps, the Firefox 128+ requirement, and the options + host-permission setup: `extension/README.md` →
-*Load it in Firefox* + *Configure*. For layer 2, do it in a **separate Firefox profile** (above).
-Temporary add-ons don't survive a Firefox restart; re-add each time — acceptable for validation work,
-not for the daily driver.
+### Safari: free signing (layer 1 and 2)
 
-### Signing for permanent install (layer 1, one-time)
+**A free Apple ID Personal Team signature is enough** — built in Xcode, signed `Apple Development`,
+Safari lists and keeps it across quit and reboot with "Allow Unsigned Extensions" off (verified
+2026-10-04). This contradicts the earlier research, which assumed only a paid Developer ID gives a
+permanent install. Unsigned and "Add Temporary Extension" builds reset on quit (or after 24h) — fine for
+layer 3, never the daily driver.
+
+**The free certificate expires 2027-09-28.** What Safari does at expiry is unverified, and so is
+renewal: a rebuild before then likely re-signs with the same expiring certificate. Renew it in Xcode →
+Settings → Accounts → Manage Certificates (or rebuild after expiry), then rebuild both projects (README
+steps 2–4).
+
+The packager warns that `world` is unsupported — wrong: `world: "MAIN"` works in Safari 26 (capture
+verified end-to-end 2026-10-04). An extension that isn't enabled in the *current* profile just looks
+like a failed patch (`window.fetch` stays `[native code]`).
+
+### Loading a temporary extension (layer 3)
+
+Safari: Develop → **Add Temporary Extension…** → this repo's `extension/` folder (Safari 18.4+; the
+Develop menu needs Settings → Advanced → *Show features for web developers*). Firefox: steps and the
+128+ requirement in `extension/README.md` → *Load it in Firefox*. Options: README → *Configure*.
+Temporary extensions don't survive a restart; re-add each time — acceptable for iteration, not for the
+daily driver.
+
+### Firefox: signing via AMO (2026-09-08, retained)
+
+Firefox's layer 2 was a temporary add-on in a **separate Firefox profile** (`about:profiles` → create a
+profile → load it from `about:debugging`): separate profiles have separate extension storage, so there's
+no ID collision with the signed copy and no chance of real practice landing in dev.
 
 Firefox **Release and Beta enforce extension signatures and cannot be told not to** —
 `xpinstall.signatures.required` only takes effect on Developer Edition, Nightly, and ESR. So permanent
@@ -222,11 +248,14 @@ things.
 
 ### Why not two permanent installs (one per stage)
 
-Two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
+**Firefox:** two simultaneously-installed copies need two distinct `browser_specific_settings.gecko.id` values —
 the ID *is* the add-on's identity. That's two manifests, two names, two AMO submissions, and two signing
 rounds on every change, forever. And what it buys is two live capture paths, which is the opposite of
 what you want: real practice should land in exactly one stage. A separate profile gets the same
 isolation for free.
+
+**Safari does run two** — a second bundle ID costs one more free Xcode build and no review, and per-profile
+enabling still keeps exactly one capture path per profile.
 
 ### What ever invalidates the setup
 
@@ -241,7 +270,10 @@ third one is ongoing work, and only for these events:
 | Cognito pool replaced | new `sub` → update the GitHub var → redeploy. Data stack is `RETAIN`, so realistically never |
 | Origin changes | re-paste `apiOrigin` + re-grant the host permission. Not expected; the domains have been live since 2026-08 |
 | New browser / profile / machine | paste the token there — `storage.local` is per-profile |
-| Firefox restart (temporary add-on only) | re-add it. The signed install is unaffected |
+| Browser restart (temporary extension only) | re-add it. The installed apps / signed add-on are unaffected |
+| Free Apple certificate expiry (2027-09-28) | rebuild both Safari projects in Xcode, re-copy to `/Applications`, delete DerivedData |
+| Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |
+| Extension code change | rebuild per README → *Build it for Safari* (prod: re-copy files first; both: redo step 4) |
 
 Storage is keyed by extension ID, so the saved token should survive a temporary→signed transition with
 the ID unchanged. Worth confirming on the first signed install rather than assuming.
@@ -325,7 +357,18 @@ largest line item in this project.
 - **Dedup is a prefix scan.** `findLeetcodeBySubmissionId` reads the whole `lc#` prefix per ingest —
   same single-user tolerance as `findLog`/`findPlan`, flagged `TODO(scale)` in `repo.ts`. A
   `lcsub#<id>` pointer item makes it a direct read when volume justifies it.
-- ~~Not signed yet.~~ **Done 2026-09-08** (*Signing for permanent install* → Status); in daily use.
+- ~~Not signed yet.~~ **Done 2026-09-08** (*Firefox: signing via AMO* → Status). Superseded as the
+  daily driver by Safari on 2026-10-04 (*Safari: free signing*).
+- ~~Is the free build really permanent past 7 days?~~ **No 7-day clock (2026-10-04).** Free Personal Team
+  *provisioning profiles* expire after 7 days on iOS, but this build embeds none: no
+  `embedded.provisionprofile` in the app or the `.appex`, and the extension's entitlements are only
+  `app-sandbox`, `files.user-selected.read-only` and `get-task-allow` (`codesign -d --entitlements -`),
+  none of which needs a profile on macOS (Apple TN3125; Apple DTS on forum thread 705932: free profiles
+  last 7 days on macOS too, but "if there's no profile then the only thing that could expire is the
+  signing identity's certificate"). Only the certificate's 2027-09-28 expiry — or its revocation — applies. Re-check if a
+  future build adds a capability (App Groups, etc.) — that would embed a profile.
+- **Does the saved token survive a Safari rebuild?** Same bundle ID and team should keep the extension's
+  storage, but that's unverified — check after the first rebuild, and record it here.
 - **Chrome path untested.** `world: "MAIN"` is supported there since 111 and the code has a `chrome`
   fallback, but neither has been run.
 - **No aggregate views.** No per-topic breakdown, no difficulty mix, no time-to-solve. V2, and per
