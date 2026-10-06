@@ -344,6 +344,17 @@ describe('TaskEditor', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Buffer (min)').value).toBe('5');
   });
 
+  it('a task started then rolled back says its rest stays in the split family', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Rolled', estimateMin: 60 });
+    await client.transitionTask(t.id, 'in_progress');
+    t = await client.transitionTask(t.id, 'backlog'); // keeps its lock
+    const { user } = renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    expect(screen.queryByRole('button', { name: 'Done with this part' })).toBeNull();
+    expect(screen.getByText(/rest stays part of this task’s split family/)).toBeTruthy();
+  });
+
   it('splitting an unstarted task offers no Done and makes an independent task', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Reading', estimateMin: 60 });

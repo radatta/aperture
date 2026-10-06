@@ -46,7 +46,8 @@ export function remainingMin(task: Task): number {
 
 // Split prefills that never invent scope — the parts add up to the working estimate (null when nothing
 // was scoped), so any growth the user types is what "Both parts … · was …" shows. Done: the rest is
-// what's left. Keep: what's left is shared — half goes to the rest, the other half stays on this part.
+// what's left. Keep: what's left is shared — half goes to the rest, the other half stays on this part
+// (never below the time already logged).
 // The rest is floored so a part that ran over still gets a real number.
 export const SPLIT_TITLE_SUFFIX = ' (cont.)';
 export const SPLIT_MIN_REMAINDER = 5;
@@ -59,7 +60,8 @@ export function splitDefaults(
   const left = Math.max(0, task.estimateMin - task.actualAccruedMin);
   if (finish === 'done') return { thisPart: null, rest: Math.max(SPLIT_MIN_REMAINDER, left) };
   const rest = Math.max(SPLIT_MIN_REMAINDER, Math.round(left / 2));
-  return { thisPart: Math.max(0, task.estimateMin - rest), rest };
+  // Never below what's already logged — an overrun part's growth then shows in "Both parts … · was …".
+  return { thisPart: Math.max(Math.round(task.actualAccruedMin), task.estimateMin - rest), rest };
 }
 
 // Soonest-due-first HINT for the morning backlog pull: dated tasks ascending by dueDay — within a day,

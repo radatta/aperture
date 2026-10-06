@@ -85,8 +85,9 @@ describe('mcp tools — tasks', () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'pset', estimateMin: 30 })) as Task;
     await call('update_task', { id: t.id, status: 'in_progress' });
+    await call('update_task', { id: t.id, bufferMin: 10 }); // buffer alone keeps the estimate
     const out = (await call('update_task', { id: t.id, estimateMin: 90 })) as Task;
-    expect(out).toMatchObject({ estimateMin: 90, estimateLockedMin: 30 });
+    expect(out).toMatchObject({ estimateMin: 90, bufferMin: 10, estimateLockedMin: 30 }); // keeps the buffer
   });
 
   it('split_task: done needs actualMin and a started task; the rest lands linked', async () => {

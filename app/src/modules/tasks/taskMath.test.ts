@@ -86,6 +86,13 @@ describe('splitDefaults', () => {
     });
   });
 
+  it('keep never sets this part below the time already logged', () => {
+    expect(splitDefaults(task({ estimateMin: 60, actualAccruedMin: 80 }), 'keep')).toEqual({
+      thisPart: 80,
+      rest: SPLIT_MIN_REMAINDER,
+    });
+  });
+
   it('is null when nothing was scoped', () => {
     expect(splitDefaults(task({ estimateMin: null }), 'keep')).toEqual({ thisPart: null, rest: null });
   });

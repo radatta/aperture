@@ -347,6 +347,21 @@ export function runApiContract(
       expect(ids).not.toContain(b.id);
     });
 
+    it('tasks: a done split on a planned task shrinks its row to the actual and plans the rest', async () => {
+      const t = await api.createTask({ title: 'Pset', estimateMin: 60, bufferMin: 15 });
+      await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 75, order: 0 });
+      await api.transitionTask(t.id, 'planned');
+      await api.transitionTask(t.id, 'in_progress');
+      const { followUp } = await api.splitTask(t.id, {
+        finish: 'done',
+        actualMin: 40,
+        followUp: { title: 'Pset, rest', estimateMin: 35 },
+      });
+      const rows = await api.listPlansForDay('2026-08-04');
+      expect(rows.find((p) => p.taskId === t.id)?.plannedMinutes).toBe(40); // what the part took
+      expect(rows.find((p) => p.taskId === followUp.id)?.plannedMinutes).toBe(35);
+    });
+
     it('tasks: a backlog original with an old plan row splits its rest into the backlog', async () => {
       const t = await api.createTask({ title: 'Rolled back', estimateMin: 60 });
       await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 60, order: 0 });

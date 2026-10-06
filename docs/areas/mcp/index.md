@@ -80,7 +80,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   pollute the signature metric. It chains `→ in_progress → done` (freezing the calibration baseline) and **replaces**
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
 - **`update_task`** fan-out order is title → categoryId → due → notes → estimate → status; the estimate
-  (the working one) is editable until the task is done/cancelled, the calibration baseline frozen at start
+  (the working one) is editable until the task is done/cancelled — `estimateMin` or `bufferMin` alone keeps the
+  other (before 2026-10-06 an estimate-only call zeroed the buffer) — the calibration baseline frozen at start
   never moves, and a failing field's error names which fields already applied.
 - **`split_task {id, finish, actualMin?, title?, estimateMin?, bufferMin?, followUpTitle,
   followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md)) — "scope change =
@@ -302,7 +303,7 @@ the model as the only UI — so:
 - **Ids are the friction.** Anything keyed by id (categories today) costs the model an extra lookup call;
   a description that names the lookup tool is the minimum.
 - **Nothing is confirmed by eye.** Mishearing lands straight in prod, so destructive or calibration-feeding
-  tools (`delete_task`, `complete_task`) are the risky ones — prefer the claude.ai per-tool permission
+  tools (`delete_task`, `complete_task`, `split_task`) are the risky ones — prefer the claude.ai per-tool permission
   "ask" for those. A new destructive tool inherits this concern.
 - **Logic that only runs when the app opens doesn't run for voice** (the stale-planned lag above is the
   existing case).

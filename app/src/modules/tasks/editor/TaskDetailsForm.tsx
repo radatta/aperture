@@ -229,9 +229,11 @@ export function TaskDetailsForm({
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted">
                 Started at {fmtDuration(task.estimateLockedMin)}
-                {inSplitFamily
-                  ? ' — split, so it isn’t measured on its own.'
-                  : ' — calibration is measured against that.'}
+                {task.status === 'cancelled'
+                  ? '.' // dropped tasks never count toward calibration
+                  : inSplitFamily
+                    ? ' — split, so it isn’t measured on its own.'
+                    : ' — calibration is measured against that.'}
               </Text>
             )}
           </div>

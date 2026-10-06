@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { canTransitionTask } from '@aperture/shared';
+import { canTransitionTask, linksToFamily } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -102,8 +102,12 @@ export function SplitForm({
           ]}
         />
       ) : (
+        // No Done here (it isn't in progress). Whether the parts form a family follows the lock, not the
+        // status: a task started then rolled back to backlog keeps its lock, so its rest still links.
         <Text size="sm" tone="muted">
-          Not started yet — the parts get their own estimates.
+          {linksToFamily(task)
+            ? 'Started earlier — the rest stays part of this task’s split family.'
+            : 'Not started yet — the parts get their own estimates.'}
         </Text>
       )}
 

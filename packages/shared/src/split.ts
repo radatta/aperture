@@ -87,11 +87,12 @@ export function followUpPlanMinutes(estimateMin: number | null, bufferMin: numbe
   return (estimateMin ?? 0) + (bufferMin ?? 0) || ROLL_PLAN_FALLBACK_MIN;
 }
 
-// A kept-going original that was rescoped re-sizes its row on the landing day to the new estimate +
-// buffer, so the day's planned total covers the job once (its row + the follow-up's), not the old size on
-// top. Null → leave the row (a done part's row is history, like Mark done; an unrescoped one is as set).
+// The original's row on the landing day after a split, so the day's planned total counts the job once
+// (its row + the follow-up's) instead of the old size on top. Done: the part's actual — what it really
+// took. Keep, rescoped: the new estimate + buffer. Null → leave the row (a kept-going original whose
+// estimate didn't change is as planned).
 export function rescopedPlanMinutes(input: SplitTaskInput, original: Task): number | null {
-  if (input.finish !== 'keep') return null;
+  if (input.finish === 'done') return Math.round(original.actualAccruedMin);
   if (input.estimateMin === undefined && input.bufferMin === undefined) return null;
   return followUpPlanMinutes(original.estimateMin, original.bufferMin);
 }

@@ -27,7 +27,7 @@ All split and family rules live in one file, `packages/shared/src/split.ts`, whi
 **D2. A split never cancels.** The original either finishes (`finish: 'done'`, only for a started task; the UI and MCP require an actual) or keeps going (`'keep'`, optionally renamed or rescoped). The rest becomes a new task. Dropping the rest is plain Cancel, a separate action.
 
 - The new task carries the category, deadline (day and time), notes and `rollId`.
-- It lands on the original's latest plan day if the original is `planned`/`in_progress` (a plan row with estimate + buffer, or 30 when unscoped). Otherwise it goes to the backlog. A past plan day self-heals: `getDay(today)`'s stale sweep moves the task back to backlog. A kept-going original that was rescoped re-sizes its own row on that day to its new estimate + buffer (`rescopedPlanMinutes`), so the day's planned total counts the job once. A done part's row stays as it is, the same as with Mark done.
+- It lands on the original's latest plan day if the original is `planned`/`in_progress` (a plan row with estimate + buffer, or 30 when unscoped). Otherwise it goes to the backlog. A past plan day self-heals: `getDay(today)`'s stale sweep moves the task back to backlog. The original's own row on that day is re-sized so the day's planned total counts the job once (`rescopedPlanMinutes`): a done part's row becomes its actual (what it really took), and a kept-going original that was rescoped gets its new estimate + buffer.
 - `splitOriginal` validates the whole input before any write.
 
 **D3. The family link needs a frozen baseline upstream, and there's no `splitRootId`.** B gets `splitFromId = A` only if A has a lock or is itself linked (`linksToFamily`). So a task with linked children always has a lock that predates all of them, and piece 3 can trust that the root's lock covers the whole job. Splitting an unstarted task gives two independent tasks, each its own fresh estimate. The root is found by walking `splitFromId` (`splitRoot`/`splitFamily`). Every consumer already loads the full task list, so a stored root would only be a denormalisation with no GSI to justify it. If piece 3 needs `family#<root>` queries at scale, add it then.
@@ -58,9 +58,9 @@ Smaller build-time calls (file placement, write order, hint copy, focus, MCP str
 
 ## Surfaces
 
-- **Editor** (`TaskDetailsForm`): Estimate and Buffer render whenever the task is open. Once it's locked, a line reads "Started at 45m — calibration is measured against that." (a split-family member: "— split, so it isn't measured on its own"). Fields the user hasn't touched reseed when the task changes elsewhere, such as a split's rename or rescope. The section label is Scope, then Rescope, then Details.
+- **Editor** (`TaskDetailsForm`): Estimate and Buffer render whenever the task is open; the lock line, its split-family variant and the reseed-on-outside-change rule are in [task-editor.md](task-editor.md). The section label is Scope, then Rescope, then Details.
 - **Split form** (`SplitForm`, phone-width stack):
-  - a "Done with this part / Keep going" toggle (unstarted tasks: no toggle, keep only);
+  - a "Done with this part / Keep going" toggle, shown only for an in-progress task (otherwise keep only — the note says whether the rest joins a family, which follows the lock: a task started and rolled back to backlog still links);
   - **This part** (title, plus Actual or Estimate);
   - **Remaining → new task** (title "… (cont.)", estimate prefilled so the parts add up to the working estimate — done: what's left, keep: half of what's left, each floored at 5);
   - a landing hint plus "Both parts: … · was …".

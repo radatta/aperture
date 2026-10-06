@@ -109,7 +109,7 @@ async function callTool(params: unknown, ctx: ToolContext): Promise<ToolCallResu
     return { content: [{ type: 'text', text: data === undefined ? 'ok' : JSON.stringify(data) }] };
   } catch (e) {
     if (e instanceof RpcParamError) throw e; // → -32602 (the model sent bad args)
-    // Execution error (e.g. "estimate is frozen", "Not found") → isError so the model can self-correct.
+    // Execution error (e.g. "Not found", "Title is required") → isError so the model can self-correct.
     return {
       content: [{ type: 'text', text: e instanceof Error ? e.message : 'error' }],
       isError: true,

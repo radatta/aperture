@@ -120,11 +120,11 @@ describe('follow-up placement', () => {
 });
 
 describe('rescopedPlanMinutes', () => {
-  it('re-sizes only a kept-going, rescoped original', () => {
-    const t = task({ estimateMin: 30, bufferMin: 5 });
+  it('a done part takes its actual; a kept-going one its new size only when rescoped', () => {
+    const t = task({ estimateMin: 30, bufferMin: 5, actualAccruedMin: 40.4 });
     expect(rescopedPlanMinutes({ finish: 'keep', estimateMin: 30, followUp }, t)).toBe(35);
     expect(rescopedPlanMinutes({ finish: 'keep', followUp }, t)).toBeNull();
-    expect(rescopedPlanMinutes({ finish: 'done', estimateMin: 30, followUp }, t)).toBeNull();
+    expect(rescopedPlanMinutes({ finish: 'done', actualMin: 40, followUp }, t)).toBe(40);
   });
 });
 
