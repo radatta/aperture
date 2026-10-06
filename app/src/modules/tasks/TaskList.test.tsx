@@ -73,6 +73,7 @@ describe('/tasks lenses', () => {
 
     await user.click(screen.getByRole('button', { name: 'Remove filter: By category' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: /CSEN 146 · / })).toBeNull());
+    expect(screen.getByRole('button', { name: 'Filter' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'pset 2' })).toBeTruthy();
   });
 

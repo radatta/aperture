@@ -210,6 +210,7 @@ describe('applyQuery', () => {
     ]);
   });
 
+  // Guard: a flat preset mustn't leak into search, which always groups by place.
   it('a7 search on Week still groups by place', () => {
     const r = applyQuery(tasks, 'week', q({ text: 'pset' }, 'week'), c);
     expect(r.groups.map((g) => g.label)).toEqual(['Today', 'This week', 'Backlog']);
