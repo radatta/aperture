@@ -102,7 +102,7 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 - `git status`, `git diff`, `git log`, `git branch`, `git show`
 - `git switch -c` / `git checkout -b`, `git switch`, `git checkout <file>`
 - `git add`, `git commit`, `git stash`
-- `git push` **to a feature branch only** (sets upstream on first push)
+- `git push` **to a feature branch only** (sets upstream on first push) — moot in the container, whose GitHub token is read-only, so the user runs every push (_PR bodies_)
 - `git fetch`, `git rebase origin/main`, `git mv`
 - `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only at _Feature workflow_ → _Cleanup_
 
@@ -162,8 +162,8 @@ Phases:
 7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (_Claude behavior_, above), then re-run the gate. Then hand the user, run from the worktree path, `git push --force origin <branch>:dev` — the user runs it; Claude never pushes to `dev` (_Git workflow_). With it, a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist.
 9. **Dev feedback** — ask how dev testing went. Fixes go back through the gate (plus a review round if non-trivial), then back to dev. Repeat until the user gives the all-clear.
-10. **PR** — on the all-clear, hand over the push + `gh pr create` commands (_Git workflow_ → _PR bodies_). If the branch was already pushed and has since been rebased, the push is `git push --force-with-lease -u origin <branch>` — again the user's to run.
-11. **Cleanup** — once `gh pr view <branch>` shows it merged, confirm with the user, then: copy the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/`; `git worktree remove .claude/worktrees/<branch>`; hand the user `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse).
+10. **PR** — on the all-clear, hand over the push + `gh pr create` commands (_Git workflow_ → _PR bodies_). A later push to an open PR after a rebase (phase 8 pushes only to `dev`, so the first PR push never is one) is `git push --force-with-lease -u origin <branch>` — again the user's to run.
+11. **Cleanup** — once `gh pr view <branch>` shows it merged, confirm with the user, then: copy the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/`; from `/workspace`, `git worktree remove .claude/worktrees/<branch>`; hand the user `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse).
 
 Page-first still holds: a backend half usually follows a frontend that already passed its rounds, so the plan says which half this is, and the reviewer checks the lambda against the contract the stub set.
 

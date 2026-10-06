@@ -143,10 +143,11 @@ describe('unsaved-changes guard', () => {
     renderApp({ api, path: '/tasks' });
 
     await openAndEdit(user);
-    // Press and release on the dialog itself = a backdrop click (both, so a drag-out wouldn't count).
+    // Press and release on the dialog itself, off its box = a backdrop click (both, so a drag-out
+    // wouldn't count). jsdom's box is 0×0 at the origin, so (5,5) is outside it.
     const editorDialog = screen.getByRole('dialog', { name: 'Task: Editable' });
-    fireEvent.mouseDown(editorDialog);
-    fireEvent.click(editorDialog);
+    fireEvent.mouseDown(editorDialog, { clientX: 5, clientY: 5 });
+    fireEvent.click(editorDialog, { clientX: 5, clientY: 5 });
     await screen.findByRole('dialog', { name: /Discard unsaved changes/ });
 
     await user.click(screen.getByRole('button', { name: 'Keep editing' }));

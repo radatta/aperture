@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { cx } from '../../lib/cx';
 
 // The app's modal primitive — a native <dialog> driven by showModal(). The browser gives us the top
@@ -9,6 +9,14 @@ import { cx } from '../../lib/cx';
 // intercepted so the DOM and state never drift. Backdrop-click close is opt-in (`closeOnBackdrop`) —
 // off by default so a paste-heavy dialog (bulk add) can't be dismissed by a stray click; the task
 // editor turns it on and guards it behind an unsaved-changes confirm.
+// A backdrop press: on the <dialog> itself AND outside its box. The target test alone isn't enough —
+// the dialog's own padding is part of the element, so a tap in that gutter would close it.
+function onBackdrop(e: MouseEvent<HTMLDialogElement>) {
+  if (e.target !== e.currentTarget) return false;
+  const r = e.currentTarget.getBoundingClientRect();
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+}
+
 export interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -61,16 +69,13 @@ export function Modal({
         e.preventDefault(); // Escape → our close, so React state stays authoritative
         onClose();
       }}
-      onMouseDown={
-        closeOnBackdrop ? (e) => (pressedBackdrop.current = e.target === ref.current) : undefined
-      }
+      onMouseDown={closeOnBackdrop ? (e) => (pressedBackdrop.current = onBackdrop(e)) : undefined}
+      // Require the press to have landed on the backdrop too (see pressedBackdrop) so a drag-out
+      // release doesn't dismiss.
       onClick={
         closeOnBackdrop
           ? (e) => {
-              // A click whose target is the <dialog> itself is the backdrop — content sits in inner
-              // elements, so their clicks have a different target. Require the press to have landed
-              // there too (see pressedBackdrop) so a drag-out release doesn't dismiss.
-              if (e.target === ref.current && pressedBackdrop.current) onClose();
+              if (pressedBackdrop.current && onBackdrop(e)) onClose();
             }
           : undefined
       }
