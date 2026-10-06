@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Ref } from 'react';
 import { canEditEstimate, fmtClock12, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -63,9 +63,11 @@ export function TaskDetailsForm({
   const [dueTime, setDueTime] = useState<string>(task.dueTime ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
-  // A change that lands from elsewhere — a split's rename/rescope, another device, the MCP — reseeds
-  // every field the user hasn't touched (still showing the previous value); edits in progress stay. Done
-  // during render (React's "adjust state on prop change"), so nothing flashes dirty for a frame.
+  // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
+  // Google), another device, the MCP — reseeds every field the user hasn't touched (still showing the
+  // previous value); edits in progress stay, so a Save can't write stale values back over the change.
+  // Due day + time reseed as a pair: never your time on the other side's day. Done during render
+  // (React's "adjust state on prop change"), so nothing flashes dirty for a frame.
   const [prevTask, setPrevTask] = useState(task);
   if (prevTask !== task) {
     setPrevTask(task);
@@ -79,8 +81,11 @@ export function TaskDetailsForm({
     );
     reseed(setBuffer, prevTask.bufferMin?.toString() ?? '', task.bufferMin?.toString() ?? '');
     reseed(setCategoryId, prevTask.categoryId ?? '', task.categoryId ?? '');
-    reseed(setDueDay_, prevTask.dueDay ?? '', task.dueDay ?? '');
-    reseed(setDueTime, prevTask.dueTime ?? '', task.dueTime ?? '');
+    if (dueDay === (prevTask.dueDay ?? '') && dueTime === (prevTask.dueTime ?? '')) {
+      setDueDay_(task.dueDay ?? '');
+      setDueTime(task.dueTime ?? '');
+    }
+    reseed(setNotes_, prevTask.notes ?? '', task.notes ?? '');
   }
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);
@@ -110,32 +115,9 @@ export function TaskDetailsForm({
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
   const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes };
   const current = useRef(fields);
-  // A layout effect, so the refill below (also one, declared after) reads this render's drafts.
-  useLayoutEffect(() => {
+  useEffect(() => {
     current.current = fields;
   });
-
-  // The task can change under an open editor — a calendar pull on foreground (an edit made in Google),
-  // another device. Refill every field still showing what it was filled from, so the form never goes
-  // dirty on its own and a Save can't write stale values back over the change; a field being edited
-  // keeps its draft. Due day + time refill as a pair (never your time on Google's day). A layout effect,
-  // so the stale values never paint as "Unsaved changes" for a frame.
-  const filledFrom = useRef(fieldsOf(task));
-  useLayoutEffect(() => {
-    const was = filledFrom.current;
-    const next = fieldsOf(task);
-    filledFrom.current = next;
-    const now = current.current;
-    if (now.title === was.title) setTitle_(next.title);
-    if (now.estimate === was.estimate) setEstimate_(next.estimate);
-    if (now.buffer === was.buffer) setBuffer(next.buffer);
-    if (now.categoryId === was.categoryId) setCategoryId(next.categoryId);
-    if (now.dueDay === was.dueDay && now.dueTime === was.dueTime) {
-      setDueDay_(next.dueDay);
-      setDueTime(next.dueTime);
-    }
-    if (now.notes === was.notes) setNotes_(next.notes);
-  }, [task]);
 
   // Writes what changed, in order, then reseeds each field from the task the last write returned (so
   // "030" reads back as "30") and shows the rendered note again — but only fields the user hasn't
@@ -343,17 +325,4 @@ export function TaskDetailsForm({
       </div>
     </section>
   );
-}
-
-// A task's values as the form's string fields hold them.
-function fieldsOf(t: Task) {
-  return {
-    title: t.title,
-    estimate: t.estimateMin?.toString() ?? '',
-    buffer: t.bufferMin?.toString() ?? '',
-    categoryId: t.categoryId ?? '',
-    dueDay: t.dueDay ?? '',
-    dueTime: t.dueTime ?? '',
-    notes: t.notes ?? '',
-  };
 }

@@ -130,8 +130,9 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 
 - **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
   creates one (so an event you removed by hand isn't resurrected).
-- **Toggle off → nothing auto-syncs**: no create, patch or delete; existing events stay where they are.
-  No backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
+- **Toggle off → nothing auto-syncs**, in either direction: no create, patch or delete, and no pull;
+  existing events stay where they are. No backfill when it's turned back on (an edit made meanwhile
+  reaches Google with the next change — Two-way sync). Needs a write default (the toggle is disabled without one).
   Not gated by it: delete-on-cancel (above), a done split moving a timed task's link to its follow-up
   (no Google call — the pointer just moves), and an **owed removal** (below) — asked for while sync was on,
   it's carried out on the next sync either way.

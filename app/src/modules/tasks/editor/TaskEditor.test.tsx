@@ -8,7 +8,6 @@ import { createStubClient } from '../../../data/stubClient';
 import { TaskDetailsForm } from './TaskDetailsForm';
 import { TaskEditor } from './TaskEditor';
 import type { TaskEditorIntent } from './TaskEditor';
-import { TaskDetailsForm } from './TaskDetailsForm';
 
 function api(): ApiClient {
   return createStubClient({ seed: false, storageKey: `editor-${Math.random()}` });

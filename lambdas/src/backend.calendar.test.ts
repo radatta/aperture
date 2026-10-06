@@ -459,7 +459,12 @@ describe('calendar auto-sync (timed tasks)', () => {
 
   it('a done split re-times the moved event to the follow-up’s estimate', async () => {
     const { g, b } = await connected();
-    const t = await b.createTask({ title: 'x', estimateMin: 30, dueDay: '2026-10-09', dueTime: '16:00' });
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
     await b.transitionTask(t.id, 'in_progress');
     await b.splitTask(t.id, {
       finish: 'done',
@@ -993,7 +998,10 @@ describe('calendar pull (two-way sync)', () => {
       g.patchEvent = realPatch;
       throw new Error('timeout'); // the follow-up's rename fails
     };
-    const { followUp } = await b.splitTask(t.id, 'done', 'pset part 2');
+    const { followUp } = await b.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 'pset part 2', estimateMin: 60 },
+    });
     expect(followUp).toMatchObject({ gcalEventId: t.gcalEventId, gcalSeen: { title: 'pset' } });
     tick(1_000);
     g.editEvent(t.gcalEventId!, {
