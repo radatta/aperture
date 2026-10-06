@@ -37,6 +37,29 @@ describe('TaskCard', () => {
     expect(await screen.findByRole('dialog', { name: 'Task: Plain' })).toBeTruthy();
   });
 
+  it('a title tap focuses the dialog, not a field — no iPhone keyboard on a read', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Just looking' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await openEditor(user, 'Just looking', 'Backlog');
+    const dialog = screen.getByRole('dialog', { name: 'Task: Just looking' });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+  });
+
+  it('Scope still opens on the Estimate field', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Needs scoping' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    await user.click(await screen.findByRole('button', { name: 'Scope' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Needs scoping' }));
+    await waitFor(() => expect(document.activeElement).toBe(d.getByLabelText('Estimate (min)')));
+  });
+
   it('shows Scope only while the task is unscoped', async () => {
     const api = freshApi();
     await api.createTask({ title: 'Unscoped' });

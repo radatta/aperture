@@ -7,8 +7,10 @@ import { TaskEditor } from './editor/TaskEditor';
 import type { TaskEditorIntent } from './editor/TaskEditor';
 
 // Wraps the Modal primitive around the task editor. Owns three things the editor body shouldn't:
-//   - the field-focus for finish/scope intents (effect lives HERE, a parent of Modal, so it runs
-//     AFTER Modal's showModal() — child effects fire first, the ordering BulkAddDialog relies on);
+//   - initial focus: the dialog itself (initialFocus="dialog"), so a title tap focuses no field and
+//     raises no iPhone keyboard; finish/scope then move it to Actual/Estimate (effect lives HERE, a
+//     parent of Modal, so it runs AFTER Modal's showModal() — child effects fire first, the ordering
+//     BulkAddDialog relies on);
 //   - the unsaved-changes guard: Esc / backdrop / Close all route through `requestClose`, which pops a
 //     confirm dialog when the details form is dirty. Mark done and Drop call `onClose` directly
 //     (nothing unsaved), so they never prompt; Delete closes via TaskModalHost once the task leaves
@@ -47,7 +49,13 @@ export function TaskModal({
 
   return (
     <>
-      <Modal open={open} onClose={requestClose} closeOnBackdrop label={`Task: ${task.title}`}>
+      <Modal
+        open={open}
+        onClose={requestClose}
+        closeOnBackdrop
+        initialFocus="dialog"
+        label={`Task: ${task.title}`}
+      >
         {open && (
           <TaskEditor
             task={task}
@@ -62,7 +70,11 @@ export function TaskModal({
       </Modal>
 
       {/* Stacks on top of the editor (a second native dialog → higher in the top layer). */}
-      <Modal open={confirming} onClose={() => setConfirming(false)} label="Discard unsaved changes?">
+      <Modal
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        label="Discard unsaved changes?"
+      >
         <div className="flex flex-col gap-3">
           <Text as="h2" size="lg" weight="semibold">
             Discard changes?

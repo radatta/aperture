@@ -14,10 +14,21 @@ export interface ModalProps {
   onClose: () => void;
   label: string; // aria-label for the dialog
   closeOnBackdrop?: boolean;
+  // Where focus starts. 'content' (default): the browser's first focusable element, or a
+  // `data-autofocus` child. 'dialog': the dialog itself, for a surface opened to read — a focused
+  // field raises the on-screen keyboard on iOS.
+  initialFocus?: 'content' | 'dialog';
   children: ReactNode;
 }
 
-export function Modal({ open, onClose, label, closeOnBackdrop = false, children }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  label,
+  closeOnBackdrop = false,
+  initialFocus = 'content',
+  children,
+}: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
   // Backdrop close fires only when BOTH the press and the release land on the dialog itself — so a
   // text selection that starts inside a field and drags out to release on the backdrop never closes.
@@ -27,17 +38,25 @@ export function Modal({ open, onClose, label, closeOnBackdrop = false, children 
     const el = ref.current;
     if (!el) return;
     if (open && !el.open) {
+      // `autofocus` on the dialog itself makes showModal() focus the dialog and never a field inside
+      // it. Set imperatively: React drops autoFocus on a <dialog>.
+      el.toggleAttribute('autofocus', initialFocus === 'dialog');
       el.showModal();
+      // Engines predating that step focus the first field anyway; move it back to the dialog.
+      if (initialFocus === 'dialog') el.focus();
       // The browser focuses the first focusable element; a dialog can name a better start instead
       // (e.g. the checked option of a radio group) with `data-autofocus`.
-      el.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+      else el.querySelector<HTMLElement>('[data-autofocus]')?.focus();
     } else if (!open && el.open) el.close();
-  }, [open]);
+  }, [open, initialFocus]);
 
   return (
     <dialog
       ref={ref}
       aria-label={label}
+      // Focusable as a container for initialFocus='dialog'; no ring on it, as with the app's other
+      // tabIndex={-1} containers — the first Tab draws it on the first field.
+      tabIndex={initialFocus === 'dialog' ? -1 : undefined}
       onCancel={(e) => {
         e.preventDefault(); // Escape → our close, so React state stays authoritative
         onClose();
@@ -63,6 +82,7 @@ export function Modal({ open, onClose, label, closeOnBackdrop = false, children 
         'm-auto w-[min(100vw-2rem,42rem)] max-h-[85dvh] overflow-auto overscroll-contain rounded-2xl',
         'border border-line bg-panel p-5 text-ink shadow-xl',
         'backdrop:bg-ink/40',
+        initialFocus === 'dialog' && 'outline-none',
       )}
     >
       {children}

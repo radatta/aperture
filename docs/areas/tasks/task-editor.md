@@ -61,7 +61,9 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - **Done opens the modal in a finish intent** (actual-minutes capture, `DoneForm` reused) focused on
   the Actual field. Scope opens it focused on Estimate. `TaskModal` owns that focus effect — it sits a
   parent above `Modal`, so its effect runs *after* `showModal()` (child effects fire first), the same
-  ordering `BulkAddDialog` relies on.
+  ordering `BulkAddDialog` relies on. A title tap (`view`) leaves focus on the dialog itself
+  (`Modal`'s `initialFocus="dialog"`, 2026-10-06): the browser default focused the Title field, which
+  raised the iPhone keyboard over a task opened only to read.
 - **Drop and Delete moved into the modal.** Drop gained a confirm strip (`DropConfirm`) it didn't have
   as a menu item — `cancelled` is terminal and it sits next to Delete, so a misclick is costly. All
   gates are the card's, moved verbatim: Drop only when `canScope`; Delete hidden when `seriesId !==
