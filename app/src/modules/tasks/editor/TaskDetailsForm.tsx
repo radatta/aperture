@@ -64,21 +64,24 @@ export function TaskDetailsForm({
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
   // A change that lands from elsewhere — a split's rename/rescope, another device, the MCP — reseeds
-  // every field the user hasn't touched (still showing the previous value); edits in progress stay.
-  const prevTask = useRef(task);
-  useEffect(() => {
-    const prev = prevTask.current;
-    prevTask.current = task;
-    if (prev === task) return;
+  // every field the user hasn't touched (still showing the previous value); edits in progress stay. Done
+  // during render (React's "adjust state on prop change"), so nothing flashes dirty for a frame.
+  const [prevTask, setPrevTask] = useState(task);
+  if (prevTask !== task) {
+    setPrevTask(task);
     const reseed = (set: (f: (v: string) => string) => void, was: string, now: string) =>
       set((v) => (v === was ? now : v));
-    reseed(setTitle_, prev.title, task.title);
-    reseed(setEstimate_, prev.estimateMin?.toString() ?? '', task.estimateMin?.toString() ?? '');
-    reseed(setBuffer, prev.bufferMin?.toString() ?? '', task.bufferMin?.toString() ?? '');
-    reseed(setCategoryId, prev.categoryId ?? '', task.categoryId ?? '');
-    reseed(setDueDay_, prev.dueDay ?? '', task.dueDay ?? '');
-    reseed(setDueTime, prev.dueTime ?? '', task.dueTime ?? '');
-  }, [task]);
+    reseed(setTitle_, prevTask.title, task.title);
+    reseed(
+      setEstimate_,
+      prevTask.estimateMin?.toString() ?? '',
+      task.estimateMin?.toString() ?? '',
+    );
+    reseed(setBuffer, prevTask.bufferMin?.toString() ?? '', task.bufferMin?.toString() ?? '');
+    reseed(setCategoryId, prevTask.categoryId ?? '', task.categoryId ?? '');
+    reseed(setDueDay_, prevTask.dueDay ?? '', task.dueDay ?? '');
+    reseed(setDueTime, prevTask.dueTime ?? '', task.dueTime ?? '');
+  }
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);

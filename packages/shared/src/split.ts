@@ -87,6 +87,15 @@ export function followUpPlanMinutes(estimateMin: number | null, bufferMin: numbe
   return (estimateMin ?? 0) + (bufferMin ?? 0) || ROLL_PLAN_FALLBACK_MIN;
 }
 
+// A kept-going original that was rescoped re-sizes its row on the landing day to the new estimate +
+// buffer, so the day's planned total covers the job once (its row + the follow-up's), not the old size on
+// top. Null → leave the row (a done part's row is history, like Mark done; an unrescoped one is as set).
+export function rescopedPlanMinutes(input: SplitTaskInput, original: Task): number | null {
+  if (input.finish !== 'keep') return null;
+  if (input.estimateMin === undefined && input.bufferMin === undefined) return null;
+  return followUpPlanMinutes(original.estimateMin, original.bufferMin);
+}
+
 // The original's half: validates the whole input (throws before any write), then applies the edits
 // (title, estimate, actual) and the finish. Calendar pointers are the caller's — they depend on the event.
 export function splitOriginal(task: Task, input: SplitTaskInput, now: number): Task {

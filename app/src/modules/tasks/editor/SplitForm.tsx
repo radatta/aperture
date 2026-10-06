@@ -38,11 +38,15 @@ export function SplitForm({
   );
   const [estimate, setEstimate] = useState(str(splitDefaults(task, 'keep').thisPart));
   const [restTitle, setRestTitle] = useState(`${task.title}${SPLIT_TITLE_SUFFIX}`);
-  const [restEstimate, setRestEstimate] = useState(str(splitDefaults(task, finish).rest));
+  const [restEstimate, setRestEstimate_] = useState(str(splitDefaults(task, finish).rest));
+  const [restTyped, setRestTyped] = useState(false);
+  const setRestEstimate = (v: string) => {
+    setRestEstimate_(v);
+    setRestTyped(true);
+  };
   // Switching mode re-defaults the rest's estimate — unless the user already typed their own.
   const setFinish = (next: Finish) => {
-    if (restEstimate === str(splitDefaults(task, finish).rest))
-      setRestEstimate(str(splitDefaults(task, next).rest));
+    if (!restTyped) setRestEstimate_(str(splitDefaults(task, next).rest));
     setFinish_(next);
   };
 
@@ -56,8 +60,8 @@ export function SplitForm({
   // The two parts' total vs the original working estimate — the size of the rescope, at a glance.
   const thisPart = done ? minutes(actual) : minutes(estimate);
   const rest = minutes(restEstimate);
-  const total = thisPart != null && rest != null ? thisPart + rest : null;
   const numbersOk = valid(actual) && valid(estimate) && valid(restEstimate);
+  const total = numbersOk && thisPart != null && rest != null ? thisPart + rest : null;
   const canSubmit =
     !!title.trim() && !!restTitle.trim() && (!done || actual.trim() !== '') && numbersOk;
 
@@ -168,6 +172,11 @@ export function SplitForm({
         </Text>
       </div>
 
+      {!numbersOk && (
+        <Text size="xs" tone="danger">
+          Minutes can&apos;t be negative.
+        </Text>
+      )}
       <div className="flex gap-2">
         {/* aria-disabled while pending (like the details Save): a keyboard user who pressed Split keeps
             focus on it, rather than dropping to <body> if the split fails. Invalid input really disables. */}
@@ -184,11 +193,6 @@ export function SplitForm({
           Cancel
         </Button>
       </div>
-      {!numbersOk && (
-        <Text size="xs" tone="danger">
-          Minutes can&apos;t be negative.
-        </Text>
-      )}
       {split.isError && (
         <div role="alert">
           <Text size="xs" tone="danger">

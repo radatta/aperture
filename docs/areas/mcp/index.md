@@ -77,7 +77,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
 - **`complete_task` requires `actualMin`** — completing feeds calibration, and a 0-actual completion would
-  pollute the signature metric. It chains `→ in_progress → done` (freezing the estimate) and **replaces**
+  pollute the signature metric. It chains `→ in_progress → done` (freezing the calibration baseline) and **replaces**
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
 - **`update_task`** fan-out order is title → categoryId → due → notes → estimate → status; the estimate
   (the working one) is editable until the task is done/cancelled, the calibration baseline frozen at start

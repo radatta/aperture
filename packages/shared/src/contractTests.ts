@@ -291,8 +291,13 @@ export function runApiContract(
         estimateLockedMin: 90,
       });
       expect(followUp).toMatchObject({ status: 'planned', splitFromId: t.id, bufferMin: 5 });
-      const row = (await api.listPlansForDay('2026-08-04')).find((p) => p.taskId === followUp.id);
-      expect(row).toMatchObject({ plannedMinutes: 35, order: 1 });
+      const rows = await api.listPlansForDay('2026-08-04');
+      expect(rows.find((p) => p.taskId === followUp.id)).toMatchObject({
+        plannedMinutes: 35,
+        order: 1,
+      });
+      // The rescoped original's row shrinks to its new size, so the day counts the job once.
+      expect(rows.find((p) => p.taskId === t.id)?.plannedMinutes).toBe(45);
     });
 
     it('tasks: splitting an unstarted task makes two independent tasks, both calibrated alone', async () => {

@@ -58,6 +58,7 @@ import {
   followUpPlanMinutes,
   calibrationTasks,
   splitFollowUp,
+  rescopedPlanMinutes,
   splitOriginal,
   stalePlannedMoves,
   taskTransition,
@@ -621,14 +622,20 @@ class StubClient implements ApiClient {
           }
         : {}),
     });
-    if (day !== null)
+    if (day !== null) {
+      const dayPlans = this.alive(this.store.plans).filter((p) => p.day === day);
+      const own = dayPlans.find((p) => p.taskId === id);
+      const resized = rescopedPlanMinutes(input, original);
+      if (own && resized !== null && resized !== own.plannedMinutes)
+        this.writes.patch(this.store.plans, own.id, { plannedMinutes: resized });
       this.writes.insert(this.store.plans, {
         ...this.base(),
         taskId: created.id,
         day,
         plannedMinutes: followUpPlanMinutes(fields.estimateMin, fields.bufferMin),
-        order: this.alive(this.store.plans).filter((p) => p.day === day).length,
+        order: dayPlans.length,
       });
+    }
     return { original, followUp: this.syncCalendar(null, created) };
   }
   async deleteTask(id: string): Promise<void> {

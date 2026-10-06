@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  calibrationTasks,
   followUpPlanDay,
   followUpPlanMinutes,
   inSplitFamily,
   isCalibrationPoint,
   linksToFamily,
+  rescopedPlanMinutes,
   splitFamily,
   splitFollowUp,
   splitOriginal,
@@ -86,6 +88,16 @@ describe('family walks', () => {
     expect(isCalibrationPoint(lone, all)).toBe(true);
   });
 
+  it('calibrationTasks is isCalibrationPoint over the list, in one pass', () => {
+    const legacy = task({ id: 'old', status: 'done' });
+    delete (legacy as { splitFromId?: unknown }).splitFromId;
+    const list = [...all, legacy, task({ id: 'open' })];
+    expect(calibrationTasks(list).map((t) => t.id)).toEqual(
+      list.filter((t) => isCalibrationPoint(t, list)).map((t) => t.id),
+    );
+    expect(calibrationTasks(list).map((t) => t.id)).toEqual(['x', 'old']);
+  });
+
   it('reads a pre-splitFromId row (undefined) as unlinked', () => {
     const legacy = task({ id: 'old', status: 'done' });
     delete (legacy as { splitFromId?: unknown }).splitFromId;
@@ -104,6 +116,15 @@ describe('follow-up placement', () => {
   it('plans estimate + buffer, else the fallback', () => {
     expect(followUpPlanMinutes(40, 5)).toBe(45);
     expect(followUpPlanMinutes(null, null)).toBe(ROLL_PLAN_FALLBACK_MIN);
+  });
+});
+
+describe('rescopedPlanMinutes', () => {
+  it('re-sizes only a kept-going, rescoped original', () => {
+    const t = task({ estimateMin: 30, bufferMin: 5 });
+    expect(rescopedPlanMinutes({ finish: 'keep', estimateMin: 30, followUp }, t)).toBe(35);
+    expect(rescopedPlanMinutes({ finish: 'keep', followUp }, t)).toBeNull();
+    expect(rescopedPlanMinutes({ finish: 'done', estimateMin: 30, followUp }, t)).toBeNull();
   });
 });
 

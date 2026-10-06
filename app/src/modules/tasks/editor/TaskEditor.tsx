@@ -71,7 +71,8 @@ export function TaskEditor({
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
   const autoCalendar = settings?.autoCalendar !== false && !!settings?.calendarWriteDefault;
-  const { data: allTasks = [], isSuccess: tasksLoaded } = useAllTasks();
+  const { data: tasksData } = useAllTasks();
+  const allTasks = tasksData ?? [];
   const [reveal, setReveal] = useState<Reveal>(null);
   // Closing the split reveal (Cancel, or a kept-going split) puts focus back on its opener, never <body>.
   const splitRef = useRef<HTMLButtonElement>(null);
@@ -101,9 +102,10 @@ export function TaskEditor({
   const showRemaining = inProgress && hasEstimate;
   const showLocked = task.estimateLockedMin != null;
   // A split family member isn't measured alone — its lock covers the whole job (split.ts). Needs the
-  // full list to know: until it loads, a family root would look like a lone task.
+  // full list to know: until it loads, a family root would look like a lone task. (Keyed on data, not
+  // isSuccess — a failed background refetch keeps the list.)
   const inFamily = inSplitFamily(task, allTasks);
-  const showDelta = tasksLoaded && isCalibrationPoint(task, allTasks);
+  const showDelta = tasksData !== undefined && isCalibrationPoint(task, allTasks);
   const splitFrom = task.splitFromId ? allTasks.find((t) => t.id === task.splitFromId) : undefined;
   const splitInto = splitChildren(allTasks, task.id);
   const timeHasContent =

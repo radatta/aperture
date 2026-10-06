@@ -30,6 +30,7 @@ import {
   followUpPlanMinutes,
   calibrationTasks,
   splitFollowUp,
+  rescopedPlanMinutes,
   splitOriginal,
   stalePlannedMoves,
   taskTransition,
@@ -622,14 +623,20 @@ export class BackendClient implements ApiClient {
           }
         : {}),
     });
-    if (day !== null)
+    if (day !== null) {
+      const dayPlans = await this.repo.listPlans(day);
+      const own = dayPlans.find((p) => p.taskId === id);
+      const resized = rescopedPlanMinutes(input, original);
+      if (own && resized !== null && resized !== own.plannedMinutes)
+        await this.repo.putPlan({ ...own, plannedMinutes: resized, updatedAt: this.now() }, own);
       await this.repo.putPlan({
         ...this.base(),
         taskId: created.id,
         day,
         plannedMinutes: followUpPlanMinutes(fields.estimateMin, fields.bufferMin),
-        order: (await this.repo.listPlans(day)).length,
+        order: dayPlans.length,
       });
+    }
     return { original, followUp: await this.syncCalendar(null, created) };
   }
   async deleteTask(id: string): Promise<void> {

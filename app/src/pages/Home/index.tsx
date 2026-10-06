@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dayKey, isCalibrationPoint, todayKey } from '@aperture/shared';
+import { calibrationTasks, dayKey, todayKey } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
@@ -213,11 +213,9 @@ function ReviewCard({ today }: { today: string }) {
   const { data: entries = [] } = useLog(today);
   const { data: tasks = [] } = useAllTasks();
   const recent = entries.slice(-3).reverse();
-  const doneToday = tasks.filter(
-    (t) =>
-      isCalibrationPoint(t, tasks) && // done + locked, outside a split family (split.ts)
-      t.completedAt != null &&
-      dayKey(t.completedAt, start) === today,
+  // Done + locked, outside a split family (split.ts) — the calibration rule, in one pass.
+  const doneToday = calibrationTasks(tasks).filter(
+    (t) => t.completedAt != null && dayKey(t.completedAt, start) === today,
   );
 
   return (
