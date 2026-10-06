@@ -267,7 +267,8 @@ export class LiveGoogle implements GoogleGateway {
     const timeMin = new Date(Date.now() - FULL_SYNC_LOOKBACK_MS).toISOString();
     let pageToken: string | undefined;
     for (;;) {
-      if (Date.now() > input.deadlineMs) throw new PullIncompleteError();
+      const left = input.deadlineMs - Date.now();
+      if (left <= 0) throw new PullIncompleteError();
       const q = new URLSearchParams({
         singleEvents: 'false',
         showDeleted: 'true',
@@ -276,11 +277,16 @@ export class LiveGoogle implements GoogleGateway {
       if (syncToken) q.set('syncToken', syncToken);
       else q.set('timeMin', timeMin);
       if (pageToken) q.set('pageToken', pageToken);
+      // Each page gets what's left of the budget (at most the usual per-call cap).
       const res = await this.api(
         input.sub,
         `/calendars/${encodeURIComponent(input.calendarId)}/events?${q}`,
+        { signal: AbortSignal.timeout(Math.min(GOOGLE_TIMEOUT_MS, left)) },
       );
-      if (res.status === 410 && syncToken) throw new SyncTokenGoneError();
+      if (res.status === 410 && syncToken) {
+        await res.body?.cancel(); // free the connection before the full re-sync
+        throw new SyncTokenGoneError();
+      }
       if (!res.ok) throw new Error(`events.list failed (${res.status})`);
       const json = (await res.json()) as {
         items?: GcalEvent[];

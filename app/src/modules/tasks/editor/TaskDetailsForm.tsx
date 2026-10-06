@@ -114,6 +114,25 @@ export function TaskDetailsForm({
     current.current = fields;
   });
 
+  // The task can change under an open editor — a calendar pull on foreground (an edit made in Google),
+  // another device. Refill every field still showing what it was filled from, so the form never goes
+  // dirty on its own and a Save can't write stale values back over the change. A field being edited
+  // keeps its draft.
+  const filledFrom = useRef(fieldsOf(task));
+  useEffect(() => {
+    const was = filledFrom.current;
+    const next = fieldsOf(task);
+    filledFrom.current = next;
+    const now = current.current;
+    if (now.title === was.title) setTitle_(next.title);
+    if (now.estimate === was.estimate) setEstimate_(next.estimate);
+    if (now.buffer === was.buffer) setBuffer(next.buffer);
+    if (now.categoryId === was.categoryId) setCategoryId(next.categoryId);
+    if (now.dueDay === was.dueDay) setDueDay_(next.dueDay);
+    if (now.dueTime === was.dueTime) setDueTime(next.dueTime);
+    if (now.notes === was.notes) setNotes_(next.notes);
+  }, [task]);
+
   // Writes what changed, in order, then reseeds each field from the task the last write returned (so
   // "030" reads back as "30") and shows the rendered note again — but only fields the user hasn't
   // touched since pressing Save, so typing during a slow save is never overwritten. Stays open; a
@@ -320,4 +339,17 @@ export function TaskDetailsForm({
       </div>
     </section>
   );
+}
+
+// A task's values as the form's string fields hold them.
+function fieldsOf(t: Task) {
+  return {
+    title: t.title,
+    estimate: t.estimateMin?.toString() ?? '',
+    buffer: t.bufferMin?.toString() ?? '',
+    categoryId: t.categoryId ?? '',
+    dueDay: t.dueDay ?? '',
+    dueTime: t.dueTime ?? '',
+    notes: t.notes ?? '',
+  };
 }

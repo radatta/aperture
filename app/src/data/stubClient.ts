@@ -33,6 +33,7 @@ import {
   assertCategoryDeletable,
   calendarPullPlan,
   calendarSyncPlan,
+  seenAfter,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -89,6 +90,7 @@ import type {
   FinanceRule,
   FinanceSyncState,
   FinanceTransaction,
+  GcalSeen,
   GcalSyncState,
   LinkTokenResult,
   PullCalendarResult,
@@ -210,9 +212,10 @@ function takeStubSyncFailure(): string | null {
 
 // Dev/test hook for two-way calendar sync: the stub has no Google, so an edit "made in Google" is queued
 // here as a JSON array and applied by the next pullCalendar — through the same shared planner as the
-// Lambda. Each entry names a linked task and what changed; anything left out keeps the task's current
-// block. A non-empty queue bypasses the stub's once-a-minute throttle (stub-only), so a UI pass can
-// queue → foreground → look. `failAccount` makes that account's pull fail with `error`.
+// Lambda. Each entry names a linked task and what changed; anything left out keeps the event as known.
+// A non-empty queue bypasses the stub's once-a-minute throttle (stub-only) — but the app's own hook
+// still pulls at most once a minute, so to see it: queue, then RELOAD (or foreground after a minute).
+// `failAccount` makes that account's pull fail with `error`.
 //   [{ "taskId": "…", "end": "2026-10-09 17:00", "durationMin": 45, "title": "pset 3" },
 //    { "taskId": "…", "allDay": true }, { "taskId": "…", "cancelled": true },
 //    { "failAccount": "seed-personal", "error": "timeout" }]
@@ -392,6 +395,7 @@ class StubClient implements ApiClient {
     if (action.kind === 'patch')
       return this.writes.patch(this.store.tasks, task.id, {
         gcalSyncError: null,
+        gcalSeen: seenAfter(action, task.gcalSeen),
         gcalTouchedAt: this.now(),
         ...(action.endMs !== undefined && { gcalManual: null }),
       });
@@ -401,6 +405,7 @@ class StubClient implements ApiClient {
       gcalEventId: `stub-event-${this.ulid()}`,
       gcalSyncError: null,
       gcalManual: null,
+      gcalSeen: seenAfter(action, null),
       gcalTouchedAt: this.now(),
     });
   }
@@ -411,6 +416,7 @@ class StubClient implements ApiClient {
       gcalEventId: null,
       gcalSyncError: null,
       gcalManual: null,
+      gcalSeen: null,
     });
   }
   private alive<T extends BaseEntity>(coll: T[]): T[] {
@@ -1138,6 +1144,7 @@ class StubClient implements ApiClient {
       gcalCalendarId: input.calendarId,
       gcalEventId: `stub-event-${this.now()}`,
       gcalManual: true, // a picked time maps to no task field — a pull syncs its title only
+      gcalSeen: { title: input.title, startMs: input.startMs, endMs: input.endMs },
     });
   }
   async deleteCalendarEvent(taskId: string): Promise<Task> {
@@ -1189,24 +1196,42 @@ class StubClient implements ApiClient {
         return { sub: st.sub, ok: false, error };
       }
       for (const edit of edits) {
-        const task = edit.taskId ? this.find(this.store.tasks, edit.taskId) : undefined;
-        if (!task?.gcalEventId || task.gcalAccountId !== st.sub) continue;
-        const action = calendarPullPlan(task, this.stubEvent(task, edit, now), localDayTime);
-        if (action.kind === 'none') continue;
-        this.writes.patch(this.store.tasks, task.id, {
-          ...(action.kind === 'apply'
-            ? action.fields
-            : {
-                gcalAccountId: null,
-                gcalCalendarId: null,
-                gcalEventId: null,
-                gcalSyncError: null,
-                gcalManual: null,
-              }),
-          gcalPulledAt: now,
-          gcalPulledNote: action.note,
+        const found = edit.taskId ? this.find(this.store.tasks, edit.taskId) : undefined;
+        if (!found?.gcalEventId || found.gcalAccountId !== st.sub) continue;
+        if (found.gcalCalendarId !== st.calendarId) continue;
+        // Stub-only: a linked task with no known event (seeded, or persisted before two-way sync) takes
+        // its own block as the known one — the queue is only ever deliberate edits, so the backend's
+        // first-sighting "just remember it" would swallow them.
+        const task = { ...found, gcalSeen: found.gcalSeen ?? this.knownEvent(found) };
+        const action = calendarPullPlan(task, this.stubEvent(task, edit, now), {
+          epoch: localEpochFromDayTime,
+          clock: localDayTime,
         });
-        changed.push(task.id);
+        if (action.kind === 'none') continue;
+        this.writes.patch(
+          this.store.tasks,
+          task.id,
+          action.kind === 'see'
+            ? { gcalSeen: action.seen }
+            : action.kind === 'apply'
+              ? {
+                  ...action.fields,
+                  gcalSeen: action.seen,
+                  gcalPulledAt: now,
+                  gcalPulledNote: action.note,
+                }
+              : {
+                  gcalAccountId: null,
+                  gcalCalendarId: null,
+                  gcalEventId: null,
+                  gcalSyncError: null,
+                  gcalManual: null,
+                  gcalSeen: null,
+                  gcalPulledAt: now,
+                  gcalPulledNote: action.note,
+                },
+        );
+        if (action.kind !== 'see') changed.push(task.id);
       }
       this.writes.put(this.store.gcalSyncStates, {
         ...st,
@@ -1221,19 +1246,31 @@ class StubClient implements ApiClient {
     });
     return { pulled: true, changedTaskIds: changed, accounts };
   }
-  // A queued edit as the event Google would now return: the task's current block with the edit's
-  // changes laid over it.
-  private stubEvent(task: Task, edit: StubGcalEdit, now: number): PulledEvent {
+  private knownEvent(task: Task): GcalSeen {
     const win = eventWindow(task, localEpochFromDayTime);
+    return { title: task.title, startMs: win?.startMs ?? null, endMs: win?.endMs ?? null };
+  }
+  // A queued edit as the event Google would now return: the known event with the edit's changes laid
+  // over it (an `end` alone keeps the block's length).
+  private stubEvent(
+    task: Task & { gcalSeen: GcalSeen },
+    edit: StubGcalEdit,
+    now: number,
+  ): PulledEvent {
+    const known = task.gcalSeen;
     const endMs = edit.end
       ? localEpochFromDayTime(edit.end.slice(0, 10), edit.end.slice(11, 16))
-      : (win?.endMs ?? null);
-    const len = edit.durationMin ?? eventLengthMin(task);
+      : known.endMs;
+    const len =
+      edit.durationMin ??
+      (known.startMs !== null && known.endMs !== null
+        ? (known.endMs - known.startMs) / 60_000
+        : eventLengthMin(task));
     return {
       eventId: task.gcalEventId!,
       cancelled: !!edit.cancelled,
       recurring: false,
-      title: edit.title ?? task.title,
+      title: edit.title ?? known.title ?? task.title,
       allDay: !!edit.allDay,
       startMs: edit.allDay || endMs === null ? null : endMs - len * 60_000,
       endMs: edit.allDay ? null : endMs,

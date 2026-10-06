@@ -689,7 +689,8 @@ describe('calendar pull (two-way sync)', () => {
     const g = new InMemoryGoogle();
     g.clock = () => clock;
     const doc = new InMemoryDoc();
-    const b = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    const b = new BackendClient(repo, {
       userId: 'local',
       now: () => clock,
       google: g,
@@ -699,7 +700,7 @@ describe('calendar pull (two-way sync)', () => {
     const tick = (ms = 61_000) => {
       clock += ms;
     };
-    // The account's first pull only baselines; every test starts past it, a minute later.
+    // Every test starts past a first pull, a minute later.
     const baseline = async () => {
       await b.pullCalendar();
       tick();
@@ -712,7 +713,7 @@ describe('calendar pull (two-way sync)', () => {
         estimateMin: 60,
         ...over,
       });
-    return { g, b, doc, tick, baseline, timed };
+    return { g, b, doc, repo, tick, baseline, timed };
   }
 
   it('a drag of the end moves the deadline; the start sets the estimate; a rename renames', async () => {
@@ -774,26 +775,106 @@ describe('calendar pull (two-way sync)', () => {
     expect(g.events.get(t.gcalEventId!)!.endMs).toBe(at('2026-10-09', '18:00'));
   });
 
-  it('the first pull per account only baselines — older Google edits are not applied, deletions are', async () => {
-    const { g, b, tick, timed } = await setup();
-    const edited = await timed();
+  it('an event linked before two-way sync (no gcalSeen) is only remembered on first sight', async () => {
+    const { g, b, repo, tick, timed } = await setup();
+    const legacy = await timed();
     const deleted = await timed({ title: 'gone' });
-    tick();
-    g.editEvent(edited.gcalEventId!, { title: 'old google edit' });
+    await repo.putTask({ ...(await b.getTask(legacy.id))!, gcalSeen: undefined });
+    await repo.putTask({ ...(await b.getTask(deleted.id))!, gcalSeen: undefined });
+    g.editEvent(legacy.gcalEventId!, { title: 'old google edit' });
     g.deleteEventInGoogle(deleted.gcalEventId!);
     tick();
-    expect((await b.pullCalendar()).changedTaskIds).toEqual([deleted.id]);
-    expect((await b.getTask(edited.id))!.title).toBe('pset');
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([deleted.id]); // deletions always apply
+    expect(await b.getTask(legacy.id)).toMatchObject({
+      title: 'pset',
+      gcalSeen: { title: 'old google edit' },
+    });
     expect(await b.getTask(deleted.id)).toMatchObject({
       gcalEventId: null,
       gcalPulledNote: 'Removed in Google Calendar',
     });
-    // The next edit after the baseline is applied.
+    // Known now: the next Google edit applies; an Aperture change pushes over the old one.
     tick();
-    g.editEvent(edited.gcalEventId!, { title: 'new google edit' });
+    g.editEvent(legacy.gcalEventId!, { title: 'new google edit' });
     tick();
     await b.pullCalendar();
-    expect((await b.getTask(edited.id))!.title).toBe('new google edit');
+    expect((await b.getTask(legacy.id))!.title).toBe('new google edit');
+  });
+
+  it('a time change that failed to reach Google is sent by the next rename — never reverted by the echo', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    const realPatch = g.patchEvent.bind(g);
+    g.patchEvent = async () => {
+      g.patchEvent = realPatch;
+      throw new Error('timeout');
+    };
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '18:00' });
+    expect((await b.getTask(t.id))!.gcalSyncError).toMatch(/Couldn’t update/);
+    await b.setTaskTitle(t.id, 'renamed');
+    expect(g.events.get(t.gcalEventId!)).toMatchObject({
+      title: 'renamed',
+      endMs: at('2026-10-09', '18:00'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({ dueTime: '18:00', title: 'renamed' });
+    expect((await b.getTask(t.id))!.gcalPulledNote ?? null).toBeNull();
+  });
+
+  it('a change made with sync off reaches Google on the next change after it is back on', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    await b.updateSettings({ autoCalendar: false });
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '18:00' });
+    expect(g.events.get(t.gcalEventId!)!.endMs).toBe(at('2026-10-09', '16:00')); // stays put while off
+    await b.updateSettings({ autoCalendar: true });
+    await b.setTaskTitle(t.id, 'back on');
+    expect(g.events.get(t.gcalEventId!)!.endMs).toBe(at('2026-10-09', '18:00'));
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.dueTime).toBe('18:00');
+  });
+
+  it('a done task renamed in Aperture keeps its name when Google later moves its block', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await b.transitionTask(t.id, 'in_progress');
+    await b.transitionTask(t.id, 'done');
+    await baseline();
+    await b.setTaskTitle(t.id, 'done and renamed'); // done tasks don't push
+    g.editEvent(t.gcalEventId!, {
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({ title: 'done and renamed', dueTime: '17:00' });
+  });
+
+  it('a pull plans on a fresh read: a task deleted or edited meanwhile is not overwritten', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const del = await timed();
+    const edited = await timed({ title: 'edited' });
+    await baseline();
+    g.deleteEventInGoogle(del.gcalEventId!);
+    g.editEvent(edited.gcalEventId!, { title: 'google' });
+    tick();
+    const real = g.listEventChanges.bind(g);
+    g.listEventChanges = async (input) => {
+      const delta = await real(input);
+      // While the delta is in flight: the task is deleted, and the other renamed in Aperture.
+      await b.deleteTask(del.id);
+      tick(1_000);
+      await b.setTaskTitle(edited.id, 'mine');
+      return delta;
+    };
+    const res = await b.pullCalendar();
+    expect(await b.getTask(del.id)).toBeNull(); // the tombstone stands
+    expect(res.changedTaskIds).not.toContain(del.id);
+    expect((await b.getTask(edited.id))!.title).toBe('mine'); // the later Aperture rename wins
   });
 
   it('deleted or moved away in Google → unlinked, never re-created by the pull', async () => {

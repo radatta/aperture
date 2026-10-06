@@ -3,13 +3,14 @@
 // it returns — the Lambda against Google, the stub against a fake id — so their decisions can't drift.
 //
 // The outgoing half of two-way sync (the incoming half, Google → task, is calendarPull.ts). A patch
-// sends only what changed, so an Aperture rename can't undo a drag in Google that hasn't been pulled
-// yet. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
+// sends only what the task has that the event doesn't (against gcalSeen, the event as Aperture last
+// knew it), so an Aperture rename can't undo a drag in Google that hasn't been pulled yet — while a
+// change that never reached Google (failed, skipped while done, or made with sync off) still goes. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
 // nothing syncs. Delete-on-cancel is separate (transitionTask) and predates this.
 
 import { eventWindow } from './due';
 import type { DueEpoch } from './due';
-import type { CalendarRef, Settings, Task } from './types';
+import type { CalendarRef, GcalSeen, Settings, Task } from './types';
 
 export type CalendarSyncAction =
   | { kind: 'none' }
@@ -21,7 +22,7 @@ type SyncFields = Pick<
   Task,
   'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin' | 'gcalEventId'
 > &
-  Partial<Pick<Task, 'gcalSyncError'>>;
+  Partial<Pick<Task, 'gcalSyncError' | 'gcalSeen' | 'gcalManual'>>;
 
 const NONE: CalendarSyncAction = { kind: 'none' };
 
@@ -37,6 +38,20 @@ export const gcalSyncMessage = (kind: 'create' | 'patch' | 'delete', detail: str
   `${FAILED[kind]} (${detail})`;
 export const isPendingRemoval = (gcalSyncError: string | null | undefined): boolean =>
   !!gcalSyncError?.startsWith(FAILED.delete);
+
+const titleUnsent = (t: SyncFields): boolean => !!t.gcalSeen && t.gcalSeen.title !== t.title;
+
+// The event as Aperture knows it after a create/patch succeeds — the next gcalSeen.
+export function seenAfter(
+  action: Extract<CalendarSyncAction, { kind: 'create' | 'patch' }>,
+  prev: GcalSeen | null | undefined,
+): GcalSeen {
+  return {
+    title: action.title ?? prev?.title ?? null,
+    startMs: action.startMs ?? prev?.startMs ?? null,
+    endMs: action.endMs ?? prev?.endMs ?? null,
+  };
+}
 
 // `prev` null = a fresh create; `ensure` = the explicit retry (sync to the task as it is now).
 export function calendarSyncPlan(
@@ -65,12 +80,29 @@ export function calendarSyncPlan(
       // Lost its time → the event it auto-synced goes. An untimed task with a manual event: gcal owns
       // that clock, so only a rename reaches it.
       if (wasTimed) return { kind: 'delete' };
-      return ensure || changed('title') ? { kind: 'patch', title: next.title } : NONE;
+      return ensure || changed('title') || titleUnsent(next)
+        ? { kind: 'patch', title: next.title }
+        : NONE;
     }
-    // Changed fields only (ensure = the retry sends everything). The window moves as one block; a
-    // manual event moves too when its task first gains a time.
-    const retime = ensure || whenChanged || changed('estimateMin') || !wasTimed;
-    const retitle = ensure || changed('title');
+    // ensure (the retry) sends everything. The window moves as one block.
+    const seen = next.gcalSeen;
+    let retime: boolean;
+    let retitle: boolean;
+    if (next.gcalManual) {
+      // A manual block keeps its picked time until the task's time changes (or it first gains one) —
+      // then it moves to the deadline and becomes the auto block.
+      retime = ensure || whenChanged || changed('estimateMin') || !wasTimed;
+      retitle = ensure || changed('title') || titleUnsent(next);
+    } else if (seen) {
+      // Send whatever the event doesn't have yet.
+      retime = ensure || seen.startMs !== window.startMs || seen.endMs !== window.endMs;
+      retitle = ensure || seen.title !== next.title;
+    } else {
+      // Not known yet (linked before two-way sync): any change sends everything, once — after which the
+      // event is known.
+      retime = retitle =
+        ensure || whenChanged || changed('estimateMin') || changed('title') || !wasTimed;
+    }
     if (!retime && !retitle) return NONE;
     return { kind: 'patch', ...(retitle && { title: next.title }), ...(retime && window) };
   }

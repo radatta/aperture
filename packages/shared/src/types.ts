@@ -69,6 +69,10 @@ export interface Task extends BaseEntity {
   // gcalTouchedAt: the last Aperture title/time/estimate change pushed to Google (sent or failed) — the
   // "latest wins" clock a Google edit is compared against.
   gcalTouchedAt?: number | null;
+  // gcalSeen: the linked event as Aperture last knew it (what it pushed, or last pulled) — the base of a
+  // three-way merge. A pull takes from Google only what changed since; a push sends what the task has
+  // that the event doesn't yet (a failed, skipped or toggle-off change). Null/absent = not known yet.
+  gcalSeen?: GcalSeen | null;
   // gcalManual: the linked event is a manual time block (the picker / create_calendar_event), whose time
   // maps to no task field — a pull syncs its title only. Cleared once auto-sync moves it to the deadline.
   gcalManual?: boolean | null;
@@ -182,14 +186,21 @@ export interface CalendarRef {
   accountSub: string;
   calendarId: string;
 }
+// The event's title and window (instants) as Aperture last knew them; times null when not known/all-day.
+export interface GcalSeen {
+  title: string | null;
+  startMs: number | null;
+  endMs: number | null;
+}
 // Two-way sync cursor, one per connected account (id = sub): the events.list syncToken for its primary
-// calendar plus pull health. A replaceable cursor — not exported; a null token means a full resync.
+// calendar plus pull health. Exported (like financeSyncStates) — no credentials; a null token means a
+// full resync.
 export interface GcalSyncState extends BaseEntity {
   sub: string;
   calendarId: string;
   syncToken: string | null;
   lastPulledAt: number | null; // stamped at the START of every attempt — the throttle counts failures
-  lastSyncedAt: number | null; // the last pull that finished; null = never (the first one only baselines)
+  lastSyncedAt: number | null; // the last pull that finished; null = never
   lastPullError: string | null; // null after a success
   lastPullErrorAt: number | null;
 }

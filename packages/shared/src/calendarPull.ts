@@ -7,10 +7,10 @@
 // delta is dropped untouched by the caller.
 
 import { dayKey, fmtClock12, fmtDuration, fmtMonthShortDay, todayKey } from './dates';
-import { eventLengthMin } from './due';
-import type { DueClock } from './due';
+import { eventLengthMin, eventWindow } from './due';
+import type { DueClock, DueEpoch } from './due';
 import { isPendingRemoval } from './calendarSync';
-import type { Task } from './types';
+import type { GcalSeen, Task } from './types';
 
 // One changed event from the delta, normalised by the gateway.
 export interface PulledEvent {
@@ -26,37 +26,64 @@ export interface PulledEvent {
 
 export type PullAction =
   | { kind: 'none' }
+  // First sighting of an event Aperture didn't know yet (linked before two-way sync), or a change
+  // that maps to nothing: just remember the event (gcalSeen) — nothing on the task changes.
+  | { kind: 'see'; seen: GcalSeen }
   | { kind: 'unlink'; note: string }
   | {
       kind: 'apply';
       fields: Partial<Pick<Task, 'title' | 'dueDay' | 'dueTime' | 'estimateMin'>>;
       note: string;
+      seen: GcalSeen;
     };
 
 type PullFields = Pick<Task, 'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin'> &
-  Partial<Pick<Task, 'gcalSyncError' | 'gcalTouchedAt' | 'gcalManual'>>;
+  Partial<Pick<Task, 'gcalSyncError' | 'gcalTouchedAt' | 'gcalManual' | 'gcalSeen'>>;
 
 // The app pulls at most once a minute per account (server-side; failures count).
 export const PULL_THROTTLE_MS = 60_000;
 export const PULL_REMOVED_NOTE = 'Removed in Google Calendar';
 const NONE: PullAction = { kind: 'none' };
 
-export function calendarPullPlan(task: PullFields, ev: PulledEvent, clock: DueClock): PullAction {
+// A three-way merge over (the event as Aperture last knew it = task.gcalSeen, the task, the event now).
+// Google's side of a field changed iff the event differs from gcalSeen — so our own push echoing back
+// is a no-op, and a field Google didn't touch is never "taken" from it. Latest wins: an event state
+// older than Aperture's last push (Google's `updated` < gcalTouchedAt) is stale — that push, sent or
+// failed-and-retried, stands — so whatever survives to the merge is newer, and Google's change wins.
+export function calendarPullPlan(
+  task: PullFields,
+  ev: PulledEvent,
+  time: { epoch: DueEpoch; clock: DueClock },
+): PullAction {
   if (task.status === 'cancelled') return NONE; // its event went with the cancel
   // Deleted or moved away → unlink, never resurrect. Deletion wins whatever `updated` says.
   if (ev.cancelled) return { kind: 'unlink', note: PULL_REMOVED_NOTE };
   if (isPendingRemoval(task.gcalSyncError)) return NONE; // the next sync deletes it anyway
   if (ev.recurring) return NONE;
+  if (ev.updatedMs < (task.gcalTouchedAt ?? 0)) return NONE;
+
+  const title = ev.title?.trim() || null;
+  const timed = !ev.allDay && ev.startMs !== null && ev.endMs !== null;
+  const seen = task.gcalSeen;
+  // An all-day conversion's time is ignored: keep the known window, so the block isn't "re-timed" back
+  // until the task's own time changes.
+  const now: GcalSeen = {
+    title: title ?? seen?.title ?? null,
+    startMs: timed ? ev.startMs : (seen?.startMs ?? null),
+    endMs: timed ? ev.endMs : (seen?.endMs ?? null),
+  };
+  if (!seen) return { kind: 'see', seen: now };
 
   const fields: Extract<PullAction, { kind: 'apply' }>['fields'] = {};
-  const title = ev.title?.trim();
-  if (title && title !== task.title) fields.title = title;
-  // Only a timed task's auto-synced block maps to time fields. A manual block (gcalManual, or any event
-  // on an untimed task) and an all-day conversion sync the title only. Compared as wall-clock day + "HH:MM" and whole minutes,
-  // never as instants, so the repeated fall-back hour can't re-apply the same time every pull.
-  const auto = !task.gcalManual && task.dueDay && task.dueTime;
-  if (auto && !ev.allDay && ev.startMs !== null && ev.endMs !== null) {
-    const end = clock(ev.endMs);
+  // Title: Google renamed it since Aperture last knew the event.
+  if (title && title !== seen.title && title !== task.title) fields.title = title;
+  // Time — only a timed task's auto-synced block maps to task fields; a manual block (gcalManual, or any
+  // event on an untimed task) syncs its title only.
+  const window = eventWindow(task, time.epoch);
+  const moved = timed && (ev.startMs !== seen.startMs || ev.endMs !== seen.endMs);
+  if (moved && window && !task.gcalManual) {
+    // Compared as wall-clock day + "HH:MM" and whole minutes, so a value equal to the task's writes nothing.
+    const end = time.clock(ev.endMs!);
     if (end.day !== task.dueDay || end.hhmm !== task.dueTime) {
       fields.dueDay = end.day;
       fields.dueTime = end.hhmm;
@@ -64,14 +91,13 @@ export function calendarPullPlan(task: PullFields, ev: PulledEvent, clock: DueCl
     // The start sets the working estimate (never the frozen estimateLockedMin). A done task's estimate
     // is history — a stretched block doesn't rewrite it. Against eventLengthMin, so a no-estimate task's
     // default-length block reads as unchanged rather than writing estimateMin = 30.
-    const len = Math.round((ev.endMs - ev.startMs) / 60_000);
+    const len = Math.round((ev.endMs! - ev.startMs!) / 60_000);
     if (task.status !== 'done' && len > 0 && len !== eventLengthMin(task)) fields.estimateMin = len;
   }
-  if (Object.keys(fields).length === 0) return NONE; // our own push echoing back, or nothing we map
-  // Latest wins: an Aperture change newer than Google's edit (its push failed, or is in flight) stands —
-  // the retry pushes it over Google's.
-  if ((task.gcalTouchedAt ?? 0) > ev.updatedMs) return NONE;
-  return { kind: 'apply', fields, note: pullNote(fields) };
+  if (Object.keys(fields).length > 0)
+    return { kind: 'apply', fields, note: pullNote(fields), seen: now };
+  const same = now.title === seen.title && now.startMs === seen.startMs && now.endMs === seen.endMs;
+  return same ? NONE : { kind: 'see', seen: now };
 }
 
 // One short line saying what Google changed: "Moved to Oct 9 5pm · Now 45m in Google Calendar".

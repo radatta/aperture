@@ -8,6 +8,7 @@ import { createStubClient } from '../../../data/stubClient';
 import { TaskDetailsForm } from './TaskDetailsForm';
 import { TaskEditor } from './TaskEditor';
 import type { TaskEditorIntent } from './TaskEditor';
+import { TaskDetailsForm } from './TaskDetailsForm';
 
 function api(): ApiClient {
   return createStubClient({ seed: false, storageKey: `editor-${Math.random()}` });
@@ -179,6 +180,34 @@ describe('TaskEditor', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('a change under the open editor (a calendar pull) refills untouched fields — never goes dirty', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Open', dueDay: '2026-10-09', dueTime: '16:00' });
+    let push: (next: Task) => void = () => {};
+    const dirty = vi.fn();
+    function Host() {
+      const [live, setLive] = useState(t);
+      push = setLive;
+      return <TaskDetailsForm task={live} onDirtyChange={dirty} />;
+    }
+    renderWithProviders(<Host />, { api: client });
+    const user = userEvent.setup();
+    const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+    // Mid-edit of the title: that draft stays; the untouched due time follows the pull.
+    await user.clear(field('Title'));
+    await user.type(field('Title'), 'my draft');
+    act(() => push({ ...t, title: 'From Google', dueTime: '18:00', updatedAt: t.updatedAt + 1 }));
+    expect(field('Due time').value).toBe('18:00');
+    expect(field('Title').value).toBe('my draft');
+    // Back to untouched (the draft cleared to what it was filled from) → the next pull refills it, clean.
+    await user.clear(field('Title'));
+    await user.type(field('Title'), 'From Google');
+    act(() => push({ ...t, title: 'Again', dueTime: '19:00', updatedAt: t.updatedAt + 2 }));
+    expect(field('Title').value).toBe('Again');
+    expect(field('Due time').value).toBe('19:00');
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
   });
 
   it('says what Google changed, today only', async () => {

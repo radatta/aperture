@@ -564,7 +564,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_calendar_event',
     description:
-      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. Deletes+recreates on move (no edit-sync). On error, re-read the task before retrying — the event may already exist.',
+      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. This is a manual time block: renaming it in Google renames the task, but its time never changes the task’s. On error, re-read the task before retrying — the event may already exist.',
     inputSchema: {
       type: 'object',
       properties: {
