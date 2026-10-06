@@ -93,7 +93,7 @@ So when a branch can't fast-forward onto `dev`, **do not propose merging `origin
 2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree` would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.
 3. `CI=true pnpm install` inside the worktree, so it has its own real `node_modules` — never a symlink to the main checkout's (running pnpm through one rewires the main checkout).
 
-The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Remove a worktree only after its PR is open, and only when the user says so** — removing it deletes its gitignored `localNotes/`.
+The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at *Feature workflow* → *Cleanup*.**
 
 ### Claude drives git — guarded
 
@@ -104,7 +104,7 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 - `git add`, `git commit`, `git stash`
 - `git push` **to a feature branch only** (sets upstream on first push)
 - `git fetch`, `git rebase origin/main`, `git mv`
-- `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only on the user's say-so
+- `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only at *Feature workflow* → *Cleanup*
 
 **Hard-blocked (never):**
 
@@ -158,7 +158,11 @@ Phases:
    | `packages/shared` | The contract both sides build on — the `app/` and `lambdas/` rows both apply, and the reviewer checks both callers. |
 
    When the round is back, fix real bugs and convention breaks. Findings that need a product call or add scope: collaborative → a list for the user; autonomous → decide and log. Then the gate runs again, which also starts the next round.
-7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current. The user pushes.
+7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current.
+8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (*Claude behavior*, above), then re-run the gate. Then hand the user, run from the worktree path, `git push --force origin <branch>:dev` — the user runs it; Claude never pushes to `dev` (*Git workflow*). With it, a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist.
+9. **Dev feedback** — ask how dev testing went. Fixes go back through the gate (plus a review round if non-trivial), then back to dev. Repeat until the user gives the all-clear.
+10. **PR** — on the all-clear, hand over the push + `gh pr create` commands (*Git workflow* → *PR bodies*). If the branch was already pushed and has since been rebased, the push is `git push --force-with-lease -u origin <branch>` — again the user's to run.
+11. **Cleanup** — once `gh pr view <branch>` shows it merged, confirm with the user, then: copy the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/`; `git worktree remove .claude/worktrees/<branch>`; hand the user `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse).
 
 Page-first still holds: a backend half usually follows a frontend that already passed its rounds, so the plan says which half this is, and the reviewer checks the lambda against the contract the stub set.
 
