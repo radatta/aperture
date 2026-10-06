@@ -58,7 +58,9 @@ capture time was wanted, and an opt-in token asks nothing of a bare capture.
     `duePresets(todayKey(dayStartHour))`, so the rollover is `todayKey`'s job. Typed digits filter.
     Once the day is whole (caret at the end of `due:2026-10-09`) or carries an `@`, the chips switch to
     **times** — 9am · 12pm · 5pm · 11:59pm (`DUE_TIME_PRESETS`), filtered by what follows the `@`, each
-    typing the full `due:<day>@HH:MM` ("Due Friday, Oct 9 at 5pm"). Added 2026-10-05.
+    typing the full `due:<day>@HH:MM` ("Due Friday, Oct 9 at 5pm"). Added 2026-10-05. A **day chip
+    chains** into them: it types the day with no trailing space and leaves the caret at its end, so the
+    time chips show at once (Tab-Tab = the day at 9am); a space or the next token skips the time.
   - **`~`** — fixed 15 · 30 · 45 · 60 · 90 · 120, filtered by digit prefix.
   - **Keys:** Tab accepts the first chip while chips show, else cycles mode; Shift+Tab always cycles
     (the escape hatch). No arrow-key highlight — arrows move the caret in a textarea; type one more

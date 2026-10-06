@@ -15,6 +15,9 @@ export interface Suggestion {
   label: string;
   a11y: string; // standalone name — "15m" or "Fri" alone means nothing to a screen reader
   insert: string; // the full token text that replaces the partial one
+  // The token can continue (a day can take '@HH:MM'): no trailing space, caret at its end — so the next
+  // chips (times) show at once. A space or the next token is the way past them.
+  chain?: boolean;
 }
 
 export const ESTIMATE_PRESETS = [15, 30, 45, 60, 90, 120] as const;
@@ -71,6 +74,7 @@ export function dueSuggestions(partial: string, today: string): Suggestion[] {
       label: p.label,
       a11y: `Due ${fmtDayHeading(p.day)}`,
       insert: `due:${p.day}`,
+      chain: true,
     }));
 }
 
@@ -84,13 +88,19 @@ export function suggestionsFor(
 }
 
 // Replace the whole token under the caret with the chip's text, then a space unless one already
-// follows — so a mid-line accept doesn't leave a double space. The caret lands after it.
+// follows — so a mid-line accept doesn't leave a double space. The caret lands after it. A chaining
+// chip (a day) gets no space and keeps the caret at the token's end, so its follow-up chips show.
 export function applySuggestion(
   text: string,
   tok: CaretToken,
   s: Suggestion,
 ): { text: string; caret: number } {
   const after = text.slice(tok.replaceEnd);
+  if (s.chain)
+    return {
+      text: text.slice(0, tok.replaceStart) + s.insert + after,
+      caret: tok.replaceStart + s.insert.length,
+    };
   const insert = /^\s/.test(after) ? s.insert : `${s.insert} `;
   const caret = tok.replaceStart + insert.length + (/^\s/.test(after) ? 1 : 0);
   return { text: text.slice(0, tok.replaceStart) + insert + after, caret };
