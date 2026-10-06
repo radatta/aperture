@@ -62,13 +62,14 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `dueDay` (`YYYY-MM-DD` | null) — **when it's due**, distinct from `taskPlans.day` (*when I'll work it*). Free metadata: set in the scope pass, editable at any status, **never part of the estimate lock**. Design: [areas/tasks/due-dates.md](../areas/tasks/due-dates.md).
 - `dueTime` (`HH:MM` 24h local | null) — the deadline's clock time, only with a `dueDay` (clearing the day clears it). Drives the urgency colour and calendar auto-sync (`gcalSyncError` holds a failed sync; `Settings.autoCalendar` is the toggle — [areas/calendar/index.md](../areas/calendar/index.md) → Auto-sync).
 - `notes` (string | null, ≤ 5,000 chars) — free-form light markdown, editable at any status, **never part of the estimate lock**. Required-nullable; pre-existing rows read back `undefined`, so readers use `!notes`. Design: [areas/tasks/notes.md](../areas/tasks/notes.md).
-- **Estimate handling:** `estimateMin` + `bufferMin` are editable while `status ∈ {backlog, planned}`. On the **first transition out of planning** (→ `in_progress` or `done`), `estimateLockedMin` is snapshotted and frozen. **Calibration = `actualAccruedMin` vs `estimateLockedMin`.** Scope changes are handled by **splitting** (finish/cancel + spawn a follow-up), never by editing the locked estimate.
+- **Estimate handling:** `estimateMin` + `bufferMin` (the **working** estimate) are editable at any open status — not `done`/`cancelled`. On the **first transition out of planning** (→ `in_progress` or `done`), `estimateLockedMin` is snapshotted and frozen; a later edit never touches it. **Calibration = `actualAccruedMin` vs `estimateLockedMin`.** Work that turned out bigger is **split** (this part done or kept going + a linked follow-up), never by editing the locked estimate.
+- `splitFromId` (string | null) — the task this one was split from, set only when a frozen baseline exists upstream, so a family's root lock covers the whole job. Split-family members are excluded from calibration until the family is scored as one. Required-nullable; old rows read `undefined` → `!splitFromId`. Design: [areas/tasks/split.md](../areas/tasks/split.md).
 - `actualAccruedMin` — **denormalized**, bumped when a *work* session closes (excludes breaks + paused time). Avoids scanning sessions.
 - `cancelled` tasks are excluded from calibration.
 - **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#delete-on-cancel) (the S3 bytes are orphaned, not swept). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
 
 **taskPlans** — scheduling (the *when*), separate from the task (the *what*). Enables multi-day + ordering.
-- `id · taskId · day · plannedMinutes · order`. A task may have plan rows on several days. Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateLockedMin − actualAccruedMin`.
+- `id · taskId · day · plannedMinutes · order`. A task may have plan rows on several days. Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateMin − actualAccruedMin` (the working estimate).
 - **Stale sweep (lazy rollover).** `getDay(today)` moves every `planned` task with no alive plan row on today or later back to `backlog` — a recurring occurrence already superseded by its series' copy today is dropped (`cancelled`) instead. Plan rows stay as history; `in_progress` is untouched. Rule: shared `stalePlannedMoves`. It runs on app open, not on a schedule (the server has no timezone), so MCP reads lag until the app loads today. `getDay` must only ever be called with the client's current day — a future day would sweep today's plan.
 
 **taskSeries** — recurrence template.
@@ -119,7 +120,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 **settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` (default 60000), `financePaymentDay` (default 20), etc.
 
 ### 2.3 Rules distilled (from the poke-holes pass)
-1. Estimate freezes on first exit from planning; calibration uses the frozen value; scope change ⇒ split.
+1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
 3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
 4. Never hard-delete — `deletedAt` tombstones everywhere.

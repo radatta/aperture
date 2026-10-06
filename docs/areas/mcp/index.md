@@ -67,7 +67,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 | group            | tools                                                                                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `delete_task {id}` |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}` |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy`                                                                  |
@@ -77,10 +77,17 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
 - **`complete_task` requires `actualMin`** — completing feeds calibration, and a 0-actual completion would
-  pollute the signature metric. It chains `→ in_progress → done` (freezing the estimate) and **replaces**
+  pollute the signature metric. It chains `→ in_progress → done` (freezing the calibration baseline) and **replaces**
   any timer-tracked minutes, echoing the previous value so an overwrite is visible.
 - **`update_task`** fan-out order is title → categoryId → due → notes → estimate → status; the estimate
-  throws if frozen, and the error names which fields already applied.
+  (the working one) is editable until the task is done/cancelled — `estimateMin` or `bufferMin` alone keeps the
+  other (before 2026-10-06 an estimate-only call zeroed the buffer) — the calibration baseline frozen at start
+  never moves, and a failing field's error names which fields already applied.
+- **`split_task {id, finish, actualMin?, title?, estimateMin?, bufferMin?, followUpTitle,
+  followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md)) — "scope change =
+  split" is the product's move, so voice gets it as one call rather than improvising cancel + create.
+  `finish: "done"` (a started task only) **requires `actualMin`** — the same posture as `complete_task`;
+  `keep` rejects it. Returns `{original, followUp}`. Worth the claude.ai per-tool "ask".
 - **Due times** ([tasks/due-dates.md](../tasks/due-dates.md)): `dueTime` (`HH:MM`, 24h, the user's local
   time) rides on `create_task`, `create_tasks` and `update_task`, validated before any dispatch. In
   `update_task`, `dueDay` and `dueTime` go out as **one** `setTaskDue` write: time-only keeps the task's
@@ -296,7 +303,7 @@ the model as the only UI — so:
 - **Ids are the friction.** Anything keyed by id (categories today) costs the model an extra lookup call;
   a description that names the lookup tool is the minimum.
 - **Nothing is confirmed by eye.** Mishearing lands straight in prod, so destructive or calibration-feeding
-  tools (`delete_task`, `complete_task`) are the risky ones — prefer the claude.ai per-tool permission
+  tools (`delete_task`, `complete_task`, `split_task`) are the risky ones — prefer the claude.ai per-tool permission
   "ask" for those. A new destructive tool inherits this concern.
 - **Logic that only runs when the app opens doesn't run for voice** (the stale-planned lag above is the
   existing case).

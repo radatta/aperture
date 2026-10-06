@@ -1,7 +1,7 @@
 import type { ApiMethod } from '@aperture/shared';
 
 // A parameter/validation error → JSON-RPC -32602 (a PROTOCOL error the model got wrong: bad args,
-// unknown tool). Distinct from a backend EXECUTION error (e.g. "estimate is frozen"), which surfaces as
+// unknown tool). Distinct from a backend EXECUTION error (e.g. "Not found"), which surfaces as
 // an `isError` tool result the model can read and self-correct from. protocol.ts branches on this type.
 export class RpcParamError extends Error {}
 

@@ -21,6 +21,7 @@ function mkTask(id: string, status: TaskStatus, over: Partial<Task> = {}): Task 
     estimateMin: 30,
     bufferMin: null,
     estimateLockedMin: null,
+    splitFromId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,

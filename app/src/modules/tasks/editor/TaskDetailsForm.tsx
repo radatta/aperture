@@ -22,16 +22,19 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 
 // The details editor inside the task modal — absorbs ScopePanel (estimate/buffer/category) and the
 // in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
-// Estimate + buffer edit only while backlog|planned; past that the calibration baseline is frozen
-// (canEditEstimate), so they show read-only. Category stays editable at any status; due locks once
-// finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
+// Estimate + buffer (the working estimate) edit at any open status — rescoping mid-task is fine, since
+// calibration is measured against the baseline frozen at start, which never moves; a finished task's
+// estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
+// due locks once finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
 // (showing "Saved"); the modal's own Close is the way out.
 export function TaskDetailsForm({
   task: live,
+  inSplitFamily = false,
   onDirtyChange,
   estimateRef,
 }: {
   task: Task;
+  inSplitFamily?: boolean; // its lock covers a split family's whole job, so it isn't measured alone
   onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
@@ -60,6 +63,25 @@ export function TaskDetailsForm({
   const [dueTime, setDueTime] = useState<string>(task.dueTime ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
+  // A change that lands from elsewhere — a split's rename/rescope, another device, the MCP — reseeds
+  // every field the user hasn't touched (still showing the previous value); edits in progress stay. Done
+  // during render (React's "adjust state on prop change"), so nothing flashes dirty for a frame.
+  const [prevTask, setPrevTask] = useState(task);
+  if (prevTask !== task) {
+    setPrevTask(task);
+    const reseed = (set: (f: (v: string) => string) => void, was: string, now: string) =>
+      set((v) => (v === was ? now : v));
+    reseed(setTitle_, prevTask.title, task.title);
+    reseed(
+      setEstimate_,
+      prevTask.estimateMin?.toString() ?? '',
+      task.estimateMin?.toString() ?? '',
+    );
+    reseed(setBuffer, prevTask.bufferMin?.toString() ?? '', task.bufferMin?.toString() ?? '');
+    reseed(setCategoryId, prevTask.categoryId ?? '', task.categoryId ?? '');
+    reseed(setDueDay_, prevTask.dueDay ?? '', task.dueDay ?? '');
+    reseed(setDueTime, prevTask.dueTime ?? '', task.dueTime ?? '');
+  }
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -104,7 +126,7 @@ export function TaskDetailsForm({
     try {
       let next = task;
       if (titleDirty) next = await setTitle.mutateAsync({ id: task.id, title: titleTrimmed });
-      // Never call setEstimate past planning — the machine throws on a frozen estimate.
+      // Never call setEstimate on a finished task — the machine throws (its estimate is history).
       if (estimateDirty)
         next = await setEstimate.mutateAsync({
           id: task.id,
@@ -185,6 +207,14 @@ export function TaskDetailsForm({
                 +25%
               </Button>
             </div>
+            {task.estimateLockedMin != null && (
+              <Text size="xs" tone="muted" className="w-full">
+                Started at {fmtDuration(task.estimateLockedMin)}
+                {inSplitFamily
+                  ? ' — split, so it isn’t measured on its own.'
+                  : ' — calibration is measured against that.'}
+              </Text>
+            )}
           </>
         ) : (
           <div className="flex flex-col gap-1">
@@ -198,8 +228,12 @@ export function TaskDetailsForm({
             </Text>
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted">
-                Frozen at {fmtDuration(task.estimateLockedMin)} when work started — calibration is
-                measured against this.
+                Started at {fmtDuration(task.estimateLockedMin)}
+                {task.status === 'cancelled'
+                  ? '.' // dropped tasks never count toward calibration
+                  : inSplitFamily
+                    ? ' — split, so it isn’t measured on its own.'
+                    : ' — calibration is measured against that.'}
               </Text>
             )}
           </div>

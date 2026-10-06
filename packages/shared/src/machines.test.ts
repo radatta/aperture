@@ -5,7 +5,6 @@ import {
   heartbeatSession,
   resolveStaleSession,
   resumeSession,
-  splitFollowUp,
   stalePlannedMoves,
   taskTransition,
   withEstimate,
@@ -30,6 +29,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     estimateMin: 60,
     bufferMin: 15,
     estimateLockedMin: null,
+    splitFromId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -49,9 +49,17 @@ describe('taskTransition — estimate freeze', () => {
     expect(started.startedAt).toBe(1000);
   });
 
-  it('freezes the estimate against further edits once work starts', () => {
+  it('a started task takes a new working estimate, and the lock never moves', () => {
     const started = taskTransition(baseTask(), 'in_progress', 1000);
-    expect(() => withEstimate(started, 120, 0, 2000)).toThrow();
+    const rescoped = withEstimate(started, 120, 0, 2000);
+    expect(rescoped.estimateMin).toBe(120);
+    expect(rescoped.estimateLockedMin).toBe(60);
+    expect(taskTransition(rescoped, 'done', 3000).estimateLockedMin).toBe(60);
+  });
+
+  it("a finished task's estimate is history", () => {
+    expect(() => withEstimate(baseTask({ status: 'done' }), 90, 0, 1)).toThrow();
+    expect(() => withEstimate(baseTask({ status: 'cancelled' }), 90, 0, 1)).toThrow();
   });
 
   it('rejects illegal transitions', () => {
@@ -163,14 +171,5 @@ describe('stalePlannedMoves', () => {
   it('ignores anything not planned', () => {
     const started = baseTask({ id: 'x', status: 'in_progress' });
     expect(stalePlannedMoves([started], [], '2026-08-04')).toEqual([]);
-  });
-});
-
-describe('splitFollowUp notes', () => {
-  it('carries the notes, and turns a legacy row with no notes field into null', () => {
-    expect(splitFollowUp(baseTask({ notes: 'context' }), 'part 2').notes).toBe('context');
-    const legacy = baseTask();
-    delete (legacy as { notes?: unknown }).notes;
-    expect(splitFollowUp(legacy, 'part 2').notes).toBeNull();
   });
 });

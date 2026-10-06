@@ -89,3 +89,30 @@ describe('night: still open — when?', () => {
     expect(screen.queryByRole('group', { name: 'essay draft' })).toBeNull();
   });
 });
+
+describe('night: today in review', () => {
+  it('bars a measured task; a split part and an unestimated task get a plain row', async () => {
+    const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });
+    await onToday(api, 'finished thing', 'done', 0);
+    const big = await onToday(api, 'big essay', 'in_progress', 1);
+    await api.splitTask(big.id, {
+      finish: 'done',
+      actualMin: 40,
+      followUp: { title: 'big essay, part 2', estimateMin: 30 },
+    });
+    const loose = await api.createTask({ title: 'quick errand' }); // never estimated
+    await api.transitionTask(loose.id, 'in_progress');
+    await api.setTaskActual(loose.id, 10);
+    await api.transitionTask(loose.id, 'done');
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    expect(await screen.findByText('finished thing')).toBeTruthy();
+    const bars = screen.getAllByRole('img', { name: /actual against/ });
+    expect(bars).toHaveLength(1); // only the measured task is drawn against its estimate
+    expect(screen.getByText('big essay')).toBeTruthy();
+    expect(screen.getByText('split')).toBeTruthy();
+    expect(screen.getByText('quick errand')).toBeTruthy();
+    expect(screen.getByText('no estimate')).toBeTruthy();
+  });
+});

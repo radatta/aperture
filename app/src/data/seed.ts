@@ -135,6 +135,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         estimateMin: est,
         bufferMin: Math.round(est * 0.25),
         estimateLockedMin: est,
+        splitFromId: null,
         actualAccruedMin: actual,
         startedAt,
         completedAt,
@@ -162,6 +163,50 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       store.sessions.push(session);
     }
   }
+
+  // A split family (split.ts): yesterday's lit review ran long, so the done first half handed the rest
+  // to a linked backlog task. Neither half is a calibration point until the family is scored as one.
+  const litDone = nowMs - DAY - 2 * HOUR;
+  const litCat = byLabel(workCats[0]!);
+  const litBase = {
+    categoryId: litCat.id,
+    dueDay: null,
+    dueTime: null,
+    notes: null,
+    seriesId: null,
+    rollId: null,
+    cancelledAt: null,
+    gcalAccountId: null,
+    gcalCalendarId: null,
+    gcalEventId: null,
+    gcalSyncError: null,
+  };
+  const litA: Task = {
+    ...mk(litDone - 70 * 60_000),
+    ...litBase,
+    title: 'Write the literature review',
+    status: 'done',
+    estimateMin: 60,
+    bufferMin: 15,
+    estimateLockedMin: 60,
+    splitFromId: null,
+    actualAccruedMin: 70,
+    startedAt: litDone - 70 * 60_000,
+    completedAt: litDone,
+  };
+  store.tasks.push(litA, {
+    ...mk(litDone),
+    ...litBase,
+    title: 'Write the literature review (cont.)',
+    status: 'backlog',
+    estimateMin: 45,
+    bufferMin: null,
+    estimateLockedMin: null,
+    splitFromId: litA.id,
+    actualAccruedMin: 0,
+    startedAt: null,
+    completedAt: null,
+  });
 
   // A handful of unscoped backlog tasks — captured title-only, waiting for the morning plan pass.
   // These make the morning "plan today" card real and give Phase 5 material to scope.
@@ -211,6 +256,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       estimateMin: null,
       bufferMin: null,
       estimateLockedMin: null,
+      splitFromId: null,
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -259,6 +305,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       estimateMin: est,
       bufferMin: Math.round(est * 0.25),
       estimateLockedMin: inProgress ? est : null,
+      splitFromId: null,
       actualAccruedMin: inProgress ? 12 : 0,
       startedAt: inProgress ? nowMs - 20 * 60_000 : null,
       completedAt: null,
@@ -353,6 +400,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       estimateMin: est,
       bufferMin: null,
       estimateLockedMin: est,
+      splitFromId: null,
       actualAccruedMin: actual,
       startedAt,
       completedAt,

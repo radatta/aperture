@@ -6,8 +6,10 @@ import {
   remainingMin,
   ruleSummary,
   scopeLabel,
+  SPLIT_MIN_REMAINDER,
   statusLabel,
   suggestedBuffer,
+  splitDefaults,
 } from './taskMath';
 
 const task = (over: Partial<Task>): Task => ({
@@ -27,6 +29,7 @@ const task = (over: Partial<Task>): Task => ({
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,
+  splitFromId: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -54,10 +57,44 @@ describe('plannedDefault', () => {
 });
 
 describe('remainingMin', () => {
-  it('uses the frozen estimate once locked, minus accrued, floored at 0', () => {
-    expect(remainingMin(task({ estimateLockedMin: 60, actualAccruedMin: 20 }))).toBe(40);
-    expect(remainingMin(task({ estimateLockedMin: 60, actualAccruedMin: 90 }))).toBe(0);
+  it('uses the working estimate (a mid-task rescope moves it), minus accrued, floored at 0', () => {
+    expect(
+      remainingMin(task({ estimateMin: 90, estimateLockedMin: 60, actualAccruedMin: 20 })),
+    ).toBe(70);
+    expect(remainingMin(task({ estimateMin: 60, actualAccruedMin: 90 }))).toBe(0);
     expect(remainingMin(task({ estimateMin: 45, actualAccruedMin: 0 }))).toBe(45);
+    expect(remainingMin(task({ estimateMin: null, estimateLockedMin: 60 }))).toBe(0);
+  });
+});
+
+describe('splitDefaults', () => {
+  it('done: the rest is what is left of the working estimate, floored', () => {
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 12 }), 'done').rest).toBe(33);
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 80 }), 'done').rest).toBe(
+      SPLIT_MIN_REMAINDER,
+    );
+  });
+
+  it('keep: what is left is shared, so the parts add up to the estimate', () => {
+    expect(splitDefaults(task({ estimateMin: 60, actualAccruedMin: 0 }), 'keep')).toEqual({
+      thisPart: 30,
+      rest: 30,
+    });
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 12 }), 'keep')).toEqual({
+      thisPart: 28,
+      rest: 17,
+    });
+  });
+
+  it('keep never sets this part below the time already logged', () => {
+    expect(splitDefaults(task({ estimateMin: 60, actualAccruedMin: 80 }), 'keep')).toEqual({
+      thisPart: 80,
+      rest: SPLIT_MIN_REMAINDER,
+    });
+  });
+
+  it('is null when nothing was scoped', () => {
+    expect(splitDefaults(task({ estimateMin: null }), 'keep')).toEqual({ thisPart: null, rest: null });
   });
 });
 
@@ -117,9 +154,14 @@ describe('statusLabel', () => {
 });
 
 describe('scopeLabel', () => {
-  it('tracks how far scoping has progressed', () => {
+  it('Scope until estimated, Rescope while open (even started), Details once finished', () => {
     expect(scopeLabel(task({ estimateMin: null }))).toBe('Scope');
     expect(scopeLabel(task({ estimateMin: 30, estimateLockedMin: null }))).toBe('Rescope');
-    expect(scopeLabel(task({ estimateMin: 30, estimateLockedMin: 30 }))).toBe('Edit details');
+    expect(scopeLabel(task({ status: 'in_progress', estimateMin: 30, estimateLockedMin: 30 }))).toBe(
+      'Rescope',
+    );
+    expect(scopeLabel(task({ status: 'done', estimateMin: 30, estimateLockedMin: 30 }))).toBe(
+      'Details',
+    );
   });
 });

@@ -124,7 +124,7 @@ function TaskMeta({
   const canScope = task.status === 'backlog' || task.status === 'planned';
   const bits: string[] = [];
   if (task.status === 'in_progress') {
-    const hasEstimate = task.estimateLockedMin != null || task.estimateMin != null;
+    const hasEstimate = task.estimateMin != null;
     bits.push(`${fmtDuration(task.actualAccruedMin)} logged`);
     if (hasEstimate) bits.push(`${fmtDuration(remainingMin(task))} left`);
   } else if (task.estimateMin != null) {

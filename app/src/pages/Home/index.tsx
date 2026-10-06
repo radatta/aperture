@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dayKey, todayKey } from '@aperture/shared';
+import { calibrationTasks, dayKey, inSplitFamily, todayKey } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
@@ -213,13 +213,13 @@ function ReviewCard({ today }: { today: string }) {
   const { data: entries = [] } = useLog(today);
   const { data: tasks = [] } = useAllTasks();
   const recent = entries.slice(-3).reverse();
+  // Every task finished today is listed. A calibration point (done + locked, outside a split family —
+  // split.ts) gets its estimate-vs-actual bar; the rest get a plain row: a split part (its lock covers the
+  // whole job, so a bar would mislead) or a task finished without an estimate.
   const doneToday = tasks.filter(
-    (t) =>
-      t.status === 'done' &&
-      t.completedAt != null &&
-      t.estimateLockedMin != null &&
-      dayKey(t.completedAt, start) === today,
+    (t) => t.status === 'done' && t.completedAt != null && dayKey(t.completedAt, start) === today,
   );
+  const measured = new Set(calibrationTasks(tasks).map((t) => t.id));
 
   return (
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>
@@ -256,14 +256,30 @@ function ReviewCard({ today }: { today: string }) {
             <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
               Done today · estimate vs actual
             </Text>
-            {doneToday.map((t) => (
-              <DeltaBar
-                key={t.id}
-                label={t.title}
-                estimateMin={t.estimateLockedMin!}
-                actualMin={t.actualAccruedMin}
-              />
-            ))}
+            {doneToday.map((t) =>
+              measured.has(t.id) ? (
+                <DeltaBar
+                  key={t.id}
+                  label={t.title}
+                  estimateMin={t.estimateLockedMin!}
+                  actualMin={t.actualAccruedMin}
+                />
+              ) : (
+                <div key={t.id} className="flex flex-col gap-1">
+                  <Text size="sm" tone="muted" className="truncate">
+                    {t.title}
+                  </Text>
+                  <div className="flex items-baseline gap-2">
+                    <Text size="sm" weight="medium" tabular>
+                      {fmtDuration(t.actualAccruedMin)}
+                    </Text>
+                    <Text size="xs" tone="muted">
+                      {inSplitFamily(t, tasks) ? 'split' : 'no estimate'}
+                    </Text>
+                  </div>
+                </div>
+              ),
+            )}
           </div>
         )}
         <StillOpenSection today={today} />

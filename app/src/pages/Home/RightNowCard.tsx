@@ -29,7 +29,8 @@ const PROMPT_COPY: Record<'pick' | 'next' | 'all-done', string> = {
   'all-done': 'Big 3 done. That’s the day’s win.',
 };
 
-const estimateOf = (t: Task): number | null => t.estimateLockedMin ?? t.estimateMin;
+// The working estimate — the hero counts up against what you currently think it'll take.
+const estimateOf = (t: Task): number | null => t.estimateMin;
 
 // A TIMED task's row takes the urgency colour (dueStyle.ts); every row carries a transparent border so
 // the colour never shifts layout. Re-read every minute.

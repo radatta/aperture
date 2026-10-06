@@ -417,17 +417,70 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(g.events.size).toBe(1);
   });
 
-  it('split (cancel or done) moves the event to the follow-up — renamed, never duplicated', async () => {
-    for (const finish of ['cancelled', 'done'] as const) {
-      const { g, b } = await connected();
-      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
-      if (finish === 'done') await b.transitionTask(t.id, 'in_progress');
-      const { original, followUp } = await b.splitTask(t.id, finish, 'x, part 2');
-      expect(original.gcalEventId).toBeNull();
-      expect(followUp.gcalEventId).toBe(t.gcalEventId);
-      expect(g.events.size).toBe(1);
-      expect(only(g)[1].title).toBe('x, part 2');
-    }
+  it('a done split moves the event to the follow-up — renamed, never duplicated', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t.id, 'in_progress');
+    const { original, followUp } = await b.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 'x, part 2', estimateMin: null },
+    });
+    expect(original.gcalEventId).toBeNull();
+    expect(followUp.gcalEventId).toBe(t.gcalEventId);
+    expect(g.events.size).toBe(1);
+    expect(only(g)[1].title).toBe('x, part 2');
+  });
+
+  it('a done split re-times the moved event to the follow-up’s estimate', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', estimateMin: 30, dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t.id, 'in_progress');
+    await b.splitTask(t.id, {
+      finish: 'done',
+      actualMin: 20,
+      followUp: { title: 'x, part 2', estimateMin: 90 },
+    });
+    expect(only(g)[1].startMs).toBe(at('2026-10-09', '14:30'));
+  });
+
+  it('a keep split with an owed removal carries it out', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.markDead('A');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null }); // remove fails → owed
+    await b.completeGoogleConnect('A');
+    const { original } = await b.splitTask(t.id, {
+      finish: 'keep',
+      followUp: { title: 'x, part 2', estimateMin: null },
+    });
+    expect(original).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+  });
+
+  it('a keep split leaves the original its event and gives the follow-up its own block', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const { original, followUp } = await b.splitTask(t.id, {
+      finish: 'keep',
+      followUp: { title: 'x, part 2', estimateMin: 30 },
+    });
+    expect(original.gcalEventId).toBe(t.gcalEventId);
+    expect(followUp.gcalEventId).not.toBeNull();
+    expect(followUp.gcalEventId).not.toBe(t.gcalEventId);
+    expect([...g.events.values()].map((e) => e.title).sort()).toEqual(['x', 'x, part 2']);
+  });
+
+  it("a started task's estimate edit re-times its event", async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({
+      title: 'x',
+      estimateMin: 30,
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    });
+    await b.transitionTask(t.id, 'in_progress');
+    await b.setTaskEstimate(t.id, 90, null);
+    expect(only(g)[1].startMs).toBe(at('2026-10-09', '14:30'));
   });
 
   it('a failed remove keeps the event linked and says so; the retry finishes the removal', async () => {
@@ -455,8 +508,8 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(g.events.size).toBe(0);
   });
 
-  it('split keeps a manual event on an untimed original (done), and removes it on cancel', async () => {
-    for (const finish of ['done', 'cancelled'] as const) {
+  it('split keeps a manual event on an untimed original, done or kept going', async () => {
+    for (const finish of ['done', 'keep'] as const) {
       const { g, b } = await connected();
       const t = await b.createTask({ title: 'x', dueDay: '2026-10-09' });
       await b.insertCalendarEvent({
@@ -468,15 +521,14 @@ describe('calendar auto-sync (timed tasks)', () => {
         endMs: at('2026-10-08', '15:00'),
       });
       await b.transitionTask(t.id, 'in_progress');
-      const { original, followUp } = await b.splitTask(t.id, finish, 'x, part 2');
+      const { original, followUp } = await b.splitTask(t.id, {
+        finish,
+        followUp: { title: 'x, part 2', estimateMin: null },
+      });
       expect(followUp.gcalEventId).toBeNull();
-      if (finish === 'done') {
-        expect(original.gcalEventId).not.toBeNull();
-        expect(only(g)[1].title).toBe('x'); // the record of the work done, untouched
-      } else {
-        expect(original.gcalEventId).toBeNull();
-        expect(g.events.size).toBe(0);
-      }
+      expect(original.gcalEventId).not.toBeNull();
+      expect(g.events.size).toBe(1);
+      expect(only(g)[1].title).toBe('x'); // the record of the work done, untouched
     }
   });
 
@@ -516,7 +568,11 @@ describe('calendar auto-sync (timed tasks)', () => {
     const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
     g.markDead('A');
     await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null });
-    const { original } = await b.splitTask(t.id, 'cancelled', 'x, part 2');
+    await b.transitionTask(t.id, 'in_progress');
+    const { original } = await b.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 'x, part 2', estimateMin: null },
+    });
     expect(original.gcalEventId).toBe(t.gcalEventId);
     expect(original.gcalSyncError).toMatch(/^Couldn’t remove/);
     expect(g.events.size).toBe(1);

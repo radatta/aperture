@@ -23,6 +23,7 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
     estimateMin: null,
     bufferMin: null,
     estimateLockedMin: null,
+    splitFromId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,

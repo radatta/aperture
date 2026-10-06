@@ -9,29 +9,35 @@ function client() {
   return createStubClient({ seed: false, storageKey: `flow-${Math.random()}` });
 }
 
-describe('estimate freeze on start-of-work', () => {
-  it('freezes the estimate on first exit from planning and rejects later edits', async () => {
+describe('the calibration baseline freezes on start-of-work', () => {
+  it('locks the pre-work estimate; a later rescope moves only the working estimate', async () => {
     const api = client();
     const t = await api.createTask({ title: 'ship it' });
     await api.setTaskEstimate(t.id, 60, 15);
     const started = await api.transitionTask(t.id, 'in_progress');
     expect(started.estimateLockedMin).toBe(60); // frozen at the pre-work value
-    await expect(api.setTaskEstimate(t.id, 90, null)).rejects.toThrow(); // hindsight can't launder it
+    const rescoped = await api.setTaskEstimate(t.id, 90, null);
+    expect(rescoped.estimateMin).toBe(90);
+    expect(rescoped.estimateLockedMin).toBe(60); // hindsight can't launder the baseline
   });
 });
 
-describe('scope change is a split, not an edit', () => {
-  it('finishes the original and spawns a fresh unlocked follow-up', async () => {
+describe('scope change is a split', () => {
+  it('finishes this part and spawns a linked, unlocked follow-up', async () => {
     const api = client();
     const t = await api.createTask({ title: 'big thing' });
     await api.setTaskEstimate(t.id, 120, null);
     await api.transitionTask(t.id, 'in_progress');
-    const { original, followUp } = await api.splitTask(t.id, 'done', 'big thing (cont.)');
+    const { original, followUp } = await api.splitTask(t.id, {
+      finish: 'done',
+      actualMin: 70,
+      followUp: { title: 'big thing (cont.)', estimateMin: 90 },
+    });
     expect(original.status).toBe('done');
     expect(original.estimateLockedMin).toBe(120); // original keeps its frozen value
     expect(followUp.status).toBe('backlog');
     expect(followUp.estimateLockedMin).toBeNull(); // a new prediction for the remaining work
-    expect(followUp.title).toBe('big thing (cont.)');
+    expect(followUp).toMatchObject({ title: 'big thing (cont.)', splitFromId: t.id });
   });
 });
 
