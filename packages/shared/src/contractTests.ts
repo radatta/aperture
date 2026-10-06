@@ -342,6 +342,41 @@ export function runApiContract(
       expect(ids).not.toContain(b.id);
     });
 
+    it('tasks: a backlog original with an old plan row splits its rest into the backlog', async () => {
+      const t = await api.createTask({ title: 'Rolled back', estimateMin: 60 });
+      await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 60, order: 0 });
+      await api.transitionTask(t.id, 'planned');
+      await api.transitionTask(t.id, 'in_progress');
+      await api.transitionTask(t.id, 'backlog'); // rollover: the row stays as history
+      const { followUp } = await api.splitTask(t.id, {
+        finish: 'keep',
+        followUp: { title: 'Rolled back, rest', estimateMin: 30 },
+      });
+      expect(followUp.status).toBe('backlog');
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.taskId)).not.toContain(
+        followUp.id,
+      );
+    });
+
+    it('tasks: a split rejects negative or non-number minutes before any write', async () => {
+      const t = await api.createTask({ title: 'Numbers', estimateMin: 30 });
+      await api.transitionTask(t.id, 'in_progress');
+      const before = (await api.listTasks()).length;
+      const bad = [
+        { finish: 'done' as const, actualMin: -5, followUp: { title: 'r', estimateMin: 5 } },
+        { finish: 'keep' as const, estimateMin: -1, followUp: { title: 'r', estimateMin: 5 } },
+        { finish: 'keep' as const, followUp: { title: 'r', estimateMin: -5 } },
+        {
+          finish: 'done' as const,
+          actualMin: Number.NaN,
+          followUp: { title: 'r', estimateMin: 5 },
+        },
+      ];
+      for (const input of bad) await expect(api.splitTask(t.id, input)).rejects.toThrow(/minutes/);
+      expect((await api.listTasks()).length).toBe(before);
+      expect(await api.getTask(t.id)).toMatchObject({ status: 'in_progress', actualAccruedMin: 0 });
+    });
+
     it('tasks: a split with an empty follow-up title writes nothing', async () => {
       const t = await api.createTask({ title: 'keep me', estimateMin: 30 });
       await api.transitionTask(t.id, 'in_progress');

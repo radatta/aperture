@@ -361,7 +361,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'split_task',
     description:
-      'Split a task in two when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new task (followUpTitle, followUpEstimateMin). Optional title/estimateMin/bufferMin rename or rescope this part. The new task keeps the category, deadline, notes and roll, lands on this task\'s plan day if it has one (else the backlog), and links back to it. Nothing is cancelled. Returns { original, followUp }.',
+      'Split a task in two when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new task (followUpTitle, followUpEstimateMin). Optional title/estimateMin/bufferMin rename or rescope this part. The new task keeps the category, deadline, notes and roll; it lands on this task\'s latest plan day when this task is planned or in progress (else the backlog), and links back to it (splitFromId) only if work had started — its split family is left out of calibration until it can be scored as one. Nothing is cancelled. Returns { original, followUp }.',
     inputSchema: {
       type: 'object',
       properties: {

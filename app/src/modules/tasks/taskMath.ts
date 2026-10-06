@@ -44,14 +44,22 @@ export function remainingMin(task: Task): number {
   return Math.max(0, (task.estimateMin ?? 0) - task.actualAccruedMin);
 }
 
-// Split prefills: the follow-up's default title, and its estimate — what's left of the working
-// estimate, floored so a part that ran over still gets a real number. Null when nothing was scoped.
+// Split prefills that never invent scope — the parts add up to the working estimate (null when nothing
+// was scoped), so any growth the user types is what "Both parts … · was …" shows. Done: the rest is
+// what's left. Keep: what's left is shared — half goes to the rest, the other half stays on this part.
+// The rest is floored so a part that ran over still gets a real number.
 export const SPLIT_TITLE_SUFFIX = ' (cont.)';
 export const SPLIT_MIN_REMAINDER = 5;
 
-export function suggestedRemainder(task: Task): number | null {
-  if (task.estimateMin == null) return null;
-  return Math.max(SPLIT_MIN_REMAINDER, task.estimateMin - task.actualAccruedMin);
+export function splitDefaults(
+  task: Task,
+  finish: 'done' | 'keep',
+): { thisPart: number | null; rest: number | null } {
+  if (task.estimateMin == null) return { thisPart: null, rest: null };
+  const left = Math.max(0, task.estimateMin - task.actualAccruedMin);
+  if (finish === 'done') return { thisPart: null, rest: Math.max(SPLIT_MIN_REMAINDER, left) };
+  const rest = Math.max(SPLIT_MIN_REMAINDER, Math.round(left / 2));
+  return { thisPart: Math.max(0, task.estimateMin - rest), rest };
 }
 
 // Soonest-due-first HINT for the morning backlog pull: dated tasks ascending by dueDay — within a day,

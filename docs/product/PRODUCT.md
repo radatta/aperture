@@ -99,7 +99,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 **Lifecycle:** `backlog → planned → in_progress → done` (or `cancelled` at any point).
 1. **Captured** — title only, unscoped, in backlog.
 2. **Scoped** (morning pass) — add **estimate** + **buffer** + **category**. Scheduled onto one or more days (**multi-day** supported) with a manual **sort order**. Estimate stays editable at any open status (rescoping mid-task is fine).
-3. **Worked** — time accrues; the **calibration baseline freezes at start-of-work** (so hindsight can't launder the calibration) — a later rescope moves only the working estimate. Work that turned out bigger is **split**: this part finishes or keeps going, the rest becomes a linked task, and the family is calibrated as one ([split.md](../areas/tasks/split.md)).
+3. **Worked** — time accrues; the **calibration baseline freezes at start-of-work** (so hindsight can't launder the calibration) — a later rescope moves only the working estimate. Work that turned out bigger is **split**: this part finishes or keeps going, the rest becomes a linked task, and the family is calibrated as one (planned — until then its parts are left out; [split.md](../areas/tasks/split.md)).
 4. **Done** — **actual time** recorded → estimate-vs-actual delta captured. `cancelled` tasks are excluded from calibration.
 
 **Recurring tasks** — a task can recur (simple rules: daily / weekdays / weekly / every-N). Each occurrence is its own instance with its own estimate/actual → its own calibration point. Distinct from **habits** (recurring *behaviors*, no estimate).

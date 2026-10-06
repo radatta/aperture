@@ -1,19 +1,19 @@
 import { useState } from 'react';
-import { canTransitionTask, todayKey } from '@aperture/shared';
+import { canTransitionTask } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
 import { ModeToggle } from '../../../components/ModeToggle';
 import { Text } from '../../../components/Text';
-import { usePlansForDay } from '../../../data/hooks/usePlans';
-import { useSettings } from '../../../data/hooks/useSettings';
 import { useSplitTask } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
-import { SPLIT_TITLE_SUFFIX, suggestedRemainder } from '../taskMath';
+import { SPLIT_TITLE_SUFFIX, splitDefaults } from '../taskMath';
 
 type Finish = 'done' | 'keep';
 
 const minutes = (v: string): number | null => (v.trim() === '' ? null : Number(v));
+const valid = (v: string) => v.trim() === '' || Number(v) >= 0; // empty, or real non-negative minutes
+const str = (n: number | null) => n?.toString() ?? '';
 
 // Split: one task becomes two (split.ts). This part is either done (an actual is required — it feeds
 // calibration, like Mark done) or keeps going (rescoped), and the rest becomes a new task with its own
@@ -28,37 +28,41 @@ export function SplitForm({
   onCancel: () => void;
 }) {
   const split = useSplitTask();
-  const { data: settings } = useSettings();
-  const { data: todayPlans = [] } = usePlansForDay(todayKey(settings?.dayStartHour ?? 4));
   // "Done" is only a legal finish once work has started — the state machine forbids backlog|planned →
   // done. An unstarted task can only keep going, so there's no choice to offer.
   const canFinishDone = canTransitionTask(task.status, 'done');
-  const [finish, setFinish] = useState<Finish>(canFinishDone ? 'done' : 'keep');
+  const [finish, setFinish_] = useState<Finish>(canFinishDone ? 'done' : 'keep');
   const [title, setTitle] = useState(task.title);
   const [actual, setActual] = useState(() =>
     task.actualAccruedMin > 0 ? String(Math.round(task.actualAccruedMin)) : '',
   );
-  const [estimate, setEstimate] = useState(task.estimateMin?.toString() ?? '');
+  const [estimate, setEstimate] = useState(str(splitDefaults(task, 'keep').thisPart));
   const [restTitle, setRestTitle] = useState(`${task.title}${SPLIT_TITLE_SUFFIX}`);
-  const [restEstimate, setRestEstimate] = useState(suggestedRemainder(task)?.toString() ?? '');
+  const [restEstimate, setRestEstimate] = useState(str(splitDefaults(task, finish).rest));
+  // Switching mode re-defaults the rest's estimate — unless the user already typed their own.
+  const setFinish = (next: Finish) => {
+    if (restEstimate === str(splitDefaults(task, finish).rest))
+      setRestEstimate(str(splitDefaults(task, next).rest));
+    setFinish_(next);
+  };
 
   const done = finish === 'done';
-  // Where the rest lands (the server rule: an open original's latest plan day, else the backlog). Only
-  // today's rows are loaded here, so a task planned on another day gets the general phrasing.
-  const onAPlan = task.status === 'planned' || task.status === 'in_progress';
-  const landing = !onAPlan
-    ? 'Lands in the backlog'
-    : todayPlans.some((p) => p.taskId === task.id)
-      ? 'Lands on today’s plan'
-      : 'Lands where this one is planned, else the backlog';
+  // Where the rest lands — the server rule, stated generally: plan rows are loaded per day here, and a
+  // planned task can have rows ahead of today (the night "Tomorrow"), so naming a day could be wrong.
+  const landing =
+    task.status === 'planned' || task.status === 'in_progress'
+      ? 'Lands on this one’s latest plan day, else the backlog'
+      : 'Lands in the backlog';
   // The two parts' total vs the original working estimate — the size of the rescope, at a glance.
   const thisPart = done ? minutes(actual) : minutes(estimate);
   const rest = minutes(restEstimate);
   const total = thisPart != null && rest != null ? thisPart + rest : null;
+  const numbersOk = valid(actual) && valid(estimate) && valid(restEstimate);
   const canSubmit =
-    !!title.trim() && !!restTitle.trim() && (!done || actual.trim() !== '') && !split.isPending;
+    !!title.trim() && !!restTitle.trim() && (!done || actual.trim() !== '') && numbersOk;
 
   async function submit() {
+    if (!canSubmit || split.isPending) return;
     try {
       await split.mutateAsync({
         id: task.id,
@@ -103,10 +107,16 @@ export function SplitForm({
         <Text as="p" size="sm" weight="semibold" tone="muted">
           This part
         </Text>
-        <Field label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <Field
+          label="Title"
+          aria-label="This part's title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
         {done ? (
           <Field
             label="Actual (min)"
+            aria-label="This part's actual (min)"
             type="number"
             min={0}
             inputMode="numeric"
@@ -118,6 +128,7 @@ export function SplitForm({
         ) : (
           <Field
             label="Estimate (min)"
+            aria-label="This part's estimate (min)"
             type="number"
             min={0}
             inputMode="numeric"
@@ -132,9 +143,15 @@ export function SplitForm({
         <Text as="p" size="sm" weight="semibold" tone="muted">
           Remaining → new task
         </Text>
-        <Field label="Title" value={restTitle} onChange={(e) => setRestTitle(e.target.value)} />
+        <Field
+          label="Title"
+          aria-label="New task's title"
+          value={restTitle}
+          onChange={(e) => setRestTitle(e.target.value)}
+        />
         <Field
           label="Estimate (min)"
+          aria-label="New task's estimate (min)"
           type="number"
           min={0}
           inputMode="numeric"
@@ -152,17 +169,32 @@ export function SplitForm({
       </div>
 
       <div className="flex gap-2">
-        <Button size="sm" disabled={!canSubmit} onClick={submit}>
+        {/* aria-disabled while pending (like the details Save): a keyboard user who pressed Split keeps
+            focus on it, rather than dropping to <body> if the split fails. Invalid input really disables. */}
+        <Button
+          size="sm"
+          disabled={!canSubmit}
+          aria-disabled={split.isPending}
+          onClick={submit}
+          className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
+        >
           Split
         </Button>
         <Button variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>
       </div>
-      {split.isError && (
+      {!numbersOk && (
         <Text size="xs" tone="danger">
-          Couldn&apos;t split this task. Please try again.
+          Minutes can&apos;t be negative.
         </Text>
+      )}
+      {split.isError && (
+        <div role="alert">
+          <Text size="xs" tone="danger">
+            Couldn&apos;t split this task. Please try again.
+          </Text>
+        </div>
       )}
     </div>
   );

@@ -47,6 +47,7 @@ export function DoneForm({
         {task.estimateLockedMin != null && (
           <Text size="sm" tone="muted" tabular>
             vs {fmtDuration(task.estimateLockedMin)} estimated
+            {task.estimateMin !== task.estimateLockedMin && ' at start'}
           </Text>
         )}
       </div>

@@ -9,7 +9,7 @@ import {
   SPLIT_MIN_REMAINDER,
   statusLabel,
   suggestedBuffer,
-  suggestedRemainder,
+  splitDefaults,
 } from './taskMath';
 
 const task = (over: Partial<Task>): Task => ({
@@ -67,13 +67,27 @@ describe('remainingMin', () => {
   });
 });
 
-describe('suggestedRemainder', () => {
-  it("is what's left of the working estimate, floored, or null when unscoped", () => {
-    expect(suggestedRemainder(task({ estimateMin: 45, actualAccruedMin: 12 }))).toBe(33);
-    expect(suggestedRemainder(task({ estimateMin: 45, actualAccruedMin: 80 }))).toBe(
+describe('splitDefaults', () => {
+  it('done: the rest is what is left of the working estimate, floored', () => {
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 12 }), 'done').rest).toBe(33);
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 80 }), 'done').rest).toBe(
       SPLIT_MIN_REMAINDER,
     );
-    expect(suggestedRemainder(task({ estimateMin: null }))).toBeNull();
+  });
+
+  it('keep: what is left is shared, so the parts add up to the estimate', () => {
+    expect(splitDefaults(task({ estimateMin: 60, actualAccruedMin: 0 }), 'keep')).toEqual({
+      thisPart: 30,
+      rest: 30,
+    });
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 12 }), 'keep')).toEqual({
+      thisPart: 28,
+      rest: 17,
+    });
+  });
+
+  it('is null when nothing was scoped', () => {
+    expect(splitDefaults(task({ estimateMin: null }), 'keep')).toEqual({ thisPart: null, rest: null });
   });
 });
 

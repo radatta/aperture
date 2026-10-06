@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dayKey, inSplitFamily, todayKey } from '@aperture/shared';
+import { dayKey, isCalibrationPoint, todayKey } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
@@ -215,10 +215,8 @@ function ReviewCard({ today }: { today: string }) {
   const recent = entries.slice(-3).reverse();
   const doneToday = tasks.filter(
     (t) =>
-      t.status === 'done' &&
+      isCalibrationPoint(t, tasks) && // done + locked, outside a split family (split.ts)
       t.completedAt != null &&
-      t.estimateLockedMin != null &&
-      !inSplitFamily(t, tasks) && // a split part's lock covers the whole job (split.ts)
       dayKey(t.completedAt, start) === today,
   );
 

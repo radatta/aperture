@@ -431,6 +431,32 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(only(g)[1].title).toBe('x, part 2');
   });
 
+  it('a done split re-times the moved event to the follow-up’s estimate', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', estimateMin: 30, dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t.id, 'in_progress');
+    await b.splitTask(t.id, {
+      finish: 'done',
+      actualMin: 20,
+      followUp: { title: 'x, part 2', estimateMin: 90 },
+    });
+    expect(only(g)[1].startMs).toBe(at('2026-10-09', '14:30'));
+  });
+
+  it('a keep split with an owed removal carries it out', async () => {
+    const { g, b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    g.markDead('A');
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null }); // remove fails → owed
+    await b.completeGoogleConnect('A');
+    const { original } = await b.splitTask(t.id, {
+      finish: 'keep',
+      followUp: { title: 'x, part 2', estimateMin: null },
+    });
+    expect(original).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(g.events.size).toBe(0);
+  });
+
   it('a keep split leaves the original its event and gives the follow-up its own block', async () => {
     const { g, b } = await connected();
     const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });

@@ -56,7 +56,7 @@ import {
   setNotesArg,
   followUpPlanDay,
   followUpPlanMinutes,
-  isCalibrationPoint,
+  calibrationTasks,
   splitFollowUp,
   splitOriginal,
   stalePlannedMoves,
@@ -1440,9 +1440,8 @@ class StubClient implements ApiClient {
   // --- Calibration ---------------------------------------------------------
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = this.dayStartHour();
-    const tasks = this.alive(this.store.tasks);
-    return tasks
-      .filter((t) => isCalibrationPoint(t, tasks) && t.completedAt !== null)
+    return calibrationTasks(this.alive(this.store.tasks))
+      .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
         day: dayKey(t.completedAt!, start),

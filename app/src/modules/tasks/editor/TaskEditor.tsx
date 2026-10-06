@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { inSplitFamily, splitChildren, todayKey } from '@aperture/shared';
+import { inSplitFamily, isCalibrationPoint, splitChildren, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { DeltaBar } from '../../../components/DeltaBar';
 import { Text } from '../../../components/Text';
 import { fmtDateTime, fmtDuration } from '../../../lib/format';
+import { returnFocus } from '../../../lib/useDisclosure';
 import { useDeleteCalendarEvent, useSyncCalendarEvent } from '../../../data/hooks/useCalendar';
 import { usePlansForDay } from '../../../data/hooks/usePlans';
 import { useSeries } from '../../../data/hooks/useSeries';
@@ -70,13 +71,13 @@ export function TaskEditor({
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
   const autoCalendar = settings?.autoCalendar !== false && !!settings?.calendarWriteDefault;
-  const { data: allTasks = [] } = useAllTasks();
+  const { data: allTasks = [], isSuccess: tasksLoaded } = useAllTasks();
   const [reveal, setReveal] = useState<Reveal>(null);
   // Closing the split reveal (Cancel, or a kept-going split) puts focus back on its opener, never <body>.
   const splitRef = useRef<HTMLButtonElement>(null);
   const closeSplit = () => {
     setReveal(null);
-    requestAnimationFrame(() => splitRef.current?.focus());
+    requestAnimationFrame(() => splitRef.current && returnFocus(splitRef.current));
   };
 
   const inProgress = task.status === 'in_progress';
@@ -99,8 +100,10 @@ export function TaskEditor({
   const showLogged = task.actualAccruedMin > 0;
   const showRemaining = inProgress && hasEstimate;
   const showLocked = task.estimateLockedMin != null;
-  // A split family member isn't measured alone — its lock covers the whole job (split.ts).
-  const showDelta = isDone && task.estimateLockedMin != null && !inSplitFamily(task, allTasks);
+  // A split family member isn't measured alone — its lock covers the whole job (split.ts). Needs the
+  // full list to know: until it loads, a family root would look like a lone task.
+  const inFamily = inSplitFamily(task, allTasks);
+  const showDelta = tasksLoaded && isCalibrationPoint(task, allTasks);
   const splitFrom = task.splitFromId ? allTasks.find((t) => t.id === task.splitFromId) : undefined;
   const splitInto = splitChildren(allTasks, task.id);
   const timeHasContent =
@@ -132,7 +135,12 @@ export function TaskEditor({
 
       {intent === 'finish' && finish}
 
-      <TaskDetailsForm task={task} onDirtyChange={onDirtyChange} estimateRef={estimateRef} />
+      <TaskDetailsForm
+        task={task}
+        inSplitFamily={inFamily}
+        onDirtyChange={onDirtyChange}
+        estimateRef={estimateRef}
+      />
 
       {intent !== 'finish' && finish}
 

@@ -39,6 +39,8 @@ All split and family rules live in one file, `packages/shared/src/split.ts`, whi
 - **Manual events:** stay on A.
 - **Owed removals:** carried out through the reporting path.
 
+Write order on a done timed split: the original is saved unlinked, and then the follow-up is saved with the link. If the follow-up's write fails, the Google event is left orphaned but visible. The reverse order is worse: if the original's write failed, two tasks would point at one event, and a retry would duplicate the follow-up.
+
 **D5. Rolls.** B inherits `rollId`, so finishing the rest tomorrow honestly counts as a rep tomorrow, and one pick can yield two reps. With a kept-going A, a roll has two open reps; `findOpenRollTask` re-plans the first. Harmless.
 
 **D6. Interim calibration: split families are excluded.** A done A measured against the whole job's lock would read "overestimated" when you actually underestimated. So `isCalibrationPoint` leaves out every family member (A and B) until piece 3 scores the family as one point (root lock vs Σ actual). Excluding B too keeps the aggregate from jumping when piece 3 lands.
@@ -60,7 +62,7 @@ Smaller build-time calls (file placement, write order, hint copy, focus, MCP str
 - **Split form** (`SplitForm`, phone-width stack):
   - a "Done with this part / Keep going" toggle (unstarted tasks: no toggle, keep only);
   - **This part** (title, plus Actual or Estimate);
-  - **Remaining → new task** (title "… (cont.)", estimate prefilled with `max(5, estimate − accrued)`);
+  - **Remaining → new task** (title "… (cont.)", estimate prefilled so the parts add up to the working estimate — done: what's left, keep: half of what's left, each floored at 5);
   - a landing hint plus "Both parts: … · was …".
   - Done closes the modal. Keep collapses the reveal and returns focus to Split….
 - **Time section**: "Split from «title»" on B, "Split into «titles»" on A.
@@ -70,4 +72,4 @@ Smaller build-time calls (file placement, write order, hint copy, focus, MCP str
 
 - **Shared:** `split.ts` (new) + `split.test.ts`; `Task.splitFromId`; `SplitTaskInput` and `splitTask(id, input)`; `canEditEstimate`/`withEstimate` relaxed; `splitFollowUp` moved from `machines.ts` to `split.ts`; contract cases (lock survives a rescope; done, keep, unstarted, chain and validation splits).
 - **Lambdas:** `BackendClient.splitTask`/`getCalibration`; the `split_task` tool and description updates; calendar split tests (done moves the link, keep makes two blocks, a rescope of a started task re-times the event).
-- **App:** `SplitForm` rewrite; `TaskDetailsForm`/`TaskEditor` (editable estimate, provenance rows, family-aware delta, focus); `taskMath` (`remainingMin`, `scopeLabel`, `suggestedRemainder`); `RightNowCard`, `ReviewCard`, `TaskCard`; stub parity; a seeded split family ("Write the literature review").
+- **App:** `SplitForm` rewrite; `TaskDetailsForm`/`TaskEditor` (editable estimate, provenance rows, family-aware delta, focus); `taskMath` (`remainingMin`, `scopeLabel`, `splitDefaults`); `RightNowCard`, `ReviewCard`, `TaskCard`; stub parity; a seeded split family ("Write the literature review").

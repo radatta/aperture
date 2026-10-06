@@ -28,7 +28,7 @@ import {
   setNotesArg,
   followUpPlanDay,
   followUpPlanMinutes,
-  isCalibrationPoint,
+  calibrationTasks,
   splitFollowUp,
   splitOriginal,
   stalePlannedMoves,
@@ -1199,9 +1199,8 @@ export class BackendClient implements ApiClient {
   // day-range → epoch-window mapping (with the offset) is nailed down.
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = (await this.ensureSettings()).dayStartHour;
-    const tasks = await this.repo.listTasks();
-    return tasks
-      .filter((t) => isCalibrationPoint(t, tasks) && t.completedAt !== null)
+    return calibrationTasks(await this.repo.listTasks())
+      .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
         day: dayKey(t.completedAt as number, start),

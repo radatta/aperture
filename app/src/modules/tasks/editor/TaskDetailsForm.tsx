@@ -29,10 +29,12 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 // (showing "Saved"); the modal's own Close is the way out.
 export function TaskDetailsForm({
   task: live,
+  inSplitFamily = false,
   onDirtyChange,
   estimateRef,
 }: {
   task: Task;
+  inSplitFamily?: boolean; // its lock covers a split family's whole job, so it isn't measured alone
   onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
@@ -61,6 +63,22 @@ export function TaskDetailsForm({
   const [dueTime, setDueTime] = useState<string>(task.dueTime ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
+  // A change that lands from elsewhere — a split's rename/rescope, another device, the MCP — reseeds
+  // every field the user hasn't touched (still showing the previous value); edits in progress stay.
+  const prevTask = useRef(task);
+  useEffect(() => {
+    const prev = prevTask.current;
+    prevTask.current = task;
+    if (prev === task) return;
+    const reseed = (set: (f: (v: string) => string) => void, was: string, now: string) =>
+      set((v) => (v === was ? now : v));
+    reseed(setTitle_, prev.title, task.title);
+    reseed(setEstimate_, prev.estimateMin?.toString() ?? '', task.estimateMin?.toString() ?? '');
+    reseed(setBuffer, prev.bufferMin?.toString() ?? '', task.bufferMin?.toString() ?? '');
+    reseed(setCategoryId, prev.categoryId ?? '', task.categoryId ?? '');
+    reseed(setDueDay_, prev.dueDay ?? '', task.dueDay ?? '');
+    reseed(setDueTime, prev.dueTime ?? '', task.dueTime ?? '');
+  }, [task]);
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -188,8 +206,10 @@ export function TaskDetailsForm({
             </div>
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted" className="w-full">
-                Started at {fmtDuration(task.estimateLockedMin)} — calibration is measured against
-                that.
+                Started at {fmtDuration(task.estimateLockedMin)}
+                {inSplitFamily
+                  ? ' — split, so it isn’t measured on its own.'
+                  : ' — calibration is measured against that.'}
               </Text>
             )}
           </>
@@ -205,8 +225,10 @@ export function TaskDetailsForm({
             </Text>
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted">
-                Started at {fmtDuration(task.estimateLockedMin)} — calibration is measured against
-                that.
+                Started at {fmtDuration(task.estimateLockedMin)}
+                {inSplitFamily
+                  ? ' — split, so it isn’t measured on its own.'
+                  : ' — calibration is measured against that.'}
               </Text>
             )}
           </div>

@@ -89,3 +89,21 @@ describe('night: still open — when?', () => {
     expect(screen.queryByRole('group', { name: 'essay draft' })).toBeNull();
   });
 });
+
+describe('night: today in review', () => {
+  it('lists a finished task’s estimate vs actual, but not a split part (scored as a family)', async () => {
+    const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });
+    await onToday(api, 'finished thing', 'done', 0);
+    const big = await onToday(api, 'big essay', 'in_progress', 1);
+    await api.splitTask(big.id, {
+      finish: 'done',
+      actualMin: 40,
+      followUp: { title: 'big essay, part 2', estimateMin: 30 },
+    });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    expect(await screen.findByText('finished thing')).toBeTruthy();
+    expect(screen.queryByText('big essay')).toBeNull();
+  });
+});

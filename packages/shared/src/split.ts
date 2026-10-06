@@ -68,6 +68,12 @@ export function isCalibrationPoint(task: Task, tasks: Task[]): boolean {
   return contributesCalibration(task) && !inSplitFamily(task, tasks);
 }
 
+// isCalibrationPoint over a whole list in one pass (getCalibration's scan).
+export function calibrationTasks(tasks: Task[]): Task[] {
+  const parents = new Set(tasks.map((t) => t.splitFromId).filter(Boolean));
+  return tasks.filter((t) => contributesCalibration(t) && !t.splitFromId && !parents.has(t.id));
+}
+
 // Where the follow-up lands: the latest day the original is planned on (pass its alive plan rows), or
 // null → backlog. A past day self-heals — getDay(today)'s stale sweep moves it back to backlog.
 export function followUpPlanDay(plans: TaskPlan[], taskId: string): string | null {
@@ -92,6 +98,20 @@ export function splitOriginal(task: Task, input: SplitTaskInput, now: number): T
     throw new Error(`Only a started task can finish a part (status: ${task.status})`);
   if (!input.followUp?.title?.trim()) throw new Error('Follow-up title is required');
   if (input.title !== undefined && !input.title.trim()) throw new Error('Title is required');
+  // Minutes feed the plan and (actual) calibration — a negative or non-number is never stored.
+  const nums = {
+    actualMin: input.actualMin,
+    estimateMin: input.estimateMin,
+    bufferMin: input.bufferMin,
+    'followUp.estimateMin': input.followUp.estimateMin,
+    'followUp.bufferMin': input.followUp.bufferMin,
+  };
+  for (const [k, v] of Object.entries(nums)) {
+    const nullable = k !== 'actualMin';
+    if (v === undefined || (v === null && nullable)) continue;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+      throw new Error(`${k} must be a non-negative number of minutes`);
+  }
   let next: Task = { ...task, updatedAt: now };
   if (input.title !== undefined) next.title = input.title.trim();
   if (input.estimateMin !== undefined || input.bufferMin !== undefined)
