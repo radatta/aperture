@@ -51,7 +51,8 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   *not* memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory itself (`SIGKILL`/137). A `tsgo`
   fatal has also been seen under load with the mechanism never confirmed — capture the **head** of the
   output, don't assume OOM (`docs/ops/COI-SANDBOX.md` → *Ops notes* → *Transient `tsc` crashes*).
-  Serialise: screenshot, kill the browser, then test.
+  Serialise: screenshot, kill the browser, then test. The feature workflow's gate (*Claude behavior* →
+  *Feature workflow*) is how it keeps them apart.
 
 Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/ops/COI-INCIDENTS.md`.
 
@@ -84,6 +85,16 @@ Same-origin `/api/*` via CloudFront (no CORS); the Function URL is auth `NONE`, 
 
 So when a branch can't fast-forward onto `dev`, **do not propose merging `origin/dev` into it, rebasing onto it, or creating a temporary worktree** — the answer is that the user force-pushes over it. Claude still never pushes to `dev` at all (see Hard-blocked); the point is to stop inventing workarounds for a problem the user solves in one command.
 
+### One worktree per feature — `/workspace` stays on main
+
+`/workspace` is always detached at `origin/main`; no feature work happens there. Every feature starts the same way:
+
+1. `git fetch`, then `git switch --detach origin/main` in `/workspace`.
+2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree` would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.
+3. `CI=true pnpm install` inside the worktree, so it has its own real `node_modules` — never a symlink to the main checkout's (running pnpm through one rewires the main checkout).
+
+The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Remove a worktree only after its PR is open, and only when the user says so** — removing it deletes its gitignored `localNotes/`.
+
 ### Claude drives git — guarded
 
 Claude handles branches, commits, and PRs. **Allowed** git commands:
@@ -93,6 +104,7 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 - `git add`, `git commit`, `git stash`
 - `git push` **to a feature branch only** (sets upstream on first push)
 - `git fetch`, `git rebase origin/main`, `git mv`
+- `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only on the user's say-so
 
 **Hard-blocked (never):**
 
@@ -105,7 +117,7 @@ Merges to `main` happen via PR, not a local push.
 
 **Commit messages: one lowercase line, past tense, 4–5 words — 6 is the hard max.** A hyphenated word counts as one; filenames and acronyms keep their case. No blank line, no body, no trailers — including `Co-Authored-By` and `Claude-Session` (Claude Code's harness adds them by default; this rule overrides that). Say what the change did: `fixed cache policy ttl`, `added oauth metadata facade`, `retuned palette for contrast`. Context that needs recording belongs in `docs/` or the PR body, not the commit. `.claude/hooks/precommit-guard.sh` enforces this — it denies a `git commit` whose message breaks it.
 
-**PR bodies: Claude writes the body to a file, the user opens the PR.** The container's GitHub token is read-only, so the push and `gh pr create` happen on the Mac. Write the body to `localNotes/pr-<branch>.md` (gitignored, survives the session), keep it current as the branch changes, and when the user says they're ready hand them the exact commands: `git push -u origin <branch>` and `gh pr create --title "<title>" --body-file localNotes/pr-<branch>.md`. **Never write `#<number>` in a PR body or title unless you mean to link that PR or issue** — GitHub autolinks every one, so a test count, a step number, or a merged-PR mention becomes a bogus link. Say "PR 33" or use a date instead. Prefixes like `lc#day` are fine (a letter follows the `#`).
+**PR bodies: Claude writes the body to a file, the user opens the PR.** The container's GitHub token is read-only, so the push and `gh pr create` happen on the Mac. Write the body to the worktree's `localNotes/pr-<branch>.md` (gitignored, survives the session), keep it current as the branch changes, and when the user says they're ready hand them the exact commands, run from the worktree path: `git push -u origin <branch>` and `gh pr create --title "<title>" --body-file localNotes/pr-<branch>.md`. **Never write `#<number>` in a PR body or title unless you mean to link that PR or issue** — GitHub autolinks every one, so a test count, a step number, or a merged-PR mention becomes a bogus link. Say "PR 33" or use a date instead. Prefixes like `lc#day` are fine (a letter follows the `#`).
 
 ## Claude behavior
 
@@ -113,7 +125,7 @@ Merges to `main` happen via PR, not a local push.
 - **Aperture MCP connector.** When an `aperture-*` MCP server is registered (`claude mcp list`), its tools read and write the user's **live** Aperture data — tasks, calibration, LeetCode, calendar, attachments. **`aperture` is prod — the user's real data and the default for any real task work. `aperture-dev` is for testing Aperture changes only** (e.g. verifying a dev deploy); never log real tasks there, and say which one you're using. A write hits DynamoDB directly and can create real Google Calendar events / S3 files. **Reads are free. Every write requires the user's explicit, in-the-moment approval — no exceptions.** Never write unprompted or inferred, and if running unattended (e.g. overnight) do **no** writes at all — a write happens only when the user explicitly asks for that specific write, then you do it. `complete_task` requires `actualMin`. Full surface: `docs/areas/mcp/index.md`.
 - **Don't write code that wasn't asked for.** Diagnosis, research, and a proposal are the deliverable until the user says to implement. "Continue" means continue what was asked — it is not license to start editing.
 - **When rebasing or pulling in others' merged work, read the PR(s) first.** Before `git rebase origin/main` (or building on top of freshly-merged branches), read the body of each PR that landed since you branched — `gh pr view <n>` — so you know what's being introduced. Rebasing blind means building on changes you haven't seen: the conflict you resolve or the contract you call may have moved for a reason the PR explains.
-- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. Distrust the plausible rationalisations ("well understood", "only just over", "obvious design", "already researched") — each is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, rewriting logic you have already defended is not.
+- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. Distrust the plausible rationalisations ("well understood", "only just over", "obvious design", "already researched") — each is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, rewriting logic you have already defended is not. The feature workflow (below) always runs it, whatever the count.
 - **Running the `Plan` agent: ask which model, never default.** When the user asks to run `Plan` (or you're about to spawn it) without naming a model, ask which model first — don't pick one silently. The user usually wants `fable`, but token budget varies, so it must be a deliberate choice each time.
 - **Reviews go through the `code-reviewer` agent** (project-aware) — not inline reading. Run it before committing anything non-trivial.
 - **Non-trivial external research → the `search-specialist` agent.** Single-fact lookups can use `WebSearch`/`WebFetch` directly. Codebase search is `Explore`'s job.
@@ -121,6 +133,34 @@ Merges to `main` happen via PR, not a local push.
 - **Version awareness:** always check the registry for the actual latest version before pinning a package — `npm view <pkg> version` (a read-only registry query; fine even though installs are pnpm-only). Never guess versions from memory.
 - **A piped command hides its exit code.** `pnpm typecheck | tail` reports success even when the typecheck never ran — the exit status you see belongs to `tail`. Before reporting any pass/fail, use `set -o pipefail` and echo `${PIPESTATUS[0]}`. This produced a false "it passed" here on 2026-09-07.
 - **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. Hand the user the exact command(s) to run and read back the output — they are your hands on that resource. Same "verify, don't assert" discipline: reason from real output, not from an assumption about what the resource contains.
+
+### Feature workflow
+
+Every feature runs the same phases. **Two modes**, and the user names which:
+
+- **Collaborative (default).** Claude stops at decision points: Plan's questions come back for discussion, and review findings that need a product call or add scope come back as a list.
+- **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands one back. Make the best call from `PRODUCT.md`, the plan, and real day-to-day use (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body summarises it. Parking is only allowed *as* a logged decision, never a quiet "ask later".
+
+Phases:
+
+1. **Worktree** — off `origin/main` (*Git workflow* → *One worktree per feature*).
+2. **Plan** — the `Plan` agent; ask which model.
+3. **Questions** — collaborative: discuss them. Autonomous: answer and log them.
+4. **Build** — only on the user's "execute" plus a number of review rounds (n). While building, after each section run the touched files' tests (`vitest run <file>`) and a typecheck.
+5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
+6. **Review round** — the read-only `code-reviewer` (no tests, no servers) in parallel with whatever each touched package adds:
+
+   | Touched | Adds |
+   | --- | --- |
+   | `app/` | Headless UI agent (`run-app` skill, stub + auth bypass) driving a concrete checklist from the plan, at phone width in light and dark. Screenshots → the worktree's `localNotes/screenshots/round-<n>/`. |
+   | `lambdas/` | No second agent — the node-env handler tests are the runtime proof and the gate ran them. The reviewer gets a backend checklist: writes only via the handler's `writes` object, external calls only via gated gateways, JWT + origin-secret handling. |
+   | `cdk/` | Synth pass: `cdk synth`, diff the template against `origin/main`'s, report changed resources, IAM grants, cdk-nag findings. No creds needed; never alongside tests. |
+   | `packages/shared` | The contract both sides build on — the `app/` and `lambdas/` rows both apply, and the reviewer checks both callers. |
+
+   When the round is back, fix real bugs and convention breaks. Findings that need a product call or add scope: collaborative → a list for the user; autonomous → decide and log. Then the gate runs again, which also starts the next round.
+7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current. The user pushes.
+
+Page-first still holds: a backend half usually follows a frontend that already passed its rounds, so the plan says which half this is, and the reviewer checks the lambda against the contract the stub set.
 
 ### Before concluding "X can't do Y"
 
