@@ -45,7 +45,7 @@ Write order on a done timed split: the original is saved unlinked, and then the 
 
 **D6. Interim calibration: split families are excluded.** A done A measured against the whole job's lock would read "overestimated" when you actually underestimated. So `isCalibrationPoint` leaves out every family member (A and B) until piece 3 scores the family as one point (root lock vs Σ actual). Excluding B too keeps the aggregate from jumping when piece 3 lands.
 
-- Wired into both `getCalibration` impls, the night review card and the editor's DeltaBar.
+- Wired into both `getCalibration` impls and the editor's DeltaBar. The night review still **lists** a finished split part (it's a real task), as a plain row with its actual time and a "split" tag instead of the estimate-vs-actual bar. A task finished with no estimate gets the same plain row, tagged "no estimate".
 - Older split rows predate `splitFromId`, read back `undefined`, and keep counting as before.
 
 **D7. What pieces 2 and 3 inherit.**
