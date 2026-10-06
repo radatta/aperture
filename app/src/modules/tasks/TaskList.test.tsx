@@ -35,7 +35,7 @@ describe('/tasks lenses', () => {
     expect(screen.getByText('Nothing planned yet.')).toBeTruthy();
   });
 
-  it('Week groups by category; adding to today moves the task to the Today lens', async () => {
+  it('Week is flat and soonest-first; adding to today moves the task to the Today lens', async () => {
     const { api, csen, soci } = await seeded();
     await api.createTask({ title: 'pset 2', categoryId: csen.id, dueDay: addDays(today(), 1) });
     await api.createTask({ title: 'reading', categoryId: soci.id, dueDay: today() });
@@ -43,8 +43,12 @@ describe('/tasks lenses', () => {
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=week' });
 
-    expect(await screen.findByRole('button', { name: /CSEN 146 · 1/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /SOCI 49 · 1/ })).toBeTruthy();
+    // No category headers, and the soonest due comes first even though CSEN sorts ahead of SOCI.
+    const reading = await screen.findByRole('button', { name: 'reading' });
+    const pset = screen.getByRole('button', { name: 'pset 2' });
+    expect(reading.compareDocumentPosition(pset) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /CSEN 146 · / })).toBeNull();
+    expect(screen.queryByRole('button', { name: /SOCI 49 · / })).toBeNull();
     expect(screen.queryByRole('button', { name: 'someday' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Add pset 2 to today' }));
@@ -54,6 +58,22 @@ describe('/tasks lenses', () => {
     await user.click(pill('Today'));
     expect(await screen.findByRole('button', { name: 'pset 2' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Unplan' })).toBeTruthy();
+  });
+
+  it('Week can still be grouped by category for the session, shown as a chip', async () => {
+    const { api, csen } = await seeded();
+    await api.createTask({ title: 'pset 2', categoryId: csen.id, dueDay: addDays(today(), 1) });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=week' });
+
+    await user.click(await screen.findByRole('button', { name: 'Filter' }));
+    await user.selectOptions(screen.getByLabelText('Group'), 'category');
+    expect(await screen.findByRole('button', { name: /CSEN 146 · 1/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filter · 1' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Remove filter: By category' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /CSEN 146 · / })).toBeNull());
+    expect(screen.getByRole('button', { name: 'pset 2' })).toBeTruthy();
   });
 
   it('typing searches every open task, grouped by where each lives', async () => {

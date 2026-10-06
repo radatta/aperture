@@ -32,9 +32,9 @@ it a Today task.
   accents ignored); a row the title and category alone don't explain says "in notes" ([notes.md](notes.md)).
   The add-to-today picker searches title + category only. Why: "find the thing" shouldn't depend on guessing which lens it's in.
 - **D2 — presets carry sort + group only.** Which tasks a lens shows is `placeOf`'s job, so a filter or
-  a search can never be clipped by a lens's window. Week/Backlog group by category (Settings order,
-  retired-with-tasks after, "No category" last) and sort soonest-due first; Done is ungrouped, newest
-  finished first, 50 at a time.
+  a search can never be clipped by a lens's window. Backlog groups by category (Settings order,
+  retired-with-tasks after, "No category" last); Week is flat (D10). Both sort soonest-due first; Done
+  is ungrouped, newest finished first, 50 at a time.
 - **D3 — Today is the plan, not a query.** Capacity + planned-vs-available on top, plan rows in plan
   order, then "In progress · not planned today". Only search applies there; no sort/group/filter.
 - **D4 — state.** The lens is in the URL (`?lens=week`, so Home links straight to Week). Search +
@@ -73,6 +73,11 @@ it a Today task.
   morning's stale sweep handles it. No count, no red.
 - **D9 — the idle Focus control docks in the capture panel.** It used to float above the panel and sit
   over right-aligned content while scrolling.
+- **D10 — Week is flat, soonest due first (2026-10-05).** Week holds only what's due within 7 days plus
+  overdue, so its one question is "what's due next". Category headers scattered that answer — the
+  soonest deadline could sit below a whole group of later ones — and every row already carries its
+  category tag. Group → Category in the filter panel still works for the session (a "By category" chip;
+  reset per D4). Backlog stays grouped: there, per-course size is what you plan from.
 
 ## 3. Deferred
 

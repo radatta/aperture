@@ -186,6 +186,34 @@ describe('applyQuery', () => {
     expect(r.count).toBe(1);
     expect(applyQuery([planned], 'backlog', q({ statuses: ['in_progress'] }), ctx()).count).toBe(0);
   });
+
+  it('a6 Week is one flat list, soonest due first, whatever the category', () => {
+    expect(LENS_PRESET.week).toMatchObject({ sort: 'due', groupBy: 'none' });
+    expect(LENS_PRESET.backlog.groupBy).toBe('category');
+    const week = [
+      task({ id: 'd29', dueDay: '2026-09-29', categoryId: 'c1' }),
+      task({ id: 'untimed', dueDay: TODAY }),
+      task({ id: 'at14', dueDay: TODAY, dueTime: '14:00', categoryId: 'c1' }),
+      task({ id: 'd24', dueDay: '2026-09-24', categoryId: 'c2' }),
+      task({ id: 'at09', dueDay: TODAY, dueTime: '09:00', categoryId: 'c2' }),
+      task({ id: 'overdue', dueDay: '2026-09-01', categoryId: 'c2' }),
+    ];
+    const r = applyQuery(week, 'week', q({}, 'week'), ctx());
+    expect(r.groups.map((g) => [g.key, g.label])).toEqual([['all', '']]);
+    expect(r.groups[0]!.tasks.map((t) => t.id)).toEqual([
+      'overdue',
+      'at09',
+      'at14',
+      'untimed',
+      'd24',
+      'd29',
+    ]);
+  });
+
+  it('a7 search on Week still groups by place', () => {
+    const r = applyQuery(tasks, 'week', q({ text: 'pset' }, 'week'), c);
+    expect(r.groups.map((g) => g.label)).toEqual(['Today', 'This week', 'Backlog']);
+  });
 });
 
 describe('due buckets', () => {
@@ -276,6 +304,14 @@ describe('override chips', () => {
     expect(chips[0]!.remove(query).categories).toEqual(['']);
     expect(chips[3]!.remove(query).sort).toBe('due');
     expect(isNarrowing(query)).toBe(true);
+  });
+
+  it('c2 grouping flat Week by category is a chip that removes back to flat', () => {
+    const query = q({ groupBy: 'category' }, 'week');
+    const chips = overrideChips(query, 'week', CATS);
+    expect(chips.map((c) => c.label)).toEqual(['By category']);
+    expect(chips[0]!.remove(query).groupBy).toBe('none');
+    expect(isNarrowing(query)).toBe(false);
   });
 
   it('the preset hides nothing; text does; a sort or grouping change alone does not', () => {

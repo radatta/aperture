@@ -62,7 +62,8 @@ export function placeOf(task: Task, today: string, planOrder: Map<string, number
 const BLANK = { text: '', due: 'any' } as const;
 export const LENS_PRESET: Record<Place, TaskQuery> = {
   today: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
-  week: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'category' },
+  // Flat: the only question on Week is what's due next, and every row already carries its category.
+  week: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
   backlog: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'category' },
   done: { ...BLANK, categories: [], statuses: [], sort: 'newest', groupBy: 'none' },
 };

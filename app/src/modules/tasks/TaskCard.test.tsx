@@ -198,9 +198,9 @@ describe('focus after the row re-renders', () => {
     const api = freshApi();
     const a = await api.upsertCategory({ label: 'Alpha', isWork: true });
     await api.upsertCategory({ label: 'Beta', isWork: true });
-    await api.createTask({ title: 'Mover', categoryId: a.id, dueDay: addDays(todayKey(4), 1) });
+    await api.createTask({ title: 'Mover', categoryId: a.id });
     const user = userEvent.setup();
-    renderApp({ api, path: '/tasks?lens=week' });
+    renderApp({ api, path: '/tasks?lens=backlog' }); // Backlog groups by category; Week is flat
 
     await user.click(await screen.findByRole('button', { name: 'Mover' }));
     const d = within(await screen.findByRole('dialog', { name: 'Task: Mover' }));
