@@ -48,7 +48,7 @@ export function AppShell() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-surface text-ink">
+    <div className="min-h-screen bg-surface pt-safe text-ink">
       <div
         className="mx-auto max-w-3xl px-5"
         style={{ paddingBottom: `calc(${dockHeight}px + 2rem)` }}
