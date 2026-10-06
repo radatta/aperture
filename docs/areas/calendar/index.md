@@ -136,10 +136,13 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   it's carried out on the next sync either way.
 - **Only what the event lacks.** A patch sends the fields where the task differs from `gcalSeen` (the
   event as Aperture last knew it) — so an Aperture rename can't undo a drag made in Google that hasn't
-  been pulled yet, while a change that never reached Google (a failed push, a rename while done, a move
-  with sync off) goes with the next one. The retry (`ensure`) sends both. Without a `gcalSeen` (linked
-  before two-way sync) any change sends everything, once. A manual block keeps its picked time until the
-  task's time changes.
+  been pulled yet, while a change that never reached Google (a failed push, a move made with sync off)
+  goes with the next one. The retry (`ensure`) sends both. Without a `gcalSeen` (linked before two-way
+  sync) any change sends everything, once; a window not known (first seen all-day) moves only when the
+  task's time does. A done task never pushes — its edits only stamp `gcalTouchedAt`, so Google can't
+  undo them. A manual block keeps its picked time — through a retry or an estimate change too — until
+  the task's deadline changes (or it first gains one); then it moves there and becomes the auto block.
+  Re-creating an event clears a stale "Removed in Google Calendar" mark.
   Moving a window sends `start/end: { date: null, dateTime }`: a patch merges nested objects, and the
   `null` clears the `date` an all-day conversion left (verify once on dev — the docs don't cover this case).
 - An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google keeps
@@ -171,12 +174,13 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
 - **Split** ([tasks/split.md](../tasks/split.md) — a split never cancels). **Done** with this part: a
-  **timed** task's event (the block before its deadline) moves to the follow-up, which renames/re-times
-  it — no delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original
-  keeps (and re-times) its event, and the follow-up, a new timed task, gets its own from the planner, so
-  two blocks end at the deadline (piece 2's two-way sync is how one gets dragged earlier). Any other
-  linked event (a manual one; a record of work done) stays on the original either way, and an owed
-  removal is carried out (reporting).
+  **timed** task's event (the block before its deadline) moves to the follow-up — the link carries what
+  Aperture knows about the event (`gcalSeen`, `gcalManual`, its clocks) — which renames/re-times it: no
+  delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original keeps
+  (and re-times) its event, and the follow-up, a new timed task, gets its own from the planner, so two
+  blocks end at the deadline; dragging either in Google moves only that part's deadline (Two-way sync).
+  Any other linked event (a manual one; a record of work done) stays on the original either way, and an
+  owed removal is carried out (reporting).
 
 ## Two-way sync (Google → task) — 2026-10-05
 
@@ -223,17 +227,24 @@ the task now matches its event.
   (instants, not wall clocks — so both DST edges are idempotent). Our own push echoing back is a no-op,
   including a no-estimate task's default 30-minute block (no `estimateMin = 30`), and a field only
   Aperture changed is never "taken" from Google's stale copy. Every pull that sees the event records it
-  as the new `gcalSeen`; a push records what it sent.
-- **Latest wins.** Every create/patch outcome — sent *or failed* — stamps `gcalTouchedAt`. An event state
-  older than that (`updated` < `gcalTouchedAt`) is stale and ignored — the push stands, and its retry (or
-  the next change) carries it; so a Google change that survives to the merge is the newer one and wins.
-  Deletion always wins. An owed removal is never pulled into.
+  as the new `gcalSeen` (except a stale, recurring or owed-removal one); a push records what it sent.
+  Titles compare trim-insensitively.
+- **Latest wins.** Every create/patch outcome — sent *or failed* — stamps `gcalTouchedAt`, and so does a
+  linked task's title/time/estimate edit that didn't push (done, or sync off). An event state older than
+  that (`updated` < `gcalTouchedAt`) is stale: nothing applies, but for a field Aperture hasn't got to
+  Google yet, Google's value goes into the base — so it can't resurface later as a "Google change" and
+  undo Aperture's, while the task still differs from the base and the next push sends Aperture's value.
+  A Google change that survives to the merge is the newer one and wins. Deletion always wins. An owed
+  removal is never pulled into.
 - **First sight only remembers.** An event linked before two-way sync has no `gcalSeen`: the first pull
   to see it (the token-less first sync returns every event from the last week on) just records it and
   honours a deletion. Under one-way rules those older Google edits were already due to be overwritten;
   two-way starts from the moment it ships, without a burst of changed deadlines.
 - **Planned on a fresh read.** The delta can land seconds after the task scan, so each write re-reads the
-  task and re-plans; a task deleted, unlinked or edited meanwhile isn't overwritten.
+  task and re-plans; a task deleted, unlinked or edited during the fetch isn't overwritten. (The write
+  itself is a plain put: an edit landing in the milliseconds between that re-read and the put is lost,
+  as with every fresh-read write here.) The writes spend the 8 s budget too — past it the pull stops
+  with no token stored, and the replay is idempotent.
 - **Shown, never silent.** A pull's write sets `gcalPulledAt` + `gcalPulledNote` — one line, latest wins:
   "Moved to Oct 9 5pm · Now 45m · Renamed to “pset 3” in Google Calendar", or "Removed in Google
   Calendar". The row shows a gold "updated from Google"; the editor's Calendar section shows the line.

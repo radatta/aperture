@@ -277,12 +277,17 @@ export class LiveGoogle implements GoogleGateway {
       if (syncToken) q.set('syncToken', syncToken);
       else q.set('timeMin', timeMin);
       if (pageToken) q.set('pageToken', pageToken);
-      // Each page gets what's left of the budget (at most the usual per-call cap).
+      // Each page gets what's left of the budget (at most the usual per-call cap); cut off by the budget
+      // rather than a slow call, it reads as having run out of time.
       const res = await this.api(
         input.sub,
         `/calendars/${encodeURIComponent(input.calendarId)}/events?${q}`,
         { signal: AbortSignal.timeout(Math.min(GOOGLE_TIMEOUT_MS, left)) },
-      );
+      ).catch((e: unknown) => {
+        if (e instanceof Error && e.name === 'TimeoutError' && left < GOOGLE_TIMEOUT_MS)
+          throw new PullIncompleteError();
+        throw e;
+      });
       if (res.status === 410 && syncToken) {
         await res.body?.cancel(); // free the connection before the full re-sync
         throw new SyncTokenGoneError();

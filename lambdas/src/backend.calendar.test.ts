@@ -854,6 +854,81 @@ describe('calendar pull (two-way sync)', () => {
     expect(await b.getTask(t.id)).toMatchObject({ title: 'done and renamed', dueTime: '17:00' });
   });
 
+  it('an unpulled Google rename, then a failed Aperture rename, then a Google drag: Aperture’s name stays', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.editEvent(t.gcalEventId!, { title: 'google' });
+    tick(1_000);
+    const realPatch = g.patchEvent.bind(g);
+    g.patchEvent = async () => {
+      g.patchEvent = realPatch;
+      throw new Error('timeout');
+    };
+    await b.setTaskTitle(t.id, 'aperture');
+    tick();
+    await b.pullCalendar(); // stale → only absorbed into the base
+    g.editEvent(t.gcalEventId!, {
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({ title: 'aperture', dueTime: '17:00' });
+    // …and Aperture's name still reaches Google with the next push.
+    await b.syncCalendarEvent(t.id);
+    expect(g.events.get(t.gcalEventId!)!.title).toBe('aperture');
+  });
+
+  it('a done task renamed after an unpulled Google rename keeps the later (Aperture) name', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await b.transitionTask(t.id, 'in_progress');
+    await b.transitionTask(t.id, 'done');
+    await baseline();
+    g.editEvent(t.gcalEventId!, { title: 'G' });
+    tick(1_000);
+    await b.setTaskTitle(t.id, 'A'); // done: no push, but it stamps the latest-wins clock
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.title).toBe('A');
+  });
+
+  it('a split moves the link with its known event, so a later Google drag still applies to the follow-up', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await b.transitionTask(t.id, 'in_progress');
+    await baseline();
+    const realPatch = g.patchEvent.bind(g);
+    g.patchEvent = async () => {
+      g.patchEvent = realPatch;
+      throw new Error('timeout'); // the follow-up's rename fails
+    };
+    const { followUp } = await b.splitTask(t.id, 'done', 'pset part 2');
+    expect(followUp).toMatchObject({ gcalEventId: t.gcalEventId, gcalSeen: { title: 'pset' } });
+    tick(1_000);
+    g.editEvent(t.gcalEventId!, {
+      startMs: at('2026-10-09', '17:00'),
+      endMs: at('2026-10-09', '18:00'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(followUp.id)).toMatchObject({ dueTime: '18:00', title: 'pset part 2' });
+  });
+
+  it('re-creating an event after a Google delete clears the "Removed" mark', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.deleteEventInGoogle(t.gcalEventId!);
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.gcalPulledNote).toBe('Removed in Google Calendar');
+    const again = await b.syncCalendarEvent(t.id);
+    expect(again.gcalEventId).toBeTruthy();
+    expect(again.gcalPulledNote ?? null).toBeNull();
+  });
+
   it('a pull plans on a fresh read: a task deleted or edited meanwhile is not overwritten', async () => {
     const { g, b, tick, baseline, timed } = await setup();
     const del = await timed();

@@ -121,6 +121,19 @@ describe('LiveGoogle.listEventChanges', () => {
     ).rejects.toBeInstanceOf(PullIncompleteError);
   });
 
+  it('a page cut off by the budget (not a slow call) reads as running out of time', async () => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.includes('oauth2')) return Response.json({ access_token: 'at', expires_in: 3600 });
+      throw Object.assign(new Error('The operation was aborted due to timeout'), {
+        name: 'TimeoutError',
+      });
+    });
+    const g = new LiveGoogle(ssm, { stage: 'test', appUrl: 'https://app.example' });
+    await expect(
+      g.listEventChanges({ ...ask, syncToken: 's1', deadlineMs: Date.now() + 1_000 }),
+    ).rejects.toBeInstanceOf(PullIncompleteError);
+  });
+
   it('any other failure is a plain error', async () => {
     const { g } = queued(() => new Response(null, { status: 500 }));
     await expect(g.listEventChanges({ ...ask, syncToken: 's1' })).rejects.toThrow(

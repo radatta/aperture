@@ -210,6 +210,23 @@ describe('TaskEditor', () => {
     await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
   });
 
+  it('due day + time refill as a pair: a draft time is never put on Google’s day', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Pair', dueDay: '2026-10-09', dueTime: '16:00' });
+    let push: (next: Task) => void = () => {};
+    function Host() {
+      const [live, setLive] = useState(t);
+      push = setLive;
+      return <TaskDetailsForm task={live} />;
+    }
+    renderWithProviders(<Host />, { api: client });
+    const time = screen.getByLabelText('Due time') as HTMLInputElement;
+    fireEvent.change(time, { target: { value: '09:00' } });
+    act(() => push({ ...t, dueDay: '2026-10-12', dueTime: '18:00', updatedAt: t.updatedAt + 1 }));
+    expect(time.value).toBe('09:00');
+    expect((screen.getByLabelText('Due') as HTMLInputElement).value).toBe('2026-10-09');
+  });
+
   it('says what Google changed, today only', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Pulled', dueDay: '2026-10-09', dueTime: '17:00' });

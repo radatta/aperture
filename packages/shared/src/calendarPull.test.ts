@@ -9,7 +9,7 @@ import {
 import { gcalSyncMessage } from './calendarSync';
 import { localEpochFromDayTime, zonedDayTime, zonedEpoch } from './dates';
 import type { DueClock, DueEpoch } from './due';
-import type { Task } from './types';
+import type { GcalSeen, Task } from './types';
 
 // A toy October clock: day N of the month = N days of ms, plus the wall minutes.
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -185,11 +185,47 @@ describe('calendarPullPlan', () => {
   });
   it('latest wins: an event state older than Aperture’s last push is stale; a newer one wins', () => {
     const t = task({ title: 'aperture', gcalTouchedAt: 3_000 });
-    expect(plan(t, event({ title: 'google', updatedMs: 2_000 }))).toEqual({ kind: 'none' });
+    expect(plan(t, event({ title: 'google', updatedMs: 2_000 }))).toMatchObject({ kind: 'see' }); // nothing applied
     expect(plan(t, event({ title: 'google', updatedMs: 4_000 }))).toMatchObject({
       kind: 'apply',
       fields: { title: 'google' },
     });
+  });
+  it('a stale state takes Google’s value into the base for a field Aperture hasn’t sent — so it can’t undo Aperture later', () => {
+    // Aperture renamed (push failed, stamped 3000) after an unpulled Google rename (2000).
+    const t = task({ title: 'aperture', gcalTouchedAt: 3_000 });
+    const stale = plan(t, event({ title: 'google', updatedMs: 2_000 }));
+    expect(stale).toEqual({
+      kind: 'see',
+      seen: { title: 'google', startMs: END - 60 * 60_000, endMs: END },
+    });
+    // A later Google drag: the title is NOT re-detected as Google's; only the move applies.
+    const absorbed = task({
+      title: 'aperture',
+      gcalTouchedAt: 3_000,
+      gcalSeen: (stale as { seen: GcalSeen }).seen,
+    });
+    const end = epoch('2026-10-05', '17:00');
+    expect(
+      plan(
+        absorbed,
+        event({ title: 'google', startMs: end - 60 * 60_000, endMs: end, updatedMs: 4_000 }),
+      ),
+    ).toMatchObject({
+      kind: 'apply',
+      fields: { dueTime: '17:00' },
+    });
+    // A field Aperture already sent stays as known (nothing to absorb).
+    expect(
+      plan(task({ gcalTouchedAt: 3_000 }), event({ title: 'google', updatedMs: 2_000 })),
+    ).toEqual({ kind: 'none' });
+  });
+  it('titles compare trim-insensitively (an untrimmed title is not a rename)', () => {
+    const t = task({
+      title: 'pset ',
+      gcalSeen: { title: 'pset ', startMs: END - 60 * 60_000, endMs: END },
+    });
+    expect(plan(t, event({ title: 'pset ' })).kind).toBe('none');
   });
   it('an owed removal is never pulled into', () => {
     const owed = task({ gcalSyncError: gcalSyncMessage('delete', 'x') });

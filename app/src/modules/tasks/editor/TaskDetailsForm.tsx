@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Ref } from 'react';
 import { canEditEstimate, fmtClock12, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -110,16 +110,18 @@ export function TaskDetailsForm({
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
   const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes };
   const current = useRef(fields);
-  useEffect(() => {
+  // A layout effect, so the refill below (also one, declared after) reads this render's drafts.
+  useLayoutEffect(() => {
     current.current = fields;
   });
 
   // The task can change under an open editor — a calendar pull on foreground (an edit made in Google),
   // another device. Refill every field still showing what it was filled from, so the form never goes
-  // dirty on its own and a Save can't write stale values back over the change. A field being edited
-  // keeps its draft.
+  // dirty on its own and a Save can't write stale values back over the change; a field being edited
+  // keeps its draft. Due day + time refill as a pair (never your time on Google's day). A layout effect,
+  // so the stale values never paint as "Unsaved changes" for a frame.
   const filledFrom = useRef(fieldsOf(task));
-  useEffect(() => {
+  useLayoutEffect(() => {
     const was = filledFrom.current;
     const next = fieldsOf(task);
     filledFrom.current = next;
@@ -128,8 +130,10 @@ export function TaskDetailsForm({
     if (now.estimate === was.estimate) setEstimate_(next.estimate);
     if (now.buffer === was.buffer) setBuffer(next.buffer);
     if (now.categoryId === was.categoryId) setCategoryId(next.categoryId);
-    if (now.dueDay === was.dueDay) setDueDay_(next.dueDay);
-    if (now.dueTime === was.dueTime) setDueTime(next.dueTime);
+    if (now.dueDay === was.dueDay && now.dueTime === was.dueTime) {
+      setDueDay_(next.dueDay);
+      setDueTime(next.dueTime);
+    }
     if (now.notes === was.notes) setNotes_(next.notes);
   }, [task]);
 

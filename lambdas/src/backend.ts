@@ -4,6 +4,7 @@ import {
   calendarPullPlan,
   calendarSyncPlan,
   seenAfter,
+  syncedFieldsChanged,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -111,7 +112,7 @@ import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
-import { EventGoneError, noopGoogle } from './google/gateway';
+import { EventGoneError, noopGoogle, PullIncompleteError } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
 import type { Presigner } from './s3/presigner';
@@ -269,7 +270,14 @@ export class BackendClient implements ApiClient {
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
-      return moot ? this.putGcal(task, { gcalSyncError: null }) : task;
+      // A linked task's title/time/estimate edit that didn't push (done, or sync off) is still
+      // Aperture's latest word: stamp it, so an older Google edit can't win the next pull.
+      const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
+      if (!moot && !edited) return task;
+      return this.putGcal(task, {
+        ...(moot && { gcalSyncError: null }),
+        ...(edited && { gcalTouchedAt: this.now() }),
+      });
     }
     const unlinked = {
       gcalAccountId: null,
@@ -300,6 +308,8 @@ export class BackendClient implements ApiClient {
           gcalSyncError: null,
           gcalManual: null,
           gcalSeen: seenAfter(action, null),
+          gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
+          gcalPulledNote: null,
           ...touched,
         });
       }
@@ -363,6 +373,8 @@ export class BackendClient implements ApiClient {
         | 'gcalManual'
         | 'gcalTouchedAt'
         | 'gcalSeen'
+        | 'gcalPulledAt'
+        | 'gcalPulledNote'
       >
     >,
   ): Promise<Task> {
@@ -643,7 +655,15 @@ export class BackendClient implements ApiClient {
       const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
       original = await this.repo.putTask({
         ...edited,
-        ...(moveLink ? { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null } : {}),
+        ...(moveLink
+          ? {
+              gcalAccountId: null,
+              gcalCalendarId: null,
+              gcalEventId: null,
+              gcalSeen: null,
+              gcalManual: null,
+            }
+          : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
       if (owed) original = await this.syncCalendar(task, original);
@@ -660,11 +680,15 @@ export class BackendClient implements ApiClient {
     const created = await this.repo.putTask({
       ...this.base(),
       ...fields,
+      // The link moves with what Aperture knows about the event (its base, manual flag and clock).
       ...(moveLink
         ? {
             gcalAccountId: task.gcalAccountId,
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
+            gcalSeen: task.gcalSeen ?? null,
+            gcalManual: task.gcalManual ?? null,
+            gcalTouchedAt: task.gcalTouchedAt ?? null,
           }
         : {}),
     });
@@ -1288,6 +1312,8 @@ export class BackendClient implements ApiClient {
           for (const ev of delta.events) {
             const task = linked.get(`${st.sub}|${st.calendarId}|${ev.eventId}`);
             if (!task) continue;
+            // The writes spend the budget too; stopping keeps the old token, and a replay is idempotent.
+            if (Date.now() > deadlineMs) throw new PullIncompleteError();
             const kind = await this.putPull(task.id, st, ev);
             if (kind === 'apply' || kind === 'unlink') changed.push(task.id);
           }

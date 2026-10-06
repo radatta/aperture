@@ -34,6 +34,7 @@ import {
   calendarPullPlan,
   calendarSyncPlan,
   seenAfter,
+  syncedFieldsChanged,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -387,7 +388,13 @@ class StubClient implements ApiClient {
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
-      return moot ? this.writes.patch(this.store.tasks, task.id, { gcalSyncError: null }) : task;
+      // An edit that didn't push (done, or sync off) still stamps the latest-wins clock.
+      const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
+      if (!moot && !edited) return task;
+      return this.writes.patch(this.store.tasks, task.id, {
+        ...(moot && { gcalSyncError: null }),
+        ...(edited && { gcalTouchedAt: this.now() }),
+      });
     }
     if (action.kind === 'delete') return this.clearCalendarPointers(task.id);
     // A create or patch is Aperture's latest word on the event (gcalTouchedAt, the latest-wins clock);
@@ -406,6 +413,8 @@ class StubClient implements ApiClient {
       gcalSyncError: null,
       gcalManual: null,
       gcalSeen: seenAfter(action, null),
+      gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
+      gcalPulledNote: null,
       gcalTouchedAt: this.now(),
     });
   }
@@ -652,7 +661,15 @@ class StubClient implements ApiClient {
       const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
       original = this.writes.put(this.store.tasks, {
         ...edited,
-        ...(moveLink ? { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null } : {}),
+        ...(moveLink
+          ? {
+              gcalAccountId: null,
+              gcalCalendarId: null,
+              gcalEventId: null,
+              gcalSeen: null,
+              gcalManual: null,
+            }
+          : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
       if (owed) original = this.syncCalendar(task, original);
@@ -672,6 +689,9 @@ class StubClient implements ApiClient {
             gcalAccountId: task.gcalAccountId,
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
+            gcalSeen: task.gcalSeen ?? null,
+            gcalManual: task.gcalManual ?? null,
+            gcalTouchedAt: task.gcalTouchedAt ?? null,
           }
         : {}),
     });

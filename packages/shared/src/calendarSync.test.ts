@@ -110,6 +110,27 @@ describe('calendarSyncPlan', () => {
       endMs: epoch('2026-10-05', '17:00'),
     });
   });
+  it('a manual block keeps its picked time through a retry and an estimate change', () => {
+    const manual = linked({
+      gcalManual: true,
+      gcalSeen: { title: 'pset', startMs: 0, endMs: 60_000 },
+    });
+    expect(calendarSyncPlan(null, manual, ON, epoch, { ensure: true })).toEqual({
+      kind: 'patch',
+      title: 'pset',
+    });
+    expect(calendarSyncPlan(manual, { ...manual, estimateMin: 90 }, ON, epoch).kind).toBe('none');
+  });
+  it('a window not known (first seen all-day) is re-timed only when the task’s time changes', () => {
+    const allDay = linked({ gcalSeen: { title: 'pset', startMs: null, endMs: null } });
+    expect(calendarSyncPlan(allDay, { ...allDay, title: 'r' }, ON, epoch)).toEqual({
+      kind: 'patch',
+      title: 'r',
+    });
+    expect(calendarSyncPlan(allDay, { ...allDay, dueTime: '17:00' }, ON, epoch)).toMatchObject({
+      endMs: epoch('2026-10-05', '17:00'),
+    });
+  });
   it('seenAfter: the event as known after a create/patch', () => {
     const prev = { title: 'a', startMs: 1, endMs: 2 };
     expect(seenAfter({ kind: 'patch', title: 'b' }, prev)).toEqual({

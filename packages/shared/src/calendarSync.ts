@@ -5,7 +5,8 @@
 // The outgoing half of two-way sync (the incoming half, Google → task, is calendarPull.ts). A patch
 // sends only what the task has that the event doesn't (against gcalSeen, the event as Aperture last
 // knew it), so an Aperture rename can't undo a drag in Google that hasn't been pulled yet — while a
-// change that never reached Google (failed, skipped while done, or made with sync off) still goes. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
+// change that never reached Google (a failed push, or one made with sync off) goes with the next push.
+// A done task never pushes; its edits only stamp gcalTouchedAt (the caller), so Google can't undo them. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
 // nothing syncs. Delete-on-cancel is separate (transitionTask) and predates this.
 
 import { eventWindow } from './due';
@@ -40,6 +41,15 @@ export const isPendingRemoval = (gcalSyncError: string | null | undefined): bool
   !!gcalSyncError?.startsWith(FAILED.delete);
 
 const titleUnsent = (t: SyncFields): boolean => !!t.gcalSeen && t.gcalSeen.title !== t.title;
+
+// Did a write change anything the event mirrors? (`?? null`: an older row's undefined equals null.)
+export const syncedFieldsChanged = (
+  prev: Pick<Task, 'title' | 'dueDay' | 'dueTime' | 'estimateMin'>,
+  next: Pick<Task, 'title' | 'dueDay' | 'dueTime' | 'estimateMin'>,
+): boolean =>
+  (['title', 'dueDay', 'dueTime', 'estimateMin'] as const).some(
+    (k) => (prev[k] ?? null) !== (next[k] ?? null),
+  );
 
 // The event as Aperture knows it after a create/patch succeeds — the next gcalSeen.
 export function seenAfter(
@@ -89,13 +99,18 @@ export function calendarSyncPlan(
     let retime: boolean;
     let retitle: boolean;
     if (next.gcalManual) {
-      // A manual block keeps its picked time until the task's time changes (or it first gains one) —
-      // then it moves to the deadline and becomes the auto block.
-      retime = ensure || whenChanged || changed('estimateMin') || !wasTimed;
+      // A manual block keeps its picked time — through a retry and an estimate change too — until the
+      // task's deadline changes (or it first gains one): then it moves there and becomes the auto block.
+      retime = prev !== null && (whenChanged || !wasTimed);
       retitle = ensure || changed('title') || titleUnsent(next);
     } else if (seen) {
-      // Send whatever the event doesn't have yet.
-      retime = ensure || seen.startMs !== window.startMs || seen.endMs !== window.endMs;
+      // Send whatever the event doesn't have yet. A window not known (first seen all-day) moves only
+      // when the task's own time does.
+      retime =
+        ensure ||
+        (seen.startMs === null
+          ? whenChanged || changed('estimateMin')
+          : seen.startMs !== window.startMs || seen.endMs !== window.endMs);
       retitle = ensure || seen.title !== next.title;
     } else {
       // Not known yet (linked before two-way sync): any change sends everything, once — after which the

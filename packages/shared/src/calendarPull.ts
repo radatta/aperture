@@ -60,7 +60,6 @@ export function calendarPullPlan(
   if (ev.cancelled) return { kind: 'unlink', note: PULL_REMOVED_NOTE };
   if (isPendingRemoval(task.gcalSyncError)) return NONE; // the next sync deletes it anyway
   if (ev.recurring) return NONE;
-  if (ev.updatedMs < (task.gcalTouchedAt ?? 0)) return NONE;
 
   const title = ev.title?.trim() || null;
   const timed = !ev.allDay && ev.startMs !== null && ev.endMs !== null;
@@ -72,14 +71,30 @@ export function calendarPullPlan(
     startMs: timed ? ev.startMs : (seen?.startMs ?? null),
     endMs: timed ? ev.endMs : (seen?.endMs ?? null),
   };
+  const window = eventWindow(task, time.epoch);
+  if (ev.updatedMs < (task.gcalTouchedAt ?? 0)) {
+    // Stale: Aperture changed the event after this state. Apply nothing — but for a field Aperture
+    // hasn't got to Google yet (its push failed or was skipped), take Google's value into the base, so
+    // it can't be "re-detected" as a Google change later and undo Aperture's (the task still differs
+    // from the base, so the next push sends Aperture's value).
+    if (!seen) return NONE;
+    const titleUnsent = !sameTitle(task.title, seen.title);
+    const timeUnsent = !!window && (window.startMs !== seen.startMs || window.endMs !== seen.endMs);
+    const absorbed: GcalSeen = {
+      title: titleUnsent ? now.title : seen.title,
+      startMs: timeUnsent ? now.startMs : seen.startMs,
+      endMs: timeUnsent ? now.endMs : seen.endMs,
+    };
+    return sameSeen(absorbed, seen) ? NONE : { kind: 'see', seen: absorbed };
+  }
   if (!seen) return { kind: 'see', seen: now };
 
   const fields: Extract<PullAction, { kind: 'apply' }>['fields'] = {};
-  // Title: Google renamed it since Aperture last knew the event.
-  if (title && title !== seen.title && title !== task.title) fields.title = title;
+  // Title: Google renamed it since Aperture last knew the event (trim-insensitive, so an untrimmed title
+  // sent by an older client doesn't read as a rename).
+  if (title && !sameTitle(title, seen.title) && !sameTitle(title, task.title)) fields.title = title;
   // Time — only a timed task's auto-synced block maps to task fields; a manual block (gcalManual, or any
   // event on an untimed task) syncs its title only.
-  const window = eventWindow(task, time.epoch);
   const moved = timed && (ev.startMs !== seen.startMs || ev.endMs !== seen.endMs);
   if (moved && window && !task.gcalManual) {
     // Compared as wall-clock day + "HH:MM" and whole minutes, so a value equal to the task's writes nothing.
@@ -96,9 +111,13 @@ export function calendarPullPlan(
   }
   if (Object.keys(fields).length > 0)
     return { kind: 'apply', fields, note: pullNote(fields), seen: now };
-  const same = now.title === seen.title && now.startMs === seen.startMs && now.endMs === seen.endMs;
-  return same ? NONE : { kind: 'see', seen: now };
+  return sameSeen(now, seen) ? NONE : { kind: 'see', seen: now };
 }
+
+const sameTitle = (a: string | null, b: string | null): boolean =>
+  (a ?? '').trim() === (b ?? '').trim();
+const sameSeen = (a: GcalSeen, b: GcalSeen): boolean =>
+  sameTitle(a.title, b.title) && a.startMs === b.startMs && a.endMs === b.endMs;
 
 // One short line saying what Google changed: "Moved to Oct 9 5pm · Now 45m in Google Calendar".
 export function pullNote(fields: Extract<PullAction, { kind: 'apply' }>['fields']): string {
