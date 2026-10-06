@@ -11,6 +11,8 @@ import { useSetActual, useTransitionTask } from '../../data/hooks/useTasks';
 // timer). This is what the estimate is measured against. `initialActualMin` lets a caller prefill the
 // LIVE elapsed (accrued + a running timer) that isn't on the task yet; defaults to the persisted value.
 // `actualRef` lets the task editor's finish-intent focus the Actual field when the dialog opens.
+// Nothing tracked starts EMPTY, not "0" (you'd type over it), and an empty field can't be submitted —
+// a quiet 0 would land in calibration as a real actual.
 export function DoneForm({
   task,
   initialActualMin,
@@ -24,9 +26,10 @@ export function DoneForm({
 }) {
   const setActual = useSetActual();
   const transition = useTransitionTask();
-  const [actual, setActual_] = useState<string>(
-    String(Math.round(initialActualMin ?? task.actualAccruedMin)),
-  );
+  const [actual, setActual_] = useState<string>(() => {
+    const tracked = Math.round(initialActualMin ?? task.actualAccruedMin);
+    return tracked > 0 ? String(tracked) : '';
+  });
   return (
     <div className="mt-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -36,6 +39,7 @@ export function DoneForm({
           type="number"
           min={0}
           inputMode="numeric"
+          placeholder="minutes"
           value={actual}
           onChange={(e) => setActual_(e.target.value)}
           className="w-32"
@@ -49,10 +53,9 @@ export function DoneForm({
       <div className="flex gap-2">
         <Button
           size="sm"
-          disabled={transition.isPending}
+          disabled={transition.isPending || actual.trim() === ''}
           onClick={async () => {
-            const n = actual === '' ? 0 : Number(actual);
-            await setActual.mutateAsync({ id: task.id, actualMin: n });
+            await setActual.mutateAsync({ id: task.id, actualMin: Number(actual) });
             await transition.mutateAsync({ id: task.id, to: 'done' });
             onDone();
           }}

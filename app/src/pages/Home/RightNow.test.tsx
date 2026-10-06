@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
@@ -81,7 +81,17 @@ describe('Right now card', () => {
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
 
     await user.click(screen.getByRole('button', { name: 'Done' }));
-    await user.click(await screen.findByRole('button', { name: 'Mark done' }));
+    // Nothing tracked: the Actual starts empty (no "0" to type over) and can't be submitted empty.
+    const actual = await screen.findByLabelText<HTMLInputElement>('Actual (min)');
+    expect(actual.value).toBe('');
+    expect(screen.getByRole('button', { name: 'Mark done' }).hasAttribute('disabled')).toBe(true);
+    await user.type(actual, '18');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(async () =>
+      expect((await api.listTasks()).find((t) => t.title === 'First thing')?.actualAccruedMin).toBe(
+        18,
+      ),
+    );
 
     // Prompt returns; the next task is NOT auto-started (still a Start button, no live Done).
     expect(await screen.findByText(/nice/)).toBeTruthy();
