@@ -82,6 +82,34 @@ describe('parseBulkTasks — due errors', () => {
   });
 });
 
+describe('parseBulkTasks — due time (@HH:MM)', () => {
+  it('parses the day and the 24h time', () => {
+    const l = only('pset | due:2026-10-09@17:00 ~90');
+    expect(l).toMatchObject({ dueDay: '2026-10-09', dueTime: '17:00', estimateMin: 90 });
+    expect(l.errors).toEqual([]);
+    expect(only('pset | due:2026-10-09').dueTime).toBeNull();
+  });
+  it('a bad or missing time is red and sets neither field', () => {
+    for (const bad of [
+      'due:2026-10-09@5pm',
+      'due:2026-10-09@5:00',
+      'due:2026-10-09@24:00',
+      'due:2026-10-09@',
+    ]) {
+      const l = only(`t | ${bad}`);
+      expect(l.errors.join()).toMatch(/invalid due time/);
+      expect(l.dueDay).toBeNull();
+      expect(l.dueTime).toBeNull();
+    }
+    expect(only('t | due:2026-02-30@10:00').errors.join()).toMatch(/invalid due date/);
+  });
+  it('is literal inside notes', () => {
+    const l = only('t | notes:"due:2026-10-09@17:00"');
+    expect(l.dueDay).toBeNull();
+    expect(l.notes).toBe('due:2026-10-09@17:00');
+  });
+});
+
 describe('parseBulkTasks — category resolution', () => {
   it('an unknown label is a yellow warning, task created uncategorised', () => {
     const l = only('t | #Nope');
@@ -179,8 +207,22 @@ describe('toCreateInputs', () => {
     const p = parse('first | ~30 #Admin due:2026-09-25\nsecond');
     const inputs = toCreateInputs(p);
     expect(inputs).toEqual([
-      { title: 'first', categoryId: 'c1', estimateMin: 30, dueDay: '2026-09-25', notes: null },
-      { title: 'second', categoryId: null, estimateMin: null, dueDay: null, notes: null },
+      {
+        title: 'first',
+        categoryId: 'c1',
+        estimateMin: 30,
+        dueDay: '2026-09-25',
+        dueTime: null,
+        notes: null,
+      },
+      {
+        title: 'second',
+        categoryId: null,
+        estimateMin: null,
+        dueDay: null,
+        dueTime: null,
+        notes: null,
+      },
     ]);
   });
   it('leaves categoryId null for an unmatched label', () => {
@@ -276,8 +318,10 @@ describe('parseTaskLine — capture', () => {
       categoryId: 'c1',
       estimateMin: 30,
       dueDay: '2026-10-03',
+      dueTime: null,
       notes: 'x',
     });
+    expect(toCreateInput(parseTaskLine('memo | due:2026-10-03@09:30', CATS)).dueTime).toBe('09:30');
   });
 });
 
@@ -308,6 +352,7 @@ describe('tokenAtCaret', () => {
     ['milk | ~30^ #ad', tok('estimate', '30', 7, 10)],
     ['milk | due:^', tok('due', '', 7, 11)],
     ['milk | due:2026-1^', tok('due', '2026-1', 7, 17)],
+    ['milk | due:2026-10-05@1^', tok('due', '2026-10-05@1', 7, 23)],
     ['milk | notes:"a |^ b"', null],
     ['milk | notes:"open^', null],
     ['milk | ^', null],

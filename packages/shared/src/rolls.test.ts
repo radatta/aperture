@@ -30,6 +30,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     seriesId: null,
     rollId: 'r1',
     dueDay: null,
+    dueTime: null,
     notes: null,
     estimateMin: 30,
     bufferMin: null,
@@ -41,6 +42,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     gcalAccountId: null,
     gcalCalendarId: null,
     gcalEventId: null,
+    gcalSyncError: null,
     ...over,
   };
 }

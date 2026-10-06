@@ -4,7 +4,14 @@ import {
   PutParameterCommand,
   DeleteParameterCommand,
 } from '@aws-sdk/client-ssm';
-import type { AccountState, BusyResult, CalendarInfo, GoogleGateway } from './gateway';
+import { EventGoneError } from './gateway';
+import type {
+  AccountState,
+  BusyResult,
+  CalendarInfo,
+  GoogleGateway,
+  PatchEventInput,
+} from './gateway';
 import { normalizeEvents, type GcalEvent } from './normalize';
 
 // The live gateway: real Google REST (via global fetch — Node 22) + SSM for creds and per-account
@@ -33,6 +40,10 @@ class InvalidGrantError extends Error {
     super('invalid_grant');
   }
 }
+
+// Per-call cap on a Google fetch. Calendar writes now ride task writes (auto-sync): a hung call must fail
+// into gcalSyncError well inside the Lambda's own timeout, not take the whole request down with it.
+const GOOGLE_TIMEOUT_MS = 4_000;
 
 export class LiveGoogle implements GoogleGateway {
   private clientCreds: { clientId: string; clientSecret: string } | null = null;
@@ -87,6 +98,7 @@ export class LiveGoogle implements GoogleGateway {
     const { clientId, clientSecret } = await this.getClientCreds();
 
     const res = await fetch(TOKEN_URL, {
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -112,6 +124,7 @@ export class LiveGoogle implements GoogleGateway {
   private async api(sub: string, path: string, init?: RequestInit): Promise<Response> {
     const token = await this.getAccessToken(sub);
     return fetch(`${API}${path}`, {
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
       ...init,
       headers: { authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
     });
@@ -256,6 +269,29 @@ export class LiveGoogle implements GoogleGateway {
     if (!res.ok && res.status !== 410 && res.status !== 404) {
       throw new Error(`events.delete failed (${res.status})`);
     }
+  }
+
+  async patchEvent(input: PatchEventInput): Promise<void> {
+    const body: Record<string, unknown> = {};
+    if (input.title !== undefined) body.summary = input.title;
+    if (input.startMs !== undefined)
+      body.start = { dateTime: new Date(input.startMs).toISOString() };
+    if (input.endMs !== undefined) body.end = { dateTime: new Date(input.endMs).toISOString() };
+    const res = await this.api(
+      input.sub,
+      `/calendars/${encodeURIComponent(input.calendarId)}/events/${encodeURIComponent(input.eventId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+    );
+    if (res.status === 404 || res.status === 410) throw new EventGoneError(input.eventId);
+    if (!res.ok) throw new Error(`events.patch failed (${res.status})`);
+    // An event deleted in Google lingers as status "cancelled"; a patch that doesn't set status leaves
+    // it deleted, so treat it as gone (the caller re-creates).
+    const json = (await res.json()) as { status?: string };
+    if (json.status === 'cancelled') throw new EventGoneError(input.eventId);
   }
 }
 

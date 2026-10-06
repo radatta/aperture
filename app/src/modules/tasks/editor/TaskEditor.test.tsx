@@ -38,6 +38,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   status: 'backlog',
   categoryId: null,
   dueDay: null,
+  dueTime: null,
   notes: null,
   seriesId: null,
   rollId: null,
@@ -51,6 +52,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   gcalAccountId: null,
   gcalCalendarId: null,
   gcalEventId: null,
+  gcalSyncError: null,
   ...over,
 });
 
@@ -94,14 +96,14 @@ describe('TaskEditor', () => {
   it('saves only the changed field and stays open', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Edit me', estimateMin: 30 });
-    const setDue = vi.spyOn(client, 'setTaskDueDay');
+    const setDue = vi.spyOn(client, 'setTaskDue');
     const setEst = vi.spyOn(client, 'setTaskEstimate');
     const { onClose, user } = renderEditor(client, t);
 
     fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(setDue).toHaveBeenCalledWith(t.id, '2026-10-01');
+    expect(setDue).toHaveBeenCalledWith(t.id, { dueDay: '2026-10-01', dueTime: null });
     expect(setEst).not.toHaveBeenCalled(); // estimate untouched
     expect(await screen.findByText('Saved')).toBeTruthy();
     expect(screen.getByLabelText<HTMLInputElement>('Due').value).toBe('2026-10-01');
@@ -140,10 +142,78 @@ describe('TaskEditor', () => {
     expect((await client.getTask(t.id))?.title).toBe('Slow one');
   });
 
+  it('due time: disabled without a day, saved with it in one write, cleared with the day', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Timed' });
+    const setDue = vi.spyOn(client, 'setTaskDue');
+    const { user } = renderEditor(client, t);
+    const time = () => screen.getByLabelText<HTMLInputElement>('Due time');
+    expect(time().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
+    expect(time().disabled).toBe(false);
+    fireEvent.change(time(), { target: { value: '16:00' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(setDue).toHaveBeenCalledTimes(1);
+    expect(setDue).toHaveBeenCalledWith(t.id, { dueDay: '2026-10-01', dueTime: '16:00' });
+    expect(await screen.findByText('Saved')).toBeTruthy();
+    expect((await client.getTask(t.id))?.dueTime).toBe('16:00');
+
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '' } });
+    expect(time().value).toBe('');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await client.getTask(t.id)).toMatchObject({ dueDay: null, dueTime: null });
+  });
+
+  it('a failed calendar sync is said in the editor, with a retry', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Synced', dueDay: '2026-10-01', dueTime: '16:00' });
+    const failed = { ...t, gcalSyncError: 'Couldn’t add the calendar event (invalid_grant)' };
+    const sync = vi.spyOn(client, 'syncCalendarEvent');
+    const { user } = renderEditor(client, failed);
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Couldn’t add the calendar event \(invalid_grant\)/,
+    );
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('a timed task with no event (timed while sync was off) offers a one-tap add', async () => {
+    const client = api();
+    await client.updateSettings({
+      calendarWriteDefault: { accountSub: 'a', calendarId: 'me@example.com' },
+      autoCalendar: false,
+    });
+    const t = await client.createTask({
+      title: 'Late add',
+      dueDay: '2026-10-01',
+      dueTime: '16:00',
+    });
+    expect(t.gcalEventId).toBeNull();
+    await client.updateSettings({ autoCalendar: true });
+    const sync = vi.spyOn(client, 'syncCalendarEvent');
+    const { user } = renderEditor(client, t);
+    expect(await screen.findByText('Not on your calendar.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Add to calendar' }));
+    expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('says so when the calendar retry itself fails', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Offline', dueDay: '2026-10-01', dueTime: '16:00' });
+    vi.spyOn(client, 'syncCalendarEvent').mockRejectedValue(new Error('offline'));
+    const { user } = renderEditor(client, {
+      ...t,
+      gcalSyncError: 'Couldn’t add the calendar event (x)',
+    });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/Couldn’t reach the calendar sync/)).toBeTruthy();
+  });
+
   it('keeps the edits and says so when a save fails', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Flaky' });
-    vi.spyOn(client, 'setTaskDueDay').mockRejectedValue(new Error('offline'));
+    vi.spyOn(client, 'setTaskDue').mockRejectedValue(new Error('offline'));
     const { onClose, user } = renderEditor(client, t);
 
     fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });

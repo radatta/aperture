@@ -7,7 +7,8 @@
 //   tokens := token (whitespace token)*      -- each KIND at most once, any order
 //   token  := '~' <digits>                   -- estimateMin, whole minutes >= 1
 //           | '#' <word> | '#"' <text> '"'   -- Category.label, case-insensitive exact match
-//           | 'due:' YYYY-MM-DD              -- dueDay, real calendar date, lowercase keyword
+//           | 'due:' YYYY-MM-DD ['@' HH:MM] -- dueDay, real calendar date, lowercase keyword; the
+//                                               optional '@HH:MM' (24h, zero-padded) is the dueTime
 //           | 'notes:"' <text> '"'           -- notes; escapes '\n' (newline) and '\\' (backslash)
 //                                               only, no '"' inside, <= TASK_NOTES_MAX after unescaping
 //
@@ -18,7 +19,7 @@
 // The capture bar's Task mode takes ONE line of the same grammar (parseTaskLine), gated on ' | ' so a
 // bare capture never meets it — still one validator, two surfaces.
 
-import { isDayKey } from './dates';
+import { isDayKey, isTimeKey } from './dates';
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
@@ -31,6 +32,7 @@ export interface BulkLine {
   categoryLabel: string | null; // as written, for the preview (present even when unmatched)
   categoryId: string | null; // resolved match, or null
   dueDay: string | null;
+  dueTime: string | null; // "HH:MM" from due:<day>@HH:MM
   notes: string | null; // unescaped + trimmed
   errors: string[]; // red — blocking
   warnings: string[]; // yellow — non-blocking
@@ -95,6 +97,7 @@ function parseLine(
     categoryLabel: null,
     categoryId: null,
     dueDay: null,
+    dueTime: null,
     notes: null,
     errors: [],
     warnings: [],
@@ -190,12 +193,19 @@ function parseLine(
       else out.notes = value;
     } else if (tok.startsWith('due:')) {
       if (!once('due', 'due')) continue;
-      const rest = tok.slice(4);
-      if (!isDayKey(rest)) out.errors.push(`invalid due date '${tok}' — use due:YYYY-MM-DD`);
-      else out.dueDay = rest;
+      const at = tok.indexOf('@');
+      const day = at === -1 ? tok.slice(4) : tok.slice(4, at);
+      const time = at === -1 ? null : tok.slice(at + 1);
+      if (!isDayKey(day)) out.errors.push(`invalid due date '${tok}' — use due:YYYY-MM-DD`);
+      else if (time !== null && !isTimeKey(time))
+        out.errors.push(`invalid due time '${tok}' — use due:YYYY-MM-DD@HH:MM (24h)`);
+      else {
+        out.dueDay = day;
+        out.dueTime = time;
+      }
     } else {
       out.errors.push(
-        `unrecognized token '${tok}' — expected ~<min>, #<label>, due:YYYY-MM-DD, or notes:"…"`,
+        `unrecognized token '${tok}' — expected ~<min>, #<label>, due:YYYY-MM-DD[@HH:MM], or notes:"…"`,
       );
     }
   }
@@ -286,6 +296,7 @@ export const toCreateInput = (l: BulkLine): CreateTaskInput => ({
   categoryId: l.categoryId,
   estimateMin: l.estimateMin,
   dueDay: l.dueDay,
+  dueTime: l.dueTime,
   notes: l.notes,
 });
 

@@ -30,6 +30,11 @@
   --gold: #d8b882; /* the accent */
   --gold-soft: rgba(216, 184, 130, 0.18);
   --danger: #e7b09e; /* soft, never alarming */
+  /* Due-time urgency fills (dueStyle.ts). DARKER than the ground in dark mode so light text gains
+     contrast: ink-muted stays >= 4.5:1 on all three grounds under either fill (subtle text on these rows
+     is lifted to ink-muted). Two distinct hues — olive-amber vs red-brown — not two alphas of one. */
+  --due-imminent-fill: rgba(90, 60, 0, 0.5);
+  --due-past-fill: rgba(160, 20, 20, 0.45);
 
   --ring: rgba(155, 197, 183, 0.8); /* focus-visible */
   --shadow-dock: 0 -1px 0 rgba(255, 255, 255, 0.05), 0 8px 30px rgba(0, 0, 0, 0.35);
@@ -51,6 +56,8 @@
   --gold: #816120;
   --gold-soft: rgba(129, 97, 32, 0.15);
   --danger: #a8492e;
+  --due-imminent-fill: rgba(240, 200, 110, 0.3);
+  --due-past-fill: rgba(240, 140, 120, 0.28);
 
   --ring: rgba(53, 104, 90, 0.75);
   --shadow-dock: 0 -1px 0 rgba(18, 38, 32, 0.04), 0 8px 30px rgba(18, 38, 32, 0.12);

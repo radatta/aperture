@@ -25,6 +25,7 @@ export function Field({ label, className, ...rest }: FieldProps) {
           'rounded-xl border border-line bg-surface px-3 py-2 text-ink',
           'placeholder:text-ink-muted outline-none transition',
           'focus:border-teal focus:bg-panel',
+          'disabled:cursor-not-allowed disabled:border-dashed disabled:opacity-60',
           nativePicker && '[color-scheme:light] dark:[color-scheme:dark]',
           className,
         )}

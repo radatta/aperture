@@ -96,6 +96,7 @@ export function splitFollowUp(original: Task, followUpTitle: string): Omit<Task,
     status: 'backlog',
     categoryId: original.categoryId,
     dueDay: original.dueDay, // a split changes scope, not the deadline — carry it (like categoryId)
+    dueTime: original.dueTime ?? null,
     notes: original.notes ?? null, // the remaining scope keeps its context
     seriesId: null,
     rollId: original.rollId, // finishing the split-off remainder tomorrow is honestly a rep tomorrow
@@ -110,6 +111,7 @@ export function splitFollowUp(original: Task, followUpTitle: string): Omit<Task,
     gcalAccountId: null,
     gcalCalendarId: null,
     gcalEventId: null,
+    gcalSyncError: null,
   };
 }
 

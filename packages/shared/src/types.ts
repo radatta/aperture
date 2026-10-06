@@ -36,6 +36,9 @@ export interface Task extends BaseEntity {
   // "YYYY-MM-DD" — when it's DUE, distinct from taskPlans.day (when I'll work it). Free metadata,
   // set in the scope pass, editable at any status, never part of the estimate lock.
   dueDay: string | null;
+  // "HH:MM" 24h local wall-clock — the deadline's clock time on dueDay. Only ever set WITH dueDay (clearing
+  // the day clears it; see due.ts normalizeDue). Pre-existing rows read back undefined, so readers use `!dueTime`.
+  dueTime: string | null;
   // Free-form light markdown (see taskNotes.ts), capped at TASK_NOTES_MAX. Editable at any status, never
   // part of the estimate lock. Empty is null; pre-existing rows read back undefined, so readers use `!notes`.
   notes: string | null;
@@ -54,6 +57,9 @@ export interface Task extends BaseEntity {
   gcalAccountId: string | null;
   gcalCalendarId: string | null;
   gcalEventId: string | null;
+  // The last calendar auto-sync failure, shown on the task with a retry; null once a sync succeeds. The
+  // task write itself never fails on gcal (calendarSync.ts). Pre-existing rows read back undefined.
+  gcalSyncError: string | null;
 }
 
 // Scheduling (the *when*), separate from the task (the *what*) → multi-day + ordering.
@@ -173,6 +179,8 @@ export interface Settings extends BaseEntity {
   calendarShapeRefs: CalendarRef[];
   // Default calendar "add to calendar" writes to; per-event override lives in the dialog. null → user picks.
   calendarWriteDefault: CalendarRef | null;
+  // Timed tasks auto-create + edit-sync an event on calendarWriteDefault. Off → existing events stay, no syncing.
+  autoCalendar: boolean; // default true
   // Waking-window bounds (hours 0–23) for the shape read — SEPARATE from dayStartHour's 4am rollover.
   dayFocusStart: number; // default 8
   dayEndHour: number; // default 22

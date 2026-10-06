@@ -1,4 +1,4 @@
-import { fmtMonthDayYear } from '@aperture/shared';
+import { fmtClock12, fmtMonthDayYear } from '@aperture/shared';
 import type { BulkLine } from '@aperture/shared';
 import { Text } from '../../components/Text';
 import { NoteIcon } from '../../components/icons';
@@ -22,6 +22,7 @@ export function TaskTokenChips({ line }: { line: BulkLine }) {
       {line.dueDay !== null && (
         <Text size="xs" tone="teal">
           {fmtMonthDayYear(line.dueDay)}
+          {line.dueTime !== null && ` ${fmtClock12(line.dueTime)}`}
         </Text>
       )}
       {line.notes !== null && (

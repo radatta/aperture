@@ -1,20 +1,25 @@
-import { fmtDueDay, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtDueDay, todayKey } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
+import { cx } from '../../lib/cx';
+import { useNow } from '../../lib/useNow';
+import { urgencyClass, urgencyLabel } from '../../modules/tasks/dueStyle';
 import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
 import { CategoryTag } from '../../modules/tasks/CategoryTag';
 import { comingUp } from '../../modules/home/comingUp';
 import { CardLink, HomeCard } from './HomeCard';
 
-// The gentle deadline radar. Excludes anything already on the tight plane above (today's plan + any
-// in-progress task) so a deadline never shows twice. Flat, quiet, no red, no tally — you plan from it.
+// The deadline radar. Excludes anything already on the tight plane above (today's plan + any in-progress
+// task) so a deadline never shows twice. Quiet, no tally — you plan from it; only a TIMED row takes the
+// urgency colour as its time nears or passes (dueStyle.ts).
 export function ComingUpCard() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
   const { rows } = useTodayPlan();
   const { data: allTasks = [], isPending, isError } = useAllTasks();
+  const now = useNow();
 
   const excludeIds = new Set<string>([
     ...rows.map((r) => r.task.id),
@@ -39,19 +44,30 @@ export function ComingUpCard() {
         </EmptyState>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {cu.items.map((t) => (
-            <div key={t.id} className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <Text size="sm" tone="subtle" className="truncate">
-                  {t.title}
+          {cu.items.map((t) => {
+            const u = dueUrgency(t, now);
+            const label = urgencyLabel(u);
+            return (
+              <div
+                key={t.id}
+                className={cx(
+                  '-mx-2 flex items-center justify-between gap-3 rounded-lg border border-transparent px-2 py-0.5',
+                  urgencyClass(u),
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <Text size="sm" tone="subtle" className="truncate">
+                    {t.title}
+                  </Text>
+                  <CategoryTag categoryId={t.categoryId} />
+                </div>
+                <Text size="xs" tone="subtle" className="shrink-0">
+                  {fmtDueDay(t.dueDay!, today, t.dueTime)}
+                  {label && <span className="sr-only">, {label}</span>}
                 </Text>
-                <CategoryTag categoryId={t.categoryId} />
               </div>
-              <Text size="xs" tone="subtle" className="shrink-0">
-                {fmtDueDay(t.dueDay!, today)}
-              </Text>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </HomeCard>

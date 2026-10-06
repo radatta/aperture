@@ -95,3 +95,17 @@ describe('finances settings', () => {
     expect(screen.queryByText('Enter a day from 1 to 31.')).toBeNull();
   });
 });
+
+describe('calendar auto-sync toggle', () => {
+  it('is on by default and turns off', async () => {
+    const api = createStubClient({ seed: true, storageKey: `settings-cal-${Math.random()}` });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    const box = (await screen.findByRole('checkbox', {
+      name: /Add tasks with a due time to this calendar automatically/,
+    })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    await user.click(box);
+    await waitFor(async () => expect((await api.getSettings()).autoCalendar).toBe(false));
+  });
+});

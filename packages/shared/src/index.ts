@@ -10,6 +10,8 @@ export * from './stories';
 export * from './rolls';
 export * from './attachments';
 export * from './taskNotes';
+export * from './due';
+export * from './calendarSync';
 export * from './api';
 export * from './bulkTasks';
 export * from './rpc';

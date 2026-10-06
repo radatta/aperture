@@ -73,6 +73,58 @@ export function isDayKey(s: string): boolean {
   return keyOf(keyToNoon(s)) === s;
 }
 
+// True iff `s` is a zero-padded 24h "HH:MM" (00:00–23:59) — the one gate for a task's dueTime.
+export function isTimeKey(s: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+}
+
+// "16:00" → "4pm", "09:30" → "9:30am", "00:00" → "12am", "23:59" → "11:59pm".
+export function fmtClock12(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number) as [number, number];
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}${m === 0 ? '' : `:${pad2(m)}`}${h < 12 ? 'am' : 'pm'}`;
+}
+
+// The local "HH:MM" of an instant — the inverse of localEpochFromDayTime's clock half.
+export function hhmmOfEpoch(epochMs: number): string {
+  const d = new Date(epochMs);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+// Capture's due-time chips (after `due:<day>@`).
+export const DUE_TIME_PRESETS = ['09:00', '12:00', '17:00', '23:59'] as const;
+
+// The user's IANA zone. One user; the (UTC) Lambda needs it to turn a dueDay+dueTime into an instant.
+export const USER_TIME_ZONE = 'America/Los_Angeles';
+
+// Epoch of wall-clock `hhmm` on `dayKey` in `timeZone` — the server-side twin of localEpochFromDayTime
+// (the Lambda's own clock is UTC). Two passes over the zone's offset so a DST-boundary day lands right.
+// Matches the browser on the two edge cases: a repeated fall-back time takes its first (earlier)
+// instant, and a nonexistent spring-forward time (2:30am) moves an hour later (3:30am).
+export function zonedEpoch(dayKey: string, hhmm: string, timeZone: string): number {
+  const [y, mo, d] = dayKey.split('-').map(Number) as [number, number, number];
+  const [hh, mm] = hhmm.split(':').map(Number) as [number, number];
+  const wall = Date.UTC(y, mo - 1, d, hh, mm);
+  const offsetAt = (ms: number): number => {
+    const p = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+    }).formatToParts(new Date(ms));
+    const n = (t: string) => Number(p.find((x) => x.type === t)!.value);
+    return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute')) - ms;
+  };
+  const first = wall - offsetAt(wall);
+  const second = wall - offsetAt(first);
+  // `second` is right unless the wall time doesn't exist (its offset round-trip disagrees) — then the
+  // later candidate is the browser's answer.
+  return second + offsetAt(second) === wall ? second : Math.max(first, second);
+}
+
 // 0 = Sunday … 6 = Saturday (JS convention), for weekly recurrence rules.
 export function weekdayOf(key: string): number {
   return keyToNoon(key).getDay();
@@ -139,18 +191,20 @@ export function fmtWeekdayShort(key: string): string {
   return WEEKDAYS[weekdayOf(key)]!.slice(0, 3);
 }
 
-// Relative due-date phrasing, at the day granularity: "due today" / "due Fri" / "was due Tue".
-// Pure over (dueDay, today) — the caller passes today = todayKey(dayStartHour), so the 4am rollover
-// lives in todayKey and never here. Weekday names for ±2–6 days; month/day beyond a week (where a
-// weekday alone is ambiguous); today/tomorrow/yesterday for the near cases.
-export function fmtDueDay(dueDay: string, today: string): string {
+// Relative due-date phrasing, at the day granularity: "due today" / "due Fri" / "was due Tue", with the
+// clock appended when the task has one ("due Fri 4pm"). Pure over (dueDay, today) — the caller passes
+// today = todayKey(dayStartHour), so the 4am rollover lives in todayKey and never here: a passed time
+// still reads "due today 4pm" until the rollover (the urgency colour, due.ts, says it's past). Weekday
+// names for ±2–6 days; month/day beyond a week (where a weekday alone is ambiguous).
+export function fmtDueDay(dueDay: string, today: string, dueTime?: string | null): string {
   const n = daysBetween(today, dueDay); // >0 future, <0 past
-  if (n === 0) return 'due today';
-  if (n === 1) return 'due tomorrow';
-  if (n === -1) return 'was due yesterday';
-  if (n >= 2 && n <= 6) return `due ${fmtWeekdayShort(dueDay)}`;
-  if (n <= -2 && n >= -6) return `was due ${fmtWeekdayShort(dueDay)}`;
-  return n > 0 ? `due ${fmtMonthShortDay(dueDay)}` : `was due ${fmtMonthShortDay(dueDay)}`;
+  const at = dueTime ? ` ${fmtClock12(dueTime)}` : '';
+  if (n === 0) return `due today${at}`;
+  if (n === 1) return `due tomorrow${at}`;
+  if (n === -1) return `was due yesterday${at}`;
+  if (n >= 2 && n <= 6) return `due ${fmtWeekdayShort(dueDay)}${at}`;
+  if (n <= -2 && n >= -6) return `was due ${fmtWeekdayShort(dueDay)}${at}`;
+  return `${n > 0 ? 'due' : 'was due'} ${fmtMonthShortDay(dueDay)}${at}`;
 }
 
 // Capture's due: suggestion chips: today, tomorrow, the first five Mon–Fri days in today+1..+7, and

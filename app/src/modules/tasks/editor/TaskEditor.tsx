@@ -6,7 +6,7 @@ import { Button } from '../../../components/Button';
 import { DeltaBar } from '../../../components/DeltaBar';
 import { Text } from '../../../components/Text';
 import { fmtDateTime, fmtDuration } from '../../../lib/format';
-import { useDeleteCalendarEvent } from '../../../data/hooks/useCalendar';
+import { useDeleteCalendarEvent, useSyncCalendarEvent } from '../../../data/hooks/useCalendar';
 import { usePlansForDay } from '../../../data/hooks/usePlans';
 import { useSeries } from '../../../data/hooks/useSeries';
 import { useSettings } from '../../../data/hooks/useSettings';
@@ -67,6 +67,8 @@ export function TaskEditor({
   const today = todayKey(settings?.dayStartHour ?? 4);
   const { data: plans = [] } = usePlansForDay(today);
   const deleteEvent = useDeleteCalendarEvent();
+  const syncEvent = useSyncCalendarEvent();
+  const autoCalendar = settings?.autoCalendar !== false && !!settings?.calendarWriteDefault;
   const [reveal, setReveal] = useState<Reveal>(null);
 
   const inProgress = task.status === 'in_progress';
@@ -148,6 +150,30 @@ export function TaskEditor({
 
       <section className="flex flex-col gap-2">
         <SectionHeading>Calendar</SectionHeading>
+        {/* A failed auto-sync never fails the task write — it's said here, with a retry. */}
+        {/* The retry/add call itself failing (offline, 5xx) is said too — never a dead button. */}
+        {syncEvent.isError && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn’t reach the calendar sync — try again.
+            </Text>
+          </div>
+        )}
+        {task.gcalSyncError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2">
+            <Text size="sm" tone="danger">
+              {task.gcalSyncError}
+            </Text>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={syncEvent.isPending}
+              onClick={() => syncEvent.mutate(task.id)}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
         {task.gcalEventId ? (
           <div className="flex items-center justify-between gap-3">
             <Text size="sm" tone="teal">
@@ -157,6 +183,24 @@ export function TaskEditor({
               Remove
             </Button>
           </div>
+        ) : task.dueDay && task.dueTime && autoCalendar && !isTerminal ? (
+          // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
+          // hand or in Google) — one tap creates it, ending at the deadline.
+          !task.gcalSyncError && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Text size="sm" tone="muted">
+                Not on your calendar.
+              </Text>
+              <Button
+                variant="quiet"
+                size="sm"
+                disabled={syncEvent.isPending}
+                onClick={() => syncEvent.mutate(task.id)}
+              >
+                Add to calendar
+              </Button>
+            </div>
+          )
         ) : task.dueDay && !isTerminal ? (
           reveal === 'calendar' ? (
             <AddToCalendarForm task={task} onDone={() => setReveal(null)} />

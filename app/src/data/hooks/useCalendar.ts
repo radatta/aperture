@@ -66,6 +66,16 @@ export function useInsertCalendarEvent() {
   });
 }
 
+// Retry a failed auto-sync (task.gcalSyncError).
+export function useSyncCalendarEvent() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: string) => api.syncCalendarEvent(taskId),
+    onSettled: () => invalidateTaskData(qc),
+  });
+}
+
 export function useDeleteCalendarEvent() {
   const api = useApi();
   const qc = useQueryClient();

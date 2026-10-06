@@ -1,17 +1,22 @@
 import {
   assertAttachmentAllowed,
   assertCategoryDeletable,
+  calendarSyncPlan,
   completeSession,
   countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
   discardSession,
+  eventWindow,
+  gcalSyncMessage,
+  isPendingRemoval,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   findOpenRollTask,
   heartbeatSession,
   normalizeContentType,
+  normalizeDue,
   normalizeNotes,
   normalizeVerdict,
   resolveStaleSession,
@@ -25,8 +30,10 @@ import {
   stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
+  USER_TIME_ZONE,
   viewableInline,
   withEstimate,
+  zonedEpoch,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -57,6 +64,7 @@ import type {
   LinkTokenResult,
   RequestFinanceSyncResult,
   SetFinanceBucketInput,
+  SetTaskDueInput,
   UpsertFinanceRuleInput,
   Habit,
   HabitCheck,
@@ -89,7 +97,7 @@ import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
-import { noopGoogle } from './google/gateway';
+import { EventGoneError, noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
 import type { Presigner } from './s3/presigner';
@@ -119,6 +127,13 @@ const unconfiguredPresigner: Presigner = {
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
 // behavior is identical to the stub by construction. The one thing SK order doesn't give for free is
 // the stub's explicit list sorts, so each list method re-applies them for byte-for-byte parity.
+// Calendar inserts in flight at once for a bulk create (createTasks), and how long — measured from the
+// call's start, so the task writes count — new ones may start for. Worst case: budget (3 s) + one
+// sync's two Google fetches at GOOGLE_TIMEOUT_MS each (token refresh + insert, liveGoogle.ts) = 11 s,
+// plus the uncapped-but-fast SSM token read and a few DynamoDB writes — inside the 15 s Lambda timeout.
+const SYNC_CONCURRENCY = 4;
+const BULK_SYNC_BUDGET_MS = 3_000;
+
 export class BackendClient implements ApiClient {
   private readonly userId: string;
   private readonly now: () => number;
@@ -163,7 +178,7 @@ export class BackendClient implements ApiClient {
       title: input.title,
       status: 'backlog',
       categoryId: input.categoryId ?? null,
-      dueDay: input.dueDay ?? null,
+      ...normalizeDue(input.dueDay ?? null, input.dueTime ?? null),
       notes: normalizeNotes(input.notes),
       seriesId: null,
       rollId: null,
@@ -177,6 +192,7 @@ export class BackendClient implements ApiClient {
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
     };
   }
   private async ensureSettings(): Promise<Settings> {
@@ -189,6 +205,7 @@ export class BackendClient implements ApiClient {
       googleAccounts: [],
       calendarShapeRefs: [],
       calendarWriteDefault: null,
+      autoCalendar: true,
       dayFocusStart: 8,
       dayEndHour: 22,
       financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
@@ -200,6 +217,105 @@ export class BackendClient implements ApiClient {
     if (row) return { ...def, ...row };
     await this.repo.putSettings(def);
     return def;
+  }
+  // The Lambda's clock is UTC — a task's wall-clock deadline is resolved in the user's zone, never locally.
+  private readonly dueEpoch = (day: string, hhmm: string): number =>
+    zonedEpoch(day, hhmm, USER_TIME_ZONE);
+
+  // Calendar auto-sync after a task write (shared calendarSyncPlan decides; docs/areas/calendar →
+  // Auto-sync). The task is already saved: a Google failure never fails the write — it lands on the
+  // task as gcalSyncError (shown with a retry) and is logged, and a failed remove keeps the event linked
+  // so the retry can finish it. Returns the task as it now stands.
+  private async syncCalendar(
+    prev: Task | null,
+    task: Task,
+    ensure = false,
+    known?: Settings, // a batch reads settings once
+  ): Promise<Task> {
+    // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
+    if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
+    const settings = known ?? (await this.ensureSettings());
+    const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
+    if (action.kind === 'none') {
+      // A stale failure note goes once nothing is left to sync: no event and no time, sync turned off,
+      // or the task finished — otherwise it'd sit there with a Retry that can't do anything.
+      const moot =
+        task.gcalSyncError &&
+        ((!task.gcalEventId && !eventWindow(task, this.dueEpoch)) ||
+          settings.autoCalendar === false ||
+          task.status === 'done' ||
+          task.status === 'cancelled');
+      return moot ? this.putGcal(task, { gcalSyncError: null }) : task;
+    }
+    const unlinked = {
+      gcalAccountId: null,
+      gcalCalendarId: null,
+      gcalEventId: null,
+      gcalSyncError: null,
+    };
+    try {
+      if (action.kind === 'create') {
+        const { eventId } = await this.google.insertEvent({
+          sub: action.target.accountSub,
+          calendarId: action.target.calendarId,
+          title: action.title,
+          startMs: action.startMs,
+          endMs: action.endMs,
+        });
+        return this.putGcal(task, {
+          gcalAccountId: action.target.accountSub,
+          gcalCalendarId: action.target.calendarId,
+          gcalEventId: eventId,
+          gcalSyncError: null,
+        });
+      }
+      if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
+      const ref = {
+        sub: task.gcalAccountId,
+        calendarId: task.gcalCalendarId,
+        eventId: task.gcalEventId,
+      };
+      // Not via deleteCalendarEvent: that swallows Google errors (right for cancel/delete, where the
+      // task is going away) — here a failed remove must surface. An already-gone event is a success.
+      if (action.kind === 'delete') {
+        await this.google.deleteEvent(ref).catch((e: unknown) => {
+          if (!(e instanceof EventGoneError)) throw e;
+        });
+        return this.putGcal(task, unlinked);
+      }
+      try {
+        await this.google.patchEvent({
+          ...ref,
+          title: action.title,
+          startMs: action.startMs,
+          endMs: action.endMs,
+        });
+      } catch (e) {
+        if (!(e instanceof EventGoneError)) throw e;
+        // Deleted in Google on purpose — drop the dead pointer, don't resurrect it. A later time change
+        // creates a fresh one.
+        return this.putGcal(task, unlinked);
+      }
+      return task.gcalSyncError ? this.putGcal(task, { gcalSyncError: null }) : task;
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      console.log(
+        JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, detail }),
+      );
+      return this.putGcal(task, { gcalSyncError: gcalSyncMessage(action.kind, detail) });
+    }
+  }
+  // Write only the calendar fields, onto a FRESH read: the sync spans a Google round-trip, and a
+  // concurrent write (a session closing, an edit from another device) must not be overwritten by it.
+  // (No row — a testMode write that never landed — falls back to the task in hand.)
+  private async putGcal(
+    task: Task,
+    fields: Partial<
+      Pick<Task, 'gcalAccountId' | 'gcalCalendarId' | 'gcalEventId' | 'gcalSyncError'>
+    >,
+  ): Promise<Task> {
+    const fresh = (await this.repo.getTask(task.id)) ?? task;
+    return this.repo.putTask({ ...fresh, ...fields, updatedAt: this.now() });
   }
   private async mustTask(id: string): Promise<Task> {
     const t = await this.repo.getTask(id);
@@ -366,36 +482,74 @@ export class BackendClient implements ApiClient {
     return this.repo.getTask(id);
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
-    return this.repo.putTask(this.newTask(input, this.now()));
+    return this.syncCalendar(null, await this.repo.putTask(this.newTask(input, this.now())));
   }
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     if (inputs.length === 0) return [];
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
-    return this.repo.putTasks(tasks);
+    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
+    const saved = await this.repo.putTasks(tasks);
+    if (!saved.some((t) => t.dueTime)) return saved;
+    // Timed tasks get their events a few at a time, inside a time budget: the tasks are already saved,
+    // so the Lambda timing out now would report a failed paste (and invite a duplicating resubmit). No
+    // new Google call starts after the budget, or once one has failed (Google is likely down for all
+    // of them) — the rest are marked for Retry instead. Worst case: budget + one sync's timeouts.
+    const settings = await this.ensureSettings();
+    let tripped = false;
+    const out = [...saved];
+    const skipped: number[] = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < out.length) {
+        const i = next++;
+        const task = out[i]!;
+        if (!task.dueTime) continue;
+        if (tripped || Date.now() > deadline) {
+          skipped.push(i);
+          continue;
+        }
+        out[i] = await this.syncCalendar(null, task, false, settings);
+        if (out[i]!.gcalSyncError) tripped = true;
+      }
+    };
+    await Promise.all(Array.from({ length: SYNC_CONCURRENCY }, worker));
+    // Mark the skipped rows for Retry — in parallel, each onto a fresh read (putGcal): they've been
+    // listable since putTasks, so another device may have touched one meanwhile.
+    const note = gcalSyncMessage('create', 'not attempted — retry');
+    await Promise.all(
+      skipped.map(async (i) => (out[i] = await this.putGcal(out[i]!, { gcalSyncError: note }))),
+    );
+    return out;
   }
   async setTaskEstimate(
     id: string,
     estimateMin: number | null,
     bufferMin: number | null,
   ): Promise<Task> {
-    return this.repo.putTask(
-      withEstimate(await this.mustTask(id), estimateMin, bufferMin, this.now()),
-    );
+    const prev = await this.mustTask(id);
+    const next = await this.repo.putTask(withEstimate(prev, estimateMin, bufferMin, this.now()));
+    return this.syncCalendar(prev, next);
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, categoryId, updatedAt: this.now() });
   }
   async setTaskDueDay(id: string, dueDay: string | null): Promise<Task> {
-    const t = await this.mustTask(id);
-    return this.repo.putTask({ ...t, dueDay, updatedAt: this.now() });
+    return this.setTaskDue(id, { dueDay });
+  }
+  async setTaskDue(id: string, due: SetTaskDueInput): Promise<Task> {
+    const prev = await this.mustTask(id);
+    const fields = normalizeDue(due.dueDay, due.dueTime, prev.dueTime); // throws before any write
+    const next = await this.repo.putTask({ ...prev, ...fields, updatedAt: this.now() });
+    return this.syncCalendar(prev, next);
   }
   async setTaskTitle(id: string, title: string): Promise<Task> {
     const trimmed = title.trim();
     if (!trimmed) throw new Error('Title is required');
-    const t = await this.mustTask(id);
-    return this.repo.putTask({ ...t, title: trimmed, updatedAt: this.now() });
+    const prev = await this.mustTask(id);
+    const next = await this.repo.putTask({ ...prev, title: trimmed, updatedAt: this.now() });
+    return this.syncCalendar(prev, next);
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
     const normalized = setNotesArg(notes); // throws (missing, over the cap) before any read or write
@@ -404,7 +558,15 @@ export class BackendClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
-    const next = await this.repo.putTask(taskTransition(task, to, this.now()));
+    // A finished task has nothing left to sync, so a failure note (and its Retry) goes with it — unless
+    // it's an owed removal, which the finish carries out (reporting, not swallowing, a failure).
+    const finished = to === 'done' || to === 'cancelled';
+    const owed = task.gcalEventId && isPendingRemoval(task.gcalSyncError);
+    const next = await this.repo.putTask({
+      ...taskTransition(task, to, this.now()),
+      ...(finished && task.gcalSyncError && !owed ? { gcalSyncError: null } : {}),
+    });
+    if (finished && owed) return this.syncCalendar(task, next);
     // Delete-on-cancel: dropping a task removes its calendar event (via the owning account) and clears
     // the pointers. Guarded by gcalEventId, so tasks without an event are unaffected.
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
@@ -420,11 +582,36 @@ export class BackendClient implements ApiClient {
     followUpTitle: string,
   ): Promise<{ original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
-    const original = await this.repo.putTask(taskTransition(task, finishStatus, this.now()));
-    const followUp = await this.repo.putTask({
-      ...this.base(),
-      ...splitFollowUp(task, followUpTitle),
+    // A TIMED task's event is the block before its deadline, and the remaining work carries that
+    // deadline — so the link moves to the follow-up (which renames/re-times it): no delete + re-create
+    // on cancel, no duplicate block on done. Any other linked event (a manual one, a record of work
+    // done) stays with the original, which then behaves like any finish: cancel removes it.
+    const timed = !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    const link = {
+      gcalAccountId: task.gcalAccountId,
+      gcalCalendarId: task.gcalCalendarId,
+      gcalEventId: task.gcalEventId,
+    };
+    const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
+    const owed = !timed && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
+    let original = await this.repo.putTask({
+      ...taskTransition(task, finishStatus, this.now()),
+      ...(timed ? unlinked : {}),
+      gcalSyncError: owed ? task.gcalSyncError : null,
     });
+    // An owed removal goes through the reporting sync path (a failure keeps the note); otherwise a
+    // cancel removes the event best-effort, exactly like delete-on-cancel.
+    if (owed) original = await this.syncCalendar(task, original);
+    else if (!timed && task.gcalEventId && finishStatus === 'cancelled')
+      original = await this.deleteCalendarEvent(id);
+    const followUp = await this.syncCalendar(
+      null,
+      await this.repo.putTask({
+        ...this.base(),
+        ...splitFollowUp(task, followUpTitle),
+        ...(timed ? link : {}),
+      }),
+    );
     return { original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
@@ -698,6 +885,7 @@ export class BackendClient implements ApiClient {
         status: 'planned',
         categoryId: series.categoryId,
         dueDay: null,
+        dueTime: null,
         notes: null,
         seriesId: series.id,
         rollId: null,
@@ -711,6 +899,7 @@ export class BackendClient implements ApiClient {
         gcalAccountId: null,
         gcalCalendarId: null,
         gcalEventId: null,
+        gcalSyncError: null,
       });
       await this.repo.putPlan({
         ...this.base(),
@@ -960,8 +1149,13 @@ export class BackendClient implements ApiClient {
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
       updatedAt: this.now(),
     });
+  }
+
+  async syncCalendarEvent(taskId: string): Promise<Task> {
+    return this.syncCalendar(null, await this.mustTask(taskId), true);
   }
 
   async disconnectGoogleAccount(accountSub: string): Promise<void> {

@@ -1,12 +1,14 @@
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import { fmtDueDay, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtDueDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Text } from '../../components/Text';
 import { NoteIcon, PaperclipIcon } from '../../components/icons';
+import { cx } from '../../lib/cx';
 import { fmtDuration } from '../../lib/format';
+import { useNow } from '../../lib/useNow';
 import { useAttachments } from '../../data/hooks/useAttachments';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useTransitionTask } from '../../data/hooks/useTasks';
@@ -16,6 +18,7 @@ import { RollTag } from '../rolls/RollTag';
 import { TaskModalHost } from './TaskModalHost';
 import { useOpenTask } from './task-modal-context';
 import { TaskTitleButton } from './TaskTitleButton';
+import { urgencyClass, urgencyLabel } from './dueStyle';
 import { remainingMin } from './taskMath';
 import type { TaskEditorIntent } from './editor/TaskEditor';
 
@@ -50,6 +53,8 @@ function TaskRow({ task, actions, notesHit = false }: TaskCardProps) {
   const openTask = useOpenTask()!;
   const titleRef = useRef<HTMLButtonElement>(null);
   const canScope = task.status === 'backlog' || task.status === 'planned';
+  const now = useNow(); // re-read every minute, so a row changes colour on its own
+  const urgency = dueUrgency(task, now); // timed tasks only
 
   // The intent picks the field the modal focuses (finish → Actual, scope → Estimate); focus returns
   // to the title button on close.
@@ -59,7 +64,7 @@ function TaskRow({ task, actions, notesHit = false }: TaskCardProps) {
     // A click anywhere on the row opens the editor too — the title button stays the keyboard path,
     // and clicks on controls are left alone.
     <Card
-      className="cursor-pointer px-3.5 py-3"
+      className={cx('cursor-pointer px-3.5 py-3', urgencyClass(urgency))}
       onClick={(e) => {
         if (!(e.target as HTMLElement).closest(ROW_CONTROLS)) openAs('view');
       }}
@@ -67,7 +72,7 @@ function TaskRow({ task, actions, notesHit = false }: TaskCardProps) {
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <TaskTitleButton task={task} ref={titleRef} onOpen={() => openAs('view')} />
-          <TaskMeta task={task} notesHit={notesHit} />
+          <TaskMeta task={task} notesHit={notesHit} urgency={urgencyLabel(urgency)} />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {actions}
@@ -103,7 +108,15 @@ function TaskRow({ task, actions, notesHit = false }: TaskCardProps) {
 
 // One quiet metadata line. Absence is shown by absence — except that an unscoped backlog task now says
 // so, since the always-visible Scope button that used to carry that signal is gone from the card.
-function TaskMeta({ task, notesHit }: { task: Task; notesHit: boolean }) {
+function TaskMeta({
+  task,
+  notesHit,
+  urgency,
+}: {
+  task: Task;
+  notesHit: boolean;
+  urgency: string | null;
+}) {
   const { data: settings } = useSettings();
   const { data: attachments = [] } = useAttachments();
   const today = todayKey(settings?.dayStartHour ?? 4);
@@ -133,16 +146,23 @@ function TaskMeta({ task, notesHit }: { task: Task; notesHit: boolean }) {
           {bits.join(' · ')}
         </Text>
       )}
-      {/* Deadline reads flat and quiet at every status — a lapsed due date is an honest signal, never
-          a scold (no red, no countdown, no aggregate). Shown on done/cancelled too, as history. */}
+      {/* The deadline phrase stays quiet at every status (no countdown, no aggregate) and shows on
+          done/cancelled too, as history. A timed task's urgency is the ROW colour (TaskRow), with the
+          same signal spelled out here for a screen reader. */}
       {task.dueDay && (
         <Text size="xs" tone="subtle">
-          {fmtDueDay(task.dueDay, today)}
+          {fmtDueDay(task.dueDay, today, task.dueTime)}
+          {urgency && <span className="sr-only">, {urgency}</span>}
         </Text>
       )}
       {task.gcalEventId && (
         <Text size="xs" tone="teal">
           on calendar
+        </Text>
+      )}
+      {task.gcalSyncError && (
+        <Text size="xs" tone="danger">
+          calendar sync failed
         </Text>
       )}
       <RollTag rollId={task.rollId} />

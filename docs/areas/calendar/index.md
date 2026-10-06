@@ -71,7 +71,9 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
 ## Data model
 
 - `Task` + `gcalAccountId | gcalCalendarId | gcalEventId` (all null-default) — the pointer to a created
-  event; all three are needed to delete it via the owning account.
+  event; all three are needed to patch or delete it via the owning account. `gcalSyncError` (null-default)
+  holds the last auto-sync failure (§ Auto-sync).
+- `Settings.autoCalendar` (default `true`) — the auto-sync toggle.
 - `Settings` + `googleAccounts[{sub,email}]`, `calendarShapeRefs[{accountSub,calendarId}]`,
   `calendarWriteDefault`, `dayFocusStart` (8), `dayEndHour` (22) — the waking window, **separate** from
   `dayStartHour`'s 4am rollover.
@@ -89,15 +91,74 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
   bounds via local `Date` (DST-safe) and sends epoch ms; the BFF reads each shape ref via the right token,
   normalizes, and returns raw merged-later intervals + an all-day count. React Query `staleTime` (~10 min)
   is the only cache — no Lambda or DDB cache.
-- **Event write**: `insertCalendarEvent` routes to the target account, stores the pointers; one live event
-  per task (a second insert throws). Time feeds the event only — never denormalized onto the task.
+- **Event write (manual)**: `insertCalendarEvent` routes to the target account, stores the pointers; one
+  live event per task (a second insert throws). The picked start feeds the event only; a task with a
+  `dueTime` prefills the block that ends at it.
 - **Delete-on-cancel**: dropping a task (`transitionTask → cancelled`) or `deleteCalendarEvent` removes the
   event via its owning account and clears the pointers. **`deleteTask` reuses the same path** (permanent
   delete hard-deletes the event, then tombstones the task) — so a failed Google call is swallowed there
   too, leaving the same silent orphan (expired token → the event stays, the pointer clears, no retry). Note
   `deleteTask` builds its tombstone from the task **returned** by `deleteCalendarEvent`, whose pointers are
-  already nulled, so it can't re-write stale pointers. Edit-sync (a moved `dueDay`) is a **named, deferred
-  gap** — the event does not move.
+  already nulled, so it can't re-write stale pointers.
+- **Auto-sync** (timed tasks, below) — create, edit-sync, and remove on clear.
+
+## Auto-sync (timed tasks) — 2026-10-05
+
+A task with a due **time** (`dueTime`, [due-dates.md](../tasks/due-dates.md)) gets an event automatically:
+it **ends at the deadline** and is as long as the estimate (`DEFAULT_EVENT_MIN` = 30 without one), on
+`calendarWriteDefault`. One pure planner, `calendarSyncPlan` (`packages/shared/src/calendarSync.ts`), runs
+after every task write in **both** `ApiClient` impls — `BackendClient.syncCalendar` executes it against the
+gateway, the stub against a fake id — so app, bulk add and MCP all get the same behaviour.
+
+| Task change | Event |
+| --- | --- |
+| gains a time (create, edit, bulk, MCP) — no event | created |
+| gains a time — a manually added event exists | **moved** to end at the deadline (no duplicate) |
+| day / time / estimate / title changes | patched (`events.patch`) |
+| untimed task with a manual event, renamed | title patched; a day move leaves it (gcal owns that clock) |
+| time or day cleared | deleted, pointers cleared |
+| done | left alone · cancel → delete-on-cancel (above) |
+
+- **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
+  creates one (so an event you removed by hand isn't resurrected).
+- **Toggle off → nothing auto-syncs**: no create, patch or delete; existing events stay where they are.
+  No backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
+  Not gated by it: delete-on-cancel (above), a split moving a timed task's link to its follow-up (no
+  Google call — the pointer just moves), and an **owed removal** (below) — asked for while sync was on,
+  it's carried out on the next sync either way.
+- **One-way.** The task is the source of record; an event edited in Google is overwritten by the next
+  task change. An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google
+  keeps deleted events restorable) is treated as gone: the pointer is dropped and the event is not
+  resurrected; a later time change creates a fresh one. Two-way sync is a follow-up.
+- **Failure never fails the task write.** The task is saved first; a gateway error lands on the task as
+  `gcalSyncError` ("Couldn’t add/update/remove the calendar event (…)", logged as `gcal_sync_failed`),
+  shown on the row and in the editor with **Retry** (`syncCalendarEvent` — an "ensure" pass of the
+  planner). A failed **remove** keeps the event linked (never a silent orphan), and its note marks it as
+  still owed a removal (`isPendingRemoval`): the next sync of any kind — the retry, or just a rename —
+  finishes it, never adopting the event as a manual one. The note clears on the next success, or once
+  there's nothing to retry (no time + no event, sync off, or the task is done/cancelled — a finish clears
+  it directly). The exception is an **owed removal**: finishing (or splitting) the task carries it out
+  through the same reporting path, so it's never dropped. Unlike delete-on-cancel — still best-effort,
+  as is the cancel half of a split — the auto-sync remove does not swallow Google errors.
+- **Writes only the calendar fields, onto a fresh read** (`putGcal`) — the sync spans a Google round-trip,
+  and a write that lands meanwhile (a session closing) must survive it.
+- **Every Google fetch has a 4 s timeout** (`LiveGoogle`), so one sync's worst case (token refresh +
+  call, ~8 s; the SSM token read has none) fails into `gcalSyncError` inside the 15 s Lambda timeout.
+- **A timed task with no event** (timed while sync was off — no backfill — or its event removed) shows
+  "Not on your calendar" + **Add to calendar** in the editor, which runs the same ensure pass.
+- **Timezone.** The Lambda is UTC, so it resolves `dueDay`+`dueTime` via `zonedEpoch(…, USER_TIME_ZONE)`
+  (`America/Los_Angeles`, shared `dates.ts`; DST-correct); the browser uses `localEpochFromDayTime`.
+- **Bulk creates** sync timed rows four at a time (a Google round-trip each; settings read once) within a
+  3 s budget measured from the call's start: no new Google call starts after it, or after the first
+  failure (Google is likely down for all of them) — the remaining timed rows get a "not attempted — retry"
+  note instead (each onto a fresh read). Worst case ≈ 3 s + one sync's two 4 s fetches = 11 s, plus a fast
+  SSM read and a few DynamoDB writes. The
+  tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
+  resubmit. Untimed rows skip it.
+- **Split.** A **timed** task's event (the block before its deadline) moves with the deadline: the link
+  goes to the follow-up, which renames/re-times it — no delete + re-create, no duplicate block. Any other
+  linked event (a manual one; a record of work done) stays on the original: kept on done, removed on
+  cancel (best-effort), and an owed removal is carried out (reporting) either way.
 
 ## Resilience (the Cognito model, per account)
 

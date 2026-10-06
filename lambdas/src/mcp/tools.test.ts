@@ -339,3 +339,65 @@ describe('mcp tools — attachments', () => {
     });
   });
 });
+
+describe('mcp tools — due times', () => {
+  it('create_task / create_tasks take dueTime; a timed task lands on the connected calendar', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', {
+      title: 'pset',
+      dueDay: '2026-10-09',
+      dueTime: '16:00',
+    })) as Task;
+    expect(t).toMatchObject({ dueDay: '2026-10-09', dueTime: '16:00', gcalSyncError: null });
+    expect(t.gcalEventId).not.toBeNull();
+    const bulk = (await call('create_tasks', {
+      tasks: [{ title: 'a', dueDay: '2026-10-09', dueTime: '09:00' }, { title: 'b' }],
+    })) as Task[];
+    expect(bulk.map((x) => x.dueTime)).toEqual(['09:00', null]);
+    expect(google.events.size).toBe(2);
+  });
+
+  it('a malformed dueTime is a param error that writes nothing', async () => {
+    const { call } = makeEnv();
+    await expect(
+      call('create_task', { title: 'x', dueDay: '2026-10-09', dueTime: '4pm' }),
+    ).rejects.toThrow(/HH:MM/);
+    const t = (await call('create_task', { title: 'y', dueDay: '2026-10-09' })) as Task;
+    await expect(
+      call('update_task', { id: t.id, title: 'renamed', dueTime: '25:00' }),
+    ).rejects.toThrow(/HH:MM/);
+    const after = ((await call('list_tasks')) as Task[]).map((x) => x.title);
+    expect(after).toEqual(['y']); // neither the create nor the rename landed
+  });
+
+  it('update_task: time-only keeps the day, day-only keeps the time, null clears', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'x', dueDay: '2026-10-09' })) as Task;
+    expect(await call('update_task', { id: t.id, dueTime: '17:30' })).toMatchObject({
+      dueDay: '2026-10-09',
+      dueTime: '17:30',
+    });
+    expect(await call('update_task', { id: t.id, dueDay: '2026-10-10' })).toMatchObject({
+      dueDay: '2026-10-10',
+      dueTime: '17:30',
+    });
+    expect(await call('update_task', { id: t.id, dueTime: null })).toMatchObject({
+      dueDay: '2026-10-10',
+      dueTime: null,
+    });
+    await call('update_task', { id: t.id, dueDay: '2026-10-10', dueTime: '08:00' });
+    expect(await call('update_task', { id: t.id, dueDay: null })).toMatchObject({
+      dueDay: null,
+      dueTime: null,
+    });
+  });
+
+  it('update_task: a time on an undated task errors and names what already applied', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'x' })) as Task;
+    await expect(
+      call('update_task', { id: t.id, title: 'renamed', dueTime: '16:00' }),
+    ).rejects.toThrow(/requires dueDay.*already applied: title/);
+  });
+});

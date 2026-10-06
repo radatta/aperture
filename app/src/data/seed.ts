@@ -5,6 +5,7 @@
 import {
   addDays,
   dayKey,
+  hhmmOfEpoch,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   rollRepFields,
@@ -70,6 +71,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       { accountSub: 'seed-school', calendarId: 'you@school.edu' },
     ],
     calendarWriteDefault: { accountSub: 'seed-personal', calendarId: 'you@gmail.com' },
+    autoCalendar: true,
     dayFocusStart: 8,
     dayEndHour: 22,
     financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
@@ -126,6 +128,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         status: 'done',
         categoryId: cat.id,
         dueDay: null,
+        dueTime: null,
         notes: null,
         seriesId: null,
         rollId: null,
@@ -139,6 +142,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         gcalAccountId: null,
         gcalCalendarId: null,
         gcalEventId: null,
+        gcalSyncError: null,
       };
       store.tasks.push(task);
       const session: PomodoroSession = {
@@ -165,7 +169,17 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   // Mixed due days so the morning pull's soonest-due sort and the relative phrasing are both visible
   // on first load: a couple dated (one overdue, one far out), the rest undated.
   // Two carry notes, so the rendered markdown and the row's notes marker show on first load.
-  const backlogSeeds: { title: string; dueOffset: number | null; notes?: string }[] = [
+  // Three carry a due TIME relative to now — inside the hour, inside 6h, and past — so every urgency
+  // colour shows on first load (each already on the seeded calendar, as auto-sync would have left it).
+  const backlogSeeds: {
+    title: string;
+    dueOffset: number | null;
+    notes?: string;
+    dueInMin?: number; // timed: the deadline is now + this (dueOffset is ignored)
+  }[] = [
+    { title: 'Submit the problem set', dueOffset: null, dueInMin: 40 },
+    { title: 'Send the case study draft', dueOffset: null, dueInMin: 3 * 60 },
+    { title: 'Turn in the discussion post', dueOffset: null, dueInMin: -20 * 60 },
     {
       title: 'Draft the project proposal',
       dueOffset: 2,
@@ -179,13 +193,18 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     { title: 'Outline the reading notes', dueOffset: 12 },
     { title: 'Book dentist appointment', dueOffset: null },
   ];
-  backlogSeeds.forEach(({ title, dueOffset, notes }, i) => {
+  backlogSeeds.forEach(({ title, dueOffset, notes, dueInMin }, i) => {
+    // A deadline is a calendar date + wall clock (not the 4am logical day), rounded to the minute.
+    const dueAt =
+      dueInMin === undefined ? null : Math.floor((nowMs + dueInMin * 60_000) / 60_000) * 60_000;
     store.tasks.push({
       ...mk(nowMs - (i + 1) * HOUR),
       title,
       status: 'backlog',
       categoryId: null,
-      dueDay: dueOffset === null ? null : addDays(today, dueOffset),
+      dueDay:
+        dueAt !== null ? dayKey(dueAt, 0) : dueOffset === null ? null : addDays(today, dueOffset),
+      dueTime: dueAt === null ? null : hhmmOfEpoch(dueAt),
       notes: notes ?? null,
       seriesId: null,
       rollId: null,
@@ -196,9 +215,10 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       startedAt: null,
       completedAt: null,
       cancelledAt: null,
-      gcalAccountId: null,
-      gcalCalendarId: null,
-      gcalEventId: null,
+      gcalAccountId: dueAt === null ? null : 'seed-personal',
+      gcalCalendarId: dueAt === null ? null : 'you@gmail.com',
+      gcalEventId: dueAt === null ? null : `stub-event-seed-${i}`,
+      gcalSyncError: null,
     });
   });
 
@@ -232,6 +252,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       status: inProgress ? 'in_progress' : 'planned',
       categoryId: byLabel(cat).id,
       dueDay: null,
+      dueTime: null,
       notes: notes ?? null,
       seriesId: null,
       rollId: null,
@@ -245,6 +266,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
     };
     store.tasks.push(task);
     store.plans.push({
@@ -324,6 +346,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       status: 'done',
       categoryId: roll.categoryId,
       dueDay: null,
+      dueTime: null,
       notes: null,
       seriesId: null,
       rollId: roll.id,
@@ -337,6 +360,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       gcalAccountId: null,
       gcalCalendarId: null,
       gcalEventId: null,
+      gcalSyncError: null,
     });
   };
   // Frequent-but-gappy for LeetCode (with two two-a-day cells), sparser for the others — a lived-in sheet.

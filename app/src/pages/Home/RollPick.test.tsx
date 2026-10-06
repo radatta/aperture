@@ -38,6 +38,7 @@ describe('Rolls ↔ daytime home', () => {
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
     await user.click(await screen.findByRole('button', { name: 'Start' }));
     await user.click(await screen.findByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '25');
     await user.click(await screen.findByRole('button', { name: 'Mark done' }));
 
     // Over on the Rolls page, today's cell is now a rep.

@@ -357,6 +357,69 @@ export function runApiContract(
       expect((await api.listTasks()).find((x) => x.id === t.id)?.dueDay).toBeNull();
     });
 
+    it('tasks: due time defaults null, sets with the day, keeps across a day move, clears with the day', async () => {
+      const t = await api.createTask({ title: 'timed' });
+      expect(t.dueTime).toBeNull();
+      expect(t.gcalSyncError).toBeNull();
+
+      const timed = await api.setTaskDue(t.id, { dueDay: '2026-08-07', dueTime: '16:00' });
+      expect(timed).toMatchObject({ dueDay: '2026-08-07', dueTime: '16:00' });
+      expect((await api.getTask(t.id))?.dueTime).toBe('16:00'); // survives read-back
+
+      // Omitted time = keep it (both the object form and the day-only back-compat method).
+      expect(await api.setTaskDue(t.id, { dueDay: '2026-08-08' })).toMatchObject({
+        dueDay: '2026-08-08',
+        dueTime: '16:00',
+      });
+      expect((await api.setTaskDueDay(t.id, '2026-08-09')).dueTime).toBe('16:00');
+      // An explicit null clears just the time.
+      expect(await api.setTaskDue(t.id, { dueDay: '2026-08-09', dueTime: null })).toMatchObject({
+        dueDay: '2026-08-09',
+        dueTime: null,
+      });
+
+      // Never touches the lock; clearing the day clears the time.
+      await api.setTaskDue(t.id, { dueDay: '2026-08-09', dueTime: '09:30' });
+      await api.setTaskEstimate(t.id, 30, 0);
+      await api.transitionTask(t.id, 'in_progress');
+      const moved = await api.setTaskDue(t.id, { dueDay: '2026-08-10', dueTime: '10:00' });
+      expect(moved.estimateLockedMin).toBe(30);
+      expect(await api.setTaskDueDay(t.id, null)).toMatchObject({ dueDay: null, dueTime: null });
+    });
+
+    it('tasks: due time is validated and needs a day — a bad write changes nothing', async () => {
+      const t = await api.createTask({ title: 'strict', dueDay: '2026-08-07', dueTime: '08:00' });
+      expect(t.dueTime).toBe('08:00');
+      await expect(api.setTaskDue(t.id, { dueDay: '2026-08-07', dueTime: '8:00' })).rejects.toThrow(
+        /dueTime/,
+      );
+      await expect(api.setTaskDue(t.id, { dueDay: null, dueTime: '08:00' })).rejects.toThrow(
+        /requires dueDay/,
+      );
+      await expect(api.createTask({ title: 'no day', dueTime: '08:00' })).rejects.toThrow(
+        /requires dueDay/,
+      );
+      expect((await api.getTask(t.id))?.dueTime).toBe('08:00');
+      // createTasks carries it, and one bad row writes none.
+      const made = await api.createTasks([{ title: 'a', dueDay: '2026-08-07', dueTime: '23:59' }]);
+      expect(made[0]!.dueTime).toBe('23:59');
+      const before = (await api.listTasks()).length;
+      await expect(
+        api.createTasks([
+          { title: 'ok' },
+          { title: 'bad', dueDay: '2026-08-07', dueTime: '24:00' },
+        ]),
+      ).rejects.toThrow(/dueTime/);
+      expect((await api.listTasks()).length).toBe(before);
+    });
+
+    it('tasks: split carries the due time to the follow-up', async () => {
+      const t = await api.createTask({ title: 'pset', dueDay: '2026-08-07', dueTime: '17:00' });
+      await api.transitionTask(t.id, 'in_progress');
+      const { followUp } = await api.splitTask(t.id, 'done', 'pset, part 2');
+      expect(followUp).toMatchObject({ dueDay: '2026-08-07', dueTime: '17:00' });
+    });
+
     it('tasks: title renames at any status, trims, rejects empty, and never touches the lock', async () => {
       const t = await api.createTask({ title: 'draft name', estimateMin: 30, bufferMin: 0 });
 
@@ -738,6 +801,9 @@ export function runApiContract(
       expect(s.financePaymentDay).toBe(20);
       const fin = await api.updateSettings({ financeBudgetCents: 45000 });
       expect(fin.financeBudgetCents).toBe(45000);
+      expect(s.autoCalendar).toBe(true);
+      expect((await api.updateSettings({ autoCalendar: false })).autoCalendar).toBe(false);
+      expect((await api.getSettings()).autoCalendar).toBe(false);
     });
 
     // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked

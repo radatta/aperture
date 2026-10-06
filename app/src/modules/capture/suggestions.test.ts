@@ -69,4 +69,17 @@ describe('applySuggestion', () => {
       caret: 14,
     });
   });
+  it('a day chip chains: no space, caret at the token end — at the end and mid-line', () => {
+    const day = dueSuggestions('', '2026-09-30')[0]!; // Today
+    const end = 'memo | due:';
+    expect(applySuggestion(end, tokenAtCaret(end, end.length)!, day)).toEqual({
+      text: 'memo | due:2026-09-30',
+      caret: 21,
+    });
+    const mid = 'memo | due: ~30';
+    expect(applySuggestion(mid, tokenAtCaret(mid, 11)!, day)).toEqual({
+      text: 'memo | due:2026-09-30 ~30',
+      caret: 21,
+    });
+  });
 });

@@ -18,6 +18,7 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
     seriesId: null,
     rollId: null,
     dueDay: dueOffset === null ? null : addDays(TODAY, dueOffset),
+    dueTime: null,
     notes: null,
     estimateMin: null,
     bufferMin: null,
@@ -29,6 +30,7 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
     gcalAccountId: null,
     gcalCalendarId: null,
     gcalEventId: null,
+    gcalSyncError: null,
   };
 }
 

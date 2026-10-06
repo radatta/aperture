@@ -4,6 +4,7 @@ import {
   UPLOAD_URL_TTL_MS,
   computeDayShape,
   isDayKey,
+  isTimeKey,
   normalizeContentType,
   normalizeNotes,
 } from '@aperture/shared';
@@ -86,6 +87,16 @@ function nullableDay(args: Record<string, unknown>, key: string): string | null 
   if (v === null || v === undefined) return null;
   return reqDay(args, key);
 }
+// A deadline clock time: "HH:MM", 24h, the user's local wall clock. null clears.
+function nullableTime(args: Record<string, unknown>, key: string): string | null {
+  const v = args[key];
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'string' || !isTimeKey(v))
+    throw new RpcParamError(`"${key}" must be HH:MM (24h, e.g. 16:00), or null`);
+  return v;
+}
+const DUE_TIME_DESC =
+  'deadline clock time HH:MM (24h) in the user\'s local time (America/Los_Angeles) on dueDay — "due Friday 4pm" is dueDay + dueTime "16:00". Needs a dueDay. A timed task is added to Google Calendar automatically when that is on (an event ending at the deadline, as long as the estimate); a sync failure shows as gcalSyncError on the returned task';
 // Notes are checked here, before any dispatch, so an over-cap note is a param error that lands nothing —
 // not a half-applied update_task. The value passed on is already normalized (trim, '' → null).
 function nullableNotes(args: Record<string, unknown>, key: string): string | null {
@@ -158,7 +169,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_task',
     description:
-      'Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); notes is free-form context (light markdown). The estimate stays editable until work starts.',
+      'Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day; notes is free-form context (light markdown). The estimate stays editable until work starts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -167,6 +178,7 @@ export const TOOLS: Tool[] = [
         estimateMin: { type: 'integer', minimum: 0 },
         bufferMin: { type: 'integer', minimum: 0 },
         dueDay: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+        dueTime: { type: 'string', description: DUE_TIME_DESC },
         notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
       },
       required: ['title'],
@@ -178,6 +190,7 @@ export const TOOLS: Tool[] = [
       if (present(args, 'estimateMin')) input.estimateMin = reqInt(args, 'estimateMin', 0);
       if (present(args, 'bufferMin')) input.bufferMin = reqInt(args, 'bufferMin', 0);
       if (present(args, 'dueDay')) input.dueDay = nullableDay(args, 'dueDay');
+      if (present(args, 'dueTime')) input.dueTime = nullableTime(args, 'dueTime');
       if (present(args, 'notes')) input.notes = nullableNotes(args, 'notes');
       return ctx.dispatch('createTask', [input]);
     },
@@ -199,6 +212,7 @@ export const TOOLS: Tool[] = [
               estimateMin: { type: 'integer', minimum: 0 },
               bufferMin: { type: 'integer', minimum: 0 },
               dueDay: { type: 'string' },
+              dueTime: { type: 'string', description: 'HH:MM (24h), needs dueDay' },
               notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
             },
             required: ['title'],
@@ -221,6 +235,7 @@ export const TOOLS: Tool[] = [
         if (present(row, 'estimateMin')) input.estimateMin = reqInt(row, 'estimateMin', 0);
         if (present(row, 'bufferMin')) input.bufferMin = reqInt(row, 'bufferMin', 0);
         if (present(row, 'dueDay')) input.dueDay = nullableDay(row, 'dueDay');
+        if (present(row, 'dueTime')) input.dueTime = nullableTime(row, 'dueTime');
         if (present(row, 'notes')) input.notes = nullableNotes(row, 'notes');
         return input;
       });
@@ -230,7 +245,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears; ISO date), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin (+optional bufferMin), status. Fields apply in order title→categoryId→dueDay→notes→estimate→status. The estimate is frozen once work starts — setting it then errors. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
+      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin (+optional bufferMin), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, title/due/estimate changes move or rename the event. The estimate is frozen once work starts — setting it then errors. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -238,6 +253,7 @@ export const TOOLS: Tool[] = [
         title: { type: 'string' },
         categoryId: { type: ['string', 'null'] },
         dueDay: { type: ['string', 'null'], description: 'ISO date YYYY-MM-DD, or null to clear' },
+        dueTime: { type: ['string', 'null'], description: `${DUE_TIME_DESC}; null clears` },
         notes: {
           type: ['string', 'null'],
           description: `${NOTES_SCHEMA_DESC}; replaces the whole note, null clears`,
@@ -255,6 +271,7 @@ export const TOOLS: Tool[] = [
         'title',
         'categoryId',
         'dueDay',
+        'dueTime',
         'notes',
         'estimateMin',
         'bufferMin',
@@ -264,6 +281,8 @@ export const TOOLS: Tool[] = [
         throw new RpcParamError('update_task needs at least one field to change');
       }
       const notes = present(args, 'notes') ? nullableNotes(args, 'notes') : undefined; // before any write
+      const dueDay = present(args, 'dueDay') ? nullableDay(args, 'dueDay') : undefined;
+      const dueTime = present(args, 'dueTime') ? nullableTime(args, 'dueTime') : undefined;
       const applied: string[] = [];
       try {
         if (present(args, 'title')) {
@@ -274,9 +293,17 @@ export const TOOLS: Tool[] = [
           await ctx.dispatch('setTaskCategory', [id, nullableStr(args, 'categoryId')]);
           applied.push('categoryId');
         }
-        if (present(args, 'dueDay')) {
-          await ctx.dispatch('setTaskDueDay', [id, nullableDay(args, 'dueDay')]);
-          applied.push('dueDay');
+        if (dueDay !== undefined || dueTime !== undefined) {
+          // A time-only change keeps the task's day; the server rejects a time with no day at all.
+          const day =
+            dueDay !== undefined
+              ? dueDay
+              : ((await ctx.dispatch('getTask', [id])) as Task | null)?.dueDay || null;
+          await ctx.dispatch('setTaskDue', [
+            id,
+            dueTime === undefined ? { dueDay: day } : { dueDay: day, dueTime },
+          ]);
+          applied.push('due');
         }
         if (notes !== undefined) {
           await ctx.dispatch('setTaskNotes', [id, notes]);

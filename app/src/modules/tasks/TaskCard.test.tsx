@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { addDays, todayKey } from '@aperture/shared';
+import { addDays, dayKey, hhmmOfEpoch, todayKey } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -311,5 +311,59 @@ describe('deleting a task', () => {
     const d = await openEditor(user, 'Daily standup');
     expect(d.getByRole('button', { name: /Drop task/ })).toBeTruthy();
     expect(d.queryByRole('button', { name: /Delete task/ })).toBeNull();
+  });
+});
+
+describe('due-time urgency', () => {
+  // Deadlines relative to the real clock: the row colour is a function of (dueDay+dueTime, now).
+  async function timed(api: ReturnType<typeof freshApi>, title: string, inMin: number) {
+    const at = Math.floor((Date.now() + inMin * 60_000) / 60_000) * 60_000;
+    return api.createTask({ title, dueDay: dayKey(at, 0), dueTime: hhmmOfEpoch(at) });
+  }
+  const rowOf = (title: string) =>
+    screen.getByRole('button', { name: title }).closest('.rounded-2xl') as HTMLElement;
+
+  it('gold edge inside 6h, gold fill inside the hour, red once past; untimed stays plain', async () => {
+    const api = freshApi();
+    await timed(api, 'Later', 9 * 60);
+    await timed(api, 'Soon', 3 * 60);
+    await timed(api, 'Imminent', 30);
+    await timed(api, 'Past', -120);
+    await api.createTask({ title: 'Untimed', dueDay: todayKey(4) });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await user.click(await screen.findByRole('button', { name: 'Week' })); // all due within the week
+    await screen.findByRole('button', { name: 'Past' });
+
+    expect(rowOf('Later').className).not.toMatch(/border-(gold|danger)/);
+    expect(rowOf('Untimed').className).not.toMatch(/border-(gold|danger)/);
+    expect(rowOf('Soon').className).toMatch(/border-gold!/);
+    expect(rowOf('Soon').className).not.toMatch(/fill/);
+    expect(rowOf('Imminent').className).toMatch(/border-gold!.*due-imminent-fill/);
+    expect(rowOf('Past').className).toMatch(/border-danger!.*due-past-fill/);
+    // The same signal for a screen reader, beside the time label.
+    expect(within(rowOf('Imminent')).getByText(/due within the hour/)).toBeTruthy();
+    expect(within(rowOf('Past')).getByText(/past due/)).toBeTruthy();
+  });
+
+  it('a finished task is never coloured, even past its time', async () => {
+    const api = freshApi();
+    const t = await timed(api, 'Finished late', -60);
+    await api.transitionTask(t.id, 'in_progress');
+    await api.transitionTask(t.id, 'done');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await user.click(await screen.findByRole('button', { name: 'Done' }));
+    expect(rowOf('Finished late').className).not.toMatch(/border-(gold|danger)/);
+  });
+
+  it('shows a failed calendar sync on the row', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Sync broke' });
+    vi.spyOn(api, 'listTasks').mockResolvedValue([{ ...t, gcalSyncError: 'invalid_grant' }]);
+    renderApp({ api, path: '/tasks' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    expect(await screen.findByText('calendar sync failed')).toBeTruthy();
   });
 });

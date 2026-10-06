@@ -202,7 +202,7 @@ function DialogBody({
               <CategoryTag categoryId={t.categoryId} />
               {t.dueDay && (
                 <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay, today)}
+                  {fmtDueDay(t.dueDay, today, t.dueTime)}
                 </Text>
               )}
             </div>
