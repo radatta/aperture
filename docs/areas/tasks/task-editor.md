@@ -51,9 +51,10 @@ The card keeps only the actions you press without thinking. No overflow menu.
   refetch lands, the form compares against that returned task (newer `updatedAt` wins), so nothing
   reads dirty or flashes old values in between. Save is `aria-disabled` rather than `disabled` when
   there's nothing to save, so a keyboard user keeps focus on it. The earlier "Save closes" was never
-  wanted (2026-09-27) — only Close / Esc / backdrop, Mark done, Drop and Delete leave. Estimate + buffer are **read-only once work has started** —
-  `canEditEstimate` (backlog|planned only), because the machine freezes the calibration baseline and
-  `withEstimate` throws past that. Category stays editable at any status (no machine guard); **due locks
+  wanted (2026-09-27) — only Close / Esc / backdrop, Mark done, Drop and Delete leave. Estimate + buffer (the working estimate) are **editable at any
+  open status** since 2026-10-05 ([split.md](split.md) D1) — the calibration baseline frozen at start is
+  separate and never moves; the form says "Started at 45m — calibration is measured against that." They
+  go **read-only once done or cancelled** (`canEditEstimate`; `withEstimate` throws there). Category stays editable at any status (no machine guard); **due locks
   once the task is done or cancelled** — a UI rule (`isTerminal` in `TaskDetailsForm`), since re-dating
   history is meaningless.
 - **Done opens the modal in a finish intent** (actual-minutes capture, `DoneForm` reused) focused on

@@ -12,7 +12,7 @@ import { dayKey } from './dates';
 export const ROLL_PLAN_FALLBACK_MIN = 30;
 
 // The non-identity fields of a fresh rep task for a roll — a planned, unlocked task carrying the roll's
-// category + estimate. The caller stamps a BaseEntity (mirrors machines.splitFollowUp).
+// category + estimate. The caller stamps a BaseEntity (mirrors split.splitFollowUp).
 export function rollRepFields(roll: Roll): Omit<Task, keyof BaseEntity> {
   return {
     title: roll.name,
@@ -26,6 +26,7 @@ export function rollRepFields(roll: Roll): Omit<Task, keyof BaseEntity> {
     estimateMin: roll.estimateMin,
     bufferMin: null,
     estimateLockedMin: null,
+    splitFromId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,

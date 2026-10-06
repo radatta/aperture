@@ -26,7 +26,11 @@ import {
   sanitizeFilename,
   seriesDueOn,
   setNotesArg,
+  followUpPlanDay,
+  followUpPlanMinutes,
+  isCalibrationPoint,
   splitFollowUp,
+  splitOriginal,
   stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
@@ -65,6 +69,7 @@ import type {
   RequestFinanceSyncResult,
   SetFinanceBucketInput,
   SetTaskDueInput,
+  SplitTaskInput,
   UpsertFinanceRuleInput,
   Habit,
   HabitCheck,
@@ -185,6 +190,7 @@ export class BackendClient implements ApiClient {
       estimateMin: input.estimateMin ?? null,
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
+      splitFromId: null,
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -576,43 +582,55 @@ export class BackendClient implements ApiClient {
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, actualAccruedMin: actualMin, updatedAt: this.now() });
   }
-  async splitTask(
-    id: string,
-    finishStatus: 'done' | 'cancelled',
-    followUpTitle: string,
-  ): Promise<{ original: Task; followUp: Task }> {
+  async splitTask(id: string, input: SplitTaskInput): Promise<{ original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
-    // A TIMED task's event is the block before its deadline, and the remaining work carries that
-    // deadline — so the link moves to the follow-up (which renames/re-times it): no delete + re-create
-    // on cancel, no duplicate block on done. Any other linked event (a manual one, a record of work
-    // done) stays with the original, which then behaves like any finish: cancel removes it.
-    const timed = !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
-    const link = {
-      gcalAccountId: task.gcalAccountId,
-      gcalCalendarId: task.gcalCalendarId,
-      gcalEventId: task.gcalEventId,
-    };
-    const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
-    const owed = !timed && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
-    let original = await this.repo.putTask({
-      ...taskTransition(task, finishStatus, this.now()),
-      ...(timed ? unlinked : {}),
-      gcalSyncError: owed ? task.gcalSyncError : null,
+    const edited = splitOriginal(task, input, this.now()); // validates everything before any write
+    const done = input.finish === 'done';
+    // A TIMED task's event is the block before its deadline. A done part has no future there, so the link
+    // moves to the follow-up (which re-titles/re-times it — no delete + re-create). Kept going, each part
+    // owns its own block: the original keeps its event, and the follow-up gets one from the planner (it
+    // gains a time). Any other linked event (a manual one, a record of work done) stays on the original.
+    const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    let original: Task;
+    if (done) {
+      // A finish drops a failure note, but carries out an owed removal (reporting, like transitionTask).
+      const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
+      original = await this.repo.putTask({
+        ...edited,
+        ...(moveLink ? { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null } : {}),
+        gcalSyncError: owed ? task.gcalSyncError : null,
+      });
+      if (owed) original = await this.syncCalendar(task, original);
+    } else {
+      original = await this.syncCalendar(task, await this.repo.putTask(edited));
+    }
+    // The follow-up lands on the original's plan day (planned), else in the backlog. Task before row: a
+    // planned task whose row never landed is what getDay's stale sweep moves back to backlog.
+    const day =
+      task.status === 'planned' || task.status === 'in_progress'
+        ? followUpPlanDay(await this.repo.listAllPlans(), id)
+        : null;
+    const fields = splitFollowUp(task, input.followUp, day !== null);
+    const created = await this.repo.putTask({
+      ...this.base(),
+      ...fields,
+      ...(moveLink
+        ? {
+            gcalAccountId: task.gcalAccountId,
+            gcalCalendarId: task.gcalCalendarId,
+            gcalEventId: task.gcalEventId,
+          }
+        : {}),
     });
-    // An owed removal goes through the reporting sync path (a failure keeps the note); otherwise a
-    // cancel removes the event best-effort, exactly like delete-on-cancel.
-    if (owed) original = await this.syncCalendar(task, original);
-    else if (!timed && task.gcalEventId && finishStatus === 'cancelled')
-      original = await this.deleteCalendarEvent(id);
-    const followUp = await this.syncCalendar(
-      null,
-      await this.repo.putTask({
+    if (day !== null)
+      await this.repo.putPlan({
         ...this.base(),
-        ...splitFollowUp(task, followUpTitle),
-        ...(timed ? link : {}),
-      }),
-    );
-    return { original, followUp };
+        taskId: created.id,
+        day,
+        plannedMinutes: followUpPlanMinutes(fields.estimateMin, fields.bufferMin),
+        order: (await this.repo.listPlans(day)).length,
+      });
+    return { original, followUp: await this.syncCalendar(null, created) };
   }
   async deleteTask(id: string): Promise<void> {
     const task = await this.repo.getTask(id);
@@ -892,6 +910,7 @@ export class BackendClient implements ApiClient {
         estimateMin: series.defaultEstimateMin,
         bufferMin: null,
         estimateLockedMin: null,
+        splitFromId: null,
         actualAccruedMin: 0,
         startedAt: null,
         completedAt: null,
@@ -1174,13 +1193,15 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Calibration ---
-  // Parity with the stub: filter done+locked tasks by their completion DAY (dayStartHour offset).
+  // Parity with the stub: done+locked tasks outside a split family (split.ts), by completion DAY
+  // (dayStartHour offset).
   // TODO(scale): swap the full task scan for `repo.doneTasksInWindow` over the GSI once the
   // day-range → epoch-window mapping (with the offset) is nailed down.
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = (await this.ensureSettings()).dayStartHour;
-    return (await this.repo.listTasks())
-      .filter((t) => t.status === 'done' && t.estimateLockedMin !== null && t.completedAt !== null)
+    const tasks = await this.repo.listTasks();
+    return tasks
+      .filter((t) => isCalibrationPoint(t, tasks) && t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
         day: dayKey(t.completedAt as number, start),

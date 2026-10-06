@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { todayKey } from '@aperture/shared';
+import { inSplitFamily, splitChildren, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { DeltaBar } from '../../../components/DeltaBar';
@@ -10,6 +10,7 @@ import { useDeleteCalendarEvent, useSyncCalendarEvent } from '../../../data/hook
 import { usePlansForDay } from '../../../data/hooks/usePlans';
 import { useSeries } from '../../../data/hooks/useSeries';
 import { useSettings } from '../../../data/hooks/useSettings';
+import { useAllTasks } from '../../../data/hooks/useTasks';
 import { AttachmentsPanel } from '../AttachmentsPanel';
 import { CategoryTag } from '../CategoryTag';
 import { DoneForm } from '../DoneForm';
@@ -69,7 +70,14 @@ export function TaskEditor({
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
   const autoCalendar = settings?.autoCalendar !== false && !!settings?.calendarWriteDefault;
+  const { data: allTasks = [] } = useAllTasks();
   const [reveal, setReveal] = useState<Reveal>(null);
+  // Closing the split reveal (Cancel, or a kept-going split) puts focus back on its opener, never <body>.
+  const splitRef = useRef<HTMLButtonElement>(null);
+  const closeSplit = () => {
+    setReveal(null);
+    requestAnimationFrame(() => splitRef.current?.focus());
+  };
 
   const inProgress = task.status === 'in_progress';
   const isDone = task.status === 'done';
@@ -78,7 +86,7 @@ export function TaskEditor({
 
   const series = task.seriesId ? seriesList.find((s) => s.id === task.seriesId) : undefined;
   const plannedToday = plans.find((p) => p.taskId === task.id)?.plannedMinutes ?? null;
-  const hasEstimate = task.estimateLockedMin != null || task.estimateMin != null;
+  const hasEstimate = task.estimateMin != null;
 
   // "Done" opens the modal here (finish intent) — the actual-minutes capture that closes the task.
   const finish = inProgress ? (
@@ -91,8 +99,13 @@ export function TaskEditor({
   const showLogged = task.actualAccruedMin > 0;
   const showRemaining = inProgress && hasEstimate;
   const showLocked = task.estimateLockedMin != null;
-  const showDelta = isDone && task.estimateLockedMin != null;
+  // A split family member isn't measured alone — its lock covers the whole job (split.ts).
+  const showDelta = isDone && task.estimateLockedMin != null && !inSplitFamily(task, allTasks);
+  const splitFrom = task.splitFromId ? allTasks.find((t) => t.id === task.splitFromId) : undefined;
+  const splitInto = splitChildren(allTasks, task.id);
   const timeHasContent =
+    !!splitFrom ||
+    splitInto.length > 0 ||
     showLogged ||
     showRemaining ||
     showLocked ||
@@ -133,6 +146,10 @@ export function TaskEditor({
           {task.startedAt != null && <Row label="Started">{fmtDateTime(task.startedAt)}</Row>}
           {task.completedAt != null && <Row label="Completed">{fmtDateTime(task.completedAt)}</Row>}
           {task.cancelledAt != null && <Row label="Dropped">{fmtDateTime(task.cancelledAt)}</Row>}
+          {splitFrom && <Row label="Split from">{splitFrom.title}</Row>}
+          {splitInto.length > 0 && (
+            <Row label="Split into">{splitInto.map((t) => t.title).join(', ')}</Row>
+          )}
           {showDelta && (
             <DeltaBar
               estimateMin={task.estimateLockedMin!}
@@ -220,7 +237,7 @@ export function TaskEditor({
       <section className="flex flex-col gap-2 border-t border-line pt-3">
         <div className="flex flex-wrap items-center gap-2">
           {!isTerminal && (
-            <Button variant="quiet" size="sm" onClick={() => setReveal('split')}>
+            <Button ref={splitRef} variant="quiet" size="sm" onClick={() => setReveal('split')}>
               Split…
             </Button>
           )}
@@ -243,7 +260,14 @@ export function TaskEditor({
             Close
           </Button>
         </div>
-        {reveal === 'split' && <SplitForm task={task} onDone={() => setReveal(null)} />}
+        {reveal === 'split' && (
+          <SplitForm
+            task={task}
+            // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
+            onDone={(finish) => (finish === 'done' ? onClose() : closeSplit())}
+            onCancel={closeSplit}
+          />
+        )}
         {reveal === 'drop' && (
           <DropConfirm task={task} onCancel={() => setReveal(null)} onDone={onClose} />
         )}

@@ -123,8 +123,8 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   creates one (so an event you removed by hand isn't resurrected).
 - **Toggle off → nothing auto-syncs**: no create, patch or delete; existing events stay where they are.
   No backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
-  Not gated by it: delete-on-cancel (above), a split moving a timed task's link to its follow-up (no
-  Google call — the pointer just moves), and an **owed removal** (below) — asked for while sync was on,
+  Not gated by it: delete-on-cancel (above), a done split moving a timed task's link to its follow-up
+  (no Google call — the pointer just moves), and an **owed removal** (below) — asked for while sync was on,
   it's carried out on the next sync either way.
 - **One-way.** The task is the source of record; an event edited in Google is overwritten by the next
   task change. An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google
@@ -138,8 +138,8 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   finishes it, never adopting the event as a manual one. The note clears on the next success, or once
   there's nothing to retry (no time + no event, sync off, or the task is done/cancelled — a finish clears
   it directly). The exception is an **owed removal**: finishing (or splitting) the task carries it out
-  through the same reporting path, so it's never dropped. Unlike delete-on-cancel — still best-effort,
-  as is the cancel half of a split — the auto-sync remove does not swallow Google errors.
+  through the same reporting path, so it's never dropped. Unlike delete-on-cancel — still best-effort —
+  the auto-sync remove does not swallow Google errors.
 - **Writes only the calendar fields, onto a fresh read** (`putGcal`) — the sync spans a Google round-trip,
   and a write that lands meanwhile (a session closing) must survive it.
 - **Every Google fetch has a 4 s timeout** (`LiveGoogle`), so one sync's worst case (token refresh +
@@ -155,10 +155,13 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   SSM read and a few DynamoDB writes. The
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
-- **Split.** A **timed** task's event (the block before its deadline) moves with the deadline: the link
-  goes to the follow-up, which renames/re-times it — no delete + re-create, no duplicate block. Any other
-  linked event (a manual one; a record of work done) stays on the original: kept on done, removed on
-  cancel (best-effort), and an owed removal is carried out (reporting) either way.
+- **Split** ([tasks/split.md](../tasks/split.md) — a split never cancels). **Done** with this part: a
+  **timed** task's event (the block before its deadline) moves to the follow-up, which renames/re-times
+  it — no delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original
+  keeps (and re-times) its event, and the follow-up, a new timed task, gets its own from the planner, so
+  two blocks end at the deadline (piece 2's two-way sync is how one gets dragged earlier). Any other
+  linked event (a manual one; a record of work done) stays on the original either way, and an owed
+  removal is carried out (reporting).
 
 ## Resilience (the Cognito model, per account)
 

@@ -145,19 +145,34 @@ describe('stub calendar auto-sync parity', () => {
     expect((await api.createTask({ title: 'n', dueDay: '2026-10-09', dueTime: '12:00' })).gcalEventId).toBeNull();
     expect((await api.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: null })).gcalEventId).toBe(t.gcalEventId);
   });
-  it('createTasks links only the timed rows; a timed split moves the link to the follow-up', async () => {
+  it('createTasks links only the timed rows; a done timed split moves the link to the follow-up', async () => {
     const api = stub();
     const made = await api.createTasks([
       { title: 'a', dueDay: '2026-10-09', dueTime: '10:00' },
       { title: 'b', dueDay: '2026-10-09' },
     ]);
     expect(made.map((t) => !!t.gcalEventId)).toEqual([true, false]);
-    const { original, followUp } = await api.splitTask(made[0]!.id, 'cancelled', 'a, part 2');
+    await api.transitionTask(made[0]!.id, 'in_progress');
+    const { original, followUp } = await api.splitTask(made[0]!.id, {
+      finish: 'done',
+      followUp: { title: 'a, part 2', estimateMin: null },
+    });
     expect(original.gcalEventId).toBeNull();
     expect(followUp.gcalEventId).toBe(made[0]!.gcalEventId);
   });
-  it('split keeps a manual event on an untimed original when done, removes it on cancel', async () => {
-    for (const finish of ['done', 'cancelled'] as const) {
+  it('a keep timed split leaves the original its event and links the follow-up to its own', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });
+    const { original, followUp } = await api.splitTask(t.id, {
+      finish: 'keep',
+      followUp: { title: 'a, part 2', estimateMin: 30 },
+    });
+    expect(original.gcalEventId).toBe(t.gcalEventId);
+    expect(followUp.gcalEventId).not.toBeNull();
+    expect(followUp.gcalEventId).not.toBe(t.gcalEventId);
+  });
+  it('split keeps a manual event on an untimed original, done or kept going', async () => {
+    for (const finish of ['done', 'keep'] as const) {
       const api = stub();
       const t = await api.createTask({ title: 'u', dueDay: '2026-10-09' });
       await api.insertCalendarEvent({
@@ -169,9 +184,12 @@ describe('stub calendar auto-sync parity', () => {
         endMs: 2000,
       });
       await api.transitionTask(t.id, 'in_progress');
-      const { original, followUp } = await api.splitTask(t.id, finish, 'u, part 2');
+      const { original, followUp } = await api.splitTask(t.id, {
+        finish,
+        followUp: { title: 'u, part 2', estimateMin: null },
+      });
       expect(followUp.gcalEventId).toBeNull();
-      expect(!!original.gcalEventId).toBe(finish === 'done');
+      expect(original.gcalEventId).not.toBeNull();
     }
   });
 });

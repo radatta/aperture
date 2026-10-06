@@ -42,11 +42,15 @@ export interface Task extends BaseEntity {
   // Free-form light markdown (see taskNotes.ts), capped at TASK_NOTES_MAX. Editable at any status, never
   // part of the estimate lock. Empty is null; pre-existing rows read back undefined, so readers use `!notes`.
   notes: string | null;
-  // estimateMin / bufferMin are editable ONLY while backlog|planned.
+  // The WORKING estimate: editable at any open status (not done/cancelled) — rescoping mid-task is fine.
   estimateMin: number | null;
   bufferMin: number | null;
-  // Frozen on first exit from planning; calibration = actualAccruedMin vs this. Never edited after.
+  // The calibration baseline, frozen on first exit from planning; calibration = actualAccruedMin vs this.
+  // Never edited after — a later estimate edit moves estimateMin only.
   estimateLockedMin: number | null;
+  // The task this one was split from (see split.ts), set only when a frozen baseline exists upstream, so
+  // a family's root lock covers the whole job. Pre-existing rows read back undefined → `!splitFromId`.
+  splitFromId: string | null;
   actualAccruedMin: number; // denormalized; bumped when a work session closes
   startedAt: number | null;
   completedAt: number | null;

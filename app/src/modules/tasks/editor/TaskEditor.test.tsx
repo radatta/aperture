@@ -45,6 +45,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,
+  splitFromId: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -225,13 +226,85 @@ describe('TaskEditor', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('makes estimate read-only once work has started, with the lock copy', async () => {
+  it('keeps the estimate editable once work has started, with the lock copy', async () => {
     const client = api();
     let t = await client.createTask({ title: 'Started', estimateMin: 45 });
     t = await client.transitionTask(t.id, 'in_progress'); // freezes estimateLockedMin = 45
+    const { user } = renderEditor(client, t);
+    expect(screen.getByText(/Started at 45m/)).toBeTruthy();
+    const field = screen.getByLabelText('Estimate (min)');
+    await user.clear(field);
+    await user.type(field, '90');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () =>
+      expect(await client.getTask(t.id)).toMatchObject({ estimateMin: 90, estimateLockedMin: 45 }),
+    );
+  });
+
+  it('shows the estimate read-only on a finished task', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Finished', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
     expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
-    expect(screen.getByText(/Frozen at 45m/)).toBeTruthy();
+    expect(screen.getByText('Details')).toBeTruthy();
+  });
+
+  it('a done split needs an actual, then closes and links the rest', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Pset', estimateMin: 45 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const { onClose, user } = renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    expect(
+      screen.getByRole('button', { name: 'Done with this part' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+    const submit = screen.getByRole('button', { name: 'Split' });
+    expect(submit.hasAttribute('disabled')).toBe(true); // nothing tracked → the actual starts empty
+    await user.type(screen.getAllByLabelText('Actual (min)').at(-1)!, '20'); // the split's, not Mark done's
+    expect(screen.getByDisplayValue('Pset (cont.)')).toBeTruthy();
+    expect(screen.getAllByLabelText<HTMLInputElement>('Estimate (min)').at(-1)!.value).toBe('45'); // 45 − 0
+    expect(screen.getByText(/else the backlog · Both parts: 1h 5m · was 45m/)).toBeTruthy();
+    await user.click(submit);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const rest = (await client.listTasks()).find((x) => x.title === 'Pset (cont.)');
+    expect(rest).toMatchObject({ splitFromId: t.id, estimateMin: 45 });
+    expect(await client.getTask(t.id)).toMatchObject({ status: 'done', actualAccruedMin: 20 });
+  });
+
+  it('a keep split stays open, shows "Split into", and returns focus to Split…', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Essay', estimateMin: 60 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const { onClose, user } = renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.click(screen.getByRole('button', { name: 'Keep going' }));
+    const thisEstimate = screen.getAllByLabelText('Estimate (min)')[1]!; // [0] is the details form's
+    await user.clear(thisEstimate);
+    await user.type(thisEstimate, '30');
+    await user.click(screen.getByRole('button', { name: 'Split' }));
+    expect(await screen.findByText('Essay (cont.)')).toBeTruthy(); // the "Split into" row
+    expect(screen.getByText('Split into')).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('Split…'));
+    expect(await client.getTask(t.id)).toMatchObject({ status: 'in_progress', estimateMin: 30 });
+  });
+
+  it('splitting an unstarted task offers no Done and makes an independent task', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Reading', estimateMin: 60 });
+    const { user } = renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    expect(screen.queryByRole('button', { name: 'Done with this part' })).toBeNull();
+    expect(screen.getByText(/Not started yet/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Split' }));
+    await waitFor(async () =>
+      expect((await client.listTasks()).find((x) => x.title === 'Reading (cont.)')).toMatchObject({
+        status: 'backlog',
+        splitFromId: null,
+      }),
+    );
   });
 
   it('locks Due but keeps Category editable on a finished task', async () => {

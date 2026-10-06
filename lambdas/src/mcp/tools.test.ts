@@ -73,13 +73,49 @@ describe('mcp tools — tasks', () => {
     const renamed = (await call('update_task', { id: t.id, title: 'Real' })) as Task;
     expect(renamed.title).toBe('Real');
 
-    // Freeze the estimate, then a fan-out that changes category (applies) then estimate (throws).
+    // A fan-out that changes category (applies) then an illegal status (backlog → done throws).
+    await expect(
+      call('update_task', { id: t.id, categoryId: cat.id, status: 'done' }),
+    ).rejects.toThrow(/already applied: categoryId/);
+    // The category change DID land despite the status failure.
+    expect(((await call('list_tasks')) as Task[])[0]!.categoryId).toBe(cat.id);
+  });
+
+  it('update_task rescopes a started task; the frozen baseline stays', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'pset', estimateMin: 30 })) as Task;
+    await call('update_task', { id: t.id, status: 'in_progress' });
+    const out = (await call('update_task', { id: t.id, estimateMin: 90 })) as Task;
+    expect(out).toMatchObject({ estimateMin: 90, estimateLockedMin: 30 });
+  });
+
+  it('split_task: done needs actualMin and a started task; the rest lands linked', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'pset', estimateMin: 60 })) as Task;
+    await expect(
+      call('split_task', { id: t.id, finish: 'done', actualMin: 40, followUpTitle: 'rest' }),
+    ).rejects.toThrow(/started/);
     await call('update_task', { id: t.id, status: 'in_progress' });
     await expect(
-      call('update_task', { id: t.id, categoryId: cat.id, estimateMin: 99 }),
-    ).rejects.toThrow(/already applied: categoryId/);
-    // The category change DID land despite the estimate failure.
-    expect(((await call('list_tasks')) as Task[])[0]!.categoryId).toBe(cat.id);
+      call('split_task', { id: t.id, finish: 'done', followUpTitle: 'rest' }),
+    ).rejects.toThrow(/actualMin/);
+    await expect(
+      call('split_task', { id: t.id, finish: 'keep', actualMin: 5, followUpTitle: 'rest' }),
+    ).rejects.toThrow(/actualMin/);
+    const { original, followUp } = (await call('split_task', {
+      id: t.id,
+      finish: 'done',
+      actualMin: 40,
+      followUpTitle: 'pset, second half',
+      followUpEstimateMin: 60,
+    })) as { original: Task; followUp: Task };
+    expect(original).toMatchObject({ status: 'done', actualAccruedMin: 40 });
+    expect(followUp).toMatchObject({
+      title: 'pset, second half',
+      estimateMin: 60,
+      splitFromId: t.id,
+      status: 'backlog',
+    });
   });
 
   it('notes: create sets them, lists return them, update replaces and clears at any status', async () => {

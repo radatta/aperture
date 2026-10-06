@@ -22,9 +22,10 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 
 // The details editor inside the task modal — absorbs ScopePanel (estimate/buffer/category) and the
 // in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
-// Estimate + buffer edit only while backlog|planned; past that the calibration baseline is frozen
-// (canEditEstimate), so they show read-only. Category stays editable at any status; due locks once
-// finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
+// Estimate + buffer (the working estimate) edit at any open status — rescoping mid-task is fine, since
+// calibration is measured against the baseline frozen at start, which never moves; a finished task's
+// estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
+// due locks once finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
 // (showing "Saved"); the modal's own Close is the way out.
 export function TaskDetailsForm({
   task: live,
@@ -104,7 +105,7 @@ export function TaskDetailsForm({
     try {
       let next = task;
       if (titleDirty) next = await setTitle.mutateAsync({ id: task.id, title: titleTrimmed });
-      // Never call setEstimate past planning — the machine throws on a frozen estimate.
+      // Never call setEstimate on a finished task — the machine throws (its estimate is history).
       if (estimateDirty)
         next = await setEstimate.mutateAsync({
           id: task.id,
@@ -185,6 +186,12 @@ export function TaskDetailsForm({
                 +25%
               </Button>
             </div>
+            {task.estimateLockedMin != null && (
+              <Text size="xs" tone="muted" className="w-full">
+                Started at {fmtDuration(task.estimateLockedMin)} — calibration is measured against
+                that.
+              </Text>
+            )}
           </>
         ) : (
           <div className="flex flex-col gap-1">
@@ -198,8 +205,8 @@ export function TaskDetailsForm({
             </Text>
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted">
-                Frozen at {fmtDuration(task.estimateLockedMin)} when work started — calibration is
-                measured against this.
+                Started at {fmtDuration(task.estimateLockedMin)} — calibration is measured against
+                that.
               </Text>
             )}
           </div>

@@ -63,6 +63,17 @@ export interface SetTaskDueInput {
   dueTime?: string | null;
 }
 
+// A split (split.ts): this part finishes ('done') or keeps going ('keep'), and the rest becomes a new
+// task. Object-shaped like SetTaskDueInput — an omitted title/estimate keeps the original's.
+export interface SplitTaskInput {
+  finish: 'done' | 'keep';
+  title?: string;
+  estimateMin?: number | null;
+  bufferMin?: number | null;
+  actualMin?: number; // 'done' only — this part's actual; omitted keeps what accrued
+  followUp: { title: string; estimateMin: number | null; bufferMin?: number | null };
+}
+
 export interface UpsertPlanInput {
   id?: string;
   taskId: string;
@@ -272,6 +283,7 @@ export interface ApiClient {
   // Bulk create — every input lands as an unlocked backlog task, in the given order (one createdAt
   // stamp for the batch so they sort together). Best-effort over batchPut; empty input writes nothing.
   createTasks(inputs: CreateTaskInput[]): Promise<Task[]>;
+  // The working estimate — any open status; rejects done/cancelled. Never touches estimateLockedMin.
   setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task>;
   // Category can change any time — labels resolve live and wasWork is snapshotted on sessions, so
   // there's no freeze constraint here (unlike the estimate).
@@ -292,12 +304,9 @@ export interface ApiClient {
   setTaskNotes(id: string, notes: string | null): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
   setTaskActual(id: string, actualMin: number): Promise<Task>;
-  // Scope change: finish/cancel the original and spawn a follow-up (never edit a locked estimate).
-  splitTask(
-    id: string,
-    finishStatus: 'done' | 'cancelled',
-    followUpTitle: string,
-  ): Promise<{ original: Task; followUp: Task }>;
+  // One task becomes two: the original finishes or keeps going, the rest becomes a linked follow-up on
+  // the original's plan day (else backlog). Never cancels, never edits a locked estimate (split.ts).
+  splitTask(id: string, input: SplitTaskInput): Promise<{ original: Task; followUp: Task }>;
   // Permanent delete (distinct from cancel, which keeps the row as history). Tombstones the task, its
   // plan rows, and its attachment metadata; hard-deletes the calendar event via the cancel path; S3
   // bytes are orphaned. No-op if the task is absent/already gone.

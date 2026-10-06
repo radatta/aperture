@@ -220,7 +220,7 @@ export function runApiContract(
       await expect(api.confirmAttachment(stale.id)).rejects.toThrow();
     });
 
-    it('tasks: estimate freezes on start of work and yields a calibration point when done', async () => {
+    it('tasks: the lock freezes at start, survives a later estimate edit, and is the calibration point', async () => {
       const t = await api.createTask({ title: 'Task A', estimateMin: 30, bufferMin: 8 });
       expect((await api.listBacklog()).map((x) => x.id)).toContain(t.id);
 
@@ -229,13 +229,16 @@ export function runApiContract(
       expect(started.estimateLockedMin).toBe(30); // frozen at start
       expect(started.startedAt).not.toBeNull();
 
-      // Estimate is now frozen — editing it must throw for every impl.
-      await expect(api.setTaskEstimate(t.id, 99, 0)).rejects.toThrow();
+      // Rescoping mid-task moves the working estimate only.
+      const rescoped = await api.setTaskEstimate(t.id, 99, 0);
+      expect(rescoped.estimateMin).toBe(99);
+      expect(rescoped.estimateLockedMin).toBe(30);
 
       await api.setTaskActual(t.id, 45);
       const done = await api.transitionTask(t.id, 'done');
       expect(done.status).toBe('done');
       expect(done.completedAt).not.toBeNull();
+      await expect(api.setTaskEstimate(t.id, 10, 0)).rejects.toThrow(); // a finished estimate is history
 
       const cal = await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' });
       const point = cal.find((p) => p.taskId === t.id);
@@ -243,17 +246,115 @@ export function runApiContract(
       expect(point?.actualAccruedMin).toBe(45);
     });
 
-    it('tasks: split finishes the original and spawns a fresh unlocked follow-up', async () => {
+    it('tasks: a done split finishes this part with its actual and links an unlocked follow-up', async () => {
       const t = await api.createTask({ title: 'Big thing', estimateMin: 60, bufferMin: 0 });
       await api.transitionTask(t.id, 'in_progress');
-      const { original, followUp } = await api.splitTask(t.id, 'done', 'Big thing, part 2');
-      expect(original.status).toBe('done');
-      expect(followUp.title).toBe('Big thing, part 2');
-      expect(followUp.status).toBe('backlog');
-      expect(followUp.estimateLockedMin).toBeNull(); // a new prediction, never the frozen value
+      const { original, followUp } = await api.splitTask(t.id, {
+        finish: 'done',
+        title: 'Big thing, part 1',
+        actualMin: 40,
+        followUp: { title: ' Big thing, part 2 ', estimateMin: 50 },
+      });
+      expect(original).toMatchObject({
+        status: 'done',
+        title: 'Big thing, part 1',
+        actualAccruedMin: 40,
+        estimateLockedMin: 60,
+      });
+      expect(followUp).toMatchObject({
+        title: 'Big thing, part 2',
+        status: 'backlog', // the original was never on a plan
+        estimateMin: 50,
+        estimateLockedMin: null, // a new prediction, never the frozen value
+        splitFromId: t.id,
+      });
       expect((await api.listTasks()).map((x) => x.id)).toEqual(
         expect.arrayContaining([original.id, followUp.id]),
       );
+    });
+
+    it('tasks: a keep split on a planned task leaves it open and plans the follow-up on its day', async () => {
+      const t = await api.createTask({ title: 'Essay', estimateMin: 90, bufferMin: 0 });
+      await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 90, order: 0 });
+      await api.transitionTask(t.id, 'planned');
+      await api.transitionTask(t.id, 'in_progress');
+      const { original, followUp } = await api.splitTask(t.id, {
+        finish: 'keep',
+        title: 'Essay: draft',
+        estimateMin: 45,
+        followUp: { title: 'Essay: edit', estimateMin: 30, bufferMin: 5 },
+      });
+      expect(original).toMatchObject({
+        status: 'in_progress',
+        title: 'Essay: draft',
+        estimateMin: 45,
+        estimateLockedMin: 90,
+      });
+      expect(followUp).toMatchObject({ status: 'planned', splitFromId: t.id, bufferMin: 5 });
+      const row = (await api.listPlansForDay('2026-08-04')).find((p) => p.taskId === followUp.id);
+      expect(row).toMatchObject({ plannedMinutes: 35, order: 1 });
+    });
+
+    it('tasks: splitting an unstarted task makes two independent tasks, both calibrated alone', async () => {
+      const t = await api.createTask({ title: 'Reading', estimateMin: 60, bufferMin: 0 });
+      await expect(
+        api.splitTask(t.id, { finish: 'done', followUp: { title: 'x', estimateMin: null } }),
+      ).rejects.toThrow(); // done needs a started task
+      const { original, followUp } = await api.splitTask(t.id, {
+        finish: 'keep',
+        estimateMin: 30,
+        followUp: { title: 'Reading, ch. 2', estimateMin: 30 },
+      });
+      expect(original.status).toBe('backlog');
+      expect(followUp).toMatchObject({ status: 'backlog', splitFromId: null });
+      for (const id of [original.id, followUp.id]) {
+        await api.transitionTask(id, 'in_progress');
+        await api.transitionTask(id, 'done');
+      }
+      const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
+        (p) => p.taskId,
+      );
+      expect(ids).toEqual(expect.arrayContaining([original.id, followUp.id]));
+    });
+
+    it('tasks: a started split family chains, and no member is a calibration point on its own', async () => {
+      const a = await api.createTask({ title: 'Pset', estimateMin: 60, bufferMin: 0 });
+      await api.transitionTask(a.id, 'in_progress');
+      const { followUp: b } = await api.splitTask(a.id, {
+        finish: 'done',
+        actualMin: 40,
+        followUp: { title: 'Pset, 2', estimateMin: 40 },
+      });
+      const { followUp: c } = await api.splitTask(b.id, {
+        finish: 'keep',
+        followUp: { title: 'Pset, 3', estimateMin: 20 },
+      });
+      expect(c.splitFromId).toBe(b.id); // b is unstarted but linked, so the chain holds
+      await api.transitionTask(b.id, 'in_progress');
+      await api.transitionTask(b.id, 'done');
+      await expect(
+        api.splitTask(b.id, { finish: 'keep', followUp: { title: 'y', estimateMin: null } }),
+      ).rejects.toThrow(); // a finished task can't be split
+      const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
+        (p) => p.taskId,
+      );
+      expect(ids).not.toContain(a.id);
+      expect(ids).not.toContain(b.id);
+    });
+
+    it('tasks: a split with an empty follow-up title writes nothing', async () => {
+      const t = await api.createTask({ title: 'keep me', estimateMin: 30 });
+      await api.transitionTask(t.id, 'in_progress');
+      const before = (await api.listTasks()).length;
+      await expect(
+        api.splitTask(t.id, {
+          finish: 'done',
+          actualMin: 5,
+          followUp: { title: '  ', estimateMin: null },
+        }),
+      ).rejects.toThrow();
+      expect((await api.listTasks()).length).toBe(before);
+      expect((await api.getTask(t.id))?.status).toBe('in_progress');
     });
 
     it('tasks: createTasks creates every input as an unlocked backlog task, in paste order, with fields', async () => {
@@ -416,7 +517,10 @@ export function runApiContract(
     it('tasks: split carries the due time to the follow-up', async () => {
       const t = await api.createTask({ title: 'pset', dueDay: '2026-08-07', dueTime: '17:00' });
       await api.transitionTask(t.id, 'in_progress');
-      const { followUp } = await api.splitTask(t.id, 'done', 'pset, part 2');
+      const { followUp } = await api.splitTask(t.id, {
+        finish: 'done',
+        followUp: { title: 'pset, part 2', estimateMin: null },
+      });
       expect(followUp).toMatchObject({ dueDay: '2026-08-07', dueTime: '17:00' });
     });
 
@@ -487,7 +591,10 @@ export function runApiContract(
     it('tasks: split carries notes to the follow-up, and export includes them', async () => {
       const t = await api.createTask({ title: 'Big thing', notes: 'links + context' });
       await api.transitionTask(t.id, 'in_progress');
-      const { followUp } = await api.splitTask(t.id, 'done', 'Big thing, part 2');
+      const { followUp } = await api.splitTask(t.id, {
+        finish: 'done',
+        followUp: { title: 'Big thing, part 2', estimateMin: null },
+      });
       expect(followUp.notes).toBe('links + context');
       const data = await api.exportData();
       expect(data.tasks.find((x) => x.id === t.id)?.notes).toBe('links + context');

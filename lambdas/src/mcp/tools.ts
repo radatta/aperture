@@ -16,6 +16,7 @@ import type {
   GoogleCalendar,
   GoogleStatus,
   Settings,
+  SplitTaskInput,
   Task,
   TaskStatus,
   UpsertCategoryInput,
@@ -245,7 +246,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin (+optional bufferMin), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, title/due/estimate changes move or rename the event. The estimate is frozen once work starts — setting it then errors. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
+      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin (+optional bufferMin), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, title/due/estimate changes move or rename the event. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -330,7 +331,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'complete_task',
     description:
-      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the estimate). actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible.',
+      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -355,6 +356,49 @@ export const TOOLS: Tool[] = [
       await ctx.dispatch('setTaskActual', [id, actualMin]);
       const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
       return { task: done, previousActualMin };
+    },
+  },
+  {
+    name: 'split_task',
+    description:
+      'Split a task in two when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new task (followUpTitle, followUpEstimateMin). Optional title/estimateMin/bufferMin rename or rescope this part. The new task keeps the category, deadline, notes and roll, lands on this task\'s plan day if it has one (else the backlog), and links back to it. Nothing is cancelled. Returns { original, followUp }.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        finish: { type: 'string', enum: ['done', 'keep'] },
+        actualMin: {
+          type: 'integer',
+          minimum: 0,
+          description: 'finish="done" only (required there): minutes this part actually took',
+        },
+        title: { type: 'string', description: "this part's new title; omitted keeps it" },
+        estimateMin: { type: 'integer', minimum: 0, description: "this part's working estimate" },
+        bufferMin: { type: 'integer', minimum: 0 },
+        followUpTitle: { type: 'string' },
+        followUpEstimateMin: { type: 'integer', minimum: 0, description: 'the rest, in minutes' },
+        followUpBufferMin: { type: 'integer', minimum: 0 },
+      },
+      required: ['id', 'finish', 'followUpTitle'],
+      additionalProperties: false,
+    },
+    run(args, ctx) {
+      const finish = enumArg<'done' | 'keep'>(args, 'finish', ['done', 'keep']);
+      if (finish === 'keep' && present(args, 'actualMin'))
+        throw new RpcParamError('actualMin is only for finish="done"');
+      const input: SplitTaskInput = {
+        finish,
+        followUp: {
+          title: reqStr(args, 'followUpTitle'),
+          estimateMin: optInt(args, 'followUpEstimateMin', 0) ?? null,
+          bufferMin: optInt(args, 'followUpBufferMin', 0) ?? null,
+        },
+      };
+      if (finish === 'done') input.actualMin = reqInt(args, 'actualMin', 0);
+      if (present(args, 'title')) input.title = reqStr(args, 'title');
+      if (present(args, 'estimateMin')) input.estimateMin = reqInt(args, 'estimateMin', 0);
+      if (present(args, 'bufferMin')) input.bufferMin = reqInt(args, 'bufferMin', 0);
+      return ctx.dispatch('splitTask', [reqStr(args, 'id'), input]);
     },
   },
   {
@@ -451,7 +495,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'get_calibration',
     description:
-      'Calibration points (estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. This is the signature metric — use it to advise better estimates.',
+      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. Tasks split after work started (a split family) are excluded for now — they will be scored as one family. This is the signature metric — use it to advise better estimates.',
     inputSchema: {
       type: 'object',
       properties: { from: { type: 'string' }, to: { type: 'string' } },

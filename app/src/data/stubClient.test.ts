@@ -36,14 +36,15 @@ describe('stub — capture', () => {
   });
 });
 
-describe('stub — task lifecycle enforces the estimate freeze', () => {
-  it('locks the estimate on start and blocks later edits', async () => {
+describe('stub — task lifecycle freezes the calibration baseline', () => {
+  it('locks the estimate on start; later edits move the working estimate, never the lock', async () => {
     const api = client();
     const task = await api.createTask({ title: 'write the thing' });
     await api.setTaskEstimate(task.id, 60, 15);
     const started = await api.transitionTask(task.id, 'in_progress');
     expect(started.estimateLockedMin).toBe(60);
-    await expect(api.setTaskEstimate(task.id, 120, 0)).rejects.toThrow();
+    const rescoped = await api.setTaskEstimate(task.id, 120, 0);
+    expect(rescoped).toMatchObject({ estimateMin: 120, estimateLockedMin: 60 });
   });
 });
 

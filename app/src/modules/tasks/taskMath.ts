@@ -18,12 +18,12 @@ export function statusLabel(status: TaskStatus): string {
 }
 
 // The details-edit affordance's label, matching what editing can still do: "Scope" when nothing is
-// scoped yet, "Rescope" when there's a working estimate but no frozen baseline, "Edit details" once
-// the calibration baseline is locked (editing can no longer move that number).
+// scoped yet, "Rescope" while the task is open (the working estimate is editable at any open status),
+// "Details" once it's finished (its estimate is history).
 export function scopeLabel(task: Task): string {
+  if (task.status === 'done' || task.status === 'cancelled') return 'Details';
   if (task.estimateMin == null) return 'Scope';
-  if (task.estimateLockedMin == null) return 'Rescope';
-  return 'Edit details';
+  return 'Rescope';
 }
 
 // The flat v1 buffer nudge: +25% of the estimate (personalized-from-bias is parked to v1.1).
@@ -38,10 +38,20 @@ export function plannedDefault(task: Task): number {
   return (task.estimateMin ?? 0) + (task.bufferMin ?? 0);
 }
 
-// Remaining work: the frozen estimate (or the working one before freeze) minus what's accrued.
+// Remaining work: the WORKING estimate minus what's accrued — a mid-task rescope moves it. (The frozen
+// baseline is calibration's number, not a plan for what's left.)
 export function remainingMin(task: Task): number {
-  const base = task.estimateLockedMin ?? task.estimateMin ?? 0;
-  return Math.max(0, base - task.actualAccruedMin);
+  return Math.max(0, (task.estimateMin ?? 0) - task.actualAccruedMin);
+}
+
+// Split prefills: the follow-up's default title, and its estimate — what's left of the working
+// estimate, floored so a part that ran over still gets a real number. Null when nothing was scoped.
+export const SPLIT_TITLE_SUFFIX = ' (cont.)';
+export const SPLIT_MIN_REMAINDER = 5;
+
+export function suggestedRemainder(task: Task): number | null {
+  if (task.estimateMin == null) return null;
+  return Math.max(SPLIT_MIN_REMAINDER, task.estimateMin - task.actualAccruedMin);
 }
 
 // Soonest-due-first HINT for the morning backlog pull: dated tasks ascending by dueDay — within a day,

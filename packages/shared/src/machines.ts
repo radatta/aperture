@@ -2,7 +2,7 @@
 // SAME rules. These never touch storage; they take an entity + inputs and return the next entity
 // (or throw on an illegal move). This is where the calibration integrity actually lives.
 
-import type { BaseEntity, PomodoroSession, Task, TaskPlan, TaskStatus } from './types';
+import type { PomodoroSession, Task, TaskPlan, TaskStatus } from './types';
 
 // --- Tasks -----------------------------------------------------------------
 
@@ -66,8 +66,10 @@ export function stalePlannedMoves(
     });
 }
 
+// The working estimate is editable at any open status — rescoping mid-task is fine, because calibration
+// is measured against estimateLockedMin (frozen at start, never touched here). Only history is read-only.
 export function canEditEstimate(task: Task): boolean {
-  return task.status === 'backlog' || task.status === 'planned';
+  return task.status !== 'done' && task.status !== 'cancelled';
 }
 
 export function withEstimate(
@@ -77,42 +79,15 @@ export function withEstimate(
   now: number,
 ): Task {
   if (!canEditEstimate(task)) {
-    throw new Error(`Estimate is frozen once work starts (status: ${task.status})`);
+    throw new Error(`Estimate is history once a task is finished (status: ${task.status})`);
   }
   return { ...task, estimateMin, bufferMin, updatedAt: now };
 }
 
-// A cancelled task never counts toward calibration.
+// A cancelled task never counts toward calibration. Split families are excluded on top of this
+// (split.ts isCalibrationPoint), which needs the task list.
 export function contributesCalibration(task: Task): boolean {
   return task.status === 'done' && task.estimateLockedMin !== null;
-}
-
-// The follow-up half of a split: a fresh backlog task carrying the unfinished scope. The estimate
-// starts UNLOCKED (a new prediction for the remaining work) — the original's frozen value is never
-// reused. Returns the non-identity fields; the caller stamps a new BaseEntity.
-export function splitFollowUp(original: Task, followUpTitle: string): Omit<Task, keyof BaseEntity> {
-  return {
-    title: followUpTitle,
-    status: 'backlog',
-    categoryId: original.categoryId,
-    dueDay: original.dueDay, // a split changes scope, not the deadline — carry it (like categoryId)
-    dueTime: original.dueTime ?? null,
-    notes: original.notes ?? null, // the remaining scope keeps its context
-    seriesId: null,
-    rollId: original.rollId, // finishing the split-off remainder tomorrow is honestly a rep tomorrow
-    estimateMin: original.estimateMin,
-    bufferMin: original.bufferMin,
-    estimateLockedMin: null,
-    actualAccruedMin: 0,
-    startedAt: null,
-    completedAt: null,
-    cancelledAt: null,
-    // The calendar event belongs to the original task; the follow-up starts unlinked.
-    gcalAccountId: null,
-    gcalCalendarId: null,
-    gcalEventId: null,
-    gcalSyncError: null,
-  };
 }
 
 // --- Sessions --------------------------------------------------------------

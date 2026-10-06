@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CreateTaskInput, SetTaskDueInput, TaskStatus } from '@aperture/shared';
+import type {
+  CreateTaskInput,
+  SetTaskDueInput,
+  SplitTaskInput,
+  TaskStatus,
+} from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { invalidateTaskData } from './invalidate';
@@ -33,8 +38,8 @@ export function useCreateTasks() {
   });
 }
 
-// Estimate + buffer — only accepted while backlog|planned (the stub throws once frozen, via the
-// shared machine). Category is set here too.
+// Estimate + buffer — the working estimate, accepted at any open status (done/cancelled throw, via the
+// shared machine). The calibration baseline frozen at start never moves. Category is set here too.
 export function useSetEstimate() {
   const api = useApi();
   const qc = useQueryClient();
@@ -108,14 +113,13 @@ export function useSetActual() {
   });
 }
 
-// Scope change = split (finish/cancel the original, spawn a fresh backlog follow-up). Never edits the
-// locked estimate — that's the calibration integrity.
+// Split: the original finishes or keeps going, the rest becomes a linked follow-up (split.ts). Never
+// cancels, never edits the locked estimate — that's the calibration integrity.
 export function useSplitTask() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { id: string; finishStatus: 'done' | 'cancelled'; followUpTitle: string }) =>
-      api.splitTask(v.id, v.finishStatus, v.followUpTitle),
+    mutationFn: (v: { id: string; input: SplitTaskInput }) => api.splitTask(v.id, v.input),
     onSettled: () => invalidateTaskData(qc),
   });
 }

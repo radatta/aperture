@@ -54,7 +54,11 @@ import {
   sanitizeFilename,
   seriesDueOn,
   setNotesArg,
+  followUpPlanDay,
+  followUpPlanMinutes,
+  isCalibrationPoint,
   splitFollowUp,
+  splitOriginal,
   stalePlannedMoves,
   taskTransition,
   UPLOAD_URL_TTL_MS,
@@ -84,6 +88,7 @@ import type {
   RequestFinanceSyncResult,
   SetFinanceBucketInput,
   SetTaskDueInput,
+  SplitTaskInput,
   UpsertFinanceRuleInput,
   GetCalendarBusyInput,
   GoogleCalendar,
@@ -314,6 +319,7 @@ class StubClient implements ApiClient {
       estimateMin: input.estimateMin ?? null,
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
+      splitFromId: null,
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -580,39 +586,50 @@ class StubClient implements ApiClient {
   async setTaskActual(id: string, actualMin: number): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { actualAccruedMin: actualMin });
   }
-  async splitTask(
-    id: string,
-    finishStatus: 'done' | 'cancelled',
-    followUpTitle: string,
-  ): Promise<{ original: Task; followUp: Task }> {
+  async splitTask(id: string, input: SplitTaskInput): Promise<{ original: Task; followUp: Task }> {
     const task = this.mustFind(this.store.tasks, id);
-    // Parity with the backend: a TIMED task's event moves with the deadline to the follow-up; any other
-    // linked event stays on the original (kept on done, removed on cancel or when a removal is owed).
-    const timed = !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
-    const link = {
-      gcalAccountId: task.gcalAccountId,
-      gcalCalendarId: task.gcalCalendarId,
-      gcalEventId: task.gcalEventId,
-    };
-    const unlinked = { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null };
-    const owed = !timed && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
-    let original = this.writes.put(this.store.tasks, {
-      ...taskTransition(task, finishStatus, this.now()),
-      ...(timed ? unlinked : {}),
-      gcalSyncError: owed ? task.gcalSyncError : null,
+    const edited = splitOriginal(task, input, this.now()); // validates everything before any write
+    const done = input.finish === 'done';
+    // Parity with the backend: a done TIMED part hands its event to the follow-up; kept going, each part
+    // owns its own block; any other linked event stays on the original.
+    const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    let original: Task;
+    if (done) {
+      const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
+      original = this.writes.put(this.store.tasks, {
+        ...edited,
+        ...(moveLink ? { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null } : {}),
+        gcalSyncError: owed ? task.gcalSyncError : null,
+      });
+      if (owed) original = this.syncCalendar(task, original);
+    } else {
+      original = this.syncCalendar(task, this.writes.put(this.store.tasks, edited));
+    }
+    const day =
+      task.status === 'planned' || task.status === 'in_progress'
+        ? followUpPlanDay(this.alive(this.store.plans), id)
+        : null;
+    const fields = splitFollowUp(task, input.followUp, day !== null);
+    const created = this.writes.insert(this.store.tasks, {
+      ...this.base(),
+      ...fields,
+      ...(moveLink
+        ? {
+            gcalAccountId: task.gcalAccountId,
+            gcalCalendarId: task.gcalCalendarId,
+            gcalEventId: task.gcalEventId,
+          }
+        : {}),
     });
-    if (owed) original = this.syncCalendar(task, original);
-    else if (!timed && task.gcalEventId && finishStatus === 'cancelled')
-      original = this.clearCalendarPointers(id);
-    const followUp = this.syncCalendar(
-      null,
-      this.writes.insert(this.store.tasks, {
+    if (day !== null)
+      this.writes.insert(this.store.plans, {
         ...this.base(),
-        ...splitFollowUp(task, followUpTitle),
-        ...(timed ? link : {}),
-      }),
-    );
-    return { original, followUp };
+        taskId: created.id,
+        day,
+        plannedMinutes: followUpPlanMinutes(fields.estimateMin, fields.bufferMin),
+        order: this.alive(this.store.plans).filter((p) => p.day === day).length,
+      });
+    return { original, followUp: this.syncCalendar(null, created) };
   }
   async deleteTask(id: string): Promise<void> {
     const task = this.find(this.store.tasks, id);
@@ -894,6 +911,7 @@ class StubClient implements ApiClient {
         estimateMin: series.defaultEstimateMin,
         bufferMin: null,
         estimateLockedMin: null,
+        splitFromId: null,
         actualAccruedMin: 0,
         startedAt: null,
         completedAt: null,
@@ -1422,8 +1440,9 @@ class StubClient implements ApiClient {
   // --- Calibration ---------------------------------------------------------
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = this.dayStartHour();
-    return this.alive(this.store.tasks)
-      .filter((t) => t.status === 'done' && t.estimateLockedMin !== null && t.completedAt !== null)
+    const tasks = this.alive(this.store.tasks);
+    return tasks
+      .filter((t) => isCalibrationPoint(t, tasks) && t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
         day: dayKey(t.completedAt!, start),
