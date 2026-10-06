@@ -77,8 +77,9 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
 - `Settings.autoCalendar` (default `true`) — the auto-sync toggle (both directions).
 - Two-way bookkeeping on `Task`, all **optional** (sync state, not task data; old rows lack them):
   `gcalSeen` (the event's title + window as Aperture last knew it — the merge base), `gcalTouchedAt`
-  (the latest-wins clock), `gcalPulledAt` + `gcalPulledNote` (the "updated from Google" mark),
-  `gcalManual` (the event is a manual block — title-only sync).
+  (Google's `updated` for Aperture's last successful push — the stale-state line), `gcalEditedAt`
+  (Aperture's last title/time/estimate edit — the conflict tiebreak), `gcalPulledAt` + `gcalPulledNote`
+  (the "updated from Google" mark), `gcalManual` (the event is a manual block — title-only sync).
 - `GcalSyncState` (`gcal#sync#<sub>`, one per account): the `events.list` `syncToken`, `lastPulledAt`
   (attempt — the throttle), `lastSyncedAt` (success; Settings' "Checked …"), `lastPullError`. Exported like `financeSyncStates`; tombstoned on disconnect.
 - `Settings` + `googleAccounts[{sub,email}]`, `calendarShapeRefs[{accountSub,calendarId}]`,
@@ -139,10 +140,11 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   been pulled yet, while a change that never reached Google (a failed push, a move made with sync off)
   goes with the next one. The retry (`ensure`) sends both. Without a `gcalSeen` (linked before two-way
   sync) any change sends everything, once; a window not known (first seen all-day) moves only when the
-  task's time does. A done task never pushes — its edits only stamp `gcalTouchedAt`, so Google can't
-  undo them. A manual block keeps its picked time — through a retry or an estimate change too — until
-  the task's deadline changes (or it first gains one); then it moves there and becomes the auto block.
-  Re-creating an event clears a stale "Removed in Google Calendar" mark.
+  task's time does. A done task never pushes — its edits only stamp `gcalEditedAt`, which beats an older
+  Google edit to the same field. A manual block keeps its picked time — through a retry or an estimate
+  change too — until the task's deadline changes (or it first gains one); then it moves there and
+  becomes the auto block (a failed move counts: the retry finishes it). Creating or inserting an event
+  clears a stale "Removed in Google Calendar" mark.
   Moving a window sends `start/end: { date: null, dateTime }`: a patch merges nested objects, and the
   `null` clears the `date` an all-day conversion left (verify once on dev — the docs don't cover this case).
 - An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google keeps
@@ -229,13 +231,15 @@ the task now matches its event.
   Aperture changed is never "taken" from Google's stale copy. Every pull that sees the event records it
   as the new `gcalSeen` (except a stale, recurring or owed-removal one); a push records what it sent.
   Titles compare trim-insensitively.
-- **Latest wins.** Every create/patch outcome — sent *or failed* — stamps `gcalTouchedAt`, and so does a
-  linked task's title/time/estimate edit that didn't push (done, or sync off). An event state older than
-  that (`updated` < `gcalTouchedAt`) is stale: nothing applies, but for a field Aperture hasn't got to
-  Google yet, Google's value goes into the base — so it can't resurface later as a "Google change" and
-  undo Aperture's, while the task still differs from the base and the next push sends Aperture's value.
-  A Google change that survives to the merge is the newer one and wins. Deletion always wins. An owed
-  removal is never pulled into.
+- **Two clocks.** `gcalTouchedAt` is **Google's** `updated` for Aperture's last successful create/patch
+  (returned by the gateway) — never the Lambda's clock, which reads *after* Google stamps the write and
+  would make our own push's echo look stale. An event state older than it predates that push: stale —
+  nothing applies, but for a field Aperture hasn't got to Google yet, Google's value goes into the base
+  (so it can't resurface later as a "Google change"; the next push still sends Aperture's). Our push's
+  echo isn't stale, so a Google edit to a field we didn't send rides in on it. `gcalEditedAt` stamps
+  every Aperture title/time/estimate edit on a linked task — pushed, failed or not pushed at all (done,
+  sync off) — and decides a field **both** sides changed: the later edit wins (Google's `updated` vs it).
+  Deletion always wins. An owed removal is never pulled into.
 - **First sight only remembers.** An event linked before two-way sync has no `gcalSeen`: the first pull
   to see it (the token-less first sync returns every event from the last week on) just records it and
   honours a deletion. Under one-way rules those older Google edits were already due to be overwritten;
@@ -248,7 +252,8 @@ the task now matches its event.
 - **Shown, never silent.** A pull's write sets `gcalPulledAt` + `gcalPulledNote` — one line, latest wins:
   "Moved to Oct 9 5pm · Now 45m · Renamed to “pset 3” in Google Calendar", or "Removed in Google
   Calendar". The row shows a gold "updated from Google"; the editor's Calendar section shows the line.
-  Both clear at the next 4am rollover (`isPullFresh`). Settings shows each account's "Checked …" or
+  Both clear at the next 4am rollover (`isPullFresh`), or as soon as you change that task's title, time
+  or estimate yourself (the note no longer describes it). Settings shows each account's "Checked …" or
   "Couldn’t check for changes (…) — retries next time you open the app".
 - **Failure.** A pull never throws to the app: a Google error (timeout, `invalid_grant`) lands on that
   account's `GcalSyncState.lastPullError`, logged `gcal_pull_failed`; other accounts still pull.

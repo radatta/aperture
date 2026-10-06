@@ -9,7 +9,7 @@
 import { dayKey, fmtClock12, fmtDuration, fmtMonthShortDay, todayKey } from './dates';
 import { eventLengthMin, eventWindow } from './due';
 import type { DueClock, DueEpoch } from './due';
-import { isPendingRemoval } from './calendarSync';
+import { isPendingRemoval, sameTitle } from './calendarSync';
 import type { GcalSeen, Task } from './types';
 
 // One changed event from the delta, normalised by the gateway.
@@ -38,7 +38,9 @@ export type PullAction =
     };
 
 type PullFields = Pick<Task, 'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin'> &
-  Partial<Pick<Task, 'gcalSyncError' | 'gcalTouchedAt' | 'gcalManual' | 'gcalSeen'>>;
+  Partial<
+    Pick<Task, 'gcalSyncError' | 'gcalTouchedAt' | 'gcalEditedAt' | 'gcalManual' | 'gcalSeen'>
+  >;
 
 // The app pulls at most once a minute per account (server-side; failures count).
 export const PULL_THROTTLE_MS = 60_000;
@@ -46,10 +48,11 @@ export const PULL_REMOVED_NOTE = 'Removed in Google Calendar';
 const NONE: PullAction = { kind: 'none' };
 
 // A three-way merge over (the event as Aperture last knew it = task.gcalSeen, the task, the event now).
-// Google's side of a field changed iff the event differs from gcalSeen — so our own push echoing back
-// is a no-op, and a field Google didn't touch is never "taken" from it. Latest wins: an event state
-// older than Aperture's last push (Google's `updated` < gcalTouchedAt) is stale — that push, sent or
-// failed-and-retried, stands — so whatever survives to the merge is newer, and Google's change wins.
+// Google changed a field iff the event differs from gcalSeen; Aperture changed it iff the task does. So
+// our own push echoing back is a no-op, a field only Google changed applies, a field only Aperture
+// changed is never "taken" from Google's copy, and a field both changed goes to the later edit (Google's
+// `updated` vs gcalEditedAt). An event state older than Aperture's last successful push (Google's
+// `updated` < gcalTouchedAt — both Google's clock) predates it and is stale.
 export function calendarPullPlan(
   task: PullFields,
   ev: PulledEvent,
@@ -72,14 +75,13 @@ export function calendarPullPlan(
     endMs: timed ? ev.endMs : (seen?.endMs ?? null),
   };
   const window = eventWindow(task, time.epoch);
+  if (!seen) return { kind: 'see', seen: now }; // first sight: remember it, apply nothing
+  const titleUnsent = !sameTitle(task.title, seen.title);
+  const timeUnsent = !!window && (window.startMs !== seen.startMs || window.endMs !== seen.endMs);
   if (ev.updatedMs < (task.gcalTouchedAt ?? 0)) {
-    // Stale: Aperture changed the event after this state. Apply nothing — but for a field Aperture
-    // hasn't got to Google yet (its push failed or was skipped), take Google's value into the base, so
-    // it can't be "re-detected" as a Google change later and undo Aperture's (the task still differs
-    // from the base, so the next push sends Aperture's value).
-    if (!seen) return NONE;
-    const titleUnsent = !sameTitle(task.title, seen.title);
-    const timeUnsent = !!window && (window.startMs !== seen.startMs || window.endMs !== seen.endMs);
+    // Stale: our push came after this state. Apply nothing — but for a field Aperture hasn't got to
+    // Google yet, take Google's value into the base, so it can't be "re-detected" as a Google change
+    // later and undo Aperture's (the task still differs from the base, so the next push sends it).
     const absorbed: GcalSeen = {
       title: titleUnsent ? now.title : seen.title,
       startMs: timeUnsent ? now.startMs : seen.startMs,
@@ -87,16 +89,23 @@ export function calendarPullPlan(
     };
     return sameSeen(absorbed, seen) ? NONE : { kind: 'see', seen: absorbed };
   }
-  if (!seen) return { kind: 'see', seen: now };
 
+  // Where both sides changed a field, the later edit wins; when Aperture's does, Google's value still
+  // goes into the base (`now`), and the next push sends Aperture's.
+  const googleLater = ev.updatedMs > (task.gcalEditedAt ?? 0);
   const fields: Extract<PullAction, { kind: 'apply' }>['fields'] = {};
-  // Title: Google renamed it since Aperture last knew the event (trim-insensitive, so an untrimmed title
-  // sent by an older client doesn't read as a rename).
-  if (title && !sameTitle(title, seen.title) && !sameTitle(title, task.title)) fields.title = title;
+  // Title: Google renamed it since Aperture last knew the event (trim-insensitive).
+  if (
+    title &&
+    !sameTitle(title, seen.title) &&
+    !sameTitle(title, task.title) &&
+    (!titleUnsent || googleLater)
+  )
+    fields.title = title;
   // Time — only a timed task's auto-synced block maps to task fields; a manual block (gcalManual, or any
   // event on an untimed task) syncs its title only.
   const moved = timed && (ev.startMs !== seen.startMs || ev.endMs !== seen.endMs);
-  if (moved && window && !task.gcalManual) {
+  if (moved && window && !task.gcalManual && (!timeUnsent || googleLater)) {
     // Compared as wall-clock day + "HH:MM" and whole minutes, so a value equal to the task's writes nothing.
     const end = time.clock(ev.endMs!);
     if (end.day !== task.dueDay || end.hhmm !== task.dueTime) {
@@ -114,8 +123,6 @@ export function calendarPullPlan(
   return sameSeen(now, seen) ? NONE : { kind: 'see', seen: now };
 }
 
-const sameTitle = (a: string | null, b: string | null): boolean =>
-  (a ?? '').trim() === (b ?? '').trim();
 const sameSeen = (a: GcalSeen, b: GcalSeen): boolean =>
   sameTitle(a.title, b.title) && a.startMs === b.startMs && a.endMs === b.endMs;
 

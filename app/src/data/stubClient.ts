@@ -381,6 +381,12 @@ class StubClient implements ApiClient {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
     const settings = this.ensureSettings();
     const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, { ensure });
+    // A linked task's synced edit stamps gcalEditedAt (the conflict tiebreak) and retires a superseded
+    // "updated from Google" note — whether or not it pushes.
+    const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
+    const editStamp = edited
+      ? { gcalEditedAt: this.now(), gcalPulledAt: null, gcalPulledNote: null }
+      : {};
     if (action.kind === 'none') {
       const moot =
         task.gcalSyncError &&
@@ -388,12 +394,10 @@ class StubClient implements ApiClient {
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
-      // An edit that didn't push (done, or sync off) still stamps the latest-wins clock.
-      const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
       if (!moot && !edited) return task;
       return this.writes.patch(this.store.tasks, task.id, {
         ...(moot && { gcalSyncError: null }),
-        ...(edited && { gcalTouchedAt: this.now() }),
+        ...editStamp,
       });
     }
     if (action.kind === 'delete') return this.clearCalendarPointers(task.id);
@@ -404,6 +408,7 @@ class StubClient implements ApiClient {
         gcalSyncError: null,
         gcalSeen: seenAfter(action, task.gcalSeen),
         gcalTouchedAt: this.now(),
+        ...editStamp,
         ...(action.endMs !== undefined && { gcalManual: null }),
       });
     return this.writes.patch(this.store.tasks, task.id, {
@@ -692,6 +697,7 @@ class StubClient implements ApiClient {
             gcalSeen: task.gcalSeen ?? null,
             gcalManual: task.gcalManual ?? null,
             gcalTouchedAt: task.gcalTouchedAt ?? null,
+            gcalEditedAt: task.gcalEditedAt ?? null,
           }
         : {}),
     });
@@ -1165,6 +1171,9 @@ class StubClient implements ApiClient {
       gcalEventId: `stub-event-${this.now()}`,
       gcalManual: true, // a picked time maps to no task field — a pull syncs its title only
       gcalSeen: { title: input.title, startMs: input.startMs, endMs: input.endMs },
+      gcalTouchedAt: this.now(),
+      gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
+      gcalPulledNote: null,
     });
   }
   async deleteCalendarEvent(taskId: string): Promise<Task> {

@@ -54,6 +54,15 @@ const FULL_SYNC_LOOKBACK_MS = 7 * 86_400_000;
 
 class SyncTokenGoneError extends Error {}
 
+// A page (or its body) cut off by the pull's budget rather than a slow call reads as running out of time.
+const budgetCut =
+  (left: number) =>
+  (e: unknown): never => {
+    if (e instanceof Error && e.name === 'TimeoutError' && left < GOOGLE_TIMEOUT_MS)
+      throw new PullIncompleteError();
+    throw e;
+  };
+
 export class LiveGoogle implements GoogleGateway {
   private clientCreds: { clientId: string; clientSecret: string } | null = null;
   private readonly access = new Map<string, AccessCacheEntry>();
@@ -283,17 +292,13 @@ export class LiveGoogle implements GoogleGateway {
         input.sub,
         `/calendars/${encodeURIComponent(input.calendarId)}/events?${q}`,
         { signal: AbortSignal.timeout(Math.min(GOOGLE_TIMEOUT_MS, left)) },
-      ).catch((e: unknown) => {
-        if (e instanceof Error && e.name === 'TimeoutError' && left < GOOGLE_TIMEOUT_MS)
-          throw new PullIncompleteError();
-        throw e;
-      });
+      ).catch(budgetCut(left));
       if (res.status === 410 && syncToken) {
         await res.body?.cancel(); // free the connection before the full re-sync
         throw new SyncTokenGoneError();
       }
       if (!res.ok) throw new Error(`events.list failed (${res.status})`);
-      const json = (await res.json()) as {
+      const json = (await res.json().catch(budgetCut(left))) as {
         items?: GcalEvent[];
         nextPageToken?: string;
         nextSyncToken?: string;
@@ -311,7 +316,7 @@ export class LiveGoogle implements GoogleGateway {
     }
   }
 
-  async insertEvent(input: InsertEventInput): Promise<{ eventId: string }> {
+  async insertEvent(input: InsertEventInput): Promise<{ eventId: string; updatedMs: number }> {
     const res = await this.api(
       input.sub,
       `/calendars/${encodeURIComponent(input.calendarId)}/events`,
@@ -329,8 +334,8 @@ export class LiveGoogle implements GoogleGateway {
       },
     );
     if (!res.ok) throw new Error(`events.insert failed (${res.status})`);
-    const json = (await res.json()) as { id: string };
-    return { eventId: json.id };
+    const json = (await res.json()) as { id: string; updated?: string };
+    return { eventId: json.id, updatedMs: updatedOf(json) };
   }
 
   async deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void> {
@@ -345,7 +350,7 @@ export class LiveGoogle implements GoogleGateway {
     }
   }
 
-  async patchEvent(input: PatchEventInput): Promise<void> {
+  async patchEvent(input: PatchEventInput): Promise<{ updatedMs: number }> {
     const body: Record<string, unknown> = {};
     if (input.title !== undefined) body.summary = input.title;
     // `date: null` because a patch MERGES nested objects: on an event made all-day in Google, a bare
@@ -367,9 +372,17 @@ export class LiveGoogle implements GoogleGateway {
     if (!res.ok) throw new Error(`events.patch failed (${res.status})`);
     // An event deleted in Google lingers as status "cancelled"; a patch that doesn't set status leaves
     // it deleted, so treat it as gone (the caller re-creates).
-    const json = (await res.json()) as { status?: string };
+    const json = (await res.json()) as { status?: string; updated?: string };
     if (json.status === 'cancelled') throw new EventGoneError(input.eventId);
+    return { updatedMs: updatedOf(json) };
   }
+}
+
+// Google's `updated` for a write we made (falls back to now if absent — then the next echo may read as
+// stale, which only delays a concurrent Google change to the delta after).
+function updatedOf(json: { updated?: string }): number {
+  const ms = json.updated ? Date.parse(json.updated) : NaN;
+  return Number.isFinite(ms) ? ms : Date.now();
 }
 
 function decodeIdToken(idToken: string): { sub: string; email: string } {

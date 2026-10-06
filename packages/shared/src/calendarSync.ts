@@ -6,8 +6,11 @@
 // sends only what the task has that the event doesn't (against gcalSeen, the event as Aperture last
 // knew it), so an Aperture rename can't undo a drag in Google that hasn't been pulled yet — while a
 // change that never reached Google (a failed push, or one made with sync off) goes with the next push.
-// A done task never pushes; its edits only stamp gcalTouchedAt (the caller), so Google can't undo them. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
-// nothing syncs. Delete-on-cancel is separate (transitionTask) and predates this.
+// A done task never pushes; its edits only stamp gcalEditedAt (the caller), which wins a conflict with
+// an older Google edit.
+//
+// The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and nothing
+// syncs. Delete-on-cancel is separate (transitionTask) and predates this.
 
 import { eventWindow } from './due';
 import type { DueEpoch } from './due';
@@ -40,7 +43,12 @@ export const gcalSyncMessage = (kind: 'create' | 'patch' | 'delete', detail: str
 export const isPendingRemoval = (gcalSyncError: string | null | undefined): boolean =>
   !!gcalSyncError?.startsWith(FAILED.delete);
 
-const titleUnsent = (t: SyncFields): boolean => !!t.gcalSeen && t.gcalSeen.title !== t.title;
+const titleUnsent = (t: SyncFields): boolean =>
+  !!t.gcalSeen && !sameTitle(t.gcalSeen.title, t.title);
+
+// Titles compare trim-insensitively both ways (an untrimmed title from an older client isn't a change).
+export const sameTitle = (a: string | null, b: string | null): boolean =>
+  (a ?? '').trim() === (b ?? '').trim();
 
 // Did a write change anything the event mirrors? (`?? null`: an older row's undefined equals null.)
 export const syncedFieldsChanged = (
@@ -111,7 +119,7 @@ export function calendarSyncPlan(
         (seen.startMs === null
           ? whenChanged || changed('estimateMin')
           : seen.startMs !== window.startMs || seen.endMs !== window.endMs);
-      retitle = ensure || seen.title !== next.title;
+      retitle = ensure || !sameTitle(seen.title, next.title);
     } else {
       // Not known yet (linked before two-way sync): any change sends everything, once — after which the
       // event is known.

@@ -35,6 +35,15 @@ describe('LiveGoogle.patchEvent', () => {
     expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ summary: 'renamed' });
   });
 
+  it("returns Google's `updated` for the write (Google's clock, not ours)", async () => {
+    const { g } = gateway(() =>
+      Response.json({ status: 'confirmed', updated: '2026-10-05T10:00:00.000Z' }),
+    );
+    expect(await g.patchEvent({ ...input, title: 'x' })).toEqual({
+      updatedMs: Date.UTC(2026, 9, 5, 10),
+    });
+  });
+
   it('an event deleted in Google is EventGoneError — 404, 410, or 200 with status cancelled', async () => {
     for (const res of [
       () => new Response(null, { status: 404 }),
@@ -143,9 +152,11 @@ describe('LiveGoogle.listEventChanges', () => {
 });
 
 describe('LiveGoogle.insertEvent', () => {
-  it('tags the event with its task id', async () => {
-    const { g, calls } = gateway(() => Response.json({ id: 'new' }));
-    await g.insertEvent({
+  it("tags the event with its task id; returns Google's `updated` for it", async () => {
+    const { g, calls } = gateway(() =>
+      Response.json({ id: 'new', updated: '2026-10-05T10:00:00.000Z' }),
+    );
+    const res = await g.insertEvent({
       sub: 'A',
       calendarId: 'me@example.com',
       title: 't',
@@ -156,5 +167,6 @@ describe('LiveGoogle.insertEvent', () => {
     expect(JSON.parse(calls[0]!.init.body as string).extendedProperties).toEqual({
       private: { apertureTaskId: 'T1' },
     });
+    expect(res).toEqual({ eventId: 'new', updatedMs: Date.UTC(2026, 9, 5, 10) });
   });
 });

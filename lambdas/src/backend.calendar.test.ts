@@ -854,6 +854,95 @@ describe('calendar pull (two-way sync)', () => {
     expect(await b.getTask(t.id)).toMatchObject({ title: 'done and renamed', dueTime: '17:00' });
   });
 
+  it('an unpulled Google drag, then an Aperture rename: the rename’s echo brings the drag in (never reverted)', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.editEvent(t.gcalEventId!, {
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+    tick(1_000);
+    await b.setTaskTitle(t.id, 'renamed'); // title-only patch; Google keeps the drag
+    expect(g.events.get(t.gcalEventId!)!.endMs).toBe(at('2026-10-09', '17:00'));
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({ title: 'renamed', dueTime: '17:00' });
+    // A later estimate edit moves the block from 5pm, not back to 4pm.
+    await b.setTaskEstimate(t.id, 90, 0);
+    expect(g.events.get(t.gcalEventId!)).toMatchObject({
+      startMs: at('2026-10-09', '15:30'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+  });
+
+  it('a failed move of a manual block still lets Retry move it to the deadline', async () => {
+    const { g, b } = await setup();
+    const t = await b.createTask({ title: 'u', dueDay: '2026-10-09' });
+    await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'u',
+      startMs: at('2026-10-09', '09:00'),
+      endMs: at('2026-10-09', '10:00'),
+    });
+    const realPatch = g.patchEvent.bind(g);
+    g.patchEvent = async () => {
+      g.patchEvent = realPatch;
+      throw new Error('timeout');
+    };
+    const failed = await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '16:00' });
+    expect(failed.gcalSyncError).toMatch(/Couldn’t update/);
+    expect(failed.gcalManual ?? null).toBeNull();
+    await b.syncCalendarEvent(t.id);
+    expect(g.events.get(t.gcalEventId ?? failed.gcalEventId!)!.endMs).toBe(
+      at('2026-10-09', '16:00'),
+    );
+  });
+
+  it('a manual insert clears a "Removed in Google Calendar" mark', async () => {
+    const { g, b, tick, baseline } = await setup();
+    const t = await b.createTask({ title: 'u', dueDay: '2026-10-09' });
+    const linked = await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'u',
+      startMs: at('2026-10-09', '09:00'),
+      endMs: at('2026-10-09', '10:00'),
+    });
+    await baseline();
+    g.deleteEventInGoogle(linked.gcalEventId!);
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.gcalPulledNote).toBe('Removed in Google Calendar');
+    const again = await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'u',
+      startMs: at('2026-10-09', '11:00'),
+      endMs: at('2026-10-09', '12:00'),
+    });
+    expect(again.gcalPulledNote ?? null).toBeNull();
+  });
+
+  it('the user’s own edit retires the "updated from Google" note it supersedes', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.editEvent(t.gcalEventId!, {
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.gcalPulledNote).toMatch(/Moved to/);
+    const moved = await b.setTaskDue(t.id, { dueDay: '2026-10-10', dueTime: '17:00' });
+    expect(moved.gcalPulledNote ?? null).toBeNull();
+  });
+
   it('an unpulled Google rename, then a failed Aperture rename, then a Google drag: Aperture’s name stays', async () => {
     const { g, b, tick, baseline, timed } = await setup();
     const t = await timed();

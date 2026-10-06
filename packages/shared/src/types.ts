@@ -66,9 +66,12 @@ export interface Task extends BaseEntity {
   gcalSyncError: string | null;
   // Two-way sync bookkeeping (calendarPull.ts) — OPTIONAL, unlike the domain fields above: sync state,
   // not task data, so old rows and literals simply lack it (readers use `?? null` / `!x`).
-  // gcalTouchedAt: the last Aperture title/time/estimate change pushed to Google (sent or failed) — the
-  // "latest wins" clock a Google edit is compared against.
+  // gcalTouchedAt: Google's `updated` for Aperture's last successful push — an event state older than it
+  // predates that push and is stale. Google's clock, so our own push's echo is never mistaken for one.
   gcalTouchedAt?: number | null;
+  // gcalEditedAt: when Aperture last changed the title/time/estimate (pushed, failed, or not pushed at
+  // all — done, sync off). Breaks a tie when both sides changed the same field: the later one wins.
+  gcalEditedAt?: number | null;
   // gcalSeen: the linked event as Aperture last knew it (what it pushed, or last pulled) — the base of a
   // three-way merge. A pull takes from Google only what changed since; a push sends what the task has
   // that the event doesn't yet (a failed, skipped or toggle-off change). Null/absent = not known yet.

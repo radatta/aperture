@@ -261,6 +261,13 @@ export class BackendClient implements ApiClient {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
     const settings = known ?? (await this.ensureSettings());
     const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
+    // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
+    // stamps gcalEditedAt, the tiebreak when Google changed the same field (calendarPull.ts), and retires
+    // an "updated from Google" note it has just superseded.
+    const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
+    const editStamp = edited
+      ? { gcalEditedAt: this.now(), gcalPulledAt: null, gcalPulledNote: null }
+      : {};
     if (action.kind === 'none') {
       // A stale failure note goes once nothing is left to sync: no event and no time, sync turned off,
       // or the task finished — otherwise it'd sit there with a Retry that can't do anything.
@@ -270,14 +277,8 @@ export class BackendClient implements ApiClient {
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
-      // A linked task's title/time/estimate edit that didn't push (done, or sync off) is still
-      // Aperture's latest word: stamp it, so an older Google edit can't win the next pull.
-      const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
       if (!moot && !edited) return task;
-      return this.putGcal(task, {
-        ...(moot && { gcalSyncError: null }),
-        ...(edited && { gcalTouchedAt: this.now() }),
-      });
+      return this.putGcal(task, { ...(moot && { gcalSyncError: null }), ...editStamp });
     }
     const unlinked = {
       gcalAccountId: null,
@@ -287,13 +288,11 @@ export class BackendClient implements ApiClient {
       gcalManual: null,
       gcalSeen: null,
     };
-    // A create or patch (sent or failed) is Aperture's latest word on the event: the clock a later
-    // Google edit must beat to win a pull (calendarPull.ts). A success also records the event as it now
-    // stands (gcalSeen) — the base both directions diff against.
-    const touched = { gcalTouchedAt: this.now() };
+    // A successful create/patch records the event as it now stands (gcalSeen — the base both directions
+    // diff against) and Google's `updated` for it (gcalTouchedAt — a delta state older than that is stale).
     try {
       if (action.kind === 'create') {
-        const { eventId } = await this.google.insertEvent({
+        const { eventId, updatedMs } = await this.google.insertEvent({
           sub: action.target.accountSub,
           calendarId: action.target.calendarId,
           title: action.title,
@@ -310,7 +309,7 @@ export class BackendClient implements ApiClient {
           gcalSeen: seenAfter(action, null),
           gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
           gcalPulledNote: null,
-          ...touched,
+          gcalTouchedAt: updatedMs,
         });
       }
       if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
@@ -327,13 +326,14 @@ export class BackendClient implements ApiClient {
         });
         return this.putGcal(task, unlinked);
       }
+      let updatedMs: number;
       try {
-        await this.google.patchEvent({
+        ({ updatedMs } = await this.google.patchEvent({
           ...ref,
           title: action.title,
           startMs: action.startMs,
           endMs: action.endMs,
-        });
+        }));
       } catch (e) {
         if (!(e instanceof EventGoneError)) throw e;
         // Deleted in Google on purpose — drop the dead pointer, don't resurrect it. A later time change
@@ -344,7 +344,8 @@ export class BackendClient implements ApiClient {
       return this.putGcal(task, {
         gcalSyncError: null,
         gcalSeen: seenAfter(action, task.gcalSeen),
-        ...touched,
+        gcalTouchedAt: updatedMs,
+        ...editStamp,
         ...(action.endMs !== undefined && { gcalManual: null }),
       });
     } catch (e) {
@@ -352,9 +353,13 @@ export class BackendClient implements ApiClient {
       console.log(
         JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, detail }),
       );
+      // A failed move of a manual block still makes it the deadline's block: the retry then re-times it
+      // (a manual block's retry otherwise keeps its picked time).
+      const retimed = action.kind === 'patch' && action.endMs !== undefined;
       return this.putGcal(task, {
         gcalSyncError: gcalSyncMessage(action.kind, detail),
-        ...(action.kind !== 'delete' && touched),
+        ...editStamp,
+        ...(retimed && { gcalManual: null }),
       });
     }
   }
@@ -372,6 +377,7 @@ export class BackendClient implements ApiClient {
         | 'gcalSyncError'
         | 'gcalManual'
         | 'gcalTouchedAt'
+        | 'gcalEditedAt'
         | 'gcalSeen'
         | 'gcalPulledAt'
         | 'gcalPulledNote'
@@ -689,6 +695,7 @@ export class BackendClient implements ApiClient {
             gcalSeen: task.gcalSeen ?? null,
             gcalManual: task.gcalManual ?? null,
             gcalTouchedAt: task.gcalTouchedAt ?? null,
+            gcalEditedAt: task.gcalEditedAt ?? null,
           }
         : {}),
     });
@@ -1211,12 +1218,12 @@ export class BackendClient implements ApiClient {
 
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
     const task = await this.mustTask(input.taskId);
-    // One live event per task — a second insert would orphan the first (edit-sync is a later PR).
+    // One live event per task — a second insert would orphan the first.
     if (task.gcalEventId) throw new Error('Task already has a calendar event');
     // Two-system write: the event is created before its pointer is stored. If putTask below fails, a
-    // real event is left with no stored id (a retry double-books). Accepted for this PR — reconciliation
-    // lands with edit-sync; see docs/areas/calendar/index.md.
-    const { eventId } = await this.google.insertEvent({
+    // real event is left with no stored id (a retry double-books). Accepted: it carries its task id
+    // (extendedProperties), but nothing reconciles it — the pull only matches stored pointers.
+    const { eventId, updatedMs } = await this.google.insertEvent({
       sub: input.accountSub,
       calendarId: input.calendarId,
       title: input.title,
@@ -1231,6 +1238,9 @@ export class BackendClient implements ApiClient {
       gcalEventId: eventId,
       gcalManual: true, // a picked time maps to no task field — a pull syncs its title only
       gcalSeen: { title: input.title, startMs: input.startMs, endMs: input.endMs },
+      gcalTouchedAt: updatedMs,
+      gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
+      gcalPulledNote: null,
       updatedAt: this.now(),
     });
   }

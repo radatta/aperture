@@ -131,6 +131,13 @@ describe('calendarSyncPlan', () => {
       endMs: epoch('2026-10-05', '17:00'),
     });
   });
+  it('an untrimmed title against a trimmed base is not re-sent', () => {
+    const t = linked({
+      title: 'pset ',
+      gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END },
+    });
+    expect(calendarSyncPlan(t, { ...t }, ON, epoch).kind).toBe('none');
+  });
   it('seenAfter: the event as known after a create/patch', () => {
     const prev = { title: 'a', startMs: 1, endMs: 2 };
     expect(seenAfter({ kind: 'patch', title: 'b' }, prev)).toEqual({

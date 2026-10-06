@@ -220,6 +220,30 @@ describe('calendarPullPlan', () => {
       plan(task({ gcalTouchedAt: 3_000 }), event({ title: 'google', updatedMs: 2_000 })),
     ).toEqual({ kind: 'none' });
   });
+  it('both changed the same field: the later edit wins — Aperture’s (gcalEditedAt) or Google’s (updated)', () => {
+    const t = task({ title: 'aperture', gcalEditedAt: 5_000 });
+    const older = plan(t, event({ title: 'google', updatedMs: 4_000 }));
+    expect(older).toMatchObject({ kind: 'see', seen: { title: 'google' } }); // into the base; Aperture's pushes next
+    expect(plan(t, event({ title: 'google', updatedMs: 6_000 }))).toMatchObject({
+      kind: 'apply',
+      fields: { title: 'google' },
+    });
+    // A field only Google changed applies whatever the edit clock says.
+    const end = epoch('2026-10-05', '17:00');
+    expect(
+      plan(t, event({ startMs: end - 60 * 60_000, endMs: end, updatedMs: 4_000 })),
+    ).toMatchObject({
+      kind: 'apply',
+      fields: { dueTime: '17:00' },
+    });
+  });
+  it('first sight comes before the stale check (a task with no base always gets one)', () => {
+    expect(
+      plan(task({ gcalSeen: undefined, gcalTouchedAt: 9_000 }), event({ updatedMs: 1 })),
+    ).toMatchObject({
+      kind: 'see',
+    });
+  });
   it('titles compare trim-insensitively (an untrimmed title is not a rename)', () => {
     const t = task({
       title: 'pset ',

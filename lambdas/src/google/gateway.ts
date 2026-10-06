@@ -40,12 +40,14 @@ export interface GoogleGateway {
   // token falls back to a full sync inside the call (`full: true`); running past `deadlineMs` throws
   // PullIncompleteError and returns no token, so the old one replays the same delta next time.
   listEventChanges(input: EventChangesInput): Promise<EventDelta>;
-  // calendar writes (only ever on events whose eventId Aperture stored — enforced by the caller)
-  insertEvent(input: InsertEventInput): Promise<{ eventId: string }>;
+  // calendar writes (only ever on events whose eventId Aperture stored — enforced by the caller). Both
+  // return Google's `updated` for the write: the clock a later delta is compared against (a state older
+  // than our own push is stale), in Google's time, never the Lambda's.
+  insertEvent(input: InsertEventInput): Promise<{ eventId: string; updatedMs: number }>;
   deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void>;
   // Partial update (events.patch) — only the given fields change. Throws EventGoneError when the event
   // no longer exists (deleted in Google), so the caller can drop its pointer and re-create.
-  patchEvent(input: PatchEventInput): Promise<void>;
+  patchEvent(input: PatchEventInput): Promise<{ updatedMs: number }>;
 }
 
 export interface InsertEventInput {
@@ -147,6 +149,9 @@ export class InMemoryGoogle implements GoogleGateway {
   private change = 0; // bumps on every event change; a sync token is `tok-<change>`
   private tokensExpired = false;
   clock: () => number = () => Date.now(); // `updated` stamps
+  // Google stamps `updated` while handling a write, before the caller's clock reads "after" — model that
+  // gap, so a test can't pass only because the two clocks agree exactly.
+  lagMs = 1;
 
   // --- test helpers ---
   seedAccount(sub: string, email: string, calendars: CalendarInfo[] = []): void {
@@ -185,7 +190,7 @@ export class InMemoryGoogle implements GoogleGateway {
   }
   private touch(evt: FakeEvent): void {
     evt.seq = ++this.change;
-    evt.updatedMs = this.clock();
+    evt.updatedMs = this.clock() - this.lagMs;
   }
 
   private mustAccount(sub: string): FakeAccount {
@@ -254,13 +259,13 @@ export class InMemoryGoogle implements GoogleGateway {
     }
     return { events, syncToken: `tok-${this.change}`, full };
   }
-  async insertEvent(input: InsertEventInput): Promise<{ eventId: string }> {
+  async insertEvent(input: InsertEventInput): Promise<{ eventId: string; updatedMs: number }> {
     this.mustAccount(input.sub);
     const eventId = `evt-${++this.seq}`;
     const evt: FakeEvent = { ...input };
     this.touch(evt);
     this.events.set(eventId, evt);
-    return { eventId };
+    return { eventId, updatedMs: evt.updatedMs! };
   }
   async deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void> {
     this.mustAccount(input.sub);
@@ -272,7 +277,7 @@ export class InMemoryGoogle implements GoogleGateway {
     }
     this.events.delete(input.eventId);
   }
-  async patchEvent(input: PatchEventInput): Promise<void> {
+  async patchEvent(input: PatchEventInput): Promise<{ updatedMs: number }> {
     this.mustAccount(input.sub);
     const evt = this.events.get(input.eventId);
     if (!evt || evt.cancelled) throw new EventGoneError(input.eventId);
@@ -285,5 +290,6 @@ export class InMemoryGoogle implements GoogleGateway {
     if (input.endMs !== undefined) evt.endMs = input.endMs;
     if (input.startMs !== undefined) evt.allDay = false; // a timed window replaces an all-day one
     this.touch(evt);
+    return { updatedMs: evt.updatedMs! };
   }
 }
