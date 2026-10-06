@@ -94,6 +94,9 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   day, day-only keeps its time, `dueDay: null` clears both, and a time on an undated task is an execution
   error naming what already applied. A timed task syncs to Google Calendar
   ([calendar → Auto-sync](../calendar/index.md)); a failure comes back as `gcalSyncError` on the task.
+  Edits made in Google come back via the app's pull ([calendar → Two-way sync](../calendar/index.md)) —
+  `list_tasks` does **not** pull, so it shows what the app last pulled; a task Google changed carries
+  `gcalPulledAt` + `gcalPulledNote` (what changed).
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`
   (`notes: null` or `""` clears; an update replaces the whole note). They're checked before any dispatch,
   so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of

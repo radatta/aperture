@@ -2,8 +2,9 @@
 // (before, after, settings): both ApiClient impls run it after a task write and execute the one action
 // it returns — the Lambda against Google, the stub against a fake id — so their decisions can't drift.
 //
-// One-way: the task is the source of record; an event edited in Google is overwritten by the next task
-// change. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
+// The outgoing half of two-way sync (the incoming half, Google → task, is calendarPull.ts). A patch
+// sends only what changed, so an Aperture rename can't undo a drag in Google that hasn't been pulled
+// yet. The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and
 // nothing syncs. Delete-on-cancel is separate (transitionTask) and predates this.
 
 import { eventWindow } from './due';
@@ -14,7 +15,7 @@ export type CalendarSyncAction =
   | { kind: 'none' }
   | { kind: 'delete' }
   | { kind: 'create'; target: CalendarRef; title: string; startMs: number; endMs: number }
-  | { kind: 'patch'; title: string; startMs?: number; endMs?: number };
+  | { kind: 'patch'; title?: string; startMs?: number; endMs?: number };
 
 type SyncFields = Pick<
   Task,
@@ -66,9 +67,12 @@ export function calendarSyncPlan(
       if (wasTimed) return { kind: 'delete' };
       return ensure || changed('title') ? { kind: 'patch', title: next.title } : NONE;
     }
-    if (ensure || whenChanged || changed('estimateMin') || changed('title'))
-      return { kind: 'patch', title: next.title, ...window };
-    return NONE;
+    // Changed fields only (ensure = the retry sends everything). The window moves as one block; a
+    // manual event moves too when its task first gains a time.
+    const retime = ensure || whenChanged || changed('estimateMin') || !wasTimed;
+    const retitle = ensure || changed('title');
+    if (!retime && !retitle) return NONE;
+    return { kind: 'patch', ...(retitle && { title: next.title }), ...(retime && window) };
   }
 
   // Unlinked: only a timed task gets an event, and only when its time is new or moved (a rename alone

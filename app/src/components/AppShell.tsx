@@ -5,6 +5,7 @@ import { AppNav } from './AppNav';
 import { CaptureBar } from '../modules/capture/CaptureBar';
 import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
 import { useKeyboardInset } from '../lib/useKeyboardInset';
+import { useCalendarPull } from '../data/hooks/useCalendar';
 import { cx } from '../lib/cx';
 
 // The layout every route renders inside: header + deep-view nav + the routed page, above a single
@@ -19,6 +20,8 @@ export function AppShell() {
   const [dockHeight, setDockHeight] = useState(0);
   // Lifts the dock above the iOS keyboard while you type in it (a fixed bottom sits behind it).
   const lifted = useKeyboardInset(dockRef);
+  // Edits made in Google Calendar come back onto their tasks on open/foreground.
+  useCalendarPull();
 
   // Reserve exactly as much room as the dock currently needs. A fixed padding can't be right: the
   // dock grows when a timer is running, when several run at once, and when the capture field wraps

@@ -390,4 +390,23 @@ describe('due-time urgency', () => {
     await user.click(await screen.findByRole('button', { name: 'Backlog' }));
     expect(await screen.findByText('calendar sync failed')).toBeTruthy();
   });
+
+  it('marks a task Google changed today, and not one it changed before the rollover', async () => {
+    const api = freshApi();
+    const fresh = await api.createTask({ title: 'Moved in Google' });
+    const stale = await api.createTask({ title: 'Moved last week' });
+    vi.spyOn(api, 'listTasks').mockResolvedValue([
+      {
+        ...fresh,
+        gcalPulledAt: Date.now(),
+        gcalPulledNote: 'Moved to Oct 9 5pm in Google Calendar',
+      },
+      { ...stale, gcalPulledAt: Date.now() - 8 * 86_400_000, gcalPulledNote: 'x' },
+    ]);
+    renderApp({ api, path: '/tasks' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    expect(await screen.findByText('updated from Google')).toBeTruthy();
+    expect(screen.getAllByText('updated from Google')).toHaveLength(1);
+  });
 });

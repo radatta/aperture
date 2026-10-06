@@ -1,12 +1,19 @@
 import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { inSplitFamily, isCalibrationPoint, splitChildren, todayKey } from '@aperture/shared';
+import {
+  inSplitFamily,
+  isCalibrationPoint,
+  isPullFresh,
+  splitChildren,
+  todayKey,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { DeltaBar } from '../../../components/DeltaBar';
 import { Text } from '../../../components/Text';
 import { fmtDateTime, fmtDuration } from '../../../lib/format';
 import { returnFocus } from '../../../lib/useDisclosure';
+import { useNow } from '../../../lib/useNow';
 import { useDeleteCalendarEvent, useSyncCalendarEvent } from '../../../data/hooks/useCalendar';
 import { usePlansForDay } from '../../../data/hooks/usePlans';
 import { useSeries } from '../../../data/hooks/useSeries';
@@ -66,7 +73,8 @@ export function TaskEditor({
 }) {
   const { data: settings } = useSettings();
   const { data: seriesList = [] } = useSeries();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const now = useNow();
+  const today = todayKey(settings?.dayStartHour ?? 4, now);
   const { data: plans = [] } = usePlansForDay(today);
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
@@ -186,6 +194,14 @@ export function TaskEditor({
             </Text>
           </div>
         )}
+        {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). */}
+        {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulledNote && (
+          <div role="status">
+            <Text size="sm" tone="gold">
+              {task.gcalPulledNote}
+            </Text>
+          </div>
+        )}
         {task.gcalSyncError && (
           <div role="alert" className="flex flex-wrap items-center justify-between gap-2">
             <Text size="sm" tone="danger">
@@ -232,7 +248,12 @@ export function TaskEditor({
           reveal === 'calendar' ? (
             <AddToCalendarForm task={task} onDone={() => setReveal(null)} />
           ) : (
-            <Button variant="quiet" size="sm" className="self-start" onClick={() => setReveal('calendar')}>
+            <Button
+              variant="quiet"
+              size="sm"
+              className="self-start"
+              onClick={() => setReveal('calendar')}
+            >
               Add to calendar…
             </Button>
           )
@@ -252,7 +273,12 @@ export function TaskEditor({
             </Button>
           )}
           {canScope && (
-            <Button variant="quiet" size="sm" className="text-danger" onClick={() => setReveal('drop')}>
+            <Button
+              variant="quiet"
+              size="sm"
+              className="text-danger"
+              onClick={() => setReveal('drop')}
+            >
               Drop task…
             </Button>
           )}

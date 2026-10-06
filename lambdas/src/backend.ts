@@ -1,6 +1,7 @@
 import {
   assertAttachmentAllowed,
   assertCategoryDeletable,
+  calendarPullPlan,
   calendarSyncPlan,
   completeSession,
   countsTowardCap,
@@ -38,7 +39,9 @@ import {
   USER_TIME_ZONE,
   viewableInline,
   withEstimate,
+  zonedDayTime,
   zonedEpoch,
+  PULL_THROTTLE_MS,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -87,6 +90,8 @@ import type {
   Story,
   StoryPatch,
   CreateStoryInput,
+  PullAction,
+  PullCalendarResult,
   Task,
   TaskPlan,
   TaskSeries,
@@ -139,6 +144,10 @@ const unconfiguredPresigner: Presigner = {
 // plus the uncapped-but-fast SSM token read and a few DynamoDB writes — inside the 15 s Lambda timeout.
 const SYNC_CONCURRENCY = 4;
 const BULK_SYNC_BUDGET_MS = 3_000;
+// A calendar pull's Google budget (pullCalendar): unlike a paste, nothing is half-written if it runs
+// out (the old sync token replays), so it may spend more. Worst case 8 s + one in-flight page (4 s) and
+// a few DynamoDB writes — inside the 15 s Lambda timeout.
+const PULL_BUDGET_MS = 8_000;
 
 export class BackendClient implements ApiClient {
   private readonly userId: string;
@@ -228,6 +237,7 @@ export class BackendClient implements ApiClient {
   // The Lambda's clock is UTC — a task's wall-clock deadline is resolved in the user's zone, never locally.
   private readonly dueEpoch = (day: string, hhmm: string): number =>
     zonedEpoch(day, hhmm, USER_TIME_ZONE);
+  private readonly dueClock = (ms: number) => zonedDayTime(ms, USER_TIME_ZONE);
 
   // Calendar auto-sync after a task write (shared calendarSyncPlan decides; docs/areas/calendar →
   // Auto-sync). The task is already saved: a Google failure never fails the write — it lands on the
@@ -259,7 +269,11 @@ export class BackendClient implements ApiClient {
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
+      gcalManual: null,
     };
+    // A create or patch (sent or failed) is Aperture's latest word on the event: the clock a later
+    // Google edit must beat to win a pull (calendarPull.ts).
+    const touched = { gcalTouchedAt: this.now() };
     try {
       if (action.kind === 'create') {
         const { eventId } = await this.google.insertEvent({
@@ -268,12 +282,15 @@ export class BackendClient implements ApiClient {
           title: action.title,
           startMs: action.startMs,
           endMs: action.endMs,
+          taskId: task.id,
         });
         return this.putGcal(task, {
           gcalAccountId: action.target.accountSub,
           gcalCalendarId: action.target.calendarId,
           gcalEventId: eventId,
           gcalSyncError: null,
+          gcalManual: null,
+          ...touched,
         });
       }
       if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
@@ -303,13 +320,21 @@ export class BackendClient implements ApiClient {
         // creates a fresh one.
         return this.putGcal(task, unlinked);
       }
-      return task.gcalSyncError ? this.putGcal(task, { gcalSyncError: null }) : task;
+      // A moved window makes a manual block the task's auto-synced one.
+      return this.putGcal(task, {
+        gcalSyncError: null,
+        ...touched,
+        ...(action.endMs !== undefined && { gcalManual: null }),
+      });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       console.log(
         JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, detail }),
       );
-      return this.putGcal(task, { gcalSyncError: gcalSyncMessage(action.kind, detail) });
+      return this.putGcal(task, {
+        gcalSyncError: gcalSyncMessage(action.kind, detail),
+        ...(action.kind !== 'delete' && touched),
+      });
     }
   }
   // Write only the calendar fields, onto a FRESH read: the sync spans a Google round-trip, and a
@@ -318,7 +343,15 @@ export class BackendClient implements ApiClient {
   private async putGcal(
     task: Task,
     fields: Partial<
-      Pick<Task, 'gcalAccountId' | 'gcalCalendarId' | 'gcalEventId' | 'gcalSyncError'>
+      Pick<
+        Task,
+        | 'gcalAccountId'
+        | 'gcalCalendarId'
+        | 'gcalEventId'
+        | 'gcalSyncError'
+        | 'gcalManual'
+        | 'gcalTouchedAt'
+      >
     >,
   ): Promise<Task> {
     const fresh = (await this.repo.getTask(task.id)) ?? task;
@@ -1081,14 +1114,19 @@ export class BackendClient implements ApiClient {
       settings.googleAccounts.map(async (a) => {
         // Per-account resilience (the Cognito model): a transient probe failure for one account must
         // not sink the whole status read — degrade that one to reconnect-required.
-        const state = await this.google
-          .getAccountState(a.sub)
-          .catch(() => ({ connected: true, reconnectRequired: true }));
+        const [state, sync] = await Promise.all([
+          this.google
+            .getAccountState(a.sub)
+            .catch(() => ({ connected: true, reconnectRequired: true })),
+          this.repo.getGcalSyncState(a.sub),
+        ]);
         return {
           sub: a.sub,
           email: a.email,
           connected: state.connected,
           reconnectRequired: state.reconnectRequired,
+          lastSyncedAt: sync?.lastSyncedAt ?? null,
+          lastPullError: sync?.lastPullError ?? null,
         };
       }),
     );
@@ -1148,12 +1186,14 @@ export class BackendClient implements ApiClient {
       title: input.title,
       startMs: input.startMs,
       endMs: input.endMs,
+      taskId: task.id,
     });
     return this.repo.putTask({
       ...task,
       gcalAccountId: input.accountSub,
       gcalCalendarId: input.calendarId,
       gcalEventId: eventId,
+      gcalManual: true, // a picked time maps to no task field — a pull syncs its title only
       updatedAt: this.now(),
     });
   }
@@ -1176,6 +1216,7 @@ export class BackendClient implements ApiClient {
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
+      gcalManual: null,
       updatedAt: this.now(),
     });
   }
@@ -1184,8 +1225,119 @@ export class BackendClient implements ApiClient {
     return this.syncCalendar(null, await this.mustTask(taskId), true);
   }
 
+  // Two-way sync, Google → task (calendarPull.ts decides; docs/areas/calendar → Two-way sync). Pulls each
+  // account's events.list delta and applies edits made in Google to the events Aperture created —
+  // matched by stored pointer, everything else dropped untouched. Never writes to Google. A Google
+  // failure lands on that account's GcalSyncState (shown in Settings), never on the caller.
+  async pullCalendar(): Promise<PullCalendarResult> {
+    const settings = await this.ensureSettings();
+    const idle: PullCalendarResult = { pulled: false, changedTaskIds: [], accounts: [] };
+    if (settings.autoCalendar === false || settings.googleAccounts.length === 0) return idle;
+    const now = this.now();
+    const states = await Promise.all(
+      settings.googleAccounts.map(
+        async (a) =>
+          (await this.repo.getGcalSyncState(a.sub)) ?? {
+            ...this.base(),
+            id: a.sub,
+            sub: a.sub,
+            calendarId: a.email, // primary-only: its calendarId is the account email
+            syncToken: null,
+            lastPulledAt: null,
+            lastSyncedAt: null,
+            lastPullError: null,
+            lastPullErrorAt: null,
+          },
+      ),
+    );
+    // At most once a minute per account — failures count, so a dead Google is probed no faster.
+    const due = states.filter(
+      (st) => !st.lastPulledAt || now - st.lastPulledAt >= PULL_THROTTLE_MS,
+    );
+    if (due.length === 0) return idle;
+    const linked = new Map<string, Task>();
+    for (const t of await this.repo.listTasks())
+      if (t.gcalAccountId && t.gcalCalendarId && t.gcalEventId)
+        linked.set(`${t.gcalAccountId}|${t.gcalCalendarId}|${t.gcalEventId}`, t);
+    const deadlineMs = Date.now() + PULL_BUDGET_MS;
+    const changed: string[] = [];
+    const accounts = await Promise.all(
+      due.map(async (st) => {
+        await this.repo.putGcalSyncState({ ...st, lastPulledAt: now, updatedAt: now });
+        try {
+          const delta = await this.google.listEventChanges({
+            sub: st.sub,
+            calendarId: st.calendarId,
+            syncToken: st.syncToken,
+            deadlineMs,
+          });
+          // The very first pull only records where Google stands: an edit made before two-way sync
+          // existed was already overwritten-on-next-change under one-way rules. Deletions still unlink.
+          const baseline = st.lastSyncedAt === null;
+          for (const ev of delta.events) {
+            const task = linked.get(`${st.sub}|${st.calendarId}|${ev.eventId}`);
+            if (!task) continue;
+            const action = calendarPullPlan(task, ev, this.dueClock);
+            if (action.kind === 'none' || (baseline && action.kind === 'apply')) continue;
+            await this.putPull(task, action);
+            changed.push(task.id);
+          }
+          await this.repo.putGcalSyncState({
+            ...st,
+            syncToken: delta.syncToken,
+            lastPulledAt: now,
+            lastSyncedAt: now,
+            lastPullError: null,
+            lastPullErrorAt: null,
+            updatedAt: this.now(),
+          });
+          return { sub: st.sub, ok: true, error: null };
+        } catch (e) {
+          const detail = e instanceof Error ? e.message : String(e);
+          console.log(JSON.stringify({ event: 'gcal_pull_failed', sub: st.sub, detail }));
+          await this.repo.putGcalSyncState({
+            ...st,
+            lastPulledAt: now,
+            lastPullError: detail,
+            lastPullErrorAt: now,
+            updatedAt: this.now(),
+          });
+          return { sub: st.sub, ok: false, error: detail };
+        }
+      }),
+    );
+    return { pulled: true, changedTaskIds: changed, accounts };
+  }
+  // A pull's write, onto a fresh read (like putGcal). Never re-runs syncCalendar: the task now matches
+  // the event, so pushing back would only echo.
+  private async putPull(task: Task, action: Exclude<PullAction, { kind: 'none' }>): Promise<Task> {
+    const fresh = (await this.repo.getTask(task.id)) ?? task;
+    const now = this.now();
+    const fields =
+      action.kind === 'apply'
+        ? action.fields
+        : {
+            gcalAccountId: null,
+            gcalCalendarId: null,
+            gcalEventId: null,
+            gcalSyncError: null,
+            gcalManual: null,
+          };
+    return this.repo.putTask({
+      ...fresh,
+      ...fields,
+      gcalPulledAt: now,
+      gcalPulledNote: action.note,
+      updatedAt: now,
+    });
+  }
+
   async disconnectGoogleAccount(accountSub: string): Promise<void> {
     await this.google.removeAccount(accountSub);
+    // Tombstone the cursor (never a hard delete — TECH §2.4); a reconnect baselines afresh.
+    const sync = await this.repo.getGcalSyncState(accountSub);
+    if (sync)
+      await this.repo.putGcalSyncState({ ...sync, deletedAt: this.now(), updatedAt: this.now() });
     const settings = await this.ensureSettings();
     await this.repo.putSettings({
       ...settings,
@@ -1238,6 +1390,7 @@ export class BackendClient implements ApiClient {
       stories: await this.repo.listStories(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
       ...(await this.finance.exportCollections()),
+      gcalSyncStates: await this.repo.listGcalSyncStates(),
       settings: await this.ensureSettings(),
     };
   }

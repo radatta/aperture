@@ -1,4 +1,4 @@
-import type { BusyInterval } from '@aperture/shared';
+import type { BusyInterval, PulledEvent } from '@aperture/shared';
 import type { BusyResult } from './gateway';
 
 // Normalize a Google Calendar events.list response into busy intervals. This is the quietest bug
@@ -23,6 +23,11 @@ export interface GcalAttendee {
   responseStatus?: string; // 'accepted' | 'declined' | 'tentative' | 'needsAction'
 }
 export interface GcalEvent {
+  id?: string;
+  summary?: string;
+  updated?: string; // RFC3339 — last change to the main event data
+  recurrence?: string[];
+  recurringEventId?: string;
   status?: string; // 'confirmed' | 'tentative' | 'cancelled'
   transparency?: string; // 'opaque' (busy) | 'transparent' (free)
   eventType?: string; // 'default' | 'focusTime' | 'outOfOffice' | 'workingLocation' | …
@@ -70,4 +75,28 @@ export function normalizeEvents(items: GcalEvent[]): BusyResult {
 
 export function normalizeResponse(res: GcalEventsResponse): BusyResult {
   return normalizeEvents(res.items ?? []);
+}
+
+// One events.list delta item → the shape the two-way planner reads (calendarPull.ts). A cancelled item
+// may be a bare stub (only `id` is guaranteed — deleted, or moved to another calendar), so every other
+// field is optional here; a missing `updated` reads as `nowMs`.
+export function toPulledEvent(ev: GcalEvent, nowMs: number): PulledEvent | null {
+  if (!ev.id) return null;
+  const start = ev.start ?? {};
+  const end = ev.end ?? {};
+  const allDay = !!start.date && !start.dateTime;
+  const startMs = !allDay && start.dateTime ? Date.parse(start.dateTime) : NaN;
+  const endMs = !allDay && end.dateTime ? Date.parse(end.dateTime) : NaN;
+  const timed = Number.isFinite(startMs) && Number.isFinite(endMs);
+  const updatedMs = ev.updated ? Date.parse(ev.updated) : NaN;
+  return {
+    eventId: ev.id,
+    cancelled: ev.status === 'cancelled',
+    recurring: !!ev.recurrence?.length || !!ev.recurringEventId,
+    title: ev.summary ?? null,
+    allDay,
+    startMs: timed ? startMs : null,
+    endMs: timed ? endMs : null,
+    updatedMs: Number.isFinite(updatedMs) ? updatedMs : nowMs,
+  };
 }

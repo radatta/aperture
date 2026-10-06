@@ -24,7 +24,16 @@ describe('backend Google Calendar (multi-account)', () => {
     const b = makeBackend(g);
     await b.completeGoogleConnect('A');
     expect(await b.getGoogleStatus()).toEqual({
-      accounts: [{ sub: 'A', email: 'A@example.com', connected: true, reconnectRequired: false }],
+      accounts: [
+        {
+          sub: 'A',
+          email: 'A@example.com',
+          connected: true,
+          reconnectRequired: false,
+          lastSyncedAt: null, // never pulled yet
+          lastPullError: null,
+        },
+      ],
     });
     // connect is idempotent per sub — reconnecting the same account doesn't duplicate it
     await b.completeGoogleConnect('A');
@@ -69,12 +78,20 @@ describe('backend Google Calendar (multi-account)', () => {
     g.seedBusy('A', 'A@example.com', { intervals: [{ startMs: 100, endMs: 200 }], allDayCount: 1 });
     g.seedBusy('B', 'B@example.com', { intervals: [{ startMs: 300, endMs: 400 }], allDayCount: 0 });
 
-    const busy = await b.getCalendarBusy({ day: '2026-01-01', windowStartMs: 0, windowEndMs: 1000 });
+    const busy = await b.getCalendarBusy({
+      day: '2026-01-01',
+      windowStartMs: 0,
+      windowEndMs: 1000,
+    });
     expect(busy.intervals).toHaveLength(2);
     expect(busy.allDayCount).toBe(1);
 
     g.markDead('B');
-    const after = await b.getCalendarBusy({ day: '2026-01-01', windowStartMs: 0, windowEndMs: 1000 });
+    const after = await b.getCalendarBusy({
+      day: '2026-01-01',
+      windowStartMs: 0,
+      windowEndMs: 1000,
+    });
     expect(after.intervals).toEqual([{ startMs: 100, endMs: 200 }]);
     // and the dead account surfaces as reconnect-required
     const status = await b.getGoogleStatus();
@@ -232,7 +249,14 @@ describe('deleteTask hard-deletes the calendar event (via the cancel path)', () 
       endMs: 2000,
     });
 
-    await handleRpc(doc, { userId: 'local', method: 'deleteTask', args: [t.id], now, testMode: true, google: g });
+    await handleRpc(doc, {
+      userId: 'local',
+      method: 'deleteTask',
+      args: [t.id],
+      now,
+      testMode: true,
+      google: g,
+    });
     expect(await b.getTask(t.id)).not.toBeNull(); // noopWrites → nothing tombstoned
     expect(g.events.size).toBe(1); // noopGoogle → event untouched
   });
@@ -247,10 +271,12 @@ describe('testMode makes zero external Google calls', () => {
       handleRpc(doc, { userId: 'smoke', method, args, testMode: true });
 
     expect(await call('getGoogleStatus')).toEqual({ accounts: [] });
-    expect(await call('getCalendarBusy', [{ day: 'x', windowStartMs: 0, windowEndMs: 1 }])).toEqual({
-      intervals: [],
-      allDayCount: 0,
-    });
+    expect(await call('getCalendarBusy', [{ day: 'x', windowStartMs: 0, windowEndMs: 1 }])).toEqual(
+      {
+        intervals: [],
+        allDayCount: 0,
+      },
+    );
     expect(await call('listGoogleCalendars')).toEqual([]);
     expect(await call('googleConnectUrl')).toEqual({ url: '#google-connect-disabled-in-testmode' });
   });
@@ -559,7 +585,10 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(stillDown.gcalEventId).toBe(t.gcalEventId);
     expect(stillDown.gcalSyncError).toMatch(/^Couldn’t remove/); // not silently dropped
     await b.completeGoogleConnect('A');
-    expect(await b.syncCalendarEvent(t.id)).toMatchObject({ gcalEventId: null, gcalSyncError: null });
+    expect(await b.syncCalendarEvent(t.id)).toMatchObject({
+      gcalEventId: null,
+      gcalSyncError: null,
+    });
     expect(g.events.size).toBe(0);
   });
 
@@ -647,5 +676,352 @@ describe('calendar auto-sync (timed tasks)', () => {
     })) as Task;
     expect(g.events.size).toBe(0); // noopGoogle
     expect(await b.getTask(res.id)).toBeNull(); // noopWrites
+  });
+});
+
+// Two-way sync, Google → task (calendarPull.ts plans; docs/areas/calendar → Two-way sync). Parity
+// scenarios: app/src/data/stubClient.calendar.test.ts.
+describe('calendar pull (two-way sync)', () => {
+  const at = (day: string, hhmm: string) => zonedEpoch(day, hhmm, USER_TIME_ZONE);
+  const MIN = 60_000;
+  async function setup() {
+    let clock = 1_700_000_000_000;
+    const g = new InMemoryGoogle();
+    g.clock = () => clock;
+    const doc = new InMemoryDoc();
+    const b = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => clock,
+      google: g,
+      stateSecret: 'test-secret',
+    });
+    await b.completeGoogleConnect('A');
+    const tick = (ms = 61_000) => {
+      clock += ms;
+    };
+    // The account's first pull only baselines; every test starts past it, a minute later.
+    const baseline = async () => {
+      await b.pullCalendar();
+      tick();
+    };
+    const timed = (over: Record<string, unknown> = {}) =>
+      b.createTask({
+        title: 'pset',
+        dueDay: '2026-10-09',
+        dueTime: '16:00',
+        estimateMin: 60,
+        ...over,
+      });
+    return { g, b, doc, tick, baseline, timed };
+  }
+
+  it('a drag of the end moves the deadline; the start sets the estimate; a rename renames', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    const patchesBefore = g.patches.length;
+    g.editEvent(t.gcalEventId!, {
+      title: 'pset 3',
+      startMs: at('2026-10-10', '16:15'),
+      endMs: at('2026-10-10', '17:00'),
+    });
+    tick();
+    const res = await b.pullCalendar();
+    expect(res).toEqual({
+      pulled: true,
+      changedTaskIds: [t.id],
+      accounts: [{ sub: 'A', ok: true, error: null }],
+    });
+    expect(await b.getTask(t.id)).toMatchObject({
+      title: 'pset 3',
+      dueDay: '2026-10-10',
+      dueTime: '17:00',
+      estimateMin: 45,
+      gcalEventId: t.gcalEventId,
+      gcalPulledNote: 'Moved to Oct 10 5pm · Now 45m · Renamed to “pset 3” in Google Calendar',
+    });
+    expect((await b.getTask(t.id))!.gcalPulledAt).toBeGreaterThan(0);
+    expect(g.patches.length).toBe(patchesBefore); // a pull never writes to Google
+  });
+
+  it('our own push coming back is a no-op — including a no-estimate task’s 30-minute block', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    await baseline();
+    const t = await timed({ estimateMin: undefined });
+    await b.setTaskTitle(t.id, 'renamed'); // a push that comes back in the next delta
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([]);
+    const after = (await b.getTask(t.id))!;
+    expect(after.estimateMin).toBeNull();
+    expect(after.gcalPulledAt ?? null).toBeNull();
+    expect(g.events.get(t.gcalEventId!)!.title).toBe('renamed');
+  });
+
+  it('an Aperture rename patches the title only, so it cannot undo an unpulled Google drag', async () => {
+    const { g, b, timed } = await setup();
+    const t = await timed();
+    g.editEvent(t.gcalEventId!, {
+      startMs: at('2026-10-09', '17:00'),
+      endMs: at('2026-10-09', '18:00'),
+    });
+    await b.setTaskTitle(t.id, 'renamed');
+    expect(g.patches.at(-1)).toEqual({
+      sub: 'A',
+      calendarId: 'A@example.com',
+      eventId: t.gcalEventId,
+      title: 'renamed',
+    });
+    expect(g.events.get(t.gcalEventId!)!.endMs).toBe(at('2026-10-09', '18:00'));
+  });
+
+  it('the first pull per account only baselines — older Google edits are not applied, deletions are', async () => {
+    const { g, b, tick, timed } = await setup();
+    const edited = await timed();
+    const deleted = await timed({ title: 'gone' });
+    tick();
+    g.editEvent(edited.gcalEventId!, { title: 'old google edit' });
+    g.deleteEventInGoogle(deleted.gcalEventId!);
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([deleted.id]);
+    expect((await b.getTask(edited.id))!.title).toBe('pset');
+    expect(await b.getTask(deleted.id)).toMatchObject({
+      gcalEventId: null,
+      gcalPulledNote: 'Removed in Google Calendar',
+    });
+    // The next edit after the baseline is applied.
+    tick();
+    g.editEvent(edited.gcalEventId!, { title: 'new google edit' });
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(edited.id))!.title).toBe('new google edit');
+  });
+
+  it('deleted or moved away in Google → unlinked, never re-created by the pull', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const del = await timed();
+    const moved = await timed({ title: 'moved' });
+    await baseline();
+    g.deleteEventInGoogle(del.gcalEventId!);
+    g.moveEventAway(moved.gcalEventId!);
+    tick();
+    const res = await b.pullCalendar();
+    expect(res.changedTaskIds.sort()).toEqual([del.id, moved.id].sort());
+    for (const id of [del.id, moved.id])
+      expect(await b.getTask(id)).toMatchObject({
+        gcalEventId: null,
+        gcalAccountId: null,
+        gcalCalendarId: null,
+        gcalPulledNote: 'Removed in Google Calendar',
+        dueTime: '16:00',
+      });
+  });
+
+  it('done: the end and a rename apply; a start drag does not touch the estimate', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await b.transitionTask(t.id, 'in_progress');
+    await b.transitionTask(t.id, 'done');
+    await baseline();
+    g.editEvent(t.gcalEventId!, { startMs: at('2026-10-09', '13:00') });
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([]);
+    g.editEvent(t.gcalEventId!, {
+      title: 'x',
+      startMs: at('2026-10-10', '08:00'),
+      endMs: at('2026-10-10', '09:00'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({
+      title: 'x',
+      dueDay: '2026-10-10',
+      dueTime: '09:00',
+      estimateMin: 60,
+    });
+  });
+
+  it('an in-progress task takes a start drag as its working estimate; the lock stays', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await b.transitionTask(t.id, 'in_progress');
+    await baseline();
+    g.editEvent(t.gcalEventId!, { startMs: at('2026-10-09', '14:30') });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({ estimateMin: 90, estimateLockedMin: 60 });
+  });
+
+  it('an all-day conversion keeps the link and the time; a later Aperture time change re-times it', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.editEvent(t.gcalEventId!, { allDay: true, title: 'all day now' });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({
+      title: 'all day now',
+      dueTime: '16:00',
+      gcalEventId: t.gcalEventId,
+    });
+    await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '18:00' });
+    expect(g.events.get(t.gcalEventId!)).toMatchObject({
+      allDay: false,
+      endMs: at('2026-10-09', '18:00'),
+    });
+  });
+
+  it('a manual block on a timed task syncs its title only', async () => {
+    const { g, b, tick, baseline } = await setup();
+    await b.updateSettings({ autoCalendar: false }); // the picker is offered when auto-sync is off
+    const t = await b.createTask({ title: 'study', dueDay: '2026-10-09', dueTime: '16:00' });
+    const linked = await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'study',
+      startMs: at('2026-10-09', '09:00'),
+      endMs: at('2026-10-09', '10:00'),
+    });
+    expect(linked.gcalManual).toBe(true);
+    await b.updateSettings({ autoCalendar: true });
+    await baseline();
+    g.editEvent(linked.gcalEventId!, {
+      title: 'study ch 3',
+      startMs: at('2026-10-09', '10:00'),
+      endMs: at('2026-10-09', '11:30'),
+    });
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({
+      title: 'study ch 3',
+      dueTime: '16:00',
+      estimateMin: null,
+    });
+  });
+
+  it('auto-sync moving a manual block to the deadline makes it the auto block', async () => {
+    const { b } = await setup();
+    const t = await b.createTask({ title: 'u', dueDay: '2026-10-09' });
+    await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'u',
+      startMs: at('2026-10-09', '09:00'),
+      endMs: at('2026-10-09', '10:00'),
+    });
+    const timedNow = await b.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '16:00' });
+    expect(timedNow.gcalManual ?? null).toBeNull();
+  });
+
+  it('latest wins: a failed Aperture push newer than the Google edit stands; an older one yields', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    const realPatch = g.patchEvent.bind(g);
+    const failNext = () => {
+      g.patchEvent = async () => {
+        g.patchEvent = realPatch;
+        throw new Error('timeout');
+      };
+    };
+    // Google edit, THEN an Aperture rename whose push fails → Aperture is newer.
+    g.editEvent(t.gcalEventId!, { title: 'google' });
+    tick(1_000);
+    failNext();
+    await b.setTaskTitle(t.id, 'aperture');
+    tick();
+    await b.pullCalendar();
+    expect(await b.getTask(t.id)).toMatchObject({ title: 'aperture' });
+    expect((await b.getTask(t.id))!.gcalSyncError).toMatch(/Couldn’t update/);
+    // A failed Aperture push, THEN a Google edit → Google is newer and wins.
+    failNext();
+    await b.setTaskTitle(t.id, 'aperture 2');
+    tick(1_000);
+    g.editEvent(t.gcalEventId!, { title: 'google 2' });
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.title).toBe('google 2');
+  });
+
+  it('at most once a minute; toggle off or no account → no pull at all', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.editEvent(t.gcalEventId!, { title: 'g' });
+    tick(1_000);
+    expect((await b.pullCalendar()).pulled).toBe(true);
+    tick(30_000);
+    expect((await b.pullCalendar()).pulled).toBe(false);
+    tick(31_000);
+    await b.updateSettings({ autoCalendar: false });
+    expect(await b.pullCalendar()).toEqual({ pulled: false, changedTaskIds: [], accounts: [] });
+    await b.updateSettings({ autoCalendar: true });
+    expect((await b.pullCalendar()).pulled).toBe(true);
+  });
+
+  it('an expired sync token (410) falls back to a full sync and still applies edits', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    g.editEvent(t.gcalEventId!, { title: 'after 410' });
+    g.expireSyncTokens();
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(t.id))!.title).toBe('after 410');
+  });
+
+  it('a failing account is reported on its status, not thrown; tasks untouched', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const t = await timed();
+    await baseline();
+    const synced = (await b.getGoogleStatus()).accounts[0]!.lastSyncedAt;
+    expect(synced).toBeGreaterThan(0);
+    g.markDead('A');
+    tick();
+    expect(await b.pullCalendar()).toMatchObject({
+      pulled: true,
+      accounts: [{ sub: 'A', ok: false, error: 'invalid_grant' }],
+    });
+    expect((await b.getGoogleStatus()).accounts[0]).toMatchObject({
+      lastPullError: 'invalid_grant',
+      lastSyncedAt: synced,
+    });
+    expect((await b.getTask(t.id))!.title).toBe('pset');
+  });
+
+  it('disconnect drops the cursor, so a reconnect baselines afresh', async () => {
+    const { b, baseline } = await setup();
+    await baseline();
+    expect((await b.exportData()).gcalSyncStates).toHaveLength(1);
+    await b.disconnectGoogleAccount('A');
+    expect((await b.exportData()).gcalSyncStates).toEqual([]);
+  });
+
+  it('events Aperture did not create are never touched', async () => {
+    const { g, b, tick, baseline } = await setup();
+    await baseline();
+    const { eventId } = await g.insertEvent({
+      sub: 'A',
+      calendarId: 'A@example.com',
+      title: 'meeting',
+      startMs: 0,
+      endMs: MIN,
+    });
+    g.editEvent(eventId, { title: 'moved meeting' });
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([]);
+  });
+
+  it('testMode: a pull makes no Google call and persists nothing', async () => {
+    const { b, doc } = await setup();
+    const res = await handleRpc(doc, {
+      userId: 'local',
+      method: 'pullCalendar',
+      args: [],
+      testMode: true,
+    });
+    expect(res).toMatchObject({ pulled: true, changedTaskIds: [] });
+    expect((await b.exportData()).gcalSyncStates).toEqual([]);
   });
 });

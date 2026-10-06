@@ -13,6 +13,7 @@ export * from './attachments';
 export * from './taskNotes';
 export * from './due';
 export * from './calendarSync';
+export * from './calendarPull';
 export * from './api';
 export * from './bulkTasks';
 export * from './rpc';

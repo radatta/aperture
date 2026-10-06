@@ -181,6 +181,23 @@ describe('TaskEditor', () => {
     expect(sync).toHaveBeenCalledWith(t.id);
   });
 
+  it('says what Google changed, today only', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Pulled', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = 'Moved to Oct 9 5pm in Google Calendar';
+    renderEditor(client, { ...t, gcalPulledAt: Date.now(), gcalPulledNote: note });
+    expect(screen.getAllByRole('status').some((el) => el.textContent === note)).toBe(true);
+  });
+
+  it('an old Google change is not repeated after the rollover', () => {
+    const client = api();
+    renderEditor(
+      client,
+      mkTask({ gcalPulledAt: Date.now() - 2 * 86_400_000, gcalPulledNote: 'old' }),
+    );
+    expect(screen.queryByText('old')).toBeNull();
+  });
+
   it('a timed task with no event (timed while sync was off) offers a one-tap add', async () => {
     const client = api();
     await client.updateSettings({

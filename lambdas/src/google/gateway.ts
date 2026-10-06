@@ -1,4 +1,4 @@
-import type { BusyInterval } from '@aperture/shared';
+import type { BusyInterval, PulledEvent } from '@aperture/shared';
 
 // The gated external seam for Google Calendar — the exact parallel of the DDB `Writes` seam. Every
 // method is account-scoped (takes the Google `sub`) so the impl uses the right refresh token. READS ARE
@@ -29,19 +29,43 @@ export interface GoogleGateway {
   getAccountState(sub: string): Promise<AccountState>;
   // calendar reads
   listCalendars(sub: string): Promise<CalendarInfo[]>;
-  listBusy(sub: string, calendarId: string, timeMinMs: number, timeMaxMs: number): Promise<BusyResult>;
+  listBusy(
+    sub: string,
+    calendarId: string,
+    timeMinMs: number,
+    timeMaxMs: number,
+  ): Promise<BusyResult>;
+  // Two-way sync: the events changed since `syncToken` on one calendar (null = a full sync of recent and
+  // future events). The caller matches them to tasks by stored pointer and drops the rest. An expired
+  // token falls back to a full sync inside the call (`full: true`); running past `deadlineMs` throws
+  // PullIncompleteError and returns no token, so the old one replays the same delta next time.
+  listEventChanges(input: EventChangesInput): Promise<EventDelta>;
   // calendar writes (only ever on events whose eventId Aperture stored — enforced by the caller)
-  insertEvent(input: {
-    sub: string;
-    calendarId: string;
-    title: string;
-    startMs: number;
-    endMs: number;
-  }): Promise<{ eventId: string }>;
+  insertEvent(input: InsertEventInput): Promise<{ eventId: string }>;
   deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void>;
   // Partial update (events.patch) — only the given fields change. Throws EventGoneError when the event
   // no longer exists (deleted in Google), so the caller can drop its pointer and re-create.
   patchEvent(input: PatchEventInput): Promise<void>;
+}
+
+export interface InsertEventInput {
+  sub: string;
+  calendarId: string;
+  title: string;
+  startMs: number;
+  endMs: number;
+  taskId?: string; // tagged on the event (extendedProperties.private) — provenance only, never matched on
+}
+export interface EventChangesInput {
+  sub: string;
+  calendarId: string;
+  syncToken: string | null;
+  deadlineMs: number;
+}
+export interface EventDelta {
+  events: PulledEvent[];
+  syncToken: string;
+  full: boolean; // no token was used (first pull, or the old one expired)
 }
 
 export interface PatchEventInput {
@@ -51,6 +75,14 @@ export interface PatchEventInput {
   title?: string;
   startMs?: number;
   endMs?: number;
+}
+
+// A pull that ran out of its time budget mid-pagination — nothing to store; the old token replays.
+export class PullIncompleteError extends Error {
+  constructor() {
+    super('Calendar pull ran out of time');
+    this.name = 'PullIncompleteError';
+  }
 }
 
 export class EventGoneError extends Error {
@@ -75,6 +107,8 @@ export function noopGoogle(): GoogleGateway {
     getAccountState: async () => ({ connected: false, reconnectRequired: false }),
     listCalendars: async () => [],
     listBusy: async () => ({ intervals: [], allDayCount: 0 }),
+    // An empty delta, never a throw: a smoke pullCalendar is inert, not an error.
+    listEventChanges: async () => ({ events: [], syncToken: 'noop', full: true }),
     insertEvent: async () => off(),
     deleteEvent: async () => off(),
     patchEvent: async () => off(),
@@ -94,6 +128,12 @@ interface FakeEvent {
   title: string;
   startMs: number;
   endMs: number;
+  taskId?: string;
+  cancelled?: boolean; // deleted (or moved away) in Google — kept, as Google keeps it, for the delta
+  allDay?: boolean;
+  recurring?: boolean;
+  updatedMs?: number;
+  seq?: number; // the change sequence a sync token is cut at (absent on a hand-seeded event)
 }
 
 // Stateful fake for tests: assert what was inserted/deleted on which account, that reads use the right
@@ -102,7 +142,11 @@ interface FakeEvent {
 export class InMemoryGoogle implements GoogleGateway {
   readonly accounts = new Map<string, FakeAccount>();
   readonly events = new Map<string, FakeEvent>(); // eventId → event (only ones we inserted)
+  readonly patches: PatchEventInput[] = []; // every patch body, in order
   private seq = 0;
+  private change = 0; // bumps on every event change; a sync token is `tok-<change>`
+  private tokensExpired = false;
+  clock: () => number = () => Date.now(); // `updated` stamps
 
   // --- test helpers ---
   seedAccount(sub: string, email: string, calendars: CalendarInfo[] = []): void {
@@ -119,6 +163,29 @@ export class InMemoryGoogle implements GoogleGateway {
   }
   markDead(sub: string): void {
     this.accounts.get(sub)!.dead = true;
+  }
+  // An edit made in Google Calendar (not by Aperture).
+  editEvent(
+    eventId: string,
+    patch: Partial<Pick<FakeEvent, 'title' | 'startMs' | 'endMs' | 'allDay' | 'recurring'>>,
+  ): void {
+    this.touch(Object.assign(this.events.get(eventId)!, patch));
+  }
+  deleteEventInGoogle(eventId: string): void {
+    this.touch(Object.assign(this.events.get(eventId)!, { cancelled: true }));
+  }
+  // Moved to another calendar: the stub left behind carries only its id.
+  moveEventAway(eventId: string): void {
+    this.touch(
+      Object.assign(this.events.get(eventId)!, { cancelled: true, title: '', taskId: undefined }),
+    );
+  }
+  expireSyncTokens(): void {
+    this.tokensExpired = true;
+  }
+  private touch(evt: FakeEvent): void {
+    evt.seq = ++this.change;
+    evt.updatedMs = this.clock();
   }
 
   private mustAccount(sub: string): FakeAccount {
@@ -164,22 +231,41 @@ export class InMemoryGoogle implements GoogleGateway {
   async listBusy(sub: string, calendarId: string): Promise<BusyResult> {
     return this.mustAccount(sub).busy.get(calendarId) ?? { intervals: [], allDayCount: 0 };
   }
-  async insertEvent(input: {
-    sub: string;
-    calendarId: string;
-    title: string;
-    startMs: number;
-    endMs: number;
-  }): Promise<{ eventId: string }> {
+  async listEventChanges(input: EventChangesInput): Promise<EventDelta> {
+    this.mustAccount(input.sub);
+    // An expired token behaves like the live 410 → a full sync.
+    const full = !input.syncToken || this.tokensExpired;
+    this.tokensExpired = false;
+    const since = Number(input.syncToken?.slice(4) ?? 0);
+    const events: PulledEvent[] = [];
+    for (const [eventId, e] of this.events) {
+      if (e.sub !== input.sub || e.calendarId !== input.calendarId) continue;
+      if (!full && (e.seq ?? 0) <= since) continue;
+      events.push({
+        eventId,
+        cancelled: !!e.cancelled,
+        recurring: !!e.recurring,
+        title: e.cancelled && !e.title ? null : e.title,
+        allDay: !!e.allDay,
+        startMs: e.allDay ? null : e.startMs,
+        endMs: e.allDay ? null : e.endMs,
+        updatedMs: e.updatedMs ?? 0,
+      });
+    }
+    return { events, syncToken: `tok-${this.change}`, full };
+  }
+  async insertEvent(input: InsertEventInput): Promise<{ eventId: string }> {
     this.mustAccount(input.sub);
     const eventId = `evt-${++this.seq}`;
-    this.events.set(eventId, { ...input });
+    const evt: FakeEvent = { ...input };
+    this.touch(evt);
+    this.events.set(eventId, evt);
     return { eventId };
   }
   async deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void> {
     this.mustAccount(input.sub);
     const evt = this.events.get(input.eventId);
-    if (!evt) throw new EventGoneError(input.eventId); // the live gateway treats 404/410 as success
+    if (!evt || evt.cancelled) throw new EventGoneError(input.eventId); // live: 404/410 = success
     // Safety: only ever delete an event we inserted, on the account+calendar it lives on.
     if (evt.sub !== input.sub || evt.calendarId !== input.calendarId) {
       throw new Error(`Refusing to delete unknown event: ${input.eventId}`);
@@ -189,12 +275,15 @@ export class InMemoryGoogle implements GoogleGateway {
   async patchEvent(input: PatchEventInput): Promise<void> {
     this.mustAccount(input.sub);
     const evt = this.events.get(input.eventId);
-    if (!evt) throw new EventGoneError(input.eventId);
+    if (!evt || evt.cancelled) throw new EventGoneError(input.eventId);
     // Same safety rule as delete: only an event we inserted, where it lives.
     if (evt.sub !== input.sub || evt.calendarId !== input.calendarId)
       throw new Error(`Refusing to patch unknown event: ${input.eventId}`);
+    this.patches.push(input);
     if (input.title !== undefined) evt.title = input.title;
     if (input.startMs !== undefined) evt.startMs = input.startMs;
     if (input.endMs !== undefined) evt.endMs = input.endMs;
+    if (input.startMs !== undefined) evt.allDay = false; // a timed window replaces an all-day one
+    this.touch(evt);
   }
 }

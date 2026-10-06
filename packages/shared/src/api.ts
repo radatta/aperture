@@ -10,6 +10,7 @@ import type {
   CalibrationPoint,
   Category,
   Day,
+  GcalSyncState,
   Habit,
   HabitCheck,
   Idea,
@@ -208,6 +209,7 @@ export interface ExportBundle {
   financeAccounts: FinanceAccount[];
   financeTransactions: FinanceTransaction[];
   financeRules: FinanceRule[];
+  gcalSyncStates: GcalSyncState[]; // calendar two-way sync cursors (no credentials — those stay in SSM)
   settings: Settings; // always materialised — never the stub's nullable storage state
 }
 
@@ -245,6 +247,17 @@ export interface GoogleAccountStatus {
   email: string;
   connected: boolean;
   reconnectRequired: boolean;
+  // Two-way sync health (GcalSyncState): the last pull that finished, and the last attempt's error (null
+  // after a success). Older clients/stubs may omit them.
+  lastSyncedAt?: number | null;
+  lastPullError?: string | null;
+}
+// pullCalendar: Google → task changes. `pulled` false = toggle off, no accounts, or throttled (≤ 1/min).
+// `changedTaskIds` = tasks written (applied or unlinked) — the app refetches tasks iff non-empty.
+export interface PullCalendarResult {
+  pulled: boolean;
+  changedTaskIds: string[];
+  accounts: { sub: string; ok: boolean; error: string | null }[];
 }
 export interface GoogleStatus {
   accounts: GoogleAccountStatus[];
@@ -388,6 +401,9 @@ export interface ApiClient {
   deleteCalendarEvent(taskId: string): Promise<Task>; // delete-on-cancel; clears the pointers
   // Retry for a failed auto-sync (task.gcalSyncError): creates or patches the event to match the task now.
   syncCalendarEvent(taskId: string): Promise<Task>;
+  // Two-way sync: pull edits made in Google to Aperture's events back onto their tasks (calendarPull.ts).
+  // Called on app open/foreground; never throws for a Google failure (it lands on the account status).
+  pullCalendar(): Promise<PullCalendarResult>;
   disconnectGoogleAccount(accountSub: string): Promise<void>; // drop the token + settings entry
 
   // Calibration (derived, read-only)

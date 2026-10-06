@@ -4,15 +4,19 @@ import {
   PutParameterCommand,
   DeleteParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { EventGoneError } from './gateway';
+import type { PulledEvent } from '@aperture/shared';
+import { EventGoneError, PullIncompleteError } from './gateway';
 import type {
   AccountState,
   BusyResult,
   CalendarInfo,
+  EventChangesInput,
+  EventDelta,
   GoogleGateway,
+  InsertEventInput,
   PatchEventInput,
 } from './gateway';
-import { normalizeEvents, type GcalEvent } from './normalize';
+import { normalizeEvents, toPulledEvent, type GcalEvent } from './normalize';
 
 // The live gateway: real Google REST (via global fetch — Node 22) + SSM for creds and per-account
 // refresh tokens. Rolled by hand rather than pulling in `googleapis` (huge): token exchange + a handful
@@ -44,6 +48,11 @@ class InvalidGrantError extends Error {
 // Per-call cap on a Google fetch. Calendar writes now ride task writes (auto-sync): a hung call must fail
 // into gcalSyncError well inside the Lambda's own timeout, not take the whole request down with it.
 const GOOGLE_TIMEOUT_MS = 4_000;
+// A first (token-less) pull reads events ending in the last week plus everything ahead — an older event
+// is past due anyway. Google only allows timeMin on the token-less request.
+const FULL_SYNC_LOOKBACK_MS = 7 * 86_400_000;
+
+class SyncTokenGoneError extends Error {}
 
 export class LiveGoogle implements GoogleGateway {
   private clientCreds: { clientId: string; clientSecret: string } | null = null;
@@ -238,22 +247,76 @@ export class LiveGoogle implements GoogleGateway {
     return normalizeEvents(items);
   }
 
-  async insertEvent(input: {
-    sub: string;
-    calendarId: string;
-    title: string;
-    startMs: number;
-    endMs: number;
-  }): Promise<{ eventId: string }> {
-    const res = await this.api(input.sub, `/calendars/${encodeURIComponent(input.calendarId)}/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        summary: input.title,
-        start: { dateTime: new Date(input.startMs).toISOString() },
-        end: { dateTime: new Date(input.endMs).toISOString() },
-      }),
-    });
+  async listEventChanges(input: EventChangesInput): Promise<EventDelta> {
+    try {
+      return await this.pageChanges(input, input.syncToken);
+    } catch (e) {
+      // 410: the token expired — Google says clear it and sync in full.
+      if (e instanceof SyncTokenGoneError) return this.pageChanges(input, null);
+      throw e;
+    }
+  }
+  // The query is the SAME on every request of a sync (Google's rule): singleEvents=false (we never create
+  // recurring events, and expanding someone's unbounded series is how a pull would blow its budget) and
+  // showDeleted=true (required with a token; set on the full sync too so deletions read the same).
+  private async pageChanges(
+    input: EventChangesInput,
+    syncToken: string | null,
+  ): Promise<EventDelta> {
+    const events: PulledEvent[] = [];
+    const timeMin = new Date(Date.now() - FULL_SYNC_LOOKBACK_MS).toISOString();
+    let pageToken: string | undefined;
+    for (;;) {
+      if (Date.now() > input.deadlineMs) throw new PullIncompleteError();
+      const q = new URLSearchParams({
+        singleEvents: 'false',
+        showDeleted: 'true',
+        maxResults: '250',
+      });
+      if (syncToken) q.set('syncToken', syncToken);
+      else q.set('timeMin', timeMin);
+      if (pageToken) q.set('pageToken', pageToken);
+      const res = await this.api(
+        input.sub,
+        `/calendars/${encodeURIComponent(input.calendarId)}/events?${q}`,
+      );
+      if (res.status === 410 && syncToken) throw new SyncTokenGoneError();
+      if (!res.ok) throw new Error(`events.list failed (${res.status})`);
+      const json = (await res.json()) as {
+        items?: GcalEvent[];
+        nextPageToken?: string;
+        nextSyncToken?: string;
+      };
+      for (const item of json.items ?? []) {
+        const ev = toPulledEvent(item, Date.now());
+        if (ev) events.push(ev);
+      }
+      if (json.nextPageToken) {
+        pageToken = json.nextPageToken;
+        continue;
+      }
+      if (!json.nextSyncToken) throw new Error('events.list returned no sync token');
+      return { events, syncToken: json.nextSyncToken, full: !syncToken };
+    }
+  }
+
+  async insertEvent(input: InsertEventInput): Promise<{ eventId: string }> {
+    const res = await this.api(
+      input.sub,
+      `/calendars/${encodeURIComponent(input.calendarId)}/events`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          summary: input.title,
+          start: { dateTime: new Date(input.startMs).toISOString() },
+          end: { dateTime: new Date(input.endMs).toISOString() },
+          ...(input.taskId && {
+            extendedProperties: { private: { apertureTaskId: input.taskId } },
+          }),
+        }),
+      },
+    );
     if (!res.ok) throw new Error(`events.insert failed (${res.status})`);
     const json = (await res.json()) as { id: string };
     return { eventId: json.id };
@@ -274,9 +337,12 @@ export class LiveGoogle implements GoogleGateway {
   async patchEvent(input: PatchEventInput): Promise<void> {
     const body: Record<string, unknown> = {};
     if (input.title !== undefined) body.summary = input.title;
+    // `date: null` because a patch MERGES nested objects: on an event made all-day in Google, a bare
+    // dateTime would sit beside its `date` (Google rejects both). Null deletes a field in a patch.
     if (input.startMs !== undefined)
-      body.start = { dateTime: new Date(input.startMs).toISOString() };
-    if (input.endMs !== undefined) body.end = { dateTime: new Date(input.endMs).toISOString() };
+      body.start = { date: null, dateTime: new Date(input.startMs).toISOString() };
+    if (input.endMs !== undefined)
+      body.end = { date: null, dateTime: new Date(input.endMs).toISOString() };
     const res = await this.api(
       input.sub,
       `/calendars/${encodeURIComponent(input.calendarId)}/events/${encodeURIComponent(input.eventId)}`,

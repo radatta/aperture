@@ -44,22 +44,29 @@ describe('calendarSyncPlan', () => {
     expect(calendarSyncPlan(task(), task({ title: 'renamed' }), ON, epoch).kind).toBe('none');
     expect(calendarSyncPlan(task(), task({ estimateMin: 90 }), ON, epoch).kind).toBe('none');
   });
-  it('linked: a day/time/estimate/title change patches the event (title + window)', () => {
+  it('linked: a day/time/estimate change patches the window only — never the title', () => {
     for (const next of [
       linked({ dueDay: '2026-10-06' }),
       linked({ dueTime: '17:00' }),
       linked({ estimateMin: 90 }),
-      linked({ title: 'renamed' }),
     ]) {
-      const a = calendarSyncPlan(linked(), next, ON, epoch);
-      expect(a.kind).toBe('patch');
-      if (a.kind === 'patch') {
-        expect(a.title).toBe(next.title);
-        expect(a.endMs).toBe(epoch(next.dueDay!, next.dueTime!));
-        expect(a.startMs).toBe(a.endMs! - next.estimateMin! * 60_000);
-      }
+      const end = epoch(next.dueDay!, next.dueTime!);
+      expect(calendarSyncPlan(linked(), next, ON, epoch)).toEqual({
+        kind: 'patch',
+        startMs: end - next.estimateMin! * 60_000,
+        endMs: end,
+      });
     }
     expect(calendarSyncPlan(linked(), linked(), ON, epoch).kind).toBe('none');
+  });
+  it('linked: a rename patches the title only, so it cannot undo a drag made in Google', () => {
+    expect(calendarSyncPlan(linked(), linked({ title: 'renamed' }), ON, epoch)).toEqual({
+      kind: 'patch',
+      title: 'renamed',
+    });
+    expect(
+      calendarSyncPlan(linked(), linked({ title: 'renamed', dueTime: '17:00' }), ON, epoch),
+    ).toMatchObject({ kind: 'patch', title: 'renamed', endMs: epoch('2026-10-05', '17:00') });
   });
   it('a manual event on an untimed task moves when the task gains a time', () => {
     const a = calendarSyncPlan(linked({ dueTime: null }), linked(), ON, epoch);
@@ -136,7 +143,12 @@ describe('calendarSyncPlan', () => {
   });
   it('ensure (the retry) syncs to the task as it is now', () => {
     expect(calendarSyncPlan(task(), task(), ON, epoch, { ensure: true }).kind).toBe('create');
-    expect(calendarSyncPlan(linked(), linked(), ON, epoch, { ensure: true }).kind).toBe('patch');
+    expect(calendarSyncPlan(linked(), linked(), ON, epoch, { ensure: true })).toEqual({
+      kind: 'patch',
+      title: 'pset',
+      startMs: END - 60 * 60_000,
+      endMs: END,
+    });
   });
   it('undefined fields from older rows compare equal to null', () => {
     const old = { ...linked(), dueTime: undefined } as unknown as T;

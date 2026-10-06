@@ -64,6 +64,18 @@ export interface Task extends BaseEntity {
   // The last calendar auto-sync failure, shown on the task with a retry; null once a sync succeeds. The
   // task write itself never fails on gcal (calendarSync.ts). Pre-existing rows read back undefined.
   gcalSyncError: string | null;
+  // Two-way sync bookkeeping (calendarPull.ts) — OPTIONAL, unlike the domain fields above: sync state,
+  // not task data, so old rows and literals simply lack it (readers use `?? null` / `!x`).
+  // gcalTouchedAt: the last Aperture title/time/estimate change pushed to Google (sent or failed) — the
+  // "latest wins" clock a Google edit is compared against.
+  gcalTouchedAt?: number | null;
+  // gcalManual: the linked event is a manual time block (the picker / create_calendar_event), whose time
+  // maps to no task field — a pull syncs its title only. Cleared once auto-sync moves it to the deadline.
+  gcalManual?: boolean | null;
+  // gcalPulledAt + gcalPulledNote: the last change Google made to this task, and one line saying what.
+  // The task shows it until the next day rollover (isPullFresh).
+  gcalPulledAt?: number | null;
+  gcalPulledNote?: string | null;
 }
 
 // Scheduling (the *when*), separate from the task (the *what*) → multi-day + ordering.
@@ -169,6 +181,17 @@ export interface GoogleAccount {
 export interface CalendarRef {
   accountSub: string;
   calendarId: string;
+}
+// Two-way sync cursor, one per connected account (id = sub): the events.list syncToken for its primary
+// calendar plus pull health. A replaceable cursor — not exported; a null token means a full resync.
+export interface GcalSyncState extends BaseEntity {
+  sub: string;
+  calendarId: string;
+  syncToken: string | null;
+  lastPulledAt: number | null; // stamped at the START of every attempt — the throttle counts failures
+  lastSyncedAt: number | null; // the last pull that finished; null = never (the first one only baselines)
+  lastPullError: string | null; // null after a success
+  lastPullErrorAt: number | null;
 }
 
 // --- Settings (singleton) --------------------------------------------------

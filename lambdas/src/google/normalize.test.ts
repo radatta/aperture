@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeEvents, type GcalEvent } from './normalize';
+import { normalizeEvents, toPulledEvent, type GcalEvent } from './normalize';
 
 const timed = (startISO: string, endISO: string, over: Partial<GcalEvent> = {}): GcalEvent => ({
   status: 'confirmed',
@@ -16,7 +16,9 @@ describe('normalizeEvents', () => {
       timed('2026-01-05T11:00:00-08:00', '2026-01-05T12:00:00-08:00', {
         attendees: [{ self: true, responseStatus: 'declined' }],
       }), // declined → dropped
-      timed('2026-01-05T13:00:00-08:00', '2026-01-05T14:00:00-08:00', { transparency: 'transparent' }), // free → dropped
+      timed('2026-01-05T13:00:00-08:00', '2026-01-05T14:00:00-08:00', {
+        transparency: 'transparent',
+      }), // free → dropped
       timed('2026-01-05T15:00:00-08:00', '2026-01-05T16:00:00-08:00', { status: 'cancelled' }), // dropped
       timed('2026-01-05T16:00:00-08:00', '2026-01-05T17:00:00-08:00', { eventType: 'focusTime' }), // dropped
       timed('2026-01-05T18:00:00-08:00', '2026-01-05T19:00:00-08:00', { eventType: 'outOfOffice' }), // committed
@@ -49,5 +51,49 @@ describe('normalizeEvents', () => {
       { status: 'confirmed', start: { dateTime: 'not-a-date' }, end: { dateTime: 'nope' } },
     ]);
     expect(res.intervals).toHaveLength(0);
+  });
+});
+
+describe('toPulledEvent (two-way sync delta items)', () => {
+  const NOW = 1_700_000_000_000;
+  it('a timed event: instants from the RFC3339 offset, title, updated', () => {
+    const ev = timed('2026-11-01T01:00:00-07:00', '2026-11-01T01:30:00-07:00', {
+      id: 'e1',
+      summary: 'pset',
+      updated: '2026-10-05T10:00:00.000Z',
+    });
+    expect(toPulledEvent(ev, NOW)).toEqual({
+      eventId: 'e1',
+      cancelled: false,
+      recurring: false,
+      title: 'pset',
+      allDay: false,
+      startMs: Date.UTC(2026, 10, 1, 8, 0),
+      endMs: Date.UTC(2026, 10, 1, 8, 30),
+      updatedMs: Date.UTC(2026, 9, 5, 10, 0),
+    });
+  });
+  it('all-day: no instants', () => {
+    const ev: GcalEvent = { id: 'e', start: { date: '2026-10-09' }, end: { date: '2026-10-10' } };
+    expect(toPulledEvent(ev, NOW)).toMatchObject({ allDay: true, startMs: null, endMs: null });
+  });
+  it('a cancelled bare stub (deleted / moved away): id only, updated → now', () => {
+    expect(toPulledEvent({ id: 'e', status: 'cancelled' }, NOW)).toEqual({
+      eventId: 'e',
+      cancelled: true,
+      recurring: false,
+      title: null,
+      allDay: false,
+      startMs: null,
+      endMs: null,
+      updatedMs: NOW,
+    });
+  });
+  it('recurring: a master with recurrence, or an instance', () => {
+    expect(toPulledEvent({ id: 'e', recurrence: ['RRULE:FREQ=DAILY'] }, NOW)!.recurring).toBe(true);
+    expect(toPulledEvent({ id: 'e', recurringEventId: 'm' }, NOW)!.recurring).toBe(true);
+  });
+  it('no id → dropped', () => {
+    expect(toPulledEvent({ status: 'confirmed' }, NOW)).toBeNull();
   });
 });

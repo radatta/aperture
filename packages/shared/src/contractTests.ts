@@ -1005,6 +1005,7 @@ export function runApiContract(
           'financeRules',
           'financeSyncStates',
           'financeTransactions',
+          'gcalSyncStates',
           'habitChecks',
           'habits',
           'ideas',
@@ -1534,6 +1535,11 @@ export function runApiContract(
       await expect(api.linkFinanceRefund('fx-xfer-sav', 'fx-safeway')).rejects.toThrow(); // transfer in
       await expect(api.linkFinanceRefund('fx-refund-3', 'fx-venmo')).rejects.toThrow(); // transfer out
       await expect(api.linkFinanceRefund('fx-ccpay-card-10', 'fx-card-8')).rejects.toThrow(); // marked
+    });
+
+    it('calendar pull: with no connected account it does nothing (parity: *.calendar.test.ts)', async () => {
+      expect(await api.pullCalendar()).toEqual({ pulled: false, changedTaskIds: [], accounts: [] });
+      expect((await api.exportData()).gcalSyncStates).toEqual([]);
     });
 
     it('finance: export carries items, accounts, transactions and rules', async () => {

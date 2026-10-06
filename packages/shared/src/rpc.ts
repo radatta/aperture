@@ -71,6 +71,7 @@ export const API_METHODS = [
   'insertCalendarEvent',
   'deleteCalendarEvent',
   'syncCalendarEvent',
+  'pullCalendar',
   'disconnectGoogleAccount',
   'createAttachmentUploadUrl',
   'confirmAttachment',

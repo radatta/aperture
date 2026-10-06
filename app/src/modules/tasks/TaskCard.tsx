@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import { dueUrgency, fmtDueDay, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtDueDay, isPullFresh, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -119,7 +119,8 @@ function TaskMeta({
 }) {
   const { data: settings } = useSettings();
   const { data: attachments = [] } = useAttachments();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const now = useNow();
+  const today = todayKey(settings?.dayStartHour ?? 4, now);
   const fileCount = attachments.filter((a) => a.taskId === task.id).length;
   const canScope = task.status === 'backlog' || task.status === 'planned';
   const bits: string[] = [];
@@ -163,6 +164,12 @@ function TaskMeta({
       {task.gcalSyncError && (
         <Text size="xs" tone="danger">
           calendar sync failed
+        </Text>
+      )}
+      {/* An edit made in Google won — said out loud until the day rolls over (the editor says what). */}
+      {isPullFresh(task, settings?.dayStartHour ?? 4, now) && (
+        <Text size="xs" tone="gold">
+          updated from Google
         </Text>
       )}
       <RollTag rollId={task.rollId} />
