@@ -660,7 +660,9 @@ class StubClient implements ApiClient {
     const done = input.finish === 'done';
     // Parity with the backend: a done TIMED part hands its event to the follow-up; kept going, each part
     // owns its own block; any other linked event stays on the original.
-    const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    // A manual block (gcalManual — a picked time, often the work just done) is "any other" event too.
+    const moveLink =
+      done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId && !task.gcalManual;
     let original: Task;
     if (done) {
       const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
@@ -673,11 +675,15 @@ class StubClient implements ApiClient {
               gcalEventId: null,
               gcalSeen: null,
               gcalManual: null,
+              gcalPulledAt: null, // the follow-up owns the event a pulled note would describe
+              gcalPulledNote: null,
             }
           : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
-      if (owed) original = this.syncCalendar(task, original);
+      // Through the sync path whenever the event stays: an owed removal is carried out, and a rename
+      // stamps the edit clock (calendarPull.ts) like any edit on a done task.
+      if (!moveLink) original = this.syncCalendar(task, original);
     } else {
       original = this.syncCalendar(task, this.writes.put(this.store.tasks, edited));
     }
@@ -695,9 +701,8 @@ class StubClient implements ApiClient {
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
             gcalSeen: task.gcalSeen ?? null,
-            gcalManual: task.gcalManual ?? null,
             gcalTouchedAt: task.gcalTouchedAt ?? null,
-            gcalEditedAt: task.gcalEditedAt ?? null,
+            gcalEditedAt: this.now(), // its title/estimate are a new Aperture edit, made now
           }
         : {}),
     });

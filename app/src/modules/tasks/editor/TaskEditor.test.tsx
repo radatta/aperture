@@ -209,6 +209,22 @@ describe('TaskEditor', () => {
     await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
   });
 
+  it('an open, untouched notes draft follows a change made elsewhere', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Notes', notes: 'old note' });
+    let push: (next: Task) => void = () => {};
+    function Host() {
+      const [live, setLive] = useState(t);
+      push = setLive;
+      return <TaskDetailsForm task={live} />;
+    }
+    renderWithProviders(<Host />, { api: client });
+    // An open, untouched notes draft follows the change (so a Save can't write the old note back).
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    act(() => push({ ...t, notes: 'new note', updatedAt: t.updatedAt + 1 }));
+    expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('new note');
+  });
+
   it('due day + time refill as a pair: a draft time is never put on Google’s day', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Pair', dueDay: '2026-10-09', dueTime: '16:00' });

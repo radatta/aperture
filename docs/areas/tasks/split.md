@@ -50,7 +50,7 @@ Write order on a done timed split: the original is saved unlinked, and then the 
 
 **D7. What pieces 2 and 3 inherit.**
 
-- Piece 2 writes only `estimateMin` from a Google start drag, and ignores done/cancelled tasks.
+- Piece 2 writes only `estimateMin` from a Google start drag, and that write skips done/cancelled tasks (a done task still takes the end and title).
 - ~~`calendar/research.md` still lists two-way sync under "don't build".~~ Revisited by piece 2: the entry now carves out events Aperture owns ([calendar → Two-way sync](../calendar/index.md)).
 - Piece 3 computes the family point from `splitFamily` and drops the D6 exclusion.
 

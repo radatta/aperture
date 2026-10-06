@@ -654,7 +654,9 @@ export class BackendClient implements ApiClient {
     // moves to the follow-up (which re-titles/re-times it — no delete + re-create). Kept going, each part
     // owns its own block: the original keeps its event, and the follow-up gets one from the planner (it
     // gains a time). Any other linked event (a manual one, a record of work done) stays on the original.
-    const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
+    // A manual block (gcalManual — a picked time, often the work just done) is "any other" event too.
+    const moveLink =
+      done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId && !task.gcalManual;
     let original: Task;
     if (done) {
       // A finish drops a failure note, but carries out an owed removal (reporting, like transitionTask).
@@ -668,11 +670,15 @@ export class BackendClient implements ApiClient {
               gcalEventId: null,
               gcalSeen: null,
               gcalManual: null,
+              gcalPulledAt: null, // the follow-up owns the event a pulled note would describe
+              gcalPulledNote: null,
             }
           : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
-      if (owed) original = await this.syncCalendar(task, original);
+      // Through the sync path whenever the event stays: an owed removal is carried out, and a rename
+      // stamps the edit clock (calendarPull.ts) like any edit on a done task.
+      if (!moveLink) original = await this.syncCalendar(task, original);
     } else {
       original = await this.syncCalendar(task, await this.repo.putTask(edited));
     }
@@ -686,16 +692,15 @@ export class BackendClient implements ApiClient {
     const created = await this.repo.putTask({
       ...this.base(),
       ...fields,
-      // The link moves with what Aperture knows about the event (its base, manual flag and clock).
+      // The link moves with what Aperture knows about the event (its base and clocks).
       ...(moveLink
         ? {
             gcalAccountId: task.gcalAccountId,
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
             gcalSeen: task.gcalSeen ?? null,
-            gcalManual: task.gcalManual ?? null,
             gcalTouchedAt: task.gcalTouchedAt ?? null,
-            gcalEditedAt: task.gcalEditedAt ?? null,
+            gcalEditedAt: this.now(), // its title/estimate are a new Aperture edit, made now
           }
         : {}),
     });

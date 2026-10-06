@@ -457,6 +457,47 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(only(g)[1].title).toBe('x, part 2');
   });
 
+  it('a done split clears the original’s two-way state and gives the follow-up the event’s', async () => {
+    const { b } = await connected();
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    await b.transitionTask(t.id, 'in_progress');
+    const { original, followUp } = await b.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 'x, part 2', estimateMin: null },
+    });
+    expect(original.gcalSeen ?? null).toBeNull();
+    expect(original.gcalManual ?? null).toBeNull();
+    expect(followUp).toMatchObject({
+      gcalSeen: { title: 'x, part 2', endMs: at('2026-10-09', '16:00') },
+      gcalTouchedAt: expect.any(Number),
+      gcalEditedAt: expect.any(Number),
+    });
+  });
+
+  it('a done split leaves a manual block on the original; the follow-up gets its own block', async () => {
+    const { g, b } = await connected();
+    await b.updateSettings({ autoCalendar: false }); // the picker is offered with sync off
+    const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+    const manual = await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'x',
+      startMs: at('2026-10-09', '09:00'),
+      endMs: at('2026-10-09', '10:00'),
+    });
+    await b.updateSettings({ autoCalendar: true });
+    await b.transitionTask(t.id, 'in_progress');
+    const { original, followUp } = await b.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 'x, part 2', estimateMin: null },
+    });
+    expect(original.gcalEventId).toBe(manual.gcalEventId); // the record of the work done stays
+    expect(g.events.get(manual.gcalEventId!)!.startMs).toBe(at('2026-10-09', '09:00'));
+    expect(followUp.gcalEventId).not.toBe(manual.gcalEventId);
+    expect(g.events.get(followUp.gcalEventId!)!.endMs).toBe(at('2026-10-09', '16:00'));
+  });
+
   it('a done split re-times the moved event to the follow-up’s estimate', async () => {
     const { g, b } = await connected();
     const t = await b.createTask({
