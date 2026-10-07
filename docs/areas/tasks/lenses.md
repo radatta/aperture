@@ -89,12 +89,15 @@ it a Today task.
   - **Dropped** tasks on today's plan show nowhere on Today; the Done lens' Dropped chip is their home.
   - **The rows stay.** Capacity still counts a done task's planned minutes (the check measures the load
     you set, and night compares against it), and Big 3 keeps a done task in its slot (right-now.md D3).
+    A **dropped** task's minutes and count stop counting (`useTodayPlan`): dropping is "not doing it",
+    and its row is no longer anywhere you could Unplan it from. Home's "N planned · Xh" follows.
   - **Collapsed** under `today:done` in the same map as D4. It always starts collapsed and the choice
     sticks across days, like every group. An empty group isn't drawn. With every planned task done,
     the empty state reads "Everything planned is done." instead of "Nothing planned yet."
-  - A finished task's row never offers Unplan, on the Done lens either.
+  - A finished or dropped task's row never offers Unplan, on the Done lens either.
   - Focus: a Done row leaves the list a render after the modal host sees the new data, so the host
     also watches the list's DOM for the trigger leaving (`TaskModalHost`), else focus fell to `<body>`.
+    The watch ends at the user's next tap or key, so a row they move later never pulls focus back.
 
 ## 3. Deferred
 

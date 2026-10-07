@@ -11,7 +11,6 @@ import { fmtDuration } from '../../lib/format';
 import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { useDay, useSetCapacity } from '../../data/hooks/useDay';
-import { useSettings } from '../../data/hooks/useSettings';
 import { doneToday } from './doneToday';
 import { GroupHeader } from './GroupHeader';
 import { TaskCard } from './TaskCard';
@@ -23,8 +22,7 @@ import { useTodayPlan } from './useTodayPlan';
 // Backlog (or Home's "+ Add"); this lens is the plan itself. Finished work leaves the plan list for a
 // collapsed "Done today" group at the bottom (lenses.md D11); its rows stay, so capacity still counts it.
 export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: () => void }) {
-  const { day, rows, plannedMin, pva, isPending, isError } = useTodayPlan();
-  const { data: settings } = useSettings();
+  const { day, dayStartHour, rows, plannedMin, pva, isPending, isError } = useTodayPlan();
   const { data: dayRec } = useDay(day);
   const setCapacity = useSetCapacity(day);
   const { addToDay, unplan } = useAddToDay();
@@ -32,7 +30,7 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
   const action = useRowAction(listRef);
   const collapsed = useCollapsedGroups();
 
-  const { open, done } = doneToday(rows, tasks, day, settings?.dayStartHour ?? 4);
+  const { open, done } = doneToday(rows, tasks, day, dayStartHour);
   const allDone = open.length === 0 && rows.some(({ task }) => task.status === 'done');
   const doneOpen = !collapsed.isCollapsed(DONE_KEY, true);
   const onPlan = new Set(rows.map((r) => r.task.id));
@@ -164,6 +162,7 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
 }
 
 // Its collapsed choice lives with the list lenses' groups (useCollapsedGroups); it starts collapsed.
+// Can't clash with a list group's `${place}:${key}`: a search from Today never shows the done place.
 const DONE_KEY = 'today:done';
 
 // The typical shapes of a day. The over-scoping catch only fires once capacity is set, and an

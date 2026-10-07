@@ -8,6 +8,7 @@ import { plannedVsAvailable, type PlannedVsAvailable } from '../calibration/cali
 
 export interface TodayPlan {
   day: string;
+  dayStartHour: number; // the one `day` was keyed with, for bucketing other instants into it
   rows: { plan: TaskPlan; task: Task }[];
   plannedMin: number;
   spentMin: number;
@@ -25,7 +26,8 @@ export interface TodayPlan {
 // cards, so they agree and don't each re-derive the join.
 export function useTodayPlan(): TodayPlan {
   const { data: settings } = useSettings();
-  const day = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const day = todayKey(dayStartHour);
   const { data: dayRec } = useDay(day);
   const { data: plans = [], isPending: plansPending, isError: plansError } = usePlansForDay(day);
   const { data: tasks = [], isPending: tasksPending, isError: tasksError } = useAllTasks();
@@ -35,17 +37,20 @@ export function useTodayPlan(): TodayPlan {
     .map((plan) => ({ plan, task: byId.get(plan.taskId) }))
     .filter((r): r is { plan: TaskPlan; task: Task } => !!r.task);
 
-  const plannedMin = plans.reduce((s, p) => s + p.plannedMinutes, 0);
+  // A dropped task leaves the day's load (lenses.md D11): its row stays as history but stops counting.
+  const kept = plans.filter((p) => byId.get(p.taskId)?.status !== 'cancelled');
+  const plannedMin = kept.reduce((s, p) => s + p.plannedMinutes, 0);
   const spentMin = rows.reduce((s, r) => s + r.task.actualAccruedMin, 0);
   const doneCount = rows.filter((r) => r.task.status === 'done').length;
 
   return {
     day,
+    dayStartHour,
     rows,
     plannedMin,
     spentMin,
     doneCount,
-    totalCount: rows.length,
+    totalCount: rows.filter((r) => r.task.status !== 'cancelled').length,
     pva: plannedVsAvailable(plannedMin, dayRec?.capacityHours ?? null),
     isPending: plansPending || tasksPending,
     isError: plansError || tasksError,

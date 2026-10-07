@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
@@ -263,6 +263,8 @@ describe('/tasks lenses', () => {
     expect(screen.getByRole('button', { name: 'started off plan' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'dropped one' })).toBeNull();
     expect(screen.getByText('Nothing planned yet.')).toBeTruthy();
+    // Its row stays as history, but a dropped task is out of the day's load.
+    expect(screen.getByText(/^0m planned/)).toBeTruthy();
   });
 
   it('Done: a finished task with a row today offers no Unplan', async () => {
@@ -332,7 +334,31 @@ describe('focus after a row leaves', () => {
 
     expect(await screen.findByRole('button', { name: 'Done today · 1' })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('button', { name: 'finish me' })).toBeNull());
-    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    // The collapsed group hides the row's title, so the list area takes focus.
+    await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
+  });
+
+  it('after a plain close, the next tap ends the watch: a later lens switch never pulls focus back', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-focus-${Math.random()}` });
+    const t = await api.createTask({ title: 'just looking' });
+    await api.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 20, order: 0 });
+    await api.transitionTask(t.id, 'planned');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'just looking' }));
+    await user.click(await screen.findByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'just looking' })),
+    );
+
+    // A Safari tap: pointerdown, no focus move (focus falls to <body>), then the click.
+    const week = pill('Week');
+    fireEvent.pointerDown(week);
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.click(week);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'just looking' })).toBeNull());
+    expect(document.activeElement).toBe(document.body);
   });
 });
 
