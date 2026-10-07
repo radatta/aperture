@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { calendarSyncPlan, gcalSyncMessage, isPendingRemoval, seenAfter } from './calendarSync';
+import {
+  calendarSyncPlan,
+  gcalSyncMessage,
+  hasUnsent,
+  isPendingRemoval,
+  seenAfter,
+} from './calendarSync';
 import type { DueEpoch } from './due';
 import type { Task } from './types';
 
@@ -140,6 +146,17 @@ describe('calendarSyncPlan', () => {
       gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 },
     });
     expect(calendarSyncPlan(t, { ...t }, ON, epoch).kind).toBe('none');
+  });
+  it('hasUnsent: what the next push would send', () => {
+    const seen = { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 };
+    expect(hasUnsent(linked({ gcalSeen: seen }), epoch)).toBe(false);
+    expect(hasUnsent(linked({ gcalSeen: seen, title: 'x' }), epoch)).toBe(true);
+    expect(hasUnsent(linked({ gcalSeen: seen, dueTime: '17:00' }), epoch)).toBe(true);
+    expect(hasUnsent(linked({ gcalSeen: seen, title: ' pset ' }), epoch)).toBe(false);
+    expect(hasUnsent(linked({ gcalSeen: { ...seen, startMs: null, endMs: null } }), epoch)).toBe(
+      false,
+    ); // a window not known moves only with the task's own time
+    expect(hasUnsent(task({ gcalSeen: seen, title: 'x' }), epoch)).toBe(false); // not linked
   });
   it('seenAfter: the event as known after a create/patch', () => {
     const prev = { title: 'a', startMs: 1, endMs: 2, updatedMs: 10 };

@@ -265,7 +265,8 @@ export class BackendClient implements ApiClient {
     const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
     // retires an "updated from Google" note it has just superseded.
-    const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
+    const edited =
+      !!prev && !!task.gcalEventId && !!task.gcalPulled && syncedFieldsChanged(prev, task);
     const editStamp = edited ? { gcalPulled: null } : {};
     if (action.kind === 'none') {
       // A stale failure note goes once nothing is left to sync: no event and no time, sync turned off,
@@ -1339,7 +1340,8 @@ export class BackendClient implements ApiClient {
   }
   // A pull's write, PLANNED on a fresh read: the task scan can be seconds old by the time the delta
   // lands, and an edit (or a delete) since must win. A task that's gone or no longer linked to this
-  // event is left alone. Never re-runs syncCalendar — the task now matches the event.
+  // event is left alone. Never re-runs syncCalendar (the pull never writes to Google) — the task now
+  // matches the event, except where Aperture's value was kept: that goes with the next push.
   private async putPull(
     taskId: string,
     st: GcalSyncState,

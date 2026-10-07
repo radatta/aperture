@@ -36,7 +36,7 @@ const task = (over: Partial<T> = {}): T => ({
   dueTime: '16:00',
   estimateMin: 60,
   gcalSyncError: null,
-  gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1_000 },
+  gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 2_000 },
   ...over,
 });
 // The event exactly as the push left it, edited in Google at `updatedMs`.
@@ -58,7 +58,7 @@ describe('calendarPullPlan', () => {
     expect(plan(task(), event())).toEqual({ kind: 'none' });
   });
   it('a no-estimate task’s default 30-minute block is a no-op — never writes estimateMin = 30', () => {
-    const seen = { title: 'pset', startMs: END - 30 * 60_000, endMs: END, updatedMs: 1_000 };
+    const seen = { title: 'pset', startMs: END - 30 * 60_000, endMs: END, updatedMs: 2_000 };
     for (const estimateMin of [null, 0])
       expect(
         plan(task({ estimateMin, gcalSeen: seen }), event({ startMs: END - 30 * 60_000 })).kind,
@@ -148,7 +148,7 @@ describe('calendarPullPlan', () => {
   it('an event on an untimed task syncs its title only (no window to map)', () => {
     const t = task({
       dueTime: null,
-      gcalSeen: { title: 'pset', startMs: 0, endMs: 3_600_000, updatedMs: 1_000 },
+      gcalSeen: { title: 'pset', startMs: 0, endMs: 3_600_000, updatedMs: 2_000 },
     });
     expect(plan(t, event({ startMs: 60_000, endMs: 3_700_000 }))).toMatchObject({ kind: 'see' });
     expect(plan(t, event({ title: 'm', startMs: 0, endMs: 3_600_000 }))).toMatchObject({
@@ -159,19 +159,110 @@ describe('calendarPullPlan', () => {
   it('made recurring in Google → ignored', () => {
     expect(plan(task(), event({ recurring: true, title: 'r' })).kind).toBe('none');
   });
-  it('first sighting (linked before two-way sync): remembered as the task has it, nothing applied', () => {
+  it('first sighting (linked before two-way sync): remembered as Google has it, nothing applied', () => {
     const end = epoch('2026-10-09', '17:00');
     const first = plan(task({ gcalSeen: undefined }), event({ title: 'g', endMs: end }));
     expect(first).toEqual({
       kind: 'see',
-      seen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 2_000 },
+      seen: { title: 'g', startMs: END - 60 * 60_000, endMs: end, updatedMs: 2_000 },
     });
-    // So the next Google edit applies — a pre-ship divergence is never mistaken for Aperture's own.
+    // Where it differed, the task's value is Aperture's unsent one: a later Google edit to it is kept
+    // out (the next push sends the task's); an untouched field still applies.
     const known = task({ gcalSeen: (first as { seen: GcalSeen }).seen });
-    expect(plan(known, event({ title: 'g2', endMs: end, updatedMs: 3_000 }))).toMatchObject({
-      kind: 'apply',
-      fields: { title: 'g2', dueDay: '2026-10-09', dueTime: '17:00' },
+    expect(
+      plan(known, event({ title: 'g2', startMs: END - 90 * 60_000, endMs: end, updatedMs: 3_000 })),
+    ).toMatchObject({
+      fields: {},
+      note: 'Kept your title and time — changed in Google Calendar too',
     });
+    const inStep = task({ gcalSeen: { ...(first as { seen: GcalSeen }).seen, title: 'pset' } });
+    expect(plan(inStep, event({ title: 'g2', endMs: end, updatedMs: 3_000 }))).toMatchObject({
+      fields: { title: 'g2' },
+    });
+  });
+  it('a block placed off the deadline before two-way sync never moves the deadline to it', () => {
+    // A picked 09:00–10:00 block on a task due 16:00: first sight, then a Google rename's echo.
+    const picked = { startMs: epoch('2026-10-05', '09:00'), endMs: epoch('2026-10-05', '10:00') };
+    const first = plan(task({ gcalSeen: undefined }), event(picked));
+    const known = task({ gcalSeen: (first as { seen: GcalSeen }).seen });
+    expect(plan(known, event({ ...picked, title: 'r', updatedMs: 3_000 }))).toMatchObject({
+      fields: { title: 'r' },
+    });
+    // …and a Google drag of it is kept out: the task's deadline is the unsent value.
+    expect(
+      plan(
+        known,
+        event({
+          startMs: picked.startMs + 3_600_000,
+          endMs: picked.endMs + 3_600_000,
+          updatedMs: 3_000,
+        }),
+      ),
+    ).toMatchObject({ fields: {}, note: 'Kept your time — moved in Google Calendar too' });
+  });
+  it('a deadline matches its base by instant or by wall-clock minute (fall-back hour, an end with seconds)', () => {
+    const tz = 'America/Los_Angeles';
+    const z = {
+      epoch: (d: string, h: string) => zonedEpoch(d, h, tz),
+      clock: (ms: number) => zonedDayTime(ms, tz),
+    };
+    // The second 1:30 on fall-back night maps to the same dueTime, but the epoch resolves the first.
+    const second = zonedEpoch('2026-11-01', '01:30', tz) + 3_600_000;
+    const t = task({
+      dueDay: '2026-11-01',
+      dueTime: '01:30',
+      estimateMin: 30,
+      gcalSeen: { title: 'pset', startMs: second - 30 * 60_000, endMs: second, updatedMs: 2_000 },
+    });
+    const later = second + 3_600_000;
+    expect(
+      calendarPullPlan(
+        t,
+        event({ startMs: later - 30 * 60_000, endMs: later, updatedMs: 3_000 }),
+        z,
+      ),
+    ).toMatchObject({ kind: 'apply', fields: { dueTime: '02:30' } });
+    // An end 20 seconds past the minute.
+    const odd = task({
+      gcalSeen: {
+        title: 'pset',
+        startMs: END - 60 * 60_000,
+        endMs: END + 20_000,
+        updatedMs: 2_000,
+      },
+    });
+    const five = epoch('2026-10-05', '17:00');
+    expect(
+      plan(odd, event({ startMs: five - 60 * 60_000, endMs: five, updatedMs: 3_000 })),
+    ).toMatchObject({ kind: 'apply', fields: { dueTime: '17:00' } });
+  });
+  it('a start-only drag on a deadline in the skipped spring-forward hour leaves the deadline alone', () => {
+    const tz = 'America/Los_Angeles';
+    const z = {
+      epoch: (d: string, h: string) => zonedEpoch(d, h, tz),
+      clock: (ms: number) => zonedDayTime(ms, tz),
+    };
+    const end = zonedEpoch('2027-03-14', '02:30', tz);
+    const t = task({
+      dueDay: '2027-03-14',
+      dueTime: '02:30',
+      estimateMin: 30,
+      gcalSeen: { title: 'pset', startMs: end - 30 * 60_000, endMs: end, updatedMs: 2_000 },
+    });
+    expect(
+      calendarPullPlan(t, event({ startMs: end - 60 * 60_000, endMs: end, updatedMs: 3_000 }), z),
+    ).toMatchObject({
+      kind: 'apply',
+      fields: { estimateMin: 60 },
+      note: 'Now 1h in Google Calendar',
+    });
+  });
+  it('a newer state with nothing to map still advances the base’s version', () => {
+    expect(plan(task(), event({ updatedMs: 5_000 }))).toEqual({
+      kind: 'see',
+      seen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 5_000 },
+    });
+    expect(plan(task(), event({ updatedMs: 2_000 }))).toEqual({ kind: 'none' }); // the echo
   });
   it('a Google change the pull doesn’t take never reads as Aperture’s unsent edit later', () => {
     // A done task's start drag is ignored; its next end drag still applies.
@@ -204,7 +295,7 @@ describe('calendarPullPlan', () => {
       kind: 'apply',
       fields: { title: 'renamed' },
     });
-    expect(plan(t, event({ updatedMs: 5_000 })).kind).toBe('none');
+    expect(plan(t, event({ updatedMs: 5_000 })).kind).toBe('see'); // nothing applied
     // Aperture renamed (unsent); Google moved the block: the move applies, the title stays Aperture's.
     const end = epoch('2026-10-05', '17:00');
     expect(
@@ -286,7 +377,7 @@ describe('calendarPullPlan', () => {
     ).toMatchObject({ fields: {}, note: 'Kept your title — renamed in Google Calendar too' });
   });
   it('an event first seen all-day has no known window, so a Google re-time isn’t "kept" out', () => {
-    const t = task({ gcalSeen: { title: 'pset', startMs: null, endMs: null, updatedMs: 1_000 } });
+    const t = task({ gcalSeen: { title: 'pset', startMs: null, endMs: null, updatedMs: 2_000 } });
     const end = epoch('2026-10-05', '17:00');
     expect(plan(t, event({ startMs: end - 60 * 60_000, endMs: end }))).toMatchObject({
       kind: 'apply',
@@ -301,7 +392,7 @@ describe('calendarPullPlan', () => {
   it('titles compare trim-insensitively (an untrimmed title is not a rename)', () => {
     const t = task({
       title: 'pset ',
-      gcalSeen: { title: 'pset ', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1_000 },
+      gcalSeen: { title: 'pset ', startMs: END - 60 * 60_000, endMs: END, updatedMs: 2_000 },
     });
     expect(plan(t, event({ title: 'pset ' })).kind).toBe('none');
   });
@@ -324,7 +415,7 @@ describe('calendarPullPlan', () => {
         dueDay: day,
         dueTime: hhmm,
         estimateMin: 30,
-        gcalSeen: { title: 'pset', startMs: end - 30 * 60_000, endMs: end, updatedMs: 1_000 },
+        gcalSeen: { title: 'pset', startMs: end - 30 * 60_000, endMs: end, updatedMs: 2_000 },
       });
       expect(calendarPullPlan(t, event({ startMs: end - 30 * 60_000, endMs: end }), z).kind).toBe(
         'none',

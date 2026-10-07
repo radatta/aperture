@@ -2,9 +2,12 @@ import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import {
   autoSyncOn,
+  hasUnsent,
   inSplitFamily,
   isCalibrationPoint,
+  isKeptNote,
   isPullFresh,
+  localEpochFromDayTime,
   splitChildren,
   todayKey,
 } from '@aperture/shared';
@@ -195,12 +198,29 @@ export function TaskEditor({
             </Text>
           </div>
         )}
-        {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). */}
+        {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
+            Aperture kept its value over Google's, Google still shows its own until the next push: one
+            tap sends it (a done task never pushes). */}
         {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
-          <div role="status">
-            <Text size="sm" tone="gold">
-              {task.gcalPulled.note}
-            </Text>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div role="status">
+              <Text size="sm" tone="gold">
+                {task.gcalPulled.note}
+              </Text>
+            </div>
+            {isKeptNote(task.gcalPulled.note) &&
+              !isTerminal &&
+              settings?.autoCalendar !== false &&
+              hasUnsent(task, localEpochFromDayTime) && (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  disabled={syncEvent.isPending}
+                  onClick={() => syncEvent.mutate(task.id)}
+                >
+                  Send to Google
+                </Button>
+              )}
           </div>
         )}
         {task.gcalSyncError && (
@@ -246,7 +266,8 @@ export function TaskEditor({
             </div>
           )
         ) : task.dueDay && !isTerminal ? (
-          reveal === 'calendar' ? (
+          // A timed task gets the picker only once settings say auto-sync can't place its block.
+          task.dueTime && !settings ? null : reveal === 'calendar' ? (
             <AddToCalendarForm task={task} onDone={() => setReveal(null)} />
           ) : (
             <Button

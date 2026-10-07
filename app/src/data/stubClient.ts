@@ -383,9 +383,10 @@ class StubClient implements ApiClient {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
     const settings = this.ensureSettings();
     const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, { ensure });
-    // A linked task's synced edit retires a superseded "updated from Google" note — whether or not it
-    // pushes.
-    const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
+    // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
+    // retires an "updated from Google" note it has just superseded.
+    const edited =
+      !!prev && !!task.gcalEventId && !!task.gcalPulled && syncedFieldsChanged(prev, task);
     const editStamp = edited ? { gcalPulled: null } : {};
     if (action.kind === 'none') {
       const moot =

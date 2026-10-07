@@ -54,6 +54,16 @@ export const AUTO_PLACED_ERROR =
 const titleUnsent = (t: SyncFields): boolean =>
   !!t.gcalSeen && !sameTitle(t.gcalSeen.title, t.title);
 
+// Does a linked task hold a change its event doesn't have yet (a failed, skipped or kept-out one)? What
+// the next push would send — the same comparison as calendarSyncPlan's known-event branch.
+export const hasUnsent = (t: SyncFields, epoch: DueEpoch): boolean => {
+  const seen = t.gcalSeen;
+  if (!t.gcalEventId || !seen) return false;
+  if (!sameTitle(seen.title, t.title)) return true;
+  const w = eventWindow(t, epoch);
+  return !!w && seen.startMs !== null && (seen.startMs !== w.startMs || seen.endMs !== w.endMs);
+};
+
 // Titles compare trim-insensitively both ways (an untrimmed title from an older client isn't a change).
 export const sameTitle = (a: string | null, b: string | null): boolean =>
   (a ?? '').trim() === (b ?? '').trim();

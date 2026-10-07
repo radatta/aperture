@@ -26,7 +26,9 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
   const [pickedTime, setTime] = useState<string | null>(null);
   const time =
     pickedTime ??
-    (task.dueDay && task.dueTime ? blockStartBefore(task.dueDay, task.dueTime, durationMin) : '09:00');
+    (task.dueDay && task.dueTime
+      ? blockStartBefore(task.dueDay, task.dueTime, durationMin)
+      : '09:00');
 
   const [calIdx, setCalIdx] = useState<number>(-1);
 
@@ -86,15 +88,19 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
           onClick={async () => {
             const cal = calendars[idx]!;
             const startMs = localEpochFromDayTime(task.dueDay!, time);
-            await insert.mutateAsync({
-              taskId: task.id,
-              accountSub: cal.accountSub,
-              calendarId: cal.calendarId,
-              title: task.title,
-              startMs,
-              endMs: startMs + durationMin * 60_000,
-            });
-            onDone();
+            try {
+              await insert.mutateAsync({
+                taskId: task.id,
+                accountSub: cal.accountSub,
+                calendarId: cal.calendarId,
+                title: task.title,
+                startMs,
+                endMs: startMs + durationMin * 60_000,
+              });
+              onDone();
+            } catch {
+              // Shown below; the form stays open with what you picked.
+            }
           }}
         >
           Add to calendar
@@ -103,6 +109,15 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
           Cancel
         </Button>
       </div>
+      {insert.isError && (
+        <div role="alert">
+          <Text size="xs" tone="danger">
+            {insert.error instanceof Error
+              ? insert.error.message
+              : 'Couldn’t add the calendar event. Please try again.'}
+          </Text>
+        </div>
+      )}
     </div>
   );
 }

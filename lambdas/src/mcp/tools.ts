@@ -564,7 +564,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_calendar_event',
     description:
-      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. For a task with no due time: a manual time block — renaming it in Google renames the task; its time maps to no task field. Refused on a task with a due time while auto-sync is on: that task’s block is placed at its deadline automatically, so change the due time with update_task instead. On error, re-read the task before retrying — the event may already exist.',
+      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. For a task with no due time: a manual time block — renaming it in Google renames the task; its time maps to no task field. Refused on a task with a due time while auto-sync is on (with a calendar to write to): that task’s block is placed at its deadline automatically, so change the due time with update_task instead. On error, re-read the task before retrying — the event may already exist.',
     inputSchema: {
       type: 'object',
       properties: {

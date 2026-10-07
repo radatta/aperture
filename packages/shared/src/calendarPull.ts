@@ -27,7 +27,8 @@ export interface PulledEvent {
 export type PullAction =
   | { kind: 'none' }
   // First sighting of an event Aperture didn't know yet (linked before two-way sync), or a change
-  // that maps to nothing: just remember the event (gcalSeen) — nothing on the task changes.
+  // that maps to nothing: just remember the event as Google has it (gcalSeen, with its `updated`) —
+  // nothing on the task changes.
   | { kind: 'see'; seen: GcalSeen }
   | { kind: 'unlink'; note: string }
   // `fields` is empty when the note only says a Google change was kept out (Aperture's unsent edit won).
@@ -80,23 +81,25 @@ export function calendarPullPlan(
     updatedMs: ev.updatedMs,
   };
   const window = eventWindow(task, time.epoch);
-  // First sight: remember the event as the task has it — apply nothing, and an edit made in Google
-  // before two-way sync isn't Aperture's "unsent" change either (the next Google edit applies).
-  if (!seen)
-    return {
-      kind: 'see',
-      seen: window ? { ...now, title: task.title, ...window } : { ...now, title: task.title },
-    };
-  if (ev.updatedMs < seen.updatedMs) return NONE; // stale: predates the base
+  // First sight: remember the event as Google has it, apply nothing. Where it differs from the task (an
+  // edit made in Google before two-way sync, a block placed off the deadline), the task's value is
+  // Aperture's unsent one — under one-way rules it was due to overwrite Google's anyway: the next push
+  // sends it (a timed task's block moves to its deadline).
+  if (!seen) return { kind: 'see', seen: now };
+  // Stale: predates the base. (`?? 0`: a base from an earlier build of this branch has no version.)
+  if (ev.updatedMs < (seen.updatedMs ?? 0)) return NONE;
   const titleUnsent = !sameTitle(task.title, seen.title);
   // Aperture changed the time iff the task no longer maps to the base the way a pull would map it: the
-  // deadline as an instant, the length in whole minutes (not on a done task — its start never maps). A
-  // window not known (first seen all-day) isn't unsent: the push side only moves it with the task's time.
+  // deadline (the same instant, or the same wall-clock minute — a fall-back hour's second 1:30, an end
+  // with seconds), the length in whole minutes (not on a done task — its start never maps). A window
+  // not known (first seen all-day) isn't unsent: the push side only moves it with the task's time.
+  const seenEnd = seen.endMs !== null ? time.clock(seen.endMs) : null;
   const timeUnsent =
     !!window &&
     seen.startMs !== null &&
     seen.endMs !== null &&
-    (window.endMs !== seen.endMs ||
+    ((window.endMs !== seen.endMs &&
+      (seenEnd!.day !== task.dueDay || seenEnd!.hhmm !== task.dueTime)) ||
       (task.status !== 'done' &&
         Math.round((seen.endMs - seen.startMs) / 60_000) !==
           (window.endMs - window.startMs) / 60_000));
@@ -113,8 +116,10 @@ export function calendarPullPlan(
   if (moved && window) {
     // Compared as wall-clock day + "HH:MM" and whole minutes, so a value equal to the task's writes nothing.
     const timeFields: typeof fields = {};
+    // Only an end that moved touches the deadline (a start drag on a deadline in the skipped spring-forward
+    // hour mustn't rewrite its wall clock).
     const end = time.clock(ev.endMs!);
-    if (end.day !== task.dueDay || end.hhmm !== task.dueTime) {
+    if (ev.endMs !== seen.endMs && (end.day !== task.dueDay || end.hhmm !== task.dueTime)) {
       timeFields.dueDay = end.day;
       timeFields.dueTime = end.hhmm;
     }
@@ -131,7 +136,10 @@ export function calendarPullPlan(
   }
   if (Object.keys(fields).length > 0 || kept.length > 0)
     return { kind: 'apply', fields, note: pullNote(fields, kept), seen: now };
-  return sameSeen(now, seen) ? NONE : { kind: 'see', seen: now };
+  // A newer state with nothing to map still advances the base's version (so an older one is stale).
+  return sameSeen(now, seen) && now.updatedMs <= (seen.updatedMs ?? 0)
+    ? NONE
+    : { kind: 'see', seen: now };
 }
 
 const sameSeen = (a: GcalSeen, b: GcalSeen): boolean =>

@@ -212,7 +212,7 @@ replays the same delta next time. Unverified: whether the first sync's `timeMin`
 scan; everything else in the delta — real meetings — is dropped untouched. New events are tagged
 `extendedProperties.private.apertureTaskId`, for provenance only (a Google "Duplicate" carries the tag
 with a new id and is never adopted). **The pull never writes to Google**, and never re-runs the push:
-the task now matches its event.
+the task now matches its event, except where a pull kept Aperture's value — that goes with the next push.
 
 | Google change (to an Aperture event) | Task |
 | --- | --- |
@@ -247,11 +247,13 @@ the task now matches its event.
   Google's `updated` is per event, not per field, so "the later edit wins" couldn't be decided per field.
   Deletion always wins. An owed removal is never pulled into.
 - **First sight only remembers.** An event linked before two-way sync has no `gcalSeen`: the first pull
-  to see it (the token-less first sync returns every event from the last week on) records it **as the
-  task has it** — title and window, with Google's `updated` — and honours a deletion. Nothing changes on
-  the task, without a burst of changed deadlines; and a Google edit made before two-way sync isn't read
-  as Aperture's unsent change, so the next Google edit to that event applies (bringing any older edit to
-  it along).
+  to see it (the token-less first sync returns every event from the last week on) records it as Google
+  has it, with its `updated`, and honours a deletion. Nothing changes on the task — no burst of changed
+  deadlines. Where the event differs from the task (an edit made in Google before two-way sync, or a
+  block placed off the deadline by the picker or MCP), the task's value is Aperture's unsent one: under
+  one-way rules it was due to overwrite Google's anyway, so the next push sends it — a timed task's
+  block moves to its deadline, never the deadline to the block — and a Google edit to that field before
+  then is kept out (with its note). Fields in step apply as usual.
 - **Planned on a fresh read.** The delta can land seconds after the task scan, so each write re-reads the
   task and re-plans; a task deleted, unlinked or edited during the fetch isn't overwritten. (The write
   itself is a plain put: an edit landing in the milliseconds between that re-read and the put is lost,
@@ -263,7 +265,9 @@ the task now matches its event.
   your title and time — changed …"; "time" is the block: deadline and length), or both kinds at once
   ("Moved to Oct 9 5pm in Google Calendar · Kept your title"). The row shows a gold "updated from
   Google" — "kept over Google" when only a kept-out change is noted; the editor's Calendar section shows
-  the line. A later successful push doesn't clear a kept note.
+  the line. A later successful push doesn't clear a kept note. Beside a kept note, while the task still
+  holds a value its event lacks (`hasUnsent`), the editor offers **Send to Google** — the same `ensure`
+  push as Retry; not on a done task (it never pushes) or with sync off.
   Both clear at the next 4am rollover (`isPullFresh`), or as soon as you change that task's title, time
   or estimate yourself (the note no longer describes it). Settings shows each account's "Checked …" or
   "Couldn’t check for changes (…) — retries next time you open the app".

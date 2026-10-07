@@ -250,6 +250,38 @@ describe('TaskEditor', () => {
     expect(screen.getAllByRole('status').some((el) => el.textContent === note)).toBe(true);
   });
 
+  it('a kept-out Google change offers one tap to send Aperture’s value — gone once nothing is unsent', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const kept = {
+      ...t,
+      title: 'Mine, renamed', // never reached Google
+      gcalPulled: { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' },
+    };
+    const sync = vi.spyOn(client, 'syncCalendarEvent');
+    const { user } = renderEditor(client, kept);
+    await user.click(await screen.findByRole('button', { name: 'Send to Google' }));
+    expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('no send button when nothing is unsent', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' };
+    renderEditor(client, { ...t, gcalPulled: note }); // in step with its event
+    await screen.findByText(note.note);
+    expect(screen.queryByRole('button', { name: 'Send to Google' })).toBeNull();
+  });
+
+  it('no send button on a done task (it never pushes)', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' };
+    renderEditor(client, { ...t, status: 'done', title: 'Mine, renamed', gcalPulled: note });
+    await screen.findByText(note.note);
+    expect(screen.queryByRole('button', { name: 'Send to Google' })).toBeNull();
+  });
+
   it('an old Google change is not repeated after the rollover', () => {
     const client = api();
     renderEditor(client, mkTask({ gcalPulled: { at: Date.now() - 2 * 86_400_000, note: 'old' } }));
@@ -274,6 +306,17 @@ describe('TaskEditor', () => {
     expect(await screen.findByText('Not on your calendar.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Add to calendar' }));
     expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('a refused calendar add is said inline and keeps the picker open', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Picked', dueDay: '2026-10-01' });
+    vi.spyOn(client, 'insertCalendarEvent').mockRejectedValue(new Error('Auto-sync places it'));
+    const { user } = renderEditor(client, t);
+    await user.click(await screen.findByRole('button', { name: 'Add to calendar…' }));
+    await user.click(await screen.findByRole('button', { name: 'Add to calendar' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('Auto-sync places it');
+    expect(screen.getByLabelText('Start')).toBeTruthy();
   });
 
   it('says so when the calendar retry itself fails', async () => {

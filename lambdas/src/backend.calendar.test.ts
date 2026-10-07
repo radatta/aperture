@@ -840,18 +840,29 @@ describe('calendar pull (two-way sync)', () => {
     expect((await b.pullCalendar()).changedTaskIds).toEqual([deleted.id]); // deletions always apply
     expect(await b.getTask(legacy.id)).toMatchObject({
       title: 'pset',
-      gcalSeen: { title: 'pset' }, // remembered as the task has it
+      gcalSeen: { title: 'old google edit' }, // remembered as Google has it
     });
     expect(await b.getTask(deleted.id)).toMatchObject({
       gcalEventId: null,
       gcalPulled: { note: 'Removed in Google Calendar' },
     });
-    // Known now: the next Google edit applies; an Aperture change pushes over the old one.
+    // Known now. The title differed before two-way sync, so the task's is Aperture's unsent one: a new
+    // Google rename is kept out, and the next push sends the task's. A field in step still applies.
     tick();
-    g.editEvent(legacy.gcalEventId!, { title: 'new google edit' });
+    g.editEvent(legacy.gcalEventId!, {
+      title: 'new google edit',
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
     tick();
     await b.pullCalendar();
-    expect((await b.getTask(legacy.id))!.title).toBe('new google edit');
+    expect(await b.getTask(legacy.id)).toMatchObject({
+      title: 'pset',
+      dueTime: '17:00',
+      gcalPulled: { note: 'Moved to Oct 9 5pm in Google Calendar · Kept your title' },
+    });
+    await b.syncCalendarEvent(legacy.id);
+    expect(g.events.get(legacy.gcalEventId!)!.title).toBe('pset');
   });
 
   it('a time change that failed to reach Google is sent by the next rename — never reverted by the echo', async () => {
@@ -1206,6 +1217,33 @@ describe('calendar pull (two-way sync)', () => {
       title: 'study ch 3',
       startMs: at('2026-10-09', '15:30'),
       endMs: at('2026-10-09', '16:00'),
+    });
+  });
+
+  it('a block placed off the deadline before two-way sync moves to the deadline — never the reverse', async () => {
+    const { g, b, repo, tick, timed } = await setup();
+    await b.updateSettings({ autoCalendar: false }); // the picker was allowed then (or MCP)
+    const t = await timed({ estimateMin: 30, dueTime: '17:00' });
+    const placed = await b.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'A',
+      calendarId: 'A@example.com',
+      title: 'pset',
+      startMs: at('2026-10-09', '14:00'),
+      endMs: at('2026-10-09', '15:00'),
+    });
+    await b.updateSettings({ autoCalendar: true });
+    await repo.putTask({ ...(await b.getTask(t.id))!, gcalSeen: undefined }); // linked before ship
+    tick();
+    await b.pullCalendar(); // first sight
+    await b.setTaskTitle(t.id, 'renamed');
+    tick();
+    await b.pullCalendar(); // the push's echo
+    expect(await b.getTask(t.id)).toMatchObject({ dueTime: '17:00', estimateMin: 30 });
+    expect(g.events.get(placed.gcalEventId!)).toMatchObject({
+      title: 'renamed',
+      startMs: at('2026-10-09', '16:30'),
+      endMs: at('2026-10-09', '17:00'),
     });
   });
 
