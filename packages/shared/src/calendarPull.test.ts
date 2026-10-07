@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calendarPullPlan,
+  hasKeptPart,
   isKeptNote,
   isPullFresh,
   PULL_REMOVED_NOTE,
@@ -441,6 +442,8 @@ describe('pullNote', () => {
     );
     expect(isKeptNote(pullNote({}, ['time']))).toBe(true);
     expect(isKeptNote(pullNote({ title: 'x' }, ['time']))).toBe(false);
+    expect(hasKeptPart(pullNote({ title: 'x' }, ['time']))).toBe(true);
+    expect(hasKeptPart(pullNote({ title: 'x' }))).toBe(false);
   });
 });
 

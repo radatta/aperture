@@ -264,6 +264,30 @@ describe('TaskEditor', () => {
     expect(sync).toHaveBeenCalledWith(t.id);
   });
 
+  it('a mixed note (something applied, something kept) offers the send too', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    renderEditor(client, {
+      ...t,
+      title: 'Mine, renamed',
+      gcalPulled: {
+        at: Date.now(),
+        note: 'Moved to Oct 9 5pm in Google Calendar · Kept your title',
+      },
+    });
+    expect(await screen.findByRole('button', { name: 'Send to Google' })).toBeTruthy();
+  });
+
+  it('a failed send is said, never a dead button', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' };
+    vi.spyOn(client, 'syncCalendarEvent').mockRejectedValueOnce(new Error('offline'));
+    const { user } = renderEditor(client, { ...t, title: 'Mine, renamed', gcalPulled: note });
+    await user.click(await screen.findByRole('button', { name: 'Send to Google' }));
+    expect(await screen.findByText(/Couldn’t reach the calendar sync/)).toBeTruthy();
+  });
+
   it('no send button when nothing is unsent', async () => {
     const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
     const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
@@ -315,7 +339,9 @@ describe('TaskEditor', () => {
     const { user } = renderEditor(client, t);
     await user.click(await screen.findByRole('button', { name: 'Add to calendar…' }));
     await user.click(await screen.findByRole('button', { name: 'Add to calendar' }));
-    expect((await screen.findByRole('alert')).textContent).toBe('Auto-sync places it');
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Couldn’t add it to your calendar: Auto-sync places it',
+    );
     expect(screen.getByLabelText('Start')).toBeTruthy();
   });
 

@@ -168,7 +168,9 @@ export function pullNote(
   return kept.length > 0 ? `${applied} · ${PULL_KEPT_PREFIX} ${keptWhat}` : applied;
 }
 
+// Only kept out (the row's "kept over Google") vs kept out in part (a mixed note — Send still applies).
 export const isKeptNote = (note: string): boolean => note.startsWith(PULL_KEPT_PREFIX);
+export const hasKeptPart = (note: string): boolean => note.includes(PULL_KEPT_PREFIX);
 
 // The "updated from Google" mark shows until the next day rollover (browser-local, dayStartHour).
 export const isPullFresh = (

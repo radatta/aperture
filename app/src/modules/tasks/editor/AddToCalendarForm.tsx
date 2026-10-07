@@ -112,9 +112,8 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
       {insert.isError && (
         <div role="alert">
           <Text size="xs" tone="danger">
-            {insert.error instanceof Error
-              ? insert.error.message
-              : 'Couldn’t add the calendar event. Please try again.'}
+            Couldn’t add it to your calendar
+            {insert.error instanceof Error ? `: ${insert.error.message}` : '.'}
           </Text>
         </div>
       )}

@@ -2,10 +2,10 @@ import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import {
   autoSyncOn,
+  hasKeptPart,
   hasUnsent,
   inSplitFamily,
   isCalibrationPoint,
-  isKeptNote,
   isPullFresh,
   localEpochFromDayTime,
   splitChildren,
@@ -208,9 +208,11 @@ export function TaskEditor({
                 {task.gcalPulled.note}
               </Text>
             </div>
-            {isKeptNote(task.gcalPulled.note) &&
+            {hasKeptPart(task.gcalPulled.note) &&
               !isTerminal &&
-              settings?.autoCalendar !== false &&
+              !!settings &&
+              settings.autoCalendar !== false &&
+              !task.gcalSyncError && // Retry shows instead
               hasUnsent(task, localEpochFromDayTime) && (
                 <Button
                   variant="quiet"

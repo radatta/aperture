@@ -231,10 +231,13 @@ the task now matches its event, except where a pull kept Aperture's value — th
   (instants, not wall clocks — so both DST edges are idempotent). Our own push echoing back is a no-op,
   including a no-estimate task's default 30-minute block (no `estimateMin = 30`), and a field only
   Aperture changed is never "taken" from Google's stale copy. Aperture changed the time iff the task no
-  longer maps to the base the way a pull would map it — the deadline as an instant, the length in whole
-  minutes (not on a done task, whose start never maps) — so a Google change the pull declines (a done
-  task's start drag, a block a few seconds off the minute) never reads as Aperture's later. Every pull
-  that sees the event records it as the new `gcalSeen` (except a stale, recurring or owed-removal one); a
+  longer maps to the base the way a pull would map it — the deadline as the same instant or the same
+  wall-clock minute (a fall-back hour's second 1:30, an end with seconds), the length in whole minutes
+  (not on a done task, whose start never maps) — so a Google change the pull declines (a done task's
+  start drag, a block a few seconds off the minute) never reads as Aperture's later. Only an end that
+  moved touches the deadline (a start drag on a deadline in the skipped spring-forward hour leaves its
+  wall clock alone). Every pull that sees the event records it as the new `gcalSeen` (except a stale,
+  recurring or owed-removal one) — a newer state with nothing to map too, so its version advances; a
   push records what it sent. Titles compare trim-insensitively.
 - **One clock, Aperture wins.** `gcalSeen.updatedMs` is **Google's** `updated` for the state the base
   describes — from the push's response (never the Lambda's clock, which reads *after* Google stamps the
@@ -265,9 +268,13 @@ the task now matches its event, except where a pull kept Aperture's value — th
   your title and time — changed …"; "time" is the block: deadline and length), or both kinds at once
   ("Moved to Oct 9 5pm in Google Calendar · Kept your title"). The row shows a gold "updated from
   Google" — "kept over Google" when only a kept-out change is noted; the editor's Calendar section shows
-  the line. A later successful push doesn't clear a kept note. Beside a kept note, while the task still
-  holds a value its event lacks (`hasUnsent`), the editor offers **Send to Google** — the same `ensure`
-  push as Retry; not on a done task (it never pushes) or with sync off.
+  the line. A later successful push doesn't clear a kept note. Beside a note with a kept part (alone or
+  mixed), while the task still holds a value its event lacks (`hasUnsent`), the editor offers **Send to
+  Google** — the same `ensure` push as Retry, so it also re-times a block first seen all-day; not on a
+  done task (it never pushes), with sync off, while settings load, or beside a sync error (Retry is
+  there). `hasUnsent` resolves the window in the device's zone (like the stub); away from
+  `USER_TIME_ZONE` it can read a pushed block as unsent and the button lingers until the note clears —
+  a tap just re-sends.
   Both clear at the next 4am rollover (`isPullFresh`), or as soon as you change that task's title, time
   or estimate yourself (the note no longer describes it). Settings shows each account's "Checked …" or
   "Couldn’t check for changes (…) — retries next time you open the app".
