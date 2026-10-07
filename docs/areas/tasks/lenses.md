@@ -35,8 +35,9 @@ it a Today task.
   a search can never be clipped by a lens's window. Backlog groups by category (Settings order,
   retired-with-tasks after, "No category" last); Week is flat (D10). Both sort soonest-due first; Done
   is ungrouped, newest finished first, 50 at a time.
-- **D3 — Today is the plan, not a query.** Capacity + planned-vs-available on top, plan rows in plan
-  order, then "In progress · not planned today". Only search applies there; no sort/group/filter.
+- **D3 — Today is the plan, not a query.** Capacity + planned-vs-available on top, open plan rows in
+  plan order, then "In progress · not planned today", then a collapsed "Done today · N" (D11). Only
+  search applies there; no sort/group/filter.
 - **D4 — state.** The lens is in the URL (`?lens=week`, so Home links straight to Week). Search +
   filters are in sessionStorage (`aperture.tasks.query`), stamped with the day — sticky for a session,
   reset each new day. Switching lens keeps the search text and resets the filters to that lens's preset.
@@ -78,6 +79,22 @@ it a Today task.
   soonest deadline could sit below a whole group of later ones — and every row already carries its
   category tag. Group → Category in the filter panel still works for the session (a "By category" chip;
   reset per D4). Backlog stays grouped: there, per-course size is what you plan from.
+
+- **D11 — finished work leaves the plan list (2026-10-06).** Today drew every plan row whatever its
+  status, so a done task sat among the open ones with an Unplan button (which would have deleted the
+  history row). Now `doneToday()` (`modules/tasks/doneToday.ts`) splits it:
+  - **Done today** (collapsed at the bottom): today's done plan rows in plan order, then tasks finished
+    today off the plan (`completedAt`'s day key), oldest first, so a task finished from the in-progress
+    tier doesn't vanish. Rows carry no actions; the title opens the editor.
+  - **Dropped** tasks on today's plan show nowhere on Today; the Done lens' Dropped chip is their home.
+  - **The rows stay.** Capacity still counts a done task's planned minutes (the check measures the load
+    you set, and night compares against it), and Big 3 keeps a done task in its slot (right-now.md D3).
+  - **Collapsed** under `today:done` in the same map as D4. It always starts collapsed and the choice
+    sticks across days, like every group. An empty group isn't drawn. With every planned task done,
+    the empty state reads "Everything planned is done." instead of "Nothing planned yet."
+  - A finished task's row never offers Unplan, on the Done lens either.
+  - Focus: a Done row leaves the list a render after the modal host sees the new data, so the host
+    also watches the list's DOM for the trigger leaving (`TaskModalHost`), else focus fell to `<body>`.
 
 ## 3. Deferred
 

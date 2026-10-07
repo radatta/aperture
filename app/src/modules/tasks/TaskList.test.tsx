@@ -203,6 +203,80 @@ describe('/tasks lenses', () => {
     expect(await api.listPlansForDay(today())).toHaveLength(0);
   });
 
+  it('Today: a finished task on the plan moves to a collapsed Done today group that remembers', async () => {
+    const { api } = await seeded();
+    const open = await api.createTask({ title: 'still to do' });
+    await api.upsertPlan({ taskId: open.id, day: today(), plannedMinutes: 30, order: 0 });
+    await api.transitionTask(open.id, 'planned');
+    const fin = await api.createTask({ title: 'finished one', estimateMin: 45 });
+    await api.upsertPlan({ taskId: fin.id, day: today(), plannedMinutes: 45, order: 1 });
+    await api.transitionTask(fin.id, 'in_progress');
+    await api.transitionTask(fin.id, 'done');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const header = await screen.findByRole('button', { name: 'Done today · 1' });
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'finished one' })).toBeNull();
+    // Its planned minutes still count: the plan you set is what the capacity check measures.
+    expect(screen.getByText(/1h 15m planned/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Unplan' })).toHaveLength(1);
+
+    await user.click(header);
+    const group = screen.getByRole('region', { name: 'Done today' });
+    expect(within(group).getByRole('button', { name: 'finished one' })).toBeTruthy();
+    expect(within(group).queryByRole('button', { name: /Unplan|Start/ })).toBeNull();
+
+    cleanup();
+    renderApp({ api, path: '/tasks' });
+    expect(
+      (await screen.findByRole('button', { name: 'Done today · 1' })).getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('Today: once everything planned is done, it says so instead of "Nothing planned yet."', async () => {
+    const { api } = await seeded();
+    const t = await api.createTask({ title: 'only one' });
+    await api.upsertPlan({ taskId: t.id, day: today(), plannedMinutes: 30, order: 0 });
+    await api.transitionTask(t.id, 'in_progress');
+    await api.transitionTask(t.id, 'done');
+    renderApp({ api, path: '/tasks' });
+
+    expect(await screen.findByText('Everything planned is done.')).toBeTruthy();
+    expect(screen.queryByText('Nothing planned yet.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Done today · 1' })).toBeTruthy();
+  });
+
+  it('Today: a task finished off the plan lands in Done today; a dropped one shows nowhere', async () => {
+    const { api } = await seeded();
+    const off = await api.createTask({ title: 'started off plan' });
+    await api.transitionTask(off.id, 'in_progress');
+    await api.transitionTask(off.id, 'done');
+    const dropped = await api.createTask({ title: 'dropped one' });
+    await api.upsertPlan({ taskId: dropped.id, day: today(), plannedMinutes: 30, order: 0 });
+    await api.transitionTask(dropped.id, 'planned');
+    await api.transitionTask(dropped.id, 'cancelled');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'Done today · 1' }));
+    expect(screen.getByRole('button', { name: 'started off plan' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'dropped one' })).toBeNull();
+    expect(screen.getByText('Nothing planned yet.')).toBeTruthy();
+  });
+
+  it('Done: a finished task with a row today offers no Unplan', async () => {
+    const { api } = await seeded();
+    const t = await api.createTask({ title: 'done on plan' });
+    await api.upsertPlan({ taskId: t.id, day: today(), plannedMinutes: 30, order: 0 });
+    await api.transitionTask(t.id, 'in_progress');
+    await api.transitionTask(t.id, 'done');
+    renderApp({ api, path: '/tasks?lens=done' });
+
+    expect(await screen.findByRole('button', { name: 'done on plan' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Unplan' })).toBeNull();
+  });
+
   it('Done lists finished and dropped history, newest first', async () => {
     // A ticking clock, so each finish has its own timestamp.
     let clock = Date.now();
@@ -241,6 +315,24 @@ describe('focus after a row leaves', () => {
     await waitFor(() => expect(add.isConnected).toBe(false));
     // The list wrapper (the one focusable non-control around the rows) takes it.
     await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
+  });
+
+  it('marking a Today row done moves it into the collapsed group, and focus never drops to <body>', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-focus-${Math.random()}` });
+    const t = await api.createTask({ title: 'finish me', estimateMin: 20 });
+    await api.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 20, order: 0 });
+    await api.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const row = (await screen.findByRole('button', { name: 'finish me' })).closest('.rounded-2xl');
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '18');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+
+    expect(await screen.findByRole('button', { name: 'Done today · 1' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'finish me' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
   });
 });
 

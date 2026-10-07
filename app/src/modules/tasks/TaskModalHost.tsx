@@ -63,19 +63,35 @@ export function TaskModalHost({
   // After a close, useDisclosure returns focus to the title button. That exact node can be gone — the
   // row left the list, or moved to another group and re-rendered — now, or on the refetch still
   // coming. Then focus would sit on <body>: find the row's title again by task id, else the list area.
-  // Keyed off data changes rather than frames, and never overrides focus the user has since moved.
+  // Keyed off data and DOM changes rather than frames, and never overrides focus the user has since moved.
   const targetId = target?.task.id;
   useEffect(() => {
     if (modal.open || !returning.current) return;
+    const root = fallbackRef.current;
+    const recover = () => {
+      const again = targetId
+        ? root?.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(targetId)}"]`)
+        : null;
+      if (again) returnFocus(again);
+      else root?.focus({ preventScroll: true });
+    };
     const trigger = triggerRef.current;
-    if (trigger?.isConnected && document.activeElement === trigger) return; // row may still move
+    if (trigger?.isConnected && document.activeElement === trigger) {
+      // The row may still move. The list can re-render after this host has the new data (Today's
+      // lens subscribes on its own, so a Done row leaves a render later), so watch the DOM as well.
+      if (!root) return;
+      const watch = new MutationObserver(() => {
+        if (trigger.isConnected) return;
+        watch.disconnect();
+        returning.current = false;
+        if (document.activeElement === document.body) recover();
+      });
+      watch.observe(root, { childList: true, subtree: true });
+      return () => watch.disconnect();
+    }
     returning.current = false;
     if (trigger?.isConnected || document.activeElement !== document.body) return;
-    const again = targetId
-      ? fallbackRef.current?.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(targetId)}"]`)
-      : null;
-    if (again) returnFocus(again);
-    else fallbackRef.current?.focus({ preventScroll: true });
+    recover();
   }, [modal.open, tasks, triggerRef, targetId]);
 
   return (
