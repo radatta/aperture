@@ -37,6 +37,29 @@ describe('TaskCard', () => {
     expect(await screen.findByRole('dialog', { name: 'Task: Plain' })).toBeTruthy();
   });
 
+  it('a title tap focuses the dialog, not a field — no iPhone keyboard on a read', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Just looking' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await openEditor(user, 'Just looking', 'Backlog');
+    const dialog = screen.getByRole('dialog', { name: 'Task: Just looking' });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+  });
+
+  it('Scope still opens on the Estimate field', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Needs scoping' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    await user.click(await screen.findByRole('button', { name: 'Backlog' }));
+    await user.click(await screen.findByRole('button', { name: 'Scope' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Needs scoping' }));
+    await waitFor(() => expect(document.activeElement).toBe(d.getByLabelText('Estimate (min)')));
+  });
+
   it('shows Scope only while the task is unscoped', async () => {
     const api = freshApi();
     await api.createTask({ title: 'Unscoped' });
@@ -120,10 +143,11 @@ describe('unsaved-changes guard', () => {
     renderApp({ api, path: '/tasks' });
 
     await openAndEdit(user);
-    // Press and release on the dialog itself = a backdrop click (both, so a drag-out wouldn't count).
+    // Press and release on the dialog itself, off its box = a backdrop click (both, so a drag-out
+    // wouldn't count). jsdom's box is 0×0 at the origin, so (5,5) is outside it.
     const editorDialog = screen.getByRole('dialog', { name: 'Task: Editable' });
-    fireEvent.mouseDown(editorDialog);
-    fireEvent.click(editorDialog);
+    fireEvent.mouseDown(editorDialog, { clientX: 5, clientY: 5 });
+    fireEvent.click(editorDialog, { clientX: 5, clientY: 5 });
     await screen.findByRole('dialog', { name: /Discard unsaved changes/ });
 
     await user.click(screen.getByRole('button', { name: 'Keep editing' }));

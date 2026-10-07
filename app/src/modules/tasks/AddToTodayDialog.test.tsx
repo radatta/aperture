@@ -75,10 +75,11 @@ describe('Home "+ Add" to today', () => {
   describe('unsaved-changes guard', () => {
     const addDialog = () => screen.queryByRole('dialog', { name: 'Add to today' });
     const confirm = () => screen.queryByRole('dialog', { name: 'Discard unsaved changes?' });
-    // A backdrop click = press and release on the <dialog> itself.
+    // A backdrop click = press and release on the <dialog> itself, outside its box. jsdom lays
+    // nothing out (a 0×0 box at the origin), so any point off the origin is outside it.
     const backdrop = () => {
-      fireEvent.mouseDown(addDialog()!);
-      fireEvent.click(addDialog()!);
+      fireEvent.mouseDown(addDialog()!, { clientX: 5, clientY: 5 });
+      fireEvent.click(addDialog()!, { clientX: 5, clientY: 5 });
     };
     // jsdom doesn't map Escape to <dialog>'s cancel event; fire it the way the browser does.
     const escape = () => fireEvent(addDialog()!, new Event('cancel', { cancelable: true }));

@@ -1,6 +1,6 @@
 # Aperture
 
-A personal life-OS PWA — one place for everything digital about me. Web-first, installable, multi-device. Its #1 job is a morning + night ritual (glance, plan, reflect); the signature move is **calibration** — surfacing the gap between what a task was *estimated* to take and what it *actually* took.
+A personal life-OS PWA — one place for everything digital about me. Web-first, installable, multi-device. Its #1 job is a morning + night ritual (glance, plan, reflect); the signature move is **calibration** — surfacing the gap between what a task was _estimated_ to take and what it _actually_ took.
 
 Product is the source of truth: `docs/product/PRODUCT.md`. Full doc map: `docs/index.md`.
 
@@ -20,14 +20,14 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 
 **pnpm only — never npm or yarn.** Requires Node 22 (`.nvmrc`).
 
-| Command | Does |
-| --- | --- |
-| `pnpm dev` | Run the app (Vite) → `http://localhost:5173`, or `6173` inside a COI container (`docs/ops/COI-SANDBOX.md` → *Ports*). Vite walks upward if taken — read the port, don't assume it. |
-| `pnpm typecheck` | `tsc -b` across the project-reference graph |
-| `pnpm lint` / `pnpm lint:fix` | ESLint (flat config), one root pass |
-| `pnpm test` | Vitest across all packages (`pnpm -r`) |
-| `pnpm build` | Production build (`pnpm -r`) |
-| `pnpm format` | Prettier write |
+| Command                       | Does                                                                                                                                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                    | Run the app (Vite) → `http://localhost:5173`, or `6173` inside a COI container (`docs/ops/COI-SANDBOX.md` → _Ports_). Vite walks upward if taken — read the port, don't assume it. |
+| `pnpm typecheck`              | `tsc -b` across the project-reference graph                                                                                                                                        |
+| `pnpm lint` / `pnpm lint:fix` | ESLint (flat config), one root pass                                                                                                                                                |
+| `pnpm test`                   | Vitest across all packages (`pnpm -r`)                                                                                                                                             |
+| `pnpm build`                  | Production build (`pnpm -r`)                                                                                                                                                       |
+| `pnpm format`                 | Prettier write                                                                                                                                                                     |
 
 **Inside the COI container (the usual case), four things bite:**
 
@@ -45,14 +45,14 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 - **`node_modules` is shared with the macOS host** — native binaries belong to whichever side installed
   last. `vite dev`/`vite build` dying with `Cannot find module '../lightningcss.*.node'` is this;
   `pnpm install` fixes it for the current platform (and breaks the other side until they do the same).
-  Doesn't affect `tsc` or `vitest`. Mechanism: `docs/ops/COI-INCIDENTS.md` → Incident B → *Related*.
+  Doesn't affect `tsc` or `vitest`. Mechanism: `docs/ops/COI-INCIDENTS.md` → Incident B → _Related_.
 - **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs, and
   **two different ceilings** bite, which is why the crashes read as code bugs when they aren't: the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`,
-  *not* memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory itself (`SIGKILL`/137). A `tsgo`
+  _not_ memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory itself (`SIGKILL`/137). A `tsgo`
   fatal has also been seen under load with the mechanism never confirmed — capture the **head** of the
-  output, don't assume OOM (`docs/ops/COI-SANDBOX.md` → *Ops notes* → *Transient `tsc` crashes*).
-  Serialise: screenshot, kill the browser, then test. The feature workflow's gate (*Claude behavior* →
-  *Feature workflow*) is how it keeps them apart.
+  output, don't assume OOM (`docs/ops/COI-SANDBOX.md` → _Ops notes_ → _Transient `tsc` crashes_).
+  Serialise: screenshot, kill the browser, then test. The feature workflow's gate (_Claude behavior_ →
+  _Feature workflow_) is how it keeps them apart.
 
 Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/ops/COI-INCIDENTS.md`.
 
@@ -60,9 +60,9 @@ Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts)
 
 Full detail in `docs/product/CONVENTIONS.md`. The load-bearing ones:
 
-- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: CI (`.github/workflows/ci.yml`) resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI (the mise trap: `docs/ops/COI-SANDBOX.md` → *Start here → 1*).
+- **pnpm only.** `pnpm install`, `pnpm -r`, `pnpm dlx` (not npx). **Its version comes from `packageManager` in the root `package.json`, via corepack — nothing else.** Never pin pnpm in a machine-global tool manager: CI (`.github/workflows/ci.yml`) resolves it from that field, so a second declaration is only a second thing to drift out of sync with CI (the mise trap: `docs/ops/COI-SANDBOX.md` → _Start here → 1_).
 - **First-principles dependency discipline.** Default to rolling our own. Only propose a dependency when EITHER (A) it's substantial hard-to-own logic, OR (B) it's security-critical / subtle-correctness / hard cross-platform edges we shouldn't hand-roll. When proposing one, justify against A/B explicitly, note its footprint + transitive deps, and state the roll-our-own alternative. **"It's popular" is not a reason.**
-- **Build order: page-first, backend-second.** Build `app/` against a stubbed API and validate the UX in-hand *before* wiring the Lambda + DynamoDB behind the same contract.
+- **Build order: page-first, backend-second.** Build `app/` against a stubbed API and validate the UX in-hand _before_ wiring the Lambda + DynamoDB behind the same contract.
 - **Workspace packages resolve from source.** `packages/shared` exports `./src/index.ts`; app and lambdas import it directly and their bundler transpiles it — no build step in the dev/test loop. (`shared` still emits a gitignored `dist/` only to satisfy TS project references; nothing imports it.)
 - **One test runner: Vitest.** jsdom env for `app/`, **node env for `lambdas/`** so tests match the Lambda's prod runtime exactly.
 - **Dates/times via a shared helper** — never inline `Date` math or raw ISO strings in a component.
@@ -93,7 +93,7 @@ So when a branch can't fast-forward onto `dev`, **do not propose merging `origin
 2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree` would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.
 3. `CI=true pnpm install` inside the worktree, so it has its own real `node_modules` — never a symlink to the main checkout's (running pnpm through one rewires the main checkout).
 
-The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Remove a worktree only after its PR is open, and only when the user says so** — removing it deletes its gitignored `localNotes/`.
+The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at _Feature workflow_ → _Cleanup_.**
 
 ### Claude drives git — guarded
 
@@ -102,9 +102,9 @@ Claude handles branches, commits, and PRs. **Allowed** git commands:
 - `git status`, `git diff`, `git log`, `git branch`, `git show`
 - `git switch -c` / `git checkout -b`, `git switch`, `git checkout <file>`
 - `git add`, `git commit`, `git stash`
-- `git push` **to a feature branch only** (sets upstream on first push)
+- `git push` **to a feature branch only** (sets upstream on first push) — moot in the container, whose GitHub token is read-only, so the user runs every push (_PR bodies_)
 - `git fetch`, `git rebase origin/main`, `git mv`
-- `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only on the user's say-so
+- `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only at _Feature workflow_ → _Cleanup_
 
 **Hard-blocked (never):**
 
@@ -125,7 +125,7 @@ Merges to `main` happen via PR, not a local push.
 - **Aperture MCP connector.** When an `aperture-*` MCP server is registered (`claude mcp list`), its tools read and write the user's **live** Aperture data — tasks, calibration, LeetCode, calendar, attachments. **`aperture` is prod — the user's real data and the default for any real task work. `aperture-dev` is for testing Aperture changes only** (e.g. verifying a dev deploy); never log real tasks there, and say which one you're using. A write hits DynamoDB directly and can create real Google Calendar events / S3 files. **Reads are free. Every write requires the user's explicit, in-the-moment approval — no exceptions.** Never write unprompted or inferred, and if running unattended (e.g. overnight) do **no** writes at all — a write happens only when the user explicitly asks for that specific write, then you do it. `complete_task` requires `actualMin`. Full surface: `docs/areas/mcp/index.md`.
 - **Don't write code that wasn't asked for.** Diagnosis, research, and a proposal are the deliverable until the user says to implement. "Continue" means continue what was asked — it is not license to start editing.
 - **When rebasing or pulling in others' merged work, read the PR(s) first.** Before `git rebase origin/main` (or building on top of freshly-merged branches), read the body of each PR that landed since you branched — `gh pr view <n>` — so you know what's being introduced. Rebasing blind means building on changes you haven't seen: the conflict you resolve or the contract you call may have moved for a reason the PR explains.
-- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` *before the first edit*, take its plan, then edit. Distrust the plausible rationalisations ("well understood", "only just over", "obvious design", "already researched") — each is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, rewriting logic you have already defended is not. The feature workflow (below) always runs it, whatever the count.
+- **The `Plan` agent is mandatory above 5 files. No judgment call, no exceptions.** Count the files the change will touch; if it is more than 5, spawn `Plan` _before the first edit_, take its plan, then edit. Distrust the plausible rationalisations ("well understood", "only just over", "obvious design", "already researched") — each is the moment the rule is for. Skipping it once turned a two-line storage fix into three rounds of review findings, each round's fixes introducing new bugs. When in doubt, spawn it: a plan pass is cheap, rewriting logic you have already defended is not. The feature workflow (below) always runs it, whatever the count.
 - **Running the `Plan` agent: ask which model, never default.** When the user asks to run `Plan` (or you're about to spawn it) without naming a model, ask which model first — don't pick one silently. The user usually wants `fable`, but token budget varies, so it must be a deliberate choice each time.
 - **Reviews go through the `code-reviewer` agent** (project-aware) — not inline reading. Run it before committing anything non-trivial.
 - **Non-trivial external research → the `search-specialist` agent.** Single-fact lookups can use `WebSearch`/`WebFetch` directly. Codebase search is `Explore`'s job.
@@ -139,32 +139,37 @@ Merges to `main` happen via PR, not a local push.
 Every feature runs the same phases. **Two modes**, and the user names which:
 
 - **Collaborative (default).** Claude stops at decision points: Plan's questions come back for discussion, and review findings that need a product call or add scope come back as a list.
-- **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands one back. Make the best call from `PRODUCT.md`, the plan, and real day-to-day use (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body summarises it. Parking is only allowed *as* a logged decision, never a quiet "ask later".
+- **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands one back. Make the best call from `PRODUCT.md`, the plan, and real day-to-day use (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body summarises it. Parking is only allowed _as_ a logged decision, never a quiet "ask later".
 
 Phases:
 
-1. **Worktree** — off `origin/main` (*Git workflow* → *One worktree per feature*).
+1. **Worktree** — off `origin/main` (_Git workflow_ → _One worktree per feature_).
 2. **Plan** — the `Plan` agent; ask which model.
 3. **Questions** — collaborative: discuss them. Autonomous: answer and log them.
 4. **Build** — only on the user's "execute" plus a number of review rounds (n). While building, after each section run the touched files' tests (`vitest run <file>`) and a typecheck.
 5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
 6. **Review round** — the read-only `code-reviewer` (no tests, no servers) in parallel with whatever each touched package adds:
 
-   | Touched | Adds |
-   | --- | --- |
-   | `app/` | Headless UI agent (`run-app` skill, stub + auth bypass) driving a concrete checklist from the plan, at phone width in light and dark. Screenshots → the worktree's `localNotes/screenshots/round-<n>/`. |
-   | `lambdas/` | No second agent — the node-env handler tests are the runtime proof and the gate ran them. The reviewer gets a backend checklist: writes only via the handler's `writes` object, external calls only via gated gateways, JWT + origin-secret handling. |
-   | `cdk/` | Synth pass: `cdk synth`, diff the template against `origin/main`'s, report changed resources, IAM grants, cdk-nag findings. No creds needed; never alongside tests. |
-   | `packages/shared` | The contract both sides build on — the `app/` and `lambdas/` rows both apply, and the reviewer checks both callers. |
+   | Touched           | Adds                                                                                                                                                                                                                                                  |
+   | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `app/`            | Headless UI agent (`run-app` skill, stub + auth bypass) driving a concrete checklist from the plan, at phone width in light and dark. Screenshots → the worktree's `localNotes/screenshots/round-<n>/`.                                               |
+   | `lambdas/`        | No second agent — the node-env handler tests are the runtime proof and the gate ran them. The reviewer gets a backend checklist: writes only via the handler's `writes` object, external calls only via gated gateways, JWT + origin-secret handling. |
+   | `cdk/`            | Synth pass: `cdk synth`, diff the template against `origin/main`'s, report changed resources, IAM grants, cdk-nag findings. No creds needed; never alongside tests.                                                                                   |
+   | `packages/shared` | The contract both sides build on — the `app/` and `lambdas/` rows both apply, and the reviewer checks both callers.                                                                                                                                   |
 
    When the round is back, fix real bugs and convention breaks. Findings that need a product call or add scope: collaborative → a list for the user; autonomous → decide and log. Then the gate runs again, which also starts the next round.
-7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current. The user pushes.
+
+7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current.
+8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (_Claude behavior_, above), then re-run the gate. Then hand the user, run from the worktree path, `git push --force origin <branch>:dev` — the user runs it; Claude never pushes to `dev` (_Git workflow_). With it, a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist.
+9. **Dev feedback** — ask how dev testing went. Fixes go back through the gate (plus a review round if non-trivial), then back to dev. Repeat until the user gives the all-clear.
+10. **PR** — on the all-clear, hand over the push + `gh pr create` commands (_Git workflow_ → _PR bodies_). A later push to an open PR after a rebase (phase 8 pushes only to `dev`, so the first PR push never is one) is `git push --force-with-lease -u origin <branch>` — again the user's to run.
+11. **Cleanup** — once `gh pr view <branch>` shows it merged, confirm with the user, then: copy the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/`; from `/workspace`, `git worktree remove .claude/worktrees/<branch>`; hand the user `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse).
 
 Page-first still holds: a backend half usually follows a frontend that already passed its rounds, so the plan says which half this is, and the reviewer checks the lambda against the contract the stub set.
 
 ### Before concluding "X can't do Y"
 
-A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/ops/COI-INCIDENTS.md` → Incident D → *Fix* → the 2026-09-07 correction.
+A wrong conclusion survived weeks and a night of work here, and each step below is where it should have died. Full write-up: `docs/ops/COI-INCIDENTS.md` → Incident D → _Fix_ → the 2026-09-07 correction.
 
 - **Check the tool's own surface first.** Never write "X doesn't support Y" into a doc — or build a workaround for it — without first running the thing that would disprove it (`coi --help` was one command).
 - **Remove your own workaround before re-testing.** While a fix is installed, the original question is unfalsifiable. Take it out, then measure.
