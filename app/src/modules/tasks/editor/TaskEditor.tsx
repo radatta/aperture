@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import {
+  autoSyncOn,
   inSplitFamily,
   isCalibrationPoint,
   isPullFresh,
@@ -78,7 +79,7 @@ export function TaskEditor({
   const { data: plans = [] } = usePlansForDay(today);
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
-  const autoCalendar = settings?.autoCalendar !== false && !!settings?.calendarWriteDefault;
+  const autoCalendar = autoSyncOn(settings);
   const { data: tasksData } = useAllTasks();
   const allTasks = tasksData ?? [];
   const [reveal, setReveal] = useState<Reveal>(null);
@@ -195,10 +196,10 @@ export function TaskEditor({
           </div>
         )}
         {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). */}
-        {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulledNote && (
+        {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
           <div role="status">
             <Text size="sm" tone="gold">
-              {task.gcalPulledNote}
+              {task.gcalPulled.note}
             </Text>
           </div>
         )}

@@ -10,7 +10,7 @@ const epoch: DueEpoch = (day, hhmm) => {
 const REF = { accountSub: 'acct', calendarId: 'me@example.com' };
 const ON = { autoCalendar: true, calendarWriteDefault: REF };
 type T = Pick<Task, 'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin' | 'gcalEventId'> &
-  Partial<Pick<Task, 'gcalSyncError' | 'gcalSeen' | 'gcalManual'>>;
+  Partial<Pick<Task, 'gcalSyncError' | 'gcalSeen'>>;
 const task = (over: Partial<T> = {}): T => ({
   title: 'pset',
   status: 'backlog',
@@ -45,7 +45,9 @@ describe('calendarSyncPlan', () => {
     expect(calendarSyncPlan(task(), task({ estimateMin: 90 }), ON, epoch).kind).toBe('none');
   });
   it('linked + known: a day/time/estimate change patches the window only — never the title', () => {
-    const known = linked({ gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END } });
+    const known = linked({
+      gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 },
+    });
     for (const next of [
       { ...known, dueDay: '2026-10-06' },
       { ...known, dueTime: '17:00' },
@@ -61,7 +63,9 @@ describe('calendarSyncPlan', () => {
     expect(calendarSyncPlan(linked(), linked(), ON, epoch).kind).toBe('none');
   });
   it('linked + known: a rename patches the title only, so it cannot undo a drag made in Google', () => {
-    const known = linked({ gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END } });
+    const known = linked({
+      gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 },
+    });
     expect(calendarSyncPlan(known, { ...known, title: 'renamed' }, ON, epoch)).toEqual({
       kind: 'patch',
       title: 'renamed',
@@ -79,7 +83,7 @@ describe('calendarSyncPlan', () => {
     });
   });
   it('with a known event (gcalSeen), a patch sends whatever the event lacks — including unsent changes', () => {
-    const seen = { title: 'pset', startMs: END - 60 * 60_000, endMs: END };
+    const seen = { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 };
     // A time change that never reached Google (failed, or made with sync off): the next rename sends it.
     const unsent = linked({ dueTime: '18:00', gcalSeen: seen });
     const end = epoch('2026-10-05', '18:00');
@@ -97,32 +101,31 @@ describe('calendarSyncPlan', () => {
     });
     expect(calendarSyncPlan(synced, { ...synced }, ON, epoch).kind).toBe('none');
   });
-  it('a manual block keeps its picked time until the task’s time changes', () => {
-    const manual = linked({
-      gcalManual: true,
-      gcalSeen: { title: 'pset', startMs: 0, endMs: 60_000 },
-    });
-    expect(calendarSyncPlan(manual, { ...manual, title: 'x' }, ON, epoch)).toEqual({
+  it('a block placed off the deadline snaps to it with the next push — a rename, an estimate change, or Retry', () => {
+    // A picked block (sync was off, or picked before the task had a time): a timed task's one block is
+    // its auto block.
+    const picked = linked({ gcalSeen: { title: 'pset', startMs: 0, endMs: 60_000, updatedMs: 1 } });
+    const window = { startMs: END - 60 * 60_000, endMs: END };
+    expect(calendarSyncPlan(picked, { ...picked, title: 'x' }, ON, epoch)).toEqual({
       kind: 'patch',
       title: 'x',
+      ...window,
     });
-    expect(calendarSyncPlan(manual, { ...manual, dueTime: '17:00' }, ON, epoch)).toMatchObject({
-      endMs: epoch('2026-10-05', '17:00'),
+    expect(calendarSyncPlan(picked, { ...picked, estimateMin: 90 }, ON, epoch)).toEqual({
+      kind: 'patch',
+      startMs: END - 90 * 60_000,
+      endMs: END,
     });
-  });
-  it('a manual block keeps its picked time through a retry and an estimate change', () => {
-    const manual = linked({
-      gcalManual: true,
-      gcalSeen: { title: 'pset', startMs: 0, endMs: 60_000 },
-    });
-    expect(calendarSyncPlan(null, manual, ON, epoch, { ensure: true })).toEqual({
+    expect(calendarSyncPlan(null, picked, ON, epoch, { ensure: true })).toEqual({
       kind: 'patch',
       title: 'pset',
+      ...window,
     });
-    expect(calendarSyncPlan(manual, { ...manual, estimateMin: 90 }, ON, epoch).kind).toBe('none');
   });
   it('a window not known (first seen all-day) is re-timed only when the task’s time changes', () => {
-    const allDay = linked({ gcalSeen: { title: 'pset', startMs: null, endMs: null } });
+    const allDay = linked({
+      gcalSeen: { title: 'pset', startMs: null, endMs: null, updatedMs: 1 },
+    });
     expect(calendarSyncPlan(allDay, { ...allDay, title: 'r' }, ON, epoch)).toEqual({
       kind: 'patch',
       title: 'r',
@@ -134,21 +137,23 @@ describe('calendarSyncPlan', () => {
   it('an untrimmed title against a trimmed base is not re-sent', () => {
     const t = linked({
       title: 'pset ',
-      gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END },
+      gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 },
     });
     expect(calendarSyncPlan(t, { ...t }, ON, epoch).kind).toBe('none');
   });
   it('seenAfter: the event as known after a create/patch', () => {
-    const prev = { title: 'a', startMs: 1, endMs: 2 };
-    expect(seenAfter({ kind: 'patch', title: 'b' }, prev)).toEqual({
+    const prev = { title: 'a', startMs: 1, endMs: 2, updatedMs: 10 };
+    expect(seenAfter({ kind: 'patch', title: 'b' }, prev, 20)).toEqual({
       title: 'b',
       startMs: 1,
       endMs: 2,
+      updatedMs: 20,
     });
-    expect(seenAfter({ kind: 'patch', startMs: 5, endMs: 6 }, null)).toEqual({
+    expect(seenAfter({ kind: 'patch', startMs: 5, endMs: 6 }, null, 30)).toEqual({
       title: null,
       startMs: 5,
       endMs: 6,
+      updatedMs: 30,
     });
   });
   it('a manual event on an untimed task moves when the task gains a time', () => {

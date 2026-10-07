@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import { dueUrgency, fmtDueDay, isPullFresh, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtDueDay, isKeptNote, isPullFresh, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -166,10 +166,13 @@ function TaskMeta({
           calendar sync failed
         </Text>
       )}
-      {/* An edit made in Google won — said out loud until the day rolls over (the editor says what). */}
+      {/* An edit made in Google applied — or was kept out — said out loud until the day rolls over (the
+          editor says what). */}
       {isPullFresh(task, settings?.dayStartHour ?? 4, now) && (
         <Text size="xs" tone="gold">
-          updated from Google
+          {task.gcalPulled && isKeptNote(task.gcalPulled.note)
+            ? 'kept over Google'
+            : 'updated from Google'}
         </Text>
       )}
       <RollTag rollId={task.rollId} />

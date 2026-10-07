@@ -1,6 +1,8 @@
 import {
   assertAttachmentAllowed,
   assertCategoryDeletable,
+  AUTO_PLACED_ERROR,
+  autoSyncOn,
   calendarPullPlan,
   calendarSyncPlan,
   seenAfter,
@@ -262,12 +264,9 @@ export class BackendClient implements ApiClient {
     const settings = known ?? (await this.ensureSettings());
     const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
-    // stamps gcalEditedAt, the tiebreak when Google changed the same field (calendarPull.ts), and retires
-    // an "updated from Google" note it has just superseded.
+    // retires an "updated from Google" note it has just superseded.
     const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
-    const editStamp = edited
-      ? { gcalEditedAt: this.now(), gcalPulledAt: null, gcalPulledNote: null }
-      : {};
+    const editStamp = edited ? { gcalPulled: null } : {};
     if (action.kind === 'none') {
       // A stale failure note goes once nothing is left to sync: no event and no time, sync turned off,
       // or the task finished — otherwise it'd sit there with a Retry that can't do anything.
@@ -285,11 +284,10 @@ export class BackendClient implements ApiClient {
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
-      gcalManual: null,
       gcalSeen: null,
     };
     // A successful create/patch records the event as it now stands (gcalSeen — the base both directions
-    // diff against) and Google's `updated` for it (gcalTouchedAt — a delta state older than that is stale).
+    // diff against), versioned by Google's `updated` for it (a delta state older than that is stale).
     try {
       if (action.kind === 'create') {
         const { eventId, updatedMs } = await this.google.insertEvent({
@@ -305,11 +303,8 @@ export class BackendClient implements ApiClient {
           gcalCalendarId: action.target.calendarId,
           gcalEventId: eventId,
           gcalSyncError: null,
-          gcalManual: null,
-          gcalSeen: seenAfter(action, null),
-          gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
-          gcalPulledNote: null,
-          gcalTouchedAt: updatedMs,
+          gcalSeen: seenAfter(action, null, updatedMs),
+          gcalPulled: null, // a "Removed in Google Calendar" mark no longer holds
         });
       }
       if (!task.gcalAccountId || !task.gcalCalendarId || !task.gcalEventId) return task;
@@ -340,26 +335,19 @@ export class BackendClient implements ApiClient {
         // creates a fresh one.
         return this.putGcal(task, unlinked);
       }
-      // A moved window makes a manual block the task's auto-synced one.
       return this.putGcal(task, {
         gcalSyncError: null,
-        gcalSeen: seenAfter(action, task.gcalSeen),
-        gcalTouchedAt: updatedMs,
+        gcalSeen: seenAfter(action, task.gcalSeen, updatedMs),
         ...editStamp,
-        ...(action.endMs !== undefined && { gcalManual: null }),
       });
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       console.log(
         JSON.stringify({ event: 'gcal_sync_failed', taskId: task.id, kind: action.kind, detail }),
       );
-      // A failed move of a manual block still makes it the deadline's block: the retry then re-times it
-      // (a manual block's retry otherwise keeps its picked time).
-      const retimed = action.kind === 'patch' && action.endMs !== undefined;
       return this.putGcal(task, {
         gcalSyncError: gcalSyncMessage(action.kind, detail),
         ...editStamp,
-        ...(retimed && { gcalManual: null }),
       });
     }
   }
@@ -375,12 +363,8 @@ export class BackendClient implements ApiClient {
         | 'gcalCalendarId'
         | 'gcalEventId'
         | 'gcalSyncError'
-        | 'gcalManual'
-        | 'gcalTouchedAt'
-        | 'gcalEditedAt'
         | 'gcalSeen'
-        | 'gcalPulledAt'
-        | 'gcalPulledNote'
+        | 'gcalPulled'
       >
     >,
   ): Promise<Task> {
@@ -653,10 +637,9 @@ export class BackendClient implements ApiClient {
     // A TIMED task's event is the block before its deadline. A done part has no future there, so the link
     // moves to the follow-up (which re-titles/re-times it — no delete + re-create). Kept going, each part
     // owns its own block: the original keeps its event, and the follow-up gets one from the planner (it
-    // gains a time). Any other linked event (a manual one, a record of work done) stays on the original.
-    // A manual block (gcalManual — a picked time, often the work just done) is "any other" event too.
-    const moveLink =
-      done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId && !task.gcalManual;
+    // gains a time). A timed task's one linked block is its auto block, whatever placed it. Any other
+    // linked event (a manual one on an untimed original) stays on the original.
+    const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
     let original: Task;
     if (done) {
       // A finish drops a failure note, but carries out an owed removal (reporting, like transitionTask).
@@ -669,15 +652,13 @@ export class BackendClient implements ApiClient {
               gcalCalendarId: null,
               gcalEventId: null,
               gcalSeen: null,
-              gcalManual: null,
-              gcalPulledAt: null, // the follow-up owns the event a pulled note would describe
-              gcalPulledNote: null,
+              gcalPulled: null, // the follow-up owns the event a pulled note would describe
             }
           : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
       // Through the sync path whenever the event stays: an owed removal is carried out, and a rename
-      // stamps the edit clock (calendarPull.ts) like any edit on a done task.
+      // retires a pulled note like any edit on a done task.
       if (!moveLink) original = await this.syncCalendar(task, original);
     } else {
       original = await this.syncCalendar(task, await this.repo.putTask(edited));
@@ -692,15 +673,14 @@ export class BackendClient implements ApiClient {
     const created = await this.repo.putTask({
       ...this.base(),
       ...fields,
-      // The link moves with what Aperture knows about the event (its base and clocks).
+      // The link moves with what Aperture knows about the event (its base). The follow-up's new title and
+      // window differ from it — unsent, so they win a conflict and go with its first push.
       ...(moveLink
         ? {
             gcalAccountId: task.gcalAccountId,
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
             gcalSeen: task.gcalSeen ?? null,
-            gcalTouchedAt: task.gcalTouchedAt ?? null,
-            gcalEditedAt: this.now(), // its title/estimate are a new Aperture edit, made now
           }
         : {}),
     });
@@ -1223,6 +1203,9 @@ export class BackendClient implements ApiClient {
 
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
     const task = await this.mustTask(input.taskId);
+    // A timed task's block is its auto block, placed at its deadline — no picked time while sync is on.
+    if (eventWindow(task, this.dueEpoch) && autoSyncOn(await this.ensureSettings()))
+      throw new Error(AUTO_PLACED_ERROR);
     // One live event per task — a second insert would orphan the first.
     if (task.gcalEventId) throw new Error('Task already has a calendar event');
     // Two-system write: the event is created before its pointer is stored. If putTask below fails, a
@@ -1241,11 +1224,8 @@ export class BackendClient implements ApiClient {
       gcalAccountId: input.accountSub,
       gcalCalendarId: input.calendarId,
       gcalEventId: eventId,
-      gcalManual: true, // a picked time maps to no task field — a pull syncs its title only
-      gcalSeen: { title: input.title, startMs: input.startMs, endMs: input.endMs },
-      gcalTouchedAt: updatedMs,
-      gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
-      gcalPulledNote: null,
+      gcalSeen: { title: input.title, startMs: input.startMs, endMs: input.endMs, updatedMs },
+      gcalPulled: null, // a "Removed in Google Calendar" mark no longer holds
       updatedAt: this.now(),
     });
   }
@@ -1268,7 +1248,6 @@ export class BackendClient implements ApiClient {
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
-      gcalManual: null,
       gcalSeen: null,
       updatedAt: this.now(),
     });
@@ -1384,18 +1363,15 @@ export class BackendClient implements ApiClient {
           ? {
               ...action.fields,
               gcalSeen: action.seen,
-              gcalPulledAt: now,
-              gcalPulledNote: action.note,
+              gcalPulled: { at: now, note: action.note },
             }
           : {
               gcalAccountId: null,
               gcalCalendarId: null,
               gcalEventId: null,
               gcalSyncError: null,
-              gcalManual: null,
               gcalSeen: null,
-              gcalPulledAt: now,
-              gcalPulledNote: action.note,
+              gcalPulled: { at: now, note: action.note },
             };
     await this.repo.putTask({ ...fresh, ...write, updatedAt: now });
     return action.kind;

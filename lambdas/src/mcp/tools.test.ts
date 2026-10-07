@@ -285,6 +285,23 @@ describe('mcp tools — calendar', () => {
     expect(google.events.size).toBe(0);
   });
 
+  it('create_calendar_event refuses a task with a due time while auto-sync is on', async () => {
+    const { call, setup } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', {
+      title: 'due',
+      dueDay: '2026-09-22',
+      dueTime: '17:00',
+    })) as Task;
+    await expect(
+      call('create_calendar_event', {
+        taskId: t.id,
+        start: '2026-09-22T14:00:00-07:00',
+        durationMin: 60,
+      }),
+    ).rejects.toThrow(/Auto-sync places/);
+  });
+
   it('create_calendar_event errors clearly with no target and no default', async () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'no cal' })) as Task;

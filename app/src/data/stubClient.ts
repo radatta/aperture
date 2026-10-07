@@ -35,6 +35,8 @@ import {
   calendarSyncPlan,
   seenAfter,
   syncedFieldsChanged,
+  AUTO_PLACED_ERROR,
+  autoSyncOn,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -381,12 +383,10 @@ class StubClient implements ApiClient {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
     const settings = this.ensureSettings();
     const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, { ensure });
-    // A linked task's synced edit stamps gcalEditedAt (the conflict tiebreak) and retires a superseded
-    // "updated from Google" note — whether or not it pushes.
+    // A linked task's synced edit retires a superseded "updated from Google" note — whether or not it
+    // pushes.
     const edited = !!prev && !!task.gcalEventId && syncedFieldsChanged(prev, task);
-    const editStamp = edited
-      ? { gcalEditedAt: this.now(), gcalPulledAt: null, gcalPulledNote: null }
-      : {};
+    const editStamp = edited ? { gcalPulled: null } : {};
     if (action.kind === 'none') {
       const moot =
         task.gcalSyncError &&
@@ -401,26 +401,20 @@ class StubClient implements ApiClient {
       });
     }
     if (action.kind === 'delete') return this.clearCalendarPointers(task.id);
-    // A create or patch is Aperture's latest word on the event (gcalTouchedAt, the latest-wins clock);
-    // a moved window makes a manual block the auto-synced one.
+    // A create or patch records the event as it now stands, versioned by the clock (Google's `updated`).
     if (action.kind === 'patch')
       return this.writes.patch(this.store.tasks, task.id, {
         gcalSyncError: null,
-        gcalSeen: seenAfter(action, task.gcalSeen),
-        gcalTouchedAt: this.now(),
+        gcalSeen: seenAfter(action, task.gcalSeen, this.now()),
         ...editStamp,
-        ...(action.endMs !== undefined && { gcalManual: null }),
       });
     return this.writes.patch(this.store.tasks, task.id, {
       gcalAccountId: action.target.accountSub,
       gcalCalendarId: action.target.calendarId,
       gcalEventId: `stub-event-${this.ulid()}`,
       gcalSyncError: null,
-      gcalManual: null,
-      gcalSeen: seenAfter(action, null),
-      gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
-      gcalPulledNote: null,
-      gcalTouchedAt: this.now(),
+      gcalSeen: seenAfter(action, null, this.now()),
+      gcalPulled: null, // a "Removed in Google Calendar" mark no longer holds
     });
   }
   private clearCalendarPointers(taskId: string): Task {
@@ -429,7 +423,6 @@ class StubClient implements ApiClient {
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
-      gcalManual: null,
       gcalSeen: null,
     });
   }
@@ -659,10 +652,8 @@ class StubClient implements ApiClient {
     const edited = splitOriginal(task, input, this.now()); // validates everything before any write
     const done = input.finish === 'done';
     // Parity with the backend: a done TIMED part hands its event to the follow-up; kept going, each part
-    // owns its own block; any other linked event stays on the original.
-    // A manual block (gcalManual — a picked time, often the work just done) is "any other" event too.
-    const moveLink =
-      done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId && !task.gcalManual;
+    // owns its own block; any other linked event (a manual one on an untimed original) stays on it.
+    const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
     let original: Task;
     if (done) {
       const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
@@ -674,15 +665,13 @@ class StubClient implements ApiClient {
               gcalCalendarId: null,
               gcalEventId: null,
               gcalSeen: null,
-              gcalManual: null,
-              gcalPulledAt: null, // the follow-up owns the event a pulled note would describe
-              gcalPulledNote: null,
+              gcalPulled: null, // the follow-up owns the event a pulled note would describe
             }
           : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
       // Through the sync path whenever the event stays: an owed removal is carried out, and a rename
-      // stamps the edit clock (calendarPull.ts) like any edit on a done task.
+      // retires a pulled note like any edit on a done task.
       if (!moveLink) original = this.syncCalendar(task, original);
     } else {
       original = this.syncCalendar(task, this.writes.put(this.store.tasks, edited));
@@ -701,8 +690,6 @@ class StubClient implements ApiClient {
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
             gcalSeen: task.gcalSeen ?? null,
-            gcalTouchedAt: task.gcalTouchedAt ?? null,
-            gcalEditedAt: this.now(), // its title/estimate are a new Aperture edit, made now
           }
         : {}),
     });
@@ -1166,19 +1153,25 @@ class StubClient implements ApiClient {
   }
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
     const task = this.mustFind(this.store.tasks, input.taskId);
-    // Parity with the backend: one live event per task, and only onto a connected account.
+    // Parity with the backend: no picked time on a timed task while auto-sync is on, one live event per
+    // task, and only onto a connected account.
+    const settings = this.ensureSettings();
+    if (eventWindow(task, localEpochFromDayTime) && autoSyncOn(settings))
+      throw new Error(AUTO_PLACED_ERROR);
     if (task.gcalEventId) throw new Error('Task already has a calendar event');
-    if (!this.ensureSettings().googleAccounts.some((a) => a.sub === input.accountSub))
+    if (!settings.googleAccounts.some((a) => a.sub === input.accountSub))
       throw new Error(`No connected account: ${input.accountSub}`);
     return this.writes.patch(this.store.tasks, input.taskId, {
       gcalAccountId: input.accountSub,
       gcalCalendarId: input.calendarId,
       gcalEventId: `stub-event-${this.now()}`,
-      gcalManual: true, // a picked time maps to no task field — a pull syncs its title only
-      gcalSeen: { title: input.title, startMs: input.startMs, endMs: input.endMs },
-      gcalTouchedAt: this.now(),
-      gcalPulledAt: null, // a "Removed in Google Calendar" mark no longer holds
-      gcalPulledNote: null,
+      gcalSeen: {
+        title: input.title,
+        startMs: input.startMs,
+        endMs: input.endMs,
+        updatedMs: this.now(),
+      },
+      gcalPulled: null, // a "Removed in Google Calendar" mark no longer holds
     });
   }
   async deleteCalendarEvent(taskId: string): Promise<Task> {
@@ -1251,18 +1244,15 @@ class StubClient implements ApiClient {
               ? {
                   ...action.fields,
                   gcalSeen: action.seen,
-                  gcalPulledAt: now,
-                  gcalPulledNote: action.note,
+                  gcalPulled: { at: now, note: action.note },
                 }
               : {
                   gcalAccountId: null,
                   gcalCalendarId: null,
                   gcalEventId: null,
                   gcalSyncError: null,
-                  gcalManual: null,
                   gcalSeen: null,
-                  gcalPulledAt: now,
-                  gcalPulledNote: action.note,
+                  gcalPulled: { at: now, note: action.note },
                 },
         );
         if (action.kind !== 'see') changed.push(task.id);
@@ -1282,7 +1272,12 @@ class StubClient implements ApiClient {
   }
   private knownEvent(task: Task): GcalSeen {
     const win = eventWindow(task, localEpochFromDayTime);
-    return { title: task.title, startMs: win?.startMs ?? null, endMs: win?.endMs ?? null };
+    return {
+      title: task.title,
+      startMs: win?.startMs ?? null,
+      endMs: win?.endMs ?? null,
+      updatedMs: 0,
+    };
   }
   // A queued edit as the event Google would now return: the known event with the edit's changes laid
   // over it (an `end` alone keeps the block's length).

@@ -246,16 +246,13 @@ describe('TaskEditor', () => {
     const client = api();
     const t = await client.createTask({ title: 'Pulled', dueDay: '2026-10-09', dueTime: '17:00' });
     const note = 'Moved to Oct 9 5pm in Google Calendar';
-    renderEditor(client, { ...t, gcalPulledAt: Date.now(), gcalPulledNote: note });
+    renderEditor(client, { ...t, gcalPulled: { at: Date.now(), note } });
     expect(screen.getAllByRole('status').some((el) => el.textContent === note)).toBe(true);
   });
 
   it('an old Google change is not repeated after the rollover', () => {
     const client = api();
-    renderEditor(
-      client,
-      mkTask({ gcalPulledAt: Date.now() - 2 * 86_400_000, gcalPulledNote: 'old' }),
-    );
+    renderEditor(client, mkTask({ gcalPulled: { at: Date.now() - 2 * 86_400_000, note: 'old' } }));
     expect(screen.queryByText('old')).toBeNull();
   });
 

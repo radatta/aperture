@@ -30,6 +30,7 @@ export type PullAction =
   // that maps to nothing: just remember the event (gcalSeen) — nothing on the task changes.
   | { kind: 'see'; seen: GcalSeen }
   | { kind: 'unlink'; note: string }
+  // `fields` is empty when the note only says a Google change was kept out (Aperture's unsent edit won).
   | {
       kind: 'apply';
       fields: Partial<Pick<Task, 'title' | 'dueDay' | 'dueTime' | 'estimateMin'>>;
@@ -38,21 +39,24 @@ export type PullAction =
     };
 
 type PullFields = Pick<Task, 'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin'> &
-  Partial<
-    Pick<Task, 'gcalSyncError' | 'gcalTouchedAt' | 'gcalEditedAt' | 'gcalManual' | 'gcalSeen'>
-  >;
+  Partial<Pick<Task, 'gcalSyncError' | 'gcalSeen'>>;
+
+// A field Google changed that Aperture had also changed and not yet sent — Aperture's value stays.
+export type KeptField = 'title' | 'time';
 
 // The app pulls at most once a minute per account (server-side; failures count).
 export const PULL_THROTTLE_MS = 60_000;
 export const PULL_REMOVED_NOTE = 'Removed in Google Calendar';
+export const PULL_KEPT_PREFIX = 'Kept your';
 const NONE: PullAction = { kind: 'none' };
 
 // A three-way merge over (the event as Aperture last knew it = task.gcalSeen, the task, the event now).
 // Google changed a field iff the event differs from gcalSeen; Aperture changed it iff the task does. So
 // our own push echoing back is a no-op, a field only Google changed applies, a field only Aperture
-// changed is never "taken" from Google's copy, and a field both changed goes to the later edit (Google's
-// `updated` vs gcalEditedAt). An event state older than Aperture's last successful push (Google's
-// `updated` < gcalTouchedAt — both Google's clock) predates it and is stale.
+// changed is never "taken" from Google's copy, and a field both changed keeps Aperture's value (unsent —
+// the next push sends it) while the base takes Google's, so it isn't re-detected. An event state older
+// than the base (Google's `updated` < gcalSeen.updatedMs — both Google's clock) is stale: our own push
+// came after it, and that push's echo carries anything newer.
 export function calendarPullPlan(
   task: PullFields,
   ev: PulledEvent,
@@ -73,61 +77,72 @@ export function calendarPullPlan(
     title: title ?? seen?.title ?? null,
     startMs: timed ? ev.startMs : (seen?.startMs ?? null),
     endMs: timed ? ev.endMs : (seen?.endMs ?? null),
+    updatedMs: ev.updatedMs,
   };
   const window = eventWindow(task, time.epoch);
-  if (!seen) return { kind: 'see', seen: now }; // first sight: remember it, apply nothing
-  const titleUnsent = !sameTitle(task.title, seen.title);
-  const timeUnsent = !!window && (window.startMs !== seen.startMs || window.endMs !== seen.endMs);
-  if (ev.updatedMs < (task.gcalTouchedAt ?? 0)) {
-    // Stale: our push came after this state. Apply nothing — but for a field Aperture hasn't got to
-    // Google yet, take Google's value into the base, so it can't be "re-detected" as a Google change
-    // later and undo Aperture's (the task still differs from the base, so the next push sends it).
-    const absorbed: GcalSeen = {
-      title: titleUnsent ? now.title : seen.title,
-      startMs: timeUnsent ? now.startMs : seen.startMs,
-      endMs: timeUnsent ? now.endMs : seen.endMs,
+  // First sight: remember the event as the task has it — apply nothing, and an edit made in Google
+  // before two-way sync isn't Aperture's "unsent" change either (the next Google edit applies).
+  if (!seen)
+    return {
+      kind: 'see',
+      seen: window ? { ...now, title: task.title, ...window } : { ...now, title: task.title },
     };
-    return sameSeen(absorbed, seen) ? NONE : { kind: 'see', seen: absorbed };
-  }
+  if (ev.updatedMs < seen.updatedMs) return NONE; // stale: predates the base
+  const titleUnsent = !sameTitle(task.title, seen.title);
+  // Aperture changed the time iff the task no longer maps to the base the way a pull would map it: the
+  // deadline as an instant, the length in whole minutes (not on a done task — its start never maps). A
+  // window not known (first seen all-day) isn't unsent: the push side only moves it with the task's time.
+  const timeUnsent =
+    !!window &&
+    seen.startMs !== null &&
+    seen.endMs !== null &&
+    (window.endMs !== seen.endMs ||
+      (task.status !== 'done' &&
+        Math.round((seen.endMs - seen.startMs) / 60_000) !==
+          (window.endMs - window.startMs) / 60_000));
 
-  // Where both sides changed a field, the later edit wins; when Aperture's does, Google's value still
-  // goes into the base (`now`), and the next push sends Aperture's.
-  const googleLater = ev.updatedMs > (task.gcalEditedAt ?? 0);
   const fields: Extract<PullAction, { kind: 'apply' }>['fields'] = {};
+  const kept: KeptField[] = [];
   // Title: Google renamed it since Aperture last knew the event (trim-insensitive).
-  if (
-    title &&
-    !sameTitle(title, seen.title) &&
-    !sameTitle(title, task.title) &&
-    (!titleUnsent || googleLater)
-  )
-    fields.title = title;
-  // Time — only a timed task's auto-synced block maps to task fields; a manual block (gcalManual, or any
-  // event on an untimed task) syncs its title only.
+  if (title && !sameTitle(title, seen.title) && !sameTitle(title, task.title)) {
+    if (titleUnsent) kept.push('title');
+    else fields.title = title;
+  }
+  // Time — only a timed task's block maps to task fields; an event on an untimed task syncs its title only.
   const moved = timed && (ev.startMs !== seen.startMs || ev.endMs !== seen.endMs);
-  if (moved && window && !task.gcalManual && (!timeUnsent || googleLater)) {
+  if (moved && window) {
     // Compared as wall-clock day + "HH:MM" and whole minutes, so a value equal to the task's writes nothing.
+    const timeFields: typeof fields = {};
     const end = time.clock(ev.endMs!);
     if (end.day !== task.dueDay || end.hhmm !== task.dueTime) {
-      fields.dueDay = end.day;
-      fields.dueTime = end.hhmm;
+      timeFields.dueDay = end.day;
+      timeFields.dueTime = end.hhmm;
     }
     // The start sets the working estimate (never the frozen estimateLockedMin). A done task's estimate
     // is history — a stretched block doesn't rewrite it. Against eventLengthMin, so a no-estimate task's
     // default-length block reads as unchanged rather than writing estimateMin = 30.
     const len = Math.round((ev.endMs! - ev.startMs!) / 60_000);
-    if (task.status !== 'done' && len > 0 && len !== eventLengthMin(task)) fields.estimateMin = len;
+    if (task.status !== 'done' && len > 0 && len !== eventLengthMin(task))
+      timeFields.estimateMin = len;
+    if (Object.keys(timeFields).length > 0) {
+      if (timeUnsent) kept.push('time');
+      else Object.assign(fields, timeFields);
+    }
   }
-  if (Object.keys(fields).length > 0)
-    return { kind: 'apply', fields, note: pullNote(fields), seen: now };
+  if (Object.keys(fields).length > 0 || kept.length > 0)
+    return { kind: 'apply', fields, note: pullNote(fields, kept), seen: now };
   return sameSeen(now, seen) ? NONE : { kind: 'see', seen: now };
 }
 
 const sameSeen = (a: GcalSeen, b: GcalSeen): boolean =>
   sameTitle(a.title, b.title) && a.startMs === b.startMs && a.endMs === b.endMs;
 
-// One short line saying what Google changed: "Moved to Oct 9 5pm · Now 45m in Google Calendar".
-export function pullNote(fields: Extract<PullAction, { kind: 'apply' }>['fields']): string {
+// One short line saying what Google changed: "Moved to Oct 9 5pm · Now 45m in Google Calendar", and what
+// it changed that Aperture kept: "Kept your title — renamed in Google Calendar too".
+export function pullNote(
+  fields: Extract<PullAction, { kind: 'apply' }>['fields'],
+  kept: KeptField[] = [],
+): string {
   const parts: string[] = [];
   if (fields.dueDay && fields.dueTime)
     parts.push(`Moved to ${fmtMonthShortDay(fields.dueDay)} ${fmtClock12(fields.dueTime)}`);
@@ -136,13 +151,21 @@ export function pullNote(fields: Extract<PullAction, { kind: 'apply' }>['fields'
     const t = fields.title.length > 40 ? `${fields.title.slice(0, 39)}…` : fields.title;
     parts.push(`Renamed to “${t}”`);
   }
-  return `${parts.join(' · ')} in Google Calendar`;
+  const keptWhat = kept.join(' and ');
+  if (parts.length === 0) {
+    const how = kept.length > 1 ? 'changed' : kept[0] === 'title' ? 'renamed' : 'moved';
+    return `${PULL_KEPT_PREFIX} ${keptWhat} — ${how} in Google Calendar too`;
+  }
+  const applied = `${parts.join(' · ')} in Google Calendar`;
+  return kept.length > 0 ? `${applied} · ${PULL_KEPT_PREFIX} ${keptWhat}` : applied;
 }
+
+export const isKeptNote = (note: string): boolean => note.startsWith(PULL_KEPT_PREFIX);
 
 // The "updated from Google" mark shows until the next day rollover (browser-local, dayStartHour).
 export const isPullFresh = (
-  task: Pick<Task, 'gcalPulledAt'>,
+  task: Pick<Task, 'gcalPulled'>,
   dayStartHour: number,
   now: number,
 ): boolean =>
-  !!task.gcalPulledAt && dayKey(task.gcalPulledAt, dayStartHour) === todayKey(dayStartHour, now);
+  !!task.gcalPulled && dayKey(task.gcalPulled.at, dayStartHour) === todayKey(dayStartHour, now);

@@ -34,9 +34,9 @@ All split and family rules live in one file, `packages/shared/src/split.ts`, whi
 
 **D4. Calendar on a split** (detail in [calendar/index.md](../calendar/index.md) → Auto-sync → Split):
 
-- **Done, timed:** the event moves to B.
+- **Done, timed:** the event moves to B, whatever placed it (a picked block too — a timed task's one block is its auto block).
 - **Keep, timed:** each part owns a block, so two blocks end at the deadline. Piece 2 is how B's gets dragged earlier.
-- **Manual events:** stay on A.
+- **Manual events on an untimed A:** stay on A.
 - **Owed removals:** carried out through the reporting path.
 
 Write order on a done timed split: the original is saved unlinked, and then the follow-up is saved with the link. If the follow-up's write fails, the Google event is left orphaned but visible. The reverse order is worse: if the original's write failed, two tasks would point at one event, and a retry would duplicate the follow-up.

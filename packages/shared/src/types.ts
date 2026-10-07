@@ -66,23 +66,15 @@ export interface Task extends BaseEntity {
   gcalSyncError: string | null;
   // Two-way sync bookkeeping (calendarPull.ts) — OPTIONAL, unlike the domain fields above: sync state,
   // not task data, so old rows and literals simply lack it (readers use `?? null` / `!x`).
-  // gcalTouchedAt: Google's `updated` for Aperture's last successful push — an event state older than it
-  // predates that push and is stale. Google's clock, so our own push's echo is never mistaken for one.
-  gcalTouchedAt?: number | null;
-  // gcalEditedAt: when Aperture last changed the title/time/estimate (pushed, failed, or not pushed at
-  // all — done, sync off). Breaks a tie when both sides changed the same field: the later one wins.
-  gcalEditedAt?: number | null;
-  // gcalSeen: the linked event as Aperture last knew it (what it pushed, or last pulled) — the base of a
-  // three-way merge. A pull takes from Google only what changed since; a push sends what the task has
-  // that the event doesn't yet (a failed, skipped or toggle-off change). Null/absent = not known yet.
+  // gcalSeen: the linked event as Aperture last knew it (what it pushed, or last pulled), with Google's
+  // `updated` for that state — the base of a three-way merge. A pull takes from Google only what changed
+  // since (a state older than the base is stale); a push sends what the task has that the event doesn't
+  // yet (a failed, skipped or toggle-off change). A field both sides changed keeps Aperture's unsent
+  // value. Null/absent = not known yet.
   gcalSeen?: GcalSeen | null;
-  // gcalManual: the linked event is a manual time block (the picker / create_calendar_event), whose time
-  // maps to no task field — a pull syncs its title only. Cleared once auto-sync moves it to the deadline.
-  gcalManual?: boolean | null;
-  // gcalPulledAt + gcalPulledNote: the last change Google made to this task, and one line saying what.
-  // The task shows it until the next day rollover (isPullFresh).
-  gcalPulledAt?: number | null;
-  gcalPulledNote?: string | null;
+  // gcalPulled: the last change Google made to this task — or kept out of it — and one line saying what.
+  // The task shows it until the next day rollover (isPullFresh) or your own edit.
+  gcalPulled?: GcalPulled | null;
 }
 
 // Scheduling (the *when*), separate from the task (the *what*) → multi-day + ordering.
@@ -190,10 +182,17 @@ export interface CalendarRef {
   calendarId: string;
 }
 // The event's title and window (instants) as Aperture last knew them; times null when not known/all-day.
+// updatedMs: Google's `updated` for that state — an event state older than it predates the base.
 export interface GcalSeen {
   title: string | null;
   startMs: number | null;
   endMs: number | null;
+  updatedMs: number;
+}
+// The "updated from Google" mark: when, and one short line saying what.
+export interface GcalPulled {
+  at: number;
+  note: string;
 }
 // Two-way sync cursor, one per connected account (id = sub): the events.list syncToken for its primary
 // calendar plus pull health. Exported (like financeSyncStates) — no credentials; a null token means a

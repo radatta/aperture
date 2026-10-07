@@ -96,7 +96,7 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   ([calendar → Auto-sync](../calendar/index.md)); a failure comes back as `gcalSyncError` on the task.
   Edits made in Google come back via the app's pull ([calendar → Two-way sync](../calendar/index.md)) —
   `list_tasks` does **not** pull, so it shows what the app last pulled; a task Google changed carries
-  `gcalPulledAt` + `gcalPulledNote` (what changed).
+  `gcalPulled` (`{at, note}` — what changed, or what Google changed that Aperture kept).
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`
   (`notes: null` or `""` clears; an update replaces the whole note). They're checked before any dispatch,
   so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of
@@ -118,7 +118,9 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 - **Rename** is a new contract method, `setTaskTitle` (allowed at any status; with auto-sync on it also
   renames a linked calendar event). Exposed as `update_task.title`.
 - **Calendar** events are created **from a task only** (the schema has nowhere to pin a standalone event).
-  Times are ISO 8601 **with an explicit offset** — no timezone inference.
+  Times are ISO 8601 **with an explicit offset** — no timezone inference. `create_calendar_event` is
+  refused on a task with a due time while auto-sync is on: that task's block is placed at its deadline,
+  so the agent changes the due time instead.
 - **Attachments** — two byte paths: `attach_file` sends content inline (base64, capped **64 KB** — tool
   args are model output tokens, so this is a small-text-artifact path) and the Lambda PUTs it to the
   presigned URL; `create_attachment_upload` returns a presigned URL for a real file (up to 20 MB) that a

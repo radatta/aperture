@@ -6,8 +6,8 @@
 // sends only what the task has that the event doesn't (against gcalSeen, the event as Aperture last
 // knew it), so an Aperture rename can't undo a drag in Google that hasn't been pulled yet — while a
 // change that never reached Google (a failed push, or one made with sync off) goes with the next push.
-// A done task never pushes; its edits only stamp gcalEditedAt (the caller), which wins a conflict with
-// an older Google edit.
+// A done task never pushes; its unsent edits still win a conflict on the pull (calendarPull.ts) and go
+// with the next push if one ever happens.
 //
 // The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and nothing
 // syncs. Delete-on-cancel is separate (transitionTask) and predates this.
@@ -26,7 +26,7 @@ type SyncFields = Pick<
   Task,
   'title' | 'status' | 'dueDay' | 'dueTime' | 'estimateMin' | 'gcalEventId'
 > &
-  Partial<Pick<Task, 'gcalSyncError' | 'gcalSeen' | 'gcalManual'>>;
+  Partial<Pick<Task, 'gcalSyncError' | 'gcalSeen'>>;
 
 const NONE: CalendarSyncAction = { kind: 'none' };
 
@@ -42,6 +42,14 @@ export const gcalSyncMessage = (kind: 'create' | 'patch' | 'delete', detail: str
   `${FAILED[kind]} (${detail})`;
 export const isPendingRemoval = (gcalSyncError: string | null | undefined): boolean =>
   !!gcalSyncError?.startsWith(FAILED.delete);
+
+// Auto-sync can place blocks: on, with a calendar to write to. A timed task's block is then its auto
+// block, at its deadline — no picked time (the editor's picker and insertCalendarEvent both check this).
+export const autoSyncOn = (
+  s: Pick<Settings, 'autoCalendar' | 'calendarWriteDefault'> | null | undefined,
+): boolean => s?.autoCalendar !== false && !!s?.calendarWriteDefault;
+export const AUTO_PLACED_ERROR =
+  'Auto-sync places this task’s calendar block at its deadline — change its due time instead, or turn auto-sync off to pick a time.';
 
 const titleUnsent = (t: SyncFields): boolean =>
   !!t.gcalSeen && !sameTitle(t.gcalSeen.title, t.title);
@@ -59,15 +67,18 @@ export const syncedFieldsChanged = (
     (k) => (prev[k] ?? null) !== (next[k] ?? null),
   );
 
-// The event as Aperture knows it after a create/patch succeeds — the next gcalSeen.
+// The event as Aperture knows it after a create/patch succeeds — the next gcalSeen, versioned by the
+// `updated` Google returned for it.
 export function seenAfter(
   action: Extract<CalendarSyncAction, { kind: 'create' | 'patch' }>,
   prev: GcalSeen | null | undefined,
+  updatedMs: number,
 ): GcalSeen {
   return {
     title: action.title ?? prev?.title ?? null,
     startMs: action.startMs ?? prev?.startMs ?? null,
     endMs: action.endMs ?? prev?.endMs ?? null,
+    updatedMs,
   };
 }
 
@@ -106,14 +117,10 @@ export function calendarSyncPlan(
     const seen = next.gcalSeen;
     let retime: boolean;
     let retitle: boolean;
-    if (next.gcalManual) {
-      // A manual block keeps its picked time — through a retry and an estimate change too — until the
-      // task's deadline changes (or it first gains one): then it moves there and becomes the auto block.
-      retime = prev !== null && (whenChanged || !wasTimed);
-      retitle = ensure || changed('title') || titleUnsent(next);
-    } else if (seen) {
-      // Send whatever the event doesn't have yet. A window not known (first seen all-day) moves only
-      // when the task's own time does.
+    if (seen) {
+      // Send whatever the event doesn't have yet — a timed task's one block is its auto block, whatever
+      // placed it, so a block off the deadline moves there. A window not known (first seen all-day)
+      // moves only when the task's own time does.
       retime =
         ensure ||
         (seen.startMs === null

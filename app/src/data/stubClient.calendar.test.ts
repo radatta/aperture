@@ -206,6 +206,45 @@ describe('stub calendar auto-sync parity', () => {
       expect(original.gcalEventId).not.toBeNull();
     }
   });
+  it('insert refuses a timed task while auto-sync is on (its block sits at the deadline)', async () => {
+    const api = stub();
+    await api.updateSettings({ autoCalendar: false });
+    const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
+    await api.updateSettings({ autoCalendar: true });
+    const block = () =>
+      api.insertCalendarEvent({
+        taskId: t.id,
+        accountSub: 'seed-personal',
+        calendarId: 'you@gmail.com',
+        title: 't',
+        startMs: 1000,
+        endMs: 2000,
+      });
+    await expect(block()).rejects.toThrow(/Auto-sync places/);
+    await api.updateSettings({ autoCalendar: false });
+    await expect(block()).resolves.toMatchObject({ gcalEventId: expect.any(String) });
+  });
+  it('a done split moves a picked block on a timed task to the follow-up', async () => {
+    const api = stub();
+    await api.updateSettings({ autoCalendar: false });
+    const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
+    const picked = await api.insertCalendarEvent({
+      taskId: t.id,
+      accountSub: 'seed-personal',
+      calendarId: 'you@gmail.com',
+      title: 't',
+      startMs: 1000,
+      endMs: 2000,
+    });
+    await api.updateSettings({ autoCalendar: true });
+    await api.transitionTask(t.id, 'in_progress');
+    const { original, followUp } = await api.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 't, part 2', estimateMin: null },
+    });
+    expect(original.gcalEventId).toBeNull();
+    expect(followUp.gcalEventId).toBe(picked.gcalEventId);
+  });
 });
 
 // Two-way sync parity with lambdas/src/backend.calendar.test.ts → "calendar pull". The stub has no
@@ -239,7 +278,9 @@ describe('stub calendar pull (two-way sync)', () => {
       dueDay: '2026-10-10',
       dueTime: '17:00',
       estimateMin: 45,
-      gcalPulledNote: 'Moved to Oct 10 5pm · Now 45m · Renamed to “pset 3” in Google Calendar',
+      gcalPulled: {
+        note: 'Moved to Oct 10 5pm · Now 45m · Renamed to “pset 3” in Google Calendar',
+      },
     });
     expect(localStorage.getItem(STUB_GCAL_EDITS_KEY)).toBeNull(); // consumed
   });
@@ -252,7 +293,7 @@ describe('stub calendar pull (two-way sync)', () => {
     expect((await api.getTask(t.id))!.estimateMin).toBeNull();
   });
 
-  it('deleted in Google → unlinked with a note; all-day → title only; manual block → title only', async () => {
+  it('deleted in Google → unlinked with a note; all-day → title only; untimed task → title only', async () => {
     const { api, queue, timed } = setup();
     const del = await timed();
     const allDay = await timed();
@@ -273,14 +314,10 @@ describe('stub calendar pull (two-way sync)', () => {
     await api.pullCalendar();
     expect(await api.getTask(del.id)).toMatchObject({
       gcalEventId: null,
-      gcalPulledNote: 'Removed in Google Calendar',
+      gcalPulled: { note: 'Removed in Google Calendar' },
     });
     expect(await api.getTask(allDay.id)).toMatchObject({ title: 'ad', dueTime: '16:00' });
-    expect(await api.getTask(plain.id)).toMatchObject({
-      title: 'u2',
-      dueTime: null,
-      gcalManual: true,
-    });
+    expect(await api.getTask(plain.id)).toMatchObject({ title: 'u2', dueTime: null });
   });
 
   it('throttles to once a minute unless edits are queued; toggle off pulls nothing', async () => {
@@ -316,15 +353,29 @@ describe('stub calendar pull (two-way sync)', () => {
     expect(status.accounts.find((a) => a.sub === 'seed-personal')!.lastSyncedAt).toBeGreaterThan(0);
   });
 
-  it('a rename stamps the latest-wins clock; a queued edit (stamped at pull time) is newer', async () => {
+  it('a push stamps the base with the clock; a queued edit (stamped at pull time) is newer', async () => {
     const { api, tick, queue, timed } = setup();
     const t = await timed();
     tick(1_000);
     queue([{ taskId: t.id, title: 'google' }]); // the queued edit is stamped at pull time…
     tick(1_000);
     await api.setTaskTitle(t.id, 'aperture'); // …so a later Aperture rename is still older than it
-    expect((await api.getTask(t.id))!.gcalTouchedAt).toBeGreaterThan(0);
+    expect((await api.getTask(t.id))!.gcalSeen!.updatedMs).toBeGreaterThan(0);
     await api.pullCalendar();
     expect((await api.getTask(t.id))!.title).toBe('google');
+  });
+
+  it('an unsent change wins over a queued Google edit to the same field, and the row says so', async () => {
+    const { api, queue, timed } = setup();
+    const t = await timed();
+    await api.updateSettings({ autoCalendar: false });
+    await api.setTaskDue(t.id, { dueDay: '2026-10-09', dueTime: '18:00' }); // never reaches "Google"
+    await api.updateSettings({ autoCalendar: true });
+    queue([{ taskId: t.id, end: '2026-10-09 17:00' }]);
+    expect((await api.pullCalendar()).changedTaskIds).toEqual([t.id]);
+    expect(await api.getTask(t.id)).toMatchObject({
+      dueTime: '18:00',
+      gcalPulled: { note: 'Kept your time — moved in Google Calendar too' },
+    });
   });
 });

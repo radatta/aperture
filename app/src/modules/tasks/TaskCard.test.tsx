@@ -395,18 +395,23 @@ describe('due-time urgency', () => {
     const api = freshApi();
     const fresh = await api.createTask({ title: 'Moved in Google' });
     const stale = await api.createTask({ title: 'Moved last week' });
+    const kept = await api.createTask({ title: 'Kept mine' });
     vi.spyOn(api, 'listTasks').mockResolvedValue([
       {
         ...fresh,
-        gcalPulledAt: Date.now(),
-        gcalPulledNote: 'Moved to Oct 9 5pm in Google Calendar',
+        gcalPulled: { at: Date.now(), note: 'Moved to Oct 9 5pm in Google Calendar' },
       },
-      { ...stale, gcalPulledAt: Date.now() - 8 * 86_400_000, gcalPulledNote: 'x' },
+      { ...stale, gcalPulled: { at: Date.now() - 8 * 86_400_000, note: 'x' } },
+      {
+        ...kept,
+        gcalPulled: { at: Date.now(), note: 'Kept your time — moved in Google Calendar too' },
+      },
     ]);
     renderApp({ api, path: '/tasks' });
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Backlog' }));
     expect(await screen.findByText('updated from Google')).toBeTruthy();
     expect(screen.getAllByText('updated from Google')).toHaveLength(1);
+    expect(screen.getAllByText('kept over Google')).toHaveLength(1);
   });
 });
