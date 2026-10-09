@@ -865,6 +865,31 @@ describe('calendar pull (two-way sync)', () => {
     expect(g.events.get(legacy.gcalEventId!)!.title).toBe('pset');
   });
 
+  it('an event linked before two-way sync first seen after the first sync: Google’s drag applies, never reverted', async () => {
+    const { g, b, repo, tick, baseline, timed } = await setup();
+    const old = await timed();
+    await baseline(); // the account's first sync is done
+    // Not in that sync (ended before its lookback): still no base when Google drags it.
+    await repo.putTask({ ...(await b.getTask(old.id))!, gcalSeen: undefined });
+    tick();
+    g.editEvent(old.gcalEventId!, {
+      startMs: at('2026-10-09', '16:00'),
+      endMs: at('2026-10-09', '17:00'),
+    });
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([old.id]);
+    expect(await b.getTask(old.id)).toMatchObject({
+      dueDay: '2026-10-09',
+      dueTime: '17:00',
+      gcalPulled: { note: 'Moved to Oct 9 5pm in Google Calendar' },
+    });
+    await b.setTaskTitle(old.id, 'renamed');
+    expect(g.events.get(old.gcalEventId!)).toMatchObject({
+      title: 'renamed',
+      endMs: at('2026-10-09', '17:00'),
+    });
+  });
+
   it('a time change that failed to reach Google is sent by the next rename — never reverted by the echo', async () => {
     const { g, b, tick, baseline, timed } = await setup();
     const t = await timed();

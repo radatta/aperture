@@ -249,14 +249,31 @@ the task now matches its event, except where a pull kept Aperture's value — th
   your title — renamed in Google Calendar too"). A successful push already resolves a conflict that way;
   Google's `updated` is per event, not per field, so "the later edit wins" couldn't be decided per field.
   Deletion always wins. An owed removal is never pulled into.
-- **First sight only remembers.** An event linked before two-way sync has no `gcalSeen`: the first pull
-  to see it (the token-less first sync returns every event from the last week on) records it as Google
-  has it, with its `updated`, and honours a deletion. Nothing changes on the task — no burst of changed
-  deadlines. Where the event differs from the task (an edit made in Google before two-way sync, or a
-  block placed off the deadline by the picker or MCP), the task's value is Aperture's unsent one: under
-  one-way rules it was due to overwrite Google's anyway, so the next push sends it — a timed task's
-  block moves to its deadline, never the deadline to the block — and a Google edit to that field before
-  then is kept out (with its note). Fields in step apply as usual.
+- **First sight on the first sync only remembers.** An event linked before two-way sync has no
+  `gcalSeen`. The account's first sync (token-less: every event from the last week on) records each such
+  event as Google has it, with its `updated`, and honours a deletion. Nothing changes on the task — no
+  burst of changed deadlines. Where the event differs from the task (an edit made in Google before
+  two-way sync, or a block placed off the deadline by the picker or MCP), the task's value is Aperture's
+  unsent one: under one-way rules it was due to overwrite Google's anyway, so the next push sends it — a
+  timed task's block moves to its deadline, never the deadline to the block — and a Google edit to that
+  field before then is kept out (with its note). Fields in step apply as usual.
+- **First sight in a later delta applies.** After the first sync, an event with no `gcalSeen` is one
+  that sync didn't see (ended before its lookback) or didn't record (cancelled, an owed removal, a failed
+  push) — it shows up again by changing in Google. So the task as it is (`seenFromTask`) stands in for
+  the base, and Google's change applies like any other, with its note — unless the task holds a failed
+  push (`gcalSyncError`): that's Aperture's unsent value, so Google's state is only remembered, as on the
+  first sync. (A 410 re-sync counts as later — the account has a token — and its full listing can carry
+  an unchanged event with no base, which then reads as a Google change.) Left as is, all rare (an old
+  linked task that's still open, or edited since):
+  - **A task edit that never reached Google** without a trace (made with sync off, or after done — a
+    done task never pushes) loses to any Google change to that event — a colour change will do — with
+    the note.
+  - **A block placed off the deadline before two-way sync** (picker with sync off, MCP) moves the
+    deadline — and an open task's estimate, never `estimateLockedMin` — to the block on any Google
+    change to it; an untimed task's manual event with its own title renames the task.
+  - **An Aperture edit before that pull** (the app, or MCP while the app is closed — days, possibly)
+    still sends everything (the push branch above), silently undoing an unpulled Google edit — the
+    original bug, in a narrower window.
 - **Planned on a fresh read.** The delta can land seconds after the task scan, so each write re-reads the
   task and re-plans; a task deleted, unlinked or edited during the fetch isn't overwritten. (The write
   itself is a plain put: an edit landing in the milliseconds between that re-read and the put is lost,
@@ -285,7 +302,7 @@ the task now matches its event, except where a pull kept Aperture's value — th
   JSON array of edits (`{taskId, end?: "YYYY-MM-DD HH:MM", durationMin?, title?, allDay?, cancelled?}` or
   `{failAccount, error}`), consumed by the next pull and bypassing the stub's throttle (the app's hook
   still waits a minute — reload to see it). A task with no `gcalSeen` takes its own block as the known
-  event (`updatedMs` 0; the queue is only deliberate edits).
+  event (`seenFromTask`, as the backend's later-delta first sight; the queue is only deliberate edits).
 
 ## Resilience (the Cognito model, per account)
 

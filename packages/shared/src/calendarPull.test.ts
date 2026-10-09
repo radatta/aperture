@@ -52,7 +52,8 @@ const event = (over: Partial<PulledEvent> = {}): PulledEvent => ({
   updatedMs: 2_000,
   ...over,
 });
-const plan = (t: T, e: PulledEvent) => calendarPullPlan(t, e, T0);
+const FIRST = { firstSync: true };
+const plan = (t: T, e: PulledEvent, opts = FIRST) => calendarPullPlan(t, e, T0, opts);
 
 describe('calendarPullPlan', () => {
   it('our own push coming back (event = gcalSeen) is a no-op', () => {
@@ -181,6 +182,59 @@ describe('calendarPullPlan', () => {
       fields: { title: 'g2' },
     });
   });
+  it('first seen in a later delta (changed in Google since the first sync): Google’s change applies', () => {
+    const later = { firstSync: false };
+    const end = epoch('2026-10-09', '17:00');
+    const fresh = task({ gcalSeen: undefined });
+    expect(plan(fresh, event({ startMs: end - 60 * 60_000, endMs: end }), later)).toEqual({
+      kind: 'apply',
+      fields: { dueDay: '2026-10-09', dueTime: '17:00' },
+      note: 'Moved to Oct 9 5pm in Google Calendar',
+      seen: { title: 'pset', startMs: end - 60 * 60_000, endMs: end, updatedMs: 2_000 },
+    });
+    expect(plan(fresh, event({ title: 'g' }), later)).toMatchObject({ fields: { title: 'g' } });
+    // Nothing that maps (an echo of the task as it is) is only remembered; an untimed task takes the title.
+    expect(plan(fresh, event(), later)).toMatchObject({ kind: 'see' });
+    const untimed = task({ dueDay: null, dueTime: null, gcalSeen: undefined });
+    expect(plan(untimed, event({ title: 'g', endMs: end }), later)).toMatchObject({
+      fields: { title: 'g' },
+    });
+    // An all-day conversion keeps the task's window as the known one.
+    expect(plan(fresh, event({ allDay: true, startMs: null, endMs: null }), later)).toMatchObject({
+      kind: 'see',
+      seen: { startMs: END - 60 * 60_000, endMs: END },
+    });
+    // A no-estimate task's default block, dragged: the deadline moves, estimateMin stays unwritten.
+    const bare = task({ estimateMin: null, gcalSeen: undefined });
+    expect(plan(bare, event({ startMs: end - 30 * 60_000, endMs: end }), later)).toMatchObject({
+      fields: { dueDay: '2026-10-09', dueTime: '17:00' },
+    });
+    expect(plan(bare, event({ startMs: end - 30 * 60_000, endMs: end }), later)).not.toHaveProperty(
+      'fields.estimateMin',
+    );
+    // A done task: the deadline applies, a stretched block never rewrites the estimate.
+    const done = task({ status: 'done', gcalSeen: undefined });
+    expect(plan(done, event({ startMs: end - 90 * 60_000, endMs: end }), later)).toMatchObject({
+      fields: { dueDay: '2026-10-09', dueTime: '17:00' },
+    });
+    expect(plan(done, event({ startMs: end - 90 * 60_000, endMs: end }), later)).not.toHaveProperty(
+      'fields.estimateMin',
+    );
+  });
+  it('first seen in a later delta holding a failed push: only remembered (Aperture’s value is unsent)', () => {
+    const failed = task({ gcalSeen: undefined, gcalSyncError: gcalSyncMessage('patch', 'x') });
+    expect(plan(failed, event({ title: 'g' }), { firstSync: false })).toMatchObject({
+      kind: 'see',
+      seen: { title: 'g' },
+    });
+  });
+  it('residual: a block placed off the deadline before two-way sync, first seen later, moves the deadline to it', () => {
+    // Documented (calendar → First sight in a later delta): any Google change to it reads as a move.
+    const picked = { startMs: epoch('2026-10-05', '09:00'), endMs: epoch('2026-10-05', '10:30') };
+    expect(
+      plan(task({ gcalSeen: undefined }), event({ ...picked, title: 'r' }), { firstSync: false }),
+    ).toMatchObject({ fields: { title: 'r', dueTime: '10:30', estimateMin: 90 } });
+  });
   it('a block placed off the deadline before two-way sync never moves the deadline to it', () => {
     // A picked 09:00–10:00 block on a task due 16:00: first sight, then a Google rename's echo.
     const picked = { startMs: epoch('2026-10-05', '09:00'), endMs: epoch('2026-10-05', '10:00') };
@@ -221,6 +275,7 @@ describe('calendarPullPlan', () => {
         t,
         event({ startMs: later - 30 * 60_000, endMs: later, updatedMs: 3_000 }),
         z,
+        FIRST,
       ),
     ).toMatchObject({ kind: 'apply', fields: { dueTime: '02:30' } });
     // An end 20 seconds past the minute.
@@ -251,7 +306,12 @@ describe('calendarPullPlan', () => {
       gcalSeen: { title: 'pset', startMs: end - 30 * 60_000, endMs: end, updatedMs: 2_000 },
     });
     expect(
-      calendarPullPlan(t, event({ startMs: end - 60 * 60_000, endMs: end, updatedMs: 3_000 }), z),
+      calendarPullPlan(
+        t,
+        event({ startMs: end - 60 * 60_000, endMs: end, updatedMs: 3_000 }),
+        z,
+        FIRST,
+      ),
     ).toMatchObject({
       kind: 'apply',
       fields: { estimateMin: 60 },
@@ -418,9 +478,9 @@ describe('calendarPullPlan', () => {
         estimateMin: 30,
         gcalSeen: { title: 'pset', startMs: end - 30 * 60_000, endMs: end, updatedMs: 2_000 },
       });
-      expect(calendarPullPlan(t, event({ startMs: end - 30 * 60_000, endMs: end }), z).kind).toBe(
-        'none',
-      );
+      expect(
+        calendarPullPlan(t, event({ startMs: end - 30 * 60_000, endMs: end }), z, FIRST).kind,
+      ).toBe('none');
     }
   });
 });

@@ -32,6 +32,7 @@ import {
   toCents,
   assertCategoryDeletable,
   calendarPullPlan,
+  seenFromTask,
   calendarSyncPlan,
   seenAfter,
   syncedFieldsChanged,
@@ -1227,14 +1228,20 @@ class StubClient implements ApiClient {
         const found = edit.taskId ? this.find(this.store.tasks, edit.taskId) : undefined;
         if (!found?.gcalEventId || found.gcalAccountId !== st.sub) continue;
         if (found.gcalCalendarId !== st.calendarId) continue;
-        // Stub-only: a linked task with no known event (seeded, or persisted before two-way sync) takes
-        // its own block as the known one — the queue is only ever deliberate edits, so the backend's
-        // first-sighting "just remember it" would swallow them.
-        const task = { ...found, gcalSeen: found.gcalSeen ?? this.knownEvent(found) };
-        const action = calendarPullPlan(task, this.stubEvent(task, edit, now), {
-          epoch: localEpochFromDayTime,
-          clock: localDayTime,
-        });
+        // A linked task with no known event (seeded, or persisted before two-way sync) takes its own
+        // block as the known one — the planner's later-delta fallback, prefilled because stubEvent
+        // needs a base (the queue is only ever deliberate edits, never a first-sync baseline).
+        const task = {
+          ...found,
+          gcalSeen:
+            found.gcalSeen ?? seenFromTask(found, eventWindow(found, localEpochFromDayTime)),
+        };
+        const action = calendarPullPlan(
+          task,
+          this.stubEvent(task, edit, now),
+          { epoch: localEpochFromDayTime, clock: localDayTime },
+          { firstSync: false },
+        );
         if (action.kind === 'none') continue;
         this.writes.patch(
           this.store.tasks,
@@ -1270,15 +1277,6 @@ class StubClient implements ApiClient {
       return { sub: st.sub, ok: true, error: null };
     });
     return { pulled: true, changedTaskIds: changed, accounts };
-  }
-  private knownEvent(task: Task): GcalSeen {
-    const win = eventWindow(task, localEpochFromDayTime);
-    return {
-      title: task.title,
-      startMs: win?.startMs ?? null,
-      endMs: win?.endMs ?? null,
-      updatedMs: 0,
-    };
   }
   // A queued edit as the event Google would now return: the known event with the edit's changes laid
   // over it (an `end` alone keeps the block's length).

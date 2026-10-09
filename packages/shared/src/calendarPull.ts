@@ -26,9 +26,9 @@ export interface PulledEvent {
 
 export type PullAction =
   | { kind: 'none' }
-  // First sighting of an event Aperture didn't know yet (linked before two-way sync), or a change
-  // that maps to nothing: just remember the event as Google has it (gcalSeen, with its `updated`) —
-  // nothing on the task changes.
+  // An event's first sight on the account's first sync (linked before two-way sync), or a change that
+  // maps to nothing: just remember the event as Google has it (gcalSeen, with its `updated`) — nothing
+  // on the task changes.
   | { kind: 'see'; seen: GcalSeen }
   | { kind: 'unlink'; note: string }
   // `fields` is empty when the note only says a Google change was kept out (Aperture's unsent edit won).
@@ -62,6 +62,7 @@ export function calendarPullPlan(
   task: PullFields,
   ev: PulledEvent,
   time: { epoch: DueEpoch; clock: DueClock },
+  opts: { firstSync: boolean },
 ): PullAction {
   if (task.status === 'cancelled') return NONE; // its event went with the cancel
   // Deleted or moved away → unlink, never resurrect. Deletion wins whatever `updated` says.
@@ -71,7 +72,12 @@ export function calendarPullPlan(
 
   const title = ev.title?.trim() || null;
   const timed = !ev.allDay && ev.startMs !== null && ev.endMs !== null;
-  const seen = task.gcalSeen;
+  const window = eventWindow(task, time.epoch);
+  // No gcalSeen (linked before two-way sync): on the first sync, remember Google's state — a difference
+  // is Aperture's unsent value. Later, it only shows up by changing in Google, so the task as it is
+  // stands in for the base — unless it holds a failed push (docs/areas/calendar → First sight).
+  const seen =
+    task.gcalSeen ?? (opts.firstSync || task.gcalSyncError ? null : seenFromTask(task, window));
   // An all-day conversion's time is ignored: keep the known window, so the block isn't "re-timed" back
   // until the task's own time changes.
   const now: GcalSeen = {
@@ -80,11 +86,6 @@ export function calendarPullPlan(
     endMs: timed ? ev.endMs : (seen?.endMs ?? null),
     updatedMs: ev.updatedMs,
   };
-  const window = eventWindow(task, time.epoch);
-  // First sight: remember the event as Google has it, apply nothing. Where it differs from the task (an
-  // edit made in Google before two-way sync, a block placed off the deadline), the task's value is
-  // Aperture's unsent one — under one-way rules it was due to overwrite Google's anyway: the next push
-  // sends it (a timed task's block moves to its deadline).
   if (!seen) return { kind: 'see', seen: now };
   // Stale: predates the base. (`?? 0`: a base from an earlier build of this branch has no version.)
   if (ev.updatedMs < (seen.updatedMs ?? 0)) return NONE;
@@ -141,6 +142,18 @@ export function calendarPullPlan(
     ? NONE
     : { kind: 'see', seen: now };
 }
+
+// The event as the task maps to it — the base for an event first seen after the first sync (the stub's
+// dev queue uses it the same way: its edits are always deliberate).
+export const seenFromTask = (
+  task: Pick<Task, 'title'>,
+  window: { startMs: number; endMs: number } | null,
+): GcalSeen => ({
+  title: task.title,
+  startMs: window?.startMs ?? null,
+  endMs: window?.endMs ?? null,
+  updatedMs: 0,
+});
 
 const sameSeen = (a: GcalSeen, b: GcalSeen): boolean =>
   sameTitle(a.title, b.title) && a.startMs === b.startMs && a.endMs === b.endMs;

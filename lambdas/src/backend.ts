@@ -1309,7 +1309,7 @@ export class BackendClient implements ApiClient {
             if (!task) continue;
             // The writes spend the budget too; stopping keeps the old token, and a replay is idempotent.
             if (Date.now() > deadlineMs) throw new PullIncompleteError();
-            const kind = await this.putPull(task.id, st, ev);
+            const kind = await this.putPull(task.id, st, ev, !st.syncToken);
             if (kind === 'apply' || kind === 'unlink') changed.push(task.id);
           }
           await this.repo.putGcalSyncState({
@@ -1346,6 +1346,7 @@ export class BackendClient implements ApiClient {
     taskId: string,
     st: GcalSyncState,
     ev: PulledEvent,
+    firstSync: boolean, // the account's first sync (no token yet) — calendarPullPlan's first sight
   ): Promise<PullAction['kind']> {
     const fresh = await this.repo.getTask(taskId);
     if (
@@ -1355,7 +1356,7 @@ export class BackendClient implements ApiClient {
       fresh.gcalEventId !== ev.eventId
     )
       return 'none';
-    const action = calendarPullPlan(fresh, ev, this.pullTime);
+    const action = calendarPullPlan(fresh, ev, this.pullTime, { firstSync });
     if (action.kind === 'none') return 'none';
     const now = this.now();
     const write: Partial<Task> =
