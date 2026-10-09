@@ -2,8 +2,9 @@ import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // auth.test.tsx rebuilds the module registry (vi.resetModules), so it runs alone in an isolated
-// worker; every other file shares one jsdom and one module graph — the per-file jsdom was ~60% of the
-// suite on CI's single worker. setup.ts resets the shared state between tests.
+// worker; every other file shares one jsdom and one module graph per worker — the per-file jsdom was
+// ~60% of the suite when CI ran a single worker. CI now runs two (VITEST_MAX_WORKERS in ci.yml); local
+// runs keep vitest's default. setup.ts resets the shared state between tests.
 const REBUILDS_MODULES = 'src/auth/auth.test.tsx';
 
 export default defineConfig({

@@ -51,8 +51,9 @@ emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it
 `eslint .` (flat config). `test` and `build` fan out per-package (`pnpm -r`). Vitest runs two envs —
 **jsdom** for `app`, **node** for everything else (Lambda runtime parity).
 
-**App test files share one jsdom and one module graph** (`isolate: false` — a fresh jsdom per file was
-most of CI's runtime on its single worker). So:
+**App test files share one jsdom and one module graph per worker** (`isolate: false` — a fresh jsdom
+per file was most of CI's runtime when it ran a single worker; CI now runs two via `VITEST_MAX_WORKERS`
+in `ci.yml`, so which files share a graph is random per run). So:
 
 - **New module-level state in `app/src`** (a singleton, cache, or `let`) needs a reset in
   `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file.

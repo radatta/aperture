@@ -2,11 +2,14 @@ name: CI
 
 # The quality gate, factored out so pr.yml and deploy.yml run the exact same checks instead of two
 # copies drifting apart. Reusable (workflow_call) — callers own their own triggers + concurrency.
+# Two jobs so the app suite (the long pole) runs beside lint/typecheck/the other tests instead of after
+# them. A caller's `needs` sees one combined result, but a ruleset gates on per-job check names, so
+# `test-app` must be a required check by name too (INFRA §9).
 on:
   workflow_call:
 
 jobs:
-  check:
+  check: # job id unchanged, so the required check `ci / check` keeps its name
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,7 +29,8 @@ jobs:
       # resolution change there (exports/types) with no source change would otherwise read as up to date.
       # They're listed, not globbed: hashFiles walks everything a `**` pattern could reach before applying
       # excludes, and after install that's node_modules — measured 8s per evaluation, paid twice (restore
-      # and the post-job save).
+      # and the post-job save). Only this job restores and saves it: test-app resolves shared from source
+      # and never runs tsc, and a second saver would race this one for the same per-commit key.
       - uses: actions/cache@v6
         with:
           path: |
@@ -44,5 +48,27 @@ jobs:
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
       - run: pnpm typecheck
         if: ${{ !cancelled() }}
-      - run: pnpm test
+      # Everything but app, which runs in test-app. The root `pnpm test` (pnpm -r test) is unchanged for
+      # local use; the split lives here only.
+      - run: pnpm -r --filter '!@aperture/app' test
         if: ${{ !cancelled() }}
+
+  test-app:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # version comes from the root packageManager field
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @aperture/app test
+        env:
+          # The private-repo runner has 2 vCPUs, and vitest's default of max(cpus-1, 1) = 1 worker with
+          # isolate:false runs every app file serially in one task. Two workers = two long-lived jsdoms
+          # and module graphs; the shuffle still decides which files share one. Set here, not in
+          # vitest.config.ts, so local runs keep vitest's default.
+          VITEST_MAX_WORKERS: 2
