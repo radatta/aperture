@@ -7,6 +7,9 @@ import type { Task } from './types';
 // Epoch of a wall-clock day+time. The browser passes localEpochFromDayTime; the (UTC) Lambda passes a
 // zonedEpoch over USER_TIME_ZONE — never the local one.
 export type DueEpoch = (dueDay: string, dueTime: string) => number;
+// The inverse: an instant's wall-clock day + "HH:MM" (localDayTime in the browser, zonedDayTime over
+// USER_TIME_ZONE in the Lambda).
+export type DueClock = (epochMs: number) => { day: string; hhmm: string };
 
 // The one gate for a deadline write: a cleared day clears the time; a time needs a day; both must be
 // well-formed. `dueTime` undefined = keep `currentTime` (the caller's existing value).
@@ -29,6 +32,10 @@ export function normalizeDue(
 // A timed task's event length when it has no estimate.
 export const DEFAULT_EVENT_MIN = 30;
 
+// How long a timed task's block is: the estimate, or the default without one (0 → default).
+export const eventLengthMin = (task: Pick<Task, 'estimateMin'>): number =>
+  task.estimateMin || DEFAULT_EVENT_MIN;
+
 // The calendar block for a timed task: it ENDS at the deadline and is as long as the estimate (the work
 // before it). null when the task has no time.
 export function eventWindow(
@@ -37,7 +44,7 @@ export function eventWindow(
 ): { startMs: number; endMs: number } | null {
   if (!task.dueDay || !task.dueTime) return null;
   const endMs = epoch(task.dueDay, task.dueTime);
-  return { startMs: endMs - (task.estimateMin || DEFAULT_EVENT_MIN) * 60_000, endMs }; // 0 → default
+  return { startMs: endMs - eventLengthMin(task) * 60_000, endMs };
 }
 
 // The manual add-to-calendar prefill (browser-local): the "HH:MM" a block of `durationMin` starts at to

@@ -91,6 +91,21 @@ export function hhmmOfEpoch(epochMs: number): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
+// The local day + "HH:MM" of an instant — the browser's inverse of localEpochFromDayTime (a calendar
+// date, not dayStartHour bucketing: a 1am deadline is on its own date).
+export function localDayTime(epochMs: number): { day: string; hhmm: string } {
+  return { day: keyOf(new Date(epochMs)), hhmm: hhmmOfEpoch(epochMs) };
+}
+
+// Durations read as "45m" / "1h 18m" / "2h".
+export function fmtDuration(min: number): string {
+  const m = Math.round(min);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
+
 // Capture's due-time chips (after `due:<day>@`).
 export const DUE_TIME_PRESETS = ['09:00', '12:00', '17:00', '23:59'] as const;
 
@@ -123,6 +138,25 @@ export function zonedEpoch(dayKey: string, hhmm: string, timeZone: string): numb
   // `second` is right unless the wall time doesn't exist (its offset round-trip disagrees) — then the
   // later candidate is the browser's answer.
   return second + offsetAt(second) === wall ? second : Math.max(first, second);
+}
+
+// The wall-clock day + "HH:MM" of an instant in `timeZone` — the server-side twin of localDayTime and
+// the inverse of zonedEpoch (the Lambda's own clock is UTC).
+export function zonedDayTime(epochMs: number, timeZone: string): { day: string; hhmm: string } {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+  }).formatToParts(new Date(epochMs));
+  const n = (t: string) => Number(p.find((x) => x.type === t)!.value);
+  return {
+    day: `${n('year')}-${pad2(n('month'))}-${pad2(n('day'))}`,
+    hhmm: `${pad2(n('hour'))}:${pad2(n('minute'))}`,
+  };
 }
 
 // 0 = Sunday … 6 = Saturday (JS convention), for weekly recurrence rules.

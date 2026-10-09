@@ -1,8 +1,11 @@
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PULL_THROTTLE_MS } from '@aperture/shared';
 import type { GetCalendarBusyInput, InsertCalendarEventInput } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { invalidateTaskData } from './invalidate';
+import { useSettings } from './useSettings';
 
 // Per-account connection health — drives the Settings account list and Home's connect/reconnect prompt.
 export function useGoogleStatus() {
@@ -83,4 +86,36 @@ export function useDeleteCalendarEvent() {
     mutationFn: (taskId: string) => api.deleteCalendarEvent(taskId),
     onSettled: () => invalidateTaskData(qc),
   });
+}
+
+// Two-way sync: pull edits made in Google back onto their tasks when the app opens and whenever it
+// comes back to the foreground — at most once a minute from here (the server throttles too). Only
+// with an account connected and auto-sync on. Never blocks or fails the app: a Google failure comes
+// back on the account status (Settings shows it), and tasks refetch only when something changed.
+export function useCalendarPull(): void {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { data: settings } = useSettings();
+  const enabled = (settings?.googleAccounts.length ?? 0) > 0 && settings?.autoCalendar !== false;
+  const lastRef = useRef(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const pull = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastRef.current < PULL_THROTTLE_MS) return;
+      lastRef.current = Date.now();
+      api
+        .pullCalendar()
+        .then((res) => {
+          if (res.changedTaskIds.length > 0) invalidateTaskData(qc);
+          if (res.pulled) qc.invalidateQueries({ queryKey: qk.googleStatus() });
+        })
+        .catch(() => {
+          /* a network or auth failure here is the app's, surfaced by its own query errors */
+        });
+    };
+    pull();
+    document.addEventListener('visibilitychange', pull);
+    return () => document.removeEventListener('visibilitychange', pull);
+  }, [api, qc, enabled]);
 }

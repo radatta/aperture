@@ -7,6 +7,7 @@ import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
+import { fmtDateTime } from '../../lib/format';
 import { ArrowDownIcon, ArrowUpIcon } from '../../components/icons';
 import { useApi } from '../../data/api-context';
 import {
@@ -383,6 +384,20 @@ function CalendarSection() {
                         Needs reconnecting
                       </Text>
                     )}
+                    {/* Two-way sync health: the last check for edits made in Google, or why it failed. */}
+                    {settings.autoCalendar !== false &&
+                      (st?.lastPullError ? (
+                        <Text size="xs" tone="gold" className="break-words">
+                          Couldn’t check for changes ({st.lastPullError}) — retries next time you
+                          open the app
+                        </Text>
+                      ) : (
+                        st?.lastSyncedAt && (
+                          <Text size="xs" tone="muted">
+                            Checked {fmtDateTime(st.lastSyncedAt)}
+                          </Text>
+                        )
+                      ))}
                   </div>
                   <Button
                     variant="quiet"
@@ -459,7 +474,8 @@ function CalendarSection() {
                 <Text size="xs" tone="muted">
                   The event ends at the deadline and lasts as long as the estimate (30 min if none).
                   Moving, renaming or re-estimating the task moves the event; clearing the time
-                  removes it.
+                  removes it. Moving, resizing or renaming the event in Google Calendar updates the
+                  task when you next open Aperture.
                 </Text>
               </span>
             </label>

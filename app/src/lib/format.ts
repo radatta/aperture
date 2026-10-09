@@ -1,13 +1,8 @@
 import { dayKey, fmtMonthShortDay } from '@aperture/shared';
 
-// UI formatters. Durations read as "45m" / "1h 18m"; the timer clock as "25:00".
-export function fmtDuration(min: number): string {
-  const m = Math.round(min);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  const r = m % 60;
-  return r ? `${h}h ${r}m` : `${h}h`;
-}
+// UI formatters. Durations ("45m" / "1h 18m") live in shared — the calendar pull's note uses them too;
+// the timer clock reads "25:00".
+export { fmtDuration } from '@aperture/shared';
 
 export function fmtClock(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));

@@ -162,8 +162,11 @@ hours. Fixture-test against a recorded real response containing each edge case. 
 
 - **Write-back / two-way sync.** Highest complexity, highest blast radius, least value for one user. Once
   you write events you own their whole lifecycle, including after uninstall. *(Note: PR-C does write
-  events, but Aperture owns only the events it created and deletes them on cancel — it does not two-way
-  sync arbitrary calendar state. The warning still holds for full sync.)*
+  events, but Aperture owns only the events it created and deletes them on cancel. Two-way sync shipped
+  2026-10-05 **for those events only**: a pull-based read of Google edits to Aperture-created events
+  back onto their tasks — never adopting other events, never writing to Google from the pull
+  ([index.md](index.md) → Two-way sync). The warning still holds for full sync of arbitrary calendar
+  state.)*
 - **Auto-scheduling.** Reproduces Motion's worst failure (packs the day, leaving no room for the
   unplanned). Also: **Clockwise shut down 27 March 2026** — the flagship calendar-defragmentation product,
   $76M raised, killed in an acquihire. Auto-scheduling is where this category struggles.

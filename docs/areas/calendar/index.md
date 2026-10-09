@@ -2,7 +2,8 @@
 
 Connect **two Google accounts** (personal + school), **read** their calendars into a morning "day
 shape" number, and **write real events** onto them from tasks. Aperture owns the events it creates and
-only ever touches those. Built in PR-C on branch `google-calendar`.
+only ever touches those — and since two-way sync (2026-10-05), edits you make to *those* events in Google
+come back onto their tasks. Built in PR-C on branch `google-calendar`.
 
 ## Why "shape", not "hours free"
 
@@ -73,7 +74,13 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
 - `Task` + `gcalAccountId | gcalCalendarId | gcalEventId` (all null-default) — the pointer to a created
   event; all three are needed to patch or delete it via the owning account. `gcalSyncError` (null-default)
   holds the last auto-sync failure (§ Auto-sync).
-- `Settings.autoCalendar` (default `true`) — the auto-sync toggle.
+- `Settings.autoCalendar` (default `true`) — the auto-sync toggle (both directions).
+- Two-way bookkeeping on `Task`, all **optional** (sync state, not task data; old rows lack them):
+  `gcalSeen` (the event's title + window as Aperture last knew it, plus Google's `updated` for that
+  state — the merge base and the stale line) and `gcalPulled` (`{at, note}` — the "updated from Google"
+  mark).
+- `GcalSyncState` (`gcal#sync#<sub>`, one per account): the `events.list` `syncToken`, `lastPulledAt`
+  (attempt — the throttle), `lastSyncedAt` (success; Settings' "Checked …"), `lastPullError`. Exported like `financeSyncStates`; tombstoned on disconnect.
 - `Settings` + `googleAccounts[{sub,email}]`, `calendarShapeRefs[{accountSub,calendarId}]`,
   `calendarWriteDefault`, `dayFocusStart` (8), `dayEndHour` (22) — the waking window, **separate** from
   `dayStartHour`'s 4am rollover.
@@ -92,8 +99,12 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
   normalizes, and returns raw merged-later intervals + an all-day count. React Query `staleTime` (~10 min)
   is the only cache — no Lambda or DDB cache.
 - **Event write (manual)**: `insertCalendarEvent` routes to the target account, stores the pointers; one
-  live event per task (a second insert throws). The picked start feeds the event only; a task with a
-  `dueTime` prefills the block that ends at it.
+  live event per task (a second insert throws). The picker is for a task with a due day but no time —
+  and for a timed task only while auto-sync can't place blocks (off, or no write default); a timed task
+  with auto-sync on gets the one-tap "Add to calendar" at its deadline instead, and
+  `insertCalendarEvent` refuses it (`AUTO_PLACED_ERROR`, both impls, so MCP gets it too). The picked
+  start feeds the event only; a task with a `dueTime` prefills the block that ends at it. A block on a
+  timed task is its auto block, whatever placed it: the next push moves it to the deadline.
 - **Delete-on-cancel**: dropping a task (`transitionTask → cancelled`) or `deleteCalendarEvent` removes the
   event via its owning account and clears the pointers. **`deleteTask` reuses the same path** (permanent
   delete hard-deletes the event, then tombstones the task) — so a failed Google call is swallowed there
@@ -113,23 +124,34 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 | Task change | Event |
 | --- | --- |
 | gains a time (create, edit, bulk, MCP) — no event | created |
-| gains a time — a manually added event exists | **moved** to end at the deadline (no duplicate) |
-| day / time / estimate / title changes | patched (`events.patch`) |
-| untimed task with a manual event, renamed | title patched; a day move leaves it (gcal owns that clock) |
+| gains a time — a block already exists | **moved** to end at the deadline (no duplicate) |
+| day / time / estimate / title changes | patched (`events.patch`) — **only what the event lacks** (the window moves as one) |
+| untimed task with a block, renamed | title patched; a day move leaves it (gcal owns that clock) |
 | time or day cleared | deleted, pointers cleared |
 | done | left alone · cancel → delete-on-cancel (above) |
 
 - **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
   creates one (so an event you removed by hand isn't resurrected).
-- **Toggle off → nothing auto-syncs**: no create, patch or delete; existing events stay where they are.
-  No backfill when it's turned back on. Needs a write default (the toggle is disabled without one).
+- **Toggle off → nothing auto-syncs**, in either direction: no create, patch or delete, and no pull;
+  existing events stay where they are. No backfill when it's turned back on (an edit made meanwhile
+  reaches Google with the next change — Two-way sync). Needs a write default (the toggle is disabled without one).
   Not gated by it: delete-on-cancel (above), a done split moving a timed task's link to its follow-up
   (no Google call — the pointer just moves), and an **owed removal** (below) — asked for while sync was on,
   it's carried out on the next sync either way.
-- **One-way.** The task is the source of record; an event edited in Google is overwritten by the next
-  task change. An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google
-  keeps deleted events restorable) is treated as gone: the pointer is dropped and the event is not
-  resurrected; a later time change creates a fresh one. Two-way sync is a follow-up.
+- **Only what the event lacks.** A patch sends the fields where the task differs from `gcalSeen` (the
+  event as Aperture last knew it) — so an Aperture rename can't undo a drag made in Google that hasn't
+  been pulled yet, while a change that never reached Google (a failed push, a move made with sync off)
+  goes with the next one. The retry (`ensure`) sends both. Without a `gcalSeen` (linked before two-way
+  sync) any change sends everything, once; a window not known (first seen all-day) moves only when the
+  task's time does. A done task never pushes — its unsent edits still win a conflict on the pull. A
+  block placed off the deadline (picked while sync was off, or before the task had a time) differs from
+  the task's window, so the next push — a rename, an estimate change or Retry — moves it to the deadline.
+  Creating or inserting an event clears a stale "Removed in Google Calendar" mark.
+  Moving a window sends `start/end: { date: null, dateTime }`: a patch merges nested objects, and the
+  `null` clears the `date` an all-day conversion left (verify once on dev — the docs don't cover this case).
+- An event **deleted** in Google (patch → 404/410, or 200 with `status: "cancelled"` — Google keeps
+  deleted events restorable) is treated as gone: the pointer is dropped and the event is not resurrected;
+  a later time change creates a fresh one. The pull (below) usually finds it first.
 - **Failure never fails the task write.** The task is saved first; a gateway error lands on the task as
   `gcalSyncError` ("Couldn’t add/update/remove the calendar event (…)", logged as `gcal_sync_failed`),
   shown on the row and in the editor with **Retry** (`syncCalendarEvent` — an "ensure" pass of the
@@ -156,12 +178,131 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
 - **Split** ([tasks/split.md](../tasks/split.md) — a split never cancels). **Done** with this part: a
-  **timed** task's event (the block before its deadline) moves to the follow-up, which renames/re-times
-  it — no delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original
-  keeps (and re-times) its event, and the follow-up, a new timed task, gets its own from the planner, so
-  two blocks end at the deadline (piece 2's two-way sync is how one gets dragged earlier). Any other
-  linked event (a manual one; a record of work done) stays on the original either way, and an owed
-  removal is carried out (reporting).
+  **timed** task's event (the block before its deadline, whatever placed it) moves to the follow-up — the
+  link carries what Aperture knows about the event (`gcalSeen`; the follow-up's new title and window are
+  unsent, so they win a conflict) — which renames/re-times it: no
+  delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original keeps
+  (and re-times) its event, and the follow-up, a new timed task, gets its own from the planner, so two
+  blocks end at the deadline; dragging either in Google moves only that part's deadline (Two-way sync).
+  A block on an untimed original stays on the original either way, and an
+  owed removal is carried out (reporting).
+
+## Two-way sync (Google → task) — 2026-10-05
+
+Edits made in Google Calendar to the events Aperture created come back onto their tasks. One pure planner,
+`calendarPullPlan` (`packages/shared/src/calendarPull.ts`), decides per changed event in **both**
+`ApiClient` impls (the outgoing half stays `calendarSyncPlan`).
+
+**Pull, not push.** `pullCalendar` runs on app open and whenever it returns to the foreground
+(`useCalendarPull`, mounted in `AppShell`), at most once a minute per account — throttled server-side on
+`GcalSyncState.lastPulledAt`, failures included. MCP `list_tasks` does **not** pull; it reads what the
+app's last pull left. No `events.watch`: it only says "something changed" (you still list), needs an
+unauthenticated webhook and weekly channel renewal.
+
+**The delta.** Per account, `events.list` on its primary with a `syncToken`. Every request of a sync uses
+the same query — `singleEvents=false` (we never create recurring events, and expanding someone's
+unbounded series is how a pull would blow its budget), `showDeleted=true` (required with a token),
+`maxResults=250`; the token-less request adds `timeMin = now − 7 d` (Google rejects `timeMin` with a
+token). A **410** clears the token and re-syncs in full inside the same call. **8 s budget**
+(`PULL_BUDGET_MS`): past it the pull stops before the next page and stores no token, so the old one
+replays the same delta next time. Unverified: whether the first sync's `timeMin` bounds later deltas
+(Google doesn't say) — either way is benign.
+
+**Matching.** By stored pointer (`gcalAccountId`, `gcalCalendarId`, `gcalEventId`) over one `listTasks`
+scan; everything else in the delta — real meetings — is dropped untouched. New events are tagged
+`extendedProperties.private.apertureTaskId`, for provenance only (a Google "Duplicate" carries the tag
+with a new id and is never adopted). **The pull never writes to Google**, and never re-runs the push:
+the task now matches its event, except where a pull kept Aperture's value — that goes with the next push.
+
+| Google change (to an Aperture event) | Task |
+| --- | --- |
+| end moved | `dueDay` / `dueTime` (wall clock in `USER_TIME_ZONE`) — the plan day never moves |
+| start moved (length changed) | `estimateMin` = the new length, rounded to the minute — never `estimateLockedMin` |
+| renamed | `title` (trimmed; a blank title is ignored) |
+| deleted, or moved to another calendar | unlinked (pointers cleared), never resurrected |
+| made all-day | time ignored, link kept, title still syncs; the next Aperture time change re-times it |
+| made recurring | ignored |
+
+- **Status.** Done: the end and title apply, a start drag is ignored (the estimate is history — revisit
+  task in prod). Cancelled: nothing (its event went with the cancel). In-progress: the start sets the
+  working estimate, matching the editable-estimate rule.
+- **Untimed tasks**: an event on a task with no due time syncs its title only — there's no window to map.
+- **A three-way merge.** `gcalSeen` is the base: Google changed a field iff the event differs from it
+  (instants, not wall clocks — so both DST edges are idempotent). Our own push echoing back is a no-op,
+  including a no-estimate task's default 30-minute block (no `estimateMin = 30`), and a field only
+  Aperture changed is never "taken" from Google's stale copy. Aperture changed the time iff the task no
+  longer maps to the base the way a pull would map it — the deadline as the same instant or the same
+  wall-clock minute (a fall-back hour's second 1:30, an end with seconds), the length in whole minutes
+  (not on a done task, whose start never maps) — so a Google change the pull declines (a done task's
+  start drag, a block a few seconds off the minute) never reads as Aperture's later. Only an end that
+  moved touches the deadline (a start drag on a deadline in the skipped spring-forward hour leaves its
+  wall clock alone). Every pull that sees the event records it as the new `gcalSeen` (except a stale,
+  recurring or owed-removal one) — a newer state with nothing to map too, so its version advances; a
+  push records what it sent. Titles compare trim-insensitively.
+- **One clock, Aperture wins.** `gcalSeen.updatedMs` is **Google's** `updated` for the state the base
+  describes — from the push's response (never the Lambda's clock, which reads *after* Google stamps the
+  write and would make our own push's echo look stale) or from the pulled event. An event state older
+  than it is stale: nothing applies and nothing is recorded — it predates our push, whose echo carries
+  anything newer (so a Google edit to a field we didn't send rides in on it). A field **both** sides
+  changed keeps Aperture's unsent value (a failed push, sync off, a done task, a dead token): the base
+  takes Google's, so it isn't re-detected, the next push sends Aperture's, and the row says so ("Kept
+  your title — renamed in Google Calendar too"). A successful push already resolves a conflict that way;
+  Google's `updated` is per event, not per field, so "the later edit wins" couldn't be decided per field.
+  Deletion always wins. An owed removal is never pulled into.
+- **First sight on the first sync only remembers.** An event linked before two-way sync has no
+  `gcalSeen`. The account's first sync (token-less: every event from the last week on) records each such
+  event as Google has it, with its `updated`, and honours a deletion. Nothing changes on the task — no
+  burst of changed deadlines. Where the event differs from the task (an edit made in Google before
+  two-way sync, or a block placed off the deadline by the picker or MCP), the task's value is Aperture's
+  unsent one: under one-way rules it was due to overwrite Google's anyway, so the next push sends it — a
+  timed task's block moves to its deadline, never the deadline to the block — and a Google edit to that
+  field before then is kept out (with its note). Fields in step apply as usual.
+- **First sight in a later delta applies.** After the first sync, an event with no `gcalSeen` is one
+  that sync didn't see (ended before its lookback) or didn't record (cancelled, an owed removal, a failed
+  push) — it shows up again by changing in Google. So the task as it is (`seenFromTask`) stands in for
+  the base, and Google's change applies like any other, with its note — unless the task holds a failed
+  push (`gcalSyncError`): that's Aperture's unsent value, so Google's state is only remembered, as on the
+  first sync. (A 410 re-sync counts as later — the account has a token — and its full listing can carry
+  an unchanged event with no base, which then reads as a Google change.) Left as is, all rare (an old
+  linked task that's still open, or edited since):
+  - **A task edit that never reached Google** without a trace (made with sync off, or after done — a
+    done task never pushes) loses to any Google change to that event — a colour change will do — with
+    the note.
+  - **A block placed off the deadline before two-way sync** (picker with sync off, MCP) moves the
+    deadline — and an open task's estimate, never `estimateLockedMin` — to the block on any Google
+    change to it; an untimed task's manual event with its own title renames the task.
+  - **An Aperture edit before that pull** (the app, or MCP while the app is closed — days, possibly)
+    still sends everything (the push branch above), silently undoing an unpulled Google edit — the
+    original bug, in a narrower window.
+- **Planned on a fresh read.** The delta can land seconds after the task scan, so each write re-reads the
+  task and re-plans; a task deleted, unlinked or edited during the fetch isn't overwritten. (The write
+  itself is a plain put: an edit landing in the milliseconds between that re-read and the put is lost,
+  as with every fresh-read write here.) The writes spend the 8 s budget too — past it the pull stops
+  with no token stored, and the replay is idempotent.
+- **Shown, never silent.** A pull's write sets `gcalPulled` (`{at, note}`) — one line, latest wins:
+  "Moved to Oct 9 5pm · Now 45m · Renamed to “pset 3” in Google Calendar", "Removed in Google
+  Calendar", "Kept your title — renamed in Google Calendar too" (also "Kept your time — moved …", "Kept
+  your title and time — changed …"; "time" is the block: deadline and length), or both kinds at once
+  ("Moved to Oct 9 5pm in Google Calendar · Kept your title"). The row shows a gold "updated from
+  Google" — "kept over Google" when only a kept-out change is noted; the editor's Calendar section shows
+  the line. A later successful push doesn't clear a kept note. Beside a note with a kept part (alone or
+  mixed), while the task still holds a value its event lacks (`hasUnsent`), the editor offers **Send to
+  Google** — the same `ensure` push as Retry, so it also re-times a block first seen all-day; not on a
+  done task (it never pushes), with sync off, while settings load, or beside a sync error (Retry is
+  there). `hasUnsent` resolves the window in the device's zone (like the stub); away from
+  `USER_TIME_ZONE` it can read a pushed block as unsent and the button lingers until the note clears —
+  a tap just re-sends.
+  Both clear at the next 4am rollover (`isPullFresh`), or as soon as you change that task's title, time
+  or estimate yourself (the note no longer describes it). Settings shows each account's "Checked …" or
+  "Couldn’t check for changes (…) — retries next time you open the app".
+- **Failure.** A pull never throws to the app: a Google error (timeout, `invalid_grant`) lands on that
+  account's `GcalSyncState.lastPullError`, logged `gcal_pull_failed`; other accounts still pull.
+  testMode: `noopGoogle` returns an empty delta and `noopWrites` persists nothing.
+- **Stub (page-first).** The same planner over a dev queue: `localStorage['aperture:stub:gcalEdits']`, a
+  JSON array of edits (`{taskId, end?: "YYYY-MM-DD HH:MM", durationMin?, title?, allDay?, cancelled?}` or
+  `{failAccount, error}`), consumed by the next pull and bypassing the stub's throttle (the app's hook
+  still waits a minute — reload to see it). A task with no `gcalSeen` takes its own block as the known
+  event (`seenFromTask`, as the backend's later-delta first sight; the queue is only deliberate edits).
 
 ## Resilience (the Cognito model, per account)
 

@@ -13,6 +13,8 @@ import {
   isTimeKey,
   localEpochFromDayTime,
   zonedEpoch,
+  zonedDayTime,
+  localDayTime,
   fmtMonthDay,
   fmtMonthDayYear,
   fmtMonthShortDay,
@@ -114,6 +116,33 @@ describe('due times — isTimeKey, fmtClock12, zonedEpoch', () => {
     expect(zonedEpoch('2027-03-14', '02:30', LA)).toBe(Date.UTC(2027, 2, 14, 10, 30));
     // 1:30am happens twice on fall-back day → the first (PDT) one.
     expect(zonedEpoch('2026-11-01', '01:30', LA)).toBe(Date.UTC(2026, 10, 1, 8, 30));
+  });
+  it('zonedDayTime inverts zonedEpoch, across both DST days and midnight', () => {
+    const LA = 'America/Los_Angeles';
+    for (const [day, hhmm] of [
+      ['2026-10-05', '16:00'],
+      ['2026-12-01', '00:15'],
+      ['2026-03-08', '03:00'],
+      ['2026-11-01', '01:30'],
+      ['2026-11-01', '23:59'],
+    ] as const)
+      expect(zonedDayTime(zonedEpoch(day, hhmm, LA), LA)).toEqual({ day, hhmm });
+    // The second 1:30am on fall-back day reads the same wall clock as the first.
+    expect(zonedDayTime(Date.UTC(2026, 10, 1, 9, 30), LA)).toEqual({
+      day: '2026-11-01',
+      hhmm: '01:30',
+    });
+    // 23:00 UTC is still the same LA day; 08:00 UTC the next morning is the previous LA evening.
+    expect(zonedDayTime(Date.UTC(2026, 9, 6, 6, 0), LA)).toEqual({
+      day: '2026-10-05',
+      hhmm: '23:00',
+    });
+  });
+  it('localDayTime inverts localEpochFromDayTime', () => {
+    expect(localDayTime(localEpochFromDayTime('2026-10-05', '00:05'))).toEqual({
+      day: '2026-10-05',
+      hhmm: '00:05',
+    });
   });
 });
 

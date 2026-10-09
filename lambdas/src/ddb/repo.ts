@@ -15,6 +15,7 @@ import type {
   LogEntry,
   PomodoroSession,
   Roll,
+  GcalSyncState,
   Settings,
   Story,
   Task,
@@ -531,6 +532,22 @@ export class Repo {
   }
 
   // --- Settings singleton ---
+  // --- Calendar two-way sync cursor (one row per Google account) ---
+  async getGcalSyncState(sub: string): Promise<GcalSyncState | null> {
+    const it = await this.doc.get(this.p(), sk.gcalSync(sub));
+    const s = it ? toEntity<GcalSyncState>(it) : null;
+    return s && s.deletedAt === null ? s : null;
+  }
+  async putGcalSyncState(s: GcalSyncState): Promise<GcalSyncState> {
+    await this.writes.put(entityItem(this.userId, sk.gcalSync(s.sub), s));
+    return s;
+  }
+  async listGcalSyncStates(): Promise<GcalSyncState[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.gcalSyncPrefix())).map(toEntity<GcalSyncState>),
+    );
+  }
+
   async getSettingsRow(): Promise<Settings | null> {
     const it = await this.doc.get(this.p(), sk.settings());
     return it ? toEntity<Settings>(it) : null;

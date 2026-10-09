@@ -69,6 +69,10 @@ export const sk = {
 
   settings: () => `settings`,
 
+  // Calendar two-way sync cursor, one per connected Google account (by `sub`).
+  gcalSync: (sub: string) => `gcal#sync#${sub}`,
+  gcalSyncPrefix: () => `gcal#sync#`,
+
   // Finances. Plaid owns the ids of items/accounts/transactions (not ULIDs); rules are ours. Each kind
   // is its own prefix so a begins_with pulls exactly one. Transactions are also on GSI1 by date.
   finItem: (itemId: string) => `fin#item#${itemId}`,

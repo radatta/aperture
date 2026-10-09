@@ -63,9 +63,11 @@ export function TaskDetailsForm({
   const [dueTime, setDueTime] = useState<string>(task.dueTime ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
-  // A change that lands from elsewhere — a split's rename/rescope, another device, the MCP — reseeds
-  // every field the user hasn't touched (still showing the previous value); edits in progress stay. Done
-  // during render (React's "adjust state on prop change"), so nothing flashes dirty for a frame.
+  // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
+  // Google), another device, the MCP — reseeds every field the user hasn't touched (still showing the
+  // previous value); edits in progress stay, so a Save can't write stale values back over the change.
+  // Due day + time reseed as a pair: never your time on the other side's day. Done during render
+  // (React's "adjust state on prop change"), so nothing flashes dirty for a frame.
   const [prevTask, setPrevTask] = useState(task);
   if (prevTask !== task) {
     setPrevTask(task);
@@ -79,8 +81,11 @@ export function TaskDetailsForm({
     );
     reseed(setBuffer, prevTask.bufferMin?.toString() ?? '', task.bufferMin?.toString() ?? '');
     reseed(setCategoryId, prevTask.categoryId ?? '', task.categoryId ?? '');
-    reseed(setDueDay_, prevTask.dueDay ?? '', task.dueDay ?? '');
-    reseed(setDueTime, prevTask.dueTime ?? '', task.dueTime ?? '');
+    if (dueDay === (prevTask.dueDay ?? '') && dueTime === (prevTask.dueTime ?? '')) {
+      setDueDay_(task.dueDay ?? '');
+      setDueTime(task.dueTime ?? '');
+    }
+    reseed(setNotes_, prevTask.notes ?? '', task.notes ?? '');
   }
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);

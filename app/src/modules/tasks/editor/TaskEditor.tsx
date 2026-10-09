@@ -1,12 +1,23 @@
 import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
-import { inSplitFamily, isCalibrationPoint, splitChildren, todayKey } from '@aperture/shared';
+import {
+  autoSyncOn,
+  hasKeptPart,
+  hasUnsent,
+  inSplitFamily,
+  isCalibrationPoint,
+  isPullFresh,
+  localEpochFromDayTime,
+  splitChildren,
+  todayKey,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { DeltaBar } from '../../../components/DeltaBar';
 import { Text } from '../../../components/Text';
 import { fmtDateTime, fmtDuration } from '../../../lib/format';
 import { returnFocus } from '../../../lib/useDisclosure';
+import { useNow } from '../../../lib/useNow';
 import { useDeleteCalendarEvent, useSyncCalendarEvent } from '../../../data/hooks/useCalendar';
 import { usePlansForDay } from '../../../data/hooks/usePlans';
 import { useSeries } from '../../../data/hooks/useSeries';
@@ -66,11 +77,12 @@ export function TaskEditor({
 }) {
   const { data: settings } = useSettings();
   const { data: seriesList = [] } = useSeries();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const now = useNow();
+  const today = todayKey(settings?.dayStartHour ?? 4, now);
   const { data: plans = [] } = usePlansForDay(today);
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
-  const autoCalendar = settings?.autoCalendar !== false && !!settings?.calendarWriteDefault;
+  const autoCalendar = autoSyncOn(settings);
   const { data: tasksData } = useAllTasks();
   const allTasks = tasksData ?? [];
   const [reveal, setReveal] = useState<Reveal>(null);
@@ -186,6 +198,33 @@ export function TaskEditor({
             </Text>
           </div>
         )}
+        {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
+            Aperture kept its value over Google's, Google still shows its own until the next push: one
+            tap sends it (a done task never pushes). */}
+        {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div role="status">
+              <Text size="sm" tone="gold">
+                {task.gcalPulled.note}
+              </Text>
+            </div>
+            {hasKeptPart(task.gcalPulled.note) &&
+              !isTerminal &&
+              !!settings &&
+              settings.autoCalendar !== false &&
+              !task.gcalSyncError && // Retry shows instead
+              hasUnsent(task, localEpochFromDayTime) && (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  disabled={syncEvent.isPending}
+                  onClick={() => syncEvent.mutate(task.id)}
+                >
+                  Send to Google
+                </Button>
+              )}
+          </div>
+        )}
         {task.gcalSyncError && (
           <div role="alert" className="flex flex-wrap items-center justify-between gap-2">
             <Text size="sm" tone="danger">
@@ -229,10 +268,16 @@ export function TaskEditor({
             </div>
           )
         ) : task.dueDay && !isTerminal ? (
-          reveal === 'calendar' ? (
+          // A timed task gets the picker only once settings say auto-sync can't place its block.
+          task.dueTime && !settings ? null : reveal === 'calendar' ? (
             <AddToCalendarForm task={task} onDone={() => setReveal(null)} />
           ) : (
-            <Button variant="quiet" size="sm" className="self-start" onClick={() => setReveal('calendar')}>
+            <Button
+              variant="quiet"
+              size="sm"
+              className="self-start"
+              onClick={() => setReveal('calendar')}
+            >
               Add to calendar…
             </Button>
           )
@@ -252,7 +297,12 @@ export function TaskEditor({
             </Button>
           )}
           {canScope && (
-            <Button variant="quiet" size="sm" className="text-danger" onClick={() => setReveal('drop')}>
+            <Button
+              variant="quiet"
+              size="sm"
+              className="text-danger"
+              onClick={() => setReveal('drop')}
+            >
               Drop task…
             </Button>
           )}

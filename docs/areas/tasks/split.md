@@ -34,9 +34,9 @@ All split and family rules live in one file, `packages/shared/src/split.ts`, whi
 
 **D4. Calendar on a split** (detail in [calendar/index.md](../calendar/index.md) → Auto-sync → Split):
 
-- **Done, timed:** the event moves to B.
+- **Done, timed:** the event moves to B, whatever placed it (a picked block too — a timed task's one block is its auto block).
 - **Keep, timed:** each part owns a block, so two blocks end at the deadline. Piece 2 is how B's gets dragged earlier.
-- **Manual events:** stay on A.
+- **Manual events on an untimed A:** stay on A.
 - **Owed removals:** carried out through the reporting path.
 
 Write order on a done timed split: the original is saved unlinked, and then the follow-up is saved with the link. If the follow-up's write fails, the Google event is left orphaned but visible. The reverse order is worse: if the original's write failed, two tasks would point at one event, and a retry would duplicate the follow-up.
@@ -50,8 +50,8 @@ Write order on a done timed split: the original is saved unlinked, and then the 
 
 **D7. What pieces 2 and 3 inherit.**
 
-- Piece 2 writes only `estimateMin` from a Google start drag, and ignores done/cancelled tasks.
-- `calendar/research.md` still lists two-way sync under "don't build". Piece 2 has to revisit that explicitly, since it limits sync to events Aperture owns.
+- Piece 2 writes only `estimateMin` from a Google start drag, and that write skips done/cancelled tasks (a done task still takes the end and title).
+- ~~`calendar/research.md` still lists two-way sync under "don't build".~~ Revisited by piece 2: the entry now carves out events Aperture owns ([calendar → Two-way sync](../calendar/index.md)).
 - Piece 3 computes the family point from `splitFamily` and drops the D6 exclusion.
 
 Smaller build-time calls (file placement, write order, hint copy, focus, MCP strictness) are logged in the PR body.

@@ -4,15 +4,19 @@ import {
   PutParameterCommand,
   DeleteParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { EventGoneError } from './gateway';
+import type { PulledEvent } from '@aperture/shared';
+import { EventGoneError, PullIncompleteError } from './gateway';
 import type {
   AccountState,
   BusyResult,
   CalendarInfo,
+  EventChangesInput,
+  EventDelta,
   GoogleGateway,
+  InsertEventInput,
   PatchEventInput,
 } from './gateway';
-import { normalizeEvents, type GcalEvent } from './normalize';
+import { normalizeEvents, toPulledEvent, type GcalEvent } from './normalize';
 
 // The live gateway: real Google REST (via global fetch — Node 22) + SSM for creds and per-account
 // refresh tokens. Rolled by hand rather than pulling in `googleapis` (huge): token exchange + a handful
@@ -44,6 +48,20 @@ class InvalidGrantError extends Error {
 // Per-call cap on a Google fetch. Calendar writes now ride task writes (auto-sync): a hung call must fail
 // into gcalSyncError well inside the Lambda's own timeout, not take the whole request down with it.
 const GOOGLE_TIMEOUT_MS = 4_000;
+// A first (token-less) pull reads events ending in the last week plus everything ahead — an older event
+// is past due anyway. Google only allows timeMin on the token-less request.
+const FULL_SYNC_LOOKBACK_MS = 7 * 86_400_000;
+
+class SyncTokenGoneError extends Error {}
+
+// A page (or its body) cut off by the pull's budget rather than a slow call reads as running out of time.
+const budgetCut =
+  (left: number) =>
+  (e: unknown): never => {
+    if (e instanceof Error && e.name === 'TimeoutError' && left < GOOGLE_TIMEOUT_MS)
+      throw new PullIncompleteError();
+    throw e;
+  };
 
 export class LiveGoogle implements GoogleGateway {
   private clientCreds: { clientId: string; clientSecret: string } | null = null;
@@ -238,25 +256,86 @@ export class LiveGoogle implements GoogleGateway {
     return normalizeEvents(items);
   }
 
-  async insertEvent(input: {
-    sub: string;
-    calendarId: string;
-    title: string;
-    startMs: number;
-    endMs: number;
-  }): Promise<{ eventId: string }> {
-    const res = await this.api(input.sub, `/calendars/${encodeURIComponent(input.calendarId)}/events`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        summary: input.title,
-        start: { dateTime: new Date(input.startMs).toISOString() },
-        end: { dateTime: new Date(input.endMs).toISOString() },
-      }),
-    });
+  async listEventChanges(input: EventChangesInput): Promise<EventDelta> {
+    try {
+      return await this.pageChanges(input, input.syncToken);
+    } catch (e) {
+      // 410: the token expired — Google says clear it and sync in full.
+      if (e instanceof SyncTokenGoneError) return this.pageChanges(input, null);
+      throw e;
+    }
+  }
+  // The query is the SAME on every request of a sync (Google's rule): singleEvents=false (we never create
+  // recurring events, and expanding someone's unbounded series is how a pull would blow its budget) and
+  // showDeleted=true (required with a token; set on the full sync too so deletions read the same).
+  private async pageChanges(
+    input: EventChangesInput,
+    syncToken: string | null,
+  ): Promise<EventDelta> {
+    const events: PulledEvent[] = [];
+    const timeMin = new Date(Date.now() - FULL_SYNC_LOOKBACK_MS).toISOString();
+    let pageToken: string | undefined;
+    for (;;) {
+      const left = input.deadlineMs - Date.now();
+      if (left <= 0) throw new PullIncompleteError();
+      const q = new URLSearchParams({
+        singleEvents: 'false',
+        showDeleted: 'true',
+        maxResults: '250',
+      });
+      if (syncToken) q.set('syncToken', syncToken);
+      else q.set('timeMin', timeMin);
+      if (pageToken) q.set('pageToken', pageToken);
+      // Each page gets what's left of the budget (at most the usual per-call cap); cut off by the budget
+      // rather than a slow call, it reads as having run out of time.
+      const res = await this.api(
+        input.sub,
+        `/calendars/${encodeURIComponent(input.calendarId)}/events?${q}`,
+        { signal: AbortSignal.timeout(Math.min(GOOGLE_TIMEOUT_MS, left)) },
+      ).catch(budgetCut(left));
+      if (res.status === 410 && syncToken) {
+        await res.body?.cancel(); // free the connection before the full re-sync
+        throw new SyncTokenGoneError();
+      }
+      if (!res.ok) throw new Error(`events.list failed (${res.status})`);
+      const json = (await res.json().catch(budgetCut(left))) as {
+        items?: GcalEvent[];
+        nextPageToken?: string;
+        nextSyncToken?: string;
+      };
+      for (const item of json.items ?? []) {
+        const ev = toPulledEvent(item, Date.now());
+        if (ev) events.push(ev);
+      }
+      if (json.nextPageToken) {
+        pageToken = json.nextPageToken;
+        continue;
+      }
+      if (!json.nextSyncToken) throw new Error('events.list returned no sync token');
+      return { events, syncToken: json.nextSyncToken, full: !syncToken };
+    }
+  }
+
+  async insertEvent(input: InsertEventInput): Promise<{ eventId: string; updatedMs: number }> {
+    const res = await this.api(
+      input.sub,
+      `/calendars/${encodeURIComponent(input.calendarId)}/events`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          summary: input.title,
+          start: { dateTime: new Date(input.startMs).toISOString() },
+          end: { dateTime: new Date(input.endMs).toISOString() },
+          ...(input.taskId && {
+            extendedProperties: { private: { apertureTaskId: input.taskId } },
+          }),
+        }),
+      },
+    );
     if (!res.ok) throw new Error(`events.insert failed (${res.status})`);
-    const json = (await res.json()) as { id: string };
-    return { eventId: json.id };
+    const json = (await res.json()) as { id: string; updated?: string };
+    return { eventId: json.id, updatedMs: updatedOf(json) };
   }
 
   async deleteEvent(input: { sub: string; calendarId: string; eventId: string }): Promise<void> {
@@ -271,12 +350,15 @@ export class LiveGoogle implements GoogleGateway {
     }
   }
 
-  async patchEvent(input: PatchEventInput): Promise<void> {
+  async patchEvent(input: PatchEventInput): Promise<{ updatedMs: number }> {
     const body: Record<string, unknown> = {};
     if (input.title !== undefined) body.summary = input.title;
+    // `date: null` because a patch MERGES nested objects: on an event made all-day in Google, a bare
+    // dateTime would sit beside its `date` (Google rejects both). Null deletes a field in a patch.
     if (input.startMs !== undefined)
-      body.start = { dateTime: new Date(input.startMs).toISOString() };
-    if (input.endMs !== undefined) body.end = { dateTime: new Date(input.endMs).toISOString() };
+      body.start = { date: null, dateTime: new Date(input.startMs).toISOString() };
+    if (input.endMs !== undefined)
+      body.end = { date: null, dateTime: new Date(input.endMs).toISOString() };
     const res = await this.api(
       input.sub,
       `/calendars/${encodeURIComponent(input.calendarId)}/events/${encodeURIComponent(input.eventId)}`,
@@ -290,9 +372,17 @@ export class LiveGoogle implements GoogleGateway {
     if (!res.ok) throw new Error(`events.patch failed (${res.status})`);
     // An event deleted in Google lingers as status "cancelled"; a patch that doesn't set status leaves
     // it deleted, so treat it as gone (the caller re-creates).
-    const json = (await res.json()) as { status?: string };
+    const json = (await res.json()) as { status?: string; updated?: string };
     if (json.status === 'cancelled') throw new EventGoneError(input.eventId);
+    return { updatedMs: updatedOf(json) };
   }
+}
+
+// Google's `updated` for a write we made (falls back to now if absent — then the next echo may read as
+// stale, which only delays a concurrent Google change to the delta after).
+function updatedOf(json: { updated?: string }): number {
+  const ms = json.updated ? Date.parse(json.updated) : NaN;
+  return Number.isFinite(ms) ? ms : Date.now();
 }
 
 function decodeIdToken(idToken: string): { sub: string; email: string } {

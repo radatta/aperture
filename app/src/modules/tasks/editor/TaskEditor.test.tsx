@@ -181,6 +181,137 @@ describe('TaskEditor', () => {
     expect(sync).toHaveBeenCalledWith(t.id);
   });
 
+  it('a change under the open editor (a calendar pull) refills untouched fields — never goes dirty', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Open', dueDay: '2026-10-09', dueTime: '16:00' });
+    let push: (next: Task) => void = () => {};
+    const dirty = vi.fn();
+    function Host() {
+      const [live, setLive] = useState(t);
+      push = setLive;
+      return <TaskDetailsForm task={live} onDirtyChange={dirty} />;
+    }
+    renderWithProviders(<Host />, { api: client });
+    const user = userEvent.setup();
+    const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+    // Mid-edit of the title: that draft stays; the untouched due time follows the pull.
+    await user.clear(field('Title'));
+    await user.type(field('Title'), 'my draft');
+    act(() => push({ ...t, title: 'From Google', dueTime: '18:00', updatedAt: t.updatedAt + 1 }));
+    expect(field('Due time').value).toBe('18:00');
+    expect(field('Title').value).toBe('my draft');
+    // Back to untouched (the draft cleared to what it was filled from) → the next pull refills it, clean.
+    await user.clear(field('Title'));
+    await user.type(field('Title'), 'From Google');
+    act(() => push({ ...t, title: 'Again', dueTime: '19:00', updatedAt: t.updatedAt + 2 }));
+    expect(field('Title').value).toBe('Again');
+    expect(field('Due time').value).toBe('19:00');
+    await waitFor(() => expect(dirty).toHaveBeenLastCalledWith(false));
+  });
+
+  it('an open, untouched notes draft follows a change made elsewhere', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Notes', notes: 'old note' });
+    let push: (next: Task) => void = () => {};
+    function Host() {
+      const [live, setLive] = useState(t);
+      push = setLive;
+      return <TaskDetailsForm task={live} />;
+    }
+    renderWithProviders(<Host />, { api: client });
+    // An open, untouched notes draft follows the change (so a Save can't write the old note back).
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
+    act(() => push({ ...t, notes: 'new note', updatedAt: t.updatedAt + 1 }));
+    expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('new note');
+  });
+
+  it('due day + time refill as a pair: a draft time is never put on Google’s day', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Pair', dueDay: '2026-10-09', dueTime: '16:00' });
+    let push: (next: Task) => void = () => {};
+    function Host() {
+      const [live, setLive] = useState(t);
+      push = setLive;
+      return <TaskDetailsForm task={live} />;
+    }
+    renderWithProviders(<Host />, { api: client });
+    const time = screen.getByLabelText('Due time') as HTMLInputElement;
+    fireEvent.change(time, { target: { value: '09:00' } });
+    act(() => push({ ...t, dueDay: '2026-10-12', dueTime: '18:00', updatedAt: t.updatedAt + 1 }));
+    expect(time.value).toBe('09:00');
+    expect((screen.getByLabelText('Due') as HTMLInputElement).value).toBe('2026-10-09');
+  });
+
+  it('says what Google changed, today only', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Pulled', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = 'Moved to Oct 9 5pm in Google Calendar';
+    renderEditor(client, { ...t, gcalPulled: { at: Date.now(), note } });
+    expect(screen.getAllByRole('status').some((el) => el.textContent === note)).toBe(true);
+  });
+
+  it('a kept-out Google change offers one tap to send Aperture’s value — gone once nothing is unsent', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const kept = {
+      ...t,
+      title: 'Mine, renamed', // never reached Google
+      gcalPulled: { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' },
+    };
+    const sync = vi.spyOn(client, 'syncCalendarEvent');
+    const { user } = renderEditor(client, kept);
+    await user.click(await screen.findByRole('button', { name: 'Send to Google' }));
+    expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('a mixed note (something applied, something kept) offers the send too', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    renderEditor(client, {
+      ...t,
+      title: 'Mine, renamed',
+      gcalPulled: {
+        at: Date.now(),
+        note: 'Moved to Oct 9 5pm in Google Calendar · Kept your title',
+      },
+    });
+    expect(await screen.findByRole('button', { name: 'Send to Google' })).toBeTruthy();
+  });
+
+  it('a failed send is said, never a dead button', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' };
+    vi.spyOn(client, 'syncCalendarEvent').mockRejectedValueOnce(new Error('offline'));
+    const { user } = renderEditor(client, { ...t, title: 'Mine, renamed', gcalPulled: note });
+    await user.click(await screen.findByRole('button', { name: 'Send to Google' }));
+    expect(await screen.findByText(/Couldn’t reach the calendar sync/)).toBeTruthy();
+  });
+
+  it('no send button when nothing is unsent', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' };
+    renderEditor(client, { ...t, gcalPulled: note }); // in step with its event
+    await screen.findByText(note.note);
+    expect(screen.queryByRole('button', { name: 'Send to Google' })).toBeNull();
+  });
+
+  it('no send button on a done task (it never pushes)', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Mine', dueDay: '2026-10-09', dueTime: '17:00' });
+    const note = { at: Date.now(), note: 'Kept your title — renamed in Google Calendar too' };
+    renderEditor(client, { ...t, status: 'done', title: 'Mine, renamed', gcalPulled: note });
+    await screen.findByText(note.note);
+    expect(screen.queryByRole('button', { name: 'Send to Google' })).toBeNull();
+  });
+
+  it('an old Google change is not repeated after the rollover', () => {
+    const client = api();
+    renderEditor(client, mkTask({ gcalPulled: { at: Date.now() - 2 * 86_400_000, note: 'old' } }));
+    expect(screen.queryByText('old')).toBeNull();
+  });
+
   it('a timed task with no event (timed while sync was off) offers a one-tap add', async () => {
     const client = api();
     await client.updateSettings({
@@ -199,6 +330,19 @@ describe('TaskEditor', () => {
     expect(await screen.findByText('Not on your calendar.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Add to calendar' }));
     expect(sync).toHaveBeenCalledWith(t.id);
+  });
+
+  it('a refused calendar add is said inline and keeps the picker open', async () => {
+    const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+    const t = await client.createTask({ title: 'Picked', dueDay: '2026-10-01' });
+    vi.spyOn(client, 'insertCalendarEvent').mockRejectedValue(new Error('Auto-sync places it'));
+    const { user } = renderEditor(client, t);
+    await user.click(await screen.findByRole('button', { name: 'Add to calendar…' }));
+    await user.click(await screen.findByRole('button', { name: 'Add to calendar' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Couldn’t add it to your calendar: Auto-sync places it',
+    );
+    expect(screen.getByLabelText('Start')).toBeTruthy();
   });
 
   it('says so when the calendar retry itself fails', async () => {

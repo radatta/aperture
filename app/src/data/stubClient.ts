@@ -31,16 +31,25 @@ import {
   todayKey,
   toCents,
   assertCategoryDeletable,
+  calendarPullPlan,
+  seenFromTask,
   calendarSyncPlan,
+  seenAfter,
+  syncedFieldsChanged,
+  AUTO_PLACED_ERROR,
+  autoSyncOn,
   completeSession,
   countsTowardCap,
   createUlid,
   dayKey,
   dayKeyForOffset,
   discardSession,
+  eventLengthMin,
   eventWindow,
   isPendingRemoval,
+  localDayTime,
   localEpochFromDayTime,
+  PULL_THROTTLE_MS,
   normalizeDue,
   findOpenRollTask,
   heartbeatSession,
@@ -85,7 +94,11 @@ import type {
   FinanceRule,
   FinanceSyncState,
   FinanceTransaction,
+  GcalSeen,
+  GcalSyncState,
   LinkTokenResult,
+  PullCalendarResult,
+  PulledEvent,
   RequestFinanceSyncResult,
   SetFinanceBucketInput,
   SetTaskDueInput,
@@ -151,6 +164,7 @@ export interface Store {
   financeAccounts: FinanceAccount[];
   financeTransactions: FinanceTransaction[];
   financeRules: FinanceRule[];
+  gcalSyncStates: GcalSyncState[];
   settings: Settings | null;
 }
 
@@ -175,6 +189,7 @@ export function emptyStore(): Store {
     financeAccounts: [],
     financeTransactions: [],
     financeRules: [],
+    gcalSyncStates: [],
     settings: null,
   };
 }
@@ -196,6 +211,38 @@ function takeStubSyncFailure(): string | null {
     return code || null;
   } catch {
     return null;
+  }
+}
+
+// Dev/test hook for two-way calendar sync: the stub has no Google, so an edit "made in Google" is queued
+// here as a JSON array and applied by the next pullCalendar — through the same shared planner as the
+// Lambda. Each entry names a linked task and what changed; anything left out keeps the event as known.
+// A non-empty queue bypasses the stub's once-a-minute throttle (stub-only) — but the app's own hook
+// still pulls at most once a minute, so to see it: queue, then RELOAD (or foreground after a minute).
+// `failAccount` makes that account's pull fail with `error`.
+//   [{ "taskId": "…", "end": "2026-10-09 17:00", "durationMin": 45, "title": "pset 3" },
+//    { "taskId": "…", "allDay": true }, { "taskId": "…", "cancelled": true },
+//    { "failAccount": "seed-personal", "error": "timeout" }]
+export const STUB_GCAL_EDITS_KEY = 'aperture:stub:gcalEdits';
+export interface StubGcalEdit {
+  taskId?: string;
+  title?: string;
+  end?: string; // "YYYY-MM-DD HH:MM", the user's wall clock
+  durationMin?: number;
+  allDay?: boolean;
+  cancelled?: boolean;
+  failAccount?: string;
+  error?: string;
+}
+function takeStubGcalEdits(): StubGcalEdit[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(STUB_GCAL_EDITS_KEY) ?? null;
+    if (!raw) return [];
+    globalThis.localStorage?.removeItem(STUB_GCAL_EDITS_KEY);
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as StubGcalEdit[]) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -337,6 +384,11 @@ class StubClient implements ApiClient {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
     const settings = this.ensureSettings();
     const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, { ensure });
+    // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
+    // retires an "updated from Google" note it has just superseded.
+    const edited =
+      !!prev && !!task.gcalEventId && !!task.gcalPulled && syncedFieldsChanged(prev, task);
+    const editStamp = edited ? { gcalPulled: null } : {};
     if (action.kind === 'none') {
       const moot =
         task.gcalSyncError &&
@@ -344,18 +396,27 @@ class StubClient implements ApiClient {
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
-      return moot ? this.writes.patch(this.store.tasks, task.id, { gcalSyncError: null }) : task;
+      if (!moot && !edited) return task;
+      return this.writes.patch(this.store.tasks, task.id, {
+        ...(moot && { gcalSyncError: null }),
+        ...editStamp,
+      });
     }
     if (action.kind === 'delete') return this.clearCalendarPointers(task.id);
+    // A create or patch records the event as it now stands, versioned by the clock (Google's `updated`).
     if (action.kind === 'patch')
-      return task.gcalSyncError
-        ? this.writes.patch(this.store.tasks, task.id, { gcalSyncError: null })
-        : task;
+      return this.writes.patch(this.store.tasks, task.id, {
+        gcalSyncError: null,
+        gcalSeen: seenAfter(action, task.gcalSeen, this.now()),
+        ...editStamp,
+      });
     return this.writes.patch(this.store.tasks, task.id, {
       gcalAccountId: action.target.accountSub,
       gcalCalendarId: action.target.calendarId,
       gcalEventId: `stub-event-${this.ulid()}`,
       gcalSyncError: null,
+      gcalSeen: seenAfter(action, null, this.now()),
+      gcalPulled: null, // a "Removed in Google Calendar" mark no longer holds
     });
   }
   private clearCalendarPointers(taskId: string): Task {
@@ -364,6 +425,7 @@ class StubClient implements ApiClient {
       gcalCalendarId: null,
       gcalEventId: null,
       gcalSyncError: null,
+      gcalSeen: null,
     });
   }
   private alive<T extends BaseEntity>(coll: T[]): T[] {
@@ -592,17 +654,27 @@ class StubClient implements ApiClient {
     const edited = splitOriginal(task, input, this.now()); // validates everything before any write
     const done = input.finish === 'done';
     // Parity with the backend: a done TIMED part hands its event to the follow-up; kept going, each part
-    // owns its own block; any other linked event stays on the original.
+    // owns its own block; any other linked event (a manual one on an untimed original) stays on it.
     const moveLink = done && !!task.dueDay && !!task.dueTime && !!task.gcalEventId;
     let original: Task;
     if (done) {
       const owed = !moveLink && !!task.gcalEventId && isPendingRemoval(task.gcalSyncError);
       original = this.writes.put(this.store.tasks, {
         ...edited,
-        ...(moveLink ? { gcalAccountId: null, gcalCalendarId: null, gcalEventId: null } : {}),
+        ...(moveLink
+          ? {
+              gcalAccountId: null,
+              gcalCalendarId: null,
+              gcalEventId: null,
+              gcalSeen: null,
+              gcalPulled: null, // the follow-up owns the event a pulled note would describe
+            }
+          : {}),
         gcalSyncError: owed ? task.gcalSyncError : null,
       });
-      if (owed) original = this.syncCalendar(task, original);
+      // Through the sync path whenever the event stays: an owed removal is carried out, and a rename
+      // retires a pulled note like any edit on a done task.
+      if (!moveLink) original = this.syncCalendar(task, original);
     } else {
       original = this.syncCalendar(task, this.writes.put(this.store.tasks, edited));
     }
@@ -619,6 +691,7 @@ class StubClient implements ApiClient {
             gcalAccountId: task.gcalAccountId,
             gcalCalendarId: task.gcalCalendarId,
             gcalEventId: task.gcalEventId,
+            gcalSeen: task.gcalSeen ?? null,
           }
         : {}),
     });
@@ -1043,12 +1116,17 @@ class StubClient implements ApiClient {
   }
   async getGoogleStatus(): Promise<GoogleStatus> {
     return {
-      accounts: this.ensureSettings().googleAccounts.map((a) => ({
-        sub: a.sub,
-        email: a.email,
-        connected: true,
-        reconnectRequired: false,
-      })),
+      accounts: this.ensureSettings().googleAccounts.map((a) => {
+        const sync = this.find(this.store.gcalSyncStates, a.sub);
+        return {
+          sub: a.sub,
+          email: a.email,
+          connected: true,
+          reconnectRequired: false,
+          lastSyncedAt: sync?.lastSyncedAt ?? null,
+          lastPullError: sync?.lastPullError ?? null,
+        };
+      }),
     };
   }
   async listGoogleCalendars(): Promise<GoogleCalendar[]> {
@@ -1077,14 +1155,25 @@ class StubClient implements ApiClient {
   }
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
     const task = this.mustFind(this.store.tasks, input.taskId);
-    // Parity with the backend: one live event per task, and only onto a connected account.
+    // Parity with the backend: no picked time on a timed task while auto-sync is on, one live event per
+    // task, and only onto a connected account.
+    const settings = this.ensureSettings();
+    if (eventWindow(task, localEpochFromDayTime) && autoSyncOn(settings))
+      throw new Error(AUTO_PLACED_ERROR);
     if (task.gcalEventId) throw new Error('Task already has a calendar event');
-    if (!this.ensureSettings().googleAccounts.some((a) => a.sub === input.accountSub))
+    if (!settings.googleAccounts.some((a) => a.sub === input.accountSub))
       throw new Error(`No connected account: ${input.accountSub}`);
     return this.writes.patch(this.store.tasks, input.taskId, {
       gcalAccountId: input.accountSub,
       gcalCalendarId: input.calendarId,
       gcalEventId: `stub-event-${this.now()}`,
+      gcalSeen: {
+        title: input.title,
+        startMs: input.startMs,
+        endMs: input.endMs,
+        updatedMs: this.now(),
+      },
+      gcalPulled: null, // a "Removed in Google Calendar" mark no longer holds
     });
   }
   async deleteCalendarEvent(taskId: string): Promise<Task> {
@@ -1093,6 +1182,128 @@ class StubClient implements ApiClient {
   }
   async syncCalendarEvent(taskId: string): Promise<Task> {
     return this.syncCalendar(null, this.mustFind(this.store.tasks, taskId), true);
+  }
+  // Two-way sync parity with the backend: the same planner, the same throttle and toggle, over the dev
+  // queue (STUB_GCAL_EDITS_KEY) instead of an events.list delta. No first-pull baseline — the queue is
+  // only ever deliberate edits.
+  async pullCalendar(): Promise<PullCalendarResult> {
+    const settings = this.ensureSettings();
+    const idle: PullCalendarResult = { pulled: false, changedTaskIds: [], accounts: [] };
+    if (settings.autoCalendar === false || settings.googleAccounts.length === 0) return idle;
+    const now = this.now();
+    const edits = takeStubGcalEdits();
+    const states = settings.googleAccounts.map(
+      (a): GcalSyncState =>
+        this.find(this.store.gcalSyncStates, a.sub) ?? {
+          ...this.base(),
+          id: a.sub,
+          sub: a.sub,
+          calendarId: a.email,
+          syncToken: null,
+          lastPulledAt: null,
+          lastSyncedAt: null,
+          lastPullError: null,
+          lastPullErrorAt: null,
+        },
+    );
+    const due = states.filter(
+      (st) => !st.lastPulledAt || now - st.lastPulledAt >= PULL_THROTTLE_MS,
+    );
+    if (due.length === 0 && edits.length === 0) return idle;
+    const changed: string[] = [];
+    const accounts = (edits.length ? states : due).map((st) => {
+      const fail = edits.find((e) => e.failAccount === st.sub);
+      if (fail) {
+        const error = fail.error ?? 'stub failure';
+        this.writes.put(this.store.gcalSyncStates, {
+          ...st,
+          lastPulledAt: now,
+          lastPullError: error,
+          lastPullErrorAt: now,
+          updatedAt: now,
+        });
+        return { sub: st.sub, ok: false, error };
+      }
+      for (const edit of edits) {
+        const found = edit.taskId ? this.find(this.store.tasks, edit.taskId) : undefined;
+        if (!found?.gcalEventId || found.gcalAccountId !== st.sub) continue;
+        if (found.gcalCalendarId !== st.calendarId) continue;
+        // A linked task with no known event (seeded, or persisted before two-way sync) takes its own
+        // block as the known one — the planner's later-delta fallback, prefilled because stubEvent
+        // needs a base (the queue is only ever deliberate edits, never a first-sync baseline).
+        const task = {
+          ...found,
+          gcalSeen:
+            found.gcalSeen ?? seenFromTask(found, eventWindow(found, localEpochFromDayTime)),
+        };
+        const action = calendarPullPlan(
+          task,
+          this.stubEvent(task, edit, now),
+          { epoch: localEpochFromDayTime, clock: localDayTime },
+          { firstSync: false },
+        );
+        if (action.kind === 'none') continue;
+        this.writes.patch(
+          this.store.tasks,
+          task.id,
+          action.kind === 'see'
+            ? { gcalSeen: action.seen }
+            : action.kind === 'apply'
+              ? {
+                  ...action.fields,
+                  gcalSeen: action.seen,
+                  gcalPulled: { at: now, note: action.note },
+                }
+              : {
+                  gcalAccountId: null,
+                  gcalCalendarId: null,
+                  gcalEventId: null,
+                  gcalSyncError: null,
+                  gcalSeen: null,
+                  gcalPulled: { at: now, note: action.note },
+                },
+        );
+        if (action.kind !== 'see') changed.push(task.id);
+      }
+      this.writes.put(this.store.gcalSyncStates, {
+        ...st,
+        syncToken: `stub-${now}`,
+        lastPulledAt: now,
+        lastSyncedAt: now,
+        lastPullError: null,
+        lastPullErrorAt: null,
+        updatedAt: now,
+      });
+      return { sub: st.sub, ok: true, error: null };
+    });
+    return { pulled: true, changedTaskIds: changed, accounts };
+  }
+  // A queued edit as the event Google would now return: the known event with the edit's changes laid
+  // over it (an `end` alone keeps the block's length).
+  private stubEvent(
+    task: Task & { gcalSeen: GcalSeen },
+    edit: StubGcalEdit,
+    now: number,
+  ): PulledEvent {
+    const known = task.gcalSeen;
+    const endMs = edit.end
+      ? localEpochFromDayTime(edit.end.slice(0, 10), edit.end.slice(11, 16))
+      : known.endMs;
+    const len =
+      edit.durationMin ??
+      (known.startMs !== null && known.endMs !== null
+        ? (known.endMs - known.startMs) / 60_000
+        : eventLengthMin(task));
+    return {
+      eventId: task.gcalEventId!,
+      cancelled: !!edit.cancelled,
+      recurring: false,
+      title: edit.title ?? known.title ?? task.title,
+      allDay: !!edit.allDay,
+      startMs: edit.allDay || endMs === null ? null : endMs - len * 60_000,
+      endMs: edit.allDay ? null : endMs,
+      updatedMs: now,
+    };
   }
   async disconnectGoogleAccount(accountSub: string): Promise<void> {
     const current = this.ensureSettings();
@@ -1107,6 +1318,7 @@ class StubClient implements ApiClient {
       updatedAt: this.now(),
     };
     this.store.settings = next;
+    this.writes.softDelete(this.store.gcalSyncStates, accountSub); // a reconnect starts afresh
     this.persist();
   }
 
@@ -1486,6 +1698,7 @@ class StubClient implements ApiClient {
       financeAccounts: this.alive(this.store.financeAccounts),
       financeTransactions: this.alive(this.store.financeTransactions),
       financeRules: this.alive(this.store.financeRules),
+      gcalSyncStates: this.alive(this.store.gcalSyncStates),
       settings: this.ensureSettings(),
     };
     // Store is the source of truth for what a full snapshot holds, so this is where a new collection

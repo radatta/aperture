@@ -64,6 +64,17 @@ export interface Task extends BaseEntity {
   // The last calendar auto-sync failure, shown on the task with a retry; null once a sync succeeds. The
   // task write itself never fails on gcal (calendarSync.ts). Pre-existing rows read back undefined.
   gcalSyncError: string | null;
+  // Two-way sync bookkeeping (calendarPull.ts) — OPTIONAL, unlike the domain fields above: sync state,
+  // not task data, so old rows and literals simply lack it (readers use `?? null` / `!x`).
+  // gcalSeen: the linked event as Aperture last knew it (what it pushed, or last pulled), with Google's
+  // `updated` for that state — the base of a three-way merge. A pull takes from Google only what changed
+  // since (a state older than the base is stale); a push sends what the task has that the event doesn't
+  // yet (a failed, skipped or toggle-off change). A field both sides changed keeps Aperture's unsent
+  // value. Null/absent = not known yet.
+  gcalSeen?: GcalSeen | null;
+  // gcalPulled: the last change Google made to this task — or kept out of it — and one line saying what.
+  // The task shows it until the next day rollover (isPullFresh) or your own edit.
+  gcalPulled?: GcalPulled | null;
 }
 
 // Scheduling (the *when*), separate from the task (the *what*) → multi-day + ordering.
@@ -169,6 +180,31 @@ export interface GoogleAccount {
 export interface CalendarRef {
   accountSub: string;
   calendarId: string;
+}
+// The event's title and window (instants) as Aperture last knew them; times null when not known/all-day.
+// updatedMs: Google's `updated` for that state — an event state older than it predates the base.
+export interface GcalSeen {
+  title: string | null;
+  startMs: number | null;
+  endMs: number | null;
+  updatedMs: number;
+}
+// The "updated from Google" mark: when, and one short line saying what.
+export interface GcalPulled {
+  at: number;
+  note: string;
+}
+// Two-way sync cursor, one per connected account (id = sub): the events.list syncToken for its primary
+// calendar plus pull health. Exported (like financeSyncStates) — no credentials; a null token means a
+// full resync.
+export interface GcalSyncState extends BaseEntity {
+  sub: string;
+  calendarId: string;
+  syncToken: string | null;
+  lastPulledAt: number | null; // stamped at the START of every attempt — the throttle counts failures
+  lastSyncedAt: number | null; // the last pull that finished; null = never
+  lastPullError: string | null; // null after a success
+  lastPullErrorAt: number | null;
 }
 
 // --- Settings (singleton) --------------------------------------------------
