@@ -73,50 +73,20 @@ jobs:
           # vitest.config.ts, so local runs keep vitest's default.
           VITEST_MAX_WORKERS: 2
 
-  # TEMPORARY setup-timing probes (faster-ci-check branch only; removed before the PR opens). Each times
-  # one pnpm setup candidate in the same run as check/test-app, whose own setup is the control.
-  probe-a1: # pnpm/setup replaces both actions; store cache saved every run (post step counts)
+  # TEMPORARY control probe (faster-ci-check branch only; removed before the PR opens): the app suite on
+  # vitest's CI default of one worker, run beside test-app (two workers) on the same commit.
+  probe-app-1w:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v3 # pnpm from packageManager, Node from .nvmrc
-        with:
-          cache: true
-          install: false
-      - run: pnpm --version && node --version
-      - run: pnpm install --frozen-lockfile
-
-  probe-a3: # pnpm/setup for pnpm only; Node + store cache stay on setup-node
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/setup@v3 # version comes from the root packageManager field
-        with:
-          node-version-file: false
-          install: false
+      - uses: pnpm/action-setup@v6 # version comes from the root packageManager field
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
-      - run: pnpm --version && node --version
       - run: pnpm install --frozen-lockfile
-
-  probe-b: # action-setup with the native @pnpm/exe bootstrap
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          standalone: true
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm --version && node --version
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @aperture/app test
+        env:
+          VITEST_MAX_WORKERS: 1
