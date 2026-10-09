@@ -338,8 +338,11 @@ Decisions (2026-10-09):
   `claude -p`) — the connector's bearer fails this edge's Cognito path, it adds model turns, it puts prod
   write tools in front of a one-liner, and a timeout no longer says whether the task was saved.
 - **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out). The ids
-  come from `list_categories`, cached a day on the Mac; a failed refresh uses the stale copy. The script
-  re-checks each field against the server's rules and drops a bad one, naming it in the toast.
+  come from `list_categories`, cached a day per stage on the Mac; a failed refresh uses the stale copy.
+  The script re-checks each field against the server's rules and drops a bad one, naming it in the toast;
+  if the server still rejects the args (`-32602`, raised before any write) it resends the line raw.
+- **"Today" uses the 4am day start** (`dayStartHour`'s default — no MCP tool reads Settings), so a
+  relative due date means what the app's Today means.
 - **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
   parse: …)` toast — the user's call over blocking; nothing is quiet.
 
@@ -347,6 +350,9 @@ Decisions (2026-10-09):
 
 - A **create-only token** for Raycast (scoped to `create_task` + `list_categories`, like the recruiting
   device token's single method) — the Mac's Keychain holds the full agent token until then.
+- **`create_task` doesn't check that `categoryId` exists.** A category deleted within the Raycast cache's
+  day can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix server-side
+  (reject an unknown/deleted id), which also covers any other caller.
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
 - Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).

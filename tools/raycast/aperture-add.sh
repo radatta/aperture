@@ -21,7 +21,9 @@ APERTURE_URL="${APERTURE_URL:-https://aperture.rahuldatta.dev}"
 ANTHROPIC_URL="${ANTHROPIC_URL:-https://api.anthropic.com}"
 KEYCHAIN_SERVICE="${APERTURE_KEYCHAIN_SERVICE:-aperture-agent-token}"
 ANTHROPIC_KEYCHAIN_SERVICE="${ANTHROPIC_KEYCHAIN_SERVICE:-anthropic-api-key}"
-CATEGORIES="$HOME/Library/Caches/aperture-raycast/categories.json"
+# One category cache per stage — the ids differ, and a prod id must never land on a dev task.
+host="${APERTURE_URL#*://}"
+CATEGORIES="$HOME/Library/Caches/aperture-raycast/categories-$(printf '%s' "${host%%/*}" | tr -c 'A-Za-z0-9.-' '_').json"
 MODEL="claude-haiku-5-5"
 MAYBE_ADDED="it may have been added — check the app before retrying"
 
@@ -33,6 +35,7 @@ short() { jq -rn --arg t "$1" 'if ($t | length) > 40 then $t[0:40] + "…" else 
 # https only — both requests carry a secret. Loopback http is allowed for the stub test.
 for url in "$APERTURE_URL" "$ANTHROPIC_URL"; do
   case "$url" in
+    *@*) fail "$url has a user@ part — refusing to send a secret to it" ;;
     https://* | http://127.0.0.1:* | http://localhost:*) ;;
     *) fail "$url must start with https:// — a secret would be sent in cleartext" ;;
   esac
@@ -97,11 +100,17 @@ refresh_categories() {
 parsed=""
 raw_reason=""
 parse_line() {
-  local cats ids schema system req stop
+  local cats ids schema system req stop today max
   cats="$(cat "$CATEGORIES" 2>/dev/null)"
   [ -n "$cats" ] || cats='[]'
   ids="$(jq -c 'map(.id)' <<<"$cats")"
-  # Structured outputs don't take minimum/pattern constraints — those are checked in validate below.
+  # The app's day starts at 4am (Settings dayStartHour's default; no MCP tool reads it), so at 1am
+  # "today" is still yesterday — the same day the app's Today chip means.
+  today="$(TZ=America/Los_Angeles jq -rn 'now - 4 * 3600 | localtime | strftime("%Y-%m-%d (%A)")')"
+  # Long lines come back as long notes: allow more time for them, up to 10s.
+  max=$((4 + ${#line} / 400))
+  [ "$max" -le 10 ] || max=10
+  # Structured outputs don't take numeric or length constraints — the field rules are checked in validate.
   schema="$(jq -n --argjson ids "$ids" '
     def nullable(s): {anyOf: [s, {type: "null"}]};
     {type: "object", additionalProperties: false,
@@ -113,7 +122,7 @@ parse_line() {
        dueDay: nullable({type: "string", format: "date"}),
        dueTime: nullable({type: "string", description: "HH:MM, 24h"}),
        estimateMin: nullable({type: "integer"})}}')"
-  system="You turn one quick-capture line into fields for a task tracker. Today is $(TZ=America/Los_Angeles date '+%Y-%m-%d (%A)') in America/Los_Angeles.
+  system="You turn one quick-capture line into fields for a task tracker. Today is $today in America/Los_Angeles.
 Categories (id: label) — use the id, or null if none clearly matches:
 $(jq -r 'if length == 0 then "(none — categoryId must be null)" else .[] | "\(.id): \(.label)" end' <<<"$cats")
 Rules:
@@ -124,10 +133,10 @@ Rules:
 - estimateMin: whole minutes, only if the user gave an estimate. Never invent one. Otherwise null.
 - Set a field only when the user stated it. Do not add tasks, advice or commentary."
   req="$(jq -n --arg model "$MODEL" --arg system "$system" --arg line "$line" --argjson schema "$schema" \
-    '{model: $model, max_tokens: 1024, thinking: {type: "disabled"},
+    '{model: $model, max_tokens: 2048, thinking: {type: "disabled"},
       output_config: {effort: "low", format: {type: "json_schema", schema: $schema}},
       system: $system, messages: [{role: "user", content: $line}]}')"
-  post "$ANTHROPIC_URL/v1/messages" "$req" 4 x-api-key "$api_key" -H 'anthropic-version: 2023-06-01'
+  post "$ANTHROPIC_URL/v1/messages" "$req" "$max" x-api-key "$api_key" -H 'anthropic-version: 2023-06-01'
   if [ "$rc" = 28 ]; then raw_reason="timeout"; return; fi
   if [ "$rc" != 0 ]; then raw_reason="$curl_msg"; return; fi
   if [ "$status" != 200 ]; then
@@ -152,7 +161,8 @@ validate() {
       | $m >= 1 and $m <= 12 and $d >= 1
       and $d <= [31, (if ($y % 4 == 0 and $y % 100 != 0) or $y % 400 == 0 then 29 else 28 end),
                  31, 30, 31, 30, 31, 31, 30, 31, 30, 31][$m - 1]);
-    def clock: test("^([01][0-9]|2[0-3]):[0-5][0-9]$");
+    def clock: test("^([0-9]|[01][0-9]|2[0-3]):[0-5][0-9]$");
+    def pad: if test("^[0-9]:") then "0" + . else . end;
     def str: type == "string";
     . as $p
     | {args: {title: (if ($p.title | str) then $p.title | trim else "" end)}, dropped: []}
@@ -167,7 +177,7 @@ validate() {
       elif ($p.dueDay | str) and ($p.dueDay | realday) then .args.dueDay = $p.dueDay
       else .dropped += ["dropped due day"] end
     | if $p.dueTime == null then .
-      elif ($p.dueTime | str) and ($p.dueTime | clock) and .args.dueDay != null then .args.dueTime = $p.dueTime
+      elif ($p.dueTime | str) and ($p.dueTime | clock) and .args.dueDay != null then .args.dueTime = ($p.dueTime | pad)
       else .dropped += ["dropped due time"] end
     | if $p.estimateMin == null then .
       elif ($p.estimateMin | type) == "number" and $p.estimateMin >= 0 and ($p.estimateMin | floor) == $p.estimateMin
@@ -196,6 +206,14 @@ fi
 
 # --- create ------------------------------------------------------------------------------------------
 mcp create_task "$args" 10
+# A param error (-32602) is thrown before any write (tools.ts arg parsing → RpcParamError), so a parsed
+# attempt the server rejects is safe to resend raw: a gap between validate and the server can't turn a
+# good capture into a hard failure, or a duplicate.
+if [ -z "$raw_reason" ] && [ "$rc" = 0 ] && [ "$status" = 200 ] \
+  && [ "$(jq -r '.error.code // empty' "$out" 2>/dev/null)" = "-32602" ]; then
+  raw_reason="server rejected it: $(jq -r '.error.message' "$out")"
+  mcp create_task "$(jq -cn --arg t "$line" '{title: $t}')" 10
+fi
 
 # Only a failure before the request went out (URL, DNS, connect, TLS) is a sure "nothing was added".
 # A timeout or dropped reply can land after the task saved, and a blind retry would duplicate it.
@@ -242,6 +260,7 @@ jq -rn --argjson t "$task" --argjson cats "$cats" --argjson dropped "$dropped" -
     + (if $t.dueDay then ["due \($t.dueDay | wday)" + (if $t.dueTime then " \($t.dueTime)" else "" end)] else [] end)
     + (if $t.estimateMin then ["\($t.estimateMin)m"] else [] end)
     + (if $t.notes then ["+notes"] else [] end)
+    + (if $t.gcalSyncError then ["calendar sync failed"] else [] end)
     + $dropped
     + (if $note != "" then [$note] else [] end)
   | join(" · ")'

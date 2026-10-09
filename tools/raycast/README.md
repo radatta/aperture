@@ -40,18 +40,21 @@ If macOS asks whether `security` may read a Keychain item, choose **Always Allow
 
 Type it the way you'd say it: a leading category word (`aperture,`), `due tmw` / `due fri 4pm`, `30m`.
 Haiku only sets what you stated — it never invents an estimate — and moves extra detail into notes.
-The toast shows what was **saved** (the server's copy), so a wrong guess is visible at once:
+"Today" follows the app's 4am day start, so `due tmw` typed at 1am means the day after the one you're
+still in. A due **time** also puts the task on Google Calendar (auto-sync). The toast shows what was
+**saved** (the server's copy), so a wrong guess is visible at once:
 
-| toast                                                 | means                                                                   |
-| ----------------------------------------------------- | ----------------------------------------------------------------------- |
-| `Added: <title> · <category> · due Sat 10/10 · 30m …` | parsed and saved; `no category` = none matched                          |
-| `… · dropped due time` / `unknown category` / …       | Haiku returned a field the server would reject; saved without it        |
-| `… · categories: stale` / `unavailable`               | couldn't refresh the category list; used the old copy / none            |
-| `Added RAW (couldn't parse: <why>): <line>`           | Haiku failed (timeout 4s, refusal, no API key …); the line is the title |
-| `Failed: <reason>`                                    | nothing was saved, or it can't tell — see Failures                      |
+| toast                                                 | means                                                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `Added: <title> · <category> · due Sat 10/10 · 30m …` | parsed and saved; `no category` = none matched                                                             |
+| `… · dropped due time` / `unknown category` / …       | Haiku returned a field the server would reject; saved without it                                           |
+| `… · categories: stale` / `unavailable`               | couldn't refresh the category list; used the old copy / none                                               |
+| `… · calendar sync failed`                            | saved, but the Google event wasn't — retry from the task in the app                                        |
+| `Added RAW (couldn't parse: <why>): <line>`           | Haiku failed (timeout 4s+, refusal, no API key …) or the server rejected its fields; the line is the title |
+| `Failed: <reason>`                                    | nothing was saved, or it can't tell — see Failures                                                         |
 
-Categories are cached for a day in `~/Library/Caches/aperture-raycast/categories.json` (retired ones
-left out). Delete the file to pick up a new category right away.
+Categories are cached for a day, one file per stage, in `~/Library/Caches/aperture-raycast/` (retired
+ones left out). Delete the folder to pick up a new category right away.
 
 ## Config
 
@@ -70,8 +73,6 @@ stored as its own Keychain item, so the prod token never goes to dev). URLs must
 APERTURE_URL=https://dev.aperture.rahuldatta.dev APERTURE_KEYCHAIN_SERVICE=aperture-agent-token-dev \
   ./aperture-add.sh "test task"
 ```
-
-Delete the category cache when switching stages — the ids differ.
 
 ## Failures
 
