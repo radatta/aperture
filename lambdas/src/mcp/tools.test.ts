@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { gcalSyncMessage } from '@aperture/shared';
 import type { ApiMethod, Attachment, Category, Task } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
@@ -391,6 +392,113 @@ describe('mcp tools — attachments', () => {
     expect(await call('delete_attachment', { id: up.attachmentId })).toEqual({
       deleted: up.attachmentId,
     });
+  });
+});
+
+describe('mcp tools — sync_calendar_event', () => {
+  type Synced = { outcome: string; task: Task };
+  const timed = { title: 'pset', dueDay: '2026-10-09', dueTime: '16:00', estimateMin: 60 };
+
+  it('puts a removed block back at the deadline — re-setting the same time never did', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', timed)) as Task;
+    await call('delete_calendar_event', { taskId: t.id });
+    await call('update_task', { id: t.id, dueTime: '16:00' });
+    expect(google.events.size).toBe(0); // the gap this tool closes
+    const r = (await call('sync_calendar_event', { taskId: t.id })) as Synced;
+    expect(r.outcome).toBe('created');
+    const ev = google.events.get(r.task.gcalEventId!)!;
+    expect(ev.endMs - ev.startMs).toBe(60 * 60_000);
+    expect(r.task.gcalSyncError).toBeNull();
+  });
+
+  it('a linked task is updated; one deleted in Google comes back unlinked, then created', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', timed)) as Task;
+    google.editEvent(t.gcalEventId!, { title: 'renamed in google' });
+    const r = (await call('sync_calendar_event', { taskId: t.id })) as Synced;
+    expect(r.outcome).toBe('updated');
+    expect(google.events.get(t.gcalEventId!)!.title).toBe('pset');
+    google.deleteEventInGoogle(t.gcalEventId!);
+    expect(await call('sync_calendar_event', { taskId: t.id })).toMatchObject({
+      outcome: 'unlinked',
+      task: { gcalEventId: null },
+    });
+    expect(await call('sync_calendar_event', { taskId: t.id })).toMatchObject({
+      outcome: 'created',
+    });
+  });
+
+  it('finishes an owed removal — even with auto-sync off', async () => {
+    const { call, setup, doc, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', timed)) as Task;
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    await repo.putTask({
+      ...(await repo.getTask(t.id))!,
+      dueTime: null,
+      gcalSyncError: gcalSyncMessage('delete', 'timeout'),
+    });
+    await setup.updateSettings({ autoCalendar: false });
+    expect(await call('sync_calendar_event', { taskId: t.id })).toMatchObject({
+      outcome: 'removed',
+      task: { gcalEventId: null, gcalSyncError: null },
+    });
+    expect(google.events.size).toBe(0);
+  });
+
+  it('refuses, with the reason, when nothing would happen', async () => {
+    const { call, setup } = makeEnv();
+    const noCal = (await call('create_task', timed)) as Task; // no account connected yet
+    await expect(call('sync_calendar_event', { taskId: noCal.id })).rejects.toThrow(
+      /No calendar to write to/,
+    );
+    await setup.completeGoogleConnect('A');
+    const untimed = (await call('create_task', { title: 'loose' })) as Task;
+    await expect(call('sync_calendar_event', { taskId: untimed.id })).rejects.toThrow(
+      /No due time and no event/,
+    );
+    const done = (await call('create_task', timed)) as Task;
+    await call('complete_task', { id: done.id, actualMin: 30 });
+    await expect(call('sync_calendar_event', { taskId: done.id })).rejects.toThrow(
+      /A done task never syncs/,
+    );
+    const linked = (await call('create_task', timed)) as Task;
+    await setup.updateSettings({ autoCalendar: false });
+    await expect(call('sync_calendar_event', { taskId: linked.id })).rejects.toThrow(
+      /Auto-sync is off/,
+    );
+    await expect(call('sync_calendar_event', { taskId: 'nope' })).rejects.toThrow(/Not found/);
+  });
+
+  it('a Google failure is an error, and its note stays on the task', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', { title: 'pset' })) as Task;
+    await call('update_task', { id: t.id, dueDay: '2026-10-09' });
+    google.insertEvent = async () => {
+      throw new Error('quota');
+    };
+    await call('update_task', { id: t.id, dueTime: '16:00' }); // the auto create fails
+    await expect(call('sync_calendar_event', { taskId: t.id })).rejects.toThrow(
+      /Couldn’t add the calendar event/,
+    );
+    expect(((await call('list_tasks')) as Task[])[0]!.gcalSyncError).toMatch(/quota/);
+  });
+
+  it('create_calendar_event’s refusal points at sync_calendar_event', async () => {
+    const { call, setup } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', timed)) as Task;
+    await expect(
+      call('create_calendar_event', {
+        taskId: t.id,
+        start: '2026-10-09T09:00:00-07:00',
+        durationMin: 30,
+      }),
+    ).rejects.toThrow(/Auto-sync places.*sync_calendar_event \{taskId\}/);
   });
 });
 

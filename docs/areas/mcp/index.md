@@ -70,7 +70,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}` |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
-| calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `get_day_busy`                                                                  |
+| calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
 | attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`            |
 | finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`           |
 
@@ -119,8 +119,16 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   renames a linked calendar event). Exposed as `update_task.title`.
 - **Calendar** events are created **from a task only** (the schema has nowhere to pin a standalone event).
   Times are ISO 8601 **with an explicit offset** — no timezone inference. `create_calendar_event` is
-  refused on a task with a due time while auto-sync is on: that task's block is placed at its deadline,
-  so the agent changes the due time instead.
+  refused on a task with a due time while auto-sync is on: that task's block is placed at its deadline
+  (the refusal adds "From here: sync_calendar_event … update_task …" on the MCP side only — the shared
+  `AUTO_PLACED_ERROR` is also the app picker's). **`sync_calendar_event {taskId}`** is the app's Add to
+  calendar / Retry / Send to Google (`syncCalendarEvent`, the `ensure` pass): it puts a removed block
+  back at the deadline (re-setting the same time never does), retries a failed sync, sends values kept
+  over Google, finishes an owed removal. It runs the shared `calendarSyncPlan` first, so it reports what
+  the backend decides — `{ outcome: created | updated | removed | unlinked, task }` (`unlinked`: Google
+  had already deleted it; call again to create) — and refuses with the reason when the plan is `none`
+  (done/cancelled, auto-sync off, no due time and no event, no write default). A Google failure is an
+  error; its text is also the task's `gcalSyncError`.
 - **Attachments** — two byte paths: `attach_file` sends content inline (base64, capped **64 KB** — tool
   args are model output tokens, so this is a small-text-artifact path) and the Lambda PUTs it to the
   presigned URL; `create_attachment_upload` returns a presigned URL for a real file (up to 20 MB) that a
