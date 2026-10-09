@@ -262,7 +262,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, title/due/estimate changes move or rename the event; clearing the due time or cancelling DELETES it. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
+      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -385,7 +385,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'split_task',
     description:
-      'Split a task in two when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new task (followUpTitle, followUpEstimateMin). Optional title/estimateMin/bufferMin rename or rescope this part. The new task keeps the category, deadline, notes and roll; it lands on this task\'s latest plan day when this task is planned or in progress (else the backlog), and links back to it (splitFromId) only if this task had started work (or is itself a split part) — its split family is left out of calibration until it can be scored as one. Nothing is cancelled. Calendar: a timed follow-up gets its own Google Calendar block at the deadline — on finish="done" it takes over this task’s block, if it has one; a sync failure shows as gcalSyncError on the follow-up (sync_calendar_event retries it). Returns { original, followUp }.',
+      'Split a task in two when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new task (followUpTitle, followUpEstimateMin). Optional title/estimateMin/bufferMin rename or rescope this part. The new task keeps the category, deadline, notes and roll; it lands on this task\'s latest plan day when this task is planned or in progress (else the backlog), and links back to it (splitFromId) only if this task had started work (or is itself a split part) — its split family is left out of calibration until it can be scored as one. Nothing is cancelled. Calendar: a timed follow-up gets its own Google Calendar block at the deadline — on finish="done" it takes over this task’s block, if it has one; a sync failure shows as gcalSyncError on whichever task it failed for (sync_calendar_event retries it). Returns { original, followUp }.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -641,7 +641,7 @@ export const TOOLS: Tool[] = [
         ]);
       } catch (e) {
         // The shared refusal ends with the app's way out; MCP's is the ensure pass.
-        if (!(e instanceof Error) || e.message !== AUTO_PLACED_ERROR) throw e;
+        if (!(e instanceof Error) || !e.message.startsWith(AUTO_PLACED_ERROR)) throw e;
         throw new Error(
           `${AUTO_PLACED_ERROR} From here: sync_calendar_event {taskId} puts the block at the deadline; update_task changes the time.`,
           { cause: e },
@@ -664,7 +664,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'sync_calendar_event',
     description:
-      'Sync a task’s Google Calendar event to the task as it is now — the app’s Add to calendar / Retry / Send to Google. Nothing is picked: a timed task’s block goes on the write default (see list_calendars), ends at the deadline and is as long as the estimate. Writes a REAL Google Calendar event. Returns { outcome, task }: "created" (a timed task with no event gets one — e.g. after its block was removed), "updated" (a linked event gets the task’s title and time — a failed sync is retried, and a value kept over a Google edit is sent), "removed" (a removal that failed earlier is finished), "unlinked" (Google had already deleted the event — call again to create a fresh one). Refused, with the reason, when nothing would happen: a done or cancelled task, auto-sync off, no due time and no event, no calendar to write to. A Google failure is an error; its text is also stored on the task as gcalSyncError.',
+      'Sync a task’s Google Calendar event to the task as it is now — the app’s Add to calendar / Retry / Send to Google. Nothing is picked: a timed task’s block goes on the write default (see list_calendars), ends at the deadline and is as long as the estimate. Writes a REAL Google Calendar event. Returns { outcome, task }: "created" (a timed task with no event gets one — e.g. after its block was removed), "updated" (a linked event gets the task’s title and time — a failed sync is retried, and a value kept over a Google edit is sent), "removed" (a removal that failed earlier is finished), "unlinked" (Google had already deleted the event — call again to create a fresh one). Refused, with the reason, when nothing would happen: a done or cancelled task (beyond an owed removal), auto-sync off, no due time and no event, no calendar to write to. A Google failure is an error; its text is also stored on the task as gcalSyncError.',
     inputSchema: {
       type: 'object',
       properties: { taskId: { type: 'string' } },
@@ -683,14 +683,18 @@ export const TOOLS: Tool[] = [
       if (plan.kind === 'none') throw new Error(syncRefusal(before, settings));
       const task = (await ctx.dispatch('syncCalendarEvent', [taskId])) as Task;
       if (task.gcalSyncError) throw new Error(task.gcalSyncError);
-      const outcome =
-        plan.kind === 'create'
-          ? 'created'
+      // Named from what came back, so a task changed between the read and the sync (finished, sync
+      // turned off) never reports a write that didn't happen.
+      const was = before.gcalEventId;
+      if (!was && !task.gcalEventId)
+        throw new Error('Nothing synced — the task changed meanwhile; re-read it and retry.');
+      const outcome = !was
+        ? 'created'
+        : task.gcalEventId
+          ? 'updated'
           : plan.kind === 'delete'
             ? 'removed'
-            : task.gcalEventId
-              ? 'updated'
-              : 'unlinked';
+            : 'unlinked';
       return { outcome, task };
     },
   },

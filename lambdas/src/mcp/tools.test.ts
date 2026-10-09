@@ -450,7 +450,7 @@ describe('mcp tools — sync_calendar_event', () => {
   });
 
   it('refuses, with the reason, when nothing would happen', async () => {
-    const { call, setup } = makeEnv();
+    const { call, setup, google } = makeEnv();
     const noCal = (await call('create_task', timed)) as Task; // no account connected yet
     await expect(call('sync_calendar_event', { taskId: noCal.id })).rejects.toThrow(
       /No calendar to write to/,
@@ -471,6 +471,14 @@ describe('mcp tools — sync_calendar_event', () => {
       /Auto-sync is off/,
     );
     await expect(call('sync_calendar_event', { taskId: 'nope' })).rejects.toThrow(/Not found/);
+    await setup.updateSettings({ autoCalendar: true });
+    const cancelled = (await call('create_task', timed)) as Task;
+    await call('update_task', { id: cancelled.id, status: 'cancelled' });
+    const events = google.events.size;
+    await expect(call('sync_calendar_event', { taskId: cancelled.id })).rejects.toThrow(
+      /A cancelled task never syncs/,
+    );
+    expect(google.events.size).toBe(events); // a refusal never reaches Google
   });
 
   it('a Google failure is an error, and its note stays on the task', async () => {
@@ -478,14 +486,62 @@ describe('mcp tools — sync_calendar_event', () => {
     await setup.completeGoogleConnect('A');
     const t = (await call('create_task', { title: 'pset' })) as Task;
     await call('update_task', { id: t.id, dueDay: '2026-10-09' });
+    let detail = 'quota';
     google.insertEvent = async () => {
-      throw new Error('quota');
+      throw new Error(detail);
     };
     await call('update_task', { id: t.id, dueTime: '16:00' }); // the auto create fails
+    detail = 'timeout'; // so a stale note can't pass for this call's
     await expect(call('sync_calendar_event', { taskId: t.id })).rejects.toThrow(
-      /Couldn’t add the calendar event/,
+      /Couldn’t add the calendar event.*timeout/,
     );
-    expect(((await call('list_tasks')) as Task[])[0]!.gcalSyncError).toMatch(/quota/);
+    expect(((await call('list_tasks')) as Task[])[0]!.gcalSyncError).toMatch(/timeout/);
+  });
+
+  it('a failed owed removal throws; on a timed task the owed note is cleared by a full update', async () => {
+    const { call, setup, doc, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    const owe = async (id: string, over: Partial<Task>) =>
+      repo.putTask({
+        ...(await repo.getTask(id))!,
+        gcalSyncError: gcalSyncMessage('delete', 'x'),
+        ...over,
+      });
+    const untimed = (await call('create_task', timed)) as Task;
+    await owe(untimed.id, { dueTime: null });
+    google.deleteEvent = async () => {
+      throw new Error('boom');
+    };
+    await expect(call('sync_calendar_event', { taskId: untimed.id })).rejects.toThrow(
+      /Couldn’t remove the calendar event/,
+    );
+    const stillTimed = (await call('create_task', timed)) as Task;
+    await owe(stillTimed.id, {});
+    expect(await call('sync_calendar_event', { taskId: stillTimed.id })).toMatchObject({
+      outcome: 'updated',
+      task: { gcalEventId: stillTimed.gcalEventId, gcalSyncError: null },
+    });
+  });
+
+  it('an untimed task’s manual block gets a title-only update', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const t = (await call('create_task', { title: 'loose' })) as Task;
+    const linked = (await call('create_calendar_event', {
+      taskId: t.id,
+      start: '2026-10-09T09:00:00-07:00',
+      durationMin: 30,
+    })) as Task;
+    google.editEvent(linked.gcalEventId!, { title: 'g' });
+    const start = google.events.get(linked.gcalEventId!)!.startMs;
+    expect(await call('sync_calendar_event', { taskId: t.id })).toMatchObject({
+      outcome: 'updated',
+    });
+    expect(google.events.get(linked.gcalEventId!)).toMatchObject({
+      title: 'loose',
+      startMs: start,
+    });
   });
 
   it('create_calendar_event’s refusal points at sync_calendar_event', async () => {
