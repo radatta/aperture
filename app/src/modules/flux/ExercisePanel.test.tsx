@@ -58,7 +58,7 @@ describe('ExercisePanel', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
     expect(screen.getByText('Side A')).toBeTruthy();
     expect(screen.getByText('Side B')).toBeTruthy();
-    expect(screen.getByText('2s each rep')).toBeTruthy();
+    expect(screen.getByText('4s each rep')).toBeTruthy();
     expect(screen.getByText(/Keep steady — move only in this plane/)).toBeTruthy();
   });
 
@@ -84,11 +84,11 @@ describe('ExercisePanel', () => {
     unmount();
     panel(
       def,
-      { ...state, inPosition: true, holdElapsedSec: 10 } as ExerciseState,
+      { ...state, inPosition: true, holdElapsedSec: 4 } as ExerciseState,
       at({ yaw: 31, pitch: 19 }),
     );
     expect(screen.getByText('In position — hold')).toBeTruthy();
-    expect(screen.getByText('20')).toBeTruthy(); // seconds left of 30
+    expect(screen.getByText('6')).toBeTruthy(); // seconds left of 10
   });
 
   it('holdAtTarget complete: Set complete + Again (new in Aperture)', () => {

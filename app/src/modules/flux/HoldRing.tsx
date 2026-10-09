@@ -1,8 +1,9 @@
 import { Text } from '../../components/Text';
+import type { RingTone } from './readout';
 
 // A circular progress ring for hold/countdown timers (flux-track's HoldRing, same geometry). progress
 // is 0..1. Tones: teal = getting there, gold = holding / done, warn = drifting.
-const STROKE: Record<'teal' | 'gold' | 'warn', string> = {
+const STROKE: Record<RingTone, string> = {
   teal: 'var(--teal)',
   gold: 'var(--gold)',
   warn: 'var(--danger)',
@@ -13,14 +14,16 @@ export function HoldRing({
   label,
   sublabel,
   tone = 'teal',
+  small = false,
 }: {
   progress: number;
   label: string;
   sublabel?: string;
-  tone?: 'teal' | 'gold' | 'warn';
+  tone?: RingTone;
+  small?: boolean; // the overlay on the video
 }) {
-  const size = 132;
-  const stroke = 10;
+  const size = small ? 72 : 132;
+  const stroke = small ? 6 : 10;
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;
   const clamped = Math.max(0, Math.min(1, progress));
@@ -52,7 +55,7 @@ export function HoldRing({
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <Text size="3xl" weight="semibold" tabular>
+        <Text size={small ? 'lg' : '3xl'} weight="semibold" tabular>
           {label}
         </Text>
         {sublabel && (

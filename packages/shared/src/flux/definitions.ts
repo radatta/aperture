@@ -10,6 +10,10 @@
 // Bilateral ROM exercises are sign-agnostic; only the single-direction pitch
 // drills and the stretch target positions depend on this convention. Flipping a
 // wrong one is a one-field change.
+//
+// Parameters are flux-track's, except the hold times, retuned after the dev test
+// (docs/areas/flux D31): ROM reps 2→4 s, the three stretches 30→10 s, the four
+// isometrics 10→5 s.
 
 import type { ExerciseDefinition } from './types';
 
@@ -27,7 +31,7 @@ export const EXERCISES = [
     exitDeg: 8,
     targetDeg: 60,
     reps: 10,
-    holdSec: 2,
+    holdSec: 4,
     instructions:
       'Sit tall, eyes forward. Slowly turn your head to look over one shoulder, return to center, then the other side.',
     cues: ['Keep your chin level', 'Move slowly and only as far as is comfortable'],
@@ -47,7 +51,7 @@ export const EXERCISES = [
     exitDeg: 6,
     targetDeg: 40,
     reps: 10,
-    holdSec: 2,
+    holdSec: 4,
     instructions:
       'Tilt your head to bring one ear toward that shoulder without lifting the shoulder. Return to center and repeat the other side.',
     cues: ['Keep both shoulders down and relaxed', "Don't shrug up to fake the range"],
@@ -67,7 +71,7 @@ export const EXERCISES = [
     exitDeg: 8,
     targetDeg: 45,
     reps: 10,
-    holdSec: 2,
+    holdSec: 4,
     instructions: 'Slowly lower your chin toward your chest, then return to neutral.',
     cues: ['Move smoothly, no bouncing'],
     precautions: [
@@ -88,7 +92,7 @@ export const EXERCISES = [
     exitDeg: 8,
     targetDeg: 55,
     reps: 8,
-    holdSec: 2,
+    holdSec: 4,
     provocative: true,
     instructions: 'Slowly tip your head back to look toward the ceiling, then return to neutral.',
     cues: ['Go slowly', 'Stop at the first sign of dizziness'],
@@ -163,7 +167,7 @@ export const EXERCISES = [
     measurement: 'approximate',
     target: { roll: 28 },
     toleranceDeg: 12,
-    holdSec: 30,
+    holdSec: 10,
     reps: 2,
     instructions:
       'Tilt one ear toward that shoulder with a gentle stretch along the opposite side of the neck. Hold, then repeat the other side.',
@@ -180,7 +184,7 @@ export const EXERCISES = [
     measurement: 'approximate',
     target: { yaw: 30, pitch: 20 },
     toleranceDeg: 14,
-    holdSec: 30,
+    holdSec: 10,
     reps: 2,
     instructions:
       'Rotate your head about 45° to one side, then look down toward your armpit until you feel a stretch. Hold, then the other side.',
@@ -197,7 +201,7 @@ export const EXERCISES = [
     measurement: 'approximate',
     target: { roll: -22, yaw: 18, pitch: -10 },
     toleranceDeg: 14,
-    holdSec: 30,
+    holdSec: 10,
     reps: 2,
     instructions:
       'Tilt your head away from the tight side and rotate to look slightly up and over the opposite shoulder. Hold gently.',
@@ -254,7 +258,7 @@ export const EXERCISES = [
     tracker: 'face',
     kind: 'guidedHold',
     measurement: 'guided',
-    holdSec: 10,
+    holdSec: 5,
     reps: 5,
     restSec: 5,
     driftToleranceDeg: 8,
@@ -271,7 +275,7 @@ export const EXERCISES = [
     tracker: 'face',
     kind: 'guidedHold',
     measurement: 'guided',
-    holdSec: 10,
+    holdSec: 5,
     reps: 5,
     restSec: 5,
     driftToleranceDeg: 8,
@@ -288,7 +292,7 @@ export const EXERCISES = [
     tracker: 'face',
     kind: 'guidedHold',
     measurement: 'guided',
-    holdSec: 10,
+    holdSec: 5,
     reps: 5,
     restSec: 5,
     driftToleranceDeg: 8,
@@ -305,7 +309,7 @@ export const EXERCISES = [
     tracker: 'face',
     kind: 'guidedHold',
     measurement: 'guided',
-    holdSec: 10,
+    holdSec: 5,
     reps: 5,
     restSec: 5,
     driftToleranceDeg: 8,

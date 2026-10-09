@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { setFluxEngineFactory } from '../../modules/flux/engine/engine';
 import { createFakeEngine, type FakeControls } from '../../modules/flux/engine/fakeEngine';
+import { initialState } from '../../modules/flux/engine/evaluate';
+import { getExercise, type ExerciseId, type ExerciseState } from '@aperture/shared/flux';
 
 // The stage over a scripted engine: every status, overlay and gate, without a camera or a worker.
 
@@ -175,6 +177,44 @@ describe('Flux exercise stage', () => {
     expect(await screen.findByText(/the last GPU start didn.t finish/)).toBeTruthy();
     await s.user.click(screen.getByRole('button', { name: 'Try the GPU' }));
     expect(s.fake().calls).toContain('forcedCpu:false');
+  });
+
+  it('overlays the live count on the video while running, not before', async () => {
+    const s = await stage('/flux/cervical-rotation');
+    expect(screen.queryByLabelText('Live readout')).toBeNull();
+    await running(s);
+    const def = getExercise('cervical-rotation');
+    act(() => s.fake().state({ ...initialState(def), repsPos: 3, repsNeg: 2 } as ExerciseState));
+    const overlay = screen.getByLabelText('Live readout');
+    expect(within(overlay).getByText('5')).toBeTruthy();
+    expect(within(overlay).getByText(/\/ 20 reps/)).toBeTruthy();
+  });
+
+  it.each<[ExerciseId, Record<string, unknown>, RegExp | string]>([
+    ['chin-tuck', { inPosition: true, holdElapsedSec: 1 }, '3'],
+    ['deep-neck-flexor', { phase: 'active', segment: 'hold', segmentElapsedSec: 4 }, 'HOLD'],
+    ['joint-position-sense', { phase: 'active', sub: 'away' }, 'Turn away'],
+    ['gaze-stability', { phase: 'active', cycles: 4 }, /cycles/],
+  ])('the overlay fits %s', async (id, over, shown) => {
+    const s = await stage(`/flux/${id}`);
+    await running(s);
+    act(() => s.fake().state({ ...initialState(getExercise(id)), ...over } as ExerciseState));
+    expect(within(screen.getByLabelText('Live readout')).getByText(shown)).toBeTruthy();
+  });
+
+  it('no overlay behind an unacknowledged contraindication', async () => {
+    localStorage.setItem('aperture.flux.condition', 'herniatedDisc');
+    const s = await stage('/flux/cervical-extension');
+    await running(s);
+    expect(screen.queryByLabelText('Live readout')).toBeNull();
+  });
+
+  it('hides the capture bar on the stage, and Back brings it back', async () => {
+    const s = await stage('/flux/chin-tuck');
+    // Hidden, not unmounted (the bar keeps its draft): out of the accessibility tree, so no role.
+    expect(screen.queryByRole('textbox', { name: 'Capture log' })).toBeNull();
+    await s.user.click(screen.getByRole('link', { name: /All exercises/ }));
+    expect(await screen.findByRole('textbox', { name: 'Capture log' })).toBeTruthy();
   });
 
   it('a finished set counts for the session and shows its cue on the HUD', async () => {

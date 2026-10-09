@@ -182,7 +182,7 @@ describe('useFluxEngine', () => {
     act(() => fake().ready('GPU'));
     act(() => fake().calibrated(true));
     act(() => fake().event({ type: 'setCompleted', summary: { count: 10 } }));
-    expect(v.speak).toHaveBeenCalledWith({ text: 'Set complete. Well done.', priority: 'high' });
+    expect(v.speak).toHaveBeenCalledWith({ text: 'Set complete. Well done.', priority: 'always' });
     expect(hook.result.current.lastCue).toBe('Set complete. Well done.');
     expect(onSetCompleted).toHaveBeenCalledWith(
       expect.objectContaining({

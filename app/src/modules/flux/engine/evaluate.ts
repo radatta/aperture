@@ -27,7 +27,7 @@ const MAX_DT = 0.5;
 // Angular speed (deg/s) below which the head counts as "still".
 const STILL_SPEED = 6;
 // Off-plane head movement (deg) that flags compensation in a single-axis move.
-const OFF_AXIS_DEG = 15;
+const OFF_AXIS_DEG = 20; // flux's 15 fired constantly in the dev test (D28)
 // Min seconds between posture warnings.
 const POSTURE_COOLDOWN = 3;
 const AXES: readonly Axis[] = ['pitch', 'yaw', 'roll'];
@@ -226,7 +226,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       else repsNeg++;
       peakSum += peakDeg;
       peakCount++;
-      events.push({ type: 'repCompleted', side, peakDeg, reachedTarget });
+      events.push({ type: 'repCompleted', side, peakDeg, reachedTarget, count: repsPos + repsNeg });
       zone = 'neutral';
       peakThisRep = 0;
       holdAccumSec = 0;

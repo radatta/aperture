@@ -95,7 +95,9 @@ above the capture bar. Never add a second `fixed` bottom-anchored element — th
 timers ended up covering the capture bar and the page's last card. The shell measures the dock
 (`offsetHeight`, *not* `contentRect`, which excludes `pb-safe`) and reserves that much bottom
 padding, because the dock's height varies from ~112px idle to ~400px with several timers and a
-wrapped capture. The column is `pointer-events-none`; each **panel** opts back in. With the on-screen
+wrapped capture. A route can drop the capture bar (never the timers) with `handle: { hideCapture: true }`
+(`lib/routeHandle.ts`) — the Flux exercise stage does; the dock stays one element. The column is
+`pointer-events-none`; each **panel** opts back in. With the on-screen
 keyboard up **and focus in the dock**, `lib/useKeyboardInset` lifts it by the gap below
 `visualViewport`: iOS Safari doesn't resize the page for the keyboard, so a plain `bottom: 0` sits
 behind it and anything below the caret — capture's token chips and preview row — was hidden (seen

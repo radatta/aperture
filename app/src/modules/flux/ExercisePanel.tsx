@@ -6,13 +6,13 @@ import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import type { Sample } from './engine/protocol';
 import { HoldRing } from './HoldRing';
+import { liveReadout } from './readout';
 
 // Live, per-kind exercise feedback derived from definition + evaluator state — flux-track's panel, with
 // its strings, restyled to Aperture's tokens. Aperture adds a finished state + Again to the two kinds
 // that had none (romReps, holdAtTarget).
 
 const fmt = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(0)}°`;
-const secs = (n: number) => `${Math.max(0, Math.ceil(n))}`;
 const start: EvalControl = { type: 'start' };
 
 export function ExercisePanel({
@@ -67,30 +67,28 @@ function Feedback({
   state: ExerciseState | null;
   onControl: (c: EvalControl) => void;
 }) {
+  const live = liveReadout(def, state);
   if (def.kind === 'romReps' && state?.kind === 'romReps') {
-    const total = def.direction === 'bilateral' ? def.reps * 2 : def.reps;
-    const done = state.repsPos + state.repsNeg;
+    const total = live?.count?.of ?? def.reps;
     const mag = Math.abs(sample.rel[def.axis]);
     const pct = Math.min(100, (mag / def.targetDeg) * 100);
     const hit = mag >= def.targetDeg;
-    const holdSec = def.holdSec ?? 0;
-    const inExcursion = state.zone !== 'neutral';
-    const heldEnough = state.holdAccumSec >= holdSec;
     const complete = state.phase === 'complete';
+    const ring = live?.ring;
     return (
       <div>
-        <Metric big={`${done}`} unit={`/ ${total} reps`} done={complete} />
+        <Metric big={`${live?.count?.n ?? 0}`} unit={`/ ${total} reps`} done={complete} />
         {complete ? (
           <StartBlock done reps={total} onStart={() => onControl(start)} />
         ) : (
           <>
-            {holdSec > 0 && (
+            {ring && (
               <div className="mt-4 flex justify-center">
                 <HoldRing
-                  progress={inExcursion ? Math.min(1, state.holdAccumSec / holdSec) : 0}
-                  label={inExcursion ? secs(holdSec - state.holdAccumSec) : 'hold'}
-                  sublabel={inExcursion ? 'hold at end range' : `${holdSec}s each rep`}
-                  tone={heldEnough && inExcursion ? 'gold' : 'teal'}
+                  {...ring}
+                  sublabel={
+                    state.zone !== 'neutral' ? 'hold at end range' : `${def.holdSec}s each rep`
+                  }
                 />
               </div>
             )}
@@ -144,19 +142,14 @@ function Feedback({
           </Text>
         </div>
       );
-    const remaining = def.holdSec - state.holdElapsedSec;
-    const progress = state.holdElapsedSec / def.holdSec;
     const axes = Object.keys(def.target) as Axis[];
     const offsets = axes.map((a) => ({ axis: a, remaining: (def.target[a] ?? 0) - sample.rel[a] }));
     const aligned = offsets.every((o) => Math.abs(o.remaining) <= def.toleranceDeg);
     return (
       <div className="flex flex-col items-center">
-        <HoldRing
-          progress={state.inPosition ? progress : 0}
-          label={state.inPosition ? secs(remaining) : '—'}
-          sublabel={state.inPosition ? 'hold' : 'get in position'}
-          tone={state.inPosition ? 'gold' : 'teal'}
-        />
+        {live?.ring && (
+          <HoldRing {...live.ring} sublabel={state.inPosition ? 'hold' : 'get in position'} />
+        )}
         <Text as="p" size="sm" tone="muted" className="mt-3">
           Hold {state.holdsDone} / {def.reps}
         </Text>
@@ -181,21 +174,13 @@ function Feedback({
   }
 
   if (def.kind === 'guidedHold' && state?.kind === 'guidedHold') {
-    const isHold = state.segment === 'hold';
-    const total = isHold ? def.holdSec : def.restSec;
-    const remaining = total - state.segmentElapsedSec;
     return (
       <div className="flex flex-col items-center">
-        {state.phase === 'active' ? (
+        {state.phase === 'active' && live?.ring ? (
           <>
-            <HoldRing
-              progress={total > 0 ? state.segmentElapsedSec / total : 0}
-              label={secs(remaining)}
-              sublabel={isHold ? 'HOLD' : 'rest'}
-              tone={state.drifting ? 'warn' : isHold ? 'gold' : 'teal'}
-            />
+            <HoldRing {...live.ring} />
             <Text as="p" size="sm" tone="muted" className="mt-3">
-              Rep {Math.min(state.holdsDone + (isHold ? 1 : 0), def.reps)} / {def.reps}
+              Rep {live.count?.n} / {def.reps}
             </Text>
             {state.drifting && (
               <Text as="p" size="xs" weight="medium" tone="danger" className="mt-2">
@@ -254,16 +239,11 @@ function Feedback({
   }
 
   if (def.kind === 'oscillation' && state?.kind === 'oscillation') {
-    const remaining = def.durationSec - state.elapsedSec;
     return (
       <div className="flex flex-col items-center">
-        {state.phase === 'active' ? (
+        {state.phase === 'active' && live?.ring ? (
           <>
-            <HoldRing
-              progress={state.elapsedSec / def.durationSec}
-              label={secs(remaining)}
-              sublabel="seconds"
-            />
+            <HoldRing {...live.ring} />
             <Text as="p" size="sm" tone="muted" className="mt-3">
               {Math.floor(state.cycles)} cycles · ~{state.amplitudeEwma.toFixed(0)}° swing
             </Text>

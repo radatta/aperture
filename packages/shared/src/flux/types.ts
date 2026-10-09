@@ -196,6 +196,7 @@ export type ExerciseEvent =
       readonly side: 'positive' | 'negative' | 'single';
       readonly peakDeg: number;
       readonly reachedTarget: boolean;
+      readonly count: number; // reps done this set, this one included — what the voice counts
     }
   | { readonly type: 'holdStarted'; readonly index: number }
   | {

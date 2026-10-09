@@ -14,6 +14,7 @@ import { FinancesAllTab, FinancesPage, FinancesRulesTab, FinancesSortTab } from 
 import { FluxPage } from './pages/Flux';
 import { FluxExerciseView } from './pages/Flux/ExerciseView';
 import { FluxLibraryTab } from './pages/Flux/LibraryTab';
+import type { RouteHandle } from './lib/routeHandle';
 
 // Route table, shared by the browser router (App) and the memory router used in tests. AppShell is
 // the layout; `/` is the glanceable home, the rest are deep views. Pomodoro + capture are not routes.
@@ -40,7 +41,12 @@ export const routes: RouteObject[] = [
         element: <FluxPage />,
         children: [
           { index: true, element: <FluxLibraryTab /> },
-          { path: ':exerciseId', element: <FluxExerciseView /> },
+          {
+            path: ':exerciseId',
+            element: <FluxExerciseView />,
+            // Nothing to capture mid-set, and the bar ate the phone's bottom strip (flux D30).
+            handle: { hideCapture: true } satisfies RouteHandle,
+          },
         ],
       },
       {

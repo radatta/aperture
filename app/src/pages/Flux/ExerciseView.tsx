@@ -94,6 +94,7 @@ function Stage({ id }: { id: ExerciseId }) {
       </Link>
 
       <CameraStage
+        def={shown}
         engine={engine}
         voice={voice}
         videoRef={videoRef}

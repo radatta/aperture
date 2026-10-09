@@ -1,14 +1,16 @@
 import { useEffect, useState, type RefObject } from 'react';
+import type { ExerciseDefinition } from '@aperture/shared/flux';
 import { Button } from '../../components/Button';
 import { VolumeIcon, VolumeOffIcon } from '../../components/icons';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
+import { StageReadout } from './StageReadout';
 import type { FluxEngineHandle } from './useFluxEngine';
 import type { VoiceControl } from './useVoice';
 
 // The camera box: mirrored video + landmark overlay, an overlay per non-running state, and the HUD
-// (tracking badge, delegate glyph, voice toggle, Calibrate / Stop) inside the box — nothing fixed to
-// the viewport (CONVENTIONS: one dock). The video is never display:none while live; WebKit pauses
+// (tracking badge, delegate glyph, voice toggle, live count + hold ring, Calibrate / Stop) inside the
+// box — nothing fixed to the viewport (CONVENTIONS: one dock). The video is never display:none while live; WebKit pauses
 // hidden camera video.
 
 const MB = (n: number) => (n / 1_000_000).toFixed(1);
@@ -20,6 +22,7 @@ const ERROR_LEAD: Record<string, string> = {
 };
 
 export function CameraStage({
+  def,
   engine,
   voice,
   videoRef,
@@ -27,6 +30,7 @@ export function CameraStage({
   onStart,
   onStop,
 }: {
+  def: ExerciseDefinition; // as shown (mirrored for side B), same as the panel's
   engine: FluxEngineHandle;
   voice: VoiceControl;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -40,7 +44,10 @@ export function CameraStage({
 
   return (
     <div
-      className="relative overflow-hidden rounded-2xl border border-line bg-black"
+      // Capped from sm up so the panel starts on screen (a 4:3 stage is ~576px tall on a Mac), never
+      // under 20rem so a landscape phone still fits the live readout. The box keeps full width and
+      // shortens; video and canvas share object-cover, so they crop alike.
+      className="relative overflow-hidden rounded-2xl border border-line bg-black sm:max-h-[max(50dvh,20rem)]"
       style={{ aspectRatio: aspect }}
     >
       <video
@@ -140,8 +147,13 @@ export function CameraStage({
           >
             {voice.on ? <VolumeIcon /> : <VolumeOffIcon className="text-ink-muted" />}
           </button>
+          <StageReadout def={def} state={engine.exState} />
           {(engine.notice || engine.lastCue) && (
-            <div aria-live="polite" className="absolute inset-x-3 bottom-16 flex justify-center">
+            // Left of the live readout's column (right-24), so a long cue never covers the ring.
+            <div
+              aria-live="polite"
+              className="absolute right-24 bottom-16 left-3 flex justify-center"
+            >
               <span className="rounded-full bg-surface/90 px-3 py-1 text-sm font-medium text-ink">
                 {engine.notice ?? engine.lastCue}
               </span>

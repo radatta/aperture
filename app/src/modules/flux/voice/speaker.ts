@@ -24,7 +24,7 @@ export function listLocalVoices(): VoiceOption[] {
 }
 
 export interface Speaker {
-  // Speak an utterance; "high" priority cancels any in-flight speech first.
+  // Speak an utterance; "high" priority cancels any in-flight speech first, the rest queue.
   speak(u: Utterance): void;
   // Stop any in-flight speech.
   cancel(): void;

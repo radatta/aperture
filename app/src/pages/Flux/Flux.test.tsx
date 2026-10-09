@@ -37,6 +37,7 @@ describe('Flux page', () => {
     renderApp({ api: await accepted(), path: '/flux' });
     await screen.findByText('Neck Rotation');
     for (const ex of EXERCISES) expect(screen.getByText(ex.name)).toBeTruthy();
+    expect(screen.getByLabelText('Capture log')).toBeTruthy(); // only the stage hides it
     expect(screen.getByText(/Active Range of Motion/i)).toBeTruthy();
     expect(screen.getByText(/Sensorimotor/i)).toBeTruthy();
     expect(screen.getByText(/Not a medical device/)).toBeTruthy();

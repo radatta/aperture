@@ -164,10 +164,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           cueRef.current = r.state;
           if (r.utterance) {
             o.voice.speak(r.utterance);
-            // Mirrored on the HUD, so a muted phone (silent switch, ducking) still shows the cue.
-            setLastCue(r.utterance.text);
-            clearTimeout(cueTimer.current);
-            cueTimer.current = setTimeout(() => setLastCue(null), CUE_MS);
+            // Mirrored on the HUD, so a muted phone (silent switch, ducking) still shows the cue —
+            // except counts, which the live readout already shows as a number.
+            if (e.event.type !== 'repCompleted') {
+              setLastCue(r.utterance.text);
+              clearTimeout(cueTimer.current);
+              cueTimer.current = setTimeout(() => setLastCue(null), CUE_MS);
+            }
           }
           if (e.event.type !== 'setCompleted') return;
           const { summary } = e.event;

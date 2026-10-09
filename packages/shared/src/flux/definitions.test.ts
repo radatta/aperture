@@ -69,3 +69,31 @@ describe('exercise definitions', () => {
     expect(() => getExercise('nope')).toThrow();
   });
 });
+
+// The hold times are the one deliberate departure from flux-track's parameters (docs/areas/flux D31),
+// retuned after the dev test — pinned so a re-port can't silently restore flux's.
+describe('hold times', () => {
+  it('match the retuned values', () => {
+    const holds = Object.fromEntries(
+      all.flatMap((d) => ('holdSec' in d && d.holdSec !== undefined ? [[d.id, d.holdSec]] : [])),
+    );
+    expect(holds).toEqual({
+      'cervical-rotation': 4,
+      'cervical-lateral-flexion': 4,
+      'cervical-flexion': 4,
+      'cervical-extension': 4,
+      'chin-tuck': 4,
+      'retraction-extension': 3,
+      'upper-trap-stretch': 10,
+      'levator-scapulae-stretch': 10,
+      'scalene-stretch': 10,
+      'deep-neck-flexor': 10,
+      'isometric-flexion': 5,
+      'isometric-extension': 5,
+      'isometric-lateral-flexion': 5,
+      'isometric-rotation': 5,
+      'scapular-retraction': 10,
+      'median-nerve-glide': 3,
+    });
+  });
+});

@@ -68,6 +68,14 @@ describe('speaker', () => {
     expect(synth.cancel).toHaveBeenCalledTimes(1);
   });
 
+  it('always priority queues behind in-flight speech (the final count before Set complete)', () => {
+    const s = createSpeaker({ lang: 'en-US' });
+    s.speak({ text: 'Ten', priority: 'always' });
+    s.speak({ text: 'Set complete. Well done.', priority: 'always' });
+    expect(synth.cancel).not.toHaveBeenCalled();
+    expect(spoken.map((u) => u.text)).toEqual(['Ten', 'Set complete. Well done.']);
+  });
+
   it('retries voice resolution when voices arrive late', () => {
     voices = [];
     const s = createSpeaker({ lang: 'en-US' });

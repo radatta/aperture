@@ -77,6 +77,7 @@ describe('romReps', () => {
     expect(reps[0]?.side).toBe('single');
     expect(reps[0]?.peakDeg).toBeCloseTo(50);
     expect(reps[0]?.reachedTarget).toBe(true);
+    expect(reps[0]?.count).toBe(1);
   });
 
   it('does not double-count jitter across the enter threshold (hysteresis)', () => {
@@ -108,6 +109,7 @@ describe('romReps', () => {
     const { events } = fold(rotation, [N(0, 0), N(0, 70), N(0, 0), N(0, -70), N(0, 0)]);
     const reps = of(events, 'repCompleted');
     expect(reps.map((r) => r.side)).toEqual(['positive', 'negative']);
+    expect(reps.map((r) => r.count)).toEqual([1, 2]); // the running total the voice counts
   });
 
   it('ignores excursions in the disallowed direction', () => {
@@ -131,7 +133,7 @@ describe('romReps', () => {
       targetDeg: 60,
       reps: 10,
     } satisfies ExerciseDefinition;
-    const { events } = fold(rotation, repeat(N(0, 30, 25), 40)); // roll 25° off-plane
+    const { events } = fold(rotation, repeat(N(0, 30, 25), 40)); // roll 25° off-plane (> 20°)
     const warn = of(events, 'postureWarning');
     expect(warn).toHaveLength(1); // once per episode, not every frame
     expect(warn[0]?.axis).toBe('roll');
@@ -165,6 +167,11 @@ describe('romReps', () => {
     expect(of(events, 'postureWarning')).toHaveLength(0);
   });
 
+  it('tolerates up to 20° off-plane (flux warned past 15°)', () => {
+    const { events } = fold(flexion, repeat(N(-30, 18, 0), 40));
+    expect(of(events, 'postureWarning')).toHaveLength(0);
+  });
+
   it('emits setCompleted once and then ignores further motion', () => {
     const twoReps = {
       ...flexion,
@@ -180,7 +187,7 @@ describe('romReps', () => {
       N(-50),
       N(0), // ignored
     ]);
-    expect(of(events, 'repCompleted')).toHaveLength(2);
+    expect(of(events, 'repCompleted').map((r) => r.count)).toEqual([1, 2]);
     const done = of(events, 'setCompleted');
     expect(done).toHaveLength(1);
     expect(done[0]?.summary.count).toBe(2);
@@ -471,7 +478,7 @@ describe('Again (start from complete)', () => {
       reps: 1,
     } satisfies ExerciseDefinition;
     const { state, events } = twoSets(flex, [N(0), N(-20), N(-50), N(-20), N(0)], false);
-    expect(of(events, 'repCompleted')).toHaveLength(1);
+    expect(of(events, 'repCompleted').map((r) => r.count)).toEqual([1]); // the voice restarts at One
     expect(of(events, 'setCompleted')).toHaveLength(1);
     expect(state.phase).toBe('complete');
   });

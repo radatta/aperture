@@ -77,7 +77,7 @@ export function useVoice(): VoiceControl {
       const s = speaker();
       s.setVoice(next);
       s.prime();
-      s.speak({ text: 'Good, full range', priority: 'high' });
+      s.speak({ text: 'Hold it there', priority: 'high' });
     },
     [speaker],
   );

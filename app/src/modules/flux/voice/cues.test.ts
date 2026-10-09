@@ -14,21 +14,60 @@ function speak(events: { e: ExerciseEvent; t: number }[]): string[] {
   return out;
 }
 
-const rep = (reachedTarget: boolean): ExerciseEvent => ({
+const rep = (count: number, reachedTarget = false): ExerciseEvent => ({
   type: 'repCompleted',
   side: 'single',
   peakDeg: 40,
   reachedTarget,
+  count,
 });
+const SET_DONE: ExerciseEvent = { type: 'setCompleted', summary: { count: 10 } };
 
 describe('reduceCue', () => {
   it('speaks the first eligible event', () => {
-    const r = reduceCue(initialCueState, rep(false), 0);
-    expect(r.utterance?.text).toBe('Good');
+    const r = reduceCue(initialCueState, rep(1), 0);
+    expect(r.utterance?.text).toBe('One');
   });
 
-  it('phrases reachedTarget differently', () => {
-    expect(reduceCue(initialCueState, rep(true), 0).utterance?.text).toBe('Good, full range');
+  it('counts reps in words whether or not they reached the target, digits past twenty', () => {
+    expect(reduceCue(initialCueState, rep(7, true), 0).utterance?.text).toBe('Seven');
+    expect(reduceCue(initialCueState, rep(20), 0).utterance?.text).toBe('Twenty');
+    expect(reduceCue(initialCueState, rep(21), 0).utterance?.text).toBe('21');
+  });
+
+  it('never drops a count, however close together', () => {
+    const out = speak([
+      { e: rep(1), t: 0 },
+      { e: rep(2), t: 200 },
+      { e: rep(3), t: 400 },
+    ]);
+    expect(out).toEqual(['One', 'Two', 'Three']);
+  });
+
+  it('a count right after another cue is still spoken', () => {
+    const out = speak([
+      { e: { type: 'driftWarning', axis: 'yaw', deg: 15 }, t: 0 },
+      { e: rep(1), t: 100 },
+    ]);
+    expect(out).toEqual(['Head still', 'One']);
+  });
+
+  it('the final count and Set complete both speak, queued rather than interrupting', () => {
+    let state: CueState = initialCueState;
+    const out = [rep(10), SET_DONE].map((e) => {
+      const r = reduceCue(state, e, 0);
+      state = r.state;
+      return r.utterance;
+    });
+    expect(out).toEqual([
+      { text: 'Ten', priority: 'always' },
+      { text: 'Set complete. Well done.', priority: 'always' },
+    ]);
+  });
+
+  it('is silent for posture warnings (the panel shows them)', () => {
+    const r = reduceCue(initialCueState, { type: 'postureWarning', axis: 'roll', deg: 25 }, 0);
+    expect(r.utterance).toBeNull();
   });
 
   it('is silent for cycleCompleted and positionLost', () => {
@@ -41,19 +80,19 @@ describe('reduceCue', () => {
 
   it('always speaks setCompleted, even right after another utterance', () => {
     const out = speak([
-      { e: rep(true), t: 0 },
-      { e: { type: 'setCompleted', summary: { count: 10 } }, t: 50 },
+      { e: { type: 'holdCompleted', index: 0, durationSec: 4 }, t: 0 },
+      { e: SET_DONE, t: 50 },
     ]);
-    expect(out).toEqual(['Good, full range', 'Set complete. Well done.']);
+    expect(out).toEqual(['And release', 'Set complete. Well done.']);
   });
 
-  it('throttles rapid reps but speaks well-spaced ones', () => {
+  it('still gates the other phrases: a second Hold inside the gap is dropped', () => {
     const out = speak([
-      { e: rep(false), t: 0 }, // speak
-      { e: rep(false), t: 200 }, // within cooldown+dedup → drop
-      { e: rep(false), t: 2000 }, // spaced beyond dedup → speak
+      { e: { type: 'holdStarted', index: 0 }, t: 0 },
+      { e: { type: 'holdStarted', index: 1 }, t: 300 },
+      { e: { type: 'holdStarted', index: 2 }, t: 1500 },
     ]);
-    expect(out).toEqual(['Good', 'Good']);
+    expect(out).toEqual(['Hold', 'Hold']);
   });
 
   it('enforces the driftWarning cooldown', () => {
@@ -78,7 +117,7 @@ describe('reduceCue', () => {
 
   it('is deterministic (pure): same inputs → same output', () => {
     const seq = [
-      { e: rep(false), t: 0 },
+      { e: rep(1), t: 0 },
       { e: { type: 'holdStarted', index: 0 } as ExerciseEvent, t: 800 },
     ];
     expect(speak(seq)).toEqual(speak(seq));
