@@ -41,17 +41,18 @@ If macOS asks whether `security` may read a Keychain item, choose **Always Allow
 Type it the way you'd say it: a leading category word (`aperture,`), `due tmw` / `due fri 4pm`, `30m`.
 Haiku only sets what you stated — it never invents an estimate — and moves extra detail into notes.
 "Today" follows the app's 4am day start, so `due tmw` typed at 1am means the day after the one you're
-still in. A due **time** also puts the task on Google Calendar (auto-sync). The toast shows what was
+still in. A time with no day (`call dentist 4pm`) means today. A due **time** also puts the task on
+Google Calendar (auto-sync). The toast shows what was
 **saved** (the server's copy), so a wrong guess is visible at once:
 
-| toast                                                 | means                                                                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `Added: <title> · <category> · due Sat 10/10 · 30m …` | parsed and saved; `no category` = none matched                                                             |
-| `… · dropped due time` / `unknown category` / …       | Haiku returned a field the server would reject; saved without it                                           |
-| `… · categories: stale` / `unavailable`               | couldn't refresh the category list; used the old copy / none                                               |
-| `… · calendar sync failed`                            | saved, but the Google event wasn't — retry from the task in the app                                        |
-| `Added RAW (couldn't parse: <why>): <line>`           | Haiku failed (timeout 4s+, refusal, no API key …) or the server rejected its fields; the line is the title |
-| `Failed: <reason>`                                    | nothing was saved, or it can't tell — see Failures                                                         |
+| toast                                                 | means                                                                                                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `Added: <title> · <category> · due Sat 10/10 · 30m …` | parsed and saved; `no category` = none matched                                                                                            |
+| `… · dropped due time` / `unknown category` / …       | Haiku returned a field the server would reject; saved without it                                                                          |
+| `… · categories: stale` / `unavailable`               | couldn't refresh the category list; used the old copy / none                                                                              |
+| `… · calendar sync failed`                            | saved, but the Google event wasn't — retry from the task in the app                                                                       |
+| `Added RAW (couldn't parse: <why>): <line>`           | **red** — saved, but unparsed: Haiku failed (timeout 4s+, refusal, no API key …) or the server rejected its fields; the line is the title |
+| `Failed: <reason>`                                    | nothing was saved, or it can't tell — see Failures                                                                                        |
 
 Categories are cached for a day, one file per stage, in `~/Library/Caches/aperture-raycast/` (retired
 ones left out). Delete the folder to pick up a new category right away.
@@ -84,8 +85,8 @@ APERTURE_URL=https://dev.aperture.rahuldatta.dev APERTURE_KEYCHAIN_SERVICE=apert
 | `… it may have been added …`       | timeout (10s), dropped reply or a 5xx — check the app before retrying         |
 | `HTTP <n> — …` / any other message | the server's error, verbatim (or a local check: empty title, missing `jq`)    |
 
-A bad API key isn't a failure: it shows as `Added RAW (couldn't parse: HTTP 401 invalid x-api-key)` —
-re-run step 2 with `-U`.
+A bad API key still saves the task: it shows as `Added RAW (couldn't parse: HTTP 401 invalid x-api-key)`
+— re-run step 2 with `-U`.
 
 ## Security
 

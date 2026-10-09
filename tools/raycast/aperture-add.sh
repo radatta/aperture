@@ -99,14 +99,14 @@ refresh_categories() {
 # --- parse: Haiku turns the line into create_task fields; sets parsed, or raw_reason --------------------
 parsed=""
 raw_reason=""
+# The app's day starts at 4am (Settings dayStartHour's default; no MCP tool reads it), so at 1am
+# "today" is still yesterday — the same day the app's Today chip means.
+today="$(TZ=America/Los_Angeles jq -rn 'now - 4 * 3600 | localtime | strftime("%Y-%m-%d (%A)")')"
 parse_line() {
-  local cats ids schema system req stop today max
+  local cats ids schema system req stop max
   cats="$(cat "$CATEGORIES" 2>/dev/null)"
   [ -n "$cats" ] || cats='[]'
   ids="$(jq -c 'map(.id)' <<<"$cats")"
-  # The app's day starts at 4am (Settings dayStartHour's default; no MCP tool reads it), so at 1am
-  # "today" is still yesterday — the same day the app's Today chip means.
-  today="$(TZ=America/Los_Angeles jq -rn 'now - 4 * 3600 | localtime | strftime("%Y-%m-%d (%A)")')"
   # Long lines come back as long notes: allow more time for them, up to 10s.
   max=$((4 + ${#line} / 400))
   [ "$max" -le 10 ] || max=10
@@ -128,8 +128,8 @@ $(jq -r 'if length == 0 then "(none — categoryId must be null)" else .[] | "\(
 Rules:
 - title: short and imperative-ish, at most 80 characters, in the user's own words. Strip the parsed meta: a leading category word (\"aperture,\"), due phrases (\"due tmw\", \"by friday\") and estimates (\"30m\", \"2h\").
 - notes: if the line has more detail than fits the title, move the rest here with light cleanup only (fix obvious typos, keep the user's wording and order). Otherwise null.
-- dueDay: YYYY-MM-DD, only if the user gave a day (\"tmw\" = tomorrow, a weekday name = the next such day, \"today\" = today). Otherwise null.
-- dueTime: HH:MM 24h, only if a clock time was given and dueDay is set. Otherwise null.
+- dueDay: YYYY-MM-DD, only if the user gave a day (\"tmw\" = tomorrow, a weekday name = the next such day, \"today\" = today), or today if they gave only a clock time. Otherwise null.
+- dueTime: HH:MM 24h, only if a clock time was given (a time with no day means today). Otherwise null.
 - estimateMin: whole minutes, only if the user gave an estimate. Never invent one. Otherwise null.
 - Set a field only when the user stated it. Do not add tasks, advice or commentary."
   req="$(jq -n --arg model "$MODEL" --arg system "$system" --arg line "$line" --argjson schema "$schema" \
@@ -155,7 +155,7 @@ validate() {
   local cats
   cats="$(cat "$CATEGORIES" 2>/dev/null)"
   [ -n "$cats" ] || cats='[]'
-  jq -c --argjson cats "$cats" '
+  jq -c --argjson cats "$cats" --arg today "${today%% *}" '
     def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
     def realday: test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") and (split("-") | map(tonumber) as [$y, $m, $d]
       | $m >= 1 and $m <= 12 and $d >= 1
@@ -177,7 +177,9 @@ validate() {
       elif ($p.dueDay | str) and ($p.dueDay | realday) then .args.dueDay = $p.dueDay
       else .dropped += ["dropped due day"] end
     | if $p.dueTime == null then .
-      elif ($p.dueTime | str) and ($p.dueTime | clock) and .args.dueDay != null then .args.dueTime = ($p.dueTime | pad)
+      # A time with no day means today (a product call); a time whose day was dropped stays dropped.
+      elif ($p.dueTime | str) and ($p.dueTime | clock) and (.args.dueDay != null or $p.dueDay == null)
+      then .args.dueTime = ($p.dueTime | pad) | .args.dueDay //= $today
       else .dropped += ["dropped due time"] end
     | if $p.estimateMin == null then .
       elif ($p.estimateMin | type) == "number" and $p.estimateMin >= 0 and ($p.estimateMin | floor) == $p.estimateMin
@@ -242,8 +244,9 @@ task="$(jq -ce '.result.content[0].text | fromjson | objects' "$out" 2>/dev/null
   || fail "unexpected response — $(head -c 200 "$out")"
 
 if [ -n "$raw_reason" ]; then
+  # Saved, but not as parsed: exit 1 so Raycast shows it red.
   echo "Added RAW (couldn't parse: $(printf '%s' "$raw_reason" | tr '\r\n' '  ')): $(short "$line")"
-  exit 0
+  exit 1
 fi
 
 # What was saved, as the server returned it, so a wrong guess is visible at once.

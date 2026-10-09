@@ -344,7 +344,9 @@ Decisions (2026-10-09):
 - **"Today" uses the 4am day start** (`dayStartHour`'s default — no MCP tool reads Settings), so a
   relative due date means what the app's Today means.
 - **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
-  parse: …)` toast — the user's call over blocking; nothing is quiet.
+  parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is quiet.
+- **A time with no day means today** (`call dentist 4pm`) — the user's call; a time whose day was
+  dropped as invalid is dropped too.
 
 ## Deferred
 
