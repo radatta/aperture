@@ -11,20 +11,28 @@ import { fmtDuration } from '../../lib/format';
 import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { useDay, useSetCapacity } from '../../data/hooks/useDay';
+import { doneToday } from './doneToday';
+import { GroupHeader } from './GroupHeader';
 import { TaskCard } from './TaskCard';
+import { useCollapsedGroups } from './useTaskQuery';
 import { useTodayPlan } from './useTodayPlan';
 
 // The Today lens — the morning plan pass (PRODUCT §3 ☀️): set the day's capacity and see planned
 // hours vs available, over today's plan in its own order. Pulling work in happens from Week and
-// Backlog (or Home's "+ Add"); this lens is the plan itself.
+// Backlog (or Home's "+ Add"); this lens is the plan itself. Finished work leaves the plan list for a
+// collapsed "Done today" group at the bottom (lenses.md D11); its rows stay, so capacity still counts it.
 export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: () => void }) {
-  const { day, rows, plannedMin, pva, isPending, isError } = useTodayPlan();
+  const { day, dayStartHour, rows, plannedMin, pva, isPending, isError } = useTodayPlan();
   const { data: dayRec } = useDay(day);
   const setCapacity = useSetCapacity(day);
   const { addToDay, unplan } = useAddToDay();
   const listRef = useRef<HTMLDivElement>(null);
   const action = useRowAction(listRef);
+  const collapsed = useCollapsedGroups();
 
+  const { open, done } = doneToday(rows, tasks, day, dayStartHour);
+  const allDone = open.length === 0 && rows.some(({ task }) => task.status === 'done');
+  const doneOpen = !collapsed.isCollapsed(DONE_KEY, true);
   const onPlan = new Set(rows.map((r) => r.task.id));
   // Started but not on today's plan — still today's business, one tier down.
   const offPlan = tasks.filter((t) => t.status === 'in_progress' && !onPlan.has(t.id));
@@ -66,7 +74,18 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
             </Text>
           )}
         </div>
-        {rows.length === 0 ? (
+        {allDone ? (
+          <EmptyState
+            title="Everything planned is done."
+            action={
+              <Button variant="ghost" size="sm" onClick={onOpenWeek}>
+                Open Week
+              </Button>
+            }
+          >
+            Pull more in from Week if there&apos;s day left.
+          </EmptyState>
+        ) : open.length === 0 ? (
           <EmptyState
             pending={isPending}
             error={isError}
@@ -80,7 +99,7 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
             Pull something in from Week or the backlog.
           </EmptyState>
         ) : (
-          rows.map(({ plan, task }) => (
+          open.map(({ plan, task }) => (
             <TaskCard
               key={plan.id}
               task={task}
@@ -126,9 +145,25 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
           ))}
         </div>
       )}
+
+      {done.length > 0 && (
+        <section aria-label="Done today" className="flex flex-col gap-2">
+          <GroupHeader
+            label="Done today"
+            count={done.length}
+            isOpen={doneOpen}
+            onToggle={() => collapsed.toggle(DONE_KEY, true)}
+          />
+          {doneOpen && done.map((task) => <TaskCard key={task.id} task={task} />)}
+        </section>
+      )}
     </div>
   );
 }
+
+// Its collapsed choice lives with the list lenses' groups (useCollapsedGroups); it starts collapsed.
+// Can't clash with a list group's `${place}:${key}`: a search from Today never shows the done place.
+const DONE_KEY = 'today:done';
 
 // The typical shapes of a day. The over-scoping catch only fires once capacity is set, and an
 // empty number box asking for a decimal is the most skippable control on the page — one tap gets

@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { todayKey } from '@aperture/shared';
 import { useSettings } from '../../data/hooks/useSettings';
-import { COLLAPSE_AT, isPlace, LENS_PRESET, resetToLens } from './query';
+import { isPlace, LENS_PRESET, resetToLens } from './query';
 import type { LensId, Place, TaskQuery } from './query';
 
 const LENSES: LensId[] = ['today', 'week', 'backlog', 'done', 'recurring', 'calibration'];
@@ -97,23 +97,23 @@ export function useTaskQuery() {
   return { lens, place, query, setQuery, setLens, today };
 }
 
-// Collapsed groups, remembered per lens:group. A group with no remembered choice starts collapsed
-// only when it's big (≥ COLLAPSE_AT) — a short group hides nothing worth hiding. That default is
-// taken once, the first time the group is seen, so a group doesn't snap shut as it grows past 8.
+// Collapsed groups, remembered per lens:group. A group with no remembered choice takes the caller's
+// default (a big list group starts collapsed, ≥ COLLAPSE_AT; Today's "Done today" always does). That
+// default is taken once, the first time the group is seen, so a group doesn't snap shut as it grows.
 export function useCollapsedGroups() {
   const [map, setMap] = useState<Record<string, boolean>>(
     () => read<Record<string, boolean>>('local', COLLAPSE_KEY) ?? {},
   );
   const firstSeen = useRef<Record<string, boolean>>({});
-  const isCollapsed = (key: string, size: number) =>
-    map[key] ?? (firstSeen.current[key] ??= size >= COLLAPSE_AT);
-  const toggle = (key: string, size: number) =>
+  const isCollapsed = (key: string, startCollapsed: boolean) =>
+    map[key] ?? (firstSeen.current[key] ??= startCollapsed);
+  const toggle = (key: string, startCollapsed: boolean) =>
     setMap((m) => {
-      const next = { ...m, [key]: !isCollapsedIn(m, key, size) };
+      const next = { ...m, [key]: !isCollapsedIn(m, key, startCollapsed) };
       write('local', COLLAPSE_KEY, next);
       return next;
     });
-  const isCollapsedIn = (m: Record<string, boolean>, key: string, size: number) =>
-    m[key] ?? firstSeen.current[key] ?? size >= COLLAPSE_AT;
+  const isCollapsedIn = (m: Record<string, boolean>, key: string, startCollapsed: boolean) =>
+    m[key] ?? firstSeen.current[key] ?? startCollapsed;
   return { isCollapsed, toggle };
 }

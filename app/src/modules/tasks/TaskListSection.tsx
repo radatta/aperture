@@ -4,13 +4,20 @@ import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
-import { ChevronRightIcon, PlusIcon } from '../../components/icons';
-import { cx } from '../../lib/cx';
+import { PlusIcon } from '../../components/icons';
 import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
-import { applyQuery, isNarrowing, labelOfFrom, matchedInNotes, resetToLens } from './query';
+import {
+  applyQuery,
+  COLLAPSE_AT,
+  isNarrowing,
+  labelOfFrom,
+  matchedInNotes,
+  resetToLens,
+} from './query';
 import type { Place, QueryCtx, TaskGroup, TaskQuery } from './query';
 import { useCollapsedGroups } from './useTaskQuery';
+import { GroupHeader } from './GroupHeader';
 import { TaskCard } from './TaskCard';
 
 // History grows forever; show it a page at a time.
@@ -137,29 +144,31 @@ export function TaskListSection({
     const plan = planByTask.get(task.id);
     const open = task.status !== 'done' && task.status !== 'cancelled';
     const busy = action.isBusy(task.id);
-    const actions = plan ? (
-      <Button
-        variant="quiet"
-        size="sm"
-        disabled={busy}
-        onClick={() => action.run(task.id, () => unplan(plan, task))}
-      >
-        Unplan
-      </Button>
-    ) : open && task.status !== 'in_progress' ? (
-      <Button
-        variant="ghost"
-        size="sm"
-        className="gap-1"
-        disabled={busy}
-        aria-label={`Add ${task.title} to today`}
-        onClick={() => action.run(task.id, () => addToDay(task))}
-      >
-        <PlusIcon size={13} />
-        {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
-        <span className="max-sm:hidden">Today</span>
-      </Button>
-    ) : undefined;
+    // A finished task's row is history (capacity, Big 3): never offer to unplan it.
+    const actions =
+      plan && open ? (
+        <Button
+          variant="quiet"
+          size="sm"
+          disabled={busy}
+          onClick={() => action.run(task.id, () => unplan(plan, task))}
+        >
+          Unplan
+        </Button>
+      ) : open && task.status !== 'in_progress' ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1"
+          disabled={busy}
+          aria-label={`Add ${task.title} to today`}
+          onClick={() => action.run(task.id, () => addToDay(task))}
+        >
+          <PlusIcon size={13} />
+          {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
+          <span className="max-sm:hidden">Today</span>
+        </Button>
+      ) : undefined;
     const notesHit = result.searching && matchedInNotes(task, query.text, labelOf);
     return <TaskCard key={task.id} task={task} actions={actions} notesHit={notesHit} />;
   };
@@ -178,22 +187,16 @@ export function TaskListSection({
             </div>
           );
         const key = `${place}:${g.key}`;
-        const isOpen = narrowing || !collapsed.isCollapsed(key, g.tasks.length);
+        const big = g.tasks.length >= COLLAPSE_AT;
+        const isOpen = narrowing || !collapsed.isCollapsed(key, big);
         return (
           <section key={g.key} aria-label={g.label} className="flex flex-col gap-2">
-            {narrowing ? (
-              <GroupLabel label={g.label} count={g.tasks.length} />
-            ) : (
-              <button
-                type="button"
-                aria-expanded={isOpen}
-                onClick={() => collapsed.toggle(key, g.tasks.length)}
-                className="flex items-center gap-1 self-start text-ink-muted transition hover:text-ink"
-              >
-                <ChevronRightIcon size={13} className={cx('transition', isOpen && 'rotate-90')} />
-                <GroupLabel label={g.label} count={g.tasks.length} />
-              </button>
-            )}
+            <GroupHeader
+              label={g.label}
+              count={g.tasks.length}
+              isOpen={isOpen}
+              onToggle={narrowing ? undefined : () => collapsed.toggle(key, big)}
+            />
             {isOpen && g.tasks.map(row)}
           </section>
         );
@@ -209,13 +212,5 @@ export function TaskListSection({
         </Button>
       )}
     </>,
-  );
-}
-
-function GroupLabel({ label, count }: { label: string; count: number }) {
-  return (
-    <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
-      {label} · {count}
-    </Text>
   );
 }
