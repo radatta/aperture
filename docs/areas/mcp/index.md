@@ -325,18 +325,28 @@ check if voice capture suddenly fails.
 ## Raycast quick-add — a Mac capture surface (no server code)
 
 `tools/raycast/aperture-add.sh` ([README](../../../tools/raycast/README.md)): a Raycast hotkey → one
-line → `create_task` with the title only. It's a plain `curl` of one stateless `tools/call` (no
-`initialize` needed) with the prod agent token from Keychain. Capture only, by decision (2026-10-09):
+line → **Claude Haiku 5.5** parses it into `create_task` fields (short title + notes, category id, due
+day/time, estimate) → `create_task`. Each Aperture call is a plain `curl` of one stateless `tools/call`
+(no `initialize` needed) with the prod agent token from Keychain. Capture only, by decision (2026-10-09):
 updates and reorganizing stay in the claude.ai chat and the app. The script checks the HTTP status **and**
 the body — MCP returns a param error (`error`) and a tool failure (`result.isError`) inside a 200 — and
 trims and rejects a blank title itself, since `createTask` stores the title verbatim.
+
+Decisions (2026-10-09):
+
+- **Haiku only parses; the script writes.** Rejected: giving Haiku the tools (the API's MCP connector, or
+  `claude -p`) — the connector's bearer fails this edge's Cognito path, it adds model turns, it puts prod
+  write tools in front of a one-liner, and a timeout no longer says whether the task was saved.
+- **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out). The ids
+  come from `list_categories`, cached a day on the Mac; a failed refresh uses the stale copy. The script
+  re-checks each field against the server's rules and drops a bad one, naming it in the toast.
+- **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
+  parse: …)` toast — the user's call over blocking; nothing is quiet.
 
 ## Deferred
 
 - A **create-only token** for Raycast (scoped to `create_task` + `list_categories`, like the recruiting
   device token's single method) — the Mac's Keychain holds the full agent token until then.
-- Raycast **field parsing** — the capture bar's ` | ` grammar (`parseTaskLine`) or a Haiku pass over the
-  line; both need `list_categories` to resolve a label to an id.
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
 - Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).
