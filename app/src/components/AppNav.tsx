@@ -12,6 +12,7 @@ const LINKS = [
   { to: '/recruiting', label: 'Recruiting' },
   { to: '/habits', label: 'Habits' },
   { to: '/rolls', label: 'Rolls' },
+  { to: '/flux', label: 'Flux' },
   { to: '/finances', label: 'Finances' },
   { to: '/inbox', label: 'Inbox' },
   { to: '/settings', label: 'Settings' },

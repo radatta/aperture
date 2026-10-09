@@ -125,6 +125,10 @@ collapse into one (see §6).
 - App: `app/src/data/hooks/useRolls.ts`, `app/src/modules/rolls/{rollSheet.ts,ContactSheet.tsx,RollPicker.tsx,RollTag.tsx}`,
   `app/src/pages/Rolls/index.tsx`, `routes.tsx`, `AppNav.tsx`, the picker in `pages/Home/index.tsx`, the
   marker in `modules/tasks/TaskCard.tsx`.
+- Other rep sources: **Flux** (`app/src/modules/flux/{repState.ts,RepTie.tsx}`) — the Roll linked in
+  Settings (`fluxRollId`) gets its rep started by a session's first finished set and offered for Done on
+  Stop; it only ever calls `pickRollToday` and `transitionTask`, so the rep rule above is untouched.
+  Design: [flux/](../flux/index.md) D18.
 
 ## 5. Build record
 

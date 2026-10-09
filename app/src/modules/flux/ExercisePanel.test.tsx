@@ -1,0 +1,152 @@
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { getExercise, type ExerciseDefinition, type ExerciseState } from '@aperture/shared/flux';
+import { initialState } from './engine/evaluate';
+import type { Sample } from './engine/protocol';
+import { ExercisePanel } from './ExercisePanel';
+import { IDLE_SAMPLE } from './useFluxEngine';
+
+const at = (rel: Partial<Sample['rel']>): Sample => ({
+  ...IDLE_SAMPLE,
+  faceVisible: true,
+  rel: { ...IDLE_SAMPLE.rel, ...rel },
+});
+
+function panel(def: ExerciseDefinition, state: ExerciseState | null, sample = IDLE_SAMPLE) {
+  const onControl = vi.fn();
+  render(<ExercisePanel def={def} sample={sample} state={state} onControl={onControl} />);
+  return onControl;
+}
+
+describe('ExercisePanel', () => {
+  it('waits for the engine with "Getting ready…", and always shows the instructions and cues', () => {
+    const def = getExercise('cervical-rotation');
+    panel(def, null);
+    expect(screen.getByText('Getting ready…')).toBeTruthy();
+    expect(screen.getByText(def.instructions)).toBeTruthy();
+    for (const c of def.cues) expect(screen.getByText(c)).toBeTruthy();
+  });
+
+  it('romReps: count, hold ring, progress toward target, both sides, compensation warning', () => {
+    const def = getExercise('cervical-rotation');
+    const state = {
+      ...initialState(def),
+      repsPos: 3,
+      repsNeg: 2,
+      compensating: true,
+    } as ExerciseState;
+    panel(def, state, at({ yaw: 30 }));
+    expect(screen.getByText('5')).toBeTruthy();
+    expect(screen.getByText('/ 20 reps')).toBeTruthy();
+    expect(screen.getByText('current +30°')).toBeTruthy();
+    expect(screen.getByText('target 60°')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
+    expect(screen.getByText('Side A')).toBeTruthy();
+    expect(screen.getByText('Side B')).toBeTruthy();
+    expect(screen.getByText('2s each rep')).toBeTruthy();
+    expect(screen.getByText(/Keep steady — move only in this plane/)).toBeTruthy();
+  });
+
+  it('romReps complete: Set complete + Again (new in Aperture)', async () => {
+    const def = getExercise('cervical-flexion');
+    const state = { ...initialState(def), phase: 'complete', repsPos: 10 } as ExerciseState;
+    const onControl = panel(def, state);
+    expect(screen.getByText('Set complete')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Again' }));
+    expect(onControl).toHaveBeenCalledWith({ type: 'start' });
+  });
+
+  it('holdAtTarget: direction chips until aligned, then "In position — hold"', () => {
+    const def = getExercise('levator-scapulae-stretch'); // yaw 30, pitch 20, tolerance 14
+    const state = initialState(def);
+    const { unmount } = render(
+      <ExercisePanel def={def} sample={at({})} state={state} onControl={() => {}} />,
+    );
+    expect(screen.getByText('Turn ▲ 30°')).toBeTruthy();
+    expect(screen.getByText('Nod ▲ 20°')).toBeTruthy();
+    expect(screen.getByText('get in position')).toBeTruthy();
+    expect(screen.getByText('Hold 0 / 2')).toBeTruthy();
+    unmount();
+    panel(
+      def,
+      { ...state, inPosition: true, holdElapsedSec: 10 } as ExerciseState,
+      at({ yaw: 31, pitch: 19 }),
+    );
+    expect(screen.getByText('In position — hold')).toBeTruthy();
+    expect(screen.getByText('20')).toBeTruthy(); // seconds left of 30
+  });
+
+  it('holdAtTarget complete: Set complete + Again (new in Aperture)', () => {
+    const def = getExercise('chin-tuck');
+    panel(def, { ...initialState(def), phase: 'complete', holdsDone: 10 } as ExerciseState);
+    expect(screen.getByText('Set complete')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Again' })).toBeTruthy();
+  });
+
+  it('guidedHold: Start block, then HOLD / rest ring, rep count, drift warning', async () => {
+    const def = getExercise('deep-neck-flexor');
+    const onControl = panel(def, initialState(def));
+    expect(screen.getByText('10 reps · get into position, then start')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(onControl).toHaveBeenCalledWith({ type: 'start' });
+    render(
+      <ExercisePanel
+        def={def}
+        sample={IDLE_SAMPLE}
+        state={
+          {
+            ...initialState(def),
+            phase: 'active',
+            segment: 'hold',
+            segmentElapsedSec: 4,
+            drifting: true,
+          } as ExerciseState
+        }
+        onControl={() => {}}
+      />,
+    );
+    expect(screen.getByText('HOLD')).toBeTruthy();
+    expect(screen.getByText('Rep 1 / 10')).toBeTruthy();
+    expect(screen.getByText('Keep your head still')).toBeTruthy();
+    expect(screen.getAllByText(/the angle isn't measured/).length).toBeGreaterThan(0);
+  });
+
+  it('reposition: trials, the prompt for each sub-phase, and the average error', () => {
+    const def = getExercise('joint-position-sense');
+    panel(def, {
+      ...initialState(def),
+      phase: 'active',
+      sub: 'returning',
+      trialsDone: 2,
+      errorSum: 7,
+      errorCount: 2,
+    } as ExerciseState);
+    expect(screen.getByText('Now return to your neutral')).toBeTruthy();
+    expect(screen.getByText('avg error 3.5°')).toBeTruthy();
+    expect(screen.getByText(/\/ \d+ trials/)).toBeTruthy();
+  });
+
+  it('oscillation: seconds ring, cycles and swing; "30s" before starting', () => {
+    const def = getExercise('gaze-stability');
+    const { unmount } = render(
+      <ExercisePanel
+        def={def}
+        sample={IDLE_SAMPLE}
+        state={initialState(def)}
+        onControl={() => {}}
+      />,
+    );
+    expect(screen.getByText('30s · get into position, then start')).toBeTruthy();
+    unmount();
+    panel(def, {
+      ...initialState(def),
+      phase: 'active',
+      elapsedSec: 10,
+      cycles: 4.6,
+      amplitudeEwma: 22,
+    } as ExerciseState);
+    expect(screen.getByText('seconds')).toBeTruthy();
+    expect(screen.getByText('4 cycles · ~22° swing')).toBeTruthy();
+  });
+});

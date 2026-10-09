@@ -8,7 +8,7 @@
 // Usage: node scripts/aws/health-check.mjs [dev|prod]
 // Run it right after publish-frontend.mjs, in the same checkout: the shell check compares the edge against
 // that build's app/dist/index.html. A missing, stale or other-stage build fails it as "edge still stale".
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const stage = process.argv[2] ?? 'dev';
@@ -105,6 +105,17 @@ await check('manifest served as application/manifest+json', async () => {
   expect(r.status === 200, `expected 200, got ${r.status}`);
   const ct = r.headers.get('content-type') ?? '';
   expect(ct.includes('application/manifest+json'), `content-type was "${ct}"`);
+});
+
+// Flux's tracking wasm: a missing asset would come back as the SPA fallback (200 text/html), and a
+// guessed Content-Type breaks Safari's streaming compile — so assert both status and type.
+await check('Flux wasm served as application/wasm', async () => {
+  const wasm = readdirSync(`${root}/app/dist/assets`).find((f) => f.endsWith('.wasm'));
+  expect(wasm, 'no .wasm in app/dist/assets — was the app built?');
+  const r = await fetch(`${appUrl}/assets/${wasm}`, { method: 'HEAD' });
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+  const ct = r.headers.get('content-type') ?? '';
+  expect(ct.startsWith('application/wasm'), `content-type was "${ct}"`);
 });
 
 await check('SPA fallback (deep route → app shell 200)', async () => {

@@ -76,6 +76,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     dayEndHour: 22,
     financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
     financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
+    fluxRollId: null,
+    fluxDisclaimerAckAt: null,
   };
 
   const estimates = [30, 45, 60, 90];

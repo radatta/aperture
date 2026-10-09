@@ -1253,6 +1253,17 @@ export function runApiContract(
       expect(s.autoCalendar).toBe(true);
       expect((await api.updateSettings({ autoCalendar: false })).autoCalendar).toBe(false);
       expect((await api.getSettings()).autoCalendar).toBe(false);
+      expect(s.fluxRollId).toBeNull();
+      expect(s.fluxDisclaimerAckAt).toBeNull();
+      const flux = await api.updateSettings({
+        fluxRollId: 'roll-1',
+        fluxDisclaimerAckAt: 1_700_000_000_000,
+      });
+      expect(flux.fluxRollId).toBe('roll-1');
+      expect(flux.fluxDisclaimerAckAt).toBe(1_700_000_000_000);
+      const reset = await api.updateSettings({ fluxRollId: null, fluxDisclaimerAckAt: null });
+      expect(reset.fluxRollId).toBeNull();
+      expect((await api.getSettings()).fluxDisclaimerAckAt).toBeNull();
     });
 
     // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked

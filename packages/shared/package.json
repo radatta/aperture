@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./contract": "./src/contractTests.ts"
+    "./contract": "./src/contractTests.ts",
+    "./flux": "./src/flux/index.ts"
   },
   "types": "./src/index.ts",
   "scripts": {

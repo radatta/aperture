@@ -230,6 +230,10 @@ export interface Settings extends BaseEntity {
   // back to (starting the day after) until you mark a payment (see finance.ts computeFinancePeriod).
   financeBudgetCents: number; // default 60000
   financePaymentDay: number; // default 20
+  // Flux: the Roll whose daily rep a Flux session counts toward (docs/areas/flux), and when the
+  // disclaimer was accepted. Synced, so it's accepted once, not once per device. null → unset.
+  fluxRollId: string | null; // default null
+  fluxDisclaimerAckAt: number | null; // default null
 }
 
 // --- Calibration (derived, read-only) -------------------------------------

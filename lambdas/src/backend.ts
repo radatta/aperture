@@ -287,6 +287,8 @@ export class BackendClient implements ApiClient {
       dayEndHour: 22,
       financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
       financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
+      fluxRollId: null,
+      fluxDisclaimerAckAt: null,
     };
     const row = await this.repo.getSettingsRow();
     // Backfill defaults over an existing row: fields added later (the calendar set) read as their
