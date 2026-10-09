@@ -170,7 +170,17 @@ export function TaskListSection({
         </Button>
       ) : undefined;
     const notesHit = result.searching && matchedInNotes(task, query.text, labelOf);
-    return <TaskCard key={task.id} task={task} actions={actions} notesHit={notesHit} />;
+    // Outside a search, a parent carries its parts (query.ts foldParts left them out of the list).
+    const showParts = !result.searching && place !== 'done';
+    return (
+      <TaskCard
+        key={task.id}
+        task={task}
+        actions={actions}
+        notesHit={notesHit}
+        showParts={showParts}
+      />
+    );
   };
 
   const groups = place === 'done' ? capGroups(result.groups, limit) : result.groups;

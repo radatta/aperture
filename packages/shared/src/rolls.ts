@@ -26,7 +26,7 @@ export function rollRepFields(roll: Roll): Omit<Task, keyof BaseEntity> {
     estimateMin: roll.estimateMin,
     bufferMin: null,
     estimateLockedMin: null,
-    splitFromId: null,
+    parentId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,

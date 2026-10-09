@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { dueUrgency, fmtClock12, fmtWeekdayShort, todayKey } from '@aperture/shared';
+import {
+  deadlineOf,
+  dueUrgency,
+  fmtClock12,
+  fmtWeekdayShort,
+  parentOf,
+  todayKey,
+} from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button, ButtonLink } from '../../components/Button';
@@ -35,8 +42,26 @@ const estimateOf = (t: Task): number | null => t.estimateMin;
 // A TIMED task's row takes the urgency colour (dueStyle.ts); every row carries a transparent border so
 // the colour never shifts layout. Re-read every minute.
 const ROW = '-mx-2 rounded-lg border border-transparent px-2';
+// The deadline a row answers to — a part's is its parent's (parts.ts).
+function useDeadline(t: Task) {
+  const { data: tasks = [] } = useAllTasks();
+  return deadlineOf(t, tasks);
+}
+
 function useUrgency(t: Task): DueUrgency {
-  return dueUrgency(t, useNow());
+  return dueUrgency(useDeadline(t), useNow());
+}
+
+// "of P2" on a part, so the row says what it's working toward.
+function PartOf({ task }: { task: Task }) {
+  const { data: tasks = [] } = useAllTasks();
+  const parent = parentOf(tasks, task);
+  if (!parent) return null;
+  return (
+    <Text size="xs" tone="subtle" className="min-w-0 truncate">
+      of {parent.title}
+    </Text>
+  );
 }
 
 // The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact, so a
@@ -45,13 +70,14 @@ function useUrgency(t: Task): DueUrgency {
 function DueTime({ task }: { task: Task }) {
   const { data: settings } = useSettings();
   const label = urgencyLabel(useUrgency(task));
-  if (!task.dueDay || !task.dueTime) return null;
+  const { dueDay, dueTime } = useDeadline(task);
+  if (!dueDay || !dueTime) return null;
   const today = todayKey(settings?.dayStartHour ?? 4);
   return (
     <Text size="xs" tone="subtle" className="shrink-0">
-      {task.dueDay === today
-        ? `by ${fmtClock12(task.dueTime)}`
-        : `${fmtWeekdayShort(task.dueDay)} ${fmtClock12(task.dueTime)}`}
+      {dueDay === today
+        ? `by ${fmtClock12(dueTime)}`
+        : `${fmtWeekdayShort(dueDay)} ${fmtClock12(dueTime)}`}
       {label && <span className="sr-only">, {label}</span>}
     </Text>
   );
@@ -113,6 +139,7 @@ export function RightNowCard() {
             </Text>
             <div className="flex flex-wrap items-center gap-2">
               <CategoryTag categoryId={hero.categoryId} />
+              <PartOf task={hero} />
               <RollTag rollId={hero.rollId} />
               {/* Count-UP vs the estimate, flat — no bar, no colour flip past 100%, no countdown. */}
               <DueTime task={hero} />
@@ -206,6 +233,7 @@ function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) =>
           {t.title}
         </Text>
         <CategoryTag categoryId={t.categoryId} />
+        <PartOf task={t} />
         <RollTag rollId={t.rollId} />
         <DueTime task={t} />
       </div>
@@ -252,6 +280,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
           {t.title}
         </Text>
         <CategoryTag categoryId={t.categoryId} />
+        <PartOf task={t} />
         <RollTag rollId={t.rollId} />
         <DueTime task={t} />
         {row.unplanned && (

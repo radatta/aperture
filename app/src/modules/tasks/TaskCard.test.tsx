@@ -415,3 +415,58 @@ describe('due-time urgency', () => {
     expect(screen.getAllByText('kept over Google')).toHaveLength(1);
   });
 });
+
+describe('parent + parts', () => {
+  const rowOf = (title: string) =>
+    screen.getByRole('button', { name: title }).closest('.rounded-2xl') as HTMLElement;
+
+  async function seeded(doneBoth: boolean) {
+    const api = freshApi();
+    const p = await api.createTask({
+      title: 'P2',
+      dueDay: addDays(todayKey(4), 2),
+      dueTime: '23:59',
+    });
+    const a = await api.createTask({ title: 'read', estimateMin: 45, parentId: p.id });
+    const b = await api.createTask({ title: 'draft', estimateMin: 60, parentId: p.id });
+    for (const t of doneBoth ? [a, b] : [a]) {
+      await api.transitionTask(t.id, 'in_progress');
+      await api.transitionTask(t.id, 'done');
+    }
+    return { api, p, a, b };
+  }
+
+  it('a parent card shows progress and the parts’ sum, nests its parts, and never offers Start', async () => {
+    const { api } = await seeded(false);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const row = await waitFor(() => rowOf('P2'));
+    expect(within(row).getByText(/1\/2 · est 1h 45m/)).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Mark done' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Add P2 to today' })).toBeNull();
+    // Its parts are inside its card, not rows of their own; the open one can go on today.
+    expect(within(row).getByRole('button', { name: 'read' })).toBeTruthy();
+    expect(within(row).getByRole('button', { name: 'Add draft to today' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Week · 1' })).toBeTruthy();
+  });
+
+  it('once every part is done the card offers one-tap Mark done', async () => {
+    const { api, p } = await seeded(true);
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=week' });
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'Mark done' }));
+    await waitFor(async () => expect((await api.getTask(p.id))?.status).toBe('done'));
+  });
+
+  it('a part on Today says what it’s part of and answers to the parent’s deadline', async () => {
+    const { api, b } = await seeded(false);
+    await api.upsertPlan({ taskId: b.id, day: todayKey(4), plannedMinutes: 60, order: 0 });
+    await api.transitionTask(b.id, 'planned');
+    await api.setTaskDue(b.id, { dueDay: addDays(todayKey(4), 1), dueTime: '15:00' });
+    renderApp({ api, path: '/tasks' });
+    const row = await waitFor(() => rowOf('draft'));
+    expect(within(row).getByText(/of P2 · due/)).toBeTruthy();
+    expect(within(row).getByText(/ends tomorrow 3pm/)).toBeTruthy();
+  });
+});

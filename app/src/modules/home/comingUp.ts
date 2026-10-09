@@ -14,11 +14,13 @@ export interface ComingUp {
 }
 
 // `excludeIds` = everything already shown in Right Now (the tight plane), so a deadline never appears
-// twice. Undated / done / cancelled never reach the radar.
+// twice. Undated / done / cancelled never reach the radar, and neither do parts: a part's own time is
+// when its block ends, not a deadline — the deadline is its parent's, which is on the radar (parts.ts).
 export function comingUp(tasks: Task[], today: string, excludeIds: Set<string>): ComingUp {
   const dated = tasks.filter(
     (t) =>
       !!t.dueDay &&
+      !t.parentId &&
       t.status !== 'done' &&
       t.status !== 'cancelled' &&
       !excludeIds.has(t.id),

@@ -48,9 +48,10 @@ export interface Task extends BaseEntity {
   // The calibration baseline, frozen on first exit from planning; calibration = actualAccruedMin vs this.
   // Never edited after — a later estimate edit moves estimateMin only.
   estimateLockedMin: number | null;
-  // The task this one was split from (see split.ts), set only when a frozen baseline exists upstream, so
-  // a family's root lock covers the whole job. Pre-existing rows read back undefined → `!splitFromId`.
-  splitFromId: string | null;
+  // The task this one is a part of (parts.ts): the parent holds the deadline, its parts hold the work. One
+  // level — a parent can't have a parent, a part can't have parts. Parenthood is derived (some task points
+  // here), never stored. Pre-existing rows read back undefined → `!parentId`.
+  parentId: string | null;
   actualAccruedMin: number; // denormalized; bumped when a work session closes
   startedAt: number | null;
   completedAt: number | null;

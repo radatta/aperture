@@ -248,10 +248,10 @@ export function runApiContract(
       expect(point?.actualAccruedMin).toBe(45);
     });
 
-    it('tasks: a done split finishes this part with its actual and links an unlocked follow-up', async () => {
+    it('tasks: a done split makes a parent that takes the title and lock; the original is Part 1', async () => {
       const t = await api.createTask({ title: 'Big thing', estimateMin: 60, bufferMin: 0 });
       await api.transitionTask(t.id, 'in_progress');
-      const { original, followUp } = await api.splitTask(t.id, {
+      const { parent, original, followUp } = await api.splitTask(t.id, {
         finish: 'done',
         title: 'Big thing, part 1',
         actualMin: 40,
@@ -268,10 +268,18 @@ export function runApiContract(
         status: 'backlog', // the original was never on a plan
         estimateMin: 50,
         estimateLockedMin: null, // a new prediction, never the frozen value
-        splitFromId: t.id,
+        parentId: parent.id,
+      });
+      expect(original).toMatchObject({ id: t.id, parentId: parent.id }); // same task: its sessions stay
+      expect(parent).toMatchObject({
+        title: 'Big thing',
+        status: 'backlog',
+        estimateMin: null,
+        estimateLockedMin: 60, // the whole job's baseline predates every part
+        parentId: null,
       });
       expect((await api.listTasks()).map((x) => x.id)).toEqual(
-        expect.arrayContaining([original.id, followUp.id]),
+        expect.arrayContaining([parent.id, original.id, followUp.id]),
       );
     });
 
@@ -292,7 +300,11 @@ export function runApiContract(
         estimateMin: 45,
         estimateLockedMin: 90,
       });
-      expect(followUp).toMatchObject({ status: 'planned', splitFromId: t.id, bufferMin: 5 });
+      expect(followUp).toMatchObject({
+        status: 'planned',
+        parentId: original.parentId,
+        bufferMin: 5,
+      });
       const rows = await api.listPlansForDay('2026-08-04');
       expect(rows.find((p) => p.taskId === followUp.id)).toMatchObject({
         plannedMinutes: 35,
@@ -302,18 +314,19 @@ export function runApiContract(
       expect(rows.find((p) => p.taskId === t.id)?.plannedMinutes).toBe(45);
     });
 
-    it('tasks: splitting an unstarted task makes two independent tasks, both calibrated alone', async () => {
+    it('tasks: splitting an unstarted task makes an unlocked parent; each part calibrates alone', async () => {
       const t = await api.createTask({ title: 'Reading', estimateMin: 60, bufferMin: 0 });
       await expect(
         api.splitTask(t.id, { finish: 'done', followUp: { title: 'x', estimateMin: null } }),
       ).rejects.toThrow(); // done needs a started task
-      const { original, followUp } = await api.splitTask(t.id, {
+      const { parent, original, followUp } = await api.splitTask(t.id, {
         finish: 'keep',
         estimateMin: 30,
         followUp: { title: 'Reading, ch. 2', estimateMin: 30 },
       });
-      expect(original.status).toBe('backlog');
-      expect(followUp).toMatchObject({ status: 'backlog', splitFromId: null });
+      expect(original).toMatchObject({ status: 'backlog', title: 'Part 1' }); // the default title
+      expect(followUp).toMatchObject({ status: 'backlog', parentId: parent.id });
+      expect(parent.estimateLockedMin).toBeNull();
       for (const id of [original.id, followUp.id]) {
         await api.transitionTask(id, 'in_progress');
         await api.transitionTask(id, 'done');
@@ -324,29 +337,51 @@ export function runApiContract(
       expect(ids).toEqual(expect.arrayContaining([original.id, followUp.id]));
     });
 
-    it('tasks: a started split family chains, and no member is a calibration point on its own', async () => {
+    it('tasks: splitting a part adds a sibling under the same parent; a parent can’t be split', async () => {
       const a = await api.createTask({ title: 'Pset', estimateMin: 60, bufferMin: 0 });
       await api.transitionTask(a.id, 'in_progress');
-      const { followUp: b } = await api.splitTask(a.id, {
+      const { parent, followUp: b } = await api.splitTask(a.id, {
         finish: 'done',
         actualMin: 40,
         followUp: { title: 'Pset, 2', estimateMin: 40 },
       });
-      const { followUp: c } = await api.splitTask(b.id, {
+      const { parent: same, followUp: c } = await api.splitTask(b.id, {
         finish: 'keep',
+        title: 'Pset, 2a',
         followUp: { title: 'Pset, 3', estimateMin: 20 },
       });
-      expect(c.splitFromId).toBe(b.id); // b is unstarted but linked, so the chain holds
-      await api.transitionTask(b.id, 'in_progress');
-      await api.transitionTask(b.id, 'done');
+      expect(same.id).toBe(parent.id);
+      expect(c.parentId).toBe(parent.id); // one level: a sibling, never a grandchild
+      expect((await api.getTask(b.id))?.title).toBe('Pset, 2a');
       await expect(
-        api.splitTask(b.id, { finish: 'keep', followUp: { title: 'y', estimateMin: null } }),
-      ).rejects.toThrow(); // a finished task can't be split
-      const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
-        (p) => p.taskId,
-      );
-      expect(ids).not.toContain(a.id);
-      expect(ids).not.toContain(b.id);
+        api.splitTask(a.id, { finish: 'keep', followUp: { title: 'y', estimateMin: null } }),
+      ).rejects.toThrow(); // a finished part can't be split
+      await expect(
+        api.splitTask(parent.id, { finish: 'keep', followUp: { title: 'y', estimateMin: null } }),
+      ).rejects.toThrow(/add a part/);
+      await expect(
+        api.splitTask(b.id, {
+          finish: 'keep',
+          parentTitle: 'renamed',
+          followUp: { title: 'z', estimateMin: null },
+        }),
+      ).rejects.toThrow(/already has its title/);
+    });
+
+    it('tasks: a typed title on a standalone split is what’s stored, for the parent and both parts', async () => {
+      const t = await api.createTask({ title: 'Essay', estimateMin: 60 });
+      const { parent, original, followUp } = await api.splitTask(t.id, {
+        finish: 'keep',
+        parentTitle: ' The essay ',
+        title: ' outline ',
+        followUp: { title: ' draft ', estimateMin: 30 },
+      });
+      expect([parent.title, original.title, followUp.title]).toEqual([
+        'The essay',
+        'outline',
+        'draft',
+      ]);
+      expect((await api.getTask(t.id))?.title).toBe('outline');
     });
 
     it('tasks: a done split on a planned task shrinks its row to the actual and plans the rest', async () => {
@@ -412,6 +447,149 @@ export function runApiContract(
       ).rejects.toThrow();
       expect((await api.listTasks()).length).toBe(before);
       expect((await api.getTask(t.id))?.status).toBe('in_progress');
+    });
+
+    it('parts: the first part clears the parent’s estimate, and a planned parent’s row moves to it', async () => {
+      const p = await api.createTask({ title: 'P2', estimateMin: 120, bufferMin: 10 });
+      await api.upsertPlan({ taskId: p.id, day: '2026-08-04', plannedMinutes: 130, order: 0 });
+      await api.transitionTask(p.id, 'planned');
+      const [a, b] = await api.createTasks([
+        { title: 'read', estimateMin: 45, parentId: p.id },
+        { title: 'draft', estimateMin: 60, parentId: p.id },
+      ]);
+      expect(await api.getTask(p.id)).toMatchObject({
+        status: 'backlog',
+        estimateMin: null,
+        bufferMin: null,
+      });
+      const rows = await api.listPlansForDay('2026-08-04');
+      expect(rows.map((r) => r.taskId)).toEqual([a!.id]); // only the first part takes the spot
+      expect(rows[0]!.plannedMinutes).toBe(45);
+      expect(await api.getTask(a!.id)).toMatchObject({ status: 'planned', parentId: p.id });
+      expect(await api.getTask(b!.id)).toMatchObject({ status: 'backlog', parentId: p.id });
+    });
+
+    it('parts: the first part to start freezes the parent’s lock at Σ parts, once', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', estimateMin: 45, parentId: p.id });
+      const b = await api.createTask({ title: 'b', estimateMin: 60, parentId: p.id });
+      expect((await api.getTask(p.id))?.estimateLockedMin).toBeNull();
+      await api.transitionTask(a.id, 'in_progress');
+      expect((await api.getTask(p.id))?.estimateLockedMin).toBe(105);
+      await api.setTaskEstimate(b.id, 90, null); // rescoping later never moves the baseline
+      await api.transitionTask(b.id, 'in_progress');
+      expect((await api.getTask(p.id))?.estimateLockedMin).toBe(105);
+    });
+
+    it('parts: done is refused while a part is open, then stamps Σ and is a calibration point', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      // Parts list oldest first; separate creates land on separate instants (the clock is frozen here).
+      const a = await api.createTask({ title: 'Part 1', estimateMin: 45, parentId: p.id });
+      advance(1000);
+      const b = await api.createTask({ title: 'Part 2', estimateMin: 60, parentId: p.id });
+      advance(1000);
+      const c = await api.createTask({ title: 'Part 3', estimateMin: 30, parentId: p.id });
+      await api.transitionTask(a.id, 'in_progress');
+      await api.setTaskActual(a.id, 50);
+      await api.transitionTask(a.id, 'done');
+      await expect(api.transitionTask(p.id, 'done')).rejects.toThrow(
+        'Part 2 and Part 3 aren’t finished — complete, drop or delete them first',
+      );
+      await api.transitionTask(b.id, 'in_progress');
+      await api.setTaskActual(b.id, 70);
+      await api.transitionTask(b.id, 'done');
+      await api.transitionTask(c.id, 'cancelled'); // dropped counts as dealt with
+      const done = await api.transitionTask(p.id, 'done');
+      expect(done).toMatchObject({ status: 'done', actualAccruedMin: 120, estimateLockedMin: 135 });
+      const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
+        (x) => x.taskId,
+      );
+      expect(ids).toEqual(expect.arrayContaining([p.id, a.id, b.id]));
+      expect(ids).not.toContain(c.id);
+    });
+
+    it('parts: cancelling the parent drops its open parts; a done part stays as history', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', parentId: p.id });
+      const b = await api.createTask({ title: 'b', parentId: p.id });
+      await api.transitionTask(a.id, 'in_progress');
+      await api.transitionTask(a.id, 'done');
+      expect(await api.transitionTask(p.id, 'cancelled')).toMatchObject({ status: 'cancelled' });
+      expect((await api.getTask(a.id))?.status).toBe('done');
+      expect((await api.getTask(b.id))?.status).toBe('cancelled');
+    });
+
+    it('parts: deleting the parent deletes every part with its plans; dropping a part touches nothing else', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', estimateMin: 30, parentId: p.id });
+      const b = await api.createTask({ title: 'b', parentId: p.id });
+      await api.upsertPlan({ taskId: a.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
+      await api.transitionTask(a.id, 'planned');
+      await api.transitionTask(b.id, 'cancelled');
+      expect(await api.getTask(a.id)).toMatchObject({ status: 'planned', parentId: p.id });
+      expect((await api.getTask(p.id))?.status).toBe('backlog');
+      await api.deleteTask(p.id);
+      expect(await api.getTask(p.id)).toBeNull();
+      expect(await api.getTask(a.id)).toBeNull();
+      expect(await api.getTask(b.id)).toBeNull();
+      expect(await api.listPlansForDay('2026-08-04')).toHaveLength(0);
+      await api.deleteTask(p.id); // idempotent
+    });
+
+    it('parts: a parent is never planned, started, estimated or given an actual of its own', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      await api.createTask({ title: 'a', parentId: p.id });
+      await expect(
+        api.upsertPlan({ taskId: p.id, day: '2026-08-04', plannedMinutes: 30, order: 0 }),
+      ).rejects.toThrow(/plan its parts/);
+      await expect(api.transitionTask(p.id, 'in_progress')).rejects.toThrow(/start a part/);
+      await expect(api.transitionTask(p.id, 'planned')).rejects.toThrow(/plan its parts/);
+      await expect(api.setTaskEstimate(p.id, 30, null)).rejects.toThrow(/sum of its parts/);
+      await expect(api.setTaskActual(p.id, 30)).rejects.toThrow(/sum of its parts/);
+    });
+
+    it('parts: one level both ways, and a task already worked on can’t become a parent', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', parentId: p.id });
+      const x = await api.createTask({ title: 'x' });
+      await expect(api.createTask({ title: 'deep', parentId: a.id })).rejects.toThrow(/one level/);
+      await expect(api.setTaskParent(p.id, x.id)).rejects.toThrow(/one level/);
+      const worked = await api.createTask({ title: 'worked', estimateMin: 30 });
+      await api.transitionTask(worked.id, 'in_progress');
+      await expect(api.createTask({ title: 'p', parentId: worked.id })).rejects.toThrow(/split/);
+      await expect(api.createTask({ title: 'p', parentId: 'nope' })).rejects.toThrow();
+      // createTasks checks every input before writing any.
+      const before = (await api.listTasks()).length;
+      await expect(
+        api.createTasks([
+          { title: 'ok', parentId: x.id },
+          { title: 'bad', parentId: a.id },
+        ]),
+      ).rejects.toThrow(/one level/);
+      expect((await api.listTasks()).length).toBe(before);
+      expect((await api.getTask(x.id))?.estimateMin).toBeNull();
+    });
+
+    it('parts: setTaskParent attaches (a started task freezes the lock) and detaches', async () => {
+      const p = await api.createTask({ title: 'P2', estimateMin: 90 });
+      const a = await api.createTask({ title: 'a', estimateMin: 40 });
+      await api.transitionTask(a.id, 'in_progress');
+      expect(await api.setTaskParent(a.id, p.id)).toMatchObject({
+        parentId: p.id,
+        status: 'in_progress',
+      });
+      expect(await api.getTask(p.id)).toMatchObject({ estimateMin: null, estimateLockedMin: 40 });
+      expect((await api.setTaskParent(a.id, null)).parentId).toBeNull();
+      await expect(api.setTaskParent(a.id, a.id)).rejects.toThrow(/itself/);
+      const data = await api.exportData();
+      expect(data.tasks.find((t) => t.id === a.id)?.parentId).toBeNull();
+    });
+
+    it('parts: export carries parentId', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', parentId: p.id });
+      const data = await api.exportData();
+      expect(data.tasks.find((t) => t.id === a.id)?.parentId).toBe(p.id);
     });
 
     it('tasks: createTasks creates every input as an unlocked backlog task, in paste order, with fields', async () => {
@@ -579,6 +757,12 @@ export function runApiContract(
         followUp: { title: 'pset, part 2', estimateMin: null },
       });
       expect(followUp).toMatchObject({ dueDay: '2026-08-07', dueTime: '17:00' });
+      // Part 1 keeps its time too (when its block ends); the parent holds the real deadline.
+      expect(await api.getTask(t.id)).toMatchObject({ dueDay: '2026-08-07', dueTime: '17:00' });
+      expect(await api.getTask(followUp.parentId!)).toMatchObject({
+        dueDay: '2026-08-07',
+        dueTime: '17:00',
+      });
     });
 
     it('tasks: title renames at any status, trims, rejects empty, and never touches the lock', async () => {

@@ -84,8 +84,8 @@ export function withEstimate(
   return { ...task, estimateMin, bufferMin, updatedAt: now };
 }
 
-// A cancelled task never counts toward calibration. Split families are excluded on top of this
-// (split.ts isCalibrationPoint), which needs the task list.
+// A done task with a frozen baseline is a calibration point; a cancelled one never is. Parts are points of
+// their own, and so is a done parent (its lock vs Σ parts — parts.ts).
 export function contributesCalibration(task: Task): boolean {
   return task.status === 'done' && task.estimateLockedMin !== null;
 }

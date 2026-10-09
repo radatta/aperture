@@ -15,7 +15,7 @@ import { TodayLens } from '../../modules/tasks/TodayLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
 import { CalibrationSection } from '../../modules/calibration/CalibrationSection';
 import { BulkAddDialog } from '../../modules/tasks/BulkAddDialog';
-import { normalize, placeOf } from '../../modules/tasks/query';
+import { foldParts, normalize, placer } from '../../modules/tasks/query';
 import type { QueryCtx } from '../../modules/tasks/query';
 import { useTaskQuery } from '../../modules/tasks/useTaskQuery';
 
@@ -47,12 +47,13 @@ export function TasksPage() {
     planOrder: new Map(plans.map((p) => [p.taskId, p.order])),
     categories,
   };
+  // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice.
   const counts = { today: 0, week: 0 };
-  if (!pending)
-    for (const t of tasks) {
-      const p = placeOf(t, today, ctx.planOrder);
-      if (p === 'today' || p === 'week') counts[p]++;
-    }
+  if (!pending) {
+    const place = placer(tasks, ctx);
+    for (const p of ['today', 'week'] as const)
+      counts[p] = foldParts(tasks.filter((t) => place(t) === p)).length;
+  }
   const isList = lens === 'today' || lens === 'week' || lens === 'backlog' || lens === 'done';
   const searching = normalize(query.text) !== '';
 

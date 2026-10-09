@@ -11,6 +11,7 @@ import {
   normalize,
   overrideChips,
   placeOf,
+  placer,
   resetToLens,
   sortTasks,
   type QueryCtx,
@@ -36,7 +37,7 @@ const task = (over: Partial<Task>): Task => ({
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,
-  splitFromId: null,
+  parentId: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -99,6 +100,15 @@ describe('placeOf', () => {
   it('treats an empty-string dueDay as undated', () => {
     expect(placeOf(task({ dueDay: '' }), TODAY, none)).toBe('backlog');
   });
+
+  it('a part off today lives where its open parent does — its own time is when it ends', () => {
+    const parent = task({ id: 'p', dueDay: '2026-09-25' });
+    const part = task({ id: 'a', parentId: 'p', dueDay: '2026-10-20' });
+    expect(placeOf(part, TODAY, none, parent)).toBe('week');
+    expect(placeOf(part, TODAY, new Map([['a', 0]]), parent)).toBe('today');
+    expect(placeOf(part, TODAY, none, { ...parent, status: 'done' })).toBe('backlog'); // its own
+    expect(placer([parent, part], { today: TODAY, planOrder: none })(part)).toBe('week');
+  });
 });
 
 describe('text search', () => {
@@ -150,6 +160,23 @@ describe('applyQuery', () => {
     task({ id: 'loose', title: 'buy stamps' }),
   ];
   const c = ctx([['today', 0]]);
+
+  it('a0 a part folds into its parent’s card outside search; search and Done stay flat', () => {
+    const parts = [
+      task({ id: 'p', title: 'P2', dueDay: '2026-09-25' }),
+      task({ id: 'a', title: 'P2 read', parentId: 'p' }),
+      task({ id: 'b', title: 'P2 draft', parentId: 'p', status: 'planned' }),
+      task({ id: 'd', title: 'P2 done', parentId: 'p', status: 'done', completedAt: 1 }),
+    ];
+    const pc = ctx([['b', 0]]);
+    const week = applyQuery(parts, 'week', q({}, 'week'), pc);
+    expect(week.groups.flatMap((g) => g.tasks.map((t) => t.id))).toEqual(['p']);
+    expect(week.count).toBe(1);
+    expect(applyQuery(parts, 'today', q({}, 'today'), pc).count).toBe(1); // b, on today's plan
+    const found = applyQuery(parts, 'week', q({ text: 'P2' }, 'week'), pc);
+    expect(found.groups.flatMap((g) => g.tasks.map((t) => t.id)).sort()).toEqual(['a', 'b', 'p']);
+    expect(applyQuery(parts, 'done', q({}, 'done'), pc).count).toBe(1);
+  });
 
   it('a1 without text shows only the lens’s place', () => {
     const r = applyQuery(tasks, 'backlog', q(), c);

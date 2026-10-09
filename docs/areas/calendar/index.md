@@ -178,8 +178,16 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   SSM read and a few DynamoDB writes. The
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
-- **Split** ([tasks/split.md](../tasks/split.md) — a split never cancels). **Done** with this part: a
-  **timed** task's event (the block before its deadline, whatever placed it) moves to the follow-up — the
+- **Parent + parts** ([tasks/parts.md](../tasks/parts.md) D8): a task with parts **never owns an event**.
+  `calendarSyncPlan` takes `opts.parent` (the impls compute it from the task list on every sync, Add/Retry/Send
+  included): a linked parent's event is deleted whatever the toggle says (after the owed-removal check), and
+  otherwise nothing happens — so a timed task that takes its first part loses its block. `insertCalendarEvent`
+  refuses a parent (`PARENT_NO_EVENT_ERROR`) before its other checks. A part's own time (`dueDay`/`dueTime`) is
+  when its block ends, so its block is an ordinary auto block. v2's due marker replaces the delete.
+- **Split** ([tasks/split.md](../tasks/split.md) — a split never cancels, and always yields parent + parts). The
+  new parent never gets an event; Part 1 keeps the original's id, time and event. **Done** with this part: a
+  **timed** task's event (the block before its deadline, whatever placed it) moves to the follow-up (a part,
+  never the parent) — the
   link carries what Aperture knows about the event (`gcalSeen`; the follow-up's new title and window are
   unsent, so they win a conflict) — which renames/re-times it: no
   delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original keeps

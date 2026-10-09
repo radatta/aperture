@@ -154,7 +154,7 @@ describe('mcp tools — tasks', () => {
     expect(out).toMatchObject({ estimateMin: 90, bufferMin: 10, estimateLockedMin: 30 }); // keeps the buffer
   });
 
-  it('split_task: done needs actualMin and a started task; the rest lands linked', async () => {
+  it('split_task: done needs actualMin and a started task; the rest is a part of a new parent', async () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'pset', estimateMin: 60 })) as Task;
     await expect(
@@ -167,20 +167,78 @@ describe('mcp tools — tasks', () => {
     await expect(
       call('split_task', { id: t.id, finish: 'keep', actualMin: 5, followUpTitle: 'rest' }),
     ).rejects.toThrow(/actualMin/);
-    const { original, followUp } = (await call('split_task', {
+    const { parent, original, followUp } = (await call('split_task', {
       id: t.id,
       finish: 'done',
       actualMin: 40,
       followUpTitle: 'pset, second half',
       followUpEstimateMin: 60,
-    })) as { original: Task; followUp: Task };
-    expect(original).toMatchObject({ status: 'done', actualAccruedMin: 40 });
+    })) as { parent: Task; original: Task; followUp: Task };
+    expect(parent).toMatchObject({ title: 'pset', estimateLockedMin: 60 });
+    expect(original).toMatchObject({
+      status: 'done',
+      actualAccruedMin: 40,
+      title: 'Part 1',
+      parentId: parent.id,
+    });
     expect(followUp).toMatchObject({
       title: 'pset, second half',
       estimateMin: 60,
-      splitFromId: t.id,
+      parentId: parent.id,
       status: 'backlog',
     });
+    await expect(
+      call('split_task', { id: parent.id, finish: 'keep', followUpTitle: 'x' }),
+    ).rejects.toThrow(/add a part/);
+  });
+
+  it('parts: create_tasks with parentId, list_tasks annotates the parent, complete_task on it', async () => {
+    const { call } = makeEnv();
+    const p = (await call('create_task', { title: 'P2', dueDay: '2026-10-13' })) as Task;
+    const [a, b] = (await call('create_tasks', {
+      tasks: [
+        { title: 'Part 1', estimateMin: 45, parentId: p.id },
+        { title: 'Part 2', estimateMin: 60, parentId: p.id },
+      ],
+    })) as Task[];
+    const listed = (await call('list_tasks')) as (Task & { parts?: unknown })[];
+    expect(listed.find((t) => t.id === p.id)?.parts).toEqual({
+      total: 2,
+      done: 0,
+      estimateMin: 105,
+    });
+    expect(listed.find((t) => t.id === a!.id)?.parentId).toBe(p.id);
+    await call('complete_task', { id: a!.id, actualMin: 50 });
+    // The hard block names the open part; actualMin on a parent is a param error.
+    await expect(call('complete_task', { id: p.id })).rejects.toThrow(
+      'Part 2 isn’t finished — complete, drop or delete it first',
+    );
+    await expect(call('complete_task', { id: p.id, actualMin: 90 })).rejects.toThrow(
+      /omit actualMin/,
+    );
+    await expect(call('complete_task', { id: b!.id })).rejects.toThrow(/actualMin/); // a part needs one
+    await call('complete_task', { id: b!.id, actualMin: 70 });
+    const { task } = (await call('complete_task', { id: p.id })) as { task: Task };
+    expect(task).toMatchObject({ status: 'done', actualAccruedMin: 120, estimateLockedMin: 105 });
+  });
+
+  it('parts: update_task attaches and detaches, refuses a second level; delete_task lists the parts', async () => {
+    const { call } = makeEnv();
+    const p = (await call('create_task', { title: 'P2' })) as Task;
+    const x = (await call('create_task', { title: 'x' })) as Task;
+    expect(((await call('update_task', { id: x.id, parentId: p.id })) as Task).parentId).toBe(p.id);
+    await expect(call('update_task', { id: p.id, parentId: x.id })).rejects.toThrow(/one level/);
+    await expect(
+      call('create_calendar_event', {
+        taskId: p.id,
+        accountSub: 'A',
+        calendarId: 'A@example.com',
+        start: '2026-10-08T14:00:00-07:00',
+        durationMin: 30,
+      }),
+    ).rejects.toThrow(/its parts do/);
+    expect(await call('delete_task', { id: p.id })).toEqual({ deleted: p.id, parts: [x.id] });
+    expect(((await call('list_tasks')) as Task[]).some((t) => t.id === x.id)).toBe(false);
   });
 
   it('notes: create sets them, lists return them, update replaces and clears at any status', async () => {

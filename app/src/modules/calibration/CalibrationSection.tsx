@@ -19,7 +19,16 @@ export function CalibrationSection() {
 
   const { data: points = [] } = useCalibration(from, today);
   const { data: tasks = [] } = useAllTasks();
-  const titleById = new Map(tasks.map((t) => [t.id, t.title]));
+  // A done parent is the rollup of its parts (parts.ts), so its label says how many there were.
+  const partCount = new Map<string, number>();
+  for (const t of tasks)
+    if (t.parentId) partCount.set(t.parentId, (partCount.get(t.parentId) ?? 0) + 1);
+  const titleById = new Map(
+    tasks.map((t) => {
+      const n = partCount.get(t.id) ?? 0;
+      return [t.id, n > 0 ? `${t.title} · ${n} ${n === 1 ? 'part' : 'parts'}` : t.title];
+    }),
+  );
 
   const agg = aggregate(points);
   const recent = points.slice(-8).reverse();

@@ -247,6 +247,80 @@ describe('stub calendar auto-sync parity', () => {
   });
 });
 
+// Parent + parts parity with lambdas/src/backend.calendar.test.ts → "parent + parts": a parent never
+// owns an event, by any path (parts.ts); its parts carry the blocks.
+describe('stub calendar: parent + parts', () => {
+  const pick = (api: ReturnType<typeof stub>, taskId: string) =>
+    api.insertCalendarEvent({
+      taskId,
+      accountSub: 'seed-personal',
+      calendarId: 'you@gmail.com',
+      title: 'x',
+      startMs: 1000,
+      endMs: 2000,
+    });
+
+  it('a timed task that takes its first part loses its block; a retry on it never makes one', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '23:59' });
+    expect(p.gcalEventId).toBeTruthy();
+    await api.createTask({ title: 'read', parentId: p.id });
+    expect((await api.getTask(p.id))?.gcalEventId).toBeNull();
+    expect((await api.syncCalendarEvent(p.id)).gcalEventId).toBeNull();
+    expect((await api.setTaskTitle(p.id, 'P2 final')).gcalEventId).toBeNull();
+  });
+
+  it('the picker refuses a parent; an untimed part can still take a manual block', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09' });
+    const part = await api.createTask({ title: 'read', parentId: p.id });
+    await expect(pick(api, p.id)).rejects.toThrow(/its parts do/);
+    await expect(pick(api, part.id)).resolves.toMatchObject({ gcalEventId: expect.any(String) });
+  });
+
+  it('a timed standalone split: the parent gets no event; keep → each part its own block', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });
+    const { parent, original, followUp } = await api.splitTask(t.id, {
+      finish: 'keep',
+      followUp: { title: 'a, part 2', estimateMin: 30 },
+    });
+    expect(parent.gcalEventId).toBeNull();
+    expect(original.gcalEventId).toBe(t.gcalEventId); // Part 1 keeps its time and its block
+    expect(followUp.gcalEventId).toBeTruthy();
+    expect(followUp.gcalEventId).not.toBe(t.gcalEventId);
+  });
+
+  it('a timed standalone done split moves the event (with its base) to Part 2, never the parent', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });
+    await api.transitionTask(t.id, 'in_progress');
+    const { parent, original, followUp } = await api.splitTask(t.id, {
+      finish: 'done',
+      followUp: { title: 'a, part 2', estimateMin: null },
+    });
+    expect(parent.gcalEventId).toBeNull();
+    expect(original.gcalEventId).toBeNull();
+    expect(followUp.gcalEventId).toBe(t.gcalEventId);
+    // The base came with the link, and Part 2's first push renamed the event (so it's not read as new).
+    expect(followUp.gcalSeen?.title).toBe('a, part 2');
+  });
+
+  it('cancelling a parent removes its open parts’ blocks', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2' });
+    const part = await api.createTask({
+      title: 'read',
+      parentId: p.id,
+      dueDay: '2026-10-09',
+      dueTime: '10:00',
+    });
+    expect(part.gcalEventId).toBeTruthy();
+    await api.transitionTask(p.id, 'cancelled');
+    expect(await api.getTask(part.id)).toMatchObject({ status: 'cancelled', gcalEventId: null });
+  });
+});
+
 // Two-way sync parity with lambdas/src/backend.calendar.test.ts → "calendar pull". The stub has no
 // Google: an edit "made in Google" is queued on STUB_GCAL_EDITS_KEY and applied by the next pull.
 describe('stub calendar pull (two-way sync)', () => {

@@ -51,11 +51,34 @@ export const PLACE_LABEL: Record<Place, string> = {
 
 export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).includes(lens);
 
-export function placeOf(task: Task, today: string, planOrder: Map<string, number>): Place {
+// A part not on today answers to its parent's deadline (its own time is when its block ends), so it
+// lives where its open parent does — and folds under that parent's card there (parts.ts).
+export function placeOf(
+  task: Task,
+  today: string,
+  planOrder: Map<string, number>,
+  parent?: Task,
+): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
   if (planOrder.has(task.id) || task.status === 'in_progress') return 'today';
-  if (task.dueDay && task.dueDay <= addDays(today, WEEK_DAYS)) return 'week';
+  const openParent = parent && parent.status !== 'done' && parent.status !== 'cancelled';
+  const due = openParent ? parent.dueDay : task.dueDay;
+  if (due && due <= addDays(today, WEEK_DAYS)) return 'week';
   return 'backlog';
+}
+
+// placeOf over a list, each part looked up against its parent.
+export function placer(tasks: Task[], ctx: Pick<QueryCtx, 'today' | 'planOrder'>) {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  return (t: Task): Place =>
+    placeOf(t, ctx.today, ctx.planOrder, t.parentId ? byId.get(t.parentId) : undefined);
+}
+
+// Outside a search, a part whose parent is in the same list is drawn inside the parent's card, not as a
+// row of its own — the deliverable stays one thing you plan from.
+export function foldParts(tasks: Task[]): Task[] {
+  const ids = new Set(tasks.map((t) => t.id));
+  return tasks.filter((t) => !(t.parentId && ids.has(t.parentId)));
 }
 
 // Presets carry only how a lens sorts and groups; which tasks it shows is placeOf's job.
@@ -165,8 +188,9 @@ export function labelOfFrom(categories: Category[]): (id: string | null) => stri
 export function groupTasks(tasks: Task[], groupBy: GroupKey, ctx: QueryCtx): TaskGroup[] {
   if (groupBy === 'none') return tasks.length ? [{ key: 'all', label: '', tasks }] : [];
   if (groupBy === 'place') {
+    const place = placer(tasks, ctx);
     return PLACES.map((p) => {
-      const inPlace = tasks.filter((t) => placeOf(t, ctx.today, ctx.planOrder) === p);
+      const inPlace = tasks.filter((t) => place(t) === p);
       // Today keeps the plan's order (the Big 3 is the top of it), in-progress-off-plan after.
       const ordered =
         p === 'today'
@@ -209,7 +233,7 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
   // Same rule as the "No category" group: an id with no category behind it counts as none.
   const catOf = (t: Task) => (t.categoryId && known.has(t.categoryId) ? t.categoryId : '');
   const searching = normalize(q.text) !== '';
-  const place = (t: Task) => placeOf(t, ctx.today, ctx.planOrder);
+  const place = placer(tasks, ctx);
   const matched = tasks.filter(
     (t) =>
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
@@ -218,9 +242,11 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
       inDueBucket(t, q.due, ctx.today) &&
       matchesText(t, q.text, labelOf),
   );
-  const sorted = sortTasks(matched, q.sort);
+  // Search stays flat (every match is a card); the Done lens is flat history.
+  const shown = searching || lens === 'done' ? matched : foldParts(matched);
+  const sorted = sortTasks(shown, q.sort);
   const groupBy = searching && lens !== 'done' ? 'place' : q.groupBy;
-  return { searching, groups: groupTasks(sorted, groupBy, ctx), count: matched.length };
+  return { searching, groups: groupTasks(sorted, groupBy, ctx), count: shown.length };
 }
 
 // What the reader changed from the lens's own preset (text aside) — drives "Filter · N" + chips.

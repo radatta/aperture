@@ -173,6 +173,15 @@ describe('fmtDueDay — relative deadline phrasing', () => {
     expect(fmtDueDay('2026-06-22', today, '23:59')).toBe('due Jun 22 11:59pm');
     expect(fmtDueDay('2026-06-22', today, null)).toBe('due Jun 22'); // untimed unchanged
   });
+  it("a part's own time reads as when its block ends, never a deadline", () => {
+    expect(fmtDueDay(today, today, '15:00', 'ends')).toBe('ends today 3pm');
+    expect(fmtDueDay('2026-06-16', today, null, 'ends')).toBe('ends tomorrow');
+    expect(fmtDueDay('2026-06-14', today, null, 'ends')).toBe('ended yesterday');
+    expect(fmtDueDay('2026-06-19', today, '17:00', 'ends')).toBe('ends Fri 5pm');
+    expect(fmtDueDay('2026-06-09', today, null, 'ends')).toBe('ended Tue');
+    expect(fmtDueDay('2026-06-22', today, null, 'ends')).toBe('ends Jun 22');
+    expect(fmtDueDay('2026-06-08', today, null, 'ends')).toBe('ended Jun 8');
+  });
 
   // The trap: at 2:30am the wall-clock date has rolled but the logical day (4am start) hasn't. A task
   // due "yesterday's calendar date" must still read "due today". The boundary lives in todayKey, and

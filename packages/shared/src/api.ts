@@ -56,6 +56,7 @@ export interface CreateTaskInput {
   dueDay?: string | null; // day-granular deadline; honored by both creates — bulk-add and capture tokens set it
   dueTime?: string | null; // "HH:MM" on dueDay; requires dueDay (normalizeDue). A timed task auto-syncs to gcal
   notes?: string | null; // normalized like setTaskNotes; createTasks rejects the whole batch if any is over the cap
+  parentId?: string | null; // a part of that task (parts.ts); createTasks validates every one before any write
 }
 
 // The deadline as one write. Object-shaped (not positional) so an OMITTED dueTime survives JSON: absent
@@ -65,14 +66,17 @@ export interface SetTaskDueInput {
   dueTime?: string | null;
 }
 
-// A split (split.ts): this part finishes ('done') or keeps going ('keep'), and the rest becomes a new
-// task. Object-shaped like SetTaskDueInput — an omitted title/estimate keeps the original's.
+// A split (split.ts): this part finishes ('done') or keeps going ('keep'), and the rest becomes a new part.
+// Object-shaped like SetTaskDueInput — an omitted title/estimate keeps the original's. A standalone task
+// becomes Part 1 under a NEW parent (titled parentTitle, else the task's own title), so its title defaults to
+// STANDALONE_PART_TITLE; a part just gains a sibling.
 export interface SplitTaskInput {
   finish: 'done' | 'keep';
   title?: string;
   estimateMin?: number | null;
   bufferMin?: number | null;
   actualMin?: number; // 'done' only — this part's actual; omitted keeps what accrued
+  parentTitle?: string; // standalone only — the new parent's title
   followUp: { title: string; estimateMin: number | null; bufferMin?: number | null };
 }
 
@@ -322,9 +326,16 @@ export interface ApiClient {
   setTaskNotes(id: string, notes: string | null): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
   setTaskActual(id: string, actualMin: number): Promise<Task>;
-  // One task becomes two: the original finishes or keeps going, the rest becomes a linked follow-up on
-  // the original's plan day (else backlog). Never cancels, never edits a locked estimate (split.ts).
-  splitTask(id: string, input: SplitTaskInput): Promise<{ original: Task; followUp: Task }>;
+  // Split always yields parent + parts (split.ts): the original finishes or keeps going, the rest becomes a
+  // new part on the original's plan day (else backlog). A standalone original becomes Part 1 under a NEW
+  // parent that takes its title, deadline and lock; a part gains a sibling. Never cancels, never edits a lock.
+  splitTask(
+    id: string,
+    input: SplitTaskInput,
+  ): Promise<{ parent: Task; original: Task; followUp: Task }>;
+  // Attach to a parent, or detach (null) — parts.ts assertCanBePart. The task keeps its plan rows and status;
+  // a parent's first part clears its estimate and plan rows, and a started part freezes the parent's lock.
+  setTaskParent(id: string, parentId: string | null): Promise<Task>;
   // Permanent delete (distinct from cancel, which keeps the row as history). Tombstones the task, its
   // plan rows, and its attachment metadata; hard-deletes the calendar event via the cancel path; S3
   // bytes are orphaned. No-op if the task is absent/already gone.

@@ -10,6 +10,8 @@ import {
   isTimeKey,
   normalizeContentType,
   normalizeNotes,
+  partsOf,
+  partsSummary,
   zonedEpoch,
 } from '@aperture/shared';
 import type {
@@ -163,7 +165,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'list_tasks',
     description:
-      'List all live tasks (any status), newest first. Optionally filter by status (backlog, planned, in_progress, done, cancelled).',
+      'List all live tasks (any status), newest first. Optionally filter by status (backlog, planned, in_progress, done, cancelled). A task with parts (a parent: the deliverable, holding the deadline) carries parts: { total, done, estimateMin } — total and estimateMin leave dropped parts out; a part carries parentId.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -174,7 +176,14 @@ export const TOOLS: Tool[] = [
     async run(args, ctx) {
       const tasks = (await ctx.dispatch('listTasks', [])) as Task[];
       const status = optEnum(args, 'status', TASK_STATUSES);
-      return status ? tasks.filter((t) => t.status === status) : tasks;
+      const shown = status ? tasks.filter((t) => t.status === status) : tasks;
+      // One read: a parent's progress comes from the same list (parts.ts).
+      return shown.map((t) => {
+        const parts = partsOf(tasks, t.id);
+        if (!parts.length) return t;
+        const { total, done, estimateMin } = partsSummary(parts);
+        return { ...t, parts: { total, done, estimateMin } };
+      });
     },
   },
   {
@@ -186,7 +195,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_task',
     description:
-      'Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day; notes is free-form context (light markdown). The estimate stays editable until the task is done or cancelled.',
+      "Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day (on a part: when its block ends, not a deadline); notes is free-form context (light markdown). The estimate stays editable until the task is done or cancelled. parentId makes it a PART of that task (one level: not a part, not finished, not already worked on): the parent is the deliverable and holds the deadline; its parts hold the work. Its first part clears the parent's estimate (now the sum of its parts), and if the parent was planned the first part takes its spot.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -197,12 +206,14 @@ export const TOOLS: Tool[] = [
         dueDay: { type: 'string', description: 'ISO date YYYY-MM-DD' },
         dueTime: { type: 'string', description: DUE_TIME_DESC },
         notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
+        parentId: { type: 'string', description: 'make it a part of this task (list_tasks id)' },
       },
       required: ['title'],
       additionalProperties: false,
     },
     run(args, ctx) {
       const input: CreateTaskInput = { title: reqStr(args, 'title') };
+      if (present(args, 'parentId')) input.parentId = nullableStr(args, 'parentId');
       if (present(args, 'categoryId')) input.categoryId = nullableStr(args, 'categoryId');
       if (present(args, 'estimateMin')) input.estimateMin = reqInt(args, 'estimateMin', 0);
       if (present(args, 'bufferMin')) input.bufferMin = reqInt(args, 'bufferMin', 0);
@@ -215,7 +226,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_tasks',
     description:
-      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task. All-or-nothing on invalid input: one bad task (e.g. notes over the cap) creates none. Use this for a study plan or a session backlog dump.',
+      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task, parentId included — breaking a deliverable into parts is one call with every part pointing at it. All-or-nothing on invalid input: one bad task (e.g. notes over the cap, an ineligible parentId) creates none. Use this for a study plan or a session backlog dump.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -231,6 +242,7 @@ export const TOOLS: Tool[] = [
               dueDay: { type: 'string' },
               dueTime: { type: 'string', description: 'HH:MM (24h), needs dueDay' },
               notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
+              parentId: { type: 'string' },
             },
             required: ['title'],
           },
@@ -254,6 +266,7 @@ export const TOOLS: Tool[] = [
         if (present(row, 'dueDay')) input.dueDay = nullableDay(row, 'dueDay');
         if (present(row, 'dueTime')) input.dueTime = nullableTime(row, 'dueTime');
         if (present(row, 'notes')) input.notes = nullableNotes(row, 'notes');
+        if (present(row, 'parentId')) input.parentId = nullableStr(row, 'parentId');
         return input;
       });
       return ctx.dispatch('createTasks', [inputs]);
@@ -274,13 +287,14 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
+      'Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→due→notes→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
         title: { type: 'string' },
         categoryId: { type: ['string', 'null'] },
+        parentId: { type: ['string', 'null'], description: 'parent task id, or null to detach' },
         dueDay: { type: ['string', 'null'], description: 'ISO date YYYY-MM-DD, or null to clear' },
         dueTime: { type: ['string', 'null'], description: `${DUE_TIME_DESC}; null clears` },
         notes: {
@@ -299,6 +313,7 @@ export const TOOLS: Tool[] = [
       const fields = [
         'title',
         'categoryId',
+        'parentId',
         'dueDay',
         'dueTime',
         'notes',
@@ -321,6 +336,10 @@ export const TOOLS: Tool[] = [
         if (present(args, 'categoryId')) {
           await ctx.dispatch('setTaskCategory', [id, nullableStr(args, 'categoryId')]);
           applied.push('categoryId');
+        }
+        if (present(args, 'parentId')) {
+          await ctx.dispatch('setTaskParent', [id, nullableStr(args, 'parentId')]);
+          applied.push('parentId');
         }
         if (dueDay !== undefined || dueTime !== undefined) {
           // A time-only change keeps the task's day; the server rejects a time with no day at all.
@@ -367,24 +386,36 @@ export const TOOLS: Tool[] = [
   {
     name: 'complete_task',
     description:
-      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible.',
+      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin — its actual is what its parts took — and it is refused while any part is still open (complete, drop or delete that part first).',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
-        actualMin: { type: 'integer', minimum: 1, description: 'actual minutes the task took' },
+        actualMin: {
+          type: 'integer',
+          minimum: 1,
+          description: 'actual minutes the task took (required, except on a parent: omit it)',
+        },
       },
-      required: ['id', 'actualMin'],
+      required: ['id'],
       additionalProperties: false,
     },
     async run(args, ctx) {
       const id = reqStr(args, 'id');
-      const actualMin = reqInt(args, 'actualMin', 1);
       const task = (await ctx.dispatch('getTask', [id])) as Task | null;
       if (!task) throw new Error(`Not found: ${id}`);
       if (task.status === 'done' || task.status === 'cancelled') {
         throw new Error(`Task is already ${task.status}`);
       }
+      const all = (await ctx.dispatch('listTasks', [])) as Task[];
+      if (partsOf(all, id).length) {
+        if (present(args, 'actualMin'))
+          throw new RpcParamError('A task with parts has no actual of its own — omit actualMin');
+        // The server refuses while a part is open, naming it (parts.ts) — that message is the answer.
+        const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
+        return { task: done, previousActualMin: 0 };
+      }
+      const actualMin = reqInt(args, 'actualMin', 1);
       const previousActualMin = task.actualAccruedMin;
       if (task.status === 'backlog' || task.status === 'planned') {
         await ctx.dispatch('transitionTask', [id, 'in_progress']);
@@ -397,7 +428,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'split_task',
     description:
-      'Split a task in two when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new task (followUpTitle, followUpEstimateMin). Optional title/estimateMin/bufferMin rename or rescope this part. The new task keeps the category, deadline, notes and roll; it lands on this task\'s latest plan day when this task is planned or in progress (else the backlog), and links back to it (splitFromId) only if this task had started work (or is itself a split part) — its split family is left out of calibration until it can be scored as one. Nothing is cancelled. Calendar: a timed follow-up gets its own Google Calendar block at the deadline — on finish="done" it takes over this task’s block, if it has one; a sync failure shows as gcalSyncError on whichever task it failed for (sync_calendar_event retries it). Returns { original, followUp }.',
+      'Split a task when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new PART (followUpTitle, followUpEstimateMin). A split always yields parent + parts: a standalone task becomes "Part 1" (unless title renames it) under a NEW parent that takes its title (or parentTitle), deadline and calibration baseline; splitting a part adds a sibling under the same parent (parentTitle is refused there). A parent itself can\'t be split — create a part instead. Optional title/estimateMin/bufferMin rename or rescope this part. The new part keeps the category, time, notes and roll, and lands on this task\'s latest plan day when this task is planned or in progress (else the backlog). Each part is its own calibration point; the parent is scored as the whole job once marked done. Nothing is cancelled. Calendar: a timed follow-up gets its own Google Calendar block ending at its time — on finish="done" it takes over this task’s block, if it has one (never the parent’s: a parent has none); a sync failure shows as gcalSyncError on whichever task it failed for (sync_calendar_event retries it). Returns { parent, original, followUp }.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -408,7 +439,15 @@ export const TOOLS: Tool[] = [
           minimum: 0,
           description: 'finish="done" only (required there): minutes this part actually took',
         },
-        title: { type: 'string', description: "this part's new title; omitted keeps it" },
+        title: {
+          type: 'string',
+          description:
+            'this part\'s new title; omitted keeps it (a standalone task becomes "Part 1")',
+        },
+        parentTitle: {
+          type: 'string',
+          description: "standalone only: the new parent's title; omitted takes this task's",
+        },
         estimateMin: { type: 'integer', minimum: 0, description: "this part's working estimate" },
         bufferMin: { type: 'integer', minimum: 0 },
         followUpTitle: { type: 'string' },
@@ -432,6 +471,7 @@ export const TOOLS: Tool[] = [
       };
       if (finish === 'done') input.actualMin = reqInt(args, 'actualMin', 0);
       if (present(args, 'title')) input.title = reqStr(args, 'title');
+      if (present(args, 'parentTitle')) input.parentTitle = reqStr(args, 'parentTitle');
       if (present(args, 'estimateMin')) input.estimateMin = reqInt(args, 'estimateMin', 0);
       if (present(args, 'bufferMin')) input.bufferMin = reqInt(args, 'bufferMin', 0);
       return ctx.dispatch('splitTask', [reqStr(args, 'id'), input]);
@@ -440,7 +480,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'delete_task',
     description:
-      'Permanently delete a task (no restore tool). Also removes its day plans and attachments, DELETES its linked Google Calendar event if it has one, and its logged time stops counting toward calibration. Refused for a recurring occurrence (seriesId set) — the series would just respawn it. To abandon a task while keeping its history, use update_task status=cancelled instead.',
+      'Permanently delete a task (no restore tool). Also removes its day plans and attachments, DELETES its linked Google Calendar event if it has one, and its logged time stops counting toward calibration. Deleting a parent deletes every one of its parts the same way (the result lists them) — confirm the count with the user first. Refused for a recurring occurrence (seriesId set) — the series would just respawn it. To abandon a task while keeping its history, use update_task status=cancelled instead.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -458,8 +498,9 @@ export const TOOLS: Tool[] = [
           'Recurring occurrence — use update_task status=cancelled instead of deleting',
         );
       }
+      const parts = partsOf((await ctx.dispatch('listTasks', [])) as Task[], id);
       await ctx.dispatch('deleteTask', [id]);
-      return { deleted: id };
+      return parts.length ? { deleted: id, parts: parts.map((p) => p.id) } : { deleted: id };
     },
   },
   {
@@ -592,7 +633,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_calendar_event',
     description:
-      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. For a task with no due time: a manual time block — renaming it in Google renames the task; its time maps to no task field. Refused on a task with a due time while auto-sync is on (with a calendar to write to): that task’s block is placed at its deadline automatically — sync_calendar_event puts it (back) there, update_task changes the time. On error, re-read the task before retrying — the event may already exist.',
+      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. For a task with no due time: a manual time block — renaming it in Google renames the task; its time maps to no task field. Refused on a parent (a task with parts — its parts carry the blocks; add the event to a part). Refused on a task with a due time while auto-sync is on (with a calendar to write to): that task’s block is placed at its deadline automatically — sync_calendar_event puts it (back) there, update_task changes the time. On error, re-read the task before retrying — the event may already exist.',
     inputSchema: {
       type: 'object',
       properties: {

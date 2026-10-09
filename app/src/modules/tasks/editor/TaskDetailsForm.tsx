@@ -26,15 +26,18 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 // calibration is measured against the baseline frozen at start, which never moves; a finished task's
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
 // due locks once finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
-// (showing "Saved"); the modal's own Close is the way out.
+// (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
+// (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts).
 export function TaskDetailsForm({
   task: live,
-  inSplitFamily = false,
+  parts,
+  isPart = false,
   onDirtyChange,
   estimateRef,
 }: {
   task: Task;
-  inSplitFamily?: boolean; // its lock covers a split family's whole job, so it isn't measured alone
+  parts?: { estimateMin: number | null; unscoped: number }; // set when it's a parent
+  isPart?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
@@ -50,7 +53,7 @@ export function TaskDetailsForm({
   const setDue = useSetDue();
   const setNotes = useSetTaskNotes();
 
-  const editEstimate = canEditEstimate(task);
+  const editEstimate = canEditEstimate(task) && !parts;
   // A finished task is history: its due date is locked (re-dating it is meaningless). Category and
   // title stay editable at every status — recategorizing a done task matters (calibration aggregates
   // by category), and a title is just display text.
@@ -214,13 +217,28 @@ export function TaskDetailsForm({
             </div>
             {task.estimateLockedMin != null && (
               <Text size="xs" tone="muted" className="w-full">
-                Started at {fmtDuration(task.estimateLockedMin)}
-                {inSplitFamily
-                  ? ' — split, so it isn’t measured on its own.'
-                  : ' — calibration is measured against that.'}
+                Started at {fmtDuration(task.estimateLockedMin)} — calibration is measured against
+                that.
               </Text>
             )}
           </>
+        ) : parts ? (
+          <div className="flex flex-col gap-1">
+            <Text size="sm" tone="muted">
+              Estimate
+            </Text>
+            <Text tabular>
+              {parts.estimateMin != null ? fmtDuration(parts.estimateMin) : 'Not set'} — the sum of
+              its parts
+              {parts.unscoped > 0 && ` · ${parts.unscoped} unscoped`}
+            </Text>
+            {task.estimateLockedMin != null && (
+              <Text size="xs" tone="muted">
+                Locked at {fmtDuration(task.estimateLockedMin)} when the first part started — the
+                parts’ total is measured against that.
+              </Text>
+            )}
+          </div>
         ) : (
           <div className="flex flex-col gap-1">
             <Text size="sm" tone="muted">
@@ -236,9 +254,7 @@ export function TaskDetailsForm({
                 Started at {fmtDuration(task.estimateLockedMin)}
                 {task.status === 'cancelled'
                   ? '.' // dropped tasks never count toward calibration
-                  : inSplitFamily
-                    ? ' — split, so it isn’t measured on its own.'
-                    : ' — calibration is measured against that.'}
+                  : ' — calibration is measured against that.'}
               </Text>
             )}
           </div>
@@ -254,18 +270,20 @@ export function TaskDetailsForm({
         {isTerminal ? (
           <div className="flex flex-col gap-1">
             <Text size="sm" tone="muted">
-              Due
+              {isPart ? 'Ends' : 'Due'}
             </Text>
             <Text tabular>
               {task.dueDay
                 ? `${fmtMonthDayYear(task.dueDay)}${task.dueTime ? ` · ${fmtClock12(task.dueTime)}` : ''}`
-                : 'No due date'}
+                : isPart
+                  ? 'No time'
+                  : 'No due date'}
             </Text>
           </div>
         ) : (
           <>
             <Field
-              label="Due"
+              label={isPart ? 'Ends' : 'Due'}
               type="date"
               value={dueDay}
               onChange={(e) => {
@@ -274,9 +292,9 @@ export function TaskDetailsForm({
               }}
               className="w-40"
             />
-            {/* Optional deadline time. Needs a day; clearing the day clears it. */}
+            {/* Optional deadline time (a part's: when its block ends). Needs a day; clearing it clears this. */}
             <Field
-              label="Due time"
+              label={isPart ? 'Ends at' : 'Due time'}
               type="time"
               step={60}
               value={dueTime}

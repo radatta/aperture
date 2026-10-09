@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { calibrationTasks, dayKey, inSplitFamily, todayKey } from '@aperture/shared';
+import { contributesCalibration, dayKey, partsOf, todayKey } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
@@ -213,13 +213,16 @@ function ReviewCard({ today }: { today: string }) {
   const { data: entries = [] } = useLog(today);
   const { data: tasks = [] } = useAllTasks();
   const recent = entries.slice(-3).reverse();
-  // Every task finished today is listed. A calibration point (done + locked, outside a split family —
-  // split.ts) gets its estimate-vs-actual bar; the rest get a plain row: a split part (its lock covers the
-  // whole job, so a bar would mislead) or a task finished without an estimate.
+  // Every task finished today is listed. A calibration point (done + locked) gets its estimate-vs-actual
+  // bar — a part on its own, and a parent marked done as the rollup of its parts (parts.ts); a task
+  // finished without an estimate gets a plain row.
   const doneToday = tasks.filter(
     (t) => t.status === 'done' && t.completedAt != null && dayKey(t.completedAt, start) === today,
   );
-  const measured = new Set(calibrationTasks(tasks).map((t) => t.id));
+  const label = (t: (typeof tasks)[number]) => {
+    const n = partsOf(tasks, t.id).length;
+    return n > 0 ? `${t.title} · ${n} ${n === 1 ? 'part' : 'parts'}` : t.title;
+  };
 
   return (
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>
@@ -257,24 +260,24 @@ function ReviewCard({ today }: { today: string }) {
               Done today · estimate vs actual
             </Text>
             {doneToday.map((t) =>
-              measured.has(t.id) ? (
+              contributesCalibration(t) ? (
                 <DeltaBar
                   key={t.id}
-                  label={t.title}
+                  label={label(t)}
                   estimateMin={t.estimateLockedMin!}
                   actualMin={t.actualAccruedMin}
                 />
               ) : (
                 <div key={t.id} className="flex flex-col gap-1">
                   <Text size="sm" tone="muted" className="truncate">
-                    {t.title}
+                    {label(t)}
                   </Text>
                   <div className="flex items-baseline gap-2">
                     <Text size="sm" weight="medium" tabular>
                       {fmtDuration(t.actualAccruedMin)}
                     </Text>
                     <Text size="xs" tone="muted">
-                      {inSplitFamily(t, tasks) ? 'split' : 'no estimate'}
+                      no estimate
                     </Text>
                   </div>
                 </div>

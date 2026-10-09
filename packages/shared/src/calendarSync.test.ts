@@ -201,6 +201,20 @@ describe('calendarSyncPlan', () => {
     );
     expect(calendarSyncPlan(null, owedOff, OFF, epoch, { ensure: true }).kind).toBe('delete');
   });
+  it('a task with parts never owns an event: a linked one deletes (sync on or off), else nothing', () => {
+    const OFF = { autoCalendar: false, calendarWriteDefault: REF };
+    const parent = { parent: true };
+    expect(calendarSyncPlan(null, task(), ON, epoch, parent)).toEqual({ kind: 'none' });
+    expect(calendarSyncPlan(null, task(), ON, epoch, { ...parent, ensure: true }).kind).toBe(
+      'none',
+    );
+    expect(calendarSyncPlan(linked(), linked(), ON, epoch, parent).kind).toBe('delete');
+    expect(calendarSyncPlan(linked(), linked(), OFF, epoch, parent).kind).toBe('delete');
+    expect(calendarSyncPlan(null, linked(), ON, epoch, { ...parent, ensure: true }).kind).toBe(
+      'delete',
+    );
+  });
+
   it('a finished task still honours an owed removal', () => {
     const owed = linked({ dueTime: null, gcalSyncError: gcalSyncMessage('delete', 'x') });
     expect(calendarSyncPlan(owed, { ...owed, status: 'done' }, ON, epoch).kind).toBe('delete');
