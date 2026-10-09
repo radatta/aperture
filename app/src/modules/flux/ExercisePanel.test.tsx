@@ -28,6 +28,20 @@ describe('ExercisePanel', () => {
     for (const c of def.cues) expect(screen.getByText(c)).toBeTruthy();
   });
 
+  it('before the camera starts, says so instead of "Getting ready…"', () => {
+    render(
+      <ExercisePanel
+        def={getExercise('chin-tuck')}
+        sample={IDLE_SAMPLE}
+        state={null}
+        idle
+        onControl={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Start the camera to begin.')).toBeTruthy();
+    expect(screen.queryByText('Getting ready…')).toBeNull();
+  });
+
   it('romReps: count, hold ring, progress toward target, both sides, compensation warning', () => {
     const def = getExercise('cervical-rotation');
     const state = {

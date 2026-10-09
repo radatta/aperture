@@ -22,17 +22,17 @@ import type {
   RomRepsState,
 } from '@aperture/shared/flux';
 
-/** Clamp a frame gap so a paused tab resuming can't overshoot a timer. */
+// Clamp a frame gap so a paused tab resuming can't overshoot a timer.
 const MAX_DT = 0.5;
-/** Angular speed (deg/s) below which the head counts as "still". */
+// Angular speed (deg/s) below which the head counts as "still".
 const STILL_SPEED = 6;
-/** Off-plane head movement (deg) that flags compensation in a single-axis move. */
+// Off-plane head movement (deg) that flags compensation in a single-axis move.
 const OFF_AXIS_DEG = 15;
-/** Min seconds between posture warnings. */
+// Min seconds between posture warnings.
 const POSTURE_COOLDOWN = 3;
 const AXES: readonly Axis[] = ['pitch', 'yaw', 'roll'];
 
-/** The full definition narrowed to one kind (base fields + that kind's spec). */
+// The full definition narrowed to one kind (base fields + that kind's spec).
 type DefOf<K extends ExerciseKind> = Extract<ExerciseDefinition, { kind: K }>;
 
 function dt(lastTSec: number | null, tSec: number): number {
@@ -40,7 +40,7 @@ function dt(lastTSec: number | null, tSec: number): number {
   return Math.min(MAX_DT, Math.max(0, tSec - lastTSec));
 }
 
-/** Advance only the timing baseline (used while idle/complete). */
+// Advance only the timing baseline (used while idle/complete).
 function touch<T extends ExerciseState>(state: T, input: EvalInput): T {
   return { ...state, lastTSec: input.tSec, lastRel: input.rel };
 }

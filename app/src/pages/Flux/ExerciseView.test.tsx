@@ -31,7 +31,7 @@ async function stage(
   return { api, user, fake: f };
 }
 
-/** Start and reach the running HUD. */
+// Start and reach the running HUD.
 async function running(s: Awaited<ReturnType<typeof stage>>) {
   await s.user.click(screen.getByRole('button', { name: 'Start camera' }));
   act(() => s.fake().ready('GPU'));
@@ -160,6 +160,23 @@ describe('Flux exercise stage', () => {
     expect(await screen.findByText(/switched to the CPU/)).toBeTruthy();
   });
 
+  it('the panel says to start the camera until it is started', async () => {
+    const s = await stage('/flux/chin-tuck');
+    expect(screen.getByText('Start the camera to begin.')).toBeTruthy();
+    await s.user.click(screen.getByRole('button', { name: 'Start camera' }));
+    expect(screen.queryByText('Start the camera to begin.')).toBeNull();
+  });
+
+  it('a CPU start after a crashed GPU boot says so and offers the GPU again', async () => {
+    localStorage.setItem('aperture.flux.gpuBoot', '1');
+    const s = await stage('/flux/cervical-rotation');
+    await s.user.click(screen.getByRole('button', { name: 'Start camera' }));
+    act(() => s.fake().ready('CPU'));
+    expect(await screen.findByText(/the last GPU start didn.t finish/)).toBeTruthy();
+    await s.user.click(screen.getByRole('button', { name: 'Try the GPU' }));
+    expect(s.fake().calls).toContain('forcedCpu:false');
+  });
+
   it('a finished set counts for the session and shows its cue on the HUD', async () => {
     const s = await stage('/flux/chin-tuck');
     await running(s);
@@ -209,6 +226,23 @@ describe('Flux Roll tie', () => {
     expect(await screen.findByText(/Neck rep done today/)).toBeTruthy();
   });
 
+  it('a later session with no set offers nothing, even after an earlier session logged sets', async () => {
+    const s = await linked(true);
+    await screen.findByText(/your first finished set starts it/);
+    await running(s);
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
+    await screen.findByText(/Neck rep in progress/);
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText("Log today's Neck rep");
+    await s.user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText("Log today's Neck rep")).toBeNull();
+
+    await running(s);
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    await act(async () => {}); // let a (wrong) onStop settle before asserting it never offered
+    expect(screen.queryByText("Log today's Neck rep")).toBeNull();
+  });
+
   it('Stop before any set offers nothing', async () => {
     const s = await linked(true);
     await screen.findByText(/your first finished set starts it/);
@@ -216,5 +250,36 @@ describe('Flux Roll tie', () => {
     await s.user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(screen.queryByText("Log today's Neck rep")).toBeNull();
     expect((await s.rep())?.status).toBe('planned');
+  });
+});
+
+describe('Flux Roll tie loading', () => {
+  it('shows nothing while the Roll data loads, then the strip', async () => {
+    let release: () => void = () => {};
+    await stage('/flux/chin-tuck', async (api) => {
+      const roll = await api.upsertRoll({ name: 'Neck', categoryId: null, estimateMin: 15 });
+      await api.updateSettings({ fluxRollId: roll.id });
+      const listRolls = api.listRolls.bind(api);
+      const gate = new Promise<void>((r) => (release = r));
+      api.listRolls = async () => {
+        await gate;
+        return listRolls();
+      };
+    });
+    expect(screen.queryByRole('button', { name: /Pick Neck for today/ })).toBeNull();
+    act(() => release());
+    expect(await screen.findByRole('button', { name: 'Pick Neck for today' })).toBeTruthy();
+  });
+
+  it('a failed Roll load says so inline instead of offering a Pick', async () => {
+    await stage('/flux/chin-tuck', async (api) => {
+      const roll = await api.upsertRoll({ name: 'Neck', categoryId: null, estimateMin: 15 });
+      await api.updateSettings({ fluxRollId: roll.id });
+      api.listRolls = async () => {
+        throw new Error('offline');
+      };
+    });
+    expect((await screen.findByText(/Couldn.t load your Roll/)).getAttribute('role')).toBe('alert');
+    expect(screen.queryByRole('button', { name: /Pick Neck/ })).toBeNull();
   });
 });

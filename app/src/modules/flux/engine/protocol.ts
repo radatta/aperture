@@ -14,7 +14,7 @@ import type { Side } from './side';
 
 export type Delegate = 'GPU' | 'CPU';
 
-/** Where a failure happened — each maps to its own copy and retry on the stage. */
+// Where a failure happened — each maps to its own copy and retry on the stage.
 export type ErrorStage = 'assets' | 'init' | 'detect' | 'camera';
 
 export interface Sample {
@@ -26,13 +26,11 @@ export interface Sample {
   readonly tSec: number;
 }
 
-/** main → worker */
+// main → worker
 export type ToWorker =
-  /**
-   * One init per worker. A CPU fallback is a fresh worker, not a second init: MediaPipe's module glue
-   * hands its factory over once per realm, so re-creating the landmarker in the same worker fails.
-   * The neutral and selection ride along so a fallback mid-session doesn't lose calibration.
-   */
+  // One init per worker. A CPU fallback is a fresh worker, not a second init: MediaPipe's module glue
+  // hands its factory over once per realm, so re-creating the landmarker in the same worker fails.
+  // The neutral and selection ride along so a fallback mid-session doesn't lose calibration.
   | {
       readonly type: 'init';
       readonly delegate: Delegate;
@@ -45,18 +43,20 @@ export type ToWorker =
   | { readonly type: 'control'; readonly control: EvalControl }
   | { readonly type: 'stop' };
 
-/** worker → main */
+// worker → main
 export type FromWorker =
   | { readonly type: 'progress'; readonly loaded: number; readonly total: number }
+  // Assets are in; the landmarker is being created on this delegate (the GPU crash-mark window opens).
+  | { readonly type: 'initStarted'; readonly delegate: Delegate }
   | { readonly type: 'ready'; readonly delegate: Delegate }
   | {
       readonly type: 'sample';
       readonly sample: Sample;
       readonly landmarks: Float32Array; // decimated [x,y,…] normalized, for overlay
     }
-  /** Every frame message is acked, dropped or not — the main thread sends the next only after it. */
+  // Every frame message is acked, dropped or not — the main thread sends the next only after it.
   | { readonly type: 'frameDone' }
-  /** `neutral` is kept by the main thread so a replacement worker can start calibrated. */
+  // `neutral` is kept by the main thread so a replacement worker can start calibrated.
   | { readonly type: 'calibrated'; readonly ok: boolean; readonly neutral: Euler | null }
   | { readonly type: 'exerciseState'; readonly state: ExerciseState }
   | { readonly type: 'exerciseEvent'; readonly event: ExerciseEvent }

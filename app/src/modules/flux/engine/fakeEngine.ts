@@ -27,7 +27,7 @@ export interface FakeControls {
   state(state: ExerciseState): void;
   event(event: ExerciseEvent): void;
   pause(): void;
-  /** Every engine method call, in order: 'start', 'stop', 'select:<id|null>:<side>', 'control:start', … */
+  // Every engine method call, in order: 'start', 'stop', 'select:<id|null>:<side>', 'control:start', …
   readonly calls: readonly string[];
   readonly lastSelect: { id: ExerciseId | null; side: Side } | undefined;
 }
@@ -103,6 +103,7 @@ export function createFakeEngine(opts: { auto?: boolean } = {}): {
       calls.push('stop');
       halt();
       delegate = null;
+      canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
     },
     resume: async () => {
       calls.push('resume');
@@ -138,7 +139,7 @@ export function createFakeEngine(opts: { auto?: boolean } = {}): {
     debug: (): EngineDebug => ({
       delegate,
       droppedFrames: 0,
-      detectFailures: 0,
+      fallbacks: 0,
       trackSize: delegate ? '640×480' : null,
     }),
   };
@@ -170,7 +171,7 @@ export function createFakeEngine(opts: { auto?: boolean } = {}): {
 
 const ZERO: Euler = { pitch: 0, yaw: 0, roll: 0 };
 
-/** 0 → 1 → hold → 0 → rest, one excursion per cycle. Returns the excursion fraction and cycle index. */
+// 0 → 1 → hold → 0 → rest, one excursion per cycle. Returns the excursion fraction and cycle index.
 function excursion(t: number, holdSec: number, rest = 0.75): { f: number; cycle: number } {
   const ramp = 1;
   const period = ramp + holdSec + ramp + rest;
@@ -184,7 +185,7 @@ function excursion(t: number, holdSec: number, rest = 0.75): { f: number; cycle:
 
 const jitter = (t: number): number => 0.4 * Math.sin(7.3 * t);
 
-/** A head that performs `def` (exported for tests). Calibrate first: neutral is the zero pose. */
+// A head that performs `def` (exported for tests). Calibrate first: neutral is the zero pose.
 export function syntheticPose(def: ExerciseDefinition | null, t: number): Euler {
   const still: Euler = { pitch: jitter(t), yaw: jitter(t + 1), roll: jitter(t + 2) };
   if (!def) {
@@ -229,7 +230,7 @@ export function syntheticPose(def: ExerciseDefinition | null, t: number): Euler 
   }
 }
 
-/** Inverse of matrixToEuler: R = Rz(roll)·Ry(yaw)·Rx(pitch), column-major 4×4. */
+// Inverse of matrixToEuler: R = Rz(roll)·Ry(yaw)·Rx(pitch), column-major 4×4.
 export function eulerToMatrix(e: Euler): number[] {
   const rad = Math.PI / 180;
   const [cx, sx] = [Math.cos(e.pitch * rad), Math.sin(e.pitch * rad)];
@@ -244,7 +245,7 @@ export function eulerToMatrix(e: Euler): number[] {
   ];
 }
 
-/** A single dot that follows the synthetic head, so screenshots show the overlay layer is live. */
+// A single dot that follows the synthetic head, so screenshots show the overlay layer is live.
 function drawDot(canvas: HTMLCanvasElement | null, pose: Euler): void {
   const ctx = canvas?.getContext('2d');
   if (!canvas || !ctx) return;

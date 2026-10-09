@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router';
+import { useEffect, useRef } from 'react';
+import { NavLink, useLocation } from 'react-router';
 import { cx } from '../lib/cx';
 
 // Home = glance, deep views = work. This slim row is how you reach the deep views; the active one is
@@ -18,9 +19,27 @@ const LINKS = [
   { to: '/settings', label: 'Settings' },
 ];
 
+const EDGE_PAD = 20; // px-5
+
 export function AppNav() {
+  const navRef = useRef<HTMLElement>(null);
+  const { pathname } = useLocation();
+  // Keep the active link visible: at 390px the later tabs sit past the row's right edge. Scrolls the
+  // row only — scrollIntoView would also move the page vertically.
+  useEffect(() => {
+    const nav = navRef.current;
+    const link = nav?.querySelector('[aria-current="page"]');
+    if (!nav || !link) return;
+    const n = nav.getBoundingClientRect();
+    const l = link.getBoundingClientRect();
+    if (l.right > n.right) nav.scrollLeft += l.right - n.right + EDGE_PAD;
+    else if (l.left < n.left) nav.scrollLeft -= n.left - l.left + EDGE_PAD;
+  }, [pathname]);
   return (
-    <nav className="no-scrollbar -mx-5 flex gap-x-5 overflow-x-auto border-b border-line px-5 pb-2.5 text-sm">
+    <nav
+      ref={navRef}
+      className="no-scrollbar -mx-5 flex gap-x-5 overflow-x-auto border-b border-line px-5 pb-2.5 text-sm"
+    >
       {LINKS.map((l) => (
         <NavLink
           key={l.to}

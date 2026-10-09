@@ -11,14 +11,14 @@ import modelUrl from './model/face_landmarker.float16.v1.task?url';
 const CACHE = 'aperture-flux-assets';
 
 export interface FluxAssets {
-  /** MediaPipe's WasmFileset: the module glue by URL, the binary as a blob: URL of the cached bytes. */
+  // MediaPipe's WasmFileset: the module glue by URL, the binary as a blob: URL of the cached bytes.
   readonly fileset: { readonly wasmLoaderPath: string; readonly wasmBinaryPath: string };
   readonly modelBytes: Uint8Array;
 }
 
 export interface AssetDeps {
   readonly fetch: typeof fetch;
-  /** Absent where CacheStorage isn't exposed (or throws, e.g. a private window): just fetch. */
+  // Absent where CacheStorage isn't exposed (or throws, e.g. a private window): just fetch.
   readonly caches: CacheStorage | undefined;
 }
 
@@ -108,7 +108,7 @@ async function readAll(
   return out;
 }
 
-/** Drop entries for older hashed assets, so an upgrade doesn't leave 17 MB behind per version. */
+// Drop entries for older hashed assets, so an upgrade doesn't leave 17 MB behind per version.
 async function prune(cache: Cache, keep: readonly string[]): Promise<void> {
   try {
     const wanted = new Set(keep.map((u) => new URL(u, self.location.href).href));

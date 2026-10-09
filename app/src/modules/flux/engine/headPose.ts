@@ -7,12 +7,10 @@ export const ZERO: Euler = { pitch: 0, yaw: 0, roll: 0 };
 
 const RAD2DEG = 180 / Math.PI;
 
-/**
- * Decompose MediaPipe's 4x4 facial transformation matrix into Euler angles
- * (degrees). MediaPipe hands the matrix back column-major as a length-16 array;
- * the upper-left 3x3 is the rotation. This is the standard R = Rz·Ry·Rx
- * extraction (same one OpenCV documents).
- */
+// Decompose MediaPipe's 4x4 facial transformation matrix into Euler angles
+// (degrees). MediaPipe hands the matrix back column-major as a length-16 array;
+// the upper-left 3x3 is the rotation. This is the standard R = Rz·Ry·Rx
+// extraction (same one OpenCV documents).
 export function matrixToEuler(m: ArrayLike<number>): Euler {
   // column-major → R[row][col]. MediaPipe always hands back 16 cells; `?? 0` only satisfies
   // noUncheckedIndexedAccess.
@@ -41,7 +39,7 @@ export function matrixToEuler(m: ArrayLike<number>): Euler {
   return { pitch: pitch * RAD2DEG, yaw: yaw * RAD2DEG, roll: roll * RAD2DEG };
 }
 
-/** Angle relative to a calibrated neutral pose (null neutral → raw angle). */
+// Angle relative to a calibrated neutral pose (null neutral → raw angle).
 export function relativeTo(current: Euler, neutral: Euler | null): Euler {
   if (!neutral) return current;
   return {
@@ -51,16 +49,14 @@ export function relativeTo(current: Euler, neutral: Euler | null): Euler {
   };
 }
 
-/** Overall angular deviation of a pose (3D magnitude, degrees). */
+// Overall angular deviation of a pose (3D magnitude, degrees).
 export function magnitude(e: Euler): number {
   return Math.hypot(e.pitch, e.yaw, e.roll);
 }
 
-/**
- * The 1€ (One-Euro) filter — adaptive low-pass that kills jitter when you hold
- * still but doesn't lag when you move fast. This is the industry default for
- * smoothing noisy pose signals; ~30 lines and no tuning of a motion model.
- */
+// The 1€ (One-Euro) filter — adaptive low-pass that kills jitter when you hold
+// still but doesn't lag when you move fast. This is the industry default for
+// smoothing noisy pose signals; ~30 lines and no tuning of a motion model.
 export class OneEuroFilter {
   private minCutoff: number;
   private beta: number;
@@ -80,7 +76,7 @@ export class OneEuroFilter {
     return 1 / (1 + tau / dt);
   }
 
-  /** @param tSec timestamp in seconds */
+  // tSec: timestamp in seconds
   filter(x: number, tSec: number): number {
     if (this.xPrev === null) {
       this.xPrev = x;
@@ -109,7 +105,7 @@ export class OneEuroFilter {
   }
 }
 
-/** Tracks min/max of a signal to report range-of-motion. */
+// Tracks min/max of a signal to report range-of-motion.
 export class RomTracker {
   min = Number.POSITIVE_INFINITY;
   max = Number.NEGATIVE_INFINITY;

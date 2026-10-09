@@ -7,7 +7,7 @@ import {
   type ExerciseDefinition,
   type ExerciseId,
 } from '@aperture/shared/flux';
-import { ButtonLink } from '../../components/Button';
+import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { ArrowLeftIcon } from '../../components/icons';
@@ -18,7 +18,7 @@ import { CameraStage } from '../../modules/flux/CameraStage';
 import { DebugReadout } from '../../modules/flux/DebugReadout';
 import { hasSide, mirrorForSide, type Side } from '../../modules/flux/engine/side';
 import { ExercisePanel } from '../../modules/flux/ExercisePanel';
-import { MeasurementBadge } from '../../modules/flux/ExerciseLibrary';
+import { EndRangeBadge, MeasurementBadge } from '../../modules/flux/ExerciseLibrary';
 import { PrecautionBanner } from '../../modules/flux/PrecautionBanner';
 import { readCondition } from '../../modules/flux/prefs';
 import { RepTieStrip } from '../../modules/flux/RepTie';
@@ -62,6 +62,7 @@ function Stage({ id }: { id: ExerciseId }) {
     exerciseId: id,
     kind: def.kind,
     side: sided ? side : null,
+    condition,
     acknowledged,
     voice,
     onSetCompleted: rep.onSetCompleted,
@@ -76,10 +77,8 @@ function Stage({ id }: { id: ExerciseId }) {
   }, [engine]);
 
   const stop = () => {
-    const sessionMs = engine.startedAt === null ? 0 : Date.now() - engine.startedAt;
-    const hadSets = engine.sessionSets.length > 0;
-    engine.stop();
-    if (hadSets) void rep.onStop(sessionMs);
+    const session = engine.stop();
+    if (session.sets > 0) void rep.onStop(session.activeMs);
   };
 
   const live = engine.status === 'running';
@@ -109,11 +108,7 @@ function Stage({ id }: { id: ExerciseId }) {
             {def.name}
           </Text>
           <MeasurementBadge ex={def} />
-          {def.provocative && (
-            <Text size="xs" tone="muted">
-              End-range
-            </Text>
-          )}
+          {def.provocative && <EndRangeBadge />}
         </div>
         {voice.on && voice.voices.length > 0 && (
           <Select
@@ -144,9 +139,19 @@ function Stage({ id }: { id: ExerciseId }) {
       )}
       {engine.fellBack && (
         <Text as="p" size="xs" tone="muted">
-          The GPU path failed on this device, so tracking switched to the CPU. Recalibrate if the
-          angles look off.
+          The GPU path failed on this device, so tracking switched to the CPU and the current set
+          restarted. Your neutral is kept — recalibrate if the angles look off.
         </Text>
+      )}
+      {engine.cpuAfterCrash && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Text size="xs" tone="muted">
+            Running on the CPU: the last GPU start didn&apos;t finish.
+          </Text>
+          <Button variant="quiet" size="sm" onClick={() => engine.setForcedCpu(false)}>
+            Try the GPU
+          </Button>
+        </div>
       )}
 
       {contra && !acknowledged ? (
@@ -160,12 +165,13 @@ function Stage({ id }: { id: ExerciseId }) {
           def={shown}
           sample={engine.sample}
           state={engine.exState}
+          idle={engine.status === 'idle'}
           onControl={engine.control}
         />
       )}
 
       <SessionLine engine={engine} def={def} />
-      <RepTieStrip handle={rep} />
+      <RepTieStrip handle={rep} activeMs={engine.activeMs()} />
       <DebugReadout engine={engine} />
     </div>
   );

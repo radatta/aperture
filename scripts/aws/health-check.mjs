@@ -15,7 +15,8 @@ const stage = process.argv[2] ?? 'dev';
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const outputs = JSON.parse(readFileSync(`${root}/cdk/cdk-outputs.${stage}.json`, 'utf8'));
 const app = outputs[`ApertureApp-${stage}`];
-if (!app?.AppUrl || !app?.FunctionUrl) throw new Error(`Missing AppUrl/FunctionUrl in cdk-outputs.${stage}.json`);
+if (!app?.AppUrl || !app?.FunctionUrl)
+  throw new Error(`Missing AppUrl/FunctionUrl in cdk-outputs.${stage}.json`);
 
 const appUrl = app.AppUrl.replace(/\/$/, '');
 const fnUrl = app.FunctionUrl.replace(/\/$/, '');
@@ -107,15 +108,25 @@ await check('manifest served as application/manifest+json', async () => {
   expect(ct.includes('application/manifest+json'), `content-type was "${ct}"`);
 });
 
-// Flux's tracking wasm: a missing asset would come back as the SPA fallback (200 text/html), and a
-// guessed Content-Type breaks Safari's streaming compile — so assert both status and type.
+// Flux's tracking wasm + model: a missing asset would come back as the SPA fallback (200 text/html),
+// and a guessed Content-Type breaks Safari's streaming compile — so assert both status and type.
+const fluxAsset = (ext) => readdirSync(`${root}/app/dist/assets`).find((f) => f.endsWith(ext));
 await check('Flux wasm served as application/wasm', async () => {
-  const wasm = readdirSync(`${root}/app/dist/assets`).find((f) => f.endsWith('.wasm'));
+  const wasm = fluxAsset('.wasm');
   expect(wasm, 'no .wasm in app/dist/assets — was the app built?');
   const r = await fetch(`${appUrl}/assets/${wasm}`, { method: 'HEAD' });
   expect(r.status === 200, `expected 200, got ${r.status}`);
   const ct = r.headers.get('content-type') ?? '';
   expect(ct.startsWith('application/wasm'), `content-type was "${ct}"`);
+});
+
+await check('Flux model served (not the SPA fallback)', async () => {
+  const model = fluxAsset('.task');
+  expect(model, 'no .task in app/dist/assets — was the app built?');
+  const r = await fetch(`${appUrl}/assets/${model}`, { method: 'HEAD' });
+  expect(r.status === 200, `expected 200, got ${r.status}`);
+  const ct = r.headers.get('content-type') ?? '';
+  expect(!ct.startsWith('text/html'), `content-type was "${ct}"`);
 });
 
 await check('SPA fallback (deep route → app shell 200)', async () => {
@@ -154,40 +165,53 @@ await check('MCP edge: GET /mcp → 405 (POST only)', async () => {
 // Phase 2 (claude.ai OAuth): the metadata façade must advertise the PKCE field Cognito omits and name OUR
 // origin as issuer; the protected-resource doc must serve at the path-suffixed URL claude.ai probes first;
 // and a bearer token must reach the Lambda (R7).
-await check('MCP façade: /.well-known/oauth-authorization-server advertises S256 + our issuer', async () => {
-  const r = await fetch(`${appUrl}/.well-known/oauth-authorization-server`);
-  expect(r.status === 200, `expected 200, got ${r.status}`);
-  const body = await r.json();
-  expect(
-    Array.isArray(body?.code_challenge_methods_supported) && body.code_challenge_methods_supported.includes('S256'),
-    `code_challenge_methods_supported was ${JSON.stringify(body?.code_challenge_methods_supported)}`,
-  );
-  expect(body?.issuer === appUrl, `issuer was "${body?.issuer}", expected "${appUrl}"`);
-});
+await check(
+  'MCP façade: /.well-known/oauth-authorization-server advertises S256 + our issuer',
+  async () => {
+    const r = await fetch(`${appUrl}/.well-known/oauth-authorization-server`);
+    expect(r.status === 200, `expected 200, got ${r.status}`);
+    const body = await r.json();
+    expect(
+      Array.isArray(body?.code_challenge_methods_supported) &&
+        body.code_challenge_methods_supported.includes('S256'),
+      `code_challenge_methods_supported was ${JSON.stringify(body?.code_challenge_methods_supported)}`,
+    );
+    expect(body?.issuer === appUrl, `issuer was "${body?.issuer}", expected "${appUrl}"`);
+  },
+);
 
-await check('MCP façade: /.well-known/oauth-protected-resource/mcp names /mcp as the resource', async () => {
-  const r = await fetch(`${appUrl}/.well-known/oauth-protected-resource/mcp`);
-  expect(r.status === 200, `expected 200, got ${r.status}`);
-  const body = await r.json();
-  expect(body?.resource === `${appUrl}/mcp`, `resource was "${body?.resource}"`);
-});
+await check(
+  'MCP façade: /.well-known/oauth-protected-resource/mcp names /mcp as the resource',
+  async () => {
+    const r = await fetch(`${appUrl}/.well-known/oauth-protected-resource/mcp`);
+    expect(r.status === 200, `expected 200, got ${r.status}`);
+    const body = await r.json();
+    expect(body?.resource === `${appUrl}/mcp`, `resource was "${body?.resource}"`);
+  },
+);
 
 // "invalid token" is the proof Authorization arrived: the verifier ran and rejected the fake JWT. If
 // CloudFront dropped the header, the body reads "requires a credential" instead. The Lambda also sends
 // WWW-Authenticate, but a Function URL renames it on every 401 (AWS security behavior) to
 // x-amzn-remapped-www-authenticate — claude.ai then falls back to probing the well-known paths above.
-await check('MCP edge: POST /mcp with a bearer token → 401 "invalid token" (proves Authorization arrives)', async () => {
-  const r = await fetch(`${appUrl}/mcp`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-real-jwt' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
-  });
-  expect(r.status === 401, `expected 401, got ${r.status}`);
-  const body = await r.json();
-  expect(body?.error === 'Unauthorized: invalid token', `body was ${JSON.stringify(body)}`);
-  const pointer = r.headers.get('x-amzn-remapped-www-authenticate') ?? '';
-  expect(pointer.includes('resource_metadata'), `x-amzn-remapped-www-authenticate was "${pointer}"`);
-});
+await check(
+  'MCP edge: POST /mcp with a bearer token → 401 "invalid token" (proves Authorization arrives)',
+  async () => {
+    const r = await fetch(`${appUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-real-jwt' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    });
+    expect(r.status === 401, `expected 401, got ${r.status}`);
+    const body = await r.json();
+    expect(body?.error === 'Unauthorized: invalid token', `body was ${JSON.stringify(body)}`);
+    const pointer = r.headers.get('x-amzn-remapped-www-authenticate') ?? '';
+    expect(
+      pointer.includes('resource_metadata'),
+      `x-amzn-remapped-www-authenticate was "${pointer}"`,
+    );
+  },
+);
 
 if (failures) {
   console.error(`\n✗ health check FAILED: ${failures} check(s)\n`);

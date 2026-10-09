@@ -13,7 +13,7 @@ import type {
 const N = (pitch = 0, yaw = 0, roll = 0): Euler => ({ pitch, yaw, roll });
 const repeat = (rel: Euler, n: number): Euler[] => Array.from({ length: n }, () => rel);
 
-/** Fold `evaluate` over a rel-stream at a fixed fps; optional start/stop frames. */
+// Fold `evaluate` over a rel-stream at a fixed fps; optional start/stop frames.
 function fold(
   def: ExerciseDefinition,
   rels: Euler[],
@@ -440,7 +440,7 @@ describe('purity', () => {
 // ─── Aperture: "Again" for every kind ─────────────────────────────────────────
 
 describe('Again (start from complete)', () => {
-  /** Finish a set with `rels`, then press Again and replay the same stream after it. */
+  // Finish a set with `rels`, then press Again and replay the same stream after it.
   function twoSets(def: ExerciseDefinition, rels: Euler[], startFirst: boolean) {
     const first = fold(def, rels, startFirst ? { startAt: 0 } : {});
     expect(first.state.phase).toBe('complete');

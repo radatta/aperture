@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -677,10 +678,18 @@ function FluxSection() {
   const { data: settings } = useSettings();
   const { data: rolls = [] } = useRolls();
   const update = useUpdateSettings();
+  const { hash } = useLocation();
+  const sectionRef = useRef<HTMLElement>(null);
+  const loaded = !!settings;
+  // Flux's "link a Roll" note deep-links to /settings#flux; the section only exists once settings
+  // load, so the browser's own anchor jump misses it.
+  useEffect(() => {
+    if (loaded && hash === '#flux') sectionRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [loaded, hash]);
   if (!settings) return null;
   const active = rolls.filter((r) => r.active);
   return (
-    <section id="flux" className="flex flex-col gap-3">
+    <section ref={sectionRef} id="flux" className="flex flex-col gap-3">
       <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
         Flux
       </Text>

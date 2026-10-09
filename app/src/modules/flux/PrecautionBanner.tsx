@@ -18,7 +18,7 @@ export function PrecautionBanner({
   return (
     <div className="flex flex-col gap-2">
       {contraindication && (
-        <div className="rounded-xl border border-danger/40 bg-panel p-3">
+        <div className="rounded-xl border border-danger/70 bg-panel p-3">
           <div className="flex items-start gap-2 text-sm text-ink">
             <WarningIcon className="mt-0.5 shrink-0 text-danger" />
             <p>

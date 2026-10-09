@@ -16,7 +16,7 @@ function roll(deg: number): number[] {
   return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 }
 
-/** Feed `n` frames at 30 fps from `t0Ms`, holding one matrix. Returns the last frame's ms. */
+// Feed `n` frames at 30 fps from `t0Ms`, holding one matrix. Returns the last frame's ms.
 function feed(core: FluxCore, m: number[] | null, n: number, t0Ms: number): number {
   let t = t0Ms;
   for (let i = 0; i < n; i++) core.frame(m, (t += 1000 / 30));

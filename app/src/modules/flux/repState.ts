@@ -6,9 +6,9 @@ import { dayKey, findOpenRollTask, type Roll, type Task } from '@aperture/shared
 
 export type RepTie =
   | { readonly kind: 'unlinked' }
-  /** Linked, but no open rep and none done today: offer "Pick <roll> for today". */
+  // Linked, but no open rep and none done today: offer "Pick <roll> for today".
   | { readonly kind: 'none'; readonly roll: Roll }
-  /** An open rep (backlog or planned) — the first finished set starts it. */
+  // An open rep (backlog or planned) — the first finished set starts it.
   | { readonly kind: 'ready'; readonly roll: Roll; readonly task: Task }
   | { readonly kind: 'in_progress'; readonly roll: Roll; readonly task: Task }
   | { readonly kind: 'done'; readonly roll: Roll; readonly task: Task };
@@ -35,10 +35,8 @@ export function repTie(
   return doneToday ? { kind: 'done', roll, task: doneToday } : { kind: 'none', roll };
 }
 
-/**
- * The Actual to prefill when a session ends: the session's minutes, or the rep's live elapsed if
- * that's more (a rep started earlier from Home, or with a focus timer running) — never undercount.
- */
+// The Actual to prefill when a session ends: the session's minutes, or the rep's live elapsed if
+// that's more (a rep started earlier from Home, or with a focus timer running) — never undercount.
 export function prefillMinutes(sessionMs: number, liveElapsedMin: number): number {
   return Math.max(Math.round(sessionMs / 60_000), Math.round(liveElapsedMin));
 }

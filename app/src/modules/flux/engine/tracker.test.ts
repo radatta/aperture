@@ -46,6 +46,7 @@ let workers: FakeWorker[];
 let events: FluxEngineEvent[];
 let getStream: ReturnType<typeof vi.fn<() => Promise<MediaStream>>>;
 let stream: ReturnType<typeof fakeStream>;
+let trackers: FluxTracker[] = [];
 
 function setup() {
   workers = [];
@@ -73,10 +74,11 @@ function setup() {
     now: () => performance.now(),
   });
   tracker.subscribe((e) => events.push(e));
+  trackers.push(tracker);
   return tracker;
 }
 
-/** Run the pending video-frame callback and let its async grab settle. */
+// Run the pending video-frame callback and let its async grab settle.
 async function nextFrame() {
   const cb = frameCb;
   frameCb = null;
@@ -87,11 +89,33 @@ async function nextFrame() {
 
 const last = () => workers.at(-1) as FakeWorker;
 
+function setVisibility(state: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+  document.dispatchEvent(new Event('visibilitychange'));
+}
+
+const startTracker = (t: FluxTracker) =>
+  t.start({ video, canvas: document.createElement('canvas') });
+const gpuMark = () => localStorage.getItem('aperture.flux.gpuBoot');
+
 describe('FluxTracker', () => {
+  let clearRect: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     localStorage.clear();
+    // jsdom has no 2D context; a spy one lets release() clear the overlay without console noise.
+    clearRect = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      clearRect,
+    } as unknown as CanvasRenderingContext2D);
   });
   afterEach(() => {
+    // Stop every tracker so no document listener or init timer outlives its test.
+    for (const t of trackers) t.stop();
+    trackers = [];
+    // Drop the instance override setVisibility() leaves, back to jsdom's own getter.
+    delete (document as { visibilityState?: unknown }).visibilityState;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     localStorage.clear();
   });
 
@@ -163,7 +187,7 @@ describe('FluxTracker', () => {
     last().reply({ type: 'calibrated', ok: true, neutral });
     last().reply({ type: 'error', stage: 'detect', message: 'boom' });
     expect(last().posted[0]).toEqual({ type: 'init', delegate: 'CPU', neutral, select: null });
-    expect(t.debug().detectFailures).toBe(1);
+    expect(t.debug().fallbacks).toBe(1);
   });
 
   it('a CPU worker that fails is an error, not another fallback', async () => {
@@ -184,11 +208,14 @@ describe('FluxTracker', () => {
     expect(events).toContainEqual({ type: 'error', stage: 'assets', message: 'HTTP 404' });
   });
 
-  it('marks a GPU boot and clears the mark on the first sample', async () => {
+  it('marks a GPU boot only once the worker starts the GPU init, and clears it on the first sample', async () => {
     const t = setup();
-    await t.start({ video, canvas: document.createElement('canvas') });
-    expect(localStorage.getItem('aperture.flux.gpuBoot')).toBe('1');
+    await startTracker(t);
+    expect(gpuMark()).toBeNull(); // the download isn't the risky part
+    last().reply({ type: 'initStarted', delegate: 'GPU' });
+    expect(gpuMark()).toBe('1');
     last().reply({ type: 'ready', delegate: 'GPU' });
+    expect(gpuMark()).toBe('1'); // ready isn't enough — the first detect can still crash
     last().reply({ type: 'sample', sample: SAMPLE, landmarks: new Float32Array(0) });
     expect(localStorage.getItem('aperture.flux.gpuBoot')).toBeNull();
     expect(events.at(-1)).toEqual({ type: 'sample', sample: SAMPLE });
@@ -205,11 +232,10 @@ describe('FluxTracker', () => {
     const t = setup();
     await t.start({ video, canvas: document.createElement('canvas') });
     last().reply({ type: 'ready', delegate: 'GPU' });
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    document.dispatchEvent(new Event('visibilitychange'));
+    setVisibility('hidden');
     expect(events.at(-1)).toEqual({ type: 'paused' });
     expect(stream.track.stop).toHaveBeenCalled();
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    setVisibility('visible');
     await t.resume();
     expect(getStream).toHaveBeenCalledTimes(2);
     expect(workers).toHaveLength(1); // same worker, same neutral
@@ -244,6 +270,7 @@ describe('FluxTracker', () => {
     expect(stream.track.stop).toHaveBeenCalled();
     expect(localStorage.getItem('aperture.flux.gpuBoot')).toBeNull();
     expect(t.debug().delegate).toBeNull();
+    expect(clearRect).toHaveBeenCalled(); // no stale landmarks left on the stage
   });
 
   it('releases a camera granted after stop()', async () => {
@@ -255,5 +282,112 @@ describe('FluxTracker', () => {
     grant(stream.stream);
     await started;
     expect(stream.track.stop).toHaveBeenCalled();
+  });
+  it('never marks a CPU init', async () => {
+    const t = setup();
+    t.setForcedCpu(true);
+    await startTracker(t);
+    last().reply({ type: 'initStarted', delegate: 'CPU' });
+    expect(gpuMark()).toBeNull();
+  });
+
+  it('clears the GPU mark when the page is hidden mid-boot (an evicted PWA is not a crash)', async () => {
+    const t = setup();
+    await startTracker(t);
+    last().reply({ type: 'initStarted', delegate: 'GPU' });
+    setVisibility('hidden');
+    expect(gpuMark()).toBeNull();
+  });
+
+  it('clears the GPU mark when the GPU init fails over to CPU', async () => {
+    const t = setup();
+    await startTracker(t);
+    last().reply({ type: 'initStarted', delegate: 'GPU' });
+    last().reply({ type: 'error', stage: 'init', message: 'webgl' });
+    expect(gpuMark()).toBeNull();
+    expect(last().posted[0]).toMatchObject({ delegate: 'CPU' });
+  });
+
+  it('a worker that becomes ready while paused does not pump until Resume', async () => {
+    const t = setup();
+    await startTracker(t);
+    setVisibility('hidden');
+    last().reply({ type: 'ready', delegate: 'GPU' });
+    expect(frameCb).toBeNull();
+    setVisibility('visible');
+    await t.resume();
+    await nextFrame();
+    expect(last().frames()).toBe(1);
+  });
+
+  it('a Stop → Start during the first camera prompt still gets a camera', async () => {
+    const t = setup();
+    const first = fakeStream();
+    let grantFirst: (s: MediaStream) => void = () => {};
+    getStream.mockReturnValueOnce(new Promise((r) => (grantFirst = r)));
+    const started = startTracker(t);
+    t.stop();
+    await startTracker(t); // the second request, answered at once with `stream`
+    expect(getStream).toHaveBeenCalledTimes(2);
+    grantFirst(first.stream);
+    await started;
+    expect(first.track.stop).toHaveBeenCalled(); // the stale grant is released…
+    expect(stream.track.stop).not.toHaveBeenCalled(); // …the live one is kept
+    expect(video.srcObject).toBe(stream.stream);
+    last().reply({ type: 'ready', delegate: 'GPU' });
+    await nextFrame();
+    expect(last().frames()).toBe(1);
+  });
+
+  it('a stale camera error from a stopped session is not reported', async () => {
+    const t = setup();
+    let denyFirst: (e: unknown) => void = () => {};
+    getStream.mockReturnValueOnce(new Promise((_, reject) => (denyFirst = reject)));
+    const started = startTracker(t);
+    t.stop();
+    await startTracker(t);
+    denyFirst(new DOMException('denied', 'NotAllowedError'));
+    await started;
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it('an init that stalls falls back to CPU, and a stalled CPU init is an error', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await startTracker(t);
+    vi.advanceTimersByTime(29_000);
+    last().reply({ type: 'progress', loaded: 1, total: 2 }); // progress re-arms the timer
+    vi.advanceTimersByTime(29_000);
+    expect(workers).toHaveLength(1);
+    vi.advanceTimersByTime(1_000);
+    expect(workers).toHaveLength(2);
+    expect(last().posted[0]).toMatchObject({ type: 'init', delegate: 'CPU' });
+    vi.advanceTimersByTime(30_000);
+    expect(events).toContainEqual({
+      type: 'error',
+      stage: 'init',
+      message: 'The tracking engine took too long to start.',
+    });
+  });
+
+  it('a ready worker cancels the stall timer', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    await startTracker(t);
+    last().reply({ type: 'ready', delegate: 'GPU' });
+    vi.advanceTimersByTime(60_000);
+    expect(workers).toHaveLength(1);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it('a new start resets the fallback count and dropped frames', async () => {
+    const t = setup();
+    await startTracker(t);
+    last().reply({ type: 'error', stage: 'init', message: 'webgl' });
+    expect(t.debug().fallbacks).toBe(1);
+    t.stop();
+    await startTracker(t);
+    expect(t.debug()).toMatchObject({ fallbacks: 0, droppedFrames: 0 });
+    expect(last().posted[0]).toMatchObject({ delegate: 'GPU' });
   });
 });

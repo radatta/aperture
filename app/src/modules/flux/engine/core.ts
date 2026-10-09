@@ -22,7 +22,7 @@ const STATE_INTERVAL_SEC = 1 / 15;
 export interface FrameResult {
   readonly sample: Sample;
   readonly events: readonly ExerciseEvent[];
-  /** Present only when the 15 Hz state throttle lets one through. */
+  // Present only when the 15 Hz state throttle lets one through.
   readonly state?: ExerciseState;
 }
 
@@ -57,12 +57,12 @@ export class FluxCore {
     return this.neutral;
   }
 
-  /** Carry a neutral over from a previous worker (the CPU fallback). */
+  // Carry a neutral over from a previous worker (the CPU fallback).
   restoreNeutral(neutral: Euler | null): void {
     this.neutral = neutral && { ...neutral };
   }
 
-  /** One detector result. Returns null for a frame dropped on a non-increasing timestamp. */
+  // One detector result. Returns null for a frame dropped on a non-increasing timestamp.
   frame(matrix: ArrayLike<number> | null, tMs: number): FrameResult | null {
     // detectForVideo needs strictly increasing timestamps; the core enforces the same rule.
     if (tMs <= this.lastTs) return null;
@@ -110,7 +110,7 @@ export class FluxCore {
     return { sample, events: r.events, state: r.state };
   }
 
-  /** Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks. */
+  // Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks.
   calibrate(): boolean {
     if (!this.faceVisible) return false;
     this.neutral = { ...this.lastSmoothed };
@@ -127,7 +127,7 @@ export class FluxCore {
     return this.exerciseState;
   }
 
-  /** Start/Stop applied immediately (between frames), as flux did. */
+  // Start/Stop applied immediately (between frames), as flux did.
   control(control: EvalControl): ControlResult | null {
     if (!this.def || !this.exerciseState) return null;
     const input = {

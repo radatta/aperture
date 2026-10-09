@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
@@ -114,5 +114,23 @@ describe('build stamp', () => {
   it('shows the build the page came from — "local" outside a deploy', async () => {
     renderApp({ path: '/settings' });
     expect(await screen.findByText('Build local')).toBeTruthy();
+  });
+});
+
+describe('flux section', () => {
+  afterEach(() => {
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it('/settings#flux scrolls to the Flux section once it has loaded', async () => {
+    const scrolled: Element[] = [];
+    // jsdom has no scrollIntoView; record what gets scrolled to.
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });
+    renderApp({ api, path: '/settings#flux' });
+    await screen.findByLabelText('Count sessions as reps of');
+    await waitFor(() => expect(scrolled.map((el) => el.id)).toContain('flux'));
   });
 });

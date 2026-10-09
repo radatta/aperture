@@ -8,25 +8,25 @@
 // way, so each definition declares how honestly the engine can grade it via
 // `measurement` and picks the `kind` that matches what we can actually observe.
 
-/** Head rotation in degrees. Lives here (not app/) so the catalog's types are self-contained. */
+// Head rotation in degrees. Lives here (not app/) so the catalog's types are self-contained.
 export interface Euler {
-  /** rotation about X — nodding (cervical flexion / extension) */
+  // rotation about X — nodding (cervical flexion / extension)
   pitch: number;
-  /** rotation about Y — turning left/right (cervical rotation) */
+  // rotation about Y — turning left/right (cervical rotation)
   yaw: number;
-  /** rotation about Z — ear-to-shoulder (lateral tilt) */
+  // rotation about Z — ear-to-shoulder (lateral tilt)
   roll: number;
 }
 
 export type Axis = 'pitch' | 'yaw' | 'roll';
 
-/** Which condition an exercise is commonly prescribed for (for filtering). */
+// Which condition an exercise is commonly prescribed for (for filtering).
 export type Condition = 'herniatedDisc' | 'sprainStrain' | 'general';
 
-/** Rehab stage the exercise suits (for filtering + contraindication rules). */
+// Rehab stage the exercise suits (for filtering + contraindication rules).
 export type Stage = 'acute' | 'subacute' | 'chronic';
 
-/** How honestly the engine can grade this exercise. */
+// How honestly the engine can grade this exercise.
 export type Measurement =
   | 'measured' // clean single-axis ROM/hold we can quantify
   | 'approximate' // multi-signal or proxy — we track a head position, not the true motion
@@ -49,11 +49,11 @@ interface ExerciseBase {
   readonly contraindications?: readonly Contraindication[];
   readonly conditions: readonly Condition[];
   readonly stages: readonly Stage[];
-  /** End-range direction some conditions must avoid (e.g. extension). */
+  // End-range direction some conditions must avoid (e.g. extension).
   readonly provocative?: boolean;
 }
 
-/** A. ROM reps — single axis, hysteresis excursion → return, counts reps. */
+// A. ROM reps — single axis, hysteresis excursion → return, counts reps.
 export interface RomRepsSpec {
   readonly kind: 'romReps';
   readonly axis: Axis;
@@ -65,7 +65,7 @@ export interface RomRepsSpec {
   readonly holdSec?: number; // optional end-range hold per rep (0/undefined = none)
 }
 
-/** B. Hold at a (possibly multi-signal) target head position for holdSec. */
+// B. Hold at a (possibly multi-signal) target head position for holdSec.
 export interface HoldAtTargetSpec {
   readonly kind: 'holdAtTarget';
   readonly target: Partial<Record<Axis, number>>; // only the axes that matter
@@ -74,7 +74,7 @@ export interface HoldAtTargetSpec {
   readonly reps: number;
 }
 
-/** C. Guided/isometric — timer-driven; engine can only verify "near neutral". */
+// C. Guided/isometric — timer-driven; engine can only verify "near neutral".
 export interface GuidedHoldSpec {
   readonly kind: 'guidedHold';
   readonly holdSec: number;
@@ -83,7 +83,7 @@ export interface GuidedHoldSpec {
   readonly driftToleranceDeg: number | null; // null = pure guide, no drift check
 }
 
-/** D. Joint-position sense — return-to-neutral error after an excursion. */
+// D. Joint-position sense — return-to-neutral error after an excursion.
 export interface RepositionSpec {
   readonly kind: 'reposition';
   readonly axis: Axis | 'any'; // "any" → 3D error magnitude
@@ -92,7 +92,7 @@ export interface RepositionSpec {
   readonly reps: number; // trials
 }
 
-/** D. Oscillation — gaze-stability head oscillation amplitude + cadence. */
+// D. Oscillation — gaze-stability head oscillation amplitude + cadence.
 export interface OscillationSpec {
   readonly kind: 'oscillation';
   readonly axis: Axis;
@@ -116,7 +116,7 @@ export interface EvalInput {
   readonly faceVisible: boolean;
 }
 
-/** Lifecycle control from the UI (Start/Stop for timed kinds). */
+// Lifecycle control from the UI (Start/Stop for timed kinds).
 export type EvalControl = { readonly type: 'start' } | { readonly type: 'stop' };
 
 export type Phase = 'ready' | 'active' | 'complete';
@@ -136,9 +136,9 @@ export interface RomRepsState extends StateCommon {
   readonly repsNeg: number;
   readonly peakSum: number;
   readonly peakCount: number;
-  /** Seconds held in the excursion this rep (for the end-range hold timer). */
+  // Seconds held in the excursion this rep (for the end-range hold timer).
   readonly holdAccumSec: number;
-  /** True while the head is tilting/nodding off the exercise's plane. */
+  // True while the head is tilting/nodding off the exercise's plane.
   readonly compensating: boolean;
   readonly lastPostureWarnAt: number;
 }

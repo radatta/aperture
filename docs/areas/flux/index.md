@@ -53,9 +53,10 @@ screen.
 - **The hot loop runs in a module Web Worker.** The main thread grabs each video frame
   (`requestVideoFrameCallback`, falling back to `requestAnimationFrame`) as an `ImageBitmap` and transfers
   it. The worker runs MediaPipe Face Landmarker, then `FluxCore`: the matrix goes to Euler, then the 1€
-  filter, then neutral-relative angles, ROM and the evaluator. Only derived numbers cross back: samples
-  (throttled to ~16 Hz for display), exercise state (~15 Hz) and events (never throttled). **Video never leaves the device**, and nothing in the
-  engine talks to the API.
+  filter, then neutral-relative angles, ROM and the evaluator. Only derived numbers cross back: a sample
+  and the overlay points every frame (the main thread re-renders them at ~16 Hz), exercise state at
+  ~15 Hz, and events unthrottled. **Video never leaves the device**, and nothing in the engine talks to
+  the API.
 - **Backpressure:** the worker acks every frame (`frameDone`), dropped or not, and the main thread sends
   the next frame only after the ack, with a 2 s watchdog. flux's guard covered only the bitmap grab, so on a slow CPU path
   frames queued in the worker without bound.
@@ -68,8 +69,15 @@ screen.
   - A GPU init failure, or five consecutive `detectForVideo` throws, replaces the worker on CPU and says
     so on the stage ("switched to the CPU").
   - A failure on CPU, or any asset failure, is an error with copy and Try again.
-  - `aperture.flux.gpuBoot` is set before a GPU boot and cleared after its first sample, or on a normal
-    Stop. Still set at the next start means the GPU boot took the page down, so that start is on CPU.
+  - An init with neither download progress nor `ready` for 30 s counts as a failed init (GPU → CPU,
+    CPU → error), so a GPU init that hangs instead of throwing can't spin forever.
+  - A fallback replaces the worker, so the current set restarts; the neutral carries over and the stage
+    says both.
+  - `aperture.flux.gpuBoot` marks only the risky window: set when the worker reports it's starting a GPU
+    init (`initStarted`, after the download), cleared at the first sample, on any failure, on Stop, and
+    when the page is hidden mid-boot (iOS evicting a backgrounded PWA isn't a GPU crash). Still set at
+    the next start means the GPU took the page down, so that start is on CPU. The CPU is sticky, but
+    the stage says why and offers **Try the GPU** (D25).
   - The HUD glyph forces CPU, or asks for the GPU again, which also forgives the mark.
   - GPU output can be wrong without throwing on WebKit (MediaPipe issue 6142). Only the Details readout
     and the glyph catch that.
@@ -81,8 +89,8 @@ screen.
   - The wasm is handed to MediaPipe as a `blob:` URL typed `application/wasm`. The model goes in as
     `modelAssetBuffer`.
   - A `text/html` response (a missing asset served as the SPA fallback) is refused rather than compiled.
-  - Old hashed entries are pruned. Workbox `runtimeCaching` CacheFirst on `/assets/*.{wasm,task}` is a
-    backstop only.
+  - Old hashed entries are pruned. There is deliberately no Workbox runtime cache on top: it would
+    store the 17 MB twice and could cache a missing asset's SPA-fallback HTML.
   - No CDN is involved, and nothing changes in `cdk/`: there is no CSP or Permissions-Policy to widen,
     and the bundle never touches `SharedArrayBuffer`, so no COOP/COEP is needed.
 - **Version:** `@mediapipe/tasks-vision` pinned at **1.1.0** (exact). The FaceLandmarker API, the
@@ -131,6 +139,10 @@ screen.
 | D20 | Side **A / B**, not left / right                                                                                                                                                                                             | Left / right labels                                                 | The yaw/roll sign convention is unverified until the dev test                                                         |
 | D21 | Details readout always available, collapsed                                                                                                                                                                                  | Dev/stub only                                                       | Read-only numbers; prod misbehaviour stays diagnosable                                                                |
 | D22 | Calibrate refused without a face                                                                                                                                                                                             | flux's copy of the last smoothed pose                               | No silent zero or stale neutral                                                                                       |
+| D23 | Paused and ready are separate: a worker that comes up while the camera is paused leaves the stage paused; Resume before ready goes back to loading                                                                           | One status field                                                    | A backgrounded download used to flip the stage to running with no camera                                              |
+| D24 | Session minutes are **active** time: from the first `ready`, paused stretches excluded; each Start is a new session (sets and clock reset)                                                                                   | Wall-clock from Start                                               | The Actual feeds calibration — a phone left in the background shouldn't inflate it                                    |
+| D25 | After a crashed GPU boot the next start is on CPU and stays there, with a note and **Try the GPU**                                                                                                                           | One silent retry on GPU                                             | A retry would take the page down on every other launch if the GPU path really crashes                                 |
+| D26 | A mid-set fallback restarts the set (the new worker's evaluator is fresh); the neutral is kept                                                                                                                               | Carry evaluator state into the new worker                           | Rare; the stage says the set restarted                                                                                |
 
 ## 5. Parity with flux-track-2
 
@@ -249,8 +261,9 @@ Open **Details** on the stage; it's the instrument.
 - **Ducking:** iOS lowers other audio while a cue speaks. Can't be fixed from the web.
 - **The wasm is served uncompressed:** CloudFront won't compress files over 10 MB. It's a one-time
   download per device, so precompressing is a follow-up only if first load bothers.
-- **Next PR (history):** `FluxSetDraft` (`useFluxEngine.ts`) is exactly what `recordFluxSet` will
-  persist (a `flux#` single-table row). Also in that PR:
+- **Next PR (history):** `FluxSetDraft` (`useFluxEngine.ts`; it carries the condition chip and the
+  set's duration) is what `recordFluxSet` will persist (a `flux#` single-table row), plus a `repTaskId`
+  linking the Roll rep the set counted toward. Also in that PR:
   - a History tab under the `FluxPage` layout;
   - a night-home line;
   - MCP `list_flux_sets` / `list_flux_exercises`;

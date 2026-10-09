@@ -10,7 +10,7 @@ export interface VoiceControl {
   readonly on: boolean;
   readonly name: string | null;
   readonly voices: readonly VoiceOption[];
-  /** Inside the Start tap: unlock speech for this visit ("Voice on" the first time). */
+  // Inside the Start tap: unlock speech for this visit ("Voice on" the first time).
   prime(): void;
   speak(u: Utterance): void;
   cancel(): void;

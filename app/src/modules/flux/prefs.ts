@@ -50,7 +50,7 @@ export function readStage(): Stage | null {
 }
 export const writeStage = (s: Stage | null) => set(STAGE, s);
 
-/** CPU when the user forced it or the last GPU boot never finished; GPU otherwise. */
+// CPU when the user forced it or the last GPU boot never finished; GPU otherwise.
 export const preferredDelegate = (): Delegate =>
   get(DELEGATE) === 'CPU' || get(GPU_BOOT) ? 'CPU' : 'GPU';
 export const readForcedCpu = (): boolean => get(DELEGATE) === 'CPU';
@@ -58,3 +58,4 @@ export const writeForcedCpu = (on: boolean) => set(DELEGATE, on ? 'CPU' : null);
 
 export const markGpuBoot = () => set(GPU_BOOT, '1');
 export const clearGpuBoot = () => set(GPU_BOOT, null);
+export const readGpuBootMark = (): boolean => get(GPU_BOOT) !== null;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
+  Condition,
   Euler,
   EvalControl,
   ExerciseId,
@@ -14,6 +15,7 @@ import {
 } from './engine/engine';
 import type { Delegate, ErrorStage, Sample } from './engine/protocol';
 import type { Side } from './engine/side';
+import { readForcedCpu, readGpuBootMark } from './prefs';
 import type { VoiceControl } from './useVoice';
 import { initialCueState, reduceCue, type CueState } from './voice/cues';
 
@@ -23,26 +25,34 @@ import { initialCueState, reduceCue, type CueState } from './voice/cues';
 
 export type FluxStatus = 'idle' | 'loading' | 'running' | 'paused' | 'error';
 
-/** One finished set, as the session holds it. Flux history (the next PR) persists exactly this. */
+// One finished set, as the session holds it — the shape Flux history (the next PR) persists.
 export interface FluxSetDraft {
   readonly exerciseId: ExerciseId;
   readonly kind: ExerciseKind;
   readonly side: Side | null;
+  readonly condition: Condition | null; // the library chip when the set was done
   readonly count: number;
   readonly avgPeakDeg?: number;
   readonly avgErrorDeg?: number;
   readonly rom: Euler;
   readonly calibrated: boolean;
   readonly delegate: Delegate | null;
+  readonly durationSec: number; // from the set's start (selection, Start/Again, or the last set) to done
   readonly completedAt: number; // epoch ms
+}
+
+// What Stop hands back: the session's active minutes (paused time excluded) and how many sets it held.
+export interface SessionSummary {
+  readonly activeMs: number;
+  readonly sets: number;
 }
 
 export interface FluxEngineOptions {
   readonly exerciseId: ExerciseId;
   readonly kind: ExerciseKind;
-  /** null for exercises without a side. */
-  readonly side: Side | null;
-  /** The contraindication gate: until acknowledged the engine runs with no exercise selected. */
+  readonly side: Side | null; // null for exercises without a side
+  readonly condition: Condition | null;
+  // The contraindication gate: until acknowledged the engine runs with no exercise selected.
   readonly acknowledged: boolean;
   readonly voice: VoiceControl;
   readonly onSetCompleted?: (set: FluxSetDraft, index: number) => void;
@@ -61,6 +71,18 @@ export const IDLE_SAMPLE: Sample = {
   tSec: 0,
 };
 
+interface Clock {
+  activeMs: number;
+  since: number | null;
+}
+const runClock = (c: Clock) => {
+  c.since ??= performance.now();
+};
+const pauseClock = (c: Clock) => {
+  if (c.since !== null) c.activeMs += performance.now() - c.since;
+  c.since = null;
+};
+
 export function useFluxEngine(opts: FluxEngineOptions) {
   const [engine] = useState(createFluxEngine);
   const [status, setStatus] = useState<FluxStatus>('idle');
@@ -68,13 +90,14 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [delegate, setDelegate] = useState<Delegate | null>(null);
   const [fellBack, setFellBack] = useState(false);
+  // On CPU because the last GPU boot took the page down (the crash mark) — said on the stage.
+  const [cpuAfterCrash, setCpuAfterCrash] = useState(false);
   const [sample, setSample] = useState<Sample>(IDLE_SAMPLE);
   const [exState, setExState] = useState<ExerciseState | null>(null);
   const [calibrated, setCalibrated] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [lastCue, setLastCue] = useState<string | null>(null);
   const [sessionSets, setSessionSets] = useState<readonly FluxSetDraft[]>([]);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -86,6 +109,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     delegate: null as Delegate | null,
   });
   const setsRef = useRef(0);
+  const readyRef = useRef(false); // the engine is ready — apart from whether the camera is live
+  const pausedRef = useRef(false); // the camera is paused — apart from whether the engine is ready
+  // Active session time: accumulated across pauses, so a backgrounded phone doesn't inflate the
+  // Actual the Roll tie offers (it's what the estimate is calibrated against).
+  const clock = useRef<Clock>({ activeMs: 0, since: null });
+  const setStartRef = useRef(0);
+
   const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const cueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -102,10 +132,18 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         case 'progress':
           return setProgress({ loaded: e.loaded, total: e.total });
         case 'ready':
+          readyRef.current = true;
           latest.current.delegate = e.delegate;
           setDelegate(e.delegate);
           if (e.fallback) setFellBack(true);
-          setStartedAt((t) => t ?? Date.now());
+          setCpuAfterCrash(
+            e.delegate === 'CPU' && !e.fallback && readGpuBootMark() && !readForcedCpu(),
+          );
+          setStartRef.current = performance.now();
+          // A worker that comes up while the camera is paused (backgrounded mid-download, a fallback)
+          // leaves the stage paused — Resume is still the way back.
+          if (pausedRef.current) return;
+          runClock(clock.current);
           return setStatus('running');
         case 'sample': {
           latest.current.sample = e.sample;
@@ -133,26 +171,34 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           }
           if (e.event.type !== 'setCompleted') return;
           const { summary } = e.event;
+          const now = performance.now();
           const set: FluxSetDraft = {
             exerciseId: o.exerciseId,
             kind: o.kind,
             side: o.side,
+            condition: o.condition,
             count: summary.count,
             ...(summary.avgPeakDeg !== undefined && { avgPeakDeg: summary.avgPeakDeg }),
             ...(summary.avgErrorDeg !== undefined && { avgErrorDeg: summary.avgErrorDeg }),
             rom: latest.current.sample.rom,
             calibrated: latest.current.calibrated,
             delegate: latest.current.delegate,
+            durationSec: Math.round((now - setStartRef.current) / 1000),
             completedAt: Date.now(),
           };
+          setStartRef.current = now;
           const index = setsRef.current++;
           setSessionSets((s) => [...s, set]);
           o.onSetCompleted?.(set, index);
           return;
         }
         case 'paused':
+          pausedRef.current = true;
+          pauseClock(clock.current);
           return setStatus('paused');
         case 'error':
+          pauseClock(clock.current);
+          readyRef.current = false;
           engine.stop();
           setError({ stage: e.stage, message: e.message });
           return setStatus('error');
@@ -173,6 +219,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const side = opts.side ?? 'a';
   useEffect(() => {
     cueRef.current = initialCueState;
+    setStartRef.current = performance.now();
     setExState(null);
     engine.selectExercise(selected, side);
   }, [engine, selected, side]);
@@ -185,6 +232,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     setProgress(null);
     setDelegate(null);
     setFellBack(false);
+    setCpuAfterCrash(false);
+    readyRef.current = false;
+    pausedRef.current = false;
   }, []);
 
   const start = useCallback(
@@ -194,24 +244,40 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       cueRef.current = initialCueState;
       setError(null);
       reset();
+      setSessionSets([]);
+      setsRef.current = 0;
+      clock.current = { activeMs: 0, since: null };
       setStatus('loading');
       await engine.start(els);
     },
     [engine, reset],
   );
 
-  const stop = useCallback(() => {
+  const stop = useCallback((): SessionSummary => {
+    pauseClock(clock.current);
+    const summary = { activeMs: clock.current.activeMs, sets: setsRef.current };
     engine.stop();
     optsRef.current.voice.cancel();
     reset();
     setStatus('idle');
+    return summary;
   }, [engine, reset]);
 
   const resume = useCallback(async () => {
     optsRef.current.voice.prime();
-    setStatus('running');
+    pausedRef.current = false;
+    if (readyRef.current) {
+      runClock(clock.current);
+      setStatus('running');
+    } else setStatus('loading'); // the model is still coming; `ready` will take it to running
     await engine.resume();
   }, [engine]);
+
+  // Live active time, for the Roll strip while a session runs.
+  const activeMs = useCallback(() => {
+    const c = clock.current;
+    return c.activeMs + (c.since === null ? 0 : performance.now() - c.since);
+  }, []);
 
   const calibrate = useCallback(() => engine.calibrate(), [engine]);
   const control = useCallback((c: EvalControl) => engine.control(c), [engine]);
@@ -230,13 +296,14 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     progress,
     delegate,
     fellBack,
+    cpuAfterCrash,
     sample,
     exState,
     calibrated,
     notice,
     lastCue,
     sessionSets,
-    startedAt,
+    activeMs,
     start,
     stop,
     resume,

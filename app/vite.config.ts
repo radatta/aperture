@@ -37,16 +37,9 @@ export default defineConfig({
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,
-        // Flux's wasm + model (~17 MB) stay out of the precache — only Flux users pay for them. The app
-        // caches them itself (modules/flux/engine/assets.ts); this is belt-and-braces for a reload.
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) =>
-              url.pathname.startsWith('/assets/') && /\.(wasm|task)$/.test(url.pathname),
-            handler: 'CacheFirst',
-            options: { cacheName: 'flux-models', expiration: { maxEntries: 4 } },
-          },
-        ],
+        // Flux's wasm + model (~17 MB) stay out of the precache (the globs skip .wasm/.task) — only Flux
+        // users pay for them, and modules/flux/engine/assets.ts caches them itself. No SW runtime cache on
+        // top: it would store them twice and could cache a missing asset's SPA-fallback HTML.
       },
       devOptions: { enabled: false }, // SW off in `vite dev`; verify against `vite preview`
     }),

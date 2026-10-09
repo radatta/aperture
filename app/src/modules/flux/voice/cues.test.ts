@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ExerciseEvent } from '@aperture/shared/flux';
 import { type CueState, initialCueState, reduceCue } from './cues';
 
-/** Fold events at explicit timestamps, collecting the spoken texts. */
+// Fold events at explicit timestamps, collecting the spoken texts.
 function speak(events: { e: ExerciseEvent; t: number }[]): string[] {
   let state: CueState = initialCueState;
   const out: string[] = [];

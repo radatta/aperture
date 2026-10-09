@@ -14,7 +14,7 @@ export interface VoiceOption {
 
 const supported = () => typeof window !== 'undefined' && 'speechSynthesis' in window;
 
-/** Local (offline) voices available for the picker; [] where unsupported. */
+// Local (offline) voices available for the picker; [] where unsupported.
 export function listLocalVoices(): VoiceOption[] {
   if (!supported()) return [];
   return window.speechSynthesis
@@ -24,16 +24,14 @@ export function listLocalVoices(): VoiceOption[] {
 }
 
 export interface Speaker {
-  /** Speak an utterance; "high" priority cancels any in-flight speech first. */
+  // Speak an utterance; "high" priority cancels any in-flight speech first.
   speak(u: Utterance): void;
-  /** Stop any in-flight speech. */
+  // Stop any in-flight speech.
   cancel(): void;
-  /**
-   * Call inside a user gesture to satisfy the gesture requirement. The first call that passes
-   * `unlock` also speaks it, so the session is audibly unlocked while the gesture is still live.
-   */
+  // Call inside a user gesture to satisfy the gesture requirement. The first call that passes
+  // `unlock` also speaks it, so the session is audibly unlocked while the gesture is still live.
   prime(unlock?: string): void;
-  /** Choose a specific voice by name (null = auto-select). */
+  // Choose a specific voice by name (null = auto-select).
   setVoice(name: string | null): void;
 }
 

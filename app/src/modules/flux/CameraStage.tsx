@@ -125,7 +125,7 @@ export function CameraStage({
                     : 'Running on the CPU — try the GPU'
                 }
                 title={delegate === 'GPU' ? 'Switch to CPU' : 'Try the GPU'}
-                className="rounded-md border border-line px-1.5 font-mono text-[10px] text-ink-muted hover:text-ink"
+                className="rounded-md border border-line px-1.5 font-mono text-[10px] text-ink"
               >
                 {delegate}
               </button>
@@ -169,7 +169,7 @@ export function CameraStage({
   );
 }
 
-/** The live track's aspect once known (iOS portrait gives 3:4 or rotated frames), 4:3 until then. */
+// The live track's aspect once known (iOS portrait gives 3:4 or rotated frames), 4:3 until then.
 function useTrackAspect(videoRef: RefObject<HTMLVideoElement | null>): string {
   const [aspect, setAspect] = useState('4 / 3');
   useEffect(() => {

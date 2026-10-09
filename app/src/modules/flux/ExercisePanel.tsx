@@ -19,16 +19,24 @@ export function ExercisePanel({
   def,
   sample,
   state,
+  idle = false,
   onControl,
 }: {
   def: ExerciseDefinition;
   sample: Sample;
   state: ExerciseState | null;
+  idle?: boolean; // camera not started: say so instead of "Getting ready…"
   onControl: (c: EvalControl) => void;
 }) {
   return (
     <Card className="p-5">
-      <Feedback def={def} sample={sample} state={state} onControl={onControl} />
+      {idle && !state ? (
+        <Text as="p" size="sm" tone="muted">
+          Start the camera to begin.
+        </Text>
+      ) : (
+        <Feedback def={def} sample={sample} state={state} onControl={onControl} />
+      )}
       <div className="mt-5 flex flex-col gap-3 border-t border-line pt-4">
         <Text as="p" size="sm" className="leading-relaxed">
           {def.instructions}

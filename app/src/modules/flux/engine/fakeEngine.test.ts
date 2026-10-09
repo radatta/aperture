@@ -61,7 +61,7 @@ describe('createFakeEngine', () => {
     expect(seen.map((e) => e.type)).toEqual(['ready', 'sample']);
     expect(fake.calls).toEqual(['start', 'select:chin-tuck:a', 'control:start']);
     expect(fake.lastSelect).toEqual({ id: 'chin-tuck', side: 'a' });
-    expect(engine.debug().delegate).toBe('GPU');
+    expect(engine.debug()).toMatchObject({ delegate: 'GPU', fallbacks: 0 });
   });
 
   it('auto mode: boots on CPU and streams samples and the selected exercise state', async () => {

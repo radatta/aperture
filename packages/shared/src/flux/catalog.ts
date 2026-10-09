@@ -30,7 +30,7 @@ export function filterByCondition(
   return defs.filter((d) => d.conditions.includes(condition));
 }
 
-/** Aperture addition: the stage chip. Same shape as filterByCondition. */
+// Aperture addition: the stage chip. Same shape as filterByCondition.
 export function filterByStage(
   defs: readonly ExerciseDefinition[],
   stage: Stage | null,
@@ -39,7 +39,7 @@ export function filterByStage(
   return defs.filter((d) => d.stages.includes(stage));
 }
 
-/** Lower-case, as the precaution sentence reads ("Caution for herniated disc (acute):"). */
+// Lower-case, as the precaution sentence reads ("Caution for herniated disc (acute):").
 export const CONDITION_LABELS: Readonly<Record<Condition, string>> = {
   herniatedDisc: 'herniated disc',
   sprainStrain: 'sprain / strain',
@@ -52,7 +52,7 @@ export const STAGE_LABELS: Readonly<Record<Stage, string>> = {
   chronic: 'Chronic',
 };
 
-/** The contraindication for a condition (any stage), or null. Warn, don't hide. */
+// The contraindication for a condition (any stage), or null. Warn, don't hide.
 export function contraindicationFor(
   def: ExerciseDefinition,
   condition: Condition | null,
@@ -73,7 +73,7 @@ export function groupByCategory(defs: readonly ExerciseDefinition[]): readonly C
   })).filter((g) => g.items.length > 0);
 }
 
-/** Short human label for the measurement honesty of an exercise. */
+// Short human label for the measurement honesty of an exercise.
 export function measurementLabel(def: ExerciseDefinition): string {
   switch (def.measurement) {
     case 'measured':

@@ -32,6 +32,7 @@ async function init(delegate: Delegate): Promise<void> {
   } catch (err) {
     return fail('assets', err);
   }
+  post({ type: 'initStarted', delegate });
   try {
     landmarker = await FaceLandmarker.createFromOptions(assets.fileset, {
       baseOptions: { modelAssetBuffer: assets.modelBytes, delegate },
@@ -42,11 +43,14 @@ async function init(delegate: Delegate): Promise<void> {
     });
   } catch (err) {
     return fail('init', err);
+  } finally {
+    // The wasm is compiled by now (or never will be); drop the 13 MB blob it was read from.
+    URL.revokeObjectURL(assets.fileset.wasmBinaryPath);
   }
   post({ type: 'ready', delegate });
 }
 
-/** Decimate landmarks to a transferable [x,y,…] array for the overlay. */
+// Decimate landmarks to a transferable [x,y,…] array for the overlay.
 function overlayPoints(res: FaceLandmarkerResult): Float32Array {
   const lm = res.faceLandmarks[0];
   if (!lm) return new Float32Array(0);

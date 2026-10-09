@@ -21,6 +21,7 @@ import {
   TimerIcon,
   WarningIcon,
 } from '../../components/icons';
+import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 
@@ -72,9 +73,9 @@ export function ExerciseLibrary({
       </div>
 
       {groups.length === 0 && (
-        <Text tone="muted" size="sm">
-          No exercises match this condition and stage. Pick “Any stage” to see more.
-        </Text>
+        <EmptyState title="No exercises match this condition and stage.">
+          Pick “Any stage” to see more.
+        </EmptyState>
       )}
 
       {groups.map((group) => {
@@ -154,7 +155,7 @@ function ExerciseCard({ ex, condition }: { ex: ExerciseDefinition; condition: Co
       </Text>
       <span className="mt-auto flex flex-wrap items-center gap-1.5 pt-3">
         <MeasurementBadge ex={ex} />
-        {ex.provocative && <Badge className="bg-panel-2 text-ink-muted">End-range</Badge>}
+        {ex.provocative && <EndRangeBadge />}
         {contra && (
           <Badge className="inline-flex items-center gap-1 bg-panel-2 text-danger">
             <WarningIcon size={12} /> Caution
@@ -173,6 +174,10 @@ const MEASUREMENT_TONE: Record<ExerciseDefinition['measurement'], string> = {
 
 export function MeasurementBadge({ ex }: { ex: ExerciseDefinition }) {
   return <Badge className={MEASUREMENT_TONE[ex.measurement]}>{measurementLabel(ex)}</Badge>;
+}
+
+export function EndRangeBadge() {
+  return <Badge className="bg-panel-2 text-ink-muted">End-range</Badge>;
 }
 
 function Badge({ className, children }: { className: string; children: React.ReactNode }) {

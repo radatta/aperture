@@ -32,7 +32,7 @@ export function DebugReadout({ engine }: { engine: FluxEngineHandle }) {
     ['rel p/y/r', deg(sample.rel)],
     ['rom p/y/r', deg(sample.rom)],
     ['dropped frames', String(stats?.droppedFrames ?? 0)],
-    ['GPU fallbacks', String(stats?.detectFailures ?? 0)],
+    ['CPU fallbacks', String(stats?.fallbacks ?? 0)],
     ['track', stats?.trackSize ?? '—'],
     ['visibility', typeof document === 'undefined' ? '—' : document.visibilityState],
   ];

@@ -10,9 +10,15 @@ import { prefillMinutes, repTie } from './repState';
 // The Roll tie's state for the stage (RepTie.tsx renders it): which rep a Flux session counts toward,
 // and the two moments that touch it — the first finished set, and Stop.
 export function useRepTie() {
-  const { data: settings } = useSettings();
-  const { data: rolls = [] } = useRolls();
-  const { data: tasks = [] } = useAllTasks();
+  const settingsQ = useSettings();
+  const rollsQ = useRolls();
+  const tasksQ = useAllTasks();
+  const settings = settingsQ.data;
+  const rolls = rollsQ.data ?? [];
+  const tasks = tasksQ.data ?? [];
+  // Until all three land, an empty list would read as "no rep today" and offer a duplicate Pick.
+  const loading = settingsQ.isPending || rollsQ.isPending || tasksQ.isPending;
+  const loadError = settingsQ.isError || rollsQ.isError || tasksQ.isError;
   const { day, dayStartHour } = useTodayPlan();
   const { timers } = usePomodoro();
   const transition = useTransitionTask();
@@ -51,6 +57,8 @@ export function useRepTie() {
 
   return {
     tie,
+    loading,
+    loadError,
     day,
     doneMin,
     error,
