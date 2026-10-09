@@ -322,8 +322,21 @@ timezone; each capture is a claude.ai conversation; the D13 refresh token isn't 
 configured), so the connector needs re-auth roughly monthly — the first thing to
 check if voice capture suddenly fails.
 
+## Raycast quick-add — a Mac capture surface (no server code)
+
+`tools/raycast/aperture-add.sh` ([README](../../../tools/raycast/README.md)): a Raycast hotkey → one
+line → `create_task` with the title only. It's a plain `curl` of one stateless `tools/call` (no
+`initialize` needed) with the prod agent token from Keychain. Capture only, by decision (2026-10-09):
+updates and reorganizing stay in the claude.ai chat and the app. The script checks the HTTP status **and**
+the body — MCP returns a param error (`error`) and a tool failure (`result.isError`) inside a 200 — and
+trims and rejects a blank title itself, since `createTask` stores the title verbatim.
+
 ## Deferred
 
+- A **create-only token** for Raycast (scoped to `create_task` + `list_categories`, like the recruiting
+  device token's single method) — the Mac's Keychain holds the full agent token until then.
+- Raycast **field parsing** — the capture bar's ` | ` grammar (`parseTaskLine`) or a Haiku pass over the
+  line; both need `list_categories` to resolve a label to an id.
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
 - Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).

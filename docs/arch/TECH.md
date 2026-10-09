@@ -198,6 +198,7 @@ aperture/
                        #   pnpm workspace member, and excluded from eslint + prettier
   packages/shared/     # shared TS types + contract across app + lambda (also ulid, dates, machines, contractTests)
   scripts/             # dev + CI utilities
+  tools/               # user-side clients run on the Mac (raycast/ quick-add) — not a pnpm workspace member
   docs/  ·  localNotes/
 ```
 
