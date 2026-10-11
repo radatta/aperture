@@ -457,6 +457,21 @@ describe('parent + parts', () => {
     const row = await waitFor(() => rowOf('P2'));
     await user.click(within(row).getByRole('button', { name: 'Mark done' }));
     await waitFor(async () => expect((await api.getTask(p.id))?.status).toBe('done'));
+    // The card leaves Week; focus lands on the list, never <body>.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'P2' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  });
+
+  it('+ Today on a part row turns it into "today" and puts focus on the part’s title', async () => {
+    const { api } = await seeded(false);
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=week' });
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'Add draft to today' }));
+    expect(await within(row).findByText('today')).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(row).getByRole('button', { name: 'draft' })),
+    );
   });
 
   it('a part on Today says what it’s part of and answers to the parent’s deadline', async () => {

@@ -4,6 +4,7 @@ import {
   assertParentCompletable,
   becomeParent,
   calibrationTasks,
+  canBecomeParent,
   cancelParent,
   completeParent,
   deadlineOf,
@@ -14,6 +15,7 @@ import {
   partOpenError,
   partsOf,
   partsSummary,
+  releaseParent,
 } from './parts';
 import type { Task } from './types';
 
@@ -121,6 +123,12 @@ describe('marking a parent done', () => {
     });
   });
 
+  it('with every part dropped there’s nothing to submit — drop it instead', () => {
+    const parts = [part('a1', { status: 'cancelled' })];
+    expect(() => completeParent(P, parts, 1)).toThrow(/drop it instead/);
+    expect(() => completeParent(P, [], 1)).toThrow(/drop it instead/);
+  });
+
   it('refuses an already finished parent', () => {
     expect(() => completeParent({ ...P, status: 'cancelled' }, [], 1)).toThrow(/already/);
   });
@@ -148,7 +156,7 @@ describe('cancelParent', () => {
 
 describe('freezeParentLock', () => {
   it('nothing to freeze until a part leaves planning', () => {
-    expect(freezeParentLock(P, [part('a1', { estimateMin: 30 })], 1)).toBeNull();
+    expect(freezeParentLock(P, [part('a1', { estimateMin: 30 })], 'a1', 1)).toBeNull();
   });
 
   it('freezes Σ parts (lock, else working estimate) over the parts not dropped, once', () => {
@@ -158,21 +166,30 @@ describe('freezeParentLock', () => {
       part('a3', { estimateMin: null }),
       part('a4', { status: 'cancelled', estimateMin: 90 }),
     ];
-    const out = freezeParentLock(P, parts, 9);
+    const out = freezeParentLock(P, parts, 'a1', 9);
     expect(out).toMatchObject({ estimateLockedMin: 105, updatedAt: 9 });
-    expect(freezeParentLock(out!, parts, 10)).toBeNull();
+    expect(freezeParentLock(out!, parts, 'a1', 10)).toBeNull();
   });
 
-  it('a started task attached later freezes it too; nothing scoped writes nothing', () => {
-    expect(freezeParentLock(P, [part('a1', { estimateLockedMin: 20 })], 1)).toMatchObject({
+  it('a started task attached first freezes it too; nothing scoped writes nothing', () => {
+    expect(freezeParentLock(P, [part('a1', { estimateLockedMin: 20 })], 'a1', 1)).toMatchObject({
       estimateLockedMin: 20,
     });
-    expect(freezeParentLock(P, [part('a1', { startedAt: 3 })], 1)).toBeNull();
+    expect(freezeParentLock(P, [part('a1', { startedAt: 3 })], 'a1', 1)).toBeNull();
+  });
+
+  it('only at the first start: once that moment passed with no baseline, a later start is hindsight', () => {
+    // A started unscoped task was split: its parent has no lock, and Part 2 starting later never adds one.
+    const parts = [
+      part('a1', { startedAt: 3, estimateMin: 30 }),
+      part('a2', { startedAt: 9, estimateMin: 60 }),
+    ];
+    expect(freezeParentLock(P, parts, 'a2', 9)).toBeNull();
   });
 
   it('a split’s parent already carries the original’s lock', () => {
     expect(
-      freezeParentLock({ ...P, estimateLockedMin: 60 }, [part('a1', { startedAt: 1 })], 1),
+      freezeParentLock({ ...P, estimateLockedMin: 60 }, [part('a1', { startedAt: 1 })], 'a1', 1),
     ).toBeNull();
   });
 });
@@ -208,6 +225,26 @@ describe('assertCanBePart', () => {
   it('an existing parent with history (a split’s) still takes more parts', () => {
     const parent = task({ id: 'p', estimateLockedMin: 60 });
     expect(() => assertCanBePart(null, parent, [parent, part('a1')])).not.toThrow();
+  });
+});
+
+describe('eligibility', () => {
+  it('a roll rep or a recurring occurrence can’t take parts', () => {
+    for (const over of [{ rollId: 'r' }, { seriesId: 's' }]) {
+      const t = task({ id: 'x', ...over });
+      expect(canBecomeParent(t)).toBe(false);
+      expect(() => assertCanBePart(null, t, [t])).toThrow(/one rep of a repeating thing/);
+    }
+    expect(canBecomeParent(task({ id: 'x' }))).toBe(true);
+    expect(canBecomeParent(task({ id: 'x', startedAt: 1 }))).toBe(false);
+  });
+
+  it('a task whose last part went drops its lock; one with parts left, or finished, keeps it', () => {
+    const parent = { ...P, estimateLockedMin: 40 };
+    expect(releaseParent(parent, [parent], 3)).toMatchObject({ estimateLockedMin: null });
+    expect(releaseParent(parent, [parent, part('a1')], 3)).toBeNull();
+    expect(releaseParent({ ...parent, status: 'done' }, [parent], 3)).toBeNull();
+    expect(releaseParent(P, [P], 3)).toBeNull(); // no lock, nothing to write
   });
 });
 

@@ -117,7 +117,7 @@ export function SplitForm({
       ) : (
         // No Done here (it isn't in progress) — the parts each get an estimate of their own.
         <Text size="sm" tone="muted">
-          Not started — each part gets its own estimate.
+          Not in progress — each part gets its own estimate.
         </Text>
       )}
 

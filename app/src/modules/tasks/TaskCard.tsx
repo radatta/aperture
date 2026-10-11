@@ -40,8 +40,9 @@ const ROW_CONTROLS = 'button, a, input, select, textarea, label';
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
 // calendar, files, drop, delete — lives in the modal the title (or Scope/Done) opens. No overflow menu.
 // `notesHit` marks a search result the title and category alone don't explain, so the row says why
-// it's here. A parent (parts.ts) is the deliverable: never started itself, it shows its progress and —
-// once every part is dealt with — one-tap Mark done; `showParts` nests its parts under it (Week/Backlog).
+// it's here. A parent (parts.ts) is the deliverable: never started itself, it shows its progress (its
+// one-tap Mark done, once every part is dealt with, comes in `actions` from the list, which owns focus
+// when the row leaves); `showParts` nests its parts under it (Week/Backlog).
 interface TaskCardProps {
   task: Task;
   actions?: ReactNode;
@@ -69,7 +70,6 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
   const { data: tasks = [] } = useAllTasks();
   const parts = partsOf(tasks, task.id);
   const summary = parts.length ? partsSummary(parts) : null;
-  const finished = task.status === 'done' || task.status === 'cancelled';
   const canScope = !summary && (task.status === 'backlog' || task.status === 'planned');
   const now = useNow(); // re-read every minute, so a row changes colour on its own
   // Timed tasks only. A part answers to its parent's deadline — the part is where you act on it.
@@ -100,16 +100,7 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
           />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {!summary && actions}
-          {summary?.allDone && !finished && (
-            <Button
-              size="sm"
-              disabled={transition.isPending}
-              onClick={() => transition.mutate({ id: task.id, to: 'done' })}
-            >
-              Mark done
-            </Button>
-          )}
+          {actions}
           {canScope && task.estimateMin == null && (
             <Button variant="quiet" size="sm" onClick={() => openAs('scope')}>
               Scope
@@ -136,15 +127,6 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
           )}
         </div>
       </div>
-      {summary && transition.isError && (
-        <div role="alert">
-          <Text size="xs" tone="danger">
-            {transition.error instanceof Error
-              ? transition.error.message
-              : 'Couldn’t mark it done — try again.'}
-          </Text>
-        </div>
-      )}
       {summary && showParts && <PartsList parts={parts} />}
     </Card>
   );

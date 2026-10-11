@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { cx } from '../../lib/cx';
+import { returnFocus } from '../../lib/useDisclosure';
 import { fmtDuration } from '../../lib/format';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { usePlansForDay } from '../../data/hooks/usePlans';
@@ -33,6 +34,7 @@ function PartRow({ part, today }: { part: Task; today: boolean }) {
   const { addToDay } = useAddToDay();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const titleRef = useRef<HTMLButtonElement>(null);
   const finished = part.status === 'done' || part.status === 'cancelled';
   const where =
     part.status === 'done'
@@ -52,6 +54,8 @@ function PartRow({ part, today }: { part: Task; today: boolean }) {
     setFailed(false);
     try {
       await addToDay(part);
+      // The button gives way to "today" — focus goes to this part's title, never <body>.
+      requestAnimationFrame(() => titleRef.current && returnFocus(titleRef.current));
     } catch {
       setFailed(true);
     } finally {
@@ -62,6 +66,7 @@ function PartRow({ part, today }: { part: Task; today: boolean }) {
   return (
     <li className="flex items-center justify-between gap-3">
       <button
+        ref={titleRef}
         type="button"
         aria-haspopup="dialog"
         data-task-id={part.id}

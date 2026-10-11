@@ -73,10 +73,16 @@ export function partOpenError(open: Pick<Task, 'title'>[]): string {
   return `${list} aren’t finished — complete, drop or delete them first`;
 }
 
+export const PARENT_ALL_DROPPED_ERROR =
+  'Every part was dropped — there’s nothing to submit, so drop it instead.';
+
+// Something to submit and nothing open. With every part dropped there's no work behind it: marking it done
+// would stamp a 0 actual against its lock (a bogus calibration point), so it's dropped instead.
 export function assertParentCompletable(parent: Task, parts: Task[]): void {
   if (finished(parent)) throw new Error(`It’s already ${parent.status}`);
-  const { open } = partsSummary(parts);
+  const { open, total } = partsSummary(parts);
   if (open.length) throw new Error(partOpenError(open));
+  if (total === 0) throw new Error(PARENT_ALL_DROPPED_ERROR);
 }
 
 // backlog → done without passing through in_progress (a parent is never worked on itself). Its actual is
@@ -103,12 +109,20 @@ export function cancelParent(
   };
 }
 
-// The rollup's baseline: the first time any part has left planning, the whole job's estimate at that
-// moment — each part's own lock, else its working estimate — over the parts not dropped. Never moves
-// after. Null = nothing to write (already frozen, nothing started yet, or nothing scoped).
-export function freezeParentLock(parent: Task, parts: Task[], now: number): Task | null {
+// The rollup's baseline, frozen at ONE moment: when the first part leaves planning (`starting` — just
+// started, or a started task just attached). It's the whole job's estimate then — each part's own lock,
+// else its working estimate — over the parts not dropped. If that moment already passed (another part
+// had started) with no baseline — a started, unscoped task split, say — it stays unset: one written later
+// would be hindsight. Null = nothing to write.
+export function freezeParentLock(
+  parent: Task,
+  parts: Task[],
+  starting: string,
+  now: number,
+): Task | null {
   if (parent.estimateLockedMin !== null || finished(parent)) return null;
-  if (!parts.some((p) => p.startedAt !== null || p.estimateLockedMin !== null)) return null;
+  const started = parts.filter((p) => p.startedAt !== null || p.estimateLockedMin !== null);
+  if (started.length !== 1 || started[0]!.id !== starting) return null;
   const sizes = parts
     .filter((p) => p.status !== 'cancelled')
     .map((p) => p.estimateLockedMin ?? p.estimateMin)
@@ -129,16 +143,41 @@ export function becomeParent(task: Task, now: number): Task {
   };
 }
 
-// Can `parent` take a part? One level; not finished; and a task that's already been worked on can't turn
-// into a container (its logged time has nowhere to go) — split it instead, which keeps that work as Part 1.
+// Can `parent` take a part? One level; not finished; not a roll rep or a recurring occurrence (each is one
+// rep of a repeating thing — the roll would re-plan the parent, the series respawn it); and a task already
+// worked on can't turn into a container (its logged time has nowhere to go) — split it instead, which
+// keeps that work as Part 1.
 export function assertParentEligible(parent: Task, tasks: Task[]): void {
   if (parent.parentId) throw new Error('A part can’t have parts of its own — one level only');
   if (finished(parent)) throw new Error(`Can’t add a part to a ${parent.status} task`);
-  if (hasParts(tasks, parent.id)) return;
-  if (parent.status === 'in_progress' || parent.startedAt !== null || parent.actualAccruedMin > 0)
-    throw new Error(
-      'It’s already been worked on — split it instead, which keeps that work as Part 1',
-    );
+  if (hasParts(tasks, parent.id) || canBecomeParent(parent)) return;
+  throw new Error(
+    parent.rollId || parent.seriesId
+      ? 'A roll rep or a recurring task can’t take parts — it’s one rep of a repeating thing'
+      : 'It’s already been worked on — split it instead, which keeps that work as Part 1',
+  );
+}
+
+// A task without parts that could take its first (the editor's "Break down…" gate) — the same rule.
+export function canBecomeParent(task: Task): boolean {
+  return (
+    !task.parentId &&
+    !finished(task) &&
+    !task.rollId &&
+    !task.seriesId &&
+    task.status !== 'in_progress' &&
+    task.startedAt === null &&
+    task.actualAccruedMin === 0
+  );
+}
+
+// A task whose last part went (detached, moved, deleted) is plain again. Its lock was frozen for its
+// parts' work — it never had any of its own (assertParentEligible) — so it goes too, and re-freezes when
+// the task is started. Null = nothing to write (still has parts, finished, or no lock).
+export function releaseParent(parent: Task, tasks: Task[], now: number): Task | null {
+  if (finished(parent) || hasParts(tasks, parent.id) || parent.estimateLockedMin === null)
+    return null;
+  return { ...parent, estimateLockedMin: null, updatedAt: now };
 }
 
 // Can `task` (null = a new one) become a part of `parent`?

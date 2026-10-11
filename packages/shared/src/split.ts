@@ -37,7 +37,8 @@ export function rescopedPlanMinutes(input: SplitTaskInput, original: Task): numb
 
 // The original's half: validates the whole input (throws before any write), then applies the edits
 // (title, estimate, actual) and the finish. `standalone` = it isn't a part yet, so it becomes Part 1 (an
-// omitted title defaults to STANDALONE_PART_TITLE). The caller refuses a parent first (PARENT_NO_SPLIT_ERROR)
+// omitted title defaults to STANDALONE_PART_TITLE); an untimed one's day was its deadline, which is the
+// parent's now, so it goes (a timed one keeps it — its time is its block's end). The caller refuses a parent first (PARENT_NO_SPLIT_ERROR)
 // and owns the calendar pointers — they depend on the event.
 export function splitOriginal(
   task: Task,
@@ -74,6 +75,7 @@ export function splitOriginal(
   let next: Task = { ...task, updatedAt: now };
   if (input.title !== undefined) next.title = input.title.trim();
   else if (standalone) next.title = STANDALONE_PART_TITLE;
+  if (standalone && !task.dueTime) next.dueDay = null;
   if (input.estimateMin !== undefined || input.bufferMin !== undefined)
     next = withEstimate(
       next,
@@ -117,8 +119,9 @@ export function newParentFrom(original: Task, input: SplitTaskInput): Omit<Task,
 }
 
 // The follow-up half: a new part of `parentId` for the remaining work, with its own UNLOCKED estimate (a
-// new prediction — the original's frozen value is never reused). It keeps the original's time (dueDay/
-// dueTime — for a part, when its block ends) so a timed split's work stays on the calendar. Returns the
+// new prediction — the original's frozen value is never reused). It keeps a timed original's time (dueDay/
+// dueTime — for a part, when its block ends) so a timed split's work stays on the calendar; an untimed day
+// is a deadline (the parent's) or that part's own, never the new part's. Returns the
 // non-identity fields; the caller stamps a BaseEntity and, for a timed done split, moves the event onto it.
 export function splitFollowUp(
   original: Task,
@@ -130,7 +133,7 @@ export function splitFollowUp(
     title: followUp.title.trim(),
     status: planned ? 'planned' : 'backlog',
     categoryId: original.categoryId,
-    dueDay: original.dueDay,
+    dueDay: original.dueTime ? original.dueDay : null,
     dueTime: original.dueTime ?? null,
     notes: original.notes ?? null, // the remaining scope keeps its context
     seriesId: null,

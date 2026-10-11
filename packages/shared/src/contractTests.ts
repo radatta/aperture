@@ -315,7 +315,12 @@ export function runApiContract(
     });
 
     it('tasks: splitting an unstarted task makes an unlocked parent; each part calibrates alone', async () => {
-      const t = await api.createTask({ title: 'Reading', estimateMin: 60, bufferMin: 0 });
+      const t = await api.createTask({
+        title: 'Reading',
+        estimateMin: 60,
+        bufferMin: 0,
+        dueDay: '2026-10-13',
+      });
       await expect(
         api.splitTask(t.id, { finish: 'done', followUp: { title: 'x', estimateMin: null } }),
       ).rejects.toThrow(); // done needs a started task
@@ -327,6 +332,9 @@ export function runApiContract(
       expect(original).toMatchObject({ status: 'backlog', title: 'Part 1' }); // the default title
       expect(followUp).toMatchObject({ status: 'backlog', parentId: parent.id });
       expect(parent.estimateLockedMin).toBeNull();
+      // An untimed day is a deadline: the parent's only (parts.md D7).
+      expect(parent.dueDay).toBe('2026-10-13');
+      expect([original.dueDay, followUp.dueDay]).toEqual([null, null]);
       for (const id of [original.id, followUp.id]) {
         await api.transitionTask(id, 'in_progress');
         await api.transitionTask(id, 'done');
@@ -501,11 +509,12 @@ export function runApiContract(
       await api.transitionTask(c.id, 'cancelled'); // dropped counts as dealt with
       const done = await api.transitionTask(p.id, 'done');
       expect(done).toMatchObject({ status: 'done', actualAccruedMin: 120, estimateLockedMin: 135 });
-      const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
-        (x) => x.taskId,
-      );
-      expect(ids).toEqual(expect.arrayContaining([p.id, a.id, b.id]));
-      expect(ids).not.toContain(c.id);
+      const cal = await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' });
+      expect(cal.map((x) => x.taskId)).toEqual(expect.arrayContaining([p.id, a.id, b.id]));
+      expect(cal.map((x) => x.taskId)).not.toContain(c.id);
+      // The rollup says how many parts it covers (dropped ones too), so the headline can skip it.
+      expect(cal.find((x) => x.taskId === p.id)?.parts).toBe(3);
+      expect(cal.find((x) => x.taskId === a.id)?.parts).toBe(0);
     });
 
     it('parts: cancelling the parent drops its open parts; a done part stays as history', async () => {
@@ -583,6 +592,57 @@ export function runApiContract(
       await expect(api.setTaskParent(a.id, a.id)).rejects.toThrow(/itself/);
       const data = await api.exportData();
       expect(data.tasks.find((t) => t.id === a.id)?.parentId).toBeNull();
+    });
+
+    it('parts: a task whose last part goes is plain again — its lock goes with them', async () => {
+      const p = await api.createTask({ title: 'P2', estimateMin: 90 });
+      const a = await api.createTask({ title: 'a', estimateMin: 40 });
+      await api.transitionTask(a.id, 'in_progress');
+      await api.setTaskParent(a.id, p.id);
+      expect((await api.getTask(p.id))?.estimateLockedMin).toBe(40);
+      await api.setTaskParent(a.id, null);
+      expect((await api.getTask(p.id))?.estimateLockedMin).toBeNull();
+      // Started later on its own, it freezes its own baseline, not its old parts'.
+      await api.setTaskEstimate(p.id, 90, null);
+      expect((await api.transitionTask(p.id, 'in_progress')).estimateLockedMin).toBe(90);
+      // Deleting the last part does the same.
+      const q = await api.createTask({ title: 'Q' });
+      const b = await api.createTask({ title: 'b', estimateMin: 20, parentId: q.id });
+      await api.transitionTask(b.id, 'in_progress');
+      expect((await api.getTask(q.id))?.estimateLockedMin).toBe(20);
+      await api.deleteTask(b.id);
+      expect((await api.getTask(q.id))?.estimateLockedMin).toBeNull();
+    });
+
+    it('parts: a roll rep or a recurring occurrence can’t take parts', async () => {
+      const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
+      const { task: rep } = await api.pickRollToday(roll.id, '2026-08-04');
+      await expect(api.createTask({ title: 'p', parentId: rep.id })).rejects.toThrow(
+        /one rep of a repeating thing/,
+      );
+    });
+
+    it('parts: with every part dropped the parent can’t be marked done — it’s dropped instead', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', estimateMin: 60, parentId: p.id });
+      await api.transitionTask(a.id, 'in_progress');
+      await api.transitionTask(a.id, 'cancelled');
+      await expect(api.transitionTask(p.id, 'done')).rejects.toThrow(/drop it instead/);
+      expect((await api.transitionTask(p.id, 'cancelled')).status).toBe('cancelled');
+    });
+
+    it('parts: splitting a started, unscoped task leaves the parent unscored — a later start adds no hindsight baseline', async () => {
+      const t = await api.createTask({ title: 'Unscoped' });
+      await api.transitionTask(t.id, 'in_progress');
+      const { parent, followUp } = await api.splitTask(t.id, {
+        finish: 'keep',
+        estimateMin: 30,
+        followUp: { title: 'rest', estimateMin: 60 },
+      });
+      expect(parent.estimateLockedMin).toBeNull();
+      advance(1000);
+      await api.transitionTask(followUp.id, 'in_progress');
+      expect((await api.getTask(parent.id))?.estimateLockedMin).toBeNull();
     });
 
     it('parts: export carries parentId', async () => {

@@ -8,6 +8,7 @@ const pt = (estimateLockedMin: number, actualAccruedMin: number): CalibrationPoi
   estimateLockedMin,
   actualAccruedMin,
   categoryId: null,
+  parts: 0,
 });
 
 describe('aggregate', () => {
@@ -18,6 +19,12 @@ describe('aggregate', () => {
     expect(a.totalActualMin).toBe(130);
     expect(a.ratio).toBeCloseTo(1.3);
     expect(a.overPct).toBe(30);
+  });
+  it('leaves a parent’s rollup out — its parts are points already', () => {
+    const a = aggregate([pt(60, 90), { ...pt(100, 200), parts: 2 }]);
+    expect(a.count).toBe(1);
+    expect(a.totalEstimateMin).toBe(60);
+    expect(a.totalActualMin).toBe(90);
   });
   it('stays honest (null ratio) with no estimate to compare', () => {
     const a = aggregate([]);

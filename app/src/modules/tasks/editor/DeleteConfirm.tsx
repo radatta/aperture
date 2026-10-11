@@ -78,7 +78,8 @@ export function DropConfirm({
       <Text size="sm" tone="danger">
         Drop “{task.title}”? It leaves your active lists (kept as history) and won’t count toward
         calibration.
-        {open > 0 && ` Its ${open} open ${open === 1 ? 'part is' : 'parts are'} dropped too`}
+        {open > 0 &&
+          ` Its ${open} open ${open === 1 ? 'part is' : 'parts are'} dropped too, with their calendar blocks`}
         {open > 0 &&
           (done > 0
             ? `; ${done === 1 ? 'the done part stays' : `the ${done} done parts stay`} as history.`

@@ -228,6 +228,30 @@ describe('backend task delete', () => {
 
     expect(await live.getTask(task.id)).not.toBeNull(); // nothing tombstoned
   });
+
+  it('persists nothing under noopWrites on the parent + parts paths either', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), { userId: 'local', now });
+    const p = await live.createTask({ title: 'P2', estimateMin: 60 });
+    const a = await live.createTask({ title: 'a', estimateMin: 30 });
+    const solo = await live.createTask({ title: 'solo', estimateMin: 30 });
+    const before = JSON.stringify(await live.exportData());
+
+    const noop = new BackendClient(new Repo(doc, noopWrites(), 'local'), { userId: 'local', now });
+    // Some of these fail part-way under noop (a write that "landed" can't be read back) — what matters
+    // is that none of them leaves anything behind.
+    const attempts: (() => Promise<unknown>)[] = [
+      () => noop.createTasks([{ title: 'part', parentId: p.id }]),
+      () => noop.setTaskParent(a.id, p.id),
+      () => noop.splitTask(solo.id, { finish: 'keep', followUp: { title: 'rest', estimateMin: 10 } }),
+      () => noop.transitionTask(p.id, 'cancelled'),
+      () => noop.deleteTask(p.id),
+    ];
+    for (const attempt of attempts) await attempt().catch(() => undefined);
+
+    expect(JSON.stringify(await live.exportData())).toBe(before);
+  });
 });
 
 // Rows written before notes existed have no attribute at all, so they read back undefined (not null).

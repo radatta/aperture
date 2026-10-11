@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import {
   autoSyncOn,
+  canBecomeParent,
   contributesCalibration,
   fmtDueDay,
   hasKeptPart,
@@ -18,6 +19,7 @@ import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { DeltaBar } from '../../../components/DeltaBar';
 import { Text } from '../../../components/Text';
+import { cx } from '../../../lib/cx';
 import { fmtDateTime, fmtDuration } from '../../../lib/format';
 import { returnFocus } from '../../../lib/useDisclosure';
 import { useNow } from '../../../lib/useNow';
@@ -98,7 +100,16 @@ export function TaskEditor({
   const isParent = parts.length > 0;
   const summary = partsSummary(parts);
   const parent = parentOf(allTasks, task);
-  const siblings = parent ? partsOf(allTasks, parent.id) : [];
+  // "Part 2 of 3" counts the parts not dropped (as the parent's own "1 of 3 parts" does) — and itself.
+  const siblings = parent
+    ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled' || p.id === task.id)
+    : [];
+  // Closing Break down / Add parts puts focus back on its opener (whichever shows by then), never <body>.
+  const partsRef = useRef<HTMLButtonElement>(null);
+  const closeParts = () => {
+    setReveal(null);
+    requestAnimationFrame(() => partsRef.current && returnFocus(partsRef.current));
+  };
   // Closing the split reveal (Cancel, or a kept-going split) puts focus back on its opener, never <body>.
   const splitRef = useRef<HTMLButtonElement>(null);
   const closeSplit = () => {
@@ -130,15 +141,8 @@ export function TaskEditor({
   const showRemaining = inProgress && hasEstimate;
   const showLocked = task.estimateLockedMin != null;
   const showDelta = contributesCalibration(task);
-  // A task can become a parent while it hasn't been worked on (its logged time would have nowhere to go —
-  // split it instead, which keeps that work as Part 1). One level: never a part.
-  const canBreakDown =
-    !isTerminal &&
-    !isParent &&
-    !task.parentId &&
-    !inProgress &&
-    task.startedAt === null &&
-    task.actualAccruedMin === 0;
+  // parts.ts canBecomeParent: never worked on, not a part, not a roll rep or a recurring occurrence.
+  const canBreakDown = !isParent && canBecomeParent(task);
   const timeHasContent =
     showLogged ||
     showRemaining ||
@@ -160,7 +164,7 @@ export function TaskEditor({
         <CategoryTag categoryId={task.categoryId} />
         {parent && (
           <Text size="sm" tone="muted">
-            · Part {partIndex(task, siblings)} of {siblings.length} of{' '}
+            Part {partIndex(task, siblings)} of {siblings.length} of{' '}
             <button
               type="button"
               className="underline decoration-line underline-offset-2 hover:text-ink"
@@ -168,7 +172,11 @@ export function TaskEditor({
             >
               {parent.title}
             </button>
-            {parent.dueDay && ` · ${fmtDueDay(parent.dueDay, today, parent.dueTime)}`}
+          </Text>
+        )}
+        {parent?.dueDay && (
+          <Text size="sm" tone="muted">
+            {fmtDueDay(parent.dueDay, today, parent.dueTime)}
           </Text>
         )}
         {series && (
@@ -197,29 +205,25 @@ export function TaskEditor({
               Parts · {summary.done}/{summary.total}
             </SectionHeading>
             {!isTerminal && reveal !== 'parts' && (
-              <Button variant="quiet" size="sm" onClick={() => setReveal('parts')}>
+              <Button ref={partsRef} variant="quiet" size="sm" onClick={() => setReveal('parts')}>
                 Add parts…
               </Button>
             )}
           </div>
           {reveal === 'parts' && (
-            <BreakDownForm
-              task={task}
-              isParent
-              onDone={() => setReveal(null)}
-              onCancel={() => setReveal(null)}
-            />
+            <BreakDownForm task={task} isParent onDone={closeParts} onCancel={closeParts} />
           )}
           <ul className="flex flex-col gap-1">
             {parts.map((p) => (
               <li key={p.id} className="flex items-baseline justify-between gap-3">
                 <button
                   type="button"
-                  className={`min-w-0 truncate text-left text-sm hover:underline ${
+                  className={cx(
+                    'min-w-0 truncate text-left text-sm hover:underline',
                     p.status === 'cancelled' || p.status === 'done'
                       ? 'text-ink-muted line-through'
-                      : 'text-ink'
-                  }`}
+                      : 'text-ink',
+                  )}
                   onClick={(e) => openTask?.(p, 'view', e.currentTarget)}
                 >
                   {p.title}
@@ -297,6 +301,30 @@ export function TaskEditor({
 
       <section className="flex flex-col gap-2">
         <SectionHeading>Calendar</SectionHeading>
+        {/* A failed auto-sync never fails the task write — it's said here, with a retry. */}
+        {/* The retry/add call itself failing (offline, 5xx) is said too — never a dead button. */}
+        {syncEvent.isError && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn’t reach the calendar sync — try again.
+            </Text>
+          </div>
+        )}
+        {task.gcalSyncError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2">
+            <Text size="sm" tone="danger">
+              {task.gcalSyncError}
+            </Text>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={syncEvent.isPending}
+              onClick={() => syncEvent.mutate(task.id)}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
         {isParent ? (
           // A parent never owns an event (parts.ts) — the work is on the calendar as its parts' blocks.
           <Text size="sm" tone="muted">
@@ -304,15 +332,6 @@ export function TaskEditor({
           </Text>
         ) : (
           <>
-            {/* A failed auto-sync never fails the task write — it's said here, with a retry. */}
-            {/* The retry/add call itself failing (offline, 5xx) is said too — never a dead button. */}
-            {syncEvent.isError && (
-              <div role="alert">
-                <Text size="sm" tone="danger">
-                  Couldn’t reach the calendar sync — try again.
-                </Text>
-              </div>
-            )}
             {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
             Aperture kept its value over Google's, Google still shows its own until the next push: one
             tap sends it (a done task never pushes). */}
@@ -338,21 +357,6 @@ export function TaskEditor({
                       Send to Google
                     </Button>
                   )}
-              </div>
-            )}
-            {task.gcalSyncError && (
-              <div role="alert" className="flex flex-wrap items-center justify-between gap-2">
-                <Text size="sm" tone="danger">
-                  {task.gcalSyncError}
-                </Text>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={syncEvent.isPending}
-                  onClick={() => syncEvent.mutate(task.id)}
-                >
-                  Retry
-                </Button>
               </div>
             )}
             {task.gcalEventId ? (
@@ -416,7 +420,7 @@ export function TaskEditor({
             </Button>
           )}
           {canBreakDown && (
-            <Button variant="quiet" size="sm" onClick={() => setReveal('parts')}>
+            <Button ref={partsRef} variant="quiet" size="sm" onClick={() => setReveal('parts')}>
               Break down…
             </Button>
           )}
@@ -445,12 +449,7 @@ export function TaskEditor({
           </Button>
         </div>
         {reveal === 'parts' && !isParent && (
-          <BreakDownForm
-            task={task}
-            isParent={false}
-            onDone={() => setReveal(null)}
-            onCancel={() => setReveal(null)}
-          />
+          <BreakDownForm task={task} isParent={false} onDone={closeParts} onCancel={closeParts} />
         )}
         {reveal === 'split' && (
           <SplitForm

@@ -214,7 +214,7 @@ describe('mcp tools — tasks', () => {
       'Part 2 isn’t finished — complete, drop or delete it first',
     );
     await expect(call('complete_task', { id: p.id, actualMin: 90 })).rejects.toThrow(
-      /omit actualMin/,
+      /Omit actualMin/,
     );
     await expect(call('complete_task', { id: b!.id })).rejects.toThrow(/actualMin/); // a part needs one
     await call('complete_task', { id: b!.id, actualMin: 70 });

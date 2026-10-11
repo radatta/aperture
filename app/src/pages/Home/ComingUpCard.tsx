@@ -63,7 +63,10 @@ export function ComingUpCard() {
                   <Text size="sm" tone="subtle" className="truncate">
                     {t.title}
                   </Text>
-                  <CategoryTag categoryId={t.categoryId} />
+                  {/* A parent's progress outranks its category on a phone — the title needs the room. */}
+                  <span className={cx('contents', sum && 'max-sm:hidden')}>
+                    <CategoryTag categoryId={t.categoryId} />
+                  </span>
                   {sum && (
                     <Text
                       size="xs"

@@ -10,6 +10,7 @@ import {
   isTimeKey,
   normalizeContentType,
   normalizeNotes,
+  PARENT_NO_ACTUAL_ERROR,
   partsOf,
   partsSummary,
   zonedEpoch,
@@ -159,6 +160,16 @@ function reqTime(args: Record<string, unknown>, key: string): number {
   return ms;
 }
 
+// A parent's progress on each listed task, from the full list (parts.ts): { total, done, estimateMin }.
+function withParts(shown: Task[], all: Task[]) {
+  return shown.map((t) => {
+    const parts = partsOf(all, t.id);
+    if (!parts.length) return t;
+    const { total, done, estimateMin } = partsSummary(parts);
+    return { ...t, parts: { total, done, estimateMin } };
+  });
+}
+
 // --- the tools -----------------------------------------------------------------------------------------
 
 export const TOOLS: Tool[] = [
@@ -176,21 +187,19 @@ export const TOOLS: Tool[] = [
     async run(args, ctx) {
       const tasks = (await ctx.dispatch('listTasks', [])) as Task[];
       const status = optEnum(args, 'status', TASK_STATUSES);
-      const shown = status ? tasks.filter((t) => t.status === status) : tasks;
       // One read: a parent's progress comes from the same list (parts.ts).
-      return shown.map((t) => {
-        const parts = partsOf(tasks, t.id);
-        if (!parts.length) return t;
-        const { total, done, estimateMin } = partsSummary(parts);
-        return { ...t, parts: { total, done, estimateMin } };
-      });
+      return withParts(status ? tasks.filter((t) => t.status === status) : tasks, tasks);
     },
   },
   {
     name: 'list_backlog',
-    description: 'List backlog tasks (status = backlog), newest first.',
+    description:
+      'List backlog tasks (status = backlog), newest first. A parent carries parts: { total, done, estimateMin }, like list_tasks.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    run: (_args, ctx) => ctx.dispatch('listBacklog', []),
+    async run(_args, ctx) {
+      const backlog = (await ctx.dispatch('listBacklog', [])) as Task[];
+      return withParts(backlog, (await ctx.dispatch('listTasks', [])) as Task[]);
+    },
   },
   {
     name: 'create_task',
@@ -410,7 +419,7 @@ export const TOOLS: Tool[] = [
       const all = (await ctx.dispatch('listTasks', [])) as Task[];
       if (partsOf(all, id).length) {
         if (present(args, 'actualMin'))
-          throw new RpcParamError('A task with parts has no actual of its own — omit actualMin');
+          throw new RpcParamError(`${PARENT_NO_ACTUAL_ERROR} Omit actualMin.`);
         // The server refuses while a part is open, naming it (parts.ts) — that message is the answer.
         const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
         return { task: done, previousActualMin: 0 };
@@ -572,7 +581,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'get_calibration',
     description:
-      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. Tasks split after work started (a split family) are excluded for now — they will be scored as one family. This is the signature metric — use it to advise better estimates.',
+      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. Every part is a point; a done parent is one too (parts > 0): its frozen lock against what its parts took. Its parts are already points, so leave parents out when totalling, or the work counts twice. This is the signature metric — use it to advise better estimates.',
     inputSchema: {
       type: 'object',
       properties: { from: { type: 'string' }, to: { type: 'string' } },

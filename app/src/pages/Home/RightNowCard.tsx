@@ -57,8 +57,9 @@ function PartOf({ task }: { task: Task }) {
   const { data: tasks = [] } = useAllTasks();
   const parent = parentOf(tasks, task);
   if (!parent) return null;
+  // Capped, so on a phone the part's own title keeps most of the row.
   return (
-    <Text size="xs" tone="subtle" className="min-w-0 truncate">
+    <Text size="xs" tone="muted" className="min-w-0 max-w-[35%] truncate">
       of {parent.title}
     </Text>
   );

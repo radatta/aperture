@@ -80,6 +80,7 @@ import {
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
+  releaseParent,
   splitFollowUp,
   rescopedPlanMinutes,
   splitOriginal,
@@ -404,13 +405,21 @@ class StubClient implements ApiClient {
     const became = this.writes.put(this.store.tasks, becomeParent(parent, this.now()));
     return this.syncCalendar(parent, became);
   }
-  // The rollup's baseline, frozen the first time a part has left planning (parts.ts freezeParentLock).
-  private freezeLock(parentId: string | null): void {
+  // The rollup's baseline, frozen when `starting` — the first part to leave planning — does
+  // (parts.ts freezeParentLock).
+  private freezeLock(parentId: string | null, starting: string): void {
     const parent = parentId ? this.find(this.store.tasks, parentId) : undefined;
     if (!parent) return;
     const parts = partsOf(this.alive(this.store.tasks), parent.id);
-    const frozen = freezeParentLock(parent, parts, this.now());
+    const frozen = freezeParentLock(parent, parts, starting, this.now());
     if (frozen) this.writes.put(this.store.tasks, frozen);
+  }
+  // A task whose last part just went is plain again, its parts' lock with them (parts.ts releaseParent).
+  private releaseLock(parentId: string | null): void {
+    const parent = parentId ? this.find(this.store.tasks, parentId) : undefined;
+    if (!parent) return;
+    const released = releaseParent(parent, this.alive(this.store.tasks), this.now());
+    if (released) this.writes.put(this.store.tasks, released);
   }
   // Calendar auto-sync parity with the backend: the same shared planner, executed against a fake event
   // id (no Google here). The browser's clock is the user's, so the local epoch is the right one.
@@ -430,7 +439,7 @@ class StubClient implements ApiClient {
     if (action.kind === 'none') {
       const moot =
         task.gcalSyncError &&
-        ((!task.gcalEventId && !eventWindow(task, localEpochFromDayTime)) ||
+        ((!task.gcalEventId && (parent || !eventWindow(task, localEpochFromDayTime))) ||
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
@@ -668,21 +677,25 @@ class StubClient implements ApiClient {
           plannedMinutes: followUpPlanMinutes(part.estimateMin, part.bufferMin),
           order: row.order,
         });
-      this.freezeLock(task.parentId);
       out.push(this.syncCalendar(null, part));
     }
     return out;
   }
   async setTaskParent(id: string, parentId: string | null): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
-    if (parentId === null) return this.writes.patch(this.store.tasks, id, { parentId: null });
+    if (parentId === null) {
+      const part = this.writes.patch(this.store.tasks, id, { parentId: null });
+      this.releaseLock(task.parentId);
+      return part;
+    }
     const parent = this.mustFind(this.store.tasks, parentId);
     const all = this.alive(this.store.tasks);
     assertCanBePart(task, parent, all);
     const first = !hasParts(all, parent.id);
     const part = this.writes.patch(this.store.tasks, id, { parentId });
     if (first) this.adoptAsParent(parent);
-    this.freezeLock(parentId);
+    if (task.parentId !== parentId) this.releaseLock(task.parentId); // moved from another parent
+    this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
     return part;
   }
   // Quick add, offline: the same flow as the Lambda (shared runQuickParse) with a heuristic standing in
@@ -737,7 +750,11 @@ class StubClient implements ApiClient {
     const parts = partsOf(this.alive(this.store.tasks), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
-    this.freezeLock(task.parentId);
+    const leftPlanning =
+      (task.status === 'backlog' || task.status === 'planned') &&
+      (to === 'in_progress' || to === 'done');
+    if (!leftPlanning) return next;
+    this.freezeLock(task.parentId, id);
     return this.find(this.store.tasks, id) ?? next;
   }
   // A parent is never worked on itself: it's marked done once its parts are dealt with (a hard block
@@ -842,8 +859,8 @@ class StubClient implements ApiClient {
         order: dayPlans.length,
       });
     }
+    // No freeze here: a standalone split's parent IS the original's lock, and nothing started just now.
     const followUp = this.syncCalendar(null, created);
-    this.freezeLock(parentId);
     return { parent: this.mustFind(this.store.tasks, parentId), original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
@@ -858,6 +875,7 @@ class StubClient implements ApiClient {
     for (const a of this.alive(this.store.attachments).filter((a) => a.taskId === id))
       this.writes.softDelete(this.store.attachments, a.id);
     this.writes.softDelete(this.store.tasks, id); // task last
+    this.releaseLock(task.parentId);
   }
 
   // --- Plans ---------------------------------------------------------------
@@ -1798,7 +1816,8 @@ class StubClient implements ApiClient {
   // --- Calibration ---------------------------------------------------------
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = this.dayStartHour();
-    return calibrationTasks(this.alive(this.store.tasks))
+    const tasks = this.alive(this.store.tasks);
+    return calibrationTasks(tasks)
       .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
@@ -1806,6 +1825,7 @@ class StubClient implements ApiClient {
         estimateLockedMin: t.estimateLockedMin!,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
+        parts: partsOf(tasks, t.id).length,
       }))
       .filter((p) => p.day >= range.from && p.day <= range.to)
       .sort((a, b) => a.day.localeCompare(b.day));

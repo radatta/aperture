@@ -1,4 +1,5 @@
 import { addDays, todayKey } from '@aperture/shared';
+import type { CalibrationPoint } from '@aperture/shared';
 import { Card } from '../../components/Card';
 import { DeltaBar } from '../../components/DeltaBar';
 import { Text } from '../../components/Text';
@@ -19,16 +20,12 @@ export function CalibrationSection() {
 
   const { data: points = [] } = useCalibration(from, today);
   const { data: tasks = [] } = useAllTasks();
+  const titleById = new Map(tasks.map((t) => [t.id, t.title]));
   // A done parent is the rollup of its parts (parts.ts), so its label says how many there were.
-  const partCount = new Map<string, number>();
-  for (const t of tasks)
-    if (t.parentId) partCount.set(t.parentId, (partCount.get(t.parentId) ?? 0) + 1);
-  const titleById = new Map(
-    tasks.map((t) => {
-      const n = partCount.get(t.id) ?? 0;
-      return [t.id, n > 0 ? `${t.title} · ${n} ${n === 1 ? 'part' : 'parts'}` : t.title];
-    }),
-  );
+  const label = (p: CalibrationPoint) => {
+    const title = titleById.get(p.taskId) ?? 'Task';
+    return p.parts > 0 ? `${title} · ${p.parts} ${p.parts === 1 ? 'part' : 'parts'}` : title;
+  };
 
   const agg = aggregate(points);
   const recent = points.slice(-8).reverse();
@@ -80,7 +77,7 @@ export function CalibrationSection() {
               {recent.map((p, i) => (
                 <div key={p.taskId} className={i === 0 ? 'pb-3' : 'py-3 last:pb-0'}>
                   <DeltaBar
-                    label={titleById.get(p.taskId) ?? 'Task'}
+                    label={label(p)}
                     estimateMin={p.estimateLockedMin}
                     actualMin={p.actualAccruedMin}
                   />

@@ -140,6 +140,20 @@ describe('splitOriginal', () => {
     ).toBe('read');
     expect(splitOriginal(task(), { finish: 'keep', followUp }, 1, false).title).toBe('thing');
   });
+
+  it('an untimed standalone original’s day is the parent’s deadline, so Part 1 drops it', () => {
+    const untimed = task({ dueDay: '2026-10-13' });
+    expect(splitOriginal(untimed, { finish: 'keep', followUp }, 1, true).dueDay).toBeNull();
+    // A timed one keeps its time (its block's end); a part's own untimed day is its own.
+    const timed = task({ dueDay: '2026-10-13', dueTime: '17:00' });
+    expect(splitOriginal(timed, { finish: 'keep', followUp }, 1, true)).toMatchObject({
+      dueDay: '2026-10-13',
+      dueTime: '17:00',
+    });
+    expect(splitOriginal(untimed, { finish: 'keep', followUp }, 1, false).dueDay).toBe(
+      '2026-10-13',
+    );
+  });
 });
 
 describe('newParentFrom', () => {
@@ -203,6 +217,10 @@ describe('splitFollowUp', () => {
       rollId: 'r',
       gcalEventId: null,
     });
+  });
+
+  it('never inherits an untimed day — that’s a deadline or the original part’s own', () => {
+    expect(splitFollowUp(task({ dueDay: '2026-10-13' }), followUp, false, 'p1').dueDay).toBeNull();
   });
 
   it('an unplanned original makes a backlog part; legacy notes read null', () => {

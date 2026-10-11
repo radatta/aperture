@@ -68,7 +68,8 @@ export function BreakDownForm({
         placeholder={'read the paper | ~45\ndraft | ~60'}
       />
       {errors.length > 0 && (
-        <div role="alert" className="flex flex-col gap-0.5">
+        // status, not alert: it updates as you type, so it mustn't interrupt on every keystroke.
+        <div role="status" className="flex flex-col gap-0.5">
           {errors.map((e) => (
             <Text key={e} size="xs" tone="danger">
               {e}

@@ -234,12 +234,18 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
   const catOf = (t: Task) => (t.categoryId && known.has(t.categoryId) ? t.categoryId : '');
   const searching = normalize(q.text) !== '';
   const place = placer(tasks, ctx);
+  // A part's due filter is its parent's deadline, like its place (its own time is when its block ends).
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const deadline = (t: Task) => {
+    const parent = t.parentId ? byId.get(t.parentId) : undefined;
+    return parent ? { ...t, dueDay: parent.dueDay, dueTime: parent.dueTime } : t;
+  };
   const matched = tasks.filter(
     (t) =>
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
       (q.categories.length === 0 || q.categories.includes(catOf(t))) &&
       matchesStatus(t, q.statuses) &&
-      inDueBucket(t, q.due, ctx.today) &&
+      inDueBucket(deadline(t), q.due, ctx.today) &&
       matchesText(t, q.text, labelOf),
   );
   // Search stays flat (every match is a card); the Done lens is flat history.
