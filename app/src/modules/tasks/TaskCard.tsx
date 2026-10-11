@@ -156,7 +156,7 @@ function TaskMeta({
   const bits: string[] = [];
   if (summary) {
     // The deliverable's progress and size: done of the parts not dropped, and their estimates' sum.
-    bits.push(`${summary.done}/${summary.total}`);
+    bits.push(summary.total ? `${summary.done}/${summary.total}` : 'all parts dropped');
     if (summary.estimateMin != null) bits.push(`est ${fmtDuration(summary.estimateMin)}`);
     if (summary.unscoped > 0) bits.push(`${summary.unscoped} unscoped`);
   } else if (task.status === 'in_progress') {

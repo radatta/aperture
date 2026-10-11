@@ -57,10 +57,11 @@ export function createLiveDoc(tableName: string): DocClient {
         throw err;
       }
     },
-    async query(pk, skPrefix) {
+    async query(pk, skPrefix, opts) {
       return queryAll({
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :p)',
         ExpressionAttributeValues: { ':pk': pk, ':p': skPrefix },
+        ConsistentRead: opts?.consistent === true,
       });
     },
     async queryIndex(gsi1pk, range?: IndexRange) {

@@ -60,8 +60,10 @@ export function BreakDownForm({
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
+      {/* Its opener unmounts on a parent ("Add parts…" gives way to the form): focus starts here. */}
       <Textarea
         label="Add parts — one per line: title | ~minutes"
+        autoFocus
         rows={4}
         value={text}
         onChange={(e) => setText(e.target.value)}

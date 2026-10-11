@@ -52,6 +52,15 @@ function useUrgency(t: Task): DueUrgency {
   return dueUrgency(useDeadline(t), useNow());
 }
 
+// A part's category is its parent's, so on a phone it gives way to "of P2" — the title needs the room.
+function PartCategory({ task }: { task: Task }) {
+  return (
+    <span className={cx('contents', task.parentId && 'max-sm:hidden')}>
+      <CategoryTag categoryId={task.categoryId} />
+    </span>
+  );
+}
+
 // "of P2" on a part, so the row says what it's working toward.
 function PartOf({ task }: { task: Task }) {
   const { data: tasks = [] } = useAllTasks();
@@ -139,7 +148,7 @@ export function RightNowCard() {
               {hero.title}
             </Text>
             <div className="flex flex-wrap items-center gap-2">
-              <CategoryTag categoryId={hero.categoryId} />
+              <PartCategory task={hero} />
               <PartOf task={hero} />
               <RollTag rollId={hero.rollId} />
               {/* Count-UP vs the estimate, flat — no bar, no colour flip past 100%, no countdown. */}
@@ -233,7 +242,7 @@ function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) =>
         >
           {t.title}
         </Text>
-        <CategoryTag categoryId={t.categoryId} />
+        <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
         <DueTime task={t} />
@@ -280,7 +289,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
         >
           {t.title}
         </Text>
-        <CategoryTag categoryId={t.categoryId} />
+        <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
         <DueTime task={t} />

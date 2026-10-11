@@ -588,7 +588,26 @@ describe('TaskEditor', () => {
       expect(await client.getTask(p.id)).toMatchObject({ status: 'done', actualAccruedMin: 70 });
     });
 
-    it('Delete names how many parts go with it', async () => {
+    it('every part dropped: no Mark done — it says to drop the parent instead', async () => {
+      const client = api();
+      const { p, parts } = await withParts(client, ['open']);
+      await client.transitionTask(parts[0]!.id, 'cancelled');
+      renderEditor(client, (await client.getTask(p.id))!);
+      expect(await screen.findByText(/Every part was dropped — drop this too/)).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Mark done' })).toBeNull();
+      expect(screen.getByText(/Open · 0 of 0 parts/)).toBeTruthy();
+    });
+
+    it('Add parts… puts focus in the form, never on <body> (its button gives way to it)', async () => {
+      const client = api();
+      const { p } = await withParts(client, ['open']);
+      const { user } = renderEditor(client, p);
+      expect(await screen.findByText(/Open · 0 of 1 part$/)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Add parts…' }));
+      expect(document.activeElement).toBe(screen.getByLabelText(/Add parts — one per line/));
+    });
+
+        it('Delete names how many parts go with it', async () => {
       const client = api();
       const { p } = await withParts(client, ['open', 'open', 'open']);
       const { user } = renderEditor(client, p);

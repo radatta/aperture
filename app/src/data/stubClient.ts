@@ -385,7 +385,7 @@ class StubClient implements ApiClient {
       estimateMin: input.estimateMin ?? null,
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
-      parentId: input.parentId ?? null,
+      parentId: input.parentId || null, // '' is no parent, never a link to validate
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -694,7 +694,8 @@ class StubClient implements ApiClient {
     const first = !hasParts(all, parent.id);
     const part = this.writes.patch(this.store.tasks, id, { parentId });
     if (first) this.adoptAsParent(parent);
-    if (task.parentId !== parentId) this.releaseLock(task.parentId); // moved from another parent
+    if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
+    this.releaseLock(task.parentId); // moved from another parent
     this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
     return part;
   }
@@ -750,10 +751,12 @@ class StubClient implements ApiClient {
     const parts = partsOf(this.alive(this.store.tasks), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
-    const leftPlanning =
+    // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
+    const firstStart =
+      task.startedAt === null &&
       (task.status === 'backlog' || task.status === 'planned') &&
       (to === 'in_progress' || to === 'done');
-    if (!leftPlanning) return next;
+    if (!firstStart) return next;
     this.freezeLock(task.parentId, id);
     return this.find(this.store.tasks, id) ?? next;
   }

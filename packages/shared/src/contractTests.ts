@@ -645,6 +645,20 @@ export function runApiContract(
       expect((await api.getTask(parent.id))?.estimateLockedMin).toBeNull();
     });
 
+    it('parts: the first start is the only freeze — a restart or a re-attach after scoping adds no hindsight baseline', async () => {
+      const p = await api.createTask({ title: 'P2' });
+      const a = await api.createTask({ title: 'a', parentId: p.id });
+      advance(1000);
+      const b = await api.createTask({ title: 'b', parentId: p.id });
+      await api.transitionTask(a.id, 'in_progress'); // nothing sized yet: no baseline
+      await api.setTaskEstimate(a.id, 30, 0);
+      await api.setTaskEstimate(b.id, 60, 0);
+      await api.transitionTask(a.id, 'backlog'); // rollover
+      await api.transitionTask(a.id, 'in_progress');
+      await api.setTaskParent(a.id, p.id); // already its part
+      expect((await api.getTask(p.id))?.estimateLockedMin).toBeNull();
+    });
+
     it('parts: export carries parentId', async () => {
       const p = await api.createTask({ title: 'P2' });
       const a = await api.createTask({ title: 'a', parentId: p.id });

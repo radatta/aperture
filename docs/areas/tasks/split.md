@@ -27,7 +27,7 @@ The split mechanics live in `packages/shared/src/split.ts`, and the parent rules
 
 **D2. A split never cancels.** The original either finishes (`finish: 'done'`, only for a started task; the UI and MCP require an actual) or keeps going (`'keep'`, optionally renamed or rescoped). The rest becomes a new task. Dropping the rest is plain Cancel, a separate action.
 
-- The new task carries the category, deadline (day and time), notes and `rollId`.
+- The new task carries the category, a timed original's day and time, notes and `rollId`. An untimed day isn't carried, and a standalone original drops its own: that day is the deadline, which is the parent's now (superseded 2026-10-11 by [parts.md](parts.md) D7 → _An untimed split_).
 - It lands on the original's latest plan day if the original is `planned`/`in_progress` (a plan row with estimate + buffer, or 30 when unscoped). Otherwise it goes to the backlog. A past plan day self-heals: `getDay(today)`'s stale sweep moves the task back to backlog. The original's own row on that day is re-sized so the day's planned total counts the job once (`rescopedPlanMinutes`): a done part's row becomes its actual (what it really took), and a kept-going original that was rescoped gets its new estimate + buffer.
 - `splitOriginal` validates the whole input before any write.
 

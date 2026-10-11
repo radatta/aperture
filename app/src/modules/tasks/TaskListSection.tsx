@@ -97,7 +97,7 @@ export function TaskListSection({
       <div role="status">
         {action.failed && (
           <Text size="sm" tone="danger">
-            Couldn&apos;t save that — try again.
+            {action.message ?? 'Couldn’t save that — try again.'}
           </Text>
         )}
       </div>
@@ -156,7 +156,8 @@ export function TaskListSection({
           size="sm"
           disabled={busy}
           onClick={() =>
-            action.run(task.id, () => transition.mutateAsync({ id: task.id, to: 'done' }))
+            // explain: a part reopened elsewhere is refused by name (parts.ts partOpenError)
+            action.run(task.id, () => transition.mutateAsync({ id: task.id, to: 'done' }), true)
           }
         >
           Mark done

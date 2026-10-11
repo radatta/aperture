@@ -14,6 +14,7 @@ import { useAllTasks } from '../../data/hooks/useTasks';
 import { useDay, useSetIntent, useSetReflection } from '../../data/hooks/useDay';
 import { useHomeMode } from '../../modules/home/home-context';
 import { RollPicker } from '../../modules/rolls/RollPicker';
+import { rollupLabel } from '../../modules/calibration/calibration';
 import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
 import { AddToTodayButton } from '../../modules/tasks/AddToTodayDialog';
 import { HabitCheckList } from '../../modules/habits/HabitCheckList';
@@ -219,10 +220,7 @@ function ReviewCard({ today }: { today: string }) {
   const doneToday = tasks.filter(
     (t) => t.status === 'done' && t.completedAt != null && dayKey(t.completedAt, start) === today,
   );
-  const label = (t: (typeof tasks)[number]) => {
-    const n = partsOf(tasks, t.id).length;
-    return n > 0 ? `${t.title} · ${n} ${n === 1 ? 'part' : 'parts'}` : t.title;
-  };
+  const label = (t: (typeof tasks)[number]) => rollupLabel(t.title, partsOf(tasks, t.id).length);
 
   return (
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>

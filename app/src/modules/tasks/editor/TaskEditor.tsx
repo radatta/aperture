@@ -159,7 +159,8 @@ export function TaskEditor({
       <div className="flex flex-wrap items-center gap-2">
         <Text size="sm" tone="muted">
           {isParent && task.status === 'backlog' ? 'Open' : statusLabel(task.status)}
-          {isParent && ` · ${summary.done} of ${summary.total} parts`}
+          {isParent &&
+            ` · ${summary.done} of ${summary.total} ${summary.total === 1 ? 'part' : 'parts'}`}
         </Text>
         <CategoryTag categoryId={task.categoryId} />
         {parent && (
@@ -243,7 +244,13 @@ export function TaskEditor({
               </li>
             ))}
           </ul>
-          {!isTerminal && (
+          {/* Every part dropped: nothing to submit, so it's dropped too (parts.ts) — no Mark done. */}
+          {!isTerminal && summary.total === 0 && (
+            <Text size="sm" tone="muted">
+              Every part was dropped — drop this too (Drop task… below).
+            </Text>
+          )}
+          {!isTerminal && summary.total > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Text size="sm" tone={summary.allDone ? 'teal' : 'muted'}>
                 {summary.allDone

@@ -7,7 +7,7 @@ import { fmtDuration } from '../../lib/format';
 import { useCalibration } from '../../data/hooks/useCalibration';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
-import { aggregate } from './calibration';
+import { aggregate, rollupLabel } from './calibration';
 
 // Estimate-vs-actual, read as evidence not judgment. The per-task deltas are drawn, not listed:
 // a column of "1h 18m · 1h est · +30%" makes you do the subtraction yourself, which is exactly the
@@ -22,10 +22,7 @@ export function CalibrationSection() {
   const { data: tasks = [] } = useAllTasks();
   const titleById = new Map(tasks.map((t) => [t.id, t.title]));
   // A done parent is the rollup of its parts (parts.ts), so its label says how many there were.
-  const label = (p: CalibrationPoint) => {
-    const title = titleById.get(p.taskId) ?? 'Task';
-    return p.parts > 0 ? `${title} · ${p.parts} ${p.parts === 1 ? 'part' : 'parts'}` : title;
-  };
+  const label = (p: CalibrationPoint) => rollupLabel(titleById.get(p.taskId) ?? 'Task', p.parts);
 
   const agg = aggregate(points);
   const recent = points.slice(-8).reverse();

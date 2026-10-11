@@ -46,7 +46,8 @@ export interface Task extends BaseEntity {
   estimateMin: number | null;
   bufferMin: number | null;
   // The calibration baseline, frozen on first exit from planning; calibration = actualAccruedMin vs this.
-  // Never edited after — a later estimate edit moves estimateMin only.
+  // Never edited after — a later estimate edit moves estimateMin only. The one exception: a parent whose
+  // last part goes is plain again, and the lock frozen for its parts goes with them (parts.ts releaseParent).
   estimateLockedMin: number | null;
   // The task this one is a part of (parts.ts): the parent holds the deadline, its parts hold the work. One
   // level — a parent can't have a parent, a part can't have parts. Parenthood is derived (some task points

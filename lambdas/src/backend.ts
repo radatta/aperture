@@ -231,7 +231,7 @@ export class BackendClient implements ApiClient {
       estimateMin: input.estimateMin ?? null,
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
-      parentId: input.parentId ?? null,
+      parentId: input.parentId || null, // '' is no parent, never a link to validate
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -253,10 +253,11 @@ export class BackendClient implements ApiClient {
     return this.syncCalendar(parent, became);
   }
   // The rollup's baseline, frozen when `starting` — the first part to leave planning — does
-  // (parts.ts freezeParentLock).
+  // (parts.ts freezeParentLock). Freeze and release decide on the list straight after a task write, so
+  // they read it strongly consistent: an eventually consistent query can miss that write.
   private async freezeLock(parentId: string | null, starting: string): Promise<void> {
     if (!parentId) return;
-    const tasks = await this.repo.listTasks();
+    const tasks = await this.repo.listTasks({ consistent: true });
     const parent = tasks.find((t) => t.id === parentId);
     if (!parent) return;
     const frozen = freezeParentLock(parent, partsOf(tasks, parentId), starting, this.now());
@@ -265,7 +266,7 @@ export class BackendClient implements ApiClient {
   // A task whose last part just went is plain again, its parts' lock with them (parts.ts releaseParent).
   private async releaseLock(parentId: string | null): Promise<void> {
     if (!parentId) return;
-    const tasks = await this.repo.listTasks();
+    const tasks = await this.repo.listTasks({ consistent: true });
     const parent = tasks.find((t) => t.id === parentId);
     const released = parent ? releaseParent(parent, tasks, this.now()) : null;
     if (released) await this.repo.putTask(released);
@@ -317,8 +318,11 @@ export class BackendClient implements ApiClient {
     // A parent never owns an event (parts.ts) — the planner needs to know, and only the list says. A
     // brand-new task can't be one (its parts would have to exist first), so a create skips the scan —
     // a timed bulk paste pays for none of them inside its sync budget. The retry (ensure) always looks.
+    // Strongly consistent: adoptAsParent syncs straight after writing the first part.
     const parent =
-      prev === null && !ensure ? false : hasParts(await this.repo.listTasks(), task.id);
+      prev === null && !ensure
+        ? false
+        : hasParts(await this.repo.listTasks({ consistent: true }), task.id);
     const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure, parent });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
     // retires an "updated from Google" note it has just superseded.
@@ -704,7 +708,8 @@ export class BackendClient implements ApiClient {
     const first = !hasParts(all, parentId);
     const part = await this.repo.putTask({ ...task, parentId, updatedAt: this.now() });
     if (first) await this.adoptAsParent(parent);
-    if (task.parentId !== parentId) await this.releaseLock(task.parentId); // moved from another parent
+    if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
+    await this.releaseLock(task.parentId); // moved from another parent
     await this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
     return part;
   }
@@ -738,10 +743,12 @@ export class BackendClient implements ApiClient {
     const parts = partsOf(await this.repo.listTasks(), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
-    const leftPlanning =
+    // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
+    const firstStart =
+      task.startedAt === null &&
       (task.status === 'backlog' || task.status === 'planned') &&
       (to === 'in_progress' || to === 'done');
-    if (!task.parentId || !leftPlanning) return next;
+    if (!task.parentId || !firstStart) return next;
     await this.freezeLock(task.parentId, id);
     return (await this.repo.getTask(id)) ?? next;
   }
