@@ -14,13 +14,15 @@ function speak(events: { e: ExerciseEvent; t: number }[]): string[] {
   return out;
 }
 
-const rep = (count: number, reachedTarget = false): ExerciseEvent => ({
+const rep = (count: number, reachedTarget = false, holdReached = false): ExerciseEvent => ({
   type: 'repCompleted',
   side: 'single',
   peakDeg: 40,
   reachedTarget,
+  holdReached,
   count,
 });
+const holdUp = (count: number): ExerciseEvent => ({ type: 'holdReached', count });
 const SET_DONE: ExerciseEvent = { type: 'setCompleted', summary: { count: 10 } };
 
 describe('reduceCue', () => {
@@ -63,6 +65,58 @@ describe('reduceCue', () => {
       { text: 'Ten', priority: 'always' },
       { text: 'Set complete. Well done.', priority: 'always' },
     ]);
+  });
+
+  it('speaks the count when the hold is up and stays quiet on the paired return', () => {
+    const out = speak([
+      { e: holdUp(3), t: 0 },
+      { e: rep(3, true, true), t: 2000 },
+    ]);
+    expect(out).toEqual(['Three']);
+  });
+
+  it('an early return (hold not reached) is still counted aloud', () => {
+    expect(reduceCue(initialCueState, rep(4, false, false), 0).utterance?.text).toBe('Four');
+  });
+
+  it('a hold-reached count bypasses the gates', () => {
+    const r1 = reduceCue(initialCueState, { type: 'driftWarning', axis: 'yaw', deg: 15 }, 0);
+    const r2 = reduceCue(r1.state, holdUp(3), 100);
+    expect(r2.utterance).toEqual({ text: 'Three', priority: 'always' });
+  });
+
+  it('the last count at the hold, then Set complete on the return', () => {
+    const out = speak([
+      { e: holdUp(20), t: 0 },
+      { e: rep(20, true, true), t: 1500 },
+      { e: SET_DONE, t: 1500 },
+    ]);
+    expect(out).toEqual(['Twenty', 'Set complete. Well done.']);
+  });
+
+  it('says Back into position after a broken hold, on a 3 s cooldown', () => {
+    const broken: ExerciseEvent = { type: 'holdBroken', heldSec: 1.2 };
+    const out = speak([
+      { e: broken, t: 0 },
+      { e: broken, t: 2000 }, // past the 1.2 s dedup, inside the cooldown → dropped by the cooldown
+      { e: broken, t: 3500 }, // past the cooldown (and 1.5 s after t 2000, so dedup alone would not drop it)
+    ]);
+    expect(out).toEqual(['Back into position', 'Back into position']);
+  });
+
+  it('And release is never dropped — not by the gap, not by its own repeat', () => {
+    expect(
+      speak([
+        { e: { type: 'positionReached' }, t: 0 },
+        { e: { type: 'holdCompleted', index: 0, durationSec: 4 }, t: 100 },
+      ]),
+    ).toEqual(['Hold it there', 'And release']);
+    expect(
+      speak([
+        { e: { type: 'holdCompleted', index: 0, durationSec: 4 }, t: 0 },
+        { e: { type: 'holdCompleted', index: 1, durationSec: 4 }, t: 200 },
+      ]),
+    ).toEqual(['And release', 'And release']);
   });
 
   it('is silent for posture warnings (the panel shows them)', () => {

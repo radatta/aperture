@@ -6,6 +6,7 @@ import type {
   EvalInput,
   ExerciseDefinition,
   ExerciseEvent,
+  ExerciseState,
 } from '@aperture/shared/flux';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -157,9 +158,84 @@ describe('romReps', () => {
     // reached target range but returned immediately → not held → not "on target"
     const quick = fold(holdRom, [N(0, 0), N(0, 40), N(0, 0)]);
     expect(of(quick.events, 'repCompleted')[0]?.reachedTarget).toBe(false);
+    expect(of(quick.events, 'repCompleted')[0]?.holdReached).toBe(false);
     // held at end range ~1.3s before returning → on target
     const held = fold(holdRom, [N(0, 0), ...repeat(N(0, 40), 40), N(0, 0)]);
     expect(of(held.events, 'repCompleted')[0]?.reachedTarget).toBe(true);
+    expect(of(held.events, 'repCompleted')[0]?.holdReached).toBe(true);
+  });
+
+  describe('holdReached (the count, spoken when the hold is up — D32)', () => {
+    const holdRom = {
+      ...base,
+      id: 't-hold-rom2',
+      name: 't',
+      measurement: 'measured',
+      kind: 'romReps',
+      axis: 'yaw',
+      direction: 'positive',
+      enterDeg: 15,
+      exitDeg: 8,
+      targetDeg: 30,
+      reps: 10,
+      holdSec: 1,
+    } satisfies ExerciseDefinition;
+
+    it('fires once per excursion, before the return, with the pending count', () => {
+      const { events } = fold(holdRom, [N(0, 0), ...repeat(N(0, 40), 60), N(0, 0)]);
+      expect(of(events, 'holdReached')).toEqual([{ type: 'holdReached', count: 1 }]);
+      expect(events.map((e) => e.type)).toEqual(['holdReached', 'repCompleted']);
+      expect(of(events, 'repCompleted')[0]).toMatchObject({ holdReached: true, count: 1 });
+    });
+
+    it('fires on the frame the hold time is crossed', () => {
+      let state = initialState(holdRom);
+      let before = 0;
+      const accum = (s: ExerciseState) => (s.kind === 'romReps' ? s.holdAccumSec : NaN);
+      for (let i = 0; i < 60; i++) {
+        const r = evaluate(holdRom, state, {
+          rel: i === 0 ? N(0, 0) : N(0, 40),
+          tSec: i / 30,
+          faceVisible: true,
+        });
+        if (r.events.some((e) => e.type === 'holdReached')) {
+          expect(accum(state)).toBeLessThan(1);
+          expect(accum(r.state)).toBeGreaterThanOrEqual(1);
+          before++;
+        }
+        state = r.state;
+      }
+      expect(before).toBe(1);
+    });
+
+    it('is not emitted on an early return (the rep still counts, aloud)', () => {
+      const { events } = fold(holdRom, [N(0, 0), N(0, 40), N(0, 0)]);
+      expect(of(events, 'holdReached')).toHaveLength(0);
+      expect(of(events, 'repCompleted')[0]).toMatchObject({ holdReached: false, count: 1 });
+    });
+
+    it('is not emitted when the exercise has no hold', () => {
+      const { events } = fold(flexion, [N(0), ...repeat(N(-50), 60), N(0)]);
+      expect(of(events, 'holdReached')).toHaveLength(0);
+      expect(of(events, 'repCompleted')[0]?.holdReached).toBe(false);
+    });
+
+    it('carries the running total when bilateral', () => {
+      const rot = {
+        ...holdRom,
+        id: 't-hold-rot',
+        direction: 'bilateral',
+      } satisfies ExerciseDefinition;
+      const { events } = fold(rot, [
+        N(0, 0),
+        ...repeat(N(0, 40), 40),
+        N(0, 0),
+        ...repeat(N(0, -40), 40),
+        N(0, 0),
+      ]);
+      expect(of(events, 'holdReached').map((e) => e.count)).toEqual([1, 2]);
+      expect(of(events, 'repCompleted').map((e) => e.count)).toEqual([1, 2]);
+    });
   });
 
   it('does not warn when off-plane movement is small', () => {
@@ -228,6 +304,48 @@ describe('holdAtTarget', () => {
     const { events } = fold(stretch, rels);
     expect(of(events, 'positionLost')).toHaveLength(1);
     expect(of(events, 'holdCompleted')).toHaveLength(1); // only the second attempt counts
+    expect(of(events, 'holdBroken')).toHaveLength(0); // 0.5 s is flicker, not a broken hold
+  });
+
+  describe('holdBroken (said out loud — D33)', () => {
+    const long = { ...stretch, id: 't-hold-long', holdSec: 3 } satisfies ExerciseDefinition;
+    const IN = N(0, 0, 28);
+    const OUT = N(0, 0, 0);
+    // n frames in position (the first only arms the timer, so held = (n − 1) / 30 s), then out.
+    const breakAfter = (n: number, out = 12) =>
+      of(fold(long, [...repeat(IN, n), ...repeat(OUT, out)]).events, 'holdBroken');
+
+    it('reports how long the hold lasted', () => {
+      const ev = breakAfter(45);
+      expect(ev).toHaveLength(1);
+      expect(ev[0]?.heldSec).toBeCloseTo(44 / 30, 5);
+    });
+
+    it('only past a 1 s hold — shorter is flicker', () => {
+      expect(breakAfter(30)).toHaveLength(0); // ≈ 0.97 s
+      expect(breakAfter(32)).toHaveLength(1); // ≈ 1.03 s
+      const flicker = fold(long, [...repeat(IN, 15), ...repeat(OUT, 12)]);
+      expect(of(flicker.events, 'positionLost')).toHaveLength(1);
+    });
+
+    it('only once the head has stayed out for 0.3 s — a blip back in says nothing', () => {
+      expect(breakAfter(45, 8)).toHaveLength(0); // out ≈ 0.23 s
+      const blip = fold(long, [...repeat(IN, 45), ...repeat(OUT, 3), ...repeat(IN, 10)]);
+      expect(of(blip.events, 'positionLost')).toHaveLength(1);
+      expect(of(blip.events, 'positionReached')).toHaveLength(2);
+      expect(of(blip.events, 'holdBroken')).toHaveLength(0);
+    });
+  });
+
+  it('leaving after a completed hold is a release, not a broken hold', () => {
+    const two = { ...stretch, id: 't-hold-two', holdSec: 1, reps: 2 } satisfies ExerciseDefinition;
+    const { events } = fold(two, [
+      ...repeat(N(0, 0, 28), 40),
+      ...repeat(N(0, 0, 0), 10),
+      ...repeat(N(0, 0, 28), 40),
+    ]);
+    expect(of(events, 'holdCompleted')).toHaveLength(2);
+    expect(of(events, 'holdBroken')).toHaveLength(0);
   });
 
   it('requires ALL specified axes within tolerance', () => {

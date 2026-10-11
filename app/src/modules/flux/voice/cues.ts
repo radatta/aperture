@@ -1,8 +1,9 @@
 // Pure event → spoken-phrase reducer for voice cues. No DOM, no SpeechSynthesis,
 // no Date.now — time is passed in — so it's deterministic and unit-testable. The
 // effectful SpeechSynthesis calls live in speaker.ts. Cooldowns run off the last
-// *spoken* time so dropped candidates don't shift the clock. Rep counts and
-// "Set complete" bypass every gate and queue, so a number is never dropped (D27).
+// *spoken* time so dropped candidates don't shift the clock. Rep counts, "Set
+// complete" and "And release" bypass every gate and queue, so a number — or the
+// release you're waiting for with your eyes closed — is never dropped (D27, D34).
 
 import type { ExerciseEvent } from '@aperture/shared/flux';
 
@@ -30,9 +31,9 @@ export const initialCueState: CueState = {
 // Per-event-type minimum spacing (ms). Absent = no per-type cooldown.
 const COOLDOWN_MS: Partial<Record<ExerciseEvent['type'], number>> = {
   holdStarted: 500,
-  holdCompleted: 500,
   positionReached: 1500,
   trialCompleted: 800,
+  holdBroken: 3000,
   driftWarning: 4000,
 };
 const MIN_GAP_MS = 600; // global anti-overlap between any two utterances
@@ -49,12 +50,18 @@ function phraseFor(e: ExerciseEvent): Utterance | null {
     case 'setCompleted':
       // Queued, not interrupting — "high" used to cancel the final count.
       return { text: 'Set complete. Well done.', priority: 'always' };
-    case 'repCompleted':
+    case 'holdReached':
       return { text: countWord(e.count), priority: 'always' };
+    case 'repCompleted':
+      // With an end-range hold the count was spoken at holdReached; an early return still counts aloud.
+      return e.holdReached ? null : { text: countWord(e.count), priority: 'always' };
     case 'holdStarted':
       return { text: 'Hold', priority: 'normal' };
     case 'holdCompleted':
-      return { text: 'And release', priority: 'normal' };
+      // The eyes-closed signal that the time is up — never gated; timer-paced, so it can't chatter.
+      return { text: 'And release', priority: 'always' };
+    case 'holdBroken':
+      return { text: 'Back into position', priority: 'normal' };
     case 'positionReached':
       return { text: 'Hold it there', priority: 'normal' };
     case 'trialCompleted':

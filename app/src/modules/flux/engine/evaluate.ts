@@ -30,6 +30,11 @@ const STILL_SPEED = 6;
 const OFF_AXIS_DEG = 20; // flux's 15 fired constantly in the dev test (D28)
 // Min seconds between posture warnings.
 const POSTURE_COOLDOWN = 3;
+// A broken hold is only said out loud past this (shorter is boundary flicker — the visual shows it)…
+const HOLD_BROKEN_MIN_SEC = 1;
+// …and only once the head has stayed out this long (edge jitter or a dropped face frame late in a
+// long hold comes straight back; saying it then would be wrong with your eyes closed).
+const HOLD_BROKEN_OUT_SEC = 0.3;
 const AXES: readonly Axis[] = ['pitch', 'yaw', 'roll'];
 
 // The full definition narrowed to one kind (base fields + that kind's spec).
@@ -94,6 +99,8 @@ function buildHold(def: DefOf<'holdAtTarget'>): HoldAtTargetState {
     inPosition: false,
     holdElapsedSec: 0,
     awaitingRelease: false,
+    brokenHeldSec: 0,
+    outSec: 0,
   };
 }
 function buildGuided(def: DefOf<'guidedHold'>): GuidedHoldState {
@@ -214,11 +221,18 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
     }
   } else {
     peakThisRep = zone === 'positive' ? Math.max(peakThisRep, v) : Math.min(peakThisRep, v);
-    // Accumulate the end-range hold while the position is held past enterDeg.
-    if (Math.abs(v) >= def.enterDeg) holdAccumSec += dtv;
+    // Accumulate the end-range hold while the position is held past enterDeg, and say the count the
+    // moment it's up (eyes closed, D32) — once per excursion; the rep still counts on return.
+    if (Math.abs(v) >= def.enterDeg) {
+      const prev = holdAccumSec;
+      holdAccumSec += dtv;
+      if (holdSec > 0 && prev < holdSec && holdAccumSec >= holdSec)
+        events.push({ type: 'holdReached', count: repsPos + repsNeg + 1 });
+    }
     if (Math.abs(v) <= def.exitDeg) {
       const peakDeg = Math.abs(peakThisRep);
-      const held = holdSec === 0 || holdAccumSec >= holdSec;
+      const holdReached = holdSec > 0 && holdAccumSec >= holdSec;
+      const held = holdSec === 0 || holdReached;
       const reachedTarget = peakDeg >= def.targetDeg && held;
       const side =
         def.direction === 'bilateral' ? (zone === 'positive' ? 'positive' : 'negative') : 'single';
@@ -226,7 +240,14 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       else repsNeg++;
       peakSum += peakDeg;
       peakCount++;
-      events.push({ type: 'repCompleted', side, peakDeg, reachedTarget, count: repsPos + repsNeg });
+      events.push({
+        type: 'repCompleted',
+        side,
+        peakDeg,
+        reachedTarget,
+        holdReached,
+        count: repsPos + repsNeg,
+      });
       zone = 'neutral';
       peakThisRep = 0;
       holdAccumSec = 0;
@@ -301,7 +322,7 @@ function evalHold(
     input.faceVisible &&
     axes.every((a) => Math.abs(input.rel[a] - (def.target[a] ?? 0)) <= def.toleranceDeg);
 
-  let { holdsDone, inPosition, holdElapsedSec, awaitingRelease } = state;
+  let { holdsDone, inPosition, holdElapsedSec, awaitingRelease, brokenHeldSec, outSec } = state;
 
   // Between reps the user must leave the target zone before the next hold counts.
   if (awaitingRelease) {
@@ -322,11 +343,21 @@ function evalHold(
   if (rawInPos && !inPosition) {
     inPosition = true;
     holdElapsedSec = 0;
+    brokenHeldSec = 0; // back before the beat was up — nothing to say
+    outSec = 0;
     events.push({ type: 'positionReached' });
   } else if (!rawInPos && inPosition) {
+    if (holdElapsedSec >= HOLD_BROKEN_MIN_SEC) brokenHeldSec = holdElapsedSec;
+    outSec = 0;
     inPosition = false;
     holdElapsedSec = 0;
     events.push({ type: 'positionLost' });
+  } else if (!rawInPos && brokenHeldSec > 0) {
+    outSec += dtv;
+    if (outSec >= HOLD_BROKEN_OUT_SEC) {
+      events.push({ type: 'holdBroken', heldSec: brokenHeldSec });
+      brokenHeldSec = 0;
+    }
   }
 
   let phase: Phase = state.phase;
@@ -357,6 +388,8 @@ function evalHold(
       inPosition,
       holdElapsedSec,
       awaitingRelease,
+      brokenHeldSec,
+      outSec,
       lastTSec: input.tSec,
       lastRel: input.rel,
     },

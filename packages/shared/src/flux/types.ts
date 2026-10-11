@@ -149,6 +149,10 @@ export interface HoldAtTargetState extends StateCommon {
   readonly inPosition: boolean;
   readonly holdElapsedSec: number;
   readonly awaitingRelease: boolean;
+  // A hold of this many seconds was just lost (0 = none pending); it's said out loud only once the head
+  // has stayed out for a beat (`outSec`), so a one-frame edge flicker never says "Back into position".
+  readonly brokenHeldSec: number;
+  readonly outSec: number;
 }
 
 export interface GuidedHoldState extends StateCommon {
@@ -197,7 +201,10 @@ export type ExerciseEvent =
       readonly peakDeg: number;
       readonly reachedTarget: boolean;
       readonly count: number; // reps done this set, this one included — what the voice counts
+      readonly holdReached: boolean; // the count was already spoken at holdReached — the voice stays quiet
     }
+  // romReps with holdSec: the end-range hold time is up — the voice counts now, the rep counts on return.
+  | { readonly type: 'holdReached'; readonly count: number } // repsPos + repsNeg + 1, the pending count
   | { readonly type: 'holdStarted'; readonly index: number }
   | {
       readonly type: 'holdCompleted';
@@ -206,6 +213,8 @@ export type ExerciseEvent =
     }
   | { readonly type: 'positionReached' }
   | { readonly type: 'positionLost' }
+  // holdAtTarget: left the target after a meaningful hold; positionLost stays silent for flicker.
+  | { readonly type: 'holdBroken'; readonly heldSec: number }
   | { readonly type: 'driftWarning'; readonly axis: Axis; readonly deg: number }
   | {
       readonly type: 'postureWarning'; // moving off-plane during a single-axis move

@@ -176,6 +176,19 @@ describe('useFluxEngine', () => {
     expect(hook.result.current.sample.fps).toBe(30);
   });
 
+  it('speaks a count at hold-reached without mirroring it; mirrors a broken hold', async () => {
+    const at = clockAt(1_000);
+    const { hook, v, fake } = setup();
+    await act(() => hook.result.current.start(els));
+    act(() => fake().ready('GPU'));
+    act(() => fake().event({ type: 'holdReached', count: 3 }));
+    expect(v.speak).toHaveBeenCalledWith({ text: 'Three', priority: 'always' });
+    expect(hook.result.current.lastCue).toBeNull(); // the overlay shows the number
+    at(5_000); // past the 600 ms gap that gates "Back into position"
+    act(() => fake().event({ type: 'holdBroken', heldSec: 2 }));
+    expect(hook.result.current.lastCue).toBe('Back into position');
+  });
+
   it('speaks cues through the reducer and records each finished set', async () => {
     const { hook, v, onSetCompleted, fake } = setup();
     await act(() => hook.result.current.start(els));

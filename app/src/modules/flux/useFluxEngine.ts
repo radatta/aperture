@@ -165,8 +165,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           if (r.utterance) {
             o.voice.speak(r.utterance);
             // Mirrored on the HUD, so a muted phone (silent switch, ducking) still shows the cue —
-            // except counts, which the live readout already shows as a number.
-            if (e.event.type !== 'repCompleted') {
+            // except counts (repCompleted, holdReached): the readout's number (or, at the hold, its
+            // ring turning gold) already says it.
+            if (e.event.type !== 'repCompleted' && e.event.type !== 'holdReached') {
               setLastCue(r.utterance.text);
               clearTimeout(cueTimer.current);
               cueTimer.current = setTimeout(() => setLastCue(null), CUE_MS);
