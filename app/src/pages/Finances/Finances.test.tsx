@@ -31,17 +31,20 @@ async function linked(): Promise<ApiClient> {
 
 const group = async (name: RegExp) => (await screen.findAllByRole('group', { name }))[0]!;
 
-// screen.findAllByRole('button', { name }) for list rows: the same role + name + visibility check, run per
-// <li> whose text can match instead of across the page, which re-ran on every poll (~70–100ms a scan on
-// the All tab). A row the prefilter misses fails loudly, never passes.
+// screen.findAllByRole('button', { name }) narrowed to list rows: the same role + name + visibility check,
+// run per <li> whose text matches instead of across the page, which re-ran on every poll (~70–100ms a scan
+// on the All tab). Checked identical to the page-wide query at every call site here (2026-10-12).
 const findRows = (name: RegExp) =>
-  waitFor(() => {
-    const rows = [...document.querySelectorAll('li')]
-      .filter((li) => name.test(li.textContent ?? ''))
-      .flatMap((li) => within(li).queryAllByRole('button', { name }));
-    if (!rows.length) throw new Error(`Unable to find a row button named ${name}`);
-    return rows;
-  });
+  waitFor(
+    () => {
+      const rows = [...document.querySelectorAll('li')]
+        .filter((li) => (li.textContent ?? '').search(name) >= 0)
+        .flatMap((li) => within(li).queryAllByRole('button', { name }));
+      if (!rows.length) throw new Error(`Unable to find a row button named ${name}`);
+      return rows;
+    },
+    { container: document.body },
+  );
 
 describe('Finances page', () => {
   it('is reachable from the nav', async () => {
