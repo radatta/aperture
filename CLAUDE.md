@@ -94,7 +94,7 @@ So when a branch can't fast-forward onto `dev`, **do not propose merging `origin
 2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree` would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.
 3. `CI=true pnpm install` inside the worktree, so it has its own real `node_modules` — never a symlink to the main checkout's (running pnpm through one rewires the main checkout).
 
-The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at _Feature workflow_ → _Cleanup_.**
+The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Every command handed to the user is one `&&`-chained line that starts with `cd` to the Mac path** — `/workspace` is `/Users/rahuldatta/Coding/Personal/aperture` there, so a worktree is `/Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/<branch>` — never a `/workspace/...` path, never separate lines. **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at _Feature workflow_ → _Cleanup_.**
 
 ### Claude drives git — guarded
 
@@ -147,7 +147,7 @@ Phases:
 1. **Worktree** — off `origin/main` (_Git workflow_ → _One worktree per feature_).
 2. **Plan** — the `Plan` agent; ask which model.
 3. **Questions** — collaborative: discuss them. Autonomous: answer and log them.
-4. **Build** — only on the user's "execute" plus a number of review rounds (n). While building, after each section run the touched files' tests (`vitest run <file>`) and a typecheck.
+4. **Build** — only on the user's "execute" plus a number of review rounds (n). When asking for n, give a rough estimate of how many files the change will touch — a gauge of size, not a commitment. While building, after each section run the touched files' tests (`vitest run <file>`) and a typecheck.
 5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
 6. **Review round** — the read-only `code-reviewer` (no tests, no servers) in parallel with whatever each touched package adds:
 
@@ -161,7 +161,7 @@ Phases:
    When the round is back, fix real bugs and convention breaks. Findings that need a product call or add scope: collaborative → a list for the user; autonomous → decide and log. Then the gate runs again, which also starts the next round.
 
 7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current.
-8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (_Claude behavior_, above), then re-run the gate. Then hand the user, run from the worktree path, `git push --force origin <branch>:dev` — the user runs it; Claude never pushes to `dev` (_Git workflow_). With it, a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist.
+8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (_Claude behavior_, above), then re-run the gate. Then hand the user, run from the worktree path, `git push --force origin <branch>:dev` — the user runs it; Claude never pushes to `dev` (_Git workflow_) — plus `code <Mac worktree path>`, so the user can read the code themselves. With it, a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist.
 9. **Dev feedback** — ask how dev testing went. Fixes go back through the gate (plus a review round if non-trivial), then back to dev. Repeat until the user gives the all-clear.
 10. **PR** — on the all-clear, hand over the push + `gh pr create` commands (_Git workflow_ → _PR bodies_). A later push to an open PR after a rebase (phase 8 pushes only to `dev`, so the first PR push never is one) is `git push --force-with-lease -u origin <branch>` — again the user's to run.
 11. **Cleanup** — once `gh pr view <branch>` shows it merged, confirm with the user, then: copy the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/`; from `/workspace`, `git worktree remove .claude/worktrees/<branch>`; hand the user `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse).
