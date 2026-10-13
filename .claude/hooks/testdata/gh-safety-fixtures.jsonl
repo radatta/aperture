@@ -1,0 +1,24 @@
+{"expect":"allow","why":"the bug — \\b ended the match at '-'","cmd":"git push -u origin dev-e2e"}
+{"expect":"allow","why":"dev- prefix after a refspec colon","cmd":"git push origin HEAD:dev-e2e"}
+{"expect":"allow","why":"'/dev' + \\b matched /dev/null — any push with a redirect was denied","cmd":"git push -u origin coi-updates 2>/dev/null"}
+{"expect":"allow","why":"main- prefix","cmd":"git push -u origin main-menu-fix"}
+{"expect":"allow","why":"the heredoc the bug denied on 2026-10-13","cmd":"cat > notes.md <<'EOF'\ngit push -u origin dev-e2e\nEOF"}
+{"expect":"allow","why":"the handoff shape CLAUDE.md prescribes","cmd":"git push -u origin dev-e2e && gh pr create --title \"x\" --body-file localNotes/pr-dev-e2e.md"}
+{"expect":"allow","why":"current branch dev-e2e is not protected","branch":"dev-e2e","cmd":"git push -u origin HEAD"}
+{"expect":"deny","why":"explicit dev","cmd":"git push origin dev"}
+{"expect":"deny","why":"explicit main","cmd":"git push origin main"}
+{"expect":"deny","why":"explicit master","cmd":"git push origin master"}
+{"expect":"deny","why":"refspec to dev","cmd":"git push origin HEAD:dev"}
+{"expect":"deny","why":"full ref","cmd":"git push origin HEAD:refs/heads/dev"}
+{"expect":"deny","why":"branch:main refspec","cmd":"git push origin coi-updates:main"}
+{"expect":"deny","why":"';' ends the name — a ([[:space:]]|$) anchor would miss this","cmd":"git push origin dev; echo pushed"}
+{"expect":"deny","why":"'&&' glued on","cmd":"git push origin dev&&echo pushed"}
+{"expect":"deny","why":"quoted target","cmd":"git push origin \"dev\""}
+{"expect":"deny","why":"current branch dev (needs symbolic-ref on an unborn repo)","branch":"dev","cmd":"git push"}
+{"expect":"deny","why":"current branch main","branch":"main","cmd":"git push -u origin HEAD"}
+{"expect":"deny","why":"recursive force delete","cmd":"rm -rf node_modules"}
+{"expect":"deny","why":"hard reset","cmd":"git reset --hard HEAD~1"}
+{"expect":"deny","why":"force push","cmd":"git push --force origin coi-updates"}
+{"expect":"deny","why":"credential lifecycle","cmd":"gh auth login"}
+{"expect":"deny","why":"raw HTTP to the GitHub API","cmd":"curl -s https://api.github.com/repos/o/r"}
+{"expect":"allow","why":"not a push","cmd":"git status"}

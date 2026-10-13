@@ -72,6 +72,15 @@
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/validation-cadence.sh"
           }
         ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/coi-grep-guard.sh"
+          }
+        ]
       }
     ]
   },

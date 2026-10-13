@@ -1,10 +1,12 @@
 #!/bin/bash
-# PreToolUse hook on Bash — DENIES command shapes that COI's security monitor
-# classifies as a CRITICAL "reverse shell", which KILLS THE WHOLE CONTAINER; the
-# right move is to stop emitting the shape, not to disarm the detector.
+# PreToolUse hook on Bash — DENIES command text that COI's security monitor acts on: the CRITICAL
+# "reverse shell" shapes, which KILL THE WHOLE CONTAINER, and the HIGH ones that PAUSE it (Sigma's
+# `/curl`|`/wget` rule, the exec watcher's node pattern). The right move is to stop emitting the shape,
+# not to disarm the detector.
 #
-# Mechanism, observed kills and why the fix is not `auto_kill_on_critical = false`:
-# docs/ops/COI-INCIDENTS.md → Incident F.
+# Rule reference (regenerated on every COI upgrade): localNotes/code-on-incus/APERTURE-ANALYSIS.md.
+# Mechanism and observed kills/pauses: docs/ops/COI-INCIDENTS.md → Incidents F and H. The any-process
+# rules live in _coi-patterns.sh, shared with coi-grep-guard.sh so the two can't drift.
 #
 # ---------------------------------------------------------------------------
 # IMPLEMENTATION CONSTRAINT — READ BEFORE EDITING
@@ -14,20 +16,19 @@
 # `jq -n --arg reason "<text mentioning python -c>"`. Both put the literals on a
 # command line, so the guard itself could trip the detector it exists to avoid.
 #
-# Therefore: match with `case` (a shell builtin, no process), and pass the deny
-# message to jq over STDIN via printf (also a builtin) rather than as --arg.
-# jq's own argv holds only the filter, which contains no flagged substring.
-# Do not reintroduce grep/sed/awk here.
+# Therefore: match with `case`/`[[ ]]`/`${//}` (shell builtins, no process), shared
+# via _coi-patterns.sh, and pass the deny message to jq over STDIN via printf (also a
+# builtin) rather than as --arg. jq's own argv holds only the filter, which contains no
+# flagged substring. Do not reintroduce grep/sed/awk here.
 # ---------------------------------------------------------------------------
 #
-# KNOWN FALSE POSITIVE: matching is substring-based, so writing a file whose
-# *contents* mention these strings is blocked too, even though no such process
-# would spawn. Use the Write/Edit tools for that — they don't go through Bash.
-# Over-blocking is the correct bias; the failure mode this prevents is the
-# container dying.
+# KNOWN FALSE POSITIVE: matching is text-based — a heredoc whose *content* carries a
+# strong token is blocked though no such process would spawn. Use the Write/Edit tools
+# for that. The arms are narrowed to what COI v0.15 really fires on: over-blocking
+# makes Claude timid, so a shape COI lets through is let through here too.
 #
 # See docs/ops/COI-SANDBOX.md → "Container killed — the CRITICAL path is a different
-# animal", and docs/ops/COI-INCIDENTS.md → Incident F.
+# animal", and docs/ops/COI-INCIDENTS.md → Incidents F and H.
 
 set -euo pipefail
 
@@ -44,11 +45,7 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""')
 # Lowercase, mirroring COI's own strings.ToLower before matching.
 LC=${COMMAND,,}
 
-deny() {
-  # Message travels over stdin, never argv. printf is a builtin.
-  printf '%s' "$1" | jq -Rs '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:.}}'
-  exit 0
-}
+source "${BASH_SOURCE[0]%/*}/_coi-patterns.sh"
 
 HEREDOC_HINT='Use a heredoc instead — it runs as "python3 -", which is not on the list:
 
@@ -60,29 +57,36 @@ HEREDOC_HINT='Use a heredoc instead — it runs as "python3 -", which is not on 
 For JSON, jq is installed and matches nothing. If you are writing file CONTENT that
 merely mentions these strings, use the Write/Edit tools rather than Bash.'
 
-# Interpreter one-liners. COI gates these on any ":" in the command, which nearly
-# every real invocation satisfies — so deny unconditionally rather than trying to
-# predict the gate.
-case "$LC" in
-  *"python -c"*|*"python3 -c"*)
-    deny "Blocked: \`python -c\` is on COI's hardcoded reverse-shell pattern list, and a match is CRITICAL — it KILLS the container, with no repeat latch. Any \`:\` in the command satisfies its network heuristic (a dict, a slice like \`v[-5:]\`, a URL, a timestamp).
+if coi_kill_shape "$LC"; then
+  if [[ $COI_CLASS == oneliner ]]; then
+    coi_deny "Blocked: $COI_REASON is COI's one-liner reverse-shell class — CRITICAL, it KILLS the container (unless [monitoring] reverse_shell_one_liners = \"warn\" is live). A one-liner without a network token is fine.
 
-$HEREDOC_HINT" ;;
-  *"perl -e"*|*"perl -mio"*|*"php -r"*|*"ruby -e"*|*"ruby -rsocket"*)
-    deny "Blocked: that interpreter one-liner is on COI's reverse-shell pattern list (process.go:249-290) and will KILL the container. Pipe a quoted heredoc into the interpreter's stdin instead, or use jq for JSON." ;;
-esac
+$HEREDOC_HINT"
+  fi
+  coi_deny "Blocked: this command carries $COI_REASON — COI classifies it CRITICAL in any process and KILLS the container. Run the command directly; to search for it use a fragment or escape (socket\\.sock, bash\\s-i); to write file content that mentions it use Write/Edit."
+fi
 
-# These bypass COI's network gate and fire unconditionally.
-case "$LC" in
-  *"bash -i"*|*"sh -i"*)
-    deny "Blocked: \`bash -i\` / \`sh -i\` match COI's reverse-shell list unconditionally — no colon needed — and KILL the container. Run the command directly instead of through an interactive shell." ;;
-esac
+# Shell-only: /dev/tcp|udp/<endpoint> fires only in a shell process — and the Bash wrapper is one — with a
+# non-loopback endpoint (process.go:614-676). Loopback probes are stripped first, so they can't mask a remote one.
+T=${LC//\/dev\/tcp\/localhost\//}; T=${T//\/dev\/tcp\/127.0.0.1\//}
+T=${T//\/dev\/udp\/localhost\//}; T=${T//\/dev\/udp\/127.0.0.1\//}
+RE_DEVNET='/dev/(tcp|udp)/[^[:space:]"'\'';|&<>()]'
+if [[ $T =~ $RE_DEVNET ]]; then
+  coi_deny "Blocked: /dev/tcp/ or /dev/udp/ followed by a non-loopback endpoint in a shell line KILLS the container. A bare mention (followed by a space or quote) or localhost/127.0.0.1 is fine; use curl -sI or nc -z for reachability."
+fi
 
-# Explicit network-shell shapes. Claude should never emit these; worth stopping on
-# regardless of what COI would do.
+# Exec watcher node-reverse-shell (procwatcher.go:55-75): argv0 node + child_process + net → PAUSE.
+RE_NODE="${COI_TOK}node (-e|-p|--eval|--print)"
+if [[ $LC =~ $RE_NODE && $LC == *child_process* && $LC == *net* ]]; then
+  coi_deny "Blocked: node -e/-p with child_process and net matches COI's node reverse-shell exec pattern and PAUSES the container. Put the script in a file, or pipe it: node - <<'JS' … JS."
+fi
+
+# Sigma "Suspicious Download and Execute via Curl/Wget" (HIGH → container PAUSED, still on v0.15.0):
+# it needs `/curl` or `/wget` + `/tmp/` + `sh -c`, and the Bash tool's own wrapper supplies the last
+# two on every call — so the five characters alone (a path segment, a URL, a grep pattern) pause it.
 case "$LC" in
-  *"nc -e"*|*"nc.traditional -e"*|*"nc.openbsd -e"*|*"ncat -e"*|*"socat"*|*"/dev/tcp/"*|*"/dev/udp/"*|*"socket.socket"*|*"fsockopen"*|*"powershell"*|*"system.net.sockets"*)
-    deny "Blocked: that is a reverse-shell shape (netcat / socat / shell network redirect). COI treats it as CRITICAL and kills the container, and it should not be needed for development work." ;;
+  *"/curl"*|*"/wget"*)
+    coi_deny "Blocked: the text \`/curl\` or \`/wget\` (with the slash) anywhere on a Bash line PAUSES the COI container — Sigma's download-and-execute rule, completed by the Bash wrapper's own \`/tmp/\` + \`bash -c\`. Bare \`curl\`/\`wget\` is fine. To read a file under a curl/ or wget/ path use the Read tool; to search for those words use a fragment (e.g. \`url\`) or the Read tool." ;;
 esac
 
 # Everything else passes through silently.

@@ -63,14 +63,15 @@ fi
 
 # Push to a protected/deploy branch — by current branch OR explicit target.
 if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+push\b'; then
-  # Explicit target: `... main`, `... dev`, `HEAD:main`, `:dev`, `refs/heads/main`, etc.
-  if echo "$COMMAND" | grep -qE '(:|[[:space:]]|/)(main|master|dev)\b'; then
+  # Explicit target: ` main`, `HEAD:dev`, `refs/heads/dev`, `"dev"`, `+dev`. The name must END there: `\b` treated
+  # `-` `.` `/` as ends, so `dev-e2e`, `main-x` and even `2>/dev/null` were denied.
+  if echo "$COMMAND" | grep -qE '[[:space:]:/+"'\''](main|master|dev)([^[:alnum:]_./-]|$)'; then
     deny "Pushing to \`main\`/\`master\`/\`dev\` is blocked — these are deploy branches (a push there deploys). Push a feature branch and open a PR; merges to main happen via PR, not a direct push."
   fi
   # Only the current-branch resolution needs the repo dir — resolve cwd here, NOT above the string-match
   # deny blocks (a cd failure must never fail-open rm -rf / force-push / reset --hard).
   source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  CURRENT_BRANCH=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "")
   case "$CURRENT_BRANCH" in
     main|master|dev)
       deny "\`git push\` from \`$CURRENT_BRANCH\` is blocked — it's a protected/deploy branch. Create a feature branch first: \`git switch -c feature/<name>\`, then \`git push -u origin HEAD\`." ;;

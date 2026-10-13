@@ -5,7 +5,9 @@ Run:  python3 .claude/hooks/testdata/run-fixtures.py
 
 Suites:
   coi-reverse-shell-guard.sh  <- reverse-shell-fixtures.jsonl
+  coi-grep-guard.sh           <- grep-guard-fixtures.jsonl  (Grep payloads: "input" instead of "cmd")
   precommit-guard.sh          <- precommit-fixtures.jsonl  (deploy-branch block, secret scan, commit-message rule)
+  gh-safety-guard.sh          <- gh-safety-fixtures.jsonl  (destructive git, deploy-branch pushes, gh auth)
 
 WHY THIS EXISTS AS A FILE-DRIVEN RUNNER, and not as an inline shell loop:
 COI's monitor matches its reverse-shell patterns against every process's argv.
@@ -19,7 +21,7 @@ hook over STDIN. No flagged string ever appears in any process's argv:
   argv of the hook   -> ["bash", "<hook path>"]
 Both are clean. Keep it that way — do not "simplify" this into a shell one-liner.
 
-The commit guard runs git (branch check, staged-diff scan), so its fixtures get a
+The commit and gh-safety guards run git (branch check, staged-diff scan), so their fixtures get a
 throwaway repo on a feature branch as their cwd — hermetic, and independent of
 whatever branch the runner happens to be invoked from. A fixture may also set
 "branch" (run in a repo on that branch) and "stage" (file content staged first);
@@ -36,16 +38,18 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE"}
 
-# (hook, fixtures, needs_repo)
+# (hook, fixtures, tool, needs_repo)
 SUITES = [
-    ("coi-reverse-shell-guard.sh", "reverse-shell-fixtures.jsonl", False),
-    ("precommit-guard.sh", "precommit-fixtures.jsonl", True),
+    ("coi-reverse-shell-guard.sh", "reverse-shell-fixtures.jsonl", "Bash", False),
+    ("coi-grep-guard.sh", "grep-guard-fixtures.jsonl", "Grep", False),
+    ("precommit-guard.sh", "precommit-fixtures.jsonl", "Bash", True),
+    ("gh-safety-guard.sh", "gh-safety-fixtures.jsonl", "Bash", True),
 ]
 
 
-def decision_for(hook: pathlib.Path, command: str, cwd: str | None) -> str:
+def decision_for(hook: pathlib.Path, tool: str, tool_input: dict, cwd: str | None) -> str:
     """Run the hook with a PreToolUse payload; return its permission decision."""
-    payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+    payload = {"tool_name": tool, "tool_input": tool_input}
     if cwd:
         payload["cwd"] = cwd
     proc = subprocess.run(
@@ -71,9 +75,10 @@ def make_repo(root: str, branch: str) -> str:
     return repo
 
 
-def run_case(hook: pathlib.Path, case: dict, root: str | None) -> str:
+def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None) -> str:
+    tool_input = case.get("input") or {"command": case["cmd"]}
     if root is None:
-        return decision_for(hook, case["cmd"], None)
+        return decision_for(hook, tool, tool_input, None)
     repo = make_repo(root, case.get("branch", "fixture-branch"))
     if "stage" in case:
         content = case["stage"]
@@ -81,10 +86,10 @@ def run_case(hook: pathlib.Path, case: dict, root: str | None) -> str:
             content = content.replace(key, value)
         (pathlib.Path(repo) / "staged.txt").write_text(content + "\n", encoding="utf-8")
         subprocess.run(["git", "-C", repo, "add", "staged.txt"], check=True)
-    return decision_for(hook, case["cmd"], repo)
+    return decision_for(hook, tool, tool_input, repo)
 
 
-def run_suite(hook_name: str, fixtures_name: str, root: str | None) -> tuple[int, int]:
+def run_suite(hook_name: str, fixtures_name: str, tool: str, root: str | None) -> tuple[int, int]:
     hook = HERE.parent / hook_name
     if not hook.exists():
         print(f"hook not found: {hook}", file=sys.stderr)
@@ -98,11 +103,11 @@ def run_suite(hook_name: str, fixtures_name: str, root: str | None) -> tuple[int
         total += 1
         case = json.loads(line)
         expected = case["expect"]
-        actual = run_case(hook, case, root)
+        actual = run_case(hook, tool, case, root)
         ok = actual == expected
         if not ok:
             failures += 1
-        label = case["cmd"].splitlines()[0][:56]
+        label = (case.get("cmd") or json.dumps(case["input"])).splitlines()[0][:56]
         print(f"{'ok  ' if ok else 'FAIL'}  {expected:<5} got {actual:<7} {label}")
         if not ok:
             print(f"          reason expected: {case['why']}")
@@ -112,8 +117,8 @@ def run_suite(hook_name: str, fixtures_name: str, root: str | None) -> tuple[int
 def main() -> int:
     failures = total = 0
     with tempfile.TemporaryDirectory() as root:  # each repo-needing fixture gets a fresh repo under here
-        for hook_name, fixtures_name, needs_repo in SUITES:
-            f, t = run_suite(hook_name, fixtures_name, root if needs_repo else None)
+        for hook_name, fixtures_name, tool, needs_repo in SUITES:
+            f, t = run_suite(hook_name, fixtures_name, tool, root if needs_repo else None)
             failures += f
             total += t
     print(f"\n{total - failures}/{total} passed")
