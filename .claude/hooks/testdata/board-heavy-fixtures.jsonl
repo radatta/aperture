@@ -1,0 +1,19 @@
+{"expect":"nudge","why":"the full suite — offer heavy.sh (first test run this session)","cmd":"pnpm test"}
+{"expect":"nudge","why":"recursive test with workspace concurrency","cmd":"pnpm -r --workspace-concurrency=1 test"}
+{"expect":"nudge","why":"one package's whole suite is still heavy","cmd":"pnpm --filter @aperture/app test"}
+{"expect":"nudge","why":"typecheck","cmd":"pnpm typecheck"}
+{"expect":"nudge","why":"lint","cmd":"pnpm lint"}
+{"expect":"nudge","why":"dev server in the background","cmd":"pnpm dev &"}
+{"expect":"nudge","why":"headless Chromium screenshot script","cmd":"cd /tmp/pw && node shot.mjs --browser chromium"}
+{"expect":"nudge","why":"gate chain — classified by its first heavy part","cmd":"pnpm typecheck && pnpm lint && pnpm test"}
+{"expect":"allow","why":"already wrapped","cmd":"scripts/board/heavy.sh -- pnpm test"}
+{"expect":"allow","why":"single-file vitest run is light — no offer","cmd":"pnpm --filter @aperture/app exec vitest run src/data/seed.test.ts"}
+{"expect":"allow","why":"a commit message that mentions pnpm test is not a test run","cmd":"git commit -m \"fixed pnpm test flake\""}
+{"expect":"allow","why":"not heavy","cmd":"git status"}
+{"expect":"allow","why":"not heavy","cmd":"ls scripts/board"}
+{"expect":"nudge","why":"enforce on but load below soft — offers, never blocks","cmd":"pnpm test","limits":{"enforce":true}}
+{"expect":"nudge","why":"past hard but enforce off (the shipped default) — runs, with the offer","cmd":"pnpm test","cgroup":{"pids.current":"3700\n"}}
+{"expect":"deny","why":"enforce on and pids past the measured hard line — held at the edge","cmd":"pnpm test","limits":{"enforce":true},"cgroup":{"pids.current":"3700\n"}}
+{"expect":"deny","why":"enforce on and anon past the measured hard line","cmd":"pnpm --filter @aperture/app test","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 15032385536\nfile 0\n"}}
+{"expect":"nudge","why":"enforce on, over soft but under hard — still only an offer","cmd":"pnpm typecheck","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 12884901888\nfile 0\n"}}
+{"expect":"nudge","why":"another session's heavy job running — the offer repeats with the count","cmd":"pnpm test","running":2}

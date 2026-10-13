@@ -173,6 +173,22 @@ describe('board.sh dev lease', () => {
   });
 });
 
+describe('board.sh gc', () => {
+  it('drops heavy slots whose wrapper died (pid gone or reused) and keeps live ones', () => {
+    const live = liveSession();
+    const start = readFileSync(`/proc/${live}/stat`, 'utf8').split(') ')[1]!.split(' ')[19];
+    const dir = join(tmp, 'board/leases/heavy');
+    mkdirSync(dir, { recursive: true });
+    const slot = (name: string, wrapperPid: number, wrapperStart: string) =>
+      writeFileSync(join(dir, `${name}.json`), JSON.stringify({ v: 1, pid: 1, class: 'test', wrapperPid, wrapperStart }));
+    slot('live', live, start!);
+    slot('dead', 4194303, '1');
+    slot('reused', live, 'not-its-start-time');
+    expect(board(['gc']).out).toMatch(/removed 2 stale entries/);
+    expect(readdirSync(dir)).toEqual(['live.json']);
+  });
+});
+
 describe('heavy.sh', () => {
   it('passes the exit code through and logs a job event, slot released', () => {
     const r = heavy(['--', 'bash', '-c', 'exit 3'], {

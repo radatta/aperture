@@ -51,7 +51,7 @@ sb_stat() {
   read -r s 2>/dev/null <"/proc/$1/stat" || return 1
   r=${s##*) }
   set -- $r
-  printf '%s %s' "$2" "${20}"
+  printf '%s %s\n' "$2" "${20}"
 }
 sb_comm() { local c; read -r c 2>/dev/null <"/proc/$1/comm" && printf '%s' "$c"; }
 sb_alive() { local want="$2" ps st; read -r ps st < <(sb_stat "$1") || return 1; [ -z "$want" ] || [ "$st" = "$want" ]; }

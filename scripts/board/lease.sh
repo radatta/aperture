@@ -112,6 +112,7 @@ _heavy_try() {
     "${BOARD_CLI[@]}" decide-heavy) || { echo '{"verdict":"grant","wait":false,"error":true}'; return 0; }  # fail open
   printf '%s\n' "$dec"
   [ "$(jq -r .wait <<<"$dec")" = true ] && return 3
+  [ -n "$slot" ] || return 0  # decide only (the PreToolUse guard)
   jq -nc --argjson pid "$owner" --arg class "$class" --arg label "$label" --argjson wp "$wp" --arg ws "$ws" \
     --argjson cost "$(jq -c --arg c "$class" '.classes[$c] // {pids: 0, anonMiB: 0} | {pids, anonMiB}' "$LIMITS_JSON")" \
     '{v: 1, pid: $pid, class: $class, label: $label, cost: $cost, wrapperPid: $wp, wrapperStart: $ws, startedAt: (now | todate)}' | sb_write "$slot"
