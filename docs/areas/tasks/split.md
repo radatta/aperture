@@ -61,7 +61,7 @@ Smaller build-time calls (file placement, write order, hint copy, focus, MCP str
 
 As of 2026-10-08 (parts.md D6 and D9):
 
-- **Editor** (`TaskDetailsForm`): Estimate and Buffer render whenever the task is open; the lock line and the reseed-on-outside-change rule are in [task-editor.md](task-editor.md). The section label is Scope, then Rescope, then Details. A parent has no Split (it takes parts), nor does a roll rep or a recurring occurrence ([parts.md](parts.md) D11), and its estimate is read-only, the sum of its parts.
+- **Editor** (`TaskDetailsForm`): Estimate and Buffer render whenever the task is open; the lock line and the reseed-on-outside-change rule are in [task-editor.md](task-editor.md). The section label is Scope, then Rescope, then Details. A parent has no Split (it takes parts), and its estimate is read-only, the sum of its parts. Nor does a roll rep or a recurring occurrence have Split ([parts.md](parts.md) D11).
 - **Split form** (`SplitForm`, phone-width stack):
   - a "Done with this part / Keep going" toggle, shown only for an in-progress task (otherwise keep only, with "Not started — each part gets its own estimate.");
   - **Deliverable (new)**, standalone only: the new parent's title, prefilled with the task's;

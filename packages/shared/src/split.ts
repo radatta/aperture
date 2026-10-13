@@ -17,9 +17,9 @@ export const STANDALONE_PART_TITLE = 'Part 1';
 export const REP_NO_SPLIT_ERROR =
   'A roll rep or a recurring task isn’t split — it’s one rep of a repeating thing. Rescope it or finish it.';
 
-// The editor's "Split…" gate: open, and not a rep (splitting one would leave two reps on one day). The
-// caller hides it on a parent too (PARENT_NO_SPLIT_ERROR).
-export const canSplit = (task: Task): boolean =>
+// The editor's "Split…" gate — splitOriginal's own refusals (finished, a rep: two reps on one day), so the
+// button never offers what the server refuses. The caller hides it on a parent too (PARENT_NO_SPLIT_ERROR).
+export const canSplit = (task: Pick<Task, 'status' | 'rollId' | 'seriesId'>): boolean =>
   task.status !== 'done' && task.status !== 'cancelled' && !isRep(task);
 
 // Where the follow-up lands: the latest day the original is planned on (pass its alive plan rows), or

@@ -638,11 +638,14 @@ export function runApiContract(
       const occurrence = (await api.listTasks()).find((t) => t.seriesId);
       expect(occurrence).toBeDefined();
       const before = (await api.listTasks()).length;
+      const plans = await api.listPlansForDay('2026-08-04');
       for (const t of [rep, occurrence!])
         await expect(
           api.splitTask(t.id, { finish: 'keep', followUp: { title: 'rest', estimateMin: null } }),
         ).rejects.toThrow(REP_NO_SPLIT_ERROR);
+      // Refused before any write: no parent, no follow-up, no plan row.
       expect(await api.listTasks()).toHaveLength(before);
+      expect(await api.listPlansForDay('2026-08-04')).toEqual(plans);
       // A roll-tagged part can't be made through the API any more; split.test.ts covers one from before.
     });
 
