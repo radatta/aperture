@@ -67,27 +67,3 @@ jobs:
       # no faster on the 2-vCPU runner. No `--` before the flag: pnpm forwards a `--` itself, and vitest
       # then runs all 68 files.
       - run: pnpm --filter @aperture/app test --shard=${{ matrix.shard }}/2
-
-  # TEMPORARY (faster-ci-check only; removed before the PR opens): the old setup, and the new one without
-  # the store cache, run beside the real jobs on the same commit so the setup numbers are comparable.
-  probe-setup-old:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-
-  probe-setup-nocache:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - run: corepack enable && corepack install && node --version && pnpm --version
-      - run: pnpm install --frozen-lockfile

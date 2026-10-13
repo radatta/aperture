@@ -103,7 +103,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 
 **File:** new `.github/dependabot.yml`.
 
-- **`github-actions`** ecosystem, `directory: "/"` (workflows) plus `/.github/actions/setup` (the local setup action), weekly, one group matching `"*"` each → action bumps in one weekly PR per entry (keeps `aws-actions/configure-aws-credentials` and `actions/*` current).
+- **`github-actions`** ecosystem, `directory: "/"`, weekly, one group matching `"*"` → all action bumps in a single weekly PR (keeps `aws-actions/configure-aws-credentials` and `actions/*` current; `directory: "/"` doesn't scan the local `.github/actions/setup`, which is run steps only — give it its own entry if it ever gains a `uses:`).
 - **`npm`** ecosystem, `directory: "/"`, `open-pull-requests-limit: 0` → suppresses routine version updates so **only security PRs** come through (security updates ignore the limit). Dependabot's npm updater handles the pnpm workspace / `pnpm-lock.yaml`.
 - **Merge workflow for a Dependabot PR:** merge normally once the required checks pass. (While the `required_deployments:[dev]` rule was enforced — retired 2026-09-10, INFRA §9 — Dependabot couldn't record the dev deployment itself, so the PR's SHA had to be pushed to `dev` first, passing the "Branch is up to date with main" step in deploy.yml's `changes` job; that is now optional, useful only to validate an action bump on real infra.) No restricted-secret concern (deploy is push-triggered).
 
