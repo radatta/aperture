@@ -31,7 +31,7 @@ tick() {  # $1 = print → stdout only, nothing written
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \
     -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" \
-    -v prevOut="$pOut" -v statusOut="$sOut" \
+    -v prevOut="$pOut" -v statusOut="$sOut" -v F1="$panes" -v F2="$sess" -v F3="$slots" -v F4="$prev" \
     "$panes" "$sess" "$slots" "$prev" -)
   rm -f "$panes" "$sess" "$slots"
   [ "${1:-}" = print ] && { printf '%s\n' "$line"; return; }

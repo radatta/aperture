@@ -13,7 +13,12 @@
   },
   "tuning": { "test": null },
   "classes": {
-    "test": { "pids": 320, "anonMiB": 3300, "p95Sec": 45, "source": "bench 2026-10-06 ×1.6 (8 workers)" },
+    "test": {
+      "pids": 320,
+      "anonMiB": 3300,
+      "p95Sec": 45,
+      "source": "bench 2026-10-06 ×1.6 (8 workers)"
+    },
     "ui": { "pids": 350, "anonMiB": 1800, "p95Sec": 900, "source": "bench 2026-10-06 ×1.6" },
     "typecheck": { "pids": 40, "anonMiB": 700, "p95Sec": 10, "source": "bench 2026-10-06" },
     "lint": { "pids": 40, "anonMiB": 900, "p95Sec": 10, "source": "bench 2026-10-06" },

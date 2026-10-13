@@ -49,7 +49,7 @@ cmd_heartbeat() {
   [ -f "$f" ] || cmd_register || return 1
   jq -c --arg s "$state" --arg now "$(sb_now)" \
     '.state = $s | .updatedAt = $now | if $s == "working" then .lastPromptAt = $now else .lastStopAt = $now end' "$f" | sb_write "$f"
-  [ "$state" = working ] && [ "$(type -t lease_renew_dev)" = function ] && lease_renew_dev "$pid"
+  [ "$state" = working ] && lease_renew_dev "$pid"
   return 0
 }
 
@@ -59,7 +59,7 @@ cmd_end() {
   f=$(me_file "$pid")
   [ -f "$f" ] && jq -c --arg now "$(sb_now)" '.state = "gone" | .endedAt = $now | .updatedAt = $now' "$f" | sb_write "$f"
   for s in "$BOARD_DIR/leases/heavy/$pid"-*.json; do [ -e "$s" ] && rm -f "$s"; done
-  [ "$(type -t lease_end_dev)" = function ] && lease_end_dev "$pid"
+  lease_end_dev "$pid"
   return 0
 }
 
@@ -166,7 +166,7 @@ cmd_gc() {
   echo "gc: removed $n stale entr$( [ $n = 1 ] && echo y || echo ies)"
 }
 
-[ -f "$SB_SCRIPTS/lease.sh" ] && . "$SB_SCRIPTS/lease.sh"
+. "$SB_SCRIPTS/lease.sh"
 
 case "${1:-status}" in
   status) cmd_status ;;
@@ -177,6 +177,6 @@ case "${1:-status}" in
   note) shift; cmd_note "$@" ;;
   sampler) shift; cmd_sampler "$@" ;;
   gc) cmd_gc ;;
-  lease) shift; [ "$(type -t cmd_lease)" = function ] && cmd_lease "$@" || { echo "board: leases not available" >&2; exit 2; } ;;
+  lease) shift; cmd_lease "$@" ;;
   *) sed -n '2,6p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

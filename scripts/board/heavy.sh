@@ -8,6 +8,7 @@
 #      HEAVY_GUARD=1 (enforce the stop conditions — load tests only).
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+. "$SB_SCRIPTS/lease.sh"
 
 wait_sec=
 while [ $# -gt 0 ]; do
@@ -39,13 +40,7 @@ fi
 slot=
 if [ "$class" != test-file ] && [ "$class" != other ]; then
   slot="$BOARD_DIR/leases/heavy/$owner-$me.json"
-  if [ "$(type -t lease_heavy_acquire)" = function ]; then
-    lease_heavy_acquire "$slot" "$owner" "$class" "$label" "$cmd" "$me" "$me_start" "${wait_sec:-}" || exit $?
-  else
-    sb_init_dirs
-    jq -nc --argjson pid "$owner" --arg class "$class" --arg label "$label" --argjson wp "$me" --arg ws "$me_start" \
-      --arg now "$(sb_now)" '{v:1, pid:$pid, class:$class, label:$label, wrapperPid:$wp, wrapperStart:$ws, startedAt:$now}' | sb_write "$slot"
-  fi
+  lease_heavy_acquire "$slot" "$owner" "$class" "$label" "$cmd" "$me" "$me_start" "${wait_sec:-}" || exit $?
 fi
 
 # Descendants of $1 (inclusive) with their threads/rss — one awk over one /proc pass.
@@ -149,7 +144,7 @@ event=$(jq -nc --arg t "$(sb_now)" --argjson pid "$owner" --arg name "$name" --a
   --argjson highMiB "$((MEM_HIGH / 1048576))" --argjson oomd "$oomd" --argjson highd "$highd" \
   --argjson psi "$pk_psi" --arg verdict "$verdict" --arg stop "$stop" --argjson mix "${mix:-null}" \
   --arg guard "${HEAVY_GUARD:-0}" '
-  {v: 1, t: $t, pid: $pid, name: $name, branch: $branch, label: $label, class: $class, cmd: $cmd,
+  {v: 1, t: $t, kind: "job", pid: $pid, name: $name, branch: $branch, label: $label, class: $class, cmd: $cmd,
    exit: $exit, signal: $signal, wallSec: ($wall / 10),
    peak: {dPids: $dPids, dAnonMiB: $dAnon, pids: $pkPids, anonMiB: $pkAnon, currentMiB: $pkCur,
           subtreeThr: $thr, subtreeRssMiB: $rss, cores: $cores},

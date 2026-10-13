@@ -1,5 +1,5 @@
 # One sampler tick → one JSON line on stdout (docs/ops/SESSION-BOARD.md → Sampler format).
-# Inputs, in ARGV order (gawk ARGIND): 1 tmux panes  "window\tpane_pid"
+# Inputs, in ARGV order (named F1–F4 via -v; no gawk ARGIND): 1 tmux panes  "window\tpane_pid"
 #                                      2 sessions    "pid\tsid\tname\tbranch\tstate"   (hook-registered)
 #                                      3 heavy slots "pid\tlabel"
 #                                      4 prev tick   "T\tepoch\tusage_usec" | "S\tpid\tcpuTicks"
@@ -7,11 +7,11 @@
 # -v: t ep interval anon file current high pids pidsMax usage psiMemSome psiMemFull psiCpuSome oomKill
 #     highEvents page hz prevOut statusOut
 BEGIN { FS = "\t"; MiB = 1048576 }
-ARGIND == 1 { win[$2] = $1; next }
+FILENAME == F1 { win[$2] = $1; next }
 # A hook state counts only once a heartbeat has fired (sampler.sh blanks it otherwise).
-ARGIND == 2 { reg[$1] = 1; sid[$1] = $2; rname[$1] = $3; branch[$1] = $4; hstate[$1] = $5; next }
-ARGIND == 3 { if (!($1 in heavy)) heavy[$1] = $2; else heavy[$1] = heavy[$1] "+" $2; nslots++; next }
-ARGIND == 4 {
+FILENAME == F2 { reg[$1] = 1; sid[$1] = $2; rname[$1] = $3; branch[$1] = $4; hstate[$1] = $5; next }
+FILENAME == F3 { if (!($1 in heavy)) heavy[$1] = $2; else heavy[$1] = heavy[$1] "+" $2; nslots++; next }
+FILENAME == F4 {
   if ($1 == "T") { prevEp = $2; prevUsage = $3 } else if ($1 == "S") prevCpu[$2] = $3
   next
 }
