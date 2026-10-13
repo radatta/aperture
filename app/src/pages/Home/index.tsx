@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { contributesCalibration, dayKey, partsOf, todayKey } from '@aperture/shared';
+import { contributesCalibration, dayKey, rollupParts, todayKey } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
@@ -220,7 +220,7 @@ function ReviewCard({ today }: { today: string }) {
   const doneToday = tasks.filter(
     (t) => t.status === 'done' && t.completedAt != null && dayKey(t.completedAt, start) === today,
   );
-  const label = (t: (typeof tasks)[number]) => rollupLabel(t.title, partsOf(tasks, t.id).length);
+  const label = (t: (typeof tasks)[number]) => rollupLabel(t.title, rollupParts(tasks, t.id));
 
   return (
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>

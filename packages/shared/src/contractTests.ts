@@ -3,6 +3,7 @@ import type { ApiClient } from './api';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
+import { REP_NO_SPLIT_ERROR } from './split';
 import {
   deriveFinanceView,
   FINANCE_REFRESH_COOLDOWN_MS,
@@ -512,8 +513,9 @@ export function runApiContract(
       const cal = await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' });
       expect(cal.map((x) => x.taskId)).toEqual(expect.arrayContaining([p.id, a.id, b.id]));
       expect(cal.map((x) => x.taskId)).not.toContain(c.id);
-      // The rollup says how many parts it covers (dropped ones too), so the headline can skip it.
-      expect(cal.find((x) => x.taskId === p.id)?.parts).toBe(3);
+      // The rollup says how many parts it covers — the ones not dropped, the card's 2/2 — so the
+      // headline can skip it.
+      expect(cal.find((x) => x.taskId === p.id)?.parts).toBe(2);
       expect(cal.find((x) => x.taskId === a.id)?.parts).toBe(0);
     });
 
@@ -620,6 +622,28 @@ export function runApiContract(
       await expect(api.createTask({ title: 'p', parentId: rep.id })).rejects.toThrow(
         /one rep of a repeating thing/,
       );
+    });
+
+    it('parts: a roll rep or a recurring occurrence can’t be split — no parent is minted', async () => {
+      const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
+      const { task: rep } = await api.pickRollToday(roll.id, '2026-08-04');
+      await api.upsertSeries({
+        title: 'Daily standup',
+        categoryId: null,
+        defaultEstimateMin: 15,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+      });
+      await api.getDay('2026-08-04');
+      const occurrence = (await api.listTasks()).find((t) => t.seriesId);
+      expect(occurrence).toBeDefined();
+      const before = (await api.listTasks()).length;
+      for (const t of [rep, occurrence!])
+        await expect(
+          api.splitTask(t.id, { finish: 'keep', followUp: { title: 'rest', estimateMin: null } }),
+        ).rejects.toThrow(REP_NO_SPLIT_ERROR);
+      expect(await api.listTasks()).toHaveLength(before);
+      // A roll-tagged part can't be made through the API any more; split.test.ts covers one from before.
     });
 
     it('parts: with every part dropped the parent can’t be marked done — it’s dropped instead', async () => {

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  REP_NO_SPLIT_ERROR,
   STANDALONE_PART_TITLE,
+  canSplit,
   followUpPlanDay,
   followUpPlanMinutes,
   newParentFrom,
@@ -131,6 +133,14 @@ describe('splitOriginal', () => {
     ).toThrow(/already has its title/);
   });
 
+  it('refuses a roll rep or a recurring occurrence — standalone or a part (one from before parts.md D11)', () => {
+    for (const over of [{ rollId: 'r' }, { seriesId: 's' }])
+      for (const standalone of [true, false])
+        expect(() =>
+          splitOriginal(task(over), { finish: 'keep', followUp }, 1, standalone),
+        ).toThrow(REP_NO_SPLIT_ERROR);
+  });
+
   it('a standalone original becomes Part 1 unless a title is typed; a part keeps its title', () => {
     expect(splitOriginal(task(), { finish: 'keep', followUp }, 1, true).title).toBe(
       STANDALONE_PART_TITLE,
@@ -196,7 +206,7 @@ describe('newParentFrom', () => {
 });
 
 describe('splitFollowUp', () => {
-  it('a fresh unlocked part of the parent carrying category, time, notes and roll', () => {
+  it('a fresh unlocked part of the parent carrying category, time and notes — never a roll', () => {
     const f = splitFollowUp(
       task({ dueDay: '2026-10-09', dueTime: '17:00', notes: 'ctx', rollId: 'r' }),
       followUp,
@@ -214,7 +224,7 @@ describe('splitFollowUp', () => {
       dueDay: '2026-10-09',
       dueTime: '17:00',
       notes: 'ctx',
-      rollId: 'r',
+      rollId: null,
       gcalEventId: null,
     });
   });
@@ -230,5 +240,19 @@ describe('splitFollowUp', () => {
     expect(f.status).toBe('backlog');
     expect(f.parentId).toBe('p1');
     expect(f.notes).toBeNull();
+  });
+});
+
+describe('canSplit', () => {
+  it('an open task that isn’t a rep', () => {
+    expect(canSplit(task())).toBe(true);
+    expect(canSplit(task({ status: 'backlog' }))).toBe(true);
+    for (const over of [
+      { status: 'done' as const },
+      { status: 'cancelled' as const },
+      { rollId: 'r' },
+      { seriesId: 's' },
+    ])
+      expect(canSplit(task(over))).toBe(false);
   });
 });

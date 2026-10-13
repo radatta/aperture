@@ -239,8 +239,8 @@ export interface CalibrationPoint {
   estimateLockedMin: number;
   actualAccruedMin: number;
   categoryId: string | null;
-  // > 0 = a done parent's rollup (parts.ts), over this many parts — each already a point of its own, so the
-  // headline skips it to count the work once.
+  // > 0 = a done parent's rollup (parts.ts), over this many parts not dropped (the card's "2/2") — each
+  // already a point of its own, so the headline skips it to count the work once.
   parts: number;
 }
 

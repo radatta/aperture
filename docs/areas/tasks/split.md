@@ -27,7 +27,7 @@ The split mechanics live in `packages/shared/src/split.ts`, and the parent rules
 
 **D2. A split never cancels.** The original either finishes (`finish: 'done'`, only for a started task; the UI and MCP require an actual) or keeps going (`'keep'`, optionally renamed or rescoped). The rest becomes a new task. Dropping the rest is plain Cancel, a separate action.
 
-- The new task carries the category, a timed original's day and time, notes and `rollId`. An untimed day isn't carried, and a standalone original drops its own: that day is the deadline, which is the parent's now (superseded 2026-10-11 by [parts.md](parts.md) D7 → _An untimed split_).
+- The new task carries the category, a timed original's day and time, and notes; `rollId` too until 2026-10-12, when a rep stopped being split ([parts.md](parts.md) D11). An untimed day isn't carried, and a standalone original drops its own: that day is the deadline, which is the parent's now (superseded 2026-10-11 by [parts.md](parts.md) D7 → _An untimed split_).
 - It lands on the original's latest plan day if the original is `planned`/`in_progress` (a plan row with estimate + buffer, or 30 when unscoped). Otherwise it goes to the backlog. A past plan day self-heals: `getDay(today)`'s stale sweep moves the task back to backlog. The original's own row on that day is re-sized so the day's planned total counts the job once (`rescopedPlanMinutes`): a done part's row becomes its actual (what it really took), and a kept-going original that was rescoped gets its new estimate + buffer.
 - `splitOriginal` validates the whole input before any write.
 
@@ -42,7 +42,7 @@ The split mechanics live in `packages/shared/src/split.ts`, and the parent rules
 
 Write order on a done timed split: the original is saved unlinked, and then the follow-up is saved with the link. If the follow-up's write fails, the Google event is left orphaned but visible. The reverse order is worse: if the original's write failed, two tasks would point at one event, and a retry would duplicate the follow-up.
 
-**D5. Rolls.** B inherits `rollId`, so finishing the rest tomorrow honestly counts as a rep tomorrow, and one pick can yield two reps. With a kept-going A, a roll has two open reps; `findOpenRollTask` re-plans the first. Harmless.
+**D5. Rolls** (superseded 2026-10-12 by [parts.md](parts.md) D11: a roll rep or a recurring occurrence isn't split, and B never carries a roll). B inherited `rollId`, so finishing the rest tomorrow honestly counts as a rep tomorrow, and one pick can yield two reps. With a kept-going A, a roll has two open reps; `findOpenRollTask` re-plans the first. Harmless.
 
 **D6 (superseded 2026-10-08 by parts.md D5: every part is a point, and so is the done parent). Interim calibration: split families are excluded.** A done A measured against the whole job's lock would read "overestimated" when you actually underestimated. So `isCalibrationPoint` leaves out every family member (A and B) until piece 3 scores the family as one point (root lock vs Σ actual). Excluding B too keeps the aggregate from jumping when piece 3 lands.
 
@@ -61,7 +61,7 @@ Smaller build-time calls (file placement, write order, hint copy, focus, MCP str
 
 As of 2026-10-08 (parts.md D6 and D9):
 
-- **Editor** (`TaskDetailsForm`): Estimate and Buffer render whenever the task is open; the lock line and the reseed-on-outside-change rule are in [task-editor.md](task-editor.md). The section label is Scope, then Rescope, then Details. A parent has no Split (it takes parts), and its estimate is read-only, the sum of its parts.
+- **Editor** (`TaskDetailsForm`): Estimate and Buffer render whenever the task is open; the lock line and the reseed-on-outside-change rule are in [task-editor.md](task-editor.md). The section label is Scope, then Rescope, then Details. A parent has no Split (it takes parts), nor does a roll rep or a recurring occurrence ([parts.md](parts.md) D11), and its estimate is read-only, the sum of its parts.
 - **Split form** (`SplitForm`, phone-width stack):
   - a "Done with this part / Keep going" toggle, shown only for an in-progress task (otherwise keep only, with "Not started — each part gets its own estimate.");
   - **Deliverable (new)**, standalone only: the new parent's title, prefilled with the task's;

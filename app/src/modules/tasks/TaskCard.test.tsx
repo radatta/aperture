@@ -450,6 +450,21 @@ describe('parent + parts', () => {
     expect(screen.getByRole('button', { name: 'Week · 1' })).toBeTruthy();
   });
 
+  it('“unscoped” counts open parts only — a done one’s estimate can’t be set any more', async () => {
+    const { api, p } = await seeded(false);
+    const c = await api.createTask({ title: 'cite', parentId: p.id });
+    await api.transitionTask(c.id, 'in_progress');
+    await api.transitionTask(c.id, 'done');
+    const { unmount } = renderApp({ api, path: '/tasks?lens=week' });
+    const row = await waitFor(() => rowOf('P2'));
+    expect(within(row).getByText(/2\/3 · est 1h 45m/)).toBeTruthy();
+    expect(within(row).queryByText(/unscoped/)).toBeNull();
+    unmount();
+    await api.createTask({ title: 'proofread', parentId: p.id }); // an open one still asks for a size
+    renderApp({ api, path: '/tasks?lens=week' });
+    expect(within(await waitFor(() => rowOf('P2'))).getByText(/1 unscoped/)).toBeTruthy();
+  });
+
   it('once every part is done the card offers one-tap Mark done', async () => {
     const { api, p } = await seeded(true);
     const user = userEvent.setup();

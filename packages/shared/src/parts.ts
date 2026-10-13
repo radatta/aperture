@@ -24,6 +24,9 @@ const finished = (t: Pick<Task, 'status'>) => t.status === 'done' || t.status ==
 
 export const isPart = (t: Pick<Task, 'parentId'>): boolean => !!t.parentId;
 
+// One rep of a repeating thing (a roll pick or a series occurrence): it takes no parts and isn't split.
+export const isRep = (t: Pick<Task, 'rollId' | 'seriesId'>): boolean => !!t.rollId || !!t.seriesId;
+
 // A parent's parts, oldest first (the order "Part 2 of 3" counts in). Pass alive tasks.
 export function partsOf(tasks: Task[], parentId: string): Task[] {
   return tasks
@@ -44,7 +47,7 @@ export interface PartsSummary {
   done: number;
   open: Task[]; // not done or dropped
   estimateMin: number | null; // Σ estimates of the non-dropped parts; null when none is scoped
-  unscoped: number; // non-dropped parts with no estimate
+  unscoped: number; // open parts with no estimate — a done one's can't be set any more, so it isn't a nag
   actualMin: number; // Σ logged time of the non-dropped parts
   allDone: boolean; // something to submit and nothing open — the "mark it submitted?" nudge
 }
@@ -59,11 +62,15 @@ export function partsSummary(parts: Task[]): PartsSummary {
     done: kept.length - open.length,
     open,
     estimateMin: scoped.length ? scoped.reduce((s, p) => s + (p.estimateMin ?? 0), 0) : null,
-    unscoped: kept.length - scoped.length,
+    unscoped: open.filter((p) => p.estimateMin === null).length,
     actualMin: kept.reduce((s, p) => s + p.actualAccruedMin, 0),
     allDone: kept.length > 0 && open.length === 0,
   };
 }
+
+// A done parent's rollup covers this many parts — the ones not dropped, as the card's "2/2" counts.
+export const rollupParts = (tasks: Task[], parentId: string): number =>
+  partsSummary(partsOf(tasks, parentId)).total;
 
 // The hard block on marking a parent done, naming what's still open.
 export function partOpenError(open: Pick<Task, 'title'>[]): string {
@@ -152,7 +159,7 @@ export function assertParentEligible(parent: Task, tasks: Task[]): void {
   if (finished(parent)) throw new Error(`Can’t add a part to a ${parent.status} task`);
   if (hasParts(tasks, parent.id) || canBecomeParent(parent)) return;
   throw new Error(
-    parent.rollId || parent.seriesId
+    isRep(parent)
       ? 'A roll rep or a recurring task can’t take parts — it’s one rep of a repeating thing'
       : 'It’s already been worked on — split it instead, which keeps that work as Part 1',
   );
@@ -163,8 +170,7 @@ export function canBecomeParent(task: Task): boolean {
   return (
     !task.parentId &&
     !finished(task) &&
-    !task.rollId &&
-    !task.seriesId &&
+    !isRep(task) &&
     task.status !== 'in_progress' &&
     task.startedAt === null &&
     task.actualAccruedMin === 0

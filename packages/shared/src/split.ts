@@ -2,15 +2,25 @@
 // parts: a standalone task becomes Part 1 under a NEW parent that takes its title, deadline and lock (so the
 // parent's rollup covers the whole job), and a part just gains a sibling. A split never cancels: this part
 // finishes ('done') or keeps going ('keep'), and the remaining work becomes a new part with its own estimate.
-// Parent rules (who can be one, the rollup) live in parts.ts; this file is the split mechanics.
+// A roll rep or a recurring occurrence isn't split (parts.md D11). Parent rules (who can be one, the
+// rollup) live in parts.ts; this file is the split mechanics.
 
 import type { SplitTaskInput } from './api';
 import { canTransitionTask, taskTransition, withEstimate } from './machines';
+import { isRep } from './parts';
 import { ROLL_PLAN_FALLBACK_MIN } from './rolls';
 import type { BaseEntity, Task, TaskPlan } from './types';
 
 // A standalone original's title once it's the first part (the form prefills it; any title can be typed).
 export const STANDALONE_PART_TITLE = 'Part 1';
+
+export const REP_NO_SPLIT_ERROR =
+  'A roll rep or a recurring task isn’t split — it’s one rep of a repeating thing. Rescope it or finish it.';
+
+// The editor's "Split…" gate: open, and not a rep (splitting one would leave two reps on one day). The
+// caller hides it on a parent too (PARENT_NO_SPLIT_ERROR).
+export const canSplit = (task: Task): boolean =>
+  task.status !== 'done' && task.status !== 'cancelled' && !isRep(task);
 
 // Where the follow-up lands: the latest day the original is planned on (pass its alive plan rows), or
 // null → backlog. A past day self-heals — getDay(today)'s stale sweep moves it back to backlog.
@@ -48,6 +58,7 @@ export function splitOriginal(
 ): Task {
   if (task.status === 'done' || task.status === 'cancelled')
     throw new Error(`Can't split a finished task (status: ${task.status})`);
+  if (isRep(task)) throw new Error(REP_NO_SPLIT_ERROR);
   if (input.finish !== 'done' && input.finish !== 'keep')
     throw new Error(`Invalid split finish: ${String(input.finish)}`);
   if (input.finish === 'done' && !canTransitionTask(task.status, 'done'))
@@ -137,7 +148,7 @@ export function splitFollowUp(
     dueTime: original.dueTime ?? null,
     notes: original.notes ?? null, // the remaining scope keeps its context
     seriesId: null,
-    rollId: original.rollId, // finishing the split-off remainder tomorrow is honestly a rep tomorrow
+    rollId: null, // a rep is never split (splitOriginal), so a part never carries a roll
     estimateMin: followUp.estimateMin,
     bufferMin: followUp.bufferMin ?? null,
     estimateLockedMin: null,

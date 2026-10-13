@@ -48,6 +48,7 @@ import {
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
+  rollupParts,
   releaseParent,
   splitFollowUp,
   rescopedPlanMinutes,
@@ -1589,7 +1590,7 @@ export class BackendClient implements ApiClient {
         estimateLockedMin: t.estimateLockedMin as number,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
-        parts: partsOf(tasks, t.id).length,
+        parts: rollupParts(tasks, t.id),
       }))
       .filter((p) => p.day >= range.from && p.day <= range.to)
       .sort((a, b) => a.day.localeCompare(b.day));

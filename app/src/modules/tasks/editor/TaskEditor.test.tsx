@@ -661,6 +661,33 @@ describe('TaskEditor', () => {
       expect(screen.getByRole('button', { name: /^Split/ })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
     });
+
+    it('a roll rep offers neither Split nor Break down — it’s one rep of a repeating thing', async () => {
+      const client = api();
+      const roll = await client.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
+      const { task: rep } = await client.pickRollToday(roll.id, '2026-08-04');
+      renderEditor(client, rep);
+      expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy(); // the row rendered
+      expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
+    });
+
+    it('a recurring occurrence offers neither Split nor Break down', async () => {
+      const client = api();
+      await client.upsertSeries({
+        title: 'Daily standup',
+        categoryId: null,
+        defaultEstimateMin: 15,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+      });
+      await client.getDay('2026-08-04');
+      const occurrence = (await client.listTasks()).find((t) => t.seriesId)!;
+      renderEditor(client, occurrence);
+      expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
+    });
   });
 
   it('locks Due but keeps Category editable on a finished task', async () => {

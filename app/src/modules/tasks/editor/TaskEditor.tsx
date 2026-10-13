@@ -3,6 +3,7 @@ import type { ReactNode, Ref } from 'react';
 import {
   autoSyncOn,
   canBecomeParent,
+  canSplit,
   contributesCalibration,
   fmtDueDay,
   hasKeptPart,
@@ -143,6 +144,8 @@ export function TaskEditor({
   const showDelta = contributesCalibration(task);
   // parts.ts canBecomeParent: never worked on, not a part, not a roll rep or a recurring occurrence.
   const canBreakDown = !isParent && canBecomeParent(task);
+  // split.ts canSplit: open, not a roll rep or a recurring occurrence — and a parent takes a part instead.
+  const showSplit = !isParent && canSplit(task);
   const timeHasContent =
     showLogged ||
     showRemaining ||
@@ -421,7 +424,7 @@ export function TaskEditor({
       {/* Manage — the lower-frequency, mostly destructive actions. */}
       <section className="flex flex-col gap-2 border-t border-line pt-3">
         <div className="flex flex-wrap items-center gap-2">
-          {!isTerminal && !isParent && (
+          {showSplit && (
             <Button ref={splitRef} variant="quiet" size="sm" onClick={() => setReveal('split')}>
               Split…
             </Button>

@@ -104,6 +104,8 @@ describe('night: today in review', () => {
     await api.transitionTask(followUp.id, 'in_progress');
     await api.setTaskActual(followUp.id, 25);
     await api.transitionTask(followUp.id, 'done');
+    const skipped = await api.createTask({ title: 'skipped', parentId: parent.id });
+    await api.transitionTask(skipped.id, 'cancelled'); // dropped: not one of the rollup's parts
     await api.transitionTask(parent.id, 'done');
     const loose = await api.createTask({ title: 'quick errand' }); // never estimated
     await api.transitionTask(loose.id, 'in_progress');

@@ -98,8 +98,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   split" is the product's move, so voice gets it as one call rather than improvising cancel + create.
   `finish: "done"` (a started task only) **requires `actualMin`** — the same posture as `complete_task`;
   `keep` rejects it. A split always yields parent + parts: a standalone task becomes "Part 1" (unless `title`)
-  under a new parent titled `parentTitle` or its own title; on a part, `parentTitle` is refused; a parent can't
-  be split. Returns `{parent, original, followUp}`. Worth the claude.ai per-tool "ask".
+  under a new parent titled `parentTitle` or its own title; on a part, `parentTitle` is refused; a parent, a roll
+  rep or a recurring occurrence can't be split ([tasks/parts.md](../tasks/parts.md) D11). Returns `{parent, original, followUp}`. Worth the claude.ai per-tool "ask".
 - **Due times** ([tasks/due-dates.md](../tasks/due-dates.md)): `dueTime` (`HH:MM`, 24h, the user's local
   time) rides on `create_task`, `create_tasks` and `update_task`, validated before any dispatch. In
   `update_task`, `dueDay` and `dueTime` go out as **one** `setTaskDue` write: time-only keeps the task's

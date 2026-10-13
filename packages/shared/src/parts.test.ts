@@ -10,12 +10,14 @@ import {
   deadlineOf,
   freezeParentLock,
   hasParts,
+  isRep,
   parentOf,
   partIndex,
   partOpenError,
   partsOf,
   partsSummary,
   releaseParent,
+  rollupParts,
 } from './parts';
 import type { Task } from './types';
 
@@ -76,10 +78,24 @@ describe('partsSummary', () => {
       part('a2', { status: 'in_progress', estimateMin: 60, actualAccruedMin: 10 }),
       part('a3', { estimateMin: null }),
       part('a4', { status: 'cancelled', estimateMin: 90, actualAccruedMin: 5 }),
+      part('a5', { status: 'done', estimateMin: null, actualAccruedMin: 20 }),
+      part('a6', { status: 'cancelled', estimateMin: null }),
     ]);
-    expect(s).toMatchObject({ total: 3, done: 1, estimateMin: 105, unscoped: 1, actualMin: 60 });
+    // unscoped is open parts only: a done one's estimate can't be set any more, a dropped one is gone.
+    expect(s).toMatchObject({ total: 4, done: 2, estimateMin: 105, unscoped: 1, actualMin: 80 });
     expect(s.open.map((t) => t.id)).toEqual(['a2', 'a3']);
     expect(s.allDone).toBe(false);
+  });
+
+  it('a rollup counts the parts not dropped', () => {
+    const tasks = [
+      P,
+      part('a1', { status: 'done' }),
+      part('a2', { status: 'cancelled' }),
+      part('a3'),
+    ];
+    expect(rollupParts(tasks, P.id)).toBe(2);
+    expect(rollupParts(tasks, 'stranger')).toBe(0);
   });
 
   it('allDone once nothing kept is open; never for no parts; no estimate reads null', () => {
@@ -232,6 +248,7 @@ describe('eligibility', () => {
   it('a roll rep or a recurring occurrence can’t take parts', () => {
     for (const over of [{ rollId: 'r' }, { seriesId: 's' }]) {
       const t = task({ id: 'x', ...over });
+      expect(isRep(t)).toBe(true);
       expect(canBecomeParent(t)).toBe(false);
       expect(() => assertCanBePart(null, t, [t])).toThrow(/one rep of a repeating thing/);
     }
