@@ -13,22 +13,6 @@ page=$(getconf PAGESIZE); hz=$(getconf CLK_TCK)
 work="${TMPDIR:-/tmp}/aperture-sampler.$$"
 prev="${APERTURE_SAMPLER_PREV:-/tmp/aperture-sampler.prev}"
 
-# pid ppid comm threads rssPages cpuTicks args(first 3, space-joined, ≤200 chars)
-procs() {
-  local d pid s r comm a0 a1 a2 args
-  for d in /proc/[0-9]*; do
-    pid=${d#/proc/}
-    read -r s 2>/dev/null <"$d/stat" || continue
-    comm=${s#*(}; comm=${comm%)*}
-    r=${s##*) }
-    a0= a1= a2=
-    { IFS= read -r -d '' a0; IFS= read -r -d '' a1; IFS= read -r -d '' a2; } 2>/dev/null <"$d/cmdline"
-    args="$a0 $a1 $a2"; args=${args//$'\t'/ }; args=${args//$'\n'/ }
-    set -- $r
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$2" "${comm//$'\t'/ }" "${18}" "${22}" \
-      "$(( ${12} + ${13} + ${14} + ${15} ))" "${args:0:200}"
-  done
-}
 
 tick() {  # $1 = print → stdout only, nothing written
   sb_init_dirs
@@ -41,7 +25,7 @@ tick() {  # $1 = print → stdout only, nothing written
     jq -r '[.pid, .sid // "", .name // "", .branch // "", (if .lastPromptAt or .lastStopAt then .state // "" else "" end)] | @tsv' "$BOARD_DIR"/sessions/*.json >"$sess" 2>/dev/null
   compgen -G "$BOARD_DIR/leases/heavy/*.json" >/dev/null &&
     jq -r '[.pid, .label // .class] | @tsv' "$BOARD_DIR"/leases/heavy/*.json >"$slots" 2>/dev/null
-  line=$(procs | awk -f "$SB_SCRIPTS/sample.awk" \
+  line=$(sb_procs args | awk -f "$SB_SCRIPTS/sample.awk" \
     -v t="$(sb_now)" -v ep="$(sb_epoch)" -v interval="$interval" -v page="$page" -v hz="$hz" \
     -v anon="$(cg_anon)" -v file="$(cg_file)" -v current="$(cg_current)" -v high="$(cg_high)" \
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" \

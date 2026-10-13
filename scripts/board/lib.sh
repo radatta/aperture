@@ -56,6 +56,43 @@ sb_stat() {
 sb_comm() { local c; read -r c 2>/dev/null <"/proc/$1/comm" && printf '%s' "$c"; }
 sb_alive() { local want="$2" ps st; read -r ps st < <(sb_stat "$1") || return 1; [ -z "$want" ] || [ "$st" = "$want" ]; }
 
+# One TSV line per process: pid ppid comm threads rssPages cpuTicks [args]. Builtins only — no fork per
+# process. `$1 = args` adds the first 3 cmdline args (≤200 chars); without it the column is empty.
+sb_procs() {
+  local d pid s r comm a0 a1 a2 args=
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    read -r s 2>/dev/null <"$d/stat" || continue
+    comm=${s#*(}; comm=${comm%)*}
+    r=${s##*) }
+    if [ "${1:-}" = args ]; then
+      a0= a1= a2=
+      { IFS= read -r -d '' a0; IFS= read -r -d '' a1; IFS= read -r -d '' a2; } 2>/dev/null <"$d/cmdline"
+      args="$a0 $a1 $a2"; args=${args//$'\t'/ }; args=${args//$'\n'/ }
+    fi
+    set -- $r
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$2" "${comm//$'\t'/ }" "${18}" "${22}" \
+      "$(( ${12} + ${13} + ${14} + ${15} ))" "${args:0:200}"
+  done
+}
+
+# Heavy class of a command line: test | test-file | typecheck | lint | build | dev | ui | other.
+# `case` only (no grep), so the PreToolUse hook can use it on the raw command for free.
+sb_classify() {
+  local c=" ${1,,} "
+  c=${c//$'\n'/ }
+  case "$c" in
+    *playwright*|*chromium*|*headless_shell*) echo ui ;;
+    *vitest*|*"pnpm test"*|*"pnpm "*" test "*)
+      case "$c" in *.test.*|*.spec.*|*" src/"*|*"/src/"*) echo test-file ;; *) echo test ;; esac ;;
+    *"pnpm typecheck"*|*" tsc "*|*"tsc -b"*|*tsgo*) echo typecheck ;;
+    *"pnpm lint"*|*eslint*) echo lint ;;
+    *"pnpm build"*|*"vite build"*|*"-r build"*) echo build ;;
+    *"pnpm dev"*|*" vite "*|*"vite dev"*|*"vite preview"*) echo dev ;;
+    *) echo other ;;
+  esac
+}
+
 # Nearest ancestor of $1 (inclusive) whose comm is `claude`. Hooks use it because CLAUDE_PID in a
 # hook's env is not guaranteed; a Bash tool shell has it, and the walk agrees with it.
 sb_claude_pid() {
