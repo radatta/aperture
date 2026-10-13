@@ -1,5 +1,5 @@
 #!/bin/bash
-# PreToolUse hook on Bash — DENIES destructive commands before they run. The one
+# PreToolUse hook on Bash (and Monitor, whose `command` is a shell line too) — DENIES destructive commands before they run. The one
 # hook that hard-blocks rather than reminds; the last line of defense for
 # unattended / skip-permissions runs where there are no approval prompts.
 #

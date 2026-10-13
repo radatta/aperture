@@ -58,7 +58,7 @@ empty box, and on a running one v0.15 starts a second container instead.
 `claude --resume` picker, and live forks fan one message out to all of them. Cleanup procedure and
 evidence: [COI-INCIDENTS.md → Incident G](COI-INCIDENTS.md).
 
-**If either check on that third line fails**, you're on a fresh Mac or a rebuilt VM — go do
+**If either check on the `ls ~/.coi/ && … --check` line fails**, you're on a fresh Mac or a rebuilt VM — go do
 *One-time setup* below (~20 min, mostly `coi build`), then come back. `ls ~/.coi/` failing means no
 COI state at all; `coi-vm-setup.sh --check` failing means `~/.coi/` exists but isn't mirrored to Mac
 disk, which quietly costs you sessions on the next VM rebuild.
@@ -218,6 +218,11 @@ and Execute Pattern via Curl/Wget* wants `/curl`|`/wget` + `/tmp/`|`/dev/shm/` +
 tool's wrapper supplies the last two on every call. Bare `curl` is fine; read `…/curl/…` paths with the
 Read tool. The guard hook denies it ([Incident H](COI-INCIDENTS.md)). `[detection] sigma_dir =
 "/nonexistent"` switches every Sigma rule off — a fallback, not the fix.
+
+**Two exec-watcher shapes pause it as well** (`procwatcher.go:41-76`, matched on the started process's
+own command line): a command starting with `nc` (`nc`, `ncat`, `nc.openbsd`…) whose text holds `-e`
+*anywhere* — a hostname like `db.us-east-1…` counts — and `node -e`/`-p` with both `child_process` and
+`net`. Use `curl -sI` for reachability and put node scripts in a file. The Bash guard denies both.
 
 **Two detectors, don't confuse them.** In `allowlist` mode (the night profile) *any* non-allowlisted
 egress fires HIGH — benign Ubuntu/Canonical background traffic trips it, which is the known-noisy
@@ -381,10 +386,10 @@ To relaunch Claude this way instead of `bash`, add the token env var — see *Op
 # 3. after step 2, stop it, then start it again from the repo folder. `coi shell` reuses a STOPPED
 #    persistent container (a running one gets a second container instead). The stop exports nothing;
 #    the container's disk keeps ~/.claude. cpu/memory are applied only when a container is created, so
-#    set them on the stopped one too (processes as well — re-applying it on reuse isn't verified):
-#      incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB limits.processes=N
+#    set them on the stopped one too (processes as well — re-applying it on reuse isn't verified).
 #    Then, inside, `claude --resume` from /workspace for each session.
 coi container stop coi-88cded0c-1
+incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB limits.processes=N   # only if [limits] changed
 cd ~/Coding/Personal/aperture && coi shell
 
 # ── in the VM ──  ONLY when you actually want the container GONE — reclaiming disk, a broken box.
@@ -407,7 +412,9 @@ reattach later with `tmux attach` (or `coi attach`). Nothing exits, nothing fork
 routine nightly move: the `exit` in step 2 *closes* the pane you'd detach from. The tradeoff: a
 detach does **not** end `coi shell`, so **no fresh export snapshot is written** — you're relying on
 the container surviving. Before anything risky (a VM change, a Mac reboot), run the step-1/2 exit
-first to force a snapshot, then come back with `coi shell --resume`. *(The no-snapshot-on-detach
+first to force a snapshot, then come back with `coi attach` (the container is still running — `coi
+shell --resume` against a running one isn't re-checked on v0.15 and may start a second container).
+*(The no-snapshot-on-detach
 point is inferred from the export firing on `coi shell` exit, not raced empirically; the
 export-on-exit mechanism itself is verified — see *Ending a session*.)*
 
@@ -444,6 +451,7 @@ no M-series VM caveat.
 ```bash
 # in the Lima VM — `coi` does not exist on the Mac or in the container (see *Start here*)
 cd ~/Coding/Personal/aperture && coi attach            # container Running — the normal case
+cd ~/Coding/Personal/aperture && coi shell             # container Stopped — restarts it, disk intact
 cd ~/Coding/Personal/aperture && coi shell --resume    # container gone
 ```
 
@@ -949,7 +957,7 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 | Container `Frozen`, "PAUSED due to security threat" — on session start, or the moment you run `pnpm install`                                     | Two detectors, one pair of keys: startup read I/O, or `pnpm install` writes (the write detector borrows `file_read_*`, `detector.go:36-37` on v0.15, so 50 MB / 10 MB/s applies to a 127 MB, 61 MB/s install). Whole-container cgroup I/O, not just the workspace. Both false positives; or a Bash line containing `/curl`/`/wget` (Sigma — Incident H) | `coi unfreeze <name>`. Triage: *Start here → 2 → Container frozen — find out what tripped it* (raw file, never `coi audit <name>`). Reasoning: [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md)                                                                                                                                                         |
 | `coi audit <name>` prints nothing for a container you can see in `coi list`                                         | CLI read-path defect — the on-disk history exists and is complete                                                                                                                                          | Read `~/.coi/audit/<name>.jsonl` directly — see *Start here → 2 → Container frozen*. `coi audit -f` is for live monitoring only.                                                                                                                                                                                                                                                        |
 | Session lost after a crash / reboot / lid-close, with no `coi shell` teardown                                       | The export only fires on the `coi shell` teardown — an ungraceful death exports nothing, so everything since the last exit is gone with the container                                                    | No fix, by design — no continuous backup. Exit `coi shell` at every real break and reattach with `coi attach`; not `coi shutdown`, which exports nothing and forks the session. If it ever bites for real, `CLAUDE_CONFIG_DIR` (*Deferred*) — **not** a `projects` symlink, which breaks the restore. After a monitor **kill**, the `forensics_on_kill` copy holds it — *Start here → 2 → Container killed* |
-| Previous session gone; `--resume` doesn't offer it                                                                  | Bare `coi shell`; or a `~/.claude/projects` symlink (removed 2026-09-07 — *One-time setup* step 12), which COI skips at export; or `~/.coi/` lost to a VM rebuild, since it is VM-local                                                       | `ls -ld ~/.claude/projects` — an arrow into `/workspace` is the symlink; remove it per step 12. Otherwise `coi shell --resume`. Recover by hand from `localNotes/coi-state/sessions-claude/<id>/.claude/projects/` or `.../container/projects/`. Prevent the rebuild case with step 10 (`scripts/coi-vm-setup.sh`).                                                                                                                                                                                                                                             |
+| Previous session gone; `--resume` doesn't offer it                                                                  | Bare `coi shell` on a torn-down container; or a `~/.claude/projects` symlink (removed 2026-09-07 — *One-time setup* step 12), which COI skips at export; or `~/.coi/` lost to a VM rebuild, since it is VM-local                                                       | `ls -ld ~/.claude/projects` — an arrow into `/workspace` is the symlink; remove it per step 12. Otherwise `coi shell --resume`. Recover by hand from `localNotes/coi-state/sessions-claude/<id>/.claude/projects/` or `.../container/projects/`. Prevent the rebuild case with step 10 (`scripts/coi-vm-setup.sh`).                                                                                                                                                                                                                                             |
 | `coi` profiles or `~/.coi` config vanished                                                                          | Same cause: `~/.coi/` lives on the VM disk, not the Mac                                                                                                                                                    | *One-time setup* step 10 (`scripts/coi-vm-setup.sh`). Recreate the profile once, then it persists.                                                                                                                                                                                                                                                                                                                        |
 | Four "ephemeral" containers alive, GBs each                                                                         | Ephemeral destroy +`--resume` write happen only on the `coi shell` teardown                                                                             | Tear down properly when done — see*Run → Ending a session*                                                                                                                                                                                                                                                                                                                                   |
 

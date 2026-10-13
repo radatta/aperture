@@ -75,10 +75,11 @@ if [[ $T =~ $RE_DEVNET ]]; then
   coi_deny "Blocked: /dev/tcp/ or /dev/udp/ followed by a non-loopback endpoint in a shell line KILLS the container. A bare mention (followed by a space or quote) or localhost/127.0.0.1 is fine; use curl -sI for reachability."
 fi
 
-# Exec watcher nc-exec/ncat-exec (procwatcher.go:41-76): a process whose argv0 is nc/ncat with `-e`
-# ANYWHERE in its text → PAUSE — so `nc -z host.us-east-1… 443` trips it via `-east`.
-RE_NC="${COI_TOK}(nc|ncat)[[:space:]]"
-if [[ $LC =~ $RE_NC && $LC == *-e* ]]; then
+# Exec watcher nc-exec/ncat-exec (procwatcher.go:41-76): a process whose argv0 starts with `nc` and whose
+# text holds `-e` ANYWHERE → PAUSE — so `nc -z host.us-east-1… 443` trips it via `-east`. Only that
+# command's own segment counts (up to ; | & or a newline).
+RE_NC="${COI_TOK}nc[^[:space:]]*[[:space:]][^;|&"$'\n'"]*-e"
+if [[ $LC =~ $RE_NC ]]; then
   coi_deny "Blocked: an nc/ncat command whose text contains \`-e\` anywhere (a flag, or a hostname like \`us-east-1\`) matches COI's netcat exec pattern and PAUSES the container. Use curl -sI for reachability instead."
 fi
 

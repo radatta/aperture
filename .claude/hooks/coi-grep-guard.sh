@@ -7,8 +7,13 @@
 set -euo pipefail
 case "$(hostname)" in coi-*) ;; *) exit 0 ;; esac
 INPUT=$(cat)
-# Everything that reaches rg's argv, joined (no path → rg searches the cwd); jq's argv is only this filter.
-TEXT=$(printf '%s' "$INPUT" | jq -r '[.tool_input.pattern, .tool_input.glob, (.tool_input.path // .cwd), .tool_input.type] | map(select(type == "string")) | join(" ")')
+# Everything that reaches rg's argv, joined; jq's argv is only this filter. The path rg gets is absolute:
+# none → the cwd; relative → resolved against the cwd (inference from Claude Code's Grep tool).
+TEXT=$(printf '%s' "$INPUT" | jq -r '(.tool_input.path // "") as $p
+  | [.tool_input.pattern, .tool_input.glob,
+     (if ($p | startswith("/")) or ($p | startswith("~")) then $p elif $p == "" then .cwd else ((.cwd // "") + "/" + $p) end),
+     .tool_input.type]
+  | map(select(type == "string")) | join(" ")')
 LC=${TEXT,,}
 source "${BASH_SOURCE[0]%/*}/_coi-patterns.sh"
 if coi_kill_shape "$LC"; then

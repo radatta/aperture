@@ -18,4 +18,6 @@
 {"expect":"allow","why":"exec: without socat","input":{"pattern":"exec:","path":"src"}}
 {"expect":"allow","why":"ordinary search","input":{"pattern":"deny","path":".claude/hooks","glob":"*.sh"}}
 {"expect":"deny","why":"no path → rg searches the cwd, which reaches its argv; a cwd naming 'websocket' is a network token next to socat","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat"}}
-{"expect":"allow","why":"an explicit path replaces the cwd","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":"docs"}}
+{"expect":"deny","why":"a relative path resolves against the cwd before it reaches rg's argv","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":"docs"}}
+{"expect":"deny","why":"an empty path means the cwd","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":""}}
+{"expect":"allow","why":"an absolute path outside the cwd replaces it","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":"/workspace/docs"}}

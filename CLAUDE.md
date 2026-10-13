@@ -35,16 +35,18 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 - **Never put a reverse-shell shape on a Bash command line or in a Grep pattern — it kills the container.**
   COI v0.15 kills on these anywhere in any process's argv (token-anchored, lowercased): `nc -e`/`ncat -e`;
   `bash -i`/`sh -i` (any shell); `socket.socket`, `fsockopen`, `System.Net.Sockets`, `ruby -rsocket`;
-  `socat`/`powershell` next to a network token; `/dev/tcp/<host>/…` with a non-loopback host (in a shell
-  line — the Bash wrapper is one); and
-  `python3 -c`/`python -c`/`perl -e`/`ruby -e`/`php -r` **only when the same command also mentions `tcp`,
-  `udp`, `socket`, an IP, or a `host:port`** (`[monitoring] reverse_shell_one_liners = "warn"` downgrades
-  that class). Prefer `python3 - <<'PY' … PY` and `jq` anyway. Separately, **`/curl` or `/wget` (with the
-  slash) anywhere in a Bash line pauses the container** (a Sigma rule the Bash wrapper pre-satisfies) —
-  bare `curl` is fine; read `…/curl/…` paths with the Read tool. **Any remote `:8080` connection is a
-  kill.** This applies to the literal text anywhere — test fixtures, echoed strings, heredocs — so file
-  content carrying these belongs in the Write/Edit tools, and every subagent prompt that may run Bash or
-  Grep must carry this rule. `.claude/hooks/coi-reverse-shell-guard.sh` (Bash and Monitor) and
+  `socat`/`powershell` next to a network token; `/dev/tcp/<host>/…` with a non-loopback host (in a
+  shell line — the Bash wrapper is one); and `python3 -c`/`python -c`/`perl -e`/`ruby -e`/`php -r`
+  **only when the same command also mentions `tcp`, `udp`, `socket`, an IP, or a `host:port`**
+  (`[monitoring] reverse_shell_one_liners = "warn"` downgrades that class). Prefer
+  `python3 - <<'PY' … PY` and `jq` anyway. Separately, **`/curl` or `/wget` (with the slash) anywhere
+  in a Bash line pauses the container** (a Sigma rule the Bash wrapper pre-satisfies) — bare `curl` is
+  fine; read `…/curl/…` paths with the Read tool. So do two exec-watcher shapes — `nc…` with `-e`
+  anywhere in its text (even `us-east-1`) and `node -e` with `child_process` + `net`
+  (`docs/ops/COI-SANDBOX.md` → _Container frozen_). **Any remote `:8080` connection is a kill.** This
+  applies to the literal text anywhere — test fixtures, echoed strings, heredocs — so file content
+  carrying these belongs in the Write/Edit tools, and every subagent prompt that may run Bash or Grep
+  must carry this rule. `.claude/hooks/coi-reverse-shell-guard.sh` (Bash and Monitor) and
   `coi-grep-guard.sh` (Grep) enforce it; the rule stands whether or not they're registered. Mechanism:
   `docs/ops/COI-INCIDENTS.md` → Incidents F and H.
 
