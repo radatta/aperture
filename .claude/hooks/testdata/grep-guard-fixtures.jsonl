@@ -17,3 +17,5 @@
 {"expect":"allow","why":"rg is not a shell, so /dev/tcp/ can't fire","input":{"pattern":"/dev/tcp/","path":"docs"}}
 {"expect":"allow","why":"exec: without socat","input":{"pattern":"exec:","path":"src"}}
 {"expect":"allow","why":"ordinary search","input":{"pattern":"deny","path":".claude/hooks","glob":"*.sh"}}
+{"expect":"deny","why":"no path → rg searches the cwd, which reaches its argv; a cwd naming 'websocket' is a network token next to socat","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat"}}
+{"expect":"allow","why":"an explicit path replaces the cwd","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":"docs"}}

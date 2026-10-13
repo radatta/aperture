@@ -25,6 +25,8 @@ The commit and gh-safety guards run git (branch check, staged-diff scan), so the
 throwaway repo on a feature branch as their cwd — hermetic, and independent of
 whatever branch the runner happens to be invoked from. A fixture may also set
 "branch" (run in a repo on that branch) and "stage" (file content staged first);
+outside a repo suite, "cwd" (the payload's session cwd) and "tool" (override the
+suite's tool name, e.g. Monitor, which carries a shell command like Bash);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
 """
@@ -76,9 +78,10 @@ def make_repo(root: str, branch: str) -> str:
 
 
 def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None) -> str:
+    tool = case.get("tool", tool)
     tool_input = case.get("input") or {"command": case["cmd"]}
     if root is None:
-        return decision_for(hook, tool, tool_input, None)
+        return decision_for(hook, tool, tool_input, case.get("cwd"))
     repo = make_repo(root, case.get("branch", "fixture-branch"))
     if "stage" in case:
         content = case["stage"]

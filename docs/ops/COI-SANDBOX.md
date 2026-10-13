@@ -33,6 +33,10 @@ incus list                                # is the container still there and Run
 #   Running  → reattach. Claude is still alive in tmux; nothing restarts.
 coi attach
 
+#   Stopped  → start the same container again (same disk, same ~/.claude), then resume in it.
+coi shell                                 # from the repo folder — v0.15 reuses a stopped persistent container
+claude --resume                           # (in the container, from /workspace) pick your session
+
 #   Gone     → rebuild it from the export, then pick your session in the container.
 ls ~/.coi/ && ./scripts/coi-vm-setup.sh --check    # both pass 9/10 times → skip to the next line
 coi shell --resume                        # → you are now in the container
@@ -46,8 +50,9 @@ when you leave, so the `claude` process and its tmux session survive; `coi attac
 
 **`coi shell --resume` is for when the container is gone**, after a `coi shutdown` or a VM rebuild.
 It rebuilds from `~/.coi/sessions-claude/` and your transcripts, prompt history (`↑`), settings and
-statusline all come back — verified 2026-09-07, see *Ending a session*. Never bare `coi shell`: on a
-torn-down container that gives you an empty box.
+statusline all come back — verified 2026-09-07, see *Ending a session*. Bare `coi shell` is only for a
+*stopped* container (it restarts it, disk intact — 2026-10-13); on a torn-down container it gives you an
+empty box, and on a running one v0.15 starts a second container instead.
 
 **Every `coi shell --resume` forks the session** — a new session id, another `(N)` entry in the
 `claude --resume` picker, and live forks fan one message out to all of them. Cleanup procedure and
@@ -298,8 +303,8 @@ Full reasoning: [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md).
 
 #### Container *killed* — the CRITICAL path is a different animal
 
-A freeze is the polite failure; CRITICAL kills the container, and it recurs on every match
-(mechanism: [COI-INCIDENTS.md → Incident F](COI-INCIDENTS.md)). What triggers it in practice is not
+A freeze is the polite failure; CRITICAL kills the container, and a repeated shape kills the next
+container too (mechanism: [COI-INCIDENTS.md → Incident F](COI-INCIDENTS.md)). What triggers it in practice is not
 an attack but a **hardcoded** pattern list (`internal/monitor/process.go:269-330`, v0.15 — matched
 lowercased and token-anchored, so `ssh -i` or `rsync -e` don't count). Rule reference, regenerated on
 every COI upgrade: `localNotes/code-on-incus/APERTURE-ANALYSIS.md` (gitignored, local).
@@ -336,7 +341,16 @@ downgrades the one-liner class to audit-only. Otherwise stop emitting the shape:
 `PreToolUse`, sharing their rules through `_coi-patterns.sh`. They no-op outside a `coi-*` host, and
 they match the **text anywhere in the command** — so a heredoc whose content carries a strong token is
 blocked too: use the Write/Edit tools for file content. They are narrowed to what v0.15 really fires
-on, because over-blocking makes Claude timid.
+on, because over-blocking makes Claude timid. The Bash guard also runs on the Monitor tool, whose
+`command` is a shell line too.
+
+**After a kill, a copy may survive.** `[monitoring] forensics_on_kill = true` (set in
+`.coi/config.toml`) makes COI `incus copy` the container before its delete (`responder.go:243-262`,
+at most 3 copies, `:333`). The copy is stopped and holds the killed container's whole disk — including
+`~/.claude`, so the session transcript is recoverable with `incus file pull` (on the VM). On our `dir`
+pool each copy is a full rootfs copy, not a reflink: it costs tens of seconds and a few GB, and COI
+never deletes it — find it with `incus list` and `incus delete` it once recovered (the copy's exact
+name isn't verified here).
 
 Full write-up: [COI-INCIDENTS.md → Incident F](COI-INCIDENTS.md).
 
@@ -364,10 +378,12 @@ To relaunch Claude this way instead of `bash`, add the token env var — see *Op
 #    The container stays running; come back later with `coi attach` (see §1).
 
 # ── in the VM ──  to apply a .coi/config.toml change and KEEP the container (v0.15; done 2026-10-13):
-# 3. stop it, then start it again from the repo folder. `coi shell` reuses a STOPPED persistent
-#    container (a running one gets a second container instead). The stop exports nothing; the
-#    container's disk keeps ~/.claude. cpu/memory are applied only when a container is created, so
-#    set them on the stopped one too:  incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB
+# 3. after step 2, stop it, then start it again from the repo folder. `coi shell` reuses a STOPPED
+#    persistent container (a running one gets a second container instead). The stop exports nothing;
+#    the container's disk keeps ~/.claude. cpu/memory are applied only when a container is created, so
+#    set them on the stopped one too (processes as well — re-applying it on reuse isn't verified):
+#      incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB limits.processes=N
+#    Then, inside, `claude --resume` from /workspace for each session.
 coi container stop coi-88cded0c-1
 cd ~/Coding/Personal/aperture && coi shell
 
@@ -435,10 +451,11 @@ Bypass perms, restricted network, the Vite range mapped out, no runtime cap. `pn
 `6173` (not `5173` — see *Ports* below), and the host port is pinned to match, so
 `http://localhost:6173` in your Mac browser is the same server.
 
-`coi attach` when the container is running; `coi shell --resume` when it is gone (it rebuilds a
-destroyed container from its exported session, and is a no-op on a running one — but it resumes
-rather than attaches, which forks the session; *Start here → 1*). Never bare `coi shell`: on a
-container COI has torn down it gives you an empty box.
+`coi attach` when the container is running; bare `coi shell` when it is stopped; `coi shell --resume`
+when it is gone (it rebuilds a destroyed container from its exported session — but it resumes rather
+than attaches, which forks the session; *Start here → 1*). On a running container a plain `coi shell`
+starts a second one on v0.15 (`Auto-allocated slot 2`, failing on the pinned Vite port — seen
+2026-10-13); `--resume` was a no-op there on v0.12, not re-checked on v0.15.
 
 **First command in a new container — check the pids headroom.** It's one line, and the failure it
 catches (`SIGABRT (134)` on your second session) is silent about its own cause:
@@ -931,7 +948,7 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
 | `vite dev`/`build`: `Cannot find module '../lightningcss.*.node'` (or a `@tailwindcss/oxide` binding error) | `node_modules` is shared with the macOS host; native binaries belong to whoever installed last                                                     | `pnpm install` on the side you're using (`CI=true` inside the container). Doesn't affect `tsc`/`vitest`.                                                                                                                                                                                                                                                                                 |
 | Container `Frozen`, "PAUSED due to security threat" — on session start, or the moment you run `pnpm install`                                     | Two detectors, one pair of keys: startup read I/O, or `pnpm install` writes (the write detector borrows `file_read_*`, `detector.go:36-37` on v0.15, so 50 MB / 10 MB/s applies to a 127 MB, 61 MB/s install). Whole-container cgroup I/O, not just the workspace. Both false positives; or a Bash line containing `/curl`/`/wget` (Sigma — Incident H) | `coi unfreeze <name>`. Triage: *Start here → 2 → Container frozen — find out what tripped it* (raw file, never `coi audit <name>`). Reasoning: [COI-INCIDENTS.md → Incident E](COI-INCIDENTS.md)                                                                                                                                                         |
 | `coi audit <name>` prints nothing for a container you can see in `coi list`                                         | CLI read-path defect — the on-disk history exists and is complete                                                                                                                                          | Read `~/.coi/audit/<name>.jsonl` directly — see *Start here → 2 → Container frozen*. `coi audit -f` is for live monitoring only.                                                                                                                                                                                                                                                        |
-| Session lost after a crash / reboot / lid-close, with no `coi shell` teardown                                       | The export only fires on the `coi shell` teardown — an ungraceful death exports nothing, so everything since the last exit is gone with the container                                                    | No fix, by design — no continuous backup. Exit `coi shell` at every real break and reattach with `coi attach`; not `coi shutdown`, which exports nothing and forks the session. If it ever bites for real, `CLAUDE_CONFIG_DIR` (*Deferred*) — **not** a `projects` symlink, which breaks the restore |
+| Session lost after a crash / reboot / lid-close, with no `coi shell` teardown                                       | The export only fires on the `coi shell` teardown — an ungraceful death exports nothing, so everything since the last exit is gone with the container                                                    | No fix, by design — no continuous backup. Exit `coi shell` at every real break and reattach with `coi attach`; not `coi shutdown`, which exports nothing and forks the session. If it ever bites for real, `CLAUDE_CONFIG_DIR` (*Deferred*) — **not** a `projects` symlink, which breaks the restore. After a monitor **kill**, the `forensics_on_kill` copy holds it — *Start here → 2 → Container killed* |
 | Previous session gone; `--resume` doesn't offer it                                                                  | Bare `coi shell`; or a `~/.claude/projects` symlink (removed 2026-09-07 — *One-time setup* step 12), which COI skips at export; or `~/.coi/` lost to a VM rebuild, since it is VM-local                                                       | `ls -ld ~/.claude/projects` — an arrow into `/workspace` is the symlink; remove it per step 12. Otherwise `coi shell --resume`. Recover by hand from `localNotes/coi-state/sessions-claude/<id>/.claude/projects/` or `.../container/projects/`. Prevent the rebuild case with step 10 (`scripts/coi-vm-setup.sh`).                                                                                                                                                                                                                                             |
 | `coi` profiles or `~/.coi` config vanished                                                                          | Same cause: `~/.coi/` lives on the VM disk, not the Mac                                                                                                                                                    | *One-time setup* step 10 (`scripts/coi-vm-setup.sh`). Recreate the profile once, then it persists.                                                                                                                                                                                                                                                                                                                        |
 | Four "ephemeral" containers alive, GBs each                                                                         | Ephemeral destroy +`--resume` write happen only on the `coi shell` teardown                                                                             | Tear down properly when done — see*Run → Ending a session*                                                                                                                                                                                                                                                                                                                                   |

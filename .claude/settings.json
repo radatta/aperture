@@ -74,6 +74,19 @@
         ]
       },
       {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/coi-reverse-shell-guard.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/gh-safety-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Grep",
         "hooks": [
           {

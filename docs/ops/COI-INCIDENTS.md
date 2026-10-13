@@ -240,8 +240,9 @@ At ~16 threads per foreground session plus a browser and a dev server, **300 onl
 one session.** A pids ceiling is a *ceiling, not a reservation* — raising it costs nothing, memory is
 the real constraint, so be generous. Honest steady-state budget: chromium 60 + vite 60 + 4 sessions ×
 16 + docker 23 ≈ **210**, with `pnpm -r` fanning out on top. `1024` is the floor; **`4096` is what's
-set** since 2026-10-13; `2048` (`54fbe95`) was the first value measured landing, at ~10× the honest
-budget. Go higher only if a real ceiling
+set** since 2026-10-13 — raised with 18 GiB / 9 CPUs when the VM grew to 10 CPU / 22 GiB (user's call,
+no ceiling hit), applied with `incus config set` and read back as `247/4096`; `2048` (`54fbe95`) was the
+first value measured landing, at ~10× the honest budget. Go higher only if a real ceiling
 is ever hit again — the number costs nothing, but a change that doesn't land is worse than no change.
 
 ### Open follow-ups
@@ -1110,7 +1111,8 @@ against, because the patterns were on the bash command line rather than in a fil
   `sh -i` bypass the gate and always fire.
 - `internal/monitor/responder.go:137-147` — `ThreatLevelCritical` + `auto_kill_on_critical` →
   `killContainer()`.
-  **No dedupe latch**, unlike HIGH's `r.paused`, so it recurs on every match.
+  **No dedupe latch**, unlike HIGH's `r.paused`, so it recurs on every match (imprecise — the
+  recurrence was the *next* container; see *Worth filing upstream*).
 - Sampling is per `poll_interval_sec` (2s). Fast one-liners often slip between samples; ones blocked
   on a slow pipe (`gh api`, `npm view`) are reliably caught. Prior successes were timing, not safety.
 - **Resolved upstream in COI v0.14.0** (#842, #846, #855–#859): the `:` gate is replaced by a real

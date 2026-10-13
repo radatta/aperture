@@ -55,3 +55,7 @@
 {"expect":"allow","why":"bare curl has no leading slash","cmd":"curl -fsSL https://example.com -o out.html"}
 {"expect":"deny","why":"exec watcher node-reverse-shell: node -e + child_process + net (pause)","cmd":"node -e \"const cp = require('child_process'); const net = require('net')\""}
 {"expect":"allow","why":"node -e with child_process but no 'net'","cmd":"node -e \"console.log(require('child_process').execSync('git rev-parse HEAD').toString())\""}
+{"expect":"deny","why":"exec watcher nc-exec: '-e' anywhere in an nc command — here inside 'us-east-1' (pause)","cmd":"nc -z dynamodb.us-east-1.amazonaws.com 443"}
+{"expect":"allow","why":"nc without '-e' anywhere on the line","cmd":"nc -z localhost 6173"}
+{"expect":"deny","why":"the Monitor tool runs a shell command too — same rules","tool":"Monitor","cmd":"tail -f docs/curl/log.txt | grep --line-buffered x"}
+{"expect":"allow","why":"an ordinary Monitor until-loop","tool":"Monitor","cmd":"until [ -f out.txt ]; do sleep 1; done; echo ready"}

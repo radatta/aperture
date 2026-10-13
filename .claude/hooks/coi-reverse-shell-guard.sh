@@ -72,7 +72,14 @@ T=${LC//\/dev\/tcp\/localhost\//}; T=${T//\/dev\/tcp\/127.0.0.1\//}
 T=${T//\/dev\/udp\/localhost\//}; T=${T//\/dev\/udp\/127.0.0.1\//}
 RE_DEVNET='/dev/(tcp|udp)/[^[:space:]"'\'';|&<>()]'
 if [[ $T =~ $RE_DEVNET ]]; then
-  coi_deny "Blocked: /dev/tcp/ or /dev/udp/ followed by a non-loopback endpoint in a shell line KILLS the container. A bare mention (followed by a space or quote) or localhost/127.0.0.1 is fine; use curl -sI or nc -z for reachability."
+  coi_deny "Blocked: /dev/tcp/ or /dev/udp/ followed by a non-loopback endpoint in a shell line KILLS the container. A bare mention (followed by a space or quote) or localhost/127.0.0.1 is fine; use curl -sI for reachability."
+fi
+
+# Exec watcher nc-exec/ncat-exec (procwatcher.go:41-76): a process whose argv0 is nc/ncat with `-e`
+# ANYWHERE in its text → PAUSE — so `nc -z host.us-east-1… 443` trips it via `-east`.
+RE_NC="${COI_TOK}(nc|ncat)[[:space:]]"
+if [[ $LC =~ $RE_NC && $LC == *-e* ]]; then
+  coi_deny "Blocked: an nc/ncat command whose text contains \`-e\` anywhere (a flag, or a hostname like \`us-east-1\`) matches COI's netcat exec pattern and PAUSES the container. Use curl -sI for reachability instead."
 fi
 
 # Exec watcher node-reverse-shell (procwatcher.go:55-75): argv0 node + child_process + net → PAUSE.

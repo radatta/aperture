@@ -7,8 +7,8 @@
 set -euo pipefail
 case "$(hostname)" in coi-*) ;; *) exit 0 ;; esac
 INPUT=$(cat)
-# Everything that reaches rg's argv, joined; jq's argv is only this filter.
-TEXT=$(printf '%s' "$INPUT" | jq -r '[.tool_input.pattern, .tool_input.glob, .tool_input.path, .tool_input.type] | map(select(type == "string")) | join(" ")')
+# Everything that reaches rg's argv, joined (no path → rg searches the cwd); jq's argv is only this filter.
+TEXT=$(printf '%s' "$INPUT" | jq -r '[.tool_input.pattern, .tool_input.glob, (.tool_input.path // .cwd), .tool_input.type] | map(select(type == "string")) | join(" ")')
 LC=${TEXT,,}
 source "${BASH_SOURCE[0]%/*}/_coi-patterns.sh"
 if coi_kill_shape "$LC"; then

@@ -33,8 +33,8 @@ but when in doubt, add it; it's fail-open and cheap.
 
 ## COI guards — Bash and Grep
 
-`coi-reverse-shell-guard.sh` (Bash) and `coi-grep-guard.sh` (Grep — `rg`'s argv is a command line COI
-inspects too) deny text COI pauses or kills the container on. Both source `_coi-patterns.sh`, so they
+`coi-reverse-shell-guard.sh` (Bash, and Monitor — its `command` is a shell line too) and
+`coi-grep-guard.sh` (Grep — `rg`'s argv is a command line COI inspects too) deny text COI pauses or kills the container on. Both source `_coi-patterns.sh`, so they
 can't drift, and both are narrowed to what COI really fires on: over-blocking makes Claude timid. The
 rules: `docs/ops/COI-SANDBOX.md` → *Container killed*; re-derive them from
 `localNotes/code-on-incus/APERTURE-ANALYSIS.md` on every COI upgrade. Implementation constraint (builtins
