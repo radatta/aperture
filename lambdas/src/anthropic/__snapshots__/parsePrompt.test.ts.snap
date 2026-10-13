@@ -6,10 +6,10 @@ Categories (id: label) — use the id, or null if none clearly matches:
 c1: Aperture
 c2: System Design
 Rules:
-- title: short and imperative-ish, at most 80 characters, in the user's own words. Strip the parsed meta: a leading category word ("aperture,"), due phrases ("due tmw", "by friday") and estimates ("30m", "2h").
-- notes: if the line has more detail than fits the title, move the rest here with light cleanup only (fix obvious typos, keep the user's wording and order). Otherwise null.
+- title: the user's own words, at most 80 characters. Remove only the parsed meta: a leading category word ("aperture,"), due phrases ("due tmw", "by friday", "today 4pm") and estimates ("30m", "2h"). Keep every other word, in the user's order and casing — never paraphrase, reword, drop or recapitalize a word, even one that looks like noise or a code word.
+- notes: if what's left after removing the meta is longer than the title allows, cut the title at a word boundary and put the rest here verbatim (fix obvious typos only). Otherwise null. Every word the user typed ends up in the title, the notes, or a parsed field.
 - dueDay: YYYY-MM-DD, only if the user gave a day ("tmw" = tomorrow, a weekday name = the next such day, "today" = today), or today if they gave only a clock time. Otherwise null.
-- dueTime: HH:MM 24h, only if a clock time was given (a time with no day means today). Otherwise null.
+- dueTime: HH:MM 24h, only if the user wrote a clock time ("4pm", "9:30am", "16:00", "noon"). A day alone ("today", "tonight", "tmw") has no time. "10m" or "30m" is an estimate in minutes, never a time. Otherwise null.
 - estimateMin: whole minutes, only if the user gave an estimate. Never invent one. Otherwise null.
 - Set a field only when the user stated it. Do not add tasks, advice or commentary."
 `;

@@ -123,6 +123,38 @@ describe('validateParsedTask', () => {
     expect(v.dropped).toEqual(['dropped due day', 'dropped due time']);
   });
 
+  // Dev check 2026-10-13: Haiku saved "today plan 10m" as due today 10am — a time nobody wrote, which also
+  // put an invented block on the calendar. With the typed line known, a due time needs a clock in it.
+  it('drops a due time when the typed line has no clock in it', () => {
+    const withLine = (line: string, over: Record<string, unknown>) =>
+      validateParsedTask(fields(over), { ...ctx, line })!;
+    const invented = withLine('aperture, qazebra ten today plan 10m', {
+      dueDay: '2026-10-12',
+      dueTime: '10:00',
+    });
+    expect(invented.input).toEqual({ title: 'fix login bug', dueDay: '2026-10-12' }); // the day stays
+    expect(invented.dropped).toEqual(['dropped due time']);
+    for (const line of [
+      'call 4pm',
+      'call at 9:30am',
+      'call 16:00',
+      'call at noon',
+      'call 4 p',
+      'call midnight',
+    ])
+      expect(withLine(line, { dueTime: '16:00' }).input.dueTime).toBe('16:00');
+    for (const line of [
+      'call today',
+      'call tonight 30m',
+      'call tmw 2h',
+      'room 4',
+      'chapter 12 due fri',
+    ])
+      expect(withLine(line, { dueTime: '16:00' }).dropped).toEqual(['dropped due time']);
+    // No line given (a caller with only the fields): the old behaviour.
+    expect(validateParsedTask(fields({ dueTime: '16:00' }), ctx)!.input.dueTime).toBe('16:00');
+  });
+
   it('estimate: whole minutes kept, 0 cleared quietly, anything else dropped', () => {
     expect(validateParsedTask(fields({ estimateMin: 45 }), ctx)!.input.estimateMin).toBe(45);
     const zero = validateParsedTask(fields({ estimateMin: 0 }), ctx)!;
@@ -206,6 +238,17 @@ describe('runQuickParse', () => {
       ok: false,
       reason: 'empty-title',
     });
+  });
+
+  it('validates against the typed line: an invented time is dropped', async () => {
+    const model = ok(fields({ dueTime: '10:00' }));
+    const r = await runQuickParse('plan the week today 10m', ctx, model);
+    expect(r).toMatchObject({
+      ok: true,
+      input: { title: 'fix login bug' },
+      dropped: ['dropped due time'],
+    });
+    expect((r as { input: object }).input).not.toHaveProperty('dueTime');
   });
 
   it("passes the model's failure through unchanged", async () => {

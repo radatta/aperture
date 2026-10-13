@@ -112,5 +112,11 @@ autonomous build:
   grammar-line error from Raycast stays a red raw save (no model fallback: the pipe is explicit intent).
   No per-period cost cap on `parse_task` (logged per call; revisit if the credit dips). "call 9am" typed
   at 3pm still lands today, already past — the 2026-10-09 rule, the user's call.
+- **Dev check (2026-10-13, Claude in Chrome on dev):** 13/13 flows passed, 3–6s per parse. Two parse-quality
+  bugs: Haiku invented a due time (`today plan 10m` → due today 10am, onto the calendar) and dropped or
+  reworded the user's words (a marker word, `no category here`, ` extra`; sentence-casing). Fixed: the
+  prompt now says keep every non-meta word verbatim (overflow to notes) and that a day alone or `10m` is no
+  time; and the validator drops any due time when the typed line has no clock in it (`4pm`, `9:30am`,
+  `16:00`, `noon`) — the one rule that doesn't depend on the model behaving.
 - **Not built:** an editable preview (edit the text, Review again); a scoped Raycast token
   (`parse_task` + `create_task` — [mcp → Deferred](../mcp/index.md#deferred)).
