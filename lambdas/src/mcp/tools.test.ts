@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gcalSyncMessage } from '@aperture/shared';
+import { gcalSyncMessage, PARENT_NO_EVENT_ERROR } from '@aperture/shared';
 import type { ApiMethod, Attachment, Category, Task } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
@@ -600,6 +600,33 @@ describe('mcp tools — sync_calendar_event', () => {
       /A cancelled task never syncs/,
     );
     expect(google.events.size).toBe(events); // a refusal never reaches Google
+  });
+
+  it('refuses a parent with the reason — its parts carry the blocks', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const p = (await call('create_task', timed)) as Task;
+    await call('create_task', { title: 'read', estimateMin: 30, parentId: p.id }); // its block goes
+    expect(google.events.size).toBe(0);
+    await expect(call('sync_calendar_event', { taskId: p.id })).rejects.toThrow(
+      PARENT_NO_EVENT_ERROR,
+    );
+    expect(google.events.size).toBe(0);
+  });
+
+  it('a stray event on a parent is removed', async () => {
+    const { call, setup, doc, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const p = (await call('create_task', timed)) as Task;
+    const part = (await call('create_task', { title: 'read' })) as Task;
+    // Attached behind the impl's back, so the parent keeps its block (a row from before parts, say).
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    await repo.putTask({ ...(await repo.getTask(part.id))!, parentId: p.id });
+    expect(await call('sync_calendar_event', { taskId: p.id })).toMatchObject({
+      outcome: 'removed',
+      task: { gcalEventId: null },
+    });
+    expect(google.events.size).toBe(0);
   });
 
   it('a Google failure is an error, and its note stays on the task', async () => {

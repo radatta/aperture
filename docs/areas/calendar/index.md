@@ -179,8 +179,8 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
 - **Parent + parts** ([tasks/parts.md](../tasks/parts.md) D8): a task with parts **never owns an event**.
-  `calendarSyncPlan` takes `opts.parent` (the impls compute it from the task list on every sync, Add/Retry/Send
-  included): a linked parent's event is deleted whatever the toggle says (after the owed-removal check), and
+  `calendarSyncPlan` takes `opts.parent` (the impls compute it from the task list on every sync but a fresh create, Add/Retry/
+  Send included): a linked parent's event is deleted whatever the toggle says (after the owed-removal check), and
   otherwise nothing happens — so a timed task that takes its first part loses its block. `insertCalendarEvent`
   refuses a parent (`PARENT_NO_EVENT_ERROR`) before its other checks. A part's own time (`dueDay`/`dueTime`) is
   when its block ends, so its block is an ordinary auto block. v2's due marker replaces the delete.
@@ -192,7 +192,7 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   unsent, so they win a conflict) — which renames/re-times it: no
   delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original keeps
   (and re-times) its event, and the follow-up, a new timed task, gets its own from the planner, so two
-  blocks end at the deadline; dragging either in Google moves only that part's deadline (Two-way sync).
+  blocks end at the deadline; dragging either in Google moves only that part's time (Two-way sync).
   A block on an untimed original stays on the original either way, and an
   owed removal is carried out (reporting).
 

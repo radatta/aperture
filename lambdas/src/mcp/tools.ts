@@ -6,11 +6,13 @@ import {
   USER_TIME_ZONE,
   calendarSyncPlan,
   computeDayShape,
+  hasParts,
   isDayKey,
   isTimeKey,
   normalizeContentType,
   normalizeNotes,
   PARENT_NO_ACTUAL_ERROR,
+  PARENT_NO_EVENT_ERROR,
   partsOf,
   partsSummary,
   zonedEpoch,
@@ -726,7 +728,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'sync_calendar_event',
     description:
-      'Sync a task’s Google Calendar event to the task as it is now — the app’s Add to calendar / Retry / Send to Google. Nothing is picked: a timed task’s block goes on the write default (see list_calendars), ends at the deadline and is as long as the estimate. Writes a REAL Google Calendar event. Returns { outcome, task }: "created" (a timed task with no event gets one — e.g. after its block was removed), "updated" (a linked event gets the task’s title and time — a failed sync is retried, and a value kept over a Google edit is sent), "removed" (a removal that failed earlier is finished), "unlinked" (Google had already deleted the event — call again to create a fresh one). Refused, with the reason, when nothing would happen: a done or cancelled task (beyond an owed removal), auto-sync off, no due time and no event, no calendar to write to. A Google failure is an error; its text is also stored on the task as gcalSyncError.',
+      'Sync a task’s Google Calendar event to the task as it is now — the app’s Add to calendar / Retry / Send to Google. Nothing is picked: a timed task’s block goes on the write default (see list_calendars), ends at its due time (on a part, when its block ends) and is as long as the estimate. Writes a REAL Google Calendar event. Returns { outcome, task }: "created" (a timed task with no event gets one — e.g. after its block was removed), "updated" (a linked event gets the task’s title and time — a failed sync is retried, and a value kept over a Google edit is sent), "removed" (a removal that failed earlier is finished), "unlinked" (Google had already deleted the event — call again to create a fresh one). Refused, with the reason, when nothing would happen: a parent (a task with parts — its parts carry the blocks; a stray event on one is removed), a done or cancelled task (beyond an owed removal), auto-sync off, no due time and no event, no calendar to write to. A Google failure is an error; its text is also stored on the task as gcalSyncError.',
     inputSchema: {
       type: 'object',
       properties: { taskId: { type: 'string' } },
@@ -738,11 +740,15 @@ export const TOOLS: Tool[] = [
       const before = (await ctx.dispatch('getTask', [taskId])) as Task | null;
       if (!before) throw new Error(`Not found: ${taskId}`);
       const settings = (await ctx.dispatch('getSettings', [])) as Settings;
-      // The same planner the backend runs (ensure = the button), so the outcome is what it decides — a
-      // skipped sync never reads as "updated".
+      // An eventually consistent read, unlike the backend's: a part attached or detached a moment ago
+      // can be missed — rare, and the outcome below is still named from what came back.
+      const parent = hasParts((await ctx.dispatch('listTasks', [])) as Task[], taskId);
+      // The same planner the backend runs (ensure = the button, parent = it has parts), so the outcome is
+      // what it decides — a skipped sync never reads as "updated".
       const due = (day: string, hhmm: string) => zonedEpoch(day, hhmm, USER_TIME_ZONE);
-      const plan = calendarSyncPlan(null, before, settings, due, { ensure: true });
-      if (plan.kind === 'none') throw new Error(syncRefusal(before, settings));
+      const plan = calendarSyncPlan(null, before, settings, due, { ensure: true, parent });
+      if (plan.kind === 'none')
+        throw new Error(parent ? PARENT_NO_EVENT_ERROR : syncRefusal(before, settings));
       const task = (await ctx.dispatch('syncCalendarEvent', [taskId])) as Task;
       if (task.gcalSyncError) throw new Error(task.gcalSyncError);
       // Named from what came back, so a task changed between the read and the sync (finished, sync
