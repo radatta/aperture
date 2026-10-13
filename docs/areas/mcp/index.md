@@ -140,7 +140,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   the backend decides — `{ outcome: created | updated | removed | unlinked, task }` (`unlinked`: Google
   had already deleted it; call again to create) — and refuses with the reason when the plan is `none`
   (a parent — `PARENT_NO_EVENT_ERROR`, [tasks/parts.md](../tasks/parts.md) D8 — done/cancelled, auto-sync
-  off, no due time and no event, no write default). A Google failure is an
+  off, no due time and no event, no write default); a refusal still clears a moot `gcalSyncError` the way
+  the backend's ensure pass does (no Google call). A Google failure is an
   error; its text is also the task's `gcalSyncError`.
 - **Attachments** — two byte paths: `attach_file` sends content inline (base64, capped **64 KB** — tool
   args are model output tokens, so this is a small-text-artifact path) and the Lambda PUTs it to the

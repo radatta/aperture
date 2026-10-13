@@ -140,6 +140,11 @@ export function zonedEpoch(dayKey: string, hhmm: string, timeZone: string): numb
   return second + offsetAt(second) === wall ? second : Math.max(first, second);
 }
 
+// A task's wall-clock deadline as an instant, in the user's zone — what the server passes the calendar
+// planner (the Lambda and MCP alike; the browser has localEpochFromDayTime).
+export const userDueEpoch = (dayKey: string, hhmm: string): number =>
+  zonedEpoch(dayKey, hhmm, USER_TIME_ZONE);
+
 // The wall-clock day + "HH:MM" of an instant in `timeZone` — the server-side twin of localDayTime and
 // the inverse of zonedEpoch (the Lambda's own clock is UTC).
 export function zonedDayTime(epochMs: number, timeZone: string): { day: string; hhmm: string } {

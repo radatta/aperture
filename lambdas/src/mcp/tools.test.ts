@@ -629,6 +629,22 @@ describe('mcp tools — sync_calendar_event', () => {
     expect(google.events.size).toBe(0);
   });
 
+  it('a refusal clears a moot failure note — a Retry that can’t do anything never lingers', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    google.insertEvent = async () => {
+      throw new Error('quota');
+    };
+    const t = (await call('create_task', timed)) as Task; // the auto create fails
+    expect(t.gcalSyncError).toMatch(/quota/);
+    await setup.updateSettings({ autoCalendar: false }); // the note is moot now, but nothing re-synced it
+    await expect(call('sync_calendar_event', { taskId: t.id })).rejects.toThrow(/Auto-sync is off/);
+    expect(
+      ((await call('list_tasks')) as Task[]).find((x) => x.id === t.id)!.gcalSyncError,
+    ).toBeNull();
+    expect(google.events.size).toBe(0);
+  });
+
   it('a Google failure is an error, and its note stays on the task', async () => {
     const { call, setup, google } = makeEnv();
     await setup.completeGoogleConnect('A');

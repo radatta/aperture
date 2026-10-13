@@ -3,7 +3,6 @@ import {
   AUTO_PLACED_ERROR,
   TASK_NOTES_MAX,
   UPLOAD_URL_TTL_MS,
-  USER_TIME_ZONE,
   calendarSyncPlan,
   computeDayShape,
   hasParts,
@@ -15,7 +14,7 @@ import {
   PARENT_NO_EVENT_ERROR,
   partsOf,
   partsSummary,
-  zonedEpoch,
+  userDueEpoch,
 } from '@aperture/shared';
 import type {
   Attachment,
@@ -745,10 +744,13 @@ export const TOOLS: Tool[] = [
       const parent = hasParts((await ctx.dispatch('listTasks', [])) as Task[], taskId);
       // The same planner the backend runs (ensure = the button, parent = it has parts), so the outcome is
       // what it decides — a skipped sync never reads as "updated".
-      const due = (day: string, hhmm: string) => zonedEpoch(day, hhmm, USER_TIME_ZONE);
-      const plan = calendarSyncPlan(null, before, settings, due, { ensure: true, parent });
-      if (plan.kind === 'none')
+      const plan = calendarSyncPlan(null, before, settings, userDueEpoch, { ensure: true, parent });
+      if (plan.kind === 'none') {
+        // The backend's ensure pass clears a moot failure note without calling Google (sync off, finished,
+        // a parent) — run it, so a refusal never leaves a Retry behind that can't do anything.
+        if (before.gcalSyncError) await ctx.dispatch('syncCalendarEvent', [taskId]);
         throw new Error(parent ? PARENT_NO_EVENT_ERROR : syncRefusal(before, settings));
+      }
       const task = (await ctx.dispatch('syncCalendarEvent', [taskId])) as Task;
       if (task.gcalSyncError) throw new Error(task.gcalSyncError);
       // Named from what came back, so a task changed between the read and the sync (finished, sync

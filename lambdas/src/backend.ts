@@ -60,11 +60,11 @@ import {
   viewableInline,
   withEstimate,
   zonedDayTime,
-  zonedEpoch,
   PULL_THROTTLE_MS,
   dayKeyInZone,
   parseBudgetMs,
   runQuickParse,
+  userDueEpoch,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -296,8 +296,7 @@ export class BackendClient implements ApiClient {
     return def;
   }
   // The Lambda's clock is UTC — a task's wall-clock deadline is resolved in the user's zone, never locally.
-  private readonly dueEpoch = (day: string, hhmm: string): number =>
-    zonedEpoch(day, hhmm, USER_TIME_ZONE);
+  private readonly dueEpoch = userDueEpoch;
   private readonly pullTime = {
     epoch: this.dueEpoch,
     clock: (ms: number) => zonedDayTime(ms, USER_TIME_ZONE),
