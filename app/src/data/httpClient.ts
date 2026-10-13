@@ -30,9 +30,21 @@ export function createHttpClient(
       body: JSON.stringify({ args }),
     });
     if (res.status === 401) onUnauthorized(); // session is gone server-side — re-auth, don't just fail
-    if (!res.ok) throw new Error(`${method} failed (${res.status})`);
+    if (!res.ok) throw new Error((await refusal(res)) ?? `${method} failed (${res.status})`);
     const text = await res.text();
     return text ? JSON.parse(text) : undefined;
+  }
+
+  // A 400 is the backend refusing (index.ts: `{ error }` — "Part 2 isn’t finished…"), worded for the
+  // user, so it's what the UI shows, as the stub's throw is. Anything else keeps the generic line.
+  async function refusal(res: { status: number; text: () => Promise<string> }) {
+    if (res.status !== 400) return null;
+    try {
+      const { error } = JSON.parse(await res.text()) as { error?: unknown };
+      return typeof error === 'string' && error ? error : null;
+    } catch {
+      return null;
+    }
   }
 
   const client: Record<string, unknown> = {};

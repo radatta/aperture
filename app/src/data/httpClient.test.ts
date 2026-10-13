@@ -37,6 +37,20 @@ describe('createHttpClient (RPC transport)', () => {
     await expect(api.listTasks()).rejects.toThrow(/listTasks failed \(500\)/);
   });
 
+  it('a 400 throws the backend’s refusal, so the UI says why; anything else stays generic', async () => {
+    const reply = (status: number, body: string) =>
+      createHttpClient('', async () => ({ ok: false, status, text: async () => body }));
+    const why = 'Part 2 isn’t finished — complete, drop or delete it first';
+    await expect(
+      reply(400, JSON.stringify({ error: why })).transitionTask('p', 'done'),
+    ).rejects.toThrow(why);
+    await expect(reply(400, 'not json').listTasks()).rejects.toThrow(/listTasks failed \(400\)/);
+    await expect(reply(400, '{}').listTasks()).rejects.toThrow(/listTasks failed \(400\)/);
+    await expect(
+      reply(500, JSON.stringify({ error: 'internal detail' })).listTasks(),
+    ).rejects.toThrow(/listTasks failed \(500\)/);
+  });
+
   it('resolves void methods (empty response body) to undefined', async () => {
     const api = createHttpClient('', async () => ({ ok: true, status: 200, text: async () => '' }));
     await expect(api.removePlan('p1')).resolves.toBeUndefined();
