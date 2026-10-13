@@ -9,6 +9,13 @@ function yaw(deg: number): number[] {
   return [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1];
 }
 
+function pitch(deg: number): number[] {
+  const t = (deg * Math.PI) / 180;
+  const c = Math.cos(t);
+  const s = Math.sin(t);
+  return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1];
+}
+
 function roll(deg: number): number[] {
   const t = (deg * Math.PI) / 180;
   const c = Math.cos(t);
@@ -162,6 +169,68 @@ describe('FluxCore', () => {
       const types = after.out.flatMap((r) => r?.events ?? []).map((e) => e.type);
       expect(types).toContain('holdEntered');
       expect(types).toContain('repCompleted');
+    });
+  });
+
+  describe('frontal neutral, and its re-set between sets (D45, D46)', () => {
+    const run = (core: FluxCore, ms: (number[] | null)[], t0 = 0) => {
+      let t = t0;
+      const out = ms.map((m) => core.frame(m, (t += 1000 / 30)));
+      return { out, t };
+    };
+    const hold = (m: number[], n: number) => Array.from({ length: n }, () => m);
+    const autos = (out: ReturnType<FluxCore['frame']>[]) => out.filter((r) => r?.autoCalibrated);
+
+    it("the automatic neutral needs a roughly frontal face; a propped phone's pitch is fine", () => {
+      const turned = new FluxCore();
+      const t = run(turned, hold(yaw(35), 90)).t;
+      expect(turned.calibrated).toBe(false); // 3 s still, looking aside
+      run(turned, hold(yaw(10), 70), t);
+      expect(turned.calibrated).toBe(true);
+      const propped = new FluxCore();
+      run(propped, hold(pitch(30), 70));
+      expect(propped.calibrated).toBe(true);
+      for (const m of [pitch(50), roll(30)]) {
+        const core = new FluxCore();
+        run(core, hold(m, 90));
+        expect(core.calibrated).toBe(false);
+      }
+    });
+
+    // A neutral at yaw 0, then one guided set run to completion with the head still.
+    function finishedSet() {
+      const core = new FluxCore();
+      let t = run(core, hold(yaw(0), 70)).t;
+      expect(core.calibrated).toBe(true);
+      core.selectExercise('isometric-flexion', 'a');
+      core.control({ type: 'start' });
+      let done = false;
+      while (!done) {
+        const r = core.frame(yaw(0), (t += 1000 / 30));
+        done = r?.events.some((e) => e.type === 'setCompleted') ?? false;
+      }
+      return { core, t };
+    }
+
+    it('between sets, a still head near the neutral re-sets it once, keeping the set', () => {
+      const { core, t } = finishedSet();
+      const { out, t: t2 } = run(core, hold(yaw(8), 75), t);
+      expect(autos(out)).toHaveLength(1);
+      expect(autos(out)[0]?.autoCalibrated?.yaw).toBeCloseTo(8, 0);
+      expect(out.at(-1)?.sample.rel.yaw).toBeCloseTo(0, 0);
+      const last = out.filter((r) => r?.state).at(-1)?.state;
+      expect(last).toMatchObject({ phase: 'complete', holdsDone: 5 });
+      expect(out.at(-1)?.sample.rom.yaw).toBeGreaterThan(5); // the ROM kept
+      expect(autos(run(core, hold(yaw(8), 120), t2).out)).toEqual([]); // once per set
+    });
+
+    it('not for a pose well away from the neutral (a stretch), nor once the next set starts', () => {
+      const far = finishedSet();
+      expect(autos(run(far.core, hold(yaw(20), 120), far.t).out)).toEqual([]);
+      const next = finishedSet();
+      next.core.control({ type: 'stop' });
+      next.core.control({ type: 'start' });
+      expect(autos(run(next.core, hold(yaw(8), 120), next.t).out)).toEqual([]);
     });
   });
 

@@ -142,10 +142,9 @@ export interface RomRepsState extends StateCommon {
   readonly holdAccumSec: number;
   // In the hold zone this frame (D36); always false without holdSec.
   readonly inHoldZone: boolean;
-  // "Further" pacing (D37): seconds still short of the zone, when it was last said, whether this
-  // excursion has had one, and how long this excursion has run without reaching the zone.
+  // "Further" pacing (D37): seconds still short of the zone, whether this excursion has had one (once
+  // per excursion), and how long it has run without reaching the zone.
   readonly stillShortSec: number;
-  readonly lastFurtherAt: number;
   readonly furtherSaid: boolean;
   readonly excursionSec: number;
   // True while the head is tilting/nodding off the exercise's plane.
@@ -224,7 +223,8 @@ export type ExerciseEvent =
   | { readonly type: 'holdReached'; readonly count: number } // repsPos + repsNeg + 1, the pending count
   // romReps with holdSec: first frame in the hold zone this excursion — "Hold" (D36).
   | { readonly type: 'holdEntered'; readonly count: number }
-  // romReps with holdSec: paused (or swung back) short of the hold zone — "Further" (D37).
+  // romReps with holdSec: paused (or swung back) short of the hold zone — "Further" (D37), once per
+  // excursion.
   | { readonly type: 'stoppedShort'; readonly shortDeg: number }
   | { readonly type: 'holdStarted'; readonly index: number }
   | {
@@ -236,8 +236,8 @@ export type ExerciseEvent =
   | { readonly type: 'positionLost' }
   // holdAtTarget: left the target after a meaningful hold; positionLost stays silent for flicker.
   | { readonly type: 'holdBroken'; readonly heldSec: number }
-  // romReps with holdSec: back below exitDeg before the hold was up — no rep (D35); said past 1 s held
-  // in the zone.
+  // romReps with holdSec: back below exitDeg before the hold was up — no rep (D35); said whenever "Hold"
+  // was said this excursion.
   | { readonly type: 'holdShort'; readonly heldSec: number }
   // holdAtTarget: still and out of position — which way to move on the worst axis (D38). `toward` is
   // relative to the target's own sign, so it holds whichever way the device's signs run.

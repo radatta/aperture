@@ -319,7 +319,7 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     const { v, fake, advance } = await running();
     act(() => fake().sample({ faceVisible: false, tSec: 0 }));
     act(() => fake().sample({ faceVisible: false, tSec: 2 }));
-    expect(spoken(v)).toEqual([]); // never seen a face yet: nothing to lose
+    expect(spoken(v)).toEqual([]); // never seen a face: it waits 3 s, not 1 (D43)
     act(() => fake().calibrated(true));
     act(() => fake().sample({ faceVisible: true, tSec: 3 }));
     act(() => fake().sample({ faceVisible: false, tSec: 3.5 }));
@@ -515,5 +515,34 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(hook.result.current.sessionDone).toBe(true);
     await act(() => hook.result.current.start(els));
     expect(hook.result.current.sessionDone).toBe(false);
+  });
+
+  it("says Can't see you when no face is ever found, after 3 s", async () => {
+    const { v, fake } = await running();
+    act(() => fake().sample({ faceVisible: false, tSec: 0 }));
+    act(() => fake().sample({ faceVisible: false, tSec: 2.9 }));
+    expect(spoken(v)).toEqual([]);
+    act(() => fake().sample({ faceVisible: false, tSec: 3 }));
+    expect(spoken(v)).toEqual(["Can't see you"]);
+    act(() => fake().sample({ faceVisible: true, tSec: 3.2 }));
+    act(() => fake().sample({ faceVisible: true, tSec: 3.7 }));
+    expect(spoken(v).at(-1)).toBe('Tracking');
+  });
+
+  it('a neutral re-set during the rest is shown, not said, and starts nothing', async () => {
+    const { hook, v, fake, advance } = await running({
+      exerciseId: 'deep-neck-flexor',
+      kind: 'guidedHold',
+    });
+    act(() => fake().calibrated(true, true));
+    advance(3_000);
+    act(() => fake().event(DONE));
+    advance(5_000);
+    act(() => fake().calibrated(true, true));
+    expect(spoken(v).filter((t) => t === 'Neutral set')).toHaveLength(1);
+    expect(spoken(v).filter((t) => t === 'Get ready')).toHaveLength(1);
+    expect(hook.result.current.notice).toBe('Neutral reset');
+    advance(10_000);
+    expect(starts(fake().calls)).toBe(1); // the rest runs on
   });
 });

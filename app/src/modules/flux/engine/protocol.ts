@@ -57,7 +57,7 @@ export type FromWorker =
   // Every frame message is acked, dropped or not — the main thread sends the next only after it.
   | { readonly type: 'frameDone' }
   // `neutral` is kept by the main thread so a replacement worker can start calibrated. `auto`: the core
-  // set it from 2 s of stillness (D40), not a Calibrate tap.
+  // set it from 2 s of stillness (D40) or re-set it between sets (D46), not a Calibrate tap.
   | {
       readonly type: 'calibrated';
       readonly ok: boolean;

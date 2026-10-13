@@ -33,14 +33,11 @@ const HOLD_BROKEN_MIN_SEC = 1;
 // …and only once the head has stayed out this long (edge jitter or a dropped face frame late in a
 // long hold comes straight back; saying it then would be wrong with your eyes closed).
 const HOLD_BROKEN_OUT_SEC = 0.3;
-// A ROM return before the hold is up is said (a failed attempt, D35) only past the same bar; shorter is
-// settling-in jitter.
-const HOLD_SHORT_MIN_SEC = HOLD_BROKEN_MIN_SEC;
 // A ROM hold is timed only this close to the target (D36): 75 % — rotation 45° of 60°.
 const HOLD_ZONE_FRACTION = 0.75;
-// "Further" (D37): still this long short of the zone, at most once per pause and this often.
+// "Further" (D37): still this long short of the zone, once per excursion (the reducer paces excursions
+// 2 s apart).
 const FURTHER_STILL_SEC = 0.6;
-const FURTHER_COOLDOWN_SEC = 3;
 // …or a swing back that never reached the zone and lasted this long.
 const FURTHER_SWING_SEC = 1;
 // A pause counts as stopping short only this close to the excursion's peak, past enterDeg — not a
@@ -97,7 +94,6 @@ function buildRom(def: DefOf<'romReps'>): RomRepsState {
     holdAccumSec: 0,
     inHoldZone: false,
     stillShortSec: 0,
-    lastFurtherAt: Number.NEGATIVE_INFINITY,
     furtherSaid: false,
     excursionSec: 0,
     compensating: false,
@@ -225,7 +221,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
   const v = input.rel[def.axis];
   const speed = speedOf(input.rel, state.lastRel, dtv);
   let { zone, peakThisRep, repsPos, repsNeg, peakSum, peakCount, holdAccumSec } = state;
-  let { stillShortSec, lastFurtherAt, furtherSaid, excursionSec } = state;
+  let { stillShortSec, furtherSaid, excursionSec } = state;
   let inHoldZone = false;
   const allowPos = def.direction === 'positive' || def.direction === 'bilateral';
   const allowNeg = def.direction === 'negative' || def.direction === 'bilateral';
@@ -259,19 +255,13 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       furtherSaid = false;
       excursionSec = 0;
     } else if (holdSec > 0 && out > def.exitDeg && holdAccumSec < holdSec) {
-      // Short of the zone: a pause at the far end says "Further" (D37) — once per pause, at most every
-      // 3 s; moving and pausing again can say it again.
+      // Short of the zone: a pause at the far end says "Further" (D37) — once per excursion, so a user
+      // straining at their real limit isn't told again and again.
       excursionSec += dtv;
       const atFarEnd = out >= def.enterDeg && out >= Math.abs(peakThisRep) - FURTHER_PEAK_DEG;
       stillShortSec = atFarEnd && speed < STILL_SPEED ? stillShortSec + dtv : 0;
-      const sinceLast = input.tSec - lastFurtherAt;
-      if (
-        stillShortSec >= FURTHER_STILL_SEC &&
-        sinceLast >= FURTHER_COOLDOWN_SEC &&
-        sinceLast > stillShortSec // not yet this pause
-      ) {
+      if (!furtherSaid && stillShortSec >= FURTHER_STILL_SEC) {
         events.push({ type: 'stoppedShort', shortDeg: holdDeg - out });
-        lastFurtherAt = input.tSec;
         furtherSaid = true;
       }
     }
@@ -279,14 +269,12 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       const peakDeg = Math.abs(peakThisRep);
       const holdReached = holdSec > 0 && holdAccumSec >= holdSec;
       const short = holdSec > 0 && !holdReached;
-      // Back before the hold was up: not a rep (D35). Below the bar it's jitter — say nothing.
-      if (short && holdAccumSec >= HOLD_SHORT_MIN_SEC)
-        events.push({ type: 'holdShort', heldSec: holdAccumSec });
+      // Back before the hold was up: not a rep (D35). Said whenever "Hold" was — a zone entry is a real
+      // attempt; before it the swing trigger below has the floor.
+      if (short && holdAccumSec > 0) events.push({ type: 'holdShort', heldSec: holdAccumSec });
       // A swing out and back that never reached the zone, with no pause to say it at (D37).
-      if (short && holdAccumSec === 0 && !furtherSaid && excursionSec >= FURTHER_SWING_SEC) {
+      if (short && holdAccumSec === 0 && !furtherSaid && excursionSec >= FURTHER_SWING_SEC)
         events.push({ type: 'stoppedShort', shortDeg: holdDeg - Math.abs(peakThisRep) });
-        lastFurtherAt = input.tSec;
-      }
       if (!short) {
         const side =
           def.direction === 'bilateral'
@@ -362,7 +350,6 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       holdAccumSec,
       inHoldZone,
       stillShortSec,
-      lastFurtherAt,
       furtherSaid,
       excursionSec,
       compensating,
@@ -411,6 +398,11 @@ function evalHold(
     };
   }
 
+  // A dropout mid-hold pauses the clock (D44): the core keeps the last pose, so the head is most likely
+  // still there, and the session already says "Can't see you" (D43). Nothing moves until the face is back.
+  if (!input.faceVisible && inPosition)
+    return { state: { ...touch(state, input), stillOutSec: 0, nudgeSaid: false }, events };
+
   if (rawInPos && !inPosition) {
     inPosition = true;
     holdElapsedSec = 0;
@@ -418,8 +410,8 @@ function evalHold(
     outSec = 0;
     events.push({ type: 'positionReached' });
   } else if (!rawInPos && inPosition) {
-    // A face dropout isn't a broken hold — the session says "Can't see you" instead (D43).
-    if (input.faceVisible && holdElapsedSec >= HOLD_BROKEN_MIN_SEC) brokenHeldSec = holdElapsedSec;
+    // Left with the face in view (a dropout pauses above, D44).
+    if (holdElapsedSec >= HOLD_BROKEN_MIN_SEC) brokenHeldSec = holdElapsedSec;
     outSec = 0;
     inPosition = false;
     holdElapsedSec = 0;

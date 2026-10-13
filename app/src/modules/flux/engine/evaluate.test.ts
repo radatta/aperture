@@ -221,9 +221,13 @@ describe('romReps', () => {
       expect(of(events, 'repCompleted')[0]).toMatchObject({ count: 1, holdReached: true });
     });
 
-    it('a sub-second hold is silent past "Hold" (settling-in jitter); past a second it is said', () => {
-      expect(fold(rom3, [N(0, 0), ...out(25)]).events.map((e) => e.type)).toEqual(['holdEntered']); // ≈ 0.8 s
-      expect(of(fold(rom3, [N(0, 0), ...out(32)]).events, 'holdShort')).toHaveLength(1); // ≈ 1.03 s
+    it('any return after "Hold" says Hold longer, however short — a zone entry is a real attempt', () => {
+      const sub = fold(rom3, [N(0, 0), ...out(25)]).events; // ≈ 0.8 s
+      expect(sub.map((e) => e.type)).toEqual(['holdEntered', 'holdShort']);
+      expect(of(sub, 'holdShort')[0]?.heldSec).toBeCloseTo(24 / 30, 5);
+      const blip = of(fold(rom3, [N(0, 0), ...out(2)]).events, 'holdShort'); // one frame in the zone
+      expect(blip).toHaveLength(1);
+      expect(blip[0]?.heldSec).toBeCloseTo(1 / 30, 5);
     });
 
     it('short holds never complete the set, nor count toward the peak average', () => {
@@ -355,30 +359,30 @@ describe('romReps', () => {
       expect(of(events, 'repCompleted')).toHaveLength(1);
     });
 
-    it('is cooled down 3 s, and a pause that outlasts the cooldown still gets its one', () => {
-      const { events } = fold(rom3, [
-        N(0, 0),
+    it('once per excursion: later pauses in it are quiet, the next excursion gets its own', () => {
+      const excursion = [
         ...repeat(N(0, 20), 20), // "Further" at ≈ 0.63 s
         ...ramp(20, 24, 5),
-        ...repeat(N(0, 24), 30), // a second pause ≈ 1.6 s later: cooled down, quiet
+        ...repeat(N(0, 24), 30), // a second pause at the new far end
         ...ramp(24, 22, 5),
-        ...repeat(N(0, 22), 150), // a third, from ≈ 2 s: said once the 3 s are up, then not again
-      ]);
-      const further = of(events, 'stoppedShort');
-      expect(further).toHaveLength(2);
+        ...repeat(N(0, 22), 150), // straining at the limit for 5 s
+      ];
+      const one = fold(rom3, [N(0, 0), ...excursion]).events;
+      expect(of(one, 'stoppedShort')).toHaveLength(1);
+      const two = fold(rom3, [N(0, 0), ...excursion, N(0, 0), ...repeat(N(0, 20), 20)]).events;
+      expect(of(two, 'stoppedShort')).toHaveLength(2);
     });
 
     it('only a pause at the far end is "Further" — not one on the way back, nor a drifted rest', () => {
       const { events } = fold(rom3, [
         N(0, 0),
-        ...ramp(0, 25, 20),
-        ...repeat(N(0, 25), 25), // paused at the far end → "Further"
+        ...ramp(0, 25, 20), // out without stopping
         ...ramp(25, 18, 5),
         ...repeat(N(0, 18), 150), // paused 7° back from the peak for 5 s: coming back, not short
         ...ramp(18, 10, 5),
         ...repeat(N(0, 10), 150), // resting just past exitDeg, below enterDeg
       ]);
-      expect(of(events, 'stoppedShort')).toHaveLength(1);
+      expect(of(events, 'stoppedShort')).toEqual([]);
     });
 
     it('nothing without a hold: no zone, no "Hold", no "Further"', () => {
@@ -640,15 +644,59 @@ describe('holdAtTarget', () => {
       expect(of(run(150), 'nudge')).toHaveLength(1);
     });
 
-    it('a face dropout mid-hold is neither a broken hold nor a nudge (D43)', () => {
+    it('a face dropout mid-hold is neither a lost position, a broken hold nor a nudge (D43, D44)', () => {
       const long = { ...two, id: 't-nudge-face', holdSec: 3 } satisfies ExerciseDefinition;
       const { events } = foldFace(long, [
         ...repeat(N(0, 0, 28), 45).map((r): [Euler, boolean] => [r, true]),
         ...repeat(N(0, 0, 28), 60).map((r): [Euler, boolean] => [r, false]),
       ]);
-      expect(of(events, 'positionLost')).toHaveLength(1);
+      expect(of(events, 'positionLost')).toEqual([]);
       expect(of(events, 'holdBroken')).toEqual([]);
       expect(of(events, 'nudge')).toEqual([]);
+    });
+  });
+
+  describe('a dropout mid-hold pauses the clock (D44)', () => {
+    const long = {
+      ...stretch,
+      id: 't-hold-drop',
+      holdSec: 3,
+      reps: 2,
+    } satisfies ExerciseDefinition;
+    const IN = N(0, 0, 28);
+    const OUT = N(0, 0, 0);
+    const frames = (rel: Euler, n: number, face: boolean) =>
+      repeat(rel, n).map((r): [Euler, boolean] => [r, face]);
+
+    it('keeps the seconds held, accrues none while the face is gone, then finishes', () => {
+      // 44 frames held, a 1 s dropout, then 40 more: 84 < 90, not done — the dropout added nothing.
+      const short = foldFace(long, [
+        ...frames(IN, 45, true),
+        ...frames(IN, 30, false),
+        ...frames(IN, 40, true),
+      ]);
+      expect(of(short.events, 'positionReached')).toHaveLength(1);
+      expect(of(short.events, 'positionLost')).toEqual([]);
+      expect(of(short.events, 'holdCompleted')).toEqual([]);
+      // 10 frames more: 94 ≥ 90 — the held seconds were kept, not reset.
+      const done = foldFace(long, [
+        ...frames(IN, 45, true),
+        ...frames(IN, 30, false),
+        ...frames(IN, 50, true),
+      ]);
+      expect(of(done.events, 'holdCompleted')).toHaveLength(1);
+    });
+
+    it('back out of position after the dropout is a normal leave, said', () => {
+      const { events } = foldFace(long, [
+        ...frames(IN, 45, true),
+        ...frames(IN, 30, false),
+        ...frames(OUT, 12, true),
+      ]);
+      expect(of(events, 'positionLost')).toHaveLength(1);
+      const broken = of(events, 'holdBroken');
+      expect(broken).toHaveLength(1);
+      expect(broken[0]?.heldSec).toBeCloseTo(44 / 30, 5);
     });
   });
 

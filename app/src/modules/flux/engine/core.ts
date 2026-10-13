@@ -13,6 +13,7 @@ import {
 } from '@aperture/shared/flux';
 import { evaluate, initialState } from './evaluate';
 import {
+  magnitude,
   matrixToEuler,
   OneEuroFilter,
   RomTracker,
@@ -30,13 +31,27 @@ const STATE_INTERVAL_SEC = 1 / 15;
 const AUTO_CAL_STILL_SEC = 2;
 // A frame gap counted toward stillness at most this long (a paused tab resuming).
 const MAX_STILL_DT = 0.5;
+// Roughly facing the camera. Yaw and roll are in the camera's frame; pitch isn't — a phone propped below
+// the face sees it pitched by the elevation (20–30° is normal), and the neutral is what absorbs that — so
+// only an extreme pitch is refused (D45).
+const FRONTAL_YAW_ROLL_DEG = 20;
+const FRONTAL_PITCH_DEG = 40;
+const isFrontal = (e: Euler): boolean =>
+  Math.abs(e.yaw) <= FRONTAL_YAW_ROLL_DEG &&
+  Math.abs(e.roll) <= FRONTAL_YAW_ROLL_DEG &&
+  Math.abs(e.pitch) <= FRONTAL_PITCH_DEG;
+// Between sets (the set complete, nothing measured) a still, frontal head within this much of the neutral
+// re-sets it, once per set: a slow slouch can't skew the next set, a stretch pose can't become neutral
+// (D46).
+const RECAL_MAX_SHIFT_DEG = 10;
 
 export interface FrameResult {
   readonly sample: Sample;
   readonly events: readonly ExerciseEvent[];
   // Present only when the 15 Hz state throttle lets one through.
   readonly state?: ExerciseState;
-  // The neutral this frame set by itself (D40); the caller reports it like a Calibrate.
+  // The neutral this frame set by itself (D40), or re-set between sets (D46); the caller reports it like
+  // a Calibrate.
   readonly autoCalibrated?: Euler;
 }
 
@@ -54,7 +69,8 @@ export class FluxCore {
   private lastStatePostSec = 0;
   private fps = 0;
   private faceVisible = false;
-  private stillSec = 0; // a visible face held still, while there's no neutral
+  private stillSec = 0; // a visible, frontal face held still — with no neutral, or between sets
+  private recalDone = false; // this finished set has had its between-sets re-set
   private def: ExerciseDefinition | null = null;
   private exerciseState: ExerciseState | null = null;
   private readonly filters = {
@@ -106,18 +122,33 @@ export class FluxCore {
     const dt = tSec - (this.lastFrameSec || tSec);
     this.lastFrameSec = tSec;
 
-    // No neutral yet: hold still with your face in view and it sets itself (D40).
+    // No neutral yet: hold still facing the camera and it sets itself (D40, D45). Between sets, the
+    // same near the neutral re-sets it once (D46).
+    const resting = this.exerciseState?.phase === 'complete';
+    if (!resting) this.recalDone = false;
     let autoCalibrated: Euler | undefined;
-    if (!this.neutral) {
+    if (!this.neutral || (resting && !this.recalDone)) {
       const stillDt = Math.min(dt, MAX_STILL_DT);
+      const near =
+        !this.neutral ||
+        magnitude(relativeTo(this.lastSmoothed, this.neutral)) <= RECAL_MAX_SHIFT_DEG;
       const still =
         hadFace &&
         this.faceVisible &&
+        near &&
+        isFrontal(this.lastSmoothed) &&
         speedOf(this.lastSmoothed, prevSmoothed, stillDt) < STILL_SPEED;
       this.stillSec = still ? this.stillSec + stillDt : 0;
-      if (this.stillSec >= AUTO_CAL_STILL_SEC && this.calibrate())
+      if (this.stillSec >= AUTO_CAL_STILL_SEC) {
+        // A re-set keeps the finished set and the ROM: a correction, not a Calibrate.
+        if (this.neutral) {
+          this.neutral = { ...this.lastSmoothed };
+          this.recalDone = true;
+        } else this.calibrate();
         autoCalibrated = { ...this.lastSmoothed };
-    }
+        this.stillSec = 0;
+      }
+    } else this.stillSec = 0;
 
     // No face holds the last pose (flux parity) — only hold/guided kinds check faceVisible.
     const rel = relativeTo(this.lastSmoothed, this.neutral);

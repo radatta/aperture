@@ -24,8 +24,9 @@ import { initialCueState, isMirrored, reduceCue, type CueEvent, type CueState } 
 // throttled to ~16 Hz for display, exercise state arrives at ~15 Hz from the engine.
 //
 // Once Start is tapped the session runs itself, eyes and hands free (the guiding principle): the neutral
-// sets itself (D40), timed kinds start on their own (D41), sets follow each other after a rest and the
-// session ends itself (D42), and a lost face is said out loud (D43).
+// sets itself (D40) and a drifted one is re-set between sets (D46), timed kinds start on their own (D41),
+// sets follow each other after a rest and the session ends itself (D42), and a lost face is said out
+// loud (D43).
 
 export type FluxStatus = 'idle' | 'loading' | 'running' | 'paused' | 'error';
 
@@ -73,6 +74,7 @@ const READY_KINDS: ReadonlySet<ExerciseKind> = new Set(['guidedHold', 'repositio
 const SET_LEAD_MS = 3000; // "Get ready" → the set starts
 const SET_REST_MS = 30_000; // between sets (D42)
 const FACE_LOST_SEC = 1; // gone this long → "Can't see you" (D43)
+const FACE_NEVER_SEC = 3; // no face since the stage came up → "Can't see you" too (D43)
 const FACE_BACK_SEC = 0.5; // back this long → "Tracking"
 const HOLD_STILL_HINT_SEC = 20; // a visible face with no neutral this long → the hint (D40)
 
@@ -269,6 +271,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           // Spoken and mirrored as a cue (not a notice), so a "Get ready" right after it shows too; it
           // supersedes a "Face the camera" refusal still on screen.
           setNotice(null);
+          // Between sets the core re-sets a drifted neutral by itself (D46): a correction with nothing
+          // to act on — shown, not said.
+          if (e.auto && autoStep.current?.kind === 'rest') return flash('Neutral reset');
           say({ type: 'neutralSet' });
           // Calibrating resets the set, so a timed kind starts itself again (D41) — at once if
           // "Start now" was what asked for the neutral. A rest in progress runs on: its end starts the set.
@@ -336,15 +341,16 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return setStatus('error');
       }
     };
-    // "Can't see you" after a second gone, "Tracking" once back; the calibration hint while uncalibrated.
+    // "Can't see you" after a second gone (3 s if no face was ever seen), "Tracking" once back; the
+    // calibration hint while uncalibrated.
     const watchFace = (smp: Sample) => {
       const f = face.current;
       if (!smp.faceVisible) {
         f.backSince = null;
         f.hintSince = null;
-        if (!f.seen || f.lostSaid) return;
+        if (f.lostSaid) return;
         f.lostSince ??= smp.tSec;
-        if (smp.tSec - f.lostSince < FACE_LOST_SEC) return;
+        if (smp.tSec - f.lostSince < (f.seen ? FACE_LOST_SEC : FACE_NEVER_SEC)) return;
         // Latched only once said: inside its 5 s cooldown it's retried each frame until it is.
         f.lostSaid = say({ type: 'faceLost' });
         return;
