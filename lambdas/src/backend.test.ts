@@ -228,6 +228,30 @@ describe('backend task delete', () => {
 
     expect(await live.getTask(task.id)).not.toBeNull(); // nothing tombstoned
   });
+
+  it('persists nothing under noopWrites on the parent + parts paths either', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), { userId: 'local', now });
+    const p = await live.createTask({ title: 'P2', estimateMin: 60 });
+    const a = await live.createTask({ title: 'a', estimateMin: 30 });
+    const solo = await live.createTask({ title: 'solo', estimateMin: 30 });
+    const before = JSON.stringify(await live.exportData());
+
+    const noop = new BackendClient(new Repo(doc, noopWrites(), 'local'), { userId: 'local', now });
+    // Some of these fail part-way under noop (a write that "landed" can't be read back) — what matters
+    // is that none of them leaves anything behind.
+    const attempts: (() => Promise<unknown>)[] = [
+      () => noop.createTasks([{ title: 'part', parentId: p.id }]),
+      () => noop.setTaskParent(a.id, p.id),
+      () => noop.splitTask(solo.id, { finish: 'keep', followUp: { title: 'rest', estimateMin: 10 } }),
+      () => noop.transitionTask(p.id, 'cancelled'),
+      () => noop.deleteTask(p.id),
+    ];
+    for (const attempt of attempts) await attempt().catch(() => undefined);
+
+    expect(JSON.stringify(await live.exportData())).toBe(before);
+  });
 });
 
 // Rows written before notes existed have no attribute at all, so they read back undefined (not null).
@@ -248,5 +272,40 @@ describe('backend task notes on a legacy row', () => {
     expect((await backend.getTask(task.id))?.notes).toBeUndefined();
     expect((await backend.setTaskNotes(task.id, 'added later')).notes).toBe('added later');
     expect((await backend.getTask(task.id))?.notes).toBe('added later');
+  });
+});
+
+// The parent's lock is decided on the task list read straight after a part's write. DynamoDB's default
+// query is eventually consistent, so it can still show the part as it was — the decision must not.
+describe('backend parent lock under a lagging task list', () => {
+  const setup = () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+    });
+    // Every non-consistent list read for the next while shows `id` as it is now.
+    const lagging = async (id: string) =>
+      doc.staleNextQueries('u#local', sk.task(id), await doc.get('u#local', sk.task(id)), 20);
+    return { backend, lagging };
+  };
+
+  it('a first start freezes the lock though the list still shows the part unstarted', async () => {
+    const { backend, lagging } = setup();
+    const p = await backend.createTask({ title: 'P2' });
+    const a = await backend.createTask({ title: 'a', estimateMin: 30, parentId: p.id });
+    await lagging(a.id);
+    await backend.transitionTask(a.id, 'in_progress');
+    expect((await backend.getTask(p.id))?.estimateLockedMin).toBe(30);
+  });
+
+  it('detaching the last part releases the lock though the list still shows it attached', async () => {
+    const { backend, lagging } = setup();
+    const p = await backend.createTask({ title: 'P2' });
+    const a = await backend.createTask({ title: 'a', estimateMin: 30, parentId: p.id });
+    await backend.transitionTask(a.id, 'in_progress');
+    await lagging(a.id);
+    await backend.setTaskParent(a.id, null);
+    expect((await backend.getTask(p.id))?.estimateLockedMin).toBeNull();
   });
 });

@@ -1,78 +1,26 @@
-// Split — one task becomes two (docs/areas/tasks/split.md). The ONE place the split + family rules live,
-// so the stub and the Lambda can't drift. A split never cancels: the original finishes ('done') or keeps
-// going ('keep'), and the remaining work becomes a new task with its own estimate.
-//
-// A FAMILY is the original plus every part split off it once a frozen baseline existed: the root's
-// estimateLockedMin covers the whole job, so the family is calibrated as one (root lock vs combined
-// actual). Until that lands, no family member is a calibration point on its own — a done part measured
-// against the whole job's lock would read as "overestimated".
-//
-// NB: pre-existing tasks predate `splitFromId` and read back undefined — compare `!t.splitFromId`.
+// Split — when work turns out bigger (docs/areas/tasks/split.md, parts.md). Split always yields parent +
+// parts: a standalone task becomes Part 1 under a NEW parent that takes its title, deadline and lock (so the
+// parent's rollup covers the whole job), and a part just gains a sibling. A split never cancels: this part
+// finishes ('done') or keeps going ('keep'), and the remaining work becomes a new part with its own estimate.
+// A roll rep or a recurring occurrence isn't split (parts.md D11). Parent rules (who can be one, the
+// rollup) live in parts.ts; this file is the split mechanics.
 
 import type { SplitTaskInput } from './api';
-import {
-  canTransitionTask,
-  contributesCalibration,
-  taskTransition,
-  withEstimate,
-} from './machines';
+import { canTransitionTask, taskTransition, withEstimate } from './machines';
+import { isRep } from './parts';
 import { ROLL_PLAN_FALLBACK_MIN } from './rolls';
 import type { BaseEntity, Task, TaskPlan } from './types';
 
-// A part links to the task it was split from only when a frozen baseline exists upstream — the task's own
-// lock, or (an unstarted part) its own link. So a task with linked children always has a lock predating
-// all of them. Splitting an unstarted task makes two independent fresh estimates, not a family.
-export function linksToFamily(task: Task): boolean {
-  return task.estimateLockedMin != null || !!task.splitFromId;
-}
+// A standalone original's title once it's the first part (the form prefills it; any title can be typed).
+export const STANDALONE_PART_TITLE = 'Part 1';
 
-export function splitChildren(tasks: Task[], id: string): Task[] {
-  return tasks.filter((t) => t.splitFromId === id);
-}
+export const REP_NO_SPLIT_ERROR =
+  'A roll rep or a recurring task isn’t split — it’s one rep of a repeating thing. Rescope it or finish it.';
 
-// Walks splitFromId up to the original. A missing parent (deleted) ends the walk at the last one found.
-export function splitRoot(tasks: Task[], task: Task): Task {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const seen = new Set<string>();
-  let cur = task;
-  while (cur.splitFromId && !seen.has(cur.id)) {
-    seen.add(cur.id);
-    const parent = byId.get(cur.splitFromId);
-    if (!parent) break;
-    cur = parent;
-  }
-  return cur;
-}
-
-// The root and every part descended from it.
-export function splitFamily(tasks: Task[], rootId: string): Task[] {
-  const out: Task[] = [];
-  const queue = tasks.filter((t) => t.id === rootId);
-  const seen = new Set<string>();
-  while (queue.length) {
-    const t = queue.shift()!;
-    if (seen.has(t.id)) continue;
-    seen.add(t.id);
-    out.push(t);
-    queue.push(...splitChildren(tasks, t.id));
-  }
-  return out;
-}
-
-export function inSplitFamily(task: Task, tasks: Task[]): boolean {
-  return !!task.splitFromId || tasks.some((t) => t.splitFromId === task.id);
-}
-
-// The interim calibration rule: a done, locked task — unless it belongs to a split family.
-export function isCalibrationPoint(task: Task, tasks: Task[]): boolean {
-  return contributesCalibration(task) && !inSplitFamily(task, tasks);
-}
-
-// isCalibrationPoint over a whole list in one pass (getCalibration's scan).
-export function calibrationTasks(tasks: Task[]): Task[] {
-  const parents = new Set(tasks.map((t) => t.splitFromId).filter(Boolean));
-  return tasks.filter((t) => contributesCalibration(t) && !t.splitFromId && !parents.has(t.id));
-}
+// The editor's "Split…" gate — splitOriginal's own refusals (finished, a rep: two reps on one day), so the
+// button never offers what the server refuses. The caller hides it on a parent too (PARENT_NO_SPLIT_ERROR).
+export const canSplit = (task: Pick<Task, 'status' | 'rollId' | 'seriesId'>): boolean =>
+  task.status !== 'done' && task.status !== 'cancelled' && !isRep(task);
 
 // Where the follow-up lands: the latest day the original is planned on (pass its alive plan rows), or
 // null → backlog. A past day self-heals — getDay(today)'s stale sweep moves it back to backlog.
@@ -98,16 +46,29 @@ export function rescopedPlanMinutes(input: SplitTaskInput, original: Task): numb
 }
 
 // The original's half: validates the whole input (throws before any write), then applies the edits
-// (title, estimate, actual) and the finish. Calendar pointers are the caller's — they depend on the event.
-export function splitOriginal(task: Task, input: SplitTaskInput, now: number): Task {
+// (title, estimate, actual) and the finish. `standalone` = it isn't a part yet, so it becomes Part 1 (an
+// omitted title defaults to STANDALONE_PART_TITLE); an untimed one's day was its deadline, which is the
+// parent's now, so it goes (a timed one keeps it — its time is its block's end). The caller refuses a parent first (PARENT_NO_SPLIT_ERROR)
+// and owns the calendar pointers — they depend on the event.
+export function splitOriginal(
+  task: Task,
+  input: SplitTaskInput,
+  now: number,
+  standalone: boolean,
+): Task {
   if (task.status === 'done' || task.status === 'cancelled')
     throw new Error(`Can't split a finished task (status: ${task.status})`);
+  if (isRep(task)) throw new Error(REP_NO_SPLIT_ERROR);
   if (input.finish !== 'done' && input.finish !== 'keep')
     throw new Error(`Invalid split finish: ${String(input.finish)}`);
   if (input.finish === 'done' && !canTransitionTask(task.status, 'done'))
     throw new Error(`Only a started task can finish a part (status: ${task.status})`);
   if (!input.followUp?.title?.trim()) throw new Error('Follow-up title is required');
   if (input.title !== undefined && !input.title.trim()) throw new Error('Title is required');
+  if (input.parentTitle !== undefined && (!standalone || !input.parentTitle.trim()))
+    throw new Error(
+      standalone ? 'Parent title is required' : 'A part’s parent already has its title',
+    );
   // Minutes feed the plan and (actual) calibration — a negative or non-number is never stored.
   const nums = {
     actualMin: input.actualMin,
@@ -124,6 +85,8 @@ export function splitOriginal(task: Task, input: SplitTaskInput, now: number): T
   }
   let next: Task = { ...task, updatedAt: now };
   if (input.title !== undefined) next.title = input.title.trim();
+  else if (standalone) next.title = STANDALONE_PART_TITLE;
+  if (standalone && !task.dueTime) next.dueDay = null;
   if (input.estimateMin !== undefined || input.bufferMin !== undefined)
     next = withEstimate(
       next,
@@ -138,27 +101,58 @@ export function splitOriginal(task: Task, input: SplitTaskInput, now: number): T
   return next;
 }
 
-// The follow-up half: a fresh task for the remaining work, with its own UNLOCKED estimate (a new
-// prediction — the original's frozen value is never reused). Returns the non-identity fields; the caller
-// stamps a BaseEntity and, for a timed done split, moves the original's event link onto it.
+// A standalone split's new parent: the deliverable the original was. It takes the title (unless renamed),
+// category, deadline and notes (copied — the original keeps its own), and the original's lock, so the
+// rollup's baseline predates every part. No estimate (Σ parts), no plan, no roll, no calendar event.
+export function newParentFrom(original: Task, input: SplitTaskInput): Omit<Task, keyof BaseEntity> {
+  return {
+    title: input.parentTitle?.trim() || original.title,
+    status: 'backlog',
+    categoryId: original.categoryId,
+    dueDay: original.dueDay,
+    dueTime: original.dueTime ?? null,
+    notes: original.notes ?? null,
+    seriesId: null,
+    rollId: null,
+    estimateMin: null,
+    bufferMin: null,
+    estimateLockedMin: original.estimateLockedMin,
+    parentId: null,
+    actualAccruedMin: 0,
+    startedAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    gcalAccountId: null,
+    gcalCalendarId: null,
+    gcalEventId: null,
+    gcalSyncError: null,
+  };
+}
+
+// The follow-up half: a new part of `parentId` for the remaining work, with its own UNLOCKED estimate (a
+// new prediction — the original's frozen value is never reused). It keeps a timed original's time (dueDay/
+// dueTime — for a part, when its block ends) so a timed split's work stays on the calendar; an untimed day
+// is a deadline (the parent's) or that part's own, never the new part's. Returns the
+// non-identity fields; the caller stamps a BaseEntity and, for a timed done split, moves the event onto it.
 export function splitFollowUp(
   original: Task,
   followUp: SplitTaskInput['followUp'],
   planned: boolean,
+  parentId: string,
 ): Omit<Task, keyof BaseEntity> {
   return {
     title: followUp.title.trim(),
     status: planned ? 'planned' : 'backlog',
     categoryId: original.categoryId,
-    dueDay: original.dueDay, // a split changes scope, not the deadline — carry it (like categoryId)
+    dueDay: original.dueTime ? original.dueDay : null,
     dueTime: original.dueTime ?? null,
     notes: original.notes ?? null, // the remaining scope keeps its context
     seriesId: null,
-    rollId: original.rollId, // finishing the split-off remainder tomorrow is honestly a rep tomorrow
+    rollId: null, // a rep is never split (splitOriginal), so a part never carries a roll
     estimateMin: followUp.estimateMin,
     bufferMin: followUp.bufferMin ?? null,
     estimateLockedMin: null,
-    splitFromId: linksToFamily(original) ? original.id : null,
+    parentId,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,

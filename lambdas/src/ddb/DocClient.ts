@@ -32,8 +32,9 @@ export interface DocClient {
   // `expectedUpdatedAt`, or — with null — only if no row exists (a tombstone counts as a row).
   // Throws ConditionFailedError otherwise.
   putIf(item: Item, expectedUpdatedAt: number | null): Promise<void>;
-  // begins_with(SK, prefix) within a partition, ascending by SK.
-  query(pk: string, skPrefix: string): Promise<Item[]>;
+  // begins_with(SK, prefix) within a partition, ascending by SK. `consistent`: strongly consistent — a
+  // decision taken on the list straight after a write must see that write.
+  query(pk: string, skPrefix: string, opts?: { consistent?: boolean }): Promise<Item[]>;
   // GSI1 range read, ascending by GSI1SK (done-task calibration window).
   queryIndex(gsi1pk: string, range?: IndexRange): Promise<Item[]>;
   delete(pk: string, sk: string): Promise<void>;
@@ -49,6 +50,7 @@ export class InMemoryDoc implements DocClient {
   private items = new Map<string, Item>();
   private intercepts = new Map<string, { fn: () => void; when?: (item: Item) => boolean }>();
   private stale = new Map<string, { snapshot: Item | null; left: number }>();
+  private staleQueries = new Map<string, { snapshot: Item | null; left: number }>();
   // Test-only: every get, and whether it asked for a strongly consistent read.
   readonly gets: { key: string; consistent: boolean }[] = [];
 
@@ -98,11 +100,24 @@ export class InMemoryDoc implements DocClient {
     this.items.set(keyOf(item.PK, item.SK), clone(item));
   }
 
-  async query(pk: string, skPrefix: string): Promise<Item[]> {
-    return [...this.items.values()]
-      .filter((it) => it.PK === pk && it.SK.startsWith(skPrefix))
-      .sort((a, b) => (a.SK < b.SK ? -1 : a.SK > b.SK ? 1 : 0))
-      .map(clone);
+  async query(pk: string, skPrefix: string, opts?: { consistent?: boolean }): Promise<Item[]> {
+    const rows: Item[] = [];
+    for (const [key, it] of this.items) {
+      if (it.PK !== pk || !it.SK.startsWith(skPrefix)) continue;
+      const lag = opts?.consistent === true ? undefined : this.staleQueries.get(key);
+      if (!lag) rows.push(it);
+      else {
+        if (--lag.left <= 0) this.staleQueries.delete(key);
+        if (lag.snapshot) rows.push(lag.snapshot);
+      }
+    }
+    return rows.sort((a, b) => (a.SK < b.SK ? -1 : a.SK > b.SK ? 1 : 0)).map(clone);
+  }
+
+  // Test-only: the next `n` NON-consistent queries that cover this key return `snapshot` for it (an
+  // older version, or null for "not visible yet"); consistent queries see the truth.
+  staleNextQueries(pk: string, sk: string, snapshot: Item | null, n = 1): void {
+    this.staleQueries.set(keyOf(pk, sk), { snapshot: snapshot ? clone(snapshot) : null, left: n });
   }
 
   async queryIndex(gsi1pk: string, range?: IndexRange): Promise<Item[]> {

@@ -140,6 +140,11 @@ export function zonedEpoch(dayKey: string, hhmm: string, timeZone: string): numb
   return second + offsetAt(second) === wall ? second : Math.max(first, second);
 }
 
+// A task's wall-clock deadline as an instant, in the user's zone — what the server passes the calendar
+// planner (the Lambda and MCP alike; the browser has localEpochFromDayTime).
+export const userDueEpoch = (dayKey: string, hhmm: string): number =>
+  zonedEpoch(dayKey, hhmm, USER_TIME_ZONE);
+
 // The wall-clock day + "HH:MM" of an instant in `timeZone` — the server-side twin of localDayTime and
 // the inverse of zonedEpoch (the Lambda's own clock is UTC).
 export function zonedDayTime(epochMs: number, timeZone: string): { day: string; hhmm: string } {
@@ -229,16 +234,23 @@ export function fmtWeekdayShort(key: string): string {
 // clock appended when the task has one ("due Fri 4pm"). Pure over (dueDay, today) — the caller passes
 // today = todayKey(dayStartHour), so the 4am rollover lives in todayKey and never here: a passed time
 // still reads "due today 4pm" until the rollover (the urgency colour, due.ts, says it's past). Weekday
-// names for ±2–6 days; month/day beyond a week (where a weekday alone is ambiguous).
-export function fmtDueDay(dueDay: string, today: string, dueTime?: string | null): string {
+// names for ±2–6 days; month/day beyond a week (where a weekday alone is ambiguous). verb 'ends' is a
+// part's own time — when its block ends, not a deadline (parts.ts): "ends Fri 4pm" / "ended Tue".
+export function fmtDueDay(
+  dueDay: string,
+  today: string,
+  dueTime?: string | null,
+  verb: 'due' | 'ends' = 'due',
+): string {
   const n = daysBetween(today, dueDay); // >0 future, <0 past
   const at = dueTime ? ` ${fmtClock12(dueTime)}` : '';
-  if (n === 0) return `due today${at}`;
-  if (n === 1) return `due tomorrow${at}`;
-  if (n === -1) return `was due yesterday${at}`;
-  if (n >= 2 && n <= 6) return `due ${fmtWeekdayShort(dueDay)}${at}`;
-  if (n <= -2 && n >= -6) return `was due ${fmtWeekdayShort(dueDay)}${at}`;
-  return `${n > 0 ? 'due' : 'was due'} ${fmtMonthShortDay(dueDay)}${at}`;
+  const [is, was] = verb === 'due' ? ['due', 'was due'] : ['ends', 'ended'];
+  if (n === 0) return `${is} today${at}`;
+  if (n === 1) return `${is} tomorrow${at}`;
+  if (n === -1) return `${was} yesterday${at}`;
+  if (n >= 2 && n <= 6) return `${is} ${fmtWeekdayShort(dueDay)}${at}`;
+  if (n <= -2 && n >= -6) return `${was} ${fmtWeekdayShort(dueDay)}${at}`;
+  return `${n > 0 ? is : was} ${fmtMonthShortDay(dueDay)}${at}`;
 }
 
 // Capture's due: suggestion chips: today, tomorrow, the first five Mon–Fri days in today+1..+7, and

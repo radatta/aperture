@@ -91,15 +91,22 @@ describe('night: still open — when?', () => {
 });
 
 describe('night: today in review', () => {
-  it('bars a measured task; a split part and an unestimated task get a plain row', async () => {
+  it('bars every measured task — each part, and a parent as its rollup; unestimated is plain', async () => {
     const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });
     await onToday(api, 'finished thing', 'done', 0);
     const big = await onToday(api, 'big essay', 'in_progress', 1);
-    await api.splitTask(big.id, {
+    const { parent, followUp } = await api.splitTask(big.id, {
       finish: 'done',
+      title: 'outline',
       actualMin: 40,
-      followUp: { title: 'big essay, part 2', estimateMin: 30 },
+      followUp: { title: 'write it', estimateMin: 30 },
     });
+    await api.transitionTask(followUp.id, 'in_progress');
+    await api.setTaskActual(followUp.id, 25);
+    await api.transitionTask(followUp.id, 'done');
+    const skipped = await api.createTask({ title: 'skipped', parentId: parent.id });
+    await api.transitionTask(skipped.id, 'cancelled'); // dropped: not one of the rollup's parts
+    await api.transitionTask(parent.id, 'done');
     const loose = await api.createTask({ title: 'quick errand' }); // never estimated
     await api.transitionTask(loose.id, 'in_progress');
     await api.setTaskActual(loose.id, 10);
@@ -108,10 +115,9 @@ describe('night: today in review', () => {
     renderApp({ api });
     await user.click(screen.getByRole('button', { name: 'Night' }));
     expect(await screen.findByText('finished thing')).toBeTruthy();
-    const bars = screen.getAllByRole('img', { name: /actual against/ });
-    expect(bars).toHaveLength(1); // only the measured task is drawn against its estimate
-    expect(screen.getByText('big essay')).toBeTruthy();
-    expect(screen.getByText('split')).toBeTruthy();
+    // finished thing, both parts, and the parent's rollup (its lock vs what its parts took).
+    expect(screen.getAllByRole('img', { name: /actual against/ })).toHaveLength(4);
+    expect(screen.getByText('big essay · 2 parts')).toBeTruthy();
     expect(screen.getByText('quick errand')).toBeTruthy();
     expect(screen.getByText('no estimate')).toBeTruthy();
   });

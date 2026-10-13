@@ -1,4 +1,4 @@
-import { dueUrgency, fmtDueDay, todayKey } from '@aperture/shared';
+import { dueUrgency, fmtDueDay, partsOf, partsSummary, todayKey } from '@aperture/shared';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -47,6 +47,10 @@ export function ComingUpCard() {
           {cu.items.map((t) => {
             const u = dueUrgency(t, now);
             const label = urgencyLabel(u);
+            // A parent shows its progress, and quietly says when it's ready to submit — the button is on
+            // its card and in its editor, not on the glance (parts.ts).
+            const parts = partsOf(allTasks, t.id);
+            const sum = parts.length ? partsSummary(parts) : null;
             return (
               <div
                 key={t.id}
@@ -59,7 +63,20 @@ export function ComingUpCard() {
                   <Text size="sm" tone="subtle" className="truncate">
                     {t.title}
                   </Text>
-                  <CategoryTag categoryId={t.categoryId} />
+                  {/* A parent's progress outranks its category on a phone — the title needs the room. */}
+                  <span className={cx('contents', sum && 'max-sm:hidden')}>
+                    <CategoryTag categoryId={t.categoryId} />
+                  </span>
+                  {sum && (
+                    <Text
+                      size="xs"
+                      tone={sum.allDone ? 'teal' : 'muted'}
+                      className="shrink-0"
+                      tabular
+                    >
+                      {sum.allDone ? 'all parts done' : `${sum.done}/${sum.total}`}
+                    </Text>
+                  )}
                 </div>
                 <Text size="xs" tone="subtle" className="shrink-0">
                   {fmtDueDay(t.dueDay!, today, t.dueTime)}

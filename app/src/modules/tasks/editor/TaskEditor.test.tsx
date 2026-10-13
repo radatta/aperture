@@ -47,7 +47,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,
-  splitFromId: null,
+  parentId: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -397,7 +397,7 @@ describe('TaskEditor', () => {
     expect(screen.getByText('Details')).toBeTruthy();
   });
 
-  it('a done split needs an actual, then closes and links the rest', async () => {
+  it('a done split needs an actual, then closes; the task becomes Part 1 under a new parent', async () => {
     const client = api();
     let t = await client.createTask({ title: 'Pset', estimateMin: 45 });
     t = await client.transitionTask(t.id, 'in_progress');
@@ -409,19 +409,31 @@ describe('TaskEditor', () => {
     const submit = screen.getByRole('button', { name: 'Split' });
     expect(submit.hasAttribute('disabled')).toBe(true); // nothing tracked → the actual starts empty
     await user.type(screen.getByLabelText("This part's actual (min)"), '20');
-    expect(screen.getByLabelText<HTMLInputElement>("New task's title").value).toBe('Pset (cont.)');
-    expect(screen.getByLabelText<HTMLInputElement>("New task's estimate (min)").value).toBe('45'); // 45 − 0
+    expect(screen.getByLabelText<HTMLInputElement>("Deliverable's title").value).toBe('Pset');
+    expect(screen.getByLabelText<HTMLInputElement>("This part's title").value).toBe('Part 1');
+    expect(screen.getByLabelText<HTMLInputElement>("Next part's title").value).toBe('Part 2');
+    expect(screen.getByLabelText<HTMLInputElement>("Next part's estimate (min)").value).toBe('45'); // 45 − 0
     expect(
       screen.getByText(/latest plan day, else the backlog · Both parts: 1h 5m · was 45m/),
     ).toBeTruthy();
+    expect(screen.getByText(/“Pset” keeps the due date/)).toBeTruthy();
     await user.click(submit);
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    const rest = (await client.listTasks()).find((x) => x.title === 'Pset (cont.)');
-    expect(rest).toMatchObject({ splitFromId: t.id, estimateMin: 45 });
-    expect(await client.getTask(t.id)).toMatchObject({ status: 'done', actualAccruedMin: 20 });
+    const all = await client.listTasks();
+    const parent = all.find((x) => x.title === 'Pset' && x.id !== t.id)!;
+    expect(all.find((x) => x.title === 'Part 2')).toMatchObject({
+      parentId: parent.id,
+      estimateMin: 45,
+    });
+    expect(await client.getTask(t.id)).toMatchObject({
+      title: 'Part 1',
+      parentId: parent.id,
+      status: 'done',
+      actualAccruedMin: 20,
+    });
   });
 
-  it('a keep split stays open, shows "Split into", and returns focus to Split…', async () => {
+  it('a keep split stays open, stores the typed titles, and returns focus to Split…', async () => {
     const client = api();
     let t = await client.createTask({ title: 'Essay', estimateMin: 60 });
     t = await client.transitionTask(t.id, 'in_progress');
@@ -431,15 +443,30 @@ describe('TaskEditor', () => {
     // Keep's defaults never invent scope: what's left is shared between the parts.
     const thisEstimate = screen.getByLabelText<HTMLInputElement>("This part's estimate (min)");
     expect(thisEstimate.value).toBe('30');
-    expect(screen.getByLabelText<HTMLInputElement>("New task's estimate (min)").value).toBe('30');
+    expect(screen.getByLabelText<HTMLInputElement>("Next part's estimate (min)").value).toBe('30');
     await user.clear(thisEstimate);
     await user.type(thisEstimate, '40');
+    // Every title is editable before anything is created — what's typed is what's stored.
+    const retitle = async (label: string, text: string) => {
+      await user.clear(screen.getByLabelText(label));
+      await user.type(screen.getByLabelText(label), text);
+    };
+    await retitle("Deliverable's title", 'Essay final');
+    await retitle("This part's title", 'outline');
+    await retitle("Next part's title", 'draft');
     await user.click(screen.getByRole('button', { name: 'Split' }));
-    expect(await screen.findByText('Essay (cont.)')).toBeTruthy(); // the "Split into" row
-    expect(screen.getByText('Split into')).toBeTruthy();
-    expect(onClose).not.toHaveBeenCalled();
     await waitFor(() => expect(document.activeElement?.textContent).toBe('Split…'));
-    expect(await client.getTask(t.id)).toMatchObject({ status: 'in_progress', estimateMin: 40 });
+    expect(onClose).not.toHaveBeenCalled();
+    const all = await client.listTasks();
+    const parent = all.find((x) => x.title === 'Essay final')!;
+    expect(await client.getTask(t.id)).toMatchObject({
+      title: 'outline',
+      status: 'in_progress',
+      estimateMin: 40,
+      parentId: parent.id,
+    });
+    expect(all.find((x) => x.title === 'draft')?.parentId).toBe(parent.id);
+    expect(all.some((x) => x.title === 'Part 1')).toBe(false);
   });
 
   it('rejects negative minutes inline, and Cancel returns focus to Split…', async () => {
@@ -455,19 +482,19 @@ describe('TaskEditor', () => {
     await waitFor(() => expect(document.activeElement?.textContent).toBe('Split…'));
   });
 
-  it('a done split family member shows no delta bar and says it is not measured alone', async () => {
+  it('a done part is measured on its own: its delta bar shows', async () => {
     const client = api();
     let t = await client.createTask({ title: 'Report', estimateMin: 60 });
     t = await client.transitionTask(t.id, 'in_progress');
     const { original } = await client.splitTask(t.id, {
       finish: 'done',
-      actualMin: 50,
+      title: 'Report, part 1',
+      actualMin: 90,
       followUp: { title: 'Report, rest', estimateMin: 30 },
     });
     renderEditor(client, original);
-    expect(await screen.findByText('Report, rest')).toBeTruthy(); // the "Split into" row (list loaded)
-    expect(screen.getByText(/isn’t measured on its own/)).toBeTruthy();
-    expect(screen.queryByText(/over|under/i)).toBeNull(); // no DeltaBar verdict
+    expect(await screen.findByRole('img', { name: /actual against/ })).toBeTruthy();
+    expect(screen.getByText(/calibration is measured against that/)).toBeTruthy();
   });
 
   it('reseeds untouched fields when the task changes elsewhere (a split), keeping edits in progress', async () => {
@@ -488,31 +515,189 @@ describe('TaskEditor', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Buffer (min)').value).toBe('5');
   });
 
-  it('a task started then rolled back says its rest stays in the split family', async () => {
-    const client = api();
-    let t = await client.createTask({ title: 'Rolled', estimateMin: 60 });
-    await client.transitionTask(t.id, 'in_progress');
-    t = await client.transitionTask(t.id, 'backlog'); // keeps its lock
-    const { user } = renderEditor(client, t);
-    await user.click(screen.getByRole('button', { name: /^Split/ }));
-    expect(screen.queryByRole('button', { name: 'Done with this part' })).toBeNull();
-    expect(screen.getByText(/rest stays part of this task’s split family/)).toBeTruthy();
-  });
-
-  it('splitting an unstarted task offers no Done and makes an independent task', async () => {
+  it('splitting an unstarted task offers no Done and makes a parent with two backlog parts', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Reading', estimateMin: 60 });
     const { user } = renderEditor(client, t);
     await user.click(screen.getByRole('button', { name: /^Split/ }));
     expect(screen.queryByRole('button', { name: 'Done with this part' })).toBeNull();
-    expect(screen.getByText(/Not started yet/)).toBeTruthy();
+    expect(screen.getByText(/each part gets its own estimate/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Split' }));
-    await waitFor(async () =>
-      expect((await client.listTasks()).find((x) => x.title === 'Reading (cont.)')).toMatchObject({
+    await waitFor(async () => {
+      const all = await client.listTasks();
+      const parent = all.find((x) => x.title === 'Reading' && x.id !== t.id);
+      expect(all.find((x) => x.title === 'Part 2')).toMatchObject({
         status: 'backlog',
-        splitFromId: null,
-      }),
-    );
+        parentId: parent?.id,
+      });
+    });
+  });
+
+  describe('parent + parts', () => {
+    async function withParts(client: ApiClient, statuses: ('done' | 'open')[]) {
+      const p = await client.createTask({ title: 'P2', dueDay: '2026-10-13', dueTime: '23:59' });
+      const parts: Task[] = [];
+      for (const [i, st] of statuses.entries()) {
+        const part = await client.createTask({
+          title: `Part ${i + 1}`,
+          estimateMin: 30,
+          parentId: p.id,
+        });
+        if (st === 'done') {
+          await client.transitionTask(part.id, 'in_progress');
+          await client.setTaskActual(part.id, 35);
+          await client.transitionTask(part.id, 'done');
+        }
+        parts.push(part);
+      }
+      return { p: (await client.getTask(p.id))!, parts };
+    }
+
+    it('a parent shows its parts and a read-only sum; no Split, no estimate fields, no picker', async () => {
+      const client = api();
+      const { p } = await withParts(client, ['done', 'open']);
+      renderEditor(client, p);
+      expect(await screen.findByText('Parts · 1/2')).toBeTruthy();
+      expect(screen.getByText(/1h — the sum of its parts/)).toBeTruthy();
+      expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
+      expect(screen.queryByLabelText('Buffer (min)')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+      expect(screen.getByText('Its parts carry their own calendar blocks.')).toBeTruthy();
+      expect(screen.getByText(/Open · 1 of 2 parts/)).toBeTruthy();
+    });
+
+    it('Mark done on a parent with an open part is refused inline, naming it; the modal stays', async () => {
+      const client = api();
+      const { p } = await withParts(client, ['done', 'open']);
+      const { onClose, user } = renderEditor(client, p);
+      const scrolled = vi.fn();
+      Element.prototype.scrollIntoView = scrolled; // jsdom has none
+      try {
+        await user.click(await screen.findByRole('button', { name: 'Mark done' }));
+        const alert = await screen.findByRole('alert');
+        expect(alert.textContent).toMatch(/Part 2 isn’t finished — complete, drop or delete it first/);
+        // It lands below a phone's fold, so it's brought into view — and again on the next refusal.
+        await waitFor(() => expect(scrolled.mock.contexts).toContain(alert));
+        const before = scrolled.mock.calls.length;
+        await user.click(screen.getByRole('button', { name: 'Mark done' }));
+        await waitFor(() => expect(scrolled.mock.calls.length).toBeGreaterThan(before));
+      } finally {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+      expect(onClose).not.toHaveBeenCalled();
+      expect((await client.getTask(p.id))?.status).toBe('backlog');
+    });
+
+    it('once every part is done it nudges, and one tap marks it done (no actual to type)', async () => {
+      const client = api();
+      const { p } = await withParts(client, ['done', 'done']);
+      const { onClose, user } = renderEditor(client, p);
+      expect(await screen.findByText('All parts done — mark it submitted?')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Mark done' }));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(await client.getTask(p.id)).toMatchObject({ status: 'done', actualAccruedMin: 70 });
+    });
+
+    it('every part dropped: no Mark done — it says to drop the parent instead', async () => {
+      const client = api();
+      const { p, parts } = await withParts(client, ['open']);
+      await client.transitionTask(parts[0]!.id, 'cancelled');
+      renderEditor(client, (await client.getTask(p.id))!);
+      expect(await screen.findByText(/Every part was dropped — drop this too/)).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Mark done' })).toBeNull();
+      expect(screen.getByText(/Open · 0 of 0 parts/)).toBeTruthy();
+    });
+
+    it('Add parts… puts focus in the form, never on <body> (its button gives way to it)', async () => {
+      const client = api();
+      const { p } = await withParts(client, ['open']);
+      const { user } = renderEditor(client, p);
+      expect(await screen.findByText(/Open · 0 of 1 part$/)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Add parts…' }));
+      expect(document.activeElement).toBe(screen.getByLabelText(/Add parts — one per line/));
+    });
+
+        it('Delete names how many parts go with it', async () => {
+      const client = api();
+      const { p } = await withParts(client, ['open', 'open', 'open']);
+      const { user } = renderEditor(client, p);
+      await user.click(await screen.findByRole('button', { name: /^Delete task/ }));
+      expect(screen.getByText(/Delete “P2” and its 3 parts\?/)).toBeTruthy();
+    });
+
+    it('a part reads its time as Ends, and its header names the parent and its deadline', async () => {
+      const client = api();
+      const { parts } = await withParts(client, ['open', 'open']);
+      renderEditor(client, parts[1]!);
+      expect(await screen.findByRole('button', { name: 'P2' })).toBeTruthy();
+      expect(screen.getByText(/Part 2 of 2 of/)).toBeTruthy();
+      expect(screen.getByLabelText('Ends')).toBeTruthy();
+      expect(screen.getByLabelText('Ends at')).toBeTruthy();
+      expect(screen.queryByLabelText('Due')).toBeNull();
+    });
+
+    it('Break down… turns a plain task into a parent, its estimate prefilling the first part', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Lab', estimateMin: 60 });
+      const { user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Break down…' }));
+      const box = screen.getByLabelText<HTMLTextAreaElement>(/Add parts/);
+      expect(box.value).toBe('Lab | ~60');
+      await user.clear(box);
+      await user.type(box, 'run it | ~45{Enter}write it up | ~30');
+      expect(screen.getByText(/2 parts · est 1h 15m/)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Add parts' }));
+      await waitFor(async () =>
+        expect((await client.listTasks()).filter((x) => x.parentId === t.id)).toHaveLength(2),
+      );
+      expect((await client.getTask(t.id))?.estimateMin).toBeNull(); // the sum now
+    });
+
+    it('a part line can’t carry a category or a deadline — those are the parent’s', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Lab' });
+      const { user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Break down…' }));
+      await user.type(screen.getByLabelText(/Add parts/), 'run it | ~45 due:2026-10-10');
+      expect(screen.getByText(/the deadline is the parent’s/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Add parts' }).hasAttribute('disabled')).toBe(true);
+    });
+
+    it('a started task offers Split, not Break down (its logged time would have nowhere to go)', async () => {
+      const client = api();
+      let t = await client.createTask({ title: 'Started', estimateMin: 30 });
+      t = await client.transitionTask(t.id, 'in_progress');
+      renderEditor(client, t);
+      expect(screen.getByRole('button', { name: /^Split/ })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
+    });
+
+    it('a roll rep offers neither Split nor Break down — it’s one rep of a repeating thing', async () => {
+      const client = api();
+      const roll = await client.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
+      const { task: rep } = await client.pickRollToday(roll.id, '2026-08-04');
+      renderEditor(client, rep);
+      expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy(); // the row rendered
+      expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
+    });
+
+    it('a recurring occurrence offers neither Split nor Break down', async () => {
+      const client = api();
+      await client.upsertSeries({
+        title: 'Daily standup',
+        categoryId: null,
+        defaultEstimateMin: 15,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+      });
+      await client.getDay('2026-08-04');
+      const occurrence = (await client.listTasks()).find((t) => t.seriesId)!;
+      renderEditor(client, occurrence);
+      expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
+    });
   });
 
   it('locks Due but keeps Category editable on a finished task', async () => {

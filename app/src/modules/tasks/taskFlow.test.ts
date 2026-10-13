@@ -23,12 +23,12 @@ describe('the calibration baseline freezes on start-of-work', () => {
 });
 
 describe('scope change is a split', () => {
-  it('finishes this part and spawns a linked, unlocked follow-up', async () => {
+  it('finishes this part and adds an unlocked part under a new parent that holds the lock', async () => {
     const api = client();
     const t = await api.createTask({ title: 'big thing' });
     await api.setTaskEstimate(t.id, 120, null);
     await api.transitionTask(t.id, 'in_progress');
-    const { original, followUp } = await api.splitTask(t.id, {
+    const { parent, original, followUp } = await api.splitTask(t.id, {
       finish: 'done',
       actualMin: 70,
       followUp: { title: 'big thing (cont.)', estimateMin: 90 },
@@ -37,7 +37,8 @@ describe('scope change is a split', () => {
     expect(original.estimateLockedMin).toBe(120); // original keeps its frozen value
     expect(followUp.status).toBe('backlog');
     expect(followUp.estimateLockedMin).toBeNull(); // a new prediction for the remaining work
-    expect(followUp).toMatchObject({ title: 'big thing (cont.)', splitFromId: t.id });
+    expect(followUp).toMatchObject({ title: 'big thing (cont.)', parentId: parent.id });
+    expect(parent).toMatchObject({ title: 'big thing', estimateLockedMin: 120 }); // the whole job's
   });
 });
 

@@ -92,19 +92,23 @@ export function seenAfter(
   };
 }
 
-// `prev` null = a fresh create; `ensure` = the explicit retry (sync to the task as it is now).
+// `prev` null = a fresh create; `ensure` = the explicit retry (sync to the task as it is now); `parent` = the
+// task has parts (parts.ts), which the caller knows from the task list.
 export function calendarSyncPlan(
   prev: SyncFields | null,
   next: SyncFields,
   settings: Pick<Settings, 'autoCalendar' | 'calendarWriteDefault'>,
   epoch: DueEpoch,
-  opts: { ensure?: boolean } = {},
+  opts: { ensure?: boolean; parent?: boolean } = {},
 ): CalendarSyncAction {
   // Old settings rows read back undefined → on (the default).
   // A removal already owed (it failed earlier) is carried out on the next sync whatever else holds —
   // finished, or sync turned off since: the user asked for it while sync was on.
   if (next.gcalEventId && isPendingRemoval(next.gcalSyncError) && !eventWindow(next, epoch))
     return { kind: 'delete' };
+  // A task with parts never owns an event — its parts carry the blocks. One it had before it became a
+  // parent goes, whatever the toggle says (like delete-on-cancel). v2 swaps this for the due marker.
+  if (opts.parent) return next.gcalEventId ? { kind: 'delete' } : NONE;
   if (settings.autoCalendar === false) return NONE;
   if (next.status === 'done' || next.status === 'cancelled') return NONE;
   const ensure = !!opts.ensure;

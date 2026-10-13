@@ -125,10 +125,14 @@ function DialogBody({
 
   const labelOf = labelOfFrom(categories);
   const onToday = new Set(plans.map((p) => p.taskId));
+  // A parent is never put on a day — its parts are (parts.ts), each labelled with what it's part of.
+  const parentIds = new Set(tasks.map((t) => t.parentId).filter(Boolean));
+  const byId = new Map(tasks.map((t) => [t.id, t]));
   const matches = byDueHint(
     tasks.filter(
       (t) =>
         isOpen(t) &&
+        !parentIds.has(t.id) &&
         (!onToday.has(t.id) || added.has(t.id)) &&
         matchesText(t, text, labelOf, false),
     ),
@@ -200,9 +204,14 @@ function DialogBody({
                 {t.title}
               </Text>
               <CategoryTag categoryId={t.categoryId} />
+              {t.parentId && byId.get(t.parentId) && (
+                <Text size="xs" tone="muted" className="min-w-0 truncate">
+                  of {byId.get(t.parentId)!.title}
+                </Text>
+              )}
               {t.dueDay && (
                 <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay, today, t.dueTime)}
+                  {fmtDueDay(t.dueDay, today, t.dueTime, t.parentId ? 'ends' : 'due')}
                 </Text>
               )}
             </div>

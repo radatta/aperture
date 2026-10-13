@@ -33,7 +33,23 @@ import {
   setNotesArg,
   followUpPlanDay,
   followUpPlanMinutes,
+  assertCanBePart,
+  becomeParent,
   calibrationTasks,
+  cancelParent,
+  completeParent,
+  freezeParentLock,
+  hasParts,
+  newParentFrom,
+  PARENT_NO_ACTUAL_ERROR,
+  PARENT_NO_ESTIMATE_ERROR,
+  PARENT_NO_EVENT_ERROR,
+  PARENT_NO_PLAN_ERROR,
+  PARENT_NO_SPLIT_ERROR,
+  PARENT_NO_START_ERROR,
+  partsOf,
+  rollupParts,
+  releaseParent,
   splitFollowUp,
   rescopedPlanMinutes,
   splitOriginal,
@@ -44,11 +60,11 @@ import {
   viewableInline,
   withEstimate,
   zonedDayTime,
-  zonedEpoch,
   PULL_THROTTLE_MS,
   dayKeyInZone,
   parseBudgetMs,
   runQuickParse,
+  userDueEpoch,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -216,7 +232,7 @@ export class BackendClient implements ApiClient {
       estimateMin: input.estimateMin ?? null,
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
-      splitFromId: null,
+      parentId: input.parentId || null, // '' is no parent, never a link to validate
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -226,6 +242,35 @@ export class BackendClient implements ApiClient {
       gcalEventId: null,
       gcalSyncError: null,
     };
+  }
+  // A task taking its first part (parts.ts becomeParent): its estimate goes, it leaves its plan (rows
+  // tombstoned) and any calendar block. Pass the task as it was; call AFTER the first part is written,
+  // so the calendar sync sees it has parts.
+  private async adoptAsParent(parent: Task): Promise<Task> {
+    const now = this.now();
+    for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === parent.id))
+      await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
+    const became = await this.repo.putTask(becomeParent(parent, now));
+    return this.syncCalendar(parent, became);
+  }
+  // The rollup's baseline, frozen when `starting` — the first part to leave planning — does
+  // (parts.ts freezeParentLock). Freeze and release decide on the list straight after a task write, so
+  // they read it strongly consistent: an eventually consistent query can miss that write.
+  private async freezeLock(parentId: string | null, starting: string): Promise<void> {
+    if (!parentId) return;
+    const tasks = await this.repo.listTasks({ consistent: true });
+    const parent = tasks.find((t) => t.id === parentId);
+    if (!parent) return;
+    const frozen = freezeParentLock(parent, partsOf(tasks, parentId), starting, this.now());
+    if (frozen) await this.repo.putTask(frozen);
+  }
+  // A task whose last part just went is plain again, its parts' lock with them (parts.ts releaseParent).
+  private async releaseLock(parentId: string | null): Promise<void> {
+    if (!parentId) return;
+    const tasks = await this.repo.listTasks({ consistent: true });
+    const parent = tasks.find((t) => t.id === parentId);
+    const released = parent ? releaseParent(parent, tasks, this.now()) : null;
+    if (released) await this.repo.putTask(released);
   }
   private async ensureSettings(): Promise<Settings> {
     const def: Settings = {
@@ -251,8 +296,7 @@ export class BackendClient implements ApiClient {
     return def;
   }
   // The Lambda's clock is UTC — a task's wall-clock deadline is resolved in the user's zone, never locally.
-  private readonly dueEpoch = (day: string, hhmm: string): number =>
-    zonedEpoch(day, hhmm, USER_TIME_ZONE);
+  private readonly dueEpoch = userDueEpoch;
   private readonly pullTime = {
     epoch: this.dueEpoch,
     clock: (ms: number) => zonedDayTime(ms, USER_TIME_ZONE),
@@ -271,7 +315,15 @@ export class BackendClient implements ApiClient {
     // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
     const settings = known ?? (await this.ensureSettings());
-    const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure });
+    // A parent never owns an event (parts.ts) — the planner needs to know, and only the list says. A
+    // brand-new task can't be one (its parts would have to exist first), so a create skips the scan —
+    // a timed bulk paste pays for none of them inside its sync budget. The retry (ensure) always looks.
+    // Strongly consistent: adoptAsParent syncs straight after writing the first part.
+    const parent =
+      prev === null && !ensure
+        ? false
+        : hasParts(await this.repo.listTasks({ consistent: true }), task.id);
+    const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure, parent });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
     // retires an "updated from Google" note it has just superseded.
     const edited =
@@ -282,7 +334,7 @@ export class BackendClient implements ApiClient {
       // or the task finished — otherwise it'd sit there with a Retry that can't do anything.
       const moot =
         task.gcalSyncError &&
-        ((!task.gcalEventId && !eventWindow(task, this.dueEpoch)) ||
+        ((!task.gcalEventId && (parent || !eventWindow(task, this.dueEpoch))) ||
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
@@ -546,6 +598,7 @@ export class BackendClient implements ApiClient {
     return this.repo.getTask(id);
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
+    if (input.parentId) return (await this.createTasks([input]))[0]!; // the parts rules live once
     return this.syncCalendar(null, await this.repo.putTask(this.newTask(input, this.now())));
   }
   // Quick add's parse (shared runQuickParse; docs/areas/tasks/quick-add.md). The server owns "today" and
@@ -565,7 +618,41 @@ export class BackendClient implements ApiClient {
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
-    const saved = await this.repo.putTasks(tasks);
+    // Parts (parts.ts): every parent is checked before any write. A planned task taking its first part
+    // hands its spot on the plan to that part (the batch's first for it).
+    const parentIds = [...new Set(tasks.map((x) => x.parentId).filter((x): x is string => !!x))];
+    const all = parentIds.length ? await this.repo.listTasks() : [];
+    const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
+    if (parentIds.length) {
+      const plans = await this.repo.listAllPlans();
+      for (const id of parentIds) {
+        const parent = all.find((x) => x.id === id);
+        if (!parent) throw new Error(`Not found: ${id}`);
+        assertCanBePart(null, parent, all);
+        if (parent.status !== 'planned' || hasParts(all, id)) continue;
+        const day = followUpPlanDay(plans, id);
+        const row = plans.find((p) => p.taskId === id && p.day === day);
+        const first = tasks.find((x) => x.parentId === id)!;
+        if (row) landing.set(first.id, row);
+      }
+    }
+    const saved = await this.repo.putTasks(
+      tasks.map((x) => (landing.has(x.id) ? { ...x, status: 'planned' as const } : x)),
+    );
+    for (const id of parentIds) {
+      if (!hasParts(all, id)) await this.adoptAsParent(all.find((x) => x.id === id)!);
+    }
+    for (const part of saved) {
+      const row = landing.get(part.id);
+      if (row)
+        await this.repo.putPlan({
+          ...this.base(),
+          taskId: part.id,
+          day: row.day,
+          plannedMinutes: followUpPlanMinutes(part.estimateMin, part.bufferMin),
+          order: row.order,
+        });
+    }
     if (!saved.some((t) => t.dueTime)) return saved;
     // Timed tasks get their events a few at a time, inside a time budget: the tasks are already saved,
     // so the Lambda timing out now would report a failed paste (and invite a duplicating resubmit). No
@@ -604,8 +691,27 @@ export class BackendClient implements ApiClient {
     bufferMin: number | null,
   ): Promise<Task> {
     const prev = await this.mustTask(id);
+    if (hasParts(await this.repo.listTasks(), id)) throw new Error(PARENT_NO_ESTIMATE_ERROR);
     const next = await this.repo.putTask(withEstimate(prev, estimateMin, bufferMin, this.now()));
     return this.syncCalendar(prev, next);
+  }
+  async setTaskParent(id: string, parentId: string | null): Promise<Task> {
+    const task = await this.mustTask(id);
+    if (parentId === null) {
+      const part = await this.repo.putTask({ ...task, parentId: null, updatedAt: this.now() });
+      await this.releaseLock(task.parentId);
+      return part;
+    }
+    const parent = await this.mustTask(parentId);
+    const all = await this.repo.listTasks();
+    assertCanBePart(task, parent, all);
+    const first = !hasParts(all, parentId);
+    const part = await this.repo.putTask({ ...task, parentId, updatedAt: this.now() });
+    if (first) await this.adoptAsParent(parent);
+    if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
+    await this.releaseLock(task.parentId); // moved from another parent
+    await this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
+    return part;
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
@@ -634,6 +740,32 @@ export class BackendClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
+    const parts = partsOf(await this.repo.listTasks(), id);
+    if (parts.length) return this.transitionParent(task, parts, to);
+    const next = await this.transitionOne(task, to);
+    // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
+    const firstStart =
+      task.startedAt === null &&
+      (task.status === 'backlog' || task.status === 'planned') &&
+      (to === 'in_progress' || to === 'done');
+    if (!task.parentId || !firstStart) return next;
+    await this.freezeLock(task.parentId, id);
+    return (await this.repo.getTask(id)) ?? next;
+  }
+  // A parent is never worked on itself: it's marked done once its parts are dealt with (a hard block
+  // otherwise), and dropping it drops its open parts first — each through the normal cancel path, so
+  // their calendar blocks go too — then the parent last.
+  private async transitionParent(task: Task, parts: Task[], to: TaskStatus): Promise<Task> {
+    if (to === 'done') return this.repo.putTask(completeParent(task, parts, this.now()));
+    if (to === 'cancelled') {
+      const { parent, parts: dropped } = cancelParent(task, parts, this.now());
+      for (const p of dropped) await this.transitionOne(await this.mustTask(p.id), to);
+      return this.repo.putTask(parent);
+    }
+    throw new Error(to === 'in_progress' ? PARENT_NO_START_ERROR : PARENT_NO_PLAN_ERROR);
+  }
+  private async transitionOne(task: Task, to: TaskStatus): Promise<Task> {
+    const id = task.id;
     // A finished task has nothing left to sync, so a failure note (and its Retry) goes with it — unless
     // it's an owed removal, which the finish carries out (reporting, not swallowing, a failure).
     const finished = to === 'done' || to === 'cancelled';
@@ -650,11 +782,23 @@ export class BackendClient implements ApiClient {
   }
   async setTaskActual(id: string, actualMin: number): Promise<Task> {
     const t = await this.mustTask(id);
+    if (hasParts(await this.repo.listTasks(), id)) throw new Error(PARENT_NO_ACTUAL_ERROR);
     return this.repo.putTask({ ...t, actualAccruedMin: actualMin, updatedAt: this.now() });
   }
-  async splitTask(id: string, input: SplitTaskInput): Promise<{ original: Task; followUp: Task }> {
+  async splitTask(
+    id: string,
+    input: SplitTaskInput,
+  ): Promise<{ parent: Task; original: Task; followUp: Task }> {
     const task = await this.mustTask(id);
-    const edited = splitOriginal(task, input, this.now()); // validates everything before any write
+    if (hasParts(await this.repo.listTasks(), id)) throw new Error(PARENT_NO_SPLIT_ERROR);
+    const standalone = !task.parentId;
+    const shaped = splitOriginal(task, input, this.now(), standalone); // validates everything before any write
+    // Split always yields parent + parts: a standalone task gets a new parent (no event — it never owns
+    // one), a part splits under the parent it has.
+    const parentId = standalone
+      ? (await this.repo.putTask({ ...this.base(), ...newParentFrom(task, input) })).id
+      : task.parentId!;
+    const edited = { ...shaped, parentId };
     const done = input.finish === 'done';
     // A TIMED task's event is the block before its deadline. A done part has no future there, so the link
     // moves to the follow-up (which re-titles/re-times it — no delete + re-create). Kept going, each part
@@ -691,7 +835,7 @@ export class BackendClient implements ApiClient {
       task.status === 'planned' || task.status === 'in_progress'
         ? followUpPlanDay(await this.repo.listAllPlans(), id)
         : null;
-    const fields = splitFollowUp(task, input.followUp, day !== null);
+    const fields = splitFollowUp(task, input.followUp, day !== null, parentId);
     const created = await this.repo.putTask({
       ...this.base(),
       ...fields,
@@ -720,11 +864,15 @@ export class BackendClient implements ApiClient {
         order: dayPlans.length,
       });
     }
-    return { original, followUp: await this.syncCalendar(null, created) };
+    // No freeze here: a standalone split's parent IS the original's lock, and nothing started just now.
+    const followUp = await this.syncCalendar(null, created);
+    return { parent: await this.mustTask(parentId), original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
     const task = await this.repo.getTask(id);
     if (!task) return; // idempotent — already tombstoned or never existed
+    // A parent goes with every part — each through this same path (event, plans, attachments), first.
+    for (const part of partsOf(await this.repo.listTasks(), id)) await this.deleteTask(part.id);
     // Calendar event FIRST (deleteCalendarEvent uses mustTask, so it must run before the tombstone).
     // Build the tombstone from the RETURNED task: it has the gcal pointers nulled, so we don't re-put
     // stale pointers onto the tombstone.
@@ -735,6 +883,7 @@ export class BackendClient implements ApiClient {
     for (const a of await this.repo.listAttachmentsForTask(id))
       await this.repo.putAttachment({ ...a, deletedAt: now, updatedAt: now });
     await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
+    await this.releaseLock(task.parentId);
   }
 
   // --- Plans ---
@@ -742,6 +891,7 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listPlans(day)).sort((a, b) => a.order - b.order);
   }
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
+    if (hasParts(await this.repo.listTasks(), input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
     const fields = {
       taskId: input.taskId,
       day: input.day,
@@ -1000,7 +1150,7 @@ export class BackendClient implements ApiClient {
         estimateMin: series.defaultEstimateMin,
         bufferMin: null,
         estimateLockedMin: null,
-        splitFromId: null,
+        parentId: null,
         actualAccruedMin: 0,
         startedAt: null,
         completedAt: null,
@@ -1225,6 +1375,9 @@ export class BackendClient implements ApiClient {
 
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
     const task = await this.mustTask(input.taskId);
+    // A parent never owns an event — its parts carry the blocks (parts.ts). Before the other checks, so
+    // MCP gets the reason that applies.
+    if (hasParts(await this.repo.listTasks(), task.id)) throw new Error(PARENT_NO_EVENT_ERROR);
     // A timed task's block is its auto block, placed at its deadline — no picked time while sync is on.
     if (eventWindow(task, this.dueEpoch) && autoSyncOn(await this.ensureSettings()))
       throw new Error(AUTO_PLACED_ERROR);
@@ -1421,13 +1574,14 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Calibration ---
-  // Parity with the stub: done+locked tasks outside a split family (split.ts), by completion DAY
+  // Parity with the stub: every done+locked task (parts.ts calibrationTasks), by completion DAY
   // (dayStartHour offset).
   // TODO(scale): swap the full task scan for `repo.doneTasksInWindow` over the GSI once the
   // day-range → epoch-window mapping (with the offset) is nailed down.
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = (await this.ensureSettings()).dayStartHour;
-    return calibrationTasks(await this.repo.listTasks())
+    const tasks = await this.repo.listTasks();
+    return calibrationTasks(tasks)
       .filter((t) => t.completedAt !== null)
       .map((t) => ({
         taskId: t.id,
@@ -1435,6 +1589,7 @@ export class BackendClient implements ApiClient {
         estimateLockedMin: t.estimateLockedMin as number,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
+        parts: rollupParts(tasks, t.id),
       }))
       .filter((p) => p.day >= range.from && p.day <= range.to)
       .sort((a, b) => a.day.localeCompare(b.day));

@@ -99,6 +99,14 @@ it a Today task.
     also watches the list's DOM for the trigger leaving (`TaskModalHost`), else focus fell to `<body>`.
     The watch ends at the user's next tap or key, so a row they move later never pulls focus back.
 
+- **D12 — parts live where their parent does (2026-10-08, [parts.md](parts.md) D9).** A part not on today's
+  plan (and not in progress) is placed by its open parent's deadline, not its own time, which is when its
+  block ends (`placeOf(task, today, planOrder, parent)`; `placer` looks the parent up). Outside a search, a part
+  whose parent is in the same result folds into the parent's card (`foldParts`), where it's drawn as a compact
+  row with "+ Today", "today", "in progress" or done struck (`PartsList`), and the lens pills count cards. Search
+  and the Done lens stay flat. A parent never goes on Today, and the add-to-today picker skips parents and
+  labels parts "of P2". A part on Today is an ordinary card, tagged "of P2 · due …".
+
 ## 3. Deferred
 
 - Server-side plan dedupe (both impls, contract-tested).

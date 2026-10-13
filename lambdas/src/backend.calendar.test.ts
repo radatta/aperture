@@ -544,7 +544,8 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(original.gcalEventId).toBe(t.gcalEventId);
     expect(followUp.gcalEventId).not.toBeNull();
     expect(followUp.gcalEventId).not.toBe(t.gcalEventId);
-    expect([...g.events.values()].map((e) => e.title).sort()).toEqual(['x', 'x, part 2']);
+    // Two blocks, one per part (Part 1 is the original renamed); the new parent has none.
+    expect([...g.events.values()].map((e) => e.title).sort()).toEqual(['Part 1', 'x, part 2']);
   });
 
   it("a started task's estimate edit re-times its event", async () => {
@@ -600,6 +601,7 @@ describe('calendar auto-sync (timed tasks)', () => {
       await b.transitionTask(t.id, 'in_progress');
       const { original, followUp } = await b.splitTask(t.id, {
         finish,
+        title: 'x', // keeps its title, so the manual block isn't renamed
         followUp: { title: 'x, part 2', estimateMin: null },
       });
       expect(followUp.gcalEventId).toBeNull();
@@ -607,6 +609,73 @@ describe('calendar auto-sync (timed tasks)', () => {
       expect(g.events.size).toBe(1);
       expect(only(g)[1].title).toBe('x'); // the record of the work done, untouched
     }
+  });
+
+  // Parent + parts (parts.ts): a parent never owns an event, by any path. Parity: the stub's
+  // "stub calendar: parent + parts".
+  describe('parent + parts', () => {
+    const pick = (b: Awaited<ReturnType<typeof connected>>['b'], taskId: string) =>
+      b.insertCalendarEvent({
+        taskId,
+        accountSub: 'A',
+        calendarId: 'A@example.com',
+        title: 'x',
+        startMs: at('2026-10-08', '14:00'),
+        endMs: at('2026-10-08', '15:00'),
+      });
+
+    it('a timed task that takes its first part loses its block; a retry on it never makes one', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '23:59' });
+      expect(g.events.size).toBe(1);
+      await b.createTask({ title: 'read', parentId: p.id });
+      expect(g.events.size).toBe(0);
+      expect((await b.getTask(p.id))?.gcalEventId).toBeNull();
+      expect((await b.syncCalendarEvent(p.id)).gcalEventId).toBeNull();
+      await b.setTaskDue(p.id, { dueDay: '2026-10-10', dueTime: '12:00' });
+      expect(g.events.size).toBe(0);
+    });
+
+    it('the picker refuses a parent before any other check; an untimed part can take one', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '23:59' });
+      const part = await b.createTask({ title: 'read', parentId: p.id });
+      await expect(pick(b, p.id)).rejects.toThrow(/its parts do/);
+      expect(g.events.size).toBe(0);
+      await expect(pick(b, part.id)).resolves.toMatchObject({ gcalEventId: expect.any(String) });
+    });
+
+    it('a timed standalone done split moves the event and its base to Part 2; the parent never inserts', async () => {
+      const { g, b } = await connected();
+      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+      await b.transitionTask(t.id, 'in_progress');
+      const insert = vi.spyOn(g, 'insertEvent');
+      const { parent, original, followUp } = await b.splitTask(t.id, {
+        finish: 'done',
+        followUp: { title: 'x, part 2', estimateMin: null },
+      });
+      expect(insert).not.toHaveBeenCalled();
+      expect(parent.gcalEventId).toBeNull();
+      expect(original.gcalEventId).toBeNull();
+      expect(followUp.gcalEventId).toBe(t.gcalEventId);
+      expect(followUp.gcalSeen?.title).toBe('x, part 2'); // the base came along; its push renamed it
+      expect(g.events.size).toBe(1);
+    });
+
+    it('cancelling a parent removes its open parts’ blocks; deleting it removes them all', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2' });
+      await b.createTask({ title: 'a', parentId: p.id, dueDay: '2026-10-09', dueTime: '10:00' });
+      await b.createTask({ title: 'b', parentId: p.id, dueDay: '2026-10-09', dueTime: '12:00' });
+      expect(g.events.size).toBe(2);
+      await b.transitionTask(p.id, 'cancelled');
+      expect(g.events.size).toBe(0);
+      const q = await b.createTask({ title: 'Q' });
+      await b.createTask({ title: 'c', parentId: q.id, dueDay: '2026-10-09', dueTime: '10:00' });
+      expect(g.events.size).toBe(1);
+      await b.deleteTask(q.id);
+      expect(g.events.size).toBe(0);
+    });
   });
 
   it('bulk create: once Google fails, the rest are marked for Retry without being attempted', async () => {

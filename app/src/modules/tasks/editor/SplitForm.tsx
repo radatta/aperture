@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { canTransitionTask, linksToFamily } from '@aperture/shared';
+import { canTransitionTask, STANDALONE_PART_TITLE } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -15,29 +15,37 @@ const minutes = (v: string): number | null => (v.trim() === '' ? null : Number(v
 const valid = (v: string) => v.trim() === '' || Number(v) >= 0; // empty, or real non-negative minutes
 const str = (n: number | null) => n?.toString() ?? '';
 
-// Split: one task becomes two (split.ts). This part is either done (an actual is required — it feeds
-// calibration, like Mark done) or keeps going (rescoped), and the rest becomes a new task with its own
-// estimate. Never cancels. `onDone(finish)` lets the editor close on done and stay open on keep.
+// Split always yields parent + parts (split.ts). This part is either done (an actual is required — it
+// feeds calibration, like Mark done) or keeps going (rescoped), and the rest becomes a new part with its
+// own estimate. A standalone task becomes Part 1 under a new parent that keeps its deadline — all three
+// titles are editable here, so what's typed is what's stored; a part (`parentTitle` set) gains a sibling.
+// Never cancels. `onDone(finish)` lets the editor close on done and stay open on keep.
 export function SplitForm({
   task,
+  parentTitle,
   onDone,
   onCancel,
 }: {
   task: Task;
+  parentTitle?: string; // set when it's already a part
   onDone: (finish: Finish) => void;
   onCancel: () => void;
 }) {
+  const standalone = !task.parentId;
   const split = useSplitTask();
   // "Done" is only a legal finish once work has started — the state machine forbids backlog|planned →
   // done. An unstarted task can only keep going, so there's no choice to offer.
   const canFinishDone = canTransitionTask(task.status, 'done');
   const [finish, setFinish_] = useState<Finish>(canFinishDone ? 'done' : 'keep');
-  const [title, setTitle] = useState(task.title);
+  const [deliverable, setDeliverable] = useState(task.title);
+  const [title, setTitle] = useState(standalone ? STANDALONE_PART_TITLE : task.title);
   const [actual, setActual] = useState(() =>
     task.actualAccruedMin > 0 ? String(Math.round(task.actualAccruedMin)) : '',
   );
   const [estimate, setEstimate] = useState(str(splitDefaults(task, 'keep').thisPart));
-  const [restTitle, setRestTitle] = useState(`${task.title}${SPLIT_TITLE_SUFFIX}`);
+  const [restTitle, setRestTitle] = useState(
+    standalone ? 'Part 2' : `${task.title}${SPLIT_TITLE_SUFFIX}`,
+  );
   const [restEstimate, setRestEstimate_] = useState(str(splitDefaults(task, finish).rest));
   const [restTyped, setRestTyped] = useState(false);
   const setRestEstimate = (v: string) => {
@@ -63,7 +71,11 @@ export function SplitForm({
   const numbersOk = valid(actual) && valid(estimate) && valid(restEstimate);
   const total = numbersOk && thisPart != null && rest != null ? thisPart + rest : null;
   const canSubmit =
-    !!title.trim() && !!restTitle.trim() && (!done || actual.trim() !== '') && numbersOk;
+    !!title.trim() &&
+    !!restTitle.trim() &&
+    (!standalone || !!deliverable.trim()) &&
+    (!done || actual.trim() !== '') &&
+    numbersOk;
 
   async function submit() {
     if (!canSubmit || split.isPending) return;
@@ -72,7 +84,8 @@ export function SplitForm({
         id: task.id,
         input: {
           finish,
-          ...(title.trim() !== task.title ? { title: title.trim() } : {}),
+          ...(standalone ? { parentTitle: deliverable.trim() } : {}),
+          ...(standalone || title.trim() !== task.title ? { title: title.trim() } : {}),
           ...(done
             ? { actualMin: Number(actual) }
             : minutes(estimate) !== task.estimateMin
@@ -102,13 +115,24 @@ export function SplitForm({
           ]}
         />
       ) : (
-        // No Done here (it isn't in progress). Whether the parts form a family follows the lock, not the
-        // status: a task started then rolled back to backlog keeps its lock, so its rest still links.
+        // No Done here (it isn't in progress) — the parts each get an estimate of their own.
         <Text size="sm" tone="muted">
-          {linksToFamily(task)
-            ? 'Started earlier — the rest stays part of this task’s split family.'
-            : 'Not started yet — the parts get their own estimates.'}
+          Not in progress — each part gets its own estimate.
         </Text>
+      )}
+
+      {standalone && (
+        <div className="flex flex-col gap-2">
+          <Text as="p" size="sm" weight="semibold" tone="muted">
+            Deliverable (new)
+          </Text>
+          <Field
+            label="Title"
+            aria-label="Deliverable's title"
+            value={deliverable}
+            onChange={(e) => setDeliverable(e.target.value)}
+          />
+        </div>
       )}
 
       <div className="flex flex-col gap-2">
@@ -149,17 +173,17 @@ export function SplitForm({
 
       <div className="flex flex-col gap-2">
         <Text as="p" size="sm" weight="semibold" tone="muted">
-          Remaining → new task
+          {standalone ? 'Next part' : `Remaining → new part of ${parentTitle ?? 'its parent'}`}
         </Text>
         <Field
           label="Title"
-          aria-label="New task's title"
+          aria-label="Next part's title"
           value={restTitle}
           onChange={(e) => setRestTitle(e.target.value)}
         />
         <Field
           label="Estimate (min)"
-          aria-label="New task's estimate (min)"
+          aria-label="Next part's estimate (min)"
           type="number"
           min={0}
           inputMode="numeric"
@@ -174,6 +198,11 @@ export function SplitForm({
               task.estimateMin != null ? ` · was ${fmtDuration(task.estimateMin)}` : ''
             }`}
         </Text>
+        {standalone && (
+          <Text size="xs" tone="muted">
+            “{deliverable.trim() || task.title}” keeps the due date; the parts carry the work.
+          </Text>
+        )}
       </div>
 
       {!numbersOk && (

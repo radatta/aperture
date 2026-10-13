@@ -70,7 +70,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 | group            | tools                                                                                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
@@ -81,16 +81,25 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 
 - **`complete_task` requires `actualMin`** — completing feeds calibration, and a 0-actual completion would
   pollute the signature metric. It chains `→ in_progress → done` (freezing the calibration baseline) and **replaces**
-  any timer-tracked minutes, echoing the previous value so an overwrite is visible.
-- **`update_task`** fan-out order is title → categoryId → due → notes → estimate → status; the estimate
+  any timer-tracked minutes, echoing the previous value so an overwrite is visible. **A parent** (a task with
+  parts, [tasks/parts.md](../tasks/parts.md)) is the exception: `actualMin` is a param error there (its actual
+  is Σ its parts), and the call is refused while a part is open, with the shared message naming the parts.
+- **Parent + parts** ([tasks/parts.md](../tasks/parts.md)): `parentId` on `create_task`/`create_tasks` makes a
+  task a part (breaking a deliverable down is one `create_tasks` call), and `update_task {parentId}` attaches or
+  (`null`) detaches. `list_tasks` annotates a parent with `parts: {total, done, estimateMin}`, from the same
+  read. `delete_task` on a parent deletes every part and returns their ids. `create_calendar_event` refuses a
+  parent (its parts carry the blocks).
+- **`update_task`** fan-out order is title → categoryId → parentId → due → notes → estimate → status; the estimate
   (the working one) is editable until the task is done/cancelled — `estimateMin` or `bufferMin` alone keeps the
   other (before 2026-10-06 an estimate-only call zeroed the buffer) — the calibration baseline frozen at start
   never moves, and a failing field's error names which fields already applied.
-- **`split_task {id, finish, actualMin?, title?, estimateMin?, bufferMin?, followUpTitle,
+- **`split_task {id, finish, actualMin?, title?, parentTitle?, estimateMin?, bufferMin?, followUpTitle,
   followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md)) — "scope change =
   split" is the product's move, so voice gets it as one call rather than improvising cancel + create.
   `finish: "done"` (a started task only) **requires `actualMin`** — the same posture as `complete_task`;
-  `keep` rejects it. Returns `{original, followUp}`. Worth the claude.ai per-tool "ask".
+  `keep` rejects it. A split always yields parent + parts: a standalone task becomes "Part 1" (unless `title`)
+  under a new parent titled `parentTitle` or its own title; on a part, `parentTitle` is refused; a parent, a roll
+  rep or a recurring occurrence can't be split ([tasks/parts.md](../tasks/parts.md) D11). Returns `{parent, original, followUp}`. Worth the claude.ai per-tool "ask".
 - **Due times** ([tasks/due-dates.md](../tasks/due-dates.md)): `dueTime` (`HH:MM`, 24h, the user's local
   time) rides on `create_task`, `create_tasks` and `update_task`, validated before any dispatch. In
   `update_task`, `dueDay` and `dueTime` go out as **one** `setTaskDue` write: time-only keeps the task's
@@ -126,11 +135,13 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   (the refusal adds "From here: sync_calendar_event … update_task …" on the MCP side only — the shared
   `AUTO_PLACED_ERROR` is also the app picker's). **`sync_calendar_event {taskId}`** is the app's Add to
   calendar / Retry / Send to Google (`syncCalendarEvent`, the `ensure` pass): it puts a removed block
-  back at the deadline (re-setting the same time never does), retries a failed sync, sends values kept
+  back at its due time (re-setting the same time never does), retries a failed sync, sends values kept
   over Google, finishes an owed removal. It runs the shared `calendarSyncPlan` first, so it reports what
   the backend decides — `{ outcome: created | updated | removed | unlinked, task }` (`unlinked`: Google
   had already deleted it; call again to create) — and refuses with the reason when the plan is `none`
-  (done/cancelled, auto-sync off, no due time and no event, no write default). A Google failure is an
+  (a parent — `PARENT_NO_EVENT_ERROR`, [tasks/parts.md](../tasks/parts.md) D8 — done/cancelled, auto-sync
+  off, no due time and no event, no write default); a refusal still clears a moot `gcalSyncError` the way
+  the backend's ensure pass does (no Google call). A Google failure is an
   error; its text is also the task's `gcalSyncError`.
 - **Attachments** — two byte paths: `attach_file` sends content inline (base64, capped **64 KB** — tool
   args are model output tokens, so this is a small-text-artifact path) and the Lambda PUTs it to the

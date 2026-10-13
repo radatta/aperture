@@ -135,7 +135,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         estimateMin: est,
         bufferMin: Math.round(est * 0.25),
         estimateLockedMin: est,
-        splitFromId: null,
+        parentId: null,
         actualAccruedMin: actual,
         startedAt,
         completedAt,
@@ -164,11 +164,12 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     }
   }
 
-  // A split family (split.ts): yesterday's lit review ran long, so the done first half handed the rest
-  // to a linked backlog task. Neither half is a calibration point until the family is scored as one.
+  // Parent + parts (parts.ts). Yesterday's lit review ran long, so it was split: the parent holds the
+  // deliverable and the whole job's baseline (the lock frozen when Part 1 started), Part 1 is done, Part 2
+  // waits in the backlog.
   const litDone = nowMs - DAY - 2 * HOUR;
   const litCat = byLabel(workCats[0]!);
-  const litBase = {
+  const partBase = {
     categoryId: litCat.id,
     dueDay: null,
     dueTime: null,
@@ -181,32 +182,48 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     gcalEventId: null,
     gcalSyncError: null,
   };
-  const litA: Task = {
-    ...mk(litDone - 70 * 60_000),
-    ...litBase,
+  const litParent: Task = {
+    ...mk(litDone - 80 * 60_000),
+    ...partBase,
     title: 'Write the literature review',
-    status: 'done',
-    estimateMin: 60,
-    bufferMin: 15,
-    estimateLockedMin: 60,
-    splitFromId: null,
-    actualAccruedMin: 70,
-    startedAt: litDone - 70 * 60_000,
-    completedAt: litDone,
-  };
-  store.tasks.push(litA, {
-    ...mk(litDone),
-    ...litBase,
-    title: 'Write the literature review (cont.)',
     status: 'backlog',
-    estimateMin: 45,
+    estimateMin: null,
     bufferMin: null,
-    estimateLockedMin: null,
-    splitFromId: litA.id,
+    estimateLockedMin: 60,
+    parentId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
-  });
+  };
+  store.tasks.push(
+    litParent,
+    {
+      ...mk(litDone - 70 * 60_000),
+      ...partBase,
+      title: 'Find and read the sources',
+      status: 'done',
+      estimateMin: 60,
+      bufferMin: 15,
+      estimateLockedMin: 60,
+      parentId: litParent.id,
+      actualAccruedMin: 70,
+      startedAt: litDone - 70 * 60_000,
+      completedAt: litDone,
+    },
+    {
+      ...mk(litDone),
+      ...partBase,
+      title: 'Write it up',
+      status: 'backlog',
+      estimateMin: 45,
+      bufferMin: null,
+      estimateLockedMin: null,
+      parentId: litParent.id,
+      actualAccruedMin: 0,
+      startedAt: null,
+      completedAt: null,
+    },
+  );
 
   // A handful of unscoped backlog tasks — captured title-only, waiting for the morning plan pass.
   // These make the morning "plan today" card real and give Phase 5 material to scope.
@@ -256,7 +273,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       estimateMin: null,
       bufferMin: null,
       estimateLockedMin: null,
-      splitFromId: null,
+      parentId: null,
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -267,6 +284,84 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       gcalSyncError: null,
     });
   });
+
+  // Two more parents so every parent state shows on first load: one with every part done (the "mark it
+  // submitted?" nudge), and one whose Part 1 kept its time from a split (a part's time reads "ends …";
+  // its colour is the parent's deadline).
+  const psetDone = nowMs - 5 * HOUR;
+  const pset: Task = {
+    ...mk(psetDone - 3 * HOUR),
+    ...partBase,
+    title: 'Pset 3',
+    status: 'backlog',
+    dueDay: addDays(today, 1),
+    dueTime: '23:59',
+    estimateMin: null,
+    bufferMin: null,
+    estimateLockedMin: 75,
+    parentId: null,
+    actualAccruedMin: 0,
+    startedAt: null,
+    completedAt: null,
+  };
+  const donePart = (title: string, est: number, actual: number, at: number): Task => ({
+    ...mk(at),
+    ...partBase,
+    title,
+    status: 'done',
+    estimateMin: est,
+    bufferMin: null,
+    estimateLockedMin: est,
+    parentId: pset.id,
+    actualAccruedMin: actual,
+    startedAt: at,
+    completedAt: at + actual * 60_000,
+  });
+  store.tasks.push(
+    pset,
+    donePart('Questions 1–4', 30, 35, psetDone - 2 * HOUR),
+    donePart('Questions 5–8', 45, 50, psetDone - HOUR),
+  );
+  const lab: Task = {
+    ...mk(nowMs - 2 * DAY),
+    ...partBase,
+    title: 'Lab report',
+    status: 'backlog',
+    dueDay: addDays(today, 3),
+    dueTime: '17:00',
+    estimateMin: null,
+    bufferMin: null,
+    estimateLockedMin: null,
+    parentId: null,
+    actualAccruedMin: 0,
+    startedAt: null,
+    completedAt: null,
+  };
+  const openPart = (title: string, est: number, over: Partial<Task> = {}): Task => ({
+    ...mk(nowMs - 2 * DAY + 60_000),
+    ...partBase,
+    title,
+    status: 'backlog',
+    estimateMin: est,
+    bufferMin: null,
+    estimateLockedMin: null,
+    parentId: lab.id,
+    actualAccruedMin: 0,
+    startedAt: null,
+    completedAt: null,
+    ...over,
+  });
+  store.tasks.push(
+    lab,
+    openPart('Run the analysis', 60, {
+      dueDay: addDays(today, 1),
+      dueTime: '15:00',
+      gcalAccountId: 'seed-personal', // on the calendar, as auto-sync would have left it
+      gcalCalendarId: 'you@gmail.com',
+      gcalEventId: 'stub-event-seed-lab',
+    }),
+    openPart('Write the discussion', 90, { createdAt: nowMs - 2 * DAY + 120_000 }),
+  );
 
   // Today's plan — a few tasks pulled in and ordered, so the daytime "Right now" hero + Big 3 render
   // on first load. The 2nd is in progress (the hero to glance); the rest are ready to start, and the
@@ -305,7 +400,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       estimateMin: est,
       bufferMin: Math.round(est * 0.25),
       estimateLockedMin: inProgress ? est : null,
-      splitFromId: null,
+      parentId: null,
       actualAccruedMin: inProgress ? 12 : 0,
       startedAt: inProgress ? nowMs - 20 * 60_000 : null,
       completedAt: null,
@@ -400,7 +495,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       estimateMin: est,
       bufferMin: null,
       estimateLockedMin: est,
-      splitFromId: null,
+      parentId: null,
       actualAccruedMin: actual,
       startedAt,
       completedAt,

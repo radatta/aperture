@@ -101,7 +101,10 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
 **Lifecycle:** `backlog → planned → in_progress → done` (or `cancelled` at any point).
 1. **Captured** — title only, unscoped, in backlog.
 2. **Scoped** (morning pass) — add **estimate** + **buffer** + **category**. Scheduled onto one or more days (**multi-day** supported) with a manual **sort order**. Estimate stays editable at any open status (rescoping mid-task is fine).
-3. **Worked** — time accrues; the **calibration baseline freezes at start-of-work** (so hindsight can't launder the calibration) — a later rescope moves only the working estimate. Work that turned out bigger is **split**: this part finishes or keeps going, the rest becomes a linked task, and the family is calibrated as one (planned — until then its parts are left out; [split.md](../areas/tasks/split.md)).
+3. **Worked** — time accrues; the **calibration baseline freezes at start-of-work** (so hindsight can't launder the calibration) — a later rescope moves only the working estimate. Work that turned out bigger is **split**: this part finishes or keeps going, and the rest becomes another part ([split.md](../areas/tasks/split.md)).
+   - **Parent + parts** ([parts.md](../areas/tasks/parts.md)): when something is due differs from when it's worked on, a task is the **deliverable** (the parent: the deadline, done when submitted) and its **parts** are the work (planned, worked and measured on their own). One level deep.
+   - **Marking the parent done:** refused while a part is open; one tap once every part is dealt with.
+   - **Calibration at two levels:** each part, and the whole job (the parent's lock vs Σ its parts — a missing part shows up there).
 4. **Done** — **actual time** recorded → estimate-vs-actual delta captured. `cancelled` tasks are excluded from calibration.
 
 **Recurring tasks** — a task can recur (simple rules: daily / weekdays / weekly / every-N). Each occurrence is its own instance with its own estimate/actual → its own calibration point. Distinct from **habits** (recurring *behaviors*, no estimate).

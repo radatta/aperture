@@ -118,8 +118,11 @@ export class Repo {
   }
 
   // --- Tasks ---
-  async listTasks(): Promise<Task[]> {
-    return alive((await this.doc.query(this.p(), sk.taskPrefix())).map((i) => toEntity<Task>(i)));
+  // `consistent` for a decision taken straight after a task write (parts: freeze, release, adopt).
+  async listTasks(opts?: { consistent?: boolean }): Promise<Task[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.taskPrefix(), opts)).map((i) => toEntity<Task>(i)),
+    );
   }
   async getTask(id: string): Promise<Task | null> {
     const it = await this.doc.get(this.p(), sk.task(id));

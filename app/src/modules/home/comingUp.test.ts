@@ -23,7 +23,7 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
     estimateMin: null,
     bufferMin: null,
     estimateLockedMin: null,
-    splitFromId: null,
+    parentId: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -53,6 +53,12 @@ describe('comingUp', () => {
       new Set(['planned-today']),
     );
     expect(cu.items.map((t) => t.id)).toEqual(['keep']);
+  });
+
+  it('leaves parts off the radar — the deadline is the parent’s, which is on it', () => {
+    const part = { ...mkTask('part', 1), parentId: 'parent' };
+    const cu = comingUp([mkTask('parent', 3), part], TODAY, new Set());
+    expect(cu.items.map((t) => t.id)).toEqual(['parent']);
   });
 
   it('counts the overflow split into this-week vs later', () => {

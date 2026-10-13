@@ -104,6 +104,18 @@ describe('InMemoryDoc', () => {
     expect(db.gets.map((g) => g.consistent)).toEqual([true, false, false]);
   });
 
+  it('staleNextQueries serves an old version (or hides the row) to non-consistent queries only', async () => {
+    await db.put(item({ PK: 'u#1', SK: 'task#a', v: 'new' }));
+    await db.put(item({ PK: 'u#1', SK: 'task#b', v: 'new' }));
+    db.staleNextQueries('u#1', 'task#a', item({ PK: 'u#1', SK: 'task#a', v: 'old' }), 1);
+    db.staleNextQueries('u#1', 'task#b', null, 1);
+    const read = async (consistent?: boolean) =>
+      (await db.query('u#1', 'task#', { consistent })).map((i) => `${i.SK}:${i.v}`);
+    expect(await read(true)).toEqual(['task#a:new', 'task#b:new']);
+    expect(await read()).toEqual(['task#a:old']);
+    expect(await read()).toEqual(['task#a:new', 'task#b:new']);
+  });
+
   it('an intercept with `when` waits for the matching write', async () => {
     await db.put(item({ PK: 'u#1', SK: 'k', updatedAt: 1 }));
     let fired = 0;

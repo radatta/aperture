@@ -22,7 +22,7 @@ const task = (over: Partial<Task>): Task => ({
   estimateMin: null,
   bufferMin: null,
   estimateLockedMin: null,
-  splitFromId: null,
+  parentId: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,

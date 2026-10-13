@@ -6,7 +6,9 @@ import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { useRowAction } from '../../lib/useRowAction';
+import { partsOf, partsSummary } from '@aperture/shared';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
+import { useTransitionTask } from '../../data/hooks/useTasks';
 import {
   applyQuery,
   COLLAPSE_AT,
@@ -73,6 +75,7 @@ export function TaskListSection({
   error: boolean;
 }) {
   const { addToDay, unplan } = useAddToDay();
+  const transition = useTransitionTask();
   const collapsed = useCollapsedGroups();
   const listRef = useRef<HTMLDivElement>(null);
   const action = useRowAction(listRef);
@@ -94,7 +97,7 @@ export function TaskListSection({
       <div role="status">
         {action.failed && (
           <Text size="sm" tone="danger">
-            Couldn&apos;t save that — try again.
+            {action.message ?? 'Couldn’t save that — try again.'}
           </Text>
         )}
       </div>
@@ -144,33 +147,57 @@ export function TaskListSection({
     const plan = planByTask.get(task.id);
     const open = task.status !== 'done' && task.status !== 'cancelled';
     const busy = action.isBusy(task.id);
+    const parts = partsOf(tasks, task.id);
+    // A parent is never planned (parts.ts): its one action is Mark done, once every part is dealt with.
     // A finished task's row is history (capacity, Big 3): never offer to unplan it.
-    const actions =
-      plan && open ? (
+    const actions = parts.length ? (
+      open && partsSummary(parts).allDone ? (
         <Button
-          variant="quiet"
           size="sm"
           disabled={busy}
-          onClick={() => action.run(task.id, () => unplan(plan, task))}
+          onClick={() =>
+            // explain: a part reopened elsewhere is refused by name (parts.ts partOpenError)
+            action.run(task.id, () => transition.mutateAsync({ id: task.id, to: 'done' }), true)
+          }
         >
-          Unplan
+          Mark done
         </Button>
-      ) : open && task.status !== 'in_progress' ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1"
-          disabled={busy}
-          aria-label={`Add ${task.title} to today`}
-          onClick={() => action.run(task.id, () => addToDay(task))}
-        >
-          <PlusIcon size={13} />
-          {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
-          <span className="max-sm:hidden">Today</span>
-        </Button>
-      ) : undefined;
+      ) : undefined
+    ) : plan && open ? (
+      <Button
+        variant="quiet"
+        size="sm"
+        disabled={busy}
+        onClick={() => action.run(task.id, () => unplan(plan, task))}
+      >
+        Unplan
+      </Button>
+    ) : open && task.status !== 'in_progress' ? (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-1"
+        disabled={busy}
+        aria-label={`Add ${task.title} to today`}
+        onClick={() => action.run(task.id, () => addToDay(task))}
+      >
+        <PlusIcon size={13} />
+        {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
+        <span className="max-sm:hidden">Today</span>
+      </Button>
+    ) : undefined;
     const notesHit = result.searching && matchedInNotes(task, query.text, labelOf);
-    return <TaskCard key={task.id} task={task} actions={actions} notesHit={notesHit} />;
+    // Outside a search, a parent carries its parts (query.ts foldParts left them out of the list).
+    const showParts = !result.searching && place !== 'done';
+    return (
+      <TaskCard
+        key={task.id}
+        task={task}
+        actions={actions}
+        notesHit={notesHit}
+        showParts={showParts}
+      />
+    );
   };
 
   const groups = place === 'done' ? capGroups(result.groups, limit) : result.groups;
