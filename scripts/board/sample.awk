@@ -5,7 +5,7 @@
 #                                      4 prev tick   "T\tepoch\tusage_usec" | "S\tpid\tcpuTicks"
 #                                      5 procs (-)   "pid\tppid\tcomm\tthreads\trssPages\tcpuTicks\targs"
 # -v: t ep interval anon file current high pids pidsMax usage psiMemSome psiMemFull psiCpuSome oomKill
-#     highEvents page hz prevOut statusOut
+#     highEvents dev page hz prevOut statusOut
 BEGIN { FS = "\t"; MiB = 1048576 }
 FILENAME == F1 { win[$2] = $1; next }
 # A hook state counts only once a heartbeat has fired (sampler.sh blanks it otherwise).
@@ -90,7 +90,8 @@ END {
     cores, num(psiMemSome), num(psiMemFull), num(psiCpuSome), oomKill, highEvents, cats, sess, working, idle, nslots, \
     gap == "" ? "null" : gap
 
-  printf "board: %d working · %d idle · heavy %d · anon %.1f/%sG · pids %d/%s\n", working, idle, nslots, \
-    anon / 1073741824, high == "" ? "-" : sprintf("%d", high / 1073741824), pids, pidsMax == "" ? "-" : pidsMax > statusOut
+  printf "board: %d working · %d idle · heavy %d · anon %.1f/%sG · pids %d/%s%s\n", working, idle, nslots, \
+    anon / 1073741824, high == "" ? "-" : sprintf("%d", high / 1073741824), pids, pidsMax == "" ? "-" : pidsMax, \
+    dev == "" ? "" : " · dev: " dev > statusOut
   close(statusOut)
 }

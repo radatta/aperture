@@ -30,7 +30,7 @@ tick() {  # $1 = print → stdout only, nothing written
     -v anon="$(cg_anon)" -v file="$(cg_file)" -v current="$(cg_current)" -v high="$(cg_high)" \
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \
-    -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" \
+    -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" -v dev="$(jq -r '.holderName // empty' "$BOARD_DIR/leases/dev.json" 2>/dev/null)" \
     -v prevOut="$pOut" -v statusOut="$sOut" -v F1="$panes" -v F2="$sess" -v F3="$slots" -v F4="$prev" \
     "$panes" "$sess" "$slots" "$prev" -)
   rm -f "$panes" "$sess" "$slots"
@@ -47,7 +47,11 @@ exec 8>>/tmp/aperture-sampler.lock
 flock -n 8 || exit 0
 printf '%s\n' "$$" >/tmp/aperture-sampler.pid
 trap 'rm -f "$work".*; exit 0' TERM INT
+n=0
 while :; do
   tick
+  # File overlaps across worktrees every 5th tick (~2.5 min): git is cheap, but not per prompt.
+  if [ $((n % 5)) -eq 0 ]; then node "$SB_REPO/scripts/src/board/cli.ts" overlap "$SB_REPO" "$BOARD_DIR" >/dev/null 2>&1 & fi
+  n=$((n + 1))
   sleep "$interval" & wait $!
 done

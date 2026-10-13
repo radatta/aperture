@@ -180,7 +180,10 @@ describe('board.sh gc', () => {
     const dir = join(tmp, 'board/leases/heavy');
     mkdirSync(dir, { recursive: true });
     const slot = (name: string, wrapperPid: number, wrapperStart: string) =>
-      writeFileSync(join(dir, `${name}.json`), JSON.stringify({ v: 1, pid: 1, class: 'test', wrapperPid, wrapperStart }));
+      writeFileSync(
+        join(dir, `${name}.json`),
+        JSON.stringify({ v: 1, pid: 1, class: 'test', wrapperPid, wrapperStart }),
+      );
     slot('live', live, start!);
     slot('dead', 4194303, '1');
     slot('reused', live, 'not-its-start-time');

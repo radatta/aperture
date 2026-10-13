@@ -2,12 +2,17 @@
 //   node scripts/src/board/cli.ts decide-dev     < {current, req}                         → DevDecision
 //   node scripts/src/board/cli.ts decide-heavy   < {limits, liveLimits, live, slots, req} → HeavyDecision
 //   node scripts/src/board/cli.ts staleness <limits.json> <historyDir>                    → warning lines
+//   node scripts/src/board/cli.ts overlap <repo> <boardDir>                              → writes <boardDir>/overlap.json
+//   node scripts/src/board/cli.ts report <historyDir> [days] [--json]                     → usage by mix + job peaks
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decideDev, decideHeavy, type Alive } from './lease.ts';
 import { parseLimits, staleness } from './limits.ts';
+import { branchFiles, overlaps, type Tree } from './overlap.ts';
 import { parseLimit, parseStat } from './proc.ts';
+import { formatReport, rollup, type JobEvent, type Sample } from './rollup.ts';
 
 const cgroup = process.env.APERTURE_CGROUP_DIR ?? '/sys/fs/cgroup';
 
@@ -48,6 +53,58 @@ function readJsonl(dir: string, prefix: string): unknown[] {
   );
 }
 
+const git = (cwd: string, ...a: string[]) => {
+  try {
+    return execFileSync('git', ['-C', cwd, ...a], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return '';
+  }
+};
+
+// Every worktree on a branch (the detached main checkout is skipped) with the files its branch touches.
+function worktrees(repo: string): Tree[] {
+  const trees: Tree[] = [];
+  let path = '';
+  for (const line of git(repo, 'worktree', 'list', '--porcelain').split('\n')) {
+    if (line.startsWith('worktree ')) path = line.slice(9);
+    if (!line.startsWith('branch refs/heads/') || !path) continue;
+    const base = git(path, 'merge-base', 'origin/main', 'HEAD').trim();
+    if (!base) continue;
+    trees.push({
+      branch: line.slice('branch refs/heads/'.length),
+      files: branchFiles(
+        git(path, 'diff', '--name-only', base, 'HEAD'),
+        git(path, 'diff', '--name-only', 'HEAD'),
+        git(path, 'ls-files', '--others', '--exclude-standard'),
+      ),
+    });
+  }
+  return trees;
+}
+
+// branch → registered session name (the SendMessage address), from board/sessions/*.json.
+function sessionNames(boardDir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  let files: string[];
+  try {
+    files = readdirSync(join(boardDir, 'sessions')).filter((f) => f.endsWith('.json'));
+  } catch {
+    return out;
+  }
+  for (const f of files) {
+    try {
+      const s = JSON.parse(readFileSync(join(boardDir, 'sessions', f), 'utf8'));
+      if (s.branch && s.name && s.state !== 'gone') out[s.branch] = s.name;
+    } catch {
+      // half-written by another session — next tick
+    }
+  }
+  return out;
+}
+
 export function main(argv: string[], stdin: () => string): string {
   const [cmd, ...args] = argv;
   const now = new Date();
@@ -68,9 +125,33 @@ export function main(argv: string[], stdin: () => string): string {
       const events = readJsonl(historyDir, 'events-') as Parameters<typeof staleness>[2];
       return staleness(limits, liveLimits(), events, now).join('\n');
     }
+    case 'overlap': {
+      const [repo, boardDir] = args;
+      if (!repo || !boardDir) throw new Error('usage: overlap <repo> <boardDir>');
+      const result = {
+        v: 1,
+        t: now.toISOString(),
+        ...overlaps(worktrees(repo), sessionNames(boardDir)),
+      };
+      const file = join(boardDir, 'overlap.json');
+      writeFileSync(`${file}.tmp.${process.pid}`, JSON.stringify(result) + '\n');
+      renameSync(`${file}.tmp.${process.pid}`, file);
+      return `${result.pairs.length} overlapping pair(s)`;
+    }
+    case 'report': {
+      const [historyDir, days = '7'] = args;
+      if (!historyDir) throw new Error('usage: report <historyDir> [days] [--json]');
+      const since = new Date(now.getTime() - Number(days) * 86400_000);
+      const r = rollup(
+        readJsonl(historyDir, 'samples-') as Sample[],
+        readJsonl(historyDir, 'events-') as JobEvent[],
+        since,
+      );
+      return args.includes('--json') ? JSON.stringify(r) : formatReport(r);
+    }
     default:
       throw new Error(
-        `usage: cli.ts decide-dev | decide-heavy | staleness (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-dev | decide-heavy | staleness | overlap | report (got ${cmd ?? 'nothing'})`,
       );
   }
 }
