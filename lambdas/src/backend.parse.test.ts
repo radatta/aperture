@@ -88,7 +88,7 @@ describe('backend parseTask', () => {
       ok: true,
       fields: fields({ categoryId: 'gone', dueDay: '2026-02-30', estimateMin: 15 }),
     };
-    expect(await b.parseTask('x')).toMatchObject({
+    expect(await b.parseTask('x 15m')).toMatchObject({
       ok: true,
       input: { title: 'fix login', estimateMin: 15 },
       dropped: ['unknown category', 'dropped due day'],

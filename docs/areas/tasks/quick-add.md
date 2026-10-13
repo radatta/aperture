@@ -117,6 +117,8 @@ autonomous build:
   reworded the user's words (a marker word, `no category here`, ` extra`; sentence-casing). Fixed: the
   prompt now says keep every non-meta word verbatim (overflow to notes) and that a day alone or `10m` is no
   time; and the validator drops any due time when the typed line has no clock in it (`4pm`, `9:30am`,
-  `16:00`, `noon`) — the one rule that doesn't depend on the model behaving.
+  `16:00`, `noon`) — the one rule that doesn't depend on the model behaving. The re-run confirmed both,
+  and caught one more invention ("call dentist tonight" → 15m): an estimate is now dropped the same way
+  when the line has no duration (`30m`, `2h`, `90 min`, `an hour`).
 - **Not built:** an editable preview (edit the text, Review again); a scoped Raycast token
   (`parse_task` + `create_task` — [mcp → Deferred](../mcp/index.md#deferred)).

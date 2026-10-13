@@ -155,6 +155,23 @@ describe('validateParsedTask', () => {
     expect(validateParsedTask(fields({ dueTime: '16:00' }), ctx)!.input.dueTime).toBe('16:00');
   });
 
+  it('drops an estimate when the typed line has no duration in it', () => {
+    const est = (line: string) =>
+      validateParsedTask(fields({ estimateMin: 15 }), { ...ctx, line })!;
+    expect(est('qazebra fifteen call dentist tonight').dropped).toEqual(['dropped estimate']);
+    expect(est('read 10 pages tmw').input.estimateMin).toBeUndefined();
+    for (const line of [
+      'x 15m',
+      'x 2h',
+      'x 1.5 hrs',
+      'x 90 min',
+      'x 20 minutes',
+      'x an hour',
+      'x half an hour',
+    ])
+      expect(est(line).input.estimateMin).toBe(15);
+  });
+
   it('estimate: whole minutes kept, 0 cleared quietly, anything else dropped', () => {
     expect(validateParsedTask(fields({ estimateMin: 45 }), ctx)!.input.estimateMin).toBe(45);
     const zero = validateParsedTask(fields({ estimateMin: 0 }), ctx)!;

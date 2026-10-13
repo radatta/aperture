@@ -52,7 +52,7 @@ export type ParseCategory = Pick<Category, 'id' | 'label'>;
 export interface ParseContext {
   categories: readonly ParseCategory[]; // active only
   today: string;
-  line?: string; // the typed line, when known — the due-time guard checks it for a clock
+  line?: string; // the typed line, when known — the guards check it for a clock / a duration
 }
 
 // A clock the user actually wrote: "4pm", "9:30am", "4 p", "16:00", "noon", "midnight". A model has read
@@ -60,6 +60,10 @@ export interface ParseContext {
 // it made up, so the validator drops it (it would also put an invented block on the calendar).
 const CLOCK_IN_LINE =
   /\b\d{1,2}(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.|a|p)\b|\b\d{1,2}:\d{2}\b|\bnoon\b|\bmidnight\b/i;
+// A duration the user actually wrote: "30m", "2h", "1.5 hrs", "90 min", "an hour", "half an hour". Dev check
+// 2026-10-13: "call dentist tonight" came back with a 15m estimate nobody typed — dropped the same way.
+const DURATION_IN_LINE =
+  /\b\d+(\.\d+)?\s*(m|mins?|minutes?|h|hrs?|hours?)\b|\b(an?|one|two|three|half an?)\s+hours?\b|\bhalf\s+hour\b/i;
 
 // The model's outcome, as the flow sees it. A failure never throws — every one is a raw save.
 export type ModelOutcome =
@@ -124,7 +128,13 @@ export function validateParsedTask(
 
   // 0 is "no estimate" (the grammar wants >= 1), so it clears quietly rather than reading as an error.
   if (p.estimateMin != null && p.estimateMin !== 0) {
-    if (typeof p.estimateMin === 'number' && Number.isInteger(p.estimateMin) && p.estimateMin > 0)
+    const statedEst = ctx.line === undefined || DURATION_IN_LINE.test(ctx.line);
+    if (
+      statedEst &&
+      typeof p.estimateMin === 'number' &&
+      Number.isInteger(p.estimateMin) &&
+      p.estimateMin > 0
+    )
       input.estimateMin = p.estimateMin;
     else dropped.push('dropped estimate');
   }

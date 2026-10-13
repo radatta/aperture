@@ -18,7 +18,7 @@ Rules:
 - notes: if what's left after removing the meta is longer than the title allows, cut the title at a word boundary and put the rest here verbatim (fix obvious typos only). Otherwise null. Every word the user typed ends up in the title, the notes, or a parsed field.
 - dueDay: YYYY-MM-DD, only if the user gave a day ("tmw" = tomorrow, a weekday name = the next such day, "today" = today), or today if they gave only a clock time. Otherwise null.
 - dueTime: HH:MM 24h, only if the user wrote a clock time ("4pm", "9:30am", "16:00", "noon"). A day alone ("today", "tonight", "tmw") has no time. "10m" or "30m" is an estimate in minutes, never a time. Otherwise null.
-- estimateMin: whole minutes, only if the user gave an estimate. Never invent one. Otherwise null.
+- estimateMin: whole minutes, only if the user typed a duration ("30m", "2h", "90 min", "an hour"). Never invent or guess one, even when a task usually takes a known time; "10 pages" is not a duration. Otherwise null.
 - Set a field only when the user stated it. Do not add tasks, advice or commentary.`;
 }
 
