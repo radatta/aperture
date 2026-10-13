@@ -102,7 +102,7 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
   live event per task (a second insert throws). The picker is for a task with a due day but no time —
   and for a timed task only while auto-sync can't place blocks (off, or no write default); a timed task
   with auto-sync on gets the one-tap "Add to calendar" at its deadline instead, and
-  `insertCalendarEvent` refuses it (`AUTO_PLACED_ERROR`, both impls, so MCP gets it too). The picked
+  `insertCalendarEvent` refuses it (`AUTO_PLACED_ERROR`, both impls, so MCP gets it too — its way out there is `sync_calendar_event`, [mcp](../mcp/index.md)). The picked
   start feeds the event only; a task with a `dueTime` prefills the block that ends at it. A block on a
   timed task is its auto block, whatever placed it: the next push moves it to the deadline.
 - **Delete-on-cancel**: dropping a task (`transitionTask → cancelled`) or `deleteCalendarEvent` removes the
@@ -167,7 +167,8 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 - **Every Google fetch has a 4 s timeout** (`LiveGoogle`), so one sync's worst case (token refresh +
   call, ~8 s; the SSM token read has none) fails into `gcalSyncError` inside the 15 s Lambda timeout.
 - **A timed task with no event** (timed while sync was off — no backfill — or its event removed) shows
-  "Not on your calendar" + **Add to calendar** in the editor, which runs the same ensure pass.
+  "Not on your calendar" + **Add to calendar** in the editor, which runs the same ensure pass (MCP:
+  `sync_calendar_event`).
 - **Timezone.** The Lambda is UTC, so it resolves `dueDay`+`dueTime` via `zonedEpoch(…, USER_TIME_ZONE)`
   (`America/Los_Angeles`, shared `dates.ts`; DST-correct); the browser uses `localEpochFromDayTime`.
 - **Bulk creates** sync timed rows four at a time (a Google round-trip each; settings read once) within a
