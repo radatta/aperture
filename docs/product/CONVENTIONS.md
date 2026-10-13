@@ -54,7 +54,9 @@ emit (error TS6310). Nothing imports that `dist/` — if you're wondering why it
 **App test files share one jsdom and one module graph per worker** (`isolate: false` — a fresh jsdom
 per file was most of CI's runtime on its single worker). CI runs the suite as two `vitest --shard`
 halves (`ci.yml`), assigned by a hash of each file's path, so a file's CI shard-mates stay fixed until a
-file is added or removed; locally, vitest's several workers mix them differently every run. So:
+file is added or removed; locally, vitest's several workers mix them differently every run. The cost:
+CI no longer runs every file in one graph, so a leak from one file into another in the other shard
+only shows up in a local run (the gate runs the full suite before every dev push and PR). So:
 
 - **New module-level state in `app/src`** (a singleton, cache, or `let`) needs a reset in
   `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file.

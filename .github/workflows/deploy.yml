@@ -52,8 +52,10 @@ jobs:
       # app/** only → app. Anything else, or an indeterminate base → full. The rule is a tested module, not an
       # inline regex (see the classifier).
       # No setup/install (~20s): the classifier imports only node:fs, and the runner image's default Node
-      # (22.x on ubuntu-24.04; the setup action's guard pins the major) strips TypeScript types natively. The constraints that puts
-      # on the classifier are in its header. `node --version` makes a runner-image Node change diagnosable.
+      # (22.23.2 on ubuntu-24.04 at the time, 22.23.3 by 2026-10-13) strips TypeScript types natively. This
+      # job is outside the setup action's .nvmrc guard, but the same run's other jobs fail loudly on a major
+      # change. The constraints that puts on the classifier are in its header. `node --version` makes a
+      # runner-image Node change diagnosable.
       - name: Classify deployable changes
         id: detect
         run: |
