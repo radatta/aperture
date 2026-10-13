@@ -570,10 +570,20 @@ describe('TaskEditor', () => {
       const client = api();
       const { p } = await withParts(client, ['done', 'open']);
       const { onClose, user } = renderEditor(client, p);
-      await user.click(await screen.findByRole('button', { name: 'Mark done' }));
-      expect((await screen.findByRole('alert')).textContent).toMatch(
-        /Part 2 isn’t finished — complete, drop or delete it first/,
-      );
+      const scrolled = vi.fn();
+      Element.prototype.scrollIntoView = scrolled; // jsdom has none
+      try {
+        await user.click(await screen.findByRole('button', { name: 'Mark done' }));
+        const alert = await screen.findByRole('alert');
+        expect(alert.textContent).toMatch(/Part 2 isn’t finished — complete, drop or delete it first/);
+        // It lands below a phone's fold, so it's brought into view — and again on the next refusal.
+        await waitFor(() => expect(scrolled.mock.contexts).toContain(alert));
+        const before = scrolled.mock.calls.length;
+        await user.click(screen.getByRole('button', { name: 'Mark done' }));
+        await waitFor(() => expect(scrolled.mock.calls.length).toBeGreaterThan(before));
+      } finally {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
       expect(onClose).not.toHaveBeenCalled();
       expect((await client.getTask(p.id))?.status).toBe('backlog');
     });

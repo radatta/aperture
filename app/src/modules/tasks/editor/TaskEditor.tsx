@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import {
   autoSyncOn,
@@ -95,6 +95,12 @@ export function TaskEditor({
   const allTasks = tasksData ?? [];
   const openTask = useOpenTask();
   const markDone = useTransitionTask();
+  // The refusal ("Part 2 isn't finished…") renders under the button, below a phone's fold — bring it into
+  // view each time one lands, or the tap reads as doing nothing.
+  const markDoneErrorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (markDone.error) markDoneErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [markDone.error]);
   const [reveal, setReveal] = useState<Reveal>(null);
   // Parent + parts (parts.ts): a parent's parts, or a part's parent and siblings.
   const parts = partsOf(allTasks, task.id);
@@ -273,7 +279,7 @@ export function TaskEditor({
             </div>
           )}
           {markDone.isError && (
-            <div role="alert">
+            <div ref={markDoneErrorRef} role="alert">
               <Text size="sm" tone="danger">
                 {markDone.error instanceof Error
                   ? markDone.error.message
