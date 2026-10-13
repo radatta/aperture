@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # The `ui` matrix cell: `pnpm dev` (stub + auth bypass) + headless Chromium over 4 routes at phone width,
 # then both stopped by PID. Run it under heavy.sh so the pair is measured as one job:
 #   PW_DIR=<dir with node_modules/playwright> heavy.sh -- scripts/board/measure/ui-cell.sh

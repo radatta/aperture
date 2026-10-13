@@ -8,7 +8,11 @@
 
 SB_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SB_REPO="$(cd "$SB_SCRIPTS/../.." && pwd)"
-BOARD_DIR="${APERTURE_BOARD_DIR:-/workspace/localNotes/board}"
+# The board lives in the MAIN checkout's localNotes/ (shared by every worktree): /workspace in the container;
+# on the Mac, wherever git says the main checkout is (read-only view — see board.sh status).
+if [ -n "${APERTURE_BOARD_DIR:-}" ]; then BOARD_DIR=$APERTURE_BOARD_DIR
+elif [ -d /workspace/localNotes ]; then BOARD_DIR=/workspace/localNotes/board
+else BOARD_DIR="$(cd "$(git -C "$SB_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)/localNotes/board"; fi
 BOARD_LOCK="${APERTURE_BOARD_LOCK:-/tmp/aperture-board.lock}"
 CG="${APERTURE_CGROUP_DIR:-/sys/fs/cgroup}"
 LIMITS_JSON="${APERTURE_LIMITS_JSON:-$SB_SCRIPTS/limits.json}"
@@ -114,9 +118,10 @@ sb_limit() { jq -r "$1 // empty" "$LIMITS_JSON" 2>/dev/null; }
 # Live absolute thresholds from limits.json fractions × live limits. Prints shell assignments.
 sb_thresholds() {
   local pm hi
-  pm=$(cg_pids_max); hi=$(cg_high)
+  pm=${SB_PIDS_MAX:-$(cg_pids_max)}; hi=${SB_MEM_HIGH:-$(cg_high)}
   [ -n "$pm" ] || pm=4194304
-  [ -n "$hi" ] || hi=$(awk '$1=="MemTotal:"{print $2*1024}' /proc/meminfo)
+  [ -n "$hi" ] || hi=$(awk '$1=="MemTotal:"{print $2*1024}' /proc/meminfo 2>/dev/null)
+  [ -n "$hi" ] || hi=0
   jq -r --argjson pm "$pm" --argjson hi "$hi" '.container as $c |
     "PIDS_SOFT=\(($c.pidsSoftFrac*$pm)|floor) PIDS_HARD=\(($c.pidsHardFrac*$pm)|floor) " +
     "ANON_SOFT=\(($c.anonSoftFrac*$hi)|floor) ANON_HARD=\(($c.anonHardFrac*$hi)|floor) " +

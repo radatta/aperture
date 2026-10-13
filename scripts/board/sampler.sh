@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Background usage sampler: one tick every SAMPLER_INTERVAL s (30) → board/history/samples-<date>.jsonl,
 # plus board/status.line. One per container (flock); started by `board.sh sampler start`, dies with the
 # container. Pure bash + one awk per tick; reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).

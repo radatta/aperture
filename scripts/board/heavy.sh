@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run one heavy command budgeted + measured (docs/ops/SESSION-BOARD.md → Heavy wrapper):
 #   scripts/board/heavy.sh [--wait SEC] -- <cmd…>
 # Takes a heavy slot (waits only when limits.json enforce:true and the budget is over hard), samples the

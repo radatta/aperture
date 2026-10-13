@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Session board CLI — who's doing what in this shared container (docs/ops/SESSION-BOARD.md).
 #   board.sh status | json
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
@@ -73,11 +73,22 @@ cmd_note() {
 
 # --- views ---
 
-sampler_running() { ! flock -n /tmp/aperture-sampler.lock true 2>/dev/null; }
+# In the container: is the sampler holding its lock? Elsewhere (the Mac): did it write in the last 90 s?
+sampler_running() {
+  if [ -r "$CG/memory.stat" ]; then ! flock -n /tmp/aperture-sampler.lock true 2>/dev/null; return; fi
+  local last; last=$(ls -t "$BOARD_DIR"/history/samples-*.jsonl 2>/dev/null | head -n 1)
+  [ -n "$last" ] && [ -n "$(find "$last" -mtime -90s 2>/dev/null || find "$last" -mmin -2 2>/dev/null)" ]
+}
 
 board_json() {
   local sample leases overlap
-  sample=$(bash "$SB_SCRIPTS/sampler.sh" --print)
+  if [ -r "$CG/memory.stat" ]; then
+    sample=$(bash "$SB_SCRIPTS/sampler.sh" --print)
+  else  # not in the container (the Mac): the sampler's latest tick, read-only
+    sample=$(tail -n 1 "$(ls -t "$BOARD_DIR"/history/samples-*.jsonl 2>/dev/null | head -n 1)" 2>/dev/null)
+    [ -n "$sample" ] || { echo "board: no samples under $BOARD_DIR — is the container's sampler running?" >&2; return 1; }
+    export SB_PIDS_MAX=$(jq -r '.cg.pidsMax' <<<"$sample") SB_MEM_HIGH=$(jq -r '.cg.highMiB * 1048576' <<<"$sample")
+  fi
   leases=$(jq -s '.' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null) || leases='[]'
   [ -n "$leases" ] || leases='[]'
   jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" \
@@ -94,9 +105,9 @@ board_json() {
 cmd_status() {
   board_json | jq -r '
     def gib: . / 1024 | . * 10 | round / 10 | tostring;
-    def hm: if . == null then "?" else (sub("\\.[0-9]+"; "") | fromdate | strflocaltime("%H:%M")) end;
+    def hm: if . == null then "?" else (sub("\\.[0-9]+"; "") | fromdate | strflocaltime("%H:%M:%S")) end;
     .sample as $s | .thresholds as $t | .registered as $r |
-    "board  anon \($s.cg.anonMiB | gib)/\($s.cg.highMiB | gib) GiB (soft \(($t.ANON_SOFT | tonumber) / 1048576 | gib) · hard \(($t.ANON_HARD | tonumber) / 1048576 | gib))" +
+    "board @ \($s.t | hm)  anon \($s.cg.anonMiB | gib)/\($s.cg.highMiB | gib) GiB (soft \(($t.ANON_SOFT | tonumber) / 1048576 | gib) · hard \(($t.ANON_HARD | tonumber) / 1048576 | gib))" +
       " · pids \($s.cg.pids)/\($s.cg.pidsMax) (soft \($t.PIDS_SOFT) · hard \($t.PIDS_HARD))" +
       " · cpu \($s.cg.cpuCores) cores · psi full \($s.cg.psiMemFull10)" +
       (if $t.ENFORCE == "true" then " · enforcing" else " · nudge-only" end),

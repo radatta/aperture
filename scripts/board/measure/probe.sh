@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # M0 environment probe (~10 s, safe): limits, versions, capability checks → board/history/probe-<date>.json
 # and a readable summary on stdout. docs/ops/SESSION-BOARD.md → Measurement protocol.
 set -u

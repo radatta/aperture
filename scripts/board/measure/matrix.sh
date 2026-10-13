@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Load-test matrix (docs/ops/SESSION-BOARD.md → Measurement protocol). Every job runs through heavy.sh
 # with HEAVY_GUARD=1, so the stop conditions hold and every rep lands in events-*.jsonl.
 #   matrix.sh setup              scratch trees B and C (detached at this HEAD) + install, for pair cells

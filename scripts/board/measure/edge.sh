@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Edge test — the only script that pushes toward failure (docs/ops/SESSION-BOARD.md → Measurement protocol).
 # Adds one looping `pnpm test` instance every EDGE_STEP s (30) until a stop condition fires, a run exits
 # ≥ 128, or EDGE_MAX (12) instances run; then stops every instance by PID, waits for anon to settle, and
