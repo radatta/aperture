@@ -33,6 +33,15 @@ describe('liveReadout', () => {
       label: '0',
       tone: 'gold',
     });
+    // Out but short of the hold zone (D36): the ring asks for more, the clock isn't running.
+    expect(liveReadout(def, with_(s, { zone: 'positive', inHoldZone: false }))?.ring).toEqual({
+      progress: 0,
+      label: 'further',
+      tone: 'teal',
+    });
+    expect(
+      liveReadout(def, with_(s, { zone: 'positive', inHoldZone: true, holdAccumSec: 0 }))?.ring,
+    ).toEqual({ progress: 0, label: '4', tone: 'teal' });
   });
 
   it('romReps complete: done, no ring', () => {

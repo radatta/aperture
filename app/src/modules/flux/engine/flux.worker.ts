@@ -85,6 +85,8 @@ function processFrame(bitmap: ImageBitmap, tMs: number): void {
   if (!r) return; // non-increasing timestamp
   const points = overlayPoints(res);
   post({ type: 'sample', sample: r.sample, landmarks: points }, [points.buffer]);
+  if (r.autoCalibrated)
+    post({ type: 'calibrated', ok: true, neutral: r.autoCalibrated, auto: true });
   for (const event of r.events) post({ type: 'exerciseEvent', event });
   if (r.state) post({ type: 'exerciseState', state: r.state });
 }

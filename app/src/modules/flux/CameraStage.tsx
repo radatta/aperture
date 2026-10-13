@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 import type { ExerciseDefinition } from '@aperture/shared/flux';
 import { Button } from '../../components/Button';
 import { VolumeIcon, VolumeOffIcon } from '../../components/icons';
@@ -29,6 +29,7 @@ export function CameraStage({
   canvasRef,
   onStart,
   onStop,
+  startAccessory,
 }: {
   def: ExerciseDefinition; // as shown (mirrored for side B), same as the panel's
   engine: FluxEngineHandle;
@@ -37,6 +38,7 @@ export function CameraStage({
   canvasRef: RefObject<HTMLCanvasElement | null>;
   onStart: () => void;
   onStop: () => void;
+  startAccessory?: ReactNode; // beside Start camera — the sets stepper
 }) {
   const { status, sample, calibrated, delegate, progress, error } = engine;
   const aspect = useTrackAspect(videoRef);
@@ -99,9 +101,12 @@ export function CameraStage({
                 Sit facing the camera at arm&apos;s length. Nothing leaves your device — all
                 tracking runs locally.
               </Text>
-              <Button onClick={onStart} disabled={status === 'loading'}>
-                {status === 'loading' ? 'Loading model…' : 'Start camera'}
-              </Button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {status === 'idle' && startAccessory}
+                <Button onClick={onStart} disabled={status === 'loading'}>
+                  {status === 'loading' ? 'Loading model…' : 'Start camera'}
+                </Button>
+              </div>
               {status === 'loading' &&
                 progress &&
                 progress.total > 0 &&

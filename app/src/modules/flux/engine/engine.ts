@@ -14,7 +14,7 @@ export type FluxEngineEvent =
   // `fallback`: the engine replaced a failing GPU worker with a CPU one on its own.
   | { readonly type: 'ready'; readonly delegate: Delegate; readonly fallback?: boolean }
   | { readonly type: 'sample'; readonly sample: Sample }
-  | { readonly type: 'calibrated'; readonly ok: boolean }
+  | { readonly type: 'calibrated'; readonly ok: boolean; readonly auto?: true }
   | { readonly type: 'exerciseState'; readonly state: ExerciseState }
   | { readonly type: 'exerciseEvent'; readonly event: ExerciseEvent }
   // The camera stopped under us (tab hidden, track ended). Neutral and the worker are kept.

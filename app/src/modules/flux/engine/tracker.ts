@@ -231,7 +231,7 @@ export class FluxTracker implements FluxEngine {
         return this.emit({ type: 'sample', sample: msg.sample });
       case 'calibrated':
         if (msg.ok) this.neutral = msg.neutral;
-        return this.emit({ type: 'calibrated', ok: msg.ok });
+        return this.emit({ type: 'calibrated', ok: msg.ok, ...(msg.auto && { auto: true }) });
       case 'exerciseState':
       case 'exerciseEvent':
         return this.emit(msg);

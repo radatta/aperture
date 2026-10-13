@@ -54,6 +54,21 @@ export function magnitude(e: Euler): number {
   return Math.hypot(e.pitch, e.yaw, e.roll);
 }
 
+// Angular speed (deg/s) below which the head counts as "still" — shared by the evaluator and the
+// core's auto-calibrate.
+export const STILL_SPEED = 6;
+
+// Angular speed (deg/s) between two poses `dtv` seconds apart; 0 with no previous pose.
+export function speedOf(rel: Euler, lastRel: Euler | null, dtv: number): number {
+  if (!lastRel) return 0;
+  const delta: Euler = {
+    pitch: rel.pitch - lastRel.pitch,
+    yaw: rel.yaw - lastRel.yaw,
+    roll: rel.roll - lastRel.roll,
+  };
+  return magnitude(delta) / (dtv || 1);
+}
+
 // The 1€ (One-Euro) filter — adaptive low-pass that kills jitter when you hold
 // still but doesn't lag when you move fast. This is the industry default for
 // smoothing noisy pose signals; ~30 lines and no tuning of a motion model.

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ExerciseEvent } from '@aperture/shared/flux';
-import { type CueState, initialCueState, reduceCue } from './cues';
+import { type CueEvent, type CueState, initialCueState, isMirrored, reduceCue } from './cues';
 
 // Fold events at explicit timestamps, collecting the spoken texts.
-function speak(events: { e: ExerciseEvent; t: number }[]): string[] {
+function speak(events: { e: CueEvent; t: number }[]): string[] {
   let state: CueState = initialCueState;
   const out: string[] = [];
   for (const { e, t } of events) {
@@ -187,6 +187,151 @@ describe('reduceCue', () => {
       { e: drift, t: 4500 }, // 4.5s since last SPOKEN → speak
     ]);
     expect(out).toEqual(['Head still', 'Head still']);
+  });
+
+  describe('eyes-free session (D36–D43)', () => {
+    const say = (e: CueEvent) => reduceCue(initialCueState, e, 0).utterance;
+    const further: CueEvent = { type: 'stoppedShort', shortDeg: 10 };
+    const hold: CueEvent = { type: 'holdEntered', count: 1 };
+
+    it('"Hold" on reaching the zone is never dropped, even inside the gap after "Further"', () => {
+      expect(say(hold)).toEqual({ text: 'Hold', priority: 'always' });
+      expect(
+        speak([
+          { e: further, t: 0 },
+          { e: hold, t: 200 },
+        ]),
+      ).toEqual(['Further', 'Hold']);
+    });
+
+    it('"Further" is gated: dropped inside the gap after a count, and cooled down 2 s', () => {
+      expect(say(further)).toEqual({ text: 'Further', priority: 'normal' });
+      expect(
+        speak([
+          { e: { type: 'holdReached', count: 1 }, t: 0 },
+          { e: further, t: 300 },
+        ]),
+      ).toEqual(['One']);
+      expect(
+        speak([
+          { e: further, t: 0 },
+          { e: further, t: 1500 },
+          { e: further, t: 2100 },
+        ]),
+      ).toEqual(['Further', 'Further']);
+    });
+
+    it('nudges name the way to move, and are cooled down 3 s', () => {
+      const nudge = (axis: 'pitch' | 'yaw' | 'roll', toward: 'more' | 'less', deg: number) =>
+        say({ type: 'nudge', axis, toward, deg })?.text;
+      expect([
+        nudge('yaw', 'more', 20),
+        nudge('yaw', 'less', -5),
+        nudge('roll', 'more', -20), // side B: the target's own sign decides
+        nudge('roll', 'less', 5),
+        nudge('pitch', 'more', 10),
+        nudge('pitch', 'less', -10),
+      ]).toEqual(['Turn more', 'Turn less', 'Tilt more', 'Tilt less', 'Chin down', 'Chin up']);
+      const n: CueEvent = { type: 'nudge', axis: 'roll', toward: 'more', deg: 20 };
+      expect(
+        speak([
+          { e: n, t: 0 },
+          { e: n, t: 2000 },
+          { e: n, t: 3100 },
+        ]),
+      ).toEqual(['Tilt more', 'Tilt more']);
+    });
+
+    it('joint-position prompts are never dropped and follow the trial result', () => {
+      const out = speak([
+        { e: { type: 'repositionPrompt', sub: 'away' }, t: 0 },
+        { e: { type: 'repositionPrompt', sub: 'returning' }, t: 100 },
+        { e: { type: 'repositionPrompt', sub: 'settling' }, t: 200 },
+        { e: { type: 'trialCompleted', errorDeg: 3.2 }, t: 300 },
+        { e: { type: 'repositionPrompt', sub: 'away' }, t: 300 },
+      ]);
+      expect(out).toEqual([
+        'Turn away',
+        'Back to neutral',
+        'Hold still',
+        'Nice. 3 degrees.',
+        'Turn away',
+      ]);
+      expect(say({ type: 'trialCompleted', errorDeg: 0.6 })?.text).toBe('Nice. 1 degree.');
+    });
+
+    it('"Go" starts a gaze set', () => {
+      expect(say({ type: 'setStarted' })).toEqual({ text: 'Go', priority: 'always' });
+    });
+
+    it('says each session cue', () => {
+      const cues: CueEvent[] = [
+        { type: 'neutralSet' },
+        { type: 'holdStillHint' },
+        { type: 'getReady' },
+        { type: 'nextSet', number: 2, otherSide: false },
+        { type: 'nextSet', number: 2, otherSide: true },
+        { type: 'sessionComplete' },
+        { type: 'faceLost' },
+        { type: 'faceFound' },
+      ];
+      expect(cues.map(say)).toEqual([
+        { text: 'Neutral set', priority: 'always' },
+        { text: 'Hold still to set neutral', priority: 'normal' },
+        { text: 'Get ready', priority: 'always' },
+        { text: 'Set two', priority: 'always' },
+        { text: 'Other side', priority: 'always' },
+        { text: 'Session complete.', priority: 'always' },
+        { text: "Can't see you", priority: 'always' },
+        { text: 'Tracking', priority: 'normal' },
+      ]);
+    });
+
+    it('"Can\'t see you" is never gapped but repeats no sooner than 5 s; "Tracking" is deduped', () => {
+      expect(
+        speak([
+          { e: { type: 'holdEntered', count: 1 }, t: 0 },
+          { e: { type: 'faceLost' }, t: 100 }, // inside the gap — still said
+          { e: { type: 'faceLost' }, t: 3000 }, // inside its 5 s cooldown
+          { e: { type: 'faceLost' }, t: 5200 },
+        ]),
+      ).toEqual(['Hold', "Can't see you", "Can't see you"]);
+      expect(
+        speak([
+          { e: { type: 'faceFound' }, t: 0 },
+          { e: { type: 'faceFound' }, t: 1000 }, // inside the 1.2 s dedup
+          { e: { type: 'faceFound' }, t: 1300 },
+        ]),
+      ).toEqual(['Tracking', 'Tracking']);
+    });
+
+    it('the hint repeats no sooner than every 20 s', () => {
+      const hint: CueEvent = { type: 'holdStillHint' };
+      expect(
+        speak([
+          { e: hint, t: 0 },
+          { e: hint, t: 19_000 },
+          { e: hint, t: 20_000 },
+        ]),
+      ).toEqual(['Hold still to set neutral', 'Hold still to set neutral']);
+    });
+
+    it('the Start queue says "Neutral set" then "Get ready", both at once', () => {
+      expect(
+        speak([
+          { e: { type: 'neutralSet' }, t: 0 },
+          { e: { type: 'getReady' }, t: 0 },
+        ]),
+      ).toEqual(['Neutral set', 'Get ready']);
+    });
+
+    it('mirrors every cue on the stage except counts and the joint-position prompts', () => {
+      expect(isMirrored(rep(1))).toBe(false);
+      expect(isMirrored(holdUp(1))).toBe(false);
+      expect(isMirrored({ type: 'repositionPrompt', sub: 'away' })).toBe(false);
+      expect(isMirrored(hold)).toBe(true);
+      expect(isMirrored({ type: 'faceLost' })).toBe(true);
+    });
   });
 
   it('is deterministic (pure): same inputs → same output', () => {

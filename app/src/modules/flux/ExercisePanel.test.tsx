@@ -60,6 +60,28 @@ describe('ExercisePanel', () => {
     expect(screen.getByText('Side B')).toBeTruthy();
     expect(screen.getByText('hold 4s to count')).toBeTruthy();
     expect(screen.getByText(/Keep steady — move only in this plane/)).toBeTruthy();
+    // The hold zone's mark on the bar: 45° of 60° (D36).
+    expect(screen.getByTestId('hold-zone-mark').style.left).toBe('75%');
+  });
+
+  it('romReps short of the hold zone asks for a little further; in it, times the hold', () => {
+    const def = getExercise('cervical-rotation');
+    const out = { ...initialState(def), zone: 'positive' } as ExerciseState;
+    const { unmount } = render(
+      <ExercisePanel def={def} sample={at({ yaw: 30 })} state={out} onControl={() => {}} />,
+    );
+    expect(screen.getByText('a little further')).toBeTruthy();
+    expect(screen.getByText('further')).toBeTruthy();
+    unmount();
+    panel(def, { ...out, inHoldZone: true, holdAccumSec: 1 } as ExerciseState, at({ yaw: 50 }));
+    expect(screen.getByText('hold at end range')).toBeTruthy();
+    expect(screen.getByText('3')).toBeTruthy();
+  });
+
+  it('romReps without a hold has no zone mark', () => {
+    const def = getExercise('eye-head-coordination');
+    panel(def, initialState(def));
+    expect(screen.queryByTestId('hold-zone-mark')).toBeNull();
   });
 
   it('romReps complete: Set complete + Again (new in Aperture)', async () => {
@@ -101,8 +123,9 @@ describe('ExercisePanel', () => {
   it('guidedHold: Start block, then HOLD / rest ring, rep count, drift warning', async () => {
     const def = getExercise('deep-neck-flexor');
     const onControl = panel(def, initialState(def));
-    expect(screen.getByText('10 reps · get into position, then start')).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: 'Start' }));
+    // Starts itself once the neutral is set (D41); the button is the override.
+    expect(screen.getByText('10 reps · starts on its own once your neutral is set')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Start now' }));
     expect(onControl).toHaveBeenCalledWith({ type: 'start' });
     render(
       <ExercisePanel
@@ -151,7 +174,7 @@ describe('ExercisePanel', () => {
         onControl={() => {}}
       />,
     );
-    expect(screen.getByText('30s · get into position, then start')).toBeTruthy();
+    expect(screen.getByText('30s · starts on its own once your neutral is set')).toBeTruthy();
     unmount();
     panel(def, {
       ...initialState(def),

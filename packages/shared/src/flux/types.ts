@@ -62,7 +62,9 @@ export interface RomRepsSpec {
   readonly exitDeg: number; // must return below this (exit < enter → hysteresis)
   readonly targetDeg: number; // goal excursion (drives the ring + reachedTarget)
   readonly reps: number; // per side if bilateral, else total
-  readonly holdSec?: number; // end-range hold per rep — a return before it's up doesn't count (D35); 0/undefined = none
+  // End-range hold per rep, timed only in the hold zone near the target (D36) — a return before it's up
+  // doesn't count (D35); 0/undefined = none.
+  readonly holdSec?: number;
 }
 
 // B. Hold at a (possibly multi-signal) target head position for holdSec.
@@ -136,8 +138,16 @@ export interface RomRepsState extends StateCommon {
   readonly repsNeg: number;
   readonly peakSum: number;
   readonly peakCount: number;
-  // Seconds held in the excursion this rep (for the end-range hold timer).
+  // Seconds held in the hold zone this rep (for the end-range hold timer).
   readonly holdAccumSec: number;
+  // In the hold zone this frame (D36); always false without holdSec.
+  readonly inHoldZone: boolean;
+  // "Further" pacing (D37): seconds still short of the zone, when it was last said, whether this
+  // excursion has had one, and how long this excursion has run without reaching the zone.
+  readonly stillShortSec: number;
+  readonly lastFurtherAt: number;
+  readonly furtherSaid: boolean;
+  readonly excursionSec: number;
   // True while the head is tilting/nodding off the exercise's plane.
   readonly compensating: boolean;
   readonly lastPostureWarnAt: number;
@@ -153,6 +163,11 @@ export interface HoldAtTargetState extends StateCommon {
   // has stayed out for a beat (`outSec`), so a one-frame edge flicker never says "Back into position".
   readonly brokenHeldSec: number;
   readonly outSec: number;
+  // Direction nudge pacing (D38): seconds still out of position, when a nudge (or a release or a
+  // broken hold, which share its cooldown) was last said, and whether this pause has had one.
+  readonly stillOutSec: number;
+  readonly lastNudgeAt: number;
+  readonly nudgeSaid: boolean;
 }
 
 export interface GuidedHoldState extends StateCommon {
@@ -207,6 +222,10 @@ export type ExerciseEvent =
     }
   // romReps with holdSec: the end-range hold time is up — the voice counts now; the rep counts on return.
   | { readonly type: 'holdReached'; readonly count: number } // repsPos + repsNeg + 1, the pending count
+  // romReps with holdSec: first frame in the hold zone this excursion — "Hold" (D36).
+  | { readonly type: 'holdEntered'; readonly count: number }
+  // romReps with holdSec: paused (or swung back) short of the hold zone — "Further" (D37).
+  | { readonly type: 'stoppedShort'; readonly shortDeg: number }
   | { readonly type: 'holdStarted'; readonly index: number }
   | {
       readonly type: 'holdCompleted';
@@ -217,8 +236,21 @@ export type ExerciseEvent =
   | { readonly type: 'positionLost' }
   // holdAtTarget: left the target after a meaningful hold; positionLost stays silent for flicker.
   | { readonly type: 'holdBroken'; readonly heldSec: number }
-  // romReps with holdSec: back below exitDeg before the hold was up — no rep (D35); said past 1 s held.
+  // romReps with holdSec: back below exitDeg before the hold was up — no rep (D35); said past 1 s held
+  // in the zone.
   | { readonly type: 'holdShort'; readonly heldSec: number }
+  // holdAtTarget: still and out of position — which way to move on the worst axis (D38). `toward` is
+  // relative to the target's own sign, so it holds whichever way the device's signs run.
+  | {
+      readonly type: 'nudge';
+      readonly axis: Axis;
+      readonly toward: 'more' | 'less';
+      readonly deg: number; // signed distance still to go (target − current)
+    }
+  // reposition: every sub-phase change, so the drill can be done eyes closed (D39).
+  | { readonly type: 'repositionPrompt'; readonly sub: RepositionState['sub'] }
+  // oscillation: the timed set began — "Go" (D39).
+  | { readonly type: 'setStarted' }
   | { readonly type: 'driftWarning'; readonly axis: Axis; readonly deg: number }
   | {
       readonly type: 'postureWarning'; // moving off-plane during a single-axis move

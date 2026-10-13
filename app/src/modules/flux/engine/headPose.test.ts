@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matrixToEuler, OneEuroFilter, RomTracker, relativeTo } from './headPose';
+import { matrixToEuler, OneEuroFilter, RomTracker, relativeTo, speedOf } from './headPose';
 
 // Column-major 4x4 rotation matrices (as MediaPipe hands them back).
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -53,6 +53,13 @@ describe('relativeTo', () => {
     const cur = { pitch: 5, yaw: 10, roll: -3 };
     const neutral = { pitch: 2, yaw: 4, roll: -1 };
     expect(relativeTo(cur, neutral)).toEqual({ pitch: 3, yaw: 6, roll: -2 });
+  });
+});
+
+describe('speedOf', () => {
+  it('is the 3D angular distance over the gap, and 0 with no previous pose', () => {
+    expect(speedOf({ pitch: 3, yaw: 4, roll: 0 }, { pitch: 0, yaw: 0, roll: 0 }, 0.5)).toBe(10);
+    expect(speedOf({ pitch: 3, yaw: 4, roll: 0 }, null, 0.5)).toBe(0);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, initialState } from './evaluate';
+import { evaluate, initialState, romHoldDeg } from './evaluate';
+import { EXERCISES } from '@aperture/shared/flux';
 import type {
   Euler,
   EvalControl,
@@ -34,6 +35,18 @@ function fold(
     const control: EvalControl | undefined =
       startAt === i ? { type: 'start' } : stopAt === i ? { type: 'stop' } : undefined;
     const r = evaluate(def, state, input, control);
+    state = r.state;
+    events.push(...r.events);
+  });
+  return { state, events };
+}
+
+// Like fold, but each frame carries its own face visibility.
+function foldFace(def: ExerciseDefinition, frames: [Euler, boolean][], fps = 30) {
+  let state = initialState(def);
+  const events: ExerciseEvent[] = [];
+  frames.forEach(([rel, faceVisible], i) => {
+    const r = evaluate(def, state, { rel, tSec: i / fps, faceVisible });
     state = r.state;
     events.push(...r.events);
   });
@@ -197,13 +210,19 @@ describe('romReps', () => {
 
     it('the next full hold still counts as rep one', () => {
       const { events } = fold(rom3, [N(0, 0), ...out(61), ...out(100)]);
-      expect(events.map((e) => e.type)).toEqual(['holdShort', 'holdReached', 'repCompleted']);
+      expect(events.map((e) => e.type)).toEqual([
+        'holdEntered',
+        'holdShort',
+        'holdEntered',
+        'holdReached',
+        'repCompleted',
+      ]);
       expect(of(events, 'holdReached')[0]?.count).toBe(1);
       expect(of(events, 'repCompleted')[0]).toMatchObject({ count: 1, holdReached: true });
     });
 
-    it('a sub-second excursion is silent (settling-in jitter); past a second it is said', () => {
-      expect(fold(rom3, [N(0, 0), ...out(25)]).events).toEqual([]); // ≈ 0.8 s
+    it('a sub-second hold is silent past "Hold" (settling-in jitter); past a second it is said', () => {
+      expect(fold(rom3, [N(0, 0), ...out(25)]).events.map((e) => e.type)).toEqual(['holdEntered']); // ≈ 0.8 s
       expect(of(fold(rom3, [N(0, 0), ...out(32)]).events, 'holdShort')).toHaveLength(1); // ≈ 1.03 s
     });
 
@@ -235,7 +254,7 @@ describe('romReps', () => {
         ...repeat(N(0, 12), 20), // easing off, still above exitDeg
         N(0, 0),
       ]);
-      expect(events.map((e) => e.type)).toEqual(['holdReached', 'repCompleted']);
+      expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdReached', 'repCompleted']);
       expect(of(events, 'repCompleted')[0]?.count).toBe(1);
     });
 
@@ -253,11 +272,106 @@ describe('romReps', () => {
     });
 
     it('once held, reachedTarget is purely the peak', () => {
-      const { events } = fold(rom3, [N(0, 0), ...out(100, 20)]);
+      const { events } = fold(rom3, [N(0, 0), ...out(100, 25)]); // in the 22.5° zone, short of 30°
       expect(of(events, 'repCompleted')[0]).toMatchObject({
         reachedTarget: false,
         holdReached: true,
       });
+    });
+  });
+
+  describe('hold zone, "Hold" and "Further" (D36, D37)', () => {
+    const rom3 = {
+      ...base,
+      id: 't-zone',
+      name: 't',
+      measurement: 'measured',
+      kind: 'romReps',
+      axis: 'yaw',
+      direction: 'positive',
+      enterDeg: 15,
+      exitDeg: 8,
+      targetDeg: 40, // zone 30°
+      reps: 10,
+      holdSec: 3,
+    } satisfies ExerciseDefinition;
+    // A ramp from `from` to `to` over n frames — moving, so never still.
+    const ramp = (from: number, to: number, n: number) =>
+      Array.from({ length: n }, (_, i) => N(0, from + ((to - from) * (i + 1)) / n));
+
+    it("the zone is 75 % of each hold exercise's target", () => {
+      const zones = (EXERCISES as readonly ExerciseDefinition[]).flatMap((d) =>
+        d.kind === 'romReps' && d.holdSec ? [[d.id, romHoldDeg(d)]] : [],
+      );
+      expect(zones).toEqual([
+        ['cervical-rotation', 45],
+        ['cervical-lateral-flexion', 30],
+        ['cervical-flexion', 33.75],
+        ['cervical-extension', 41.25],
+      ]);
+    });
+
+    it('a hold short of the zone is no rep and says "Further" once, not again on return', () => {
+      const { state, events } = fold(rom3, [N(0, 0), ...repeat(N(0, 20), 90), N(0, 0)]);
+      expect(events.map((e) => e.type)).toEqual(['stoppedShort']);
+      expect(of(events, 'stoppedShort')[0]?.shortDeg).toBeCloseTo(10, 5);
+      expect(state).toMatchObject({ repsPos: 0, holdAccumSec: 0 });
+    });
+
+    it('"Further" fires 0.6 s into the pause', () => {
+      const at = (n: number) =>
+        of(fold(rom3, [N(0, 0), ...repeat(N(0, 20), n)]).events, 'stoppedShort');
+      expect(at(18)).toHaveLength(0); // 17 frames still ≈ 0.57 s
+      expect(at(20)).toHaveLength(1);
+    });
+
+    it('a swing out and back that never paused or reached the zone says "Further" on return', () => {
+      const swing = [N(0, 0), ...ramp(0, 25, 40), ...ramp(25, 0, 40)]; // ≈ 1.4 s past 15°, moving
+      expect(fold(rom3, swing).events.map((e) => e.type)).toEqual(['stoppedShort']);
+      const quick = [N(0, 0), ...ramp(0, 25, 10), ...ramp(25, 0, 10)]; // ≈ 0.4 s — a twitch
+      expect(fold(rom3, quick).events).toEqual([]);
+    });
+
+    it('"Hold" fires once per excursion on entering the zone, before the count', () => {
+      const { events } = fold(rom3, [
+        N(0, 0),
+        ...repeat(N(0, 35), 30),
+        ...repeat(N(0, 25), 5), // a dip below the zone pauses the clock — no second "Hold"
+        ...repeat(N(0, 35), 80),
+        N(0, 0),
+      ]);
+      expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdReached', 'repCompleted']);
+      expect(of(events, 'holdEntered')[0]?.count).toBe(1);
+    });
+
+    it('a dip below the zone pauses the hold clock rather than resetting it', () => {
+      const { events } = fold(rom3, [
+        N(0, 0),
+        ...repeat(N(0, 35), 61), // 2 s
+        ...repeat(N(0, 25), 15),
+        ...repeat(N(0, 35), 31), // + 1 s
+        N(0, 0),
+      ]);
+      expect(of(events, 'repCompleted')).toHaveLength(1);
+    });
+
+    it('is cooled down 3 s, and a pause that outlasts the cooldown still gets its one', () => {
+      const { events } = fold(rom3, [
+        N(0, 0),
+        ...repeat(N(0, 20), 20), // "Further" at ≈ 0.63 s
+        ...ramp(20, 24, 5),
+        ...repeat(N(0, 24), 30), // a second pause ≈ 1.6 s later: cooled down, quiet
+        ...ramp(24, 22, 5),
+        ...repeat(N(0, 22), 150), // a third, from ≈ 2 s: said once the 3 s are up, then not again
+      ]);
+      const further = of(events, 'stoppedShort');
+      expect(further).toHaveLength(2);
+    });
+
+    it('nothing without a hold: no zone, no "Hold", no "Further"', () => {
+      const flex = { ...rom3, id: 't-zone-none', holdSec: undefined } satisfies ExerciseDefinition;
+      const { events } = fold(flex, [N(0, 0), ...repeat(N(0, 20), 90), N(0, 0)]);
+      expect(events.map((e) => e.type)).toEqual(['repCompleted']);
     });
   });
 
@@ -280,7 +394,7 @@ describe('romReps', () => {
     it('fires once per excursion, before the return, with the pending count', () => {
       const { events } = fold(holdRom, [N(0, 0), ...repeat(N(0, 40), 60), N(0, 0)]);
       expect(of(events, 'holdReached')).toEqual([{ type: 'holdReached', count: 1 }]);
-      expect(events.map((e) => e.type)).toEqual(['holdReached', 'repCompleted']);
+      expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdReached', 'repCompleted']);
       expect(of(events, 'repCompleted')[0]).toMatchObject({ holdReached: true, count: 1 });
     });
 
@@ -466,6 +580,65 @@ describe('holdAtTarget', () => {
     expect(of(events, 'holdCompleted')).toHaveLength(0);
   });
 
+  describe('direction nudges (D38)', () => {
+    const two = { ...stretch, id: 't-nudge', reps: 2 } satisfies ExerciseDefinition;
+    const nudges = (rels: Euler[], def: ExerciseDefinition = two) =>
+      of(fold(def, rels).events, 'nudge');
+
+    it('fires after 0.8 s still out of position, once per pause', () => {
+      expect(nudges(repeat(N(0, 0, 0), 24))).toEqual([]); // ≈ 0.77 s
+      expect(nudges(repeat(N(0, 0, 0), 26))).toEqual([
+        { type: 'nudge', axis: 'roll', toward: 'more', deg: 28 },
+      ]);
+      expect(nudges(repeat(N(0, 0, 0), 300))).toHaveLength(1); // a 10 s pause: still just one
+    });
+
+    it('says "less" past the target, relative to the target\'s own sign (side B mirrors)', () => {
+      expect(nudges(repeat(N(0, 0, 45), 30))[0]).toMatchObject({ toward: 'less', deg: -17 });
+      const sideB = { ...two, id: 't-nudge-b', target: { roll: -28 } } satisfies ExerciseDefinition;
+      expect(nudges(repeat(N(0, 0, 0), 30), sideB)[0]).toMatchObject({ toward: 'more' });
+      expect(nudges(repeat(N(0, 0, -45), 30), sideB)[0]).toMatchObject({ toward: 'less' });
+    });
+
+    it('names the axis furthest outside its tolerance', () => {
+      const multi = {
+        ...two,
+        id: 't-nudge-multi',
+        target: { yaw: 30, pitch: 20 },
+        toleranceDeg: 14,
+      } satisfies ExerciseDefinition;
+      expect(nudges(repeat(N(20, 0, 0), 30), multi)[0]).toMatchObject({ axis: 'yaw', deg: 30 });
+      expect(nudges(repeat(N(0, 30, 0), 30), multi)[0]).toMatchObject({ axis: 'pitch', deg: 20 });
+    });
+
+    it('waits 4 s after a release before nudging again', () => {
+      const after = (outFrames: number) =>
+        nudges([...repeat(N(0, 0, 28), 31), ...repeat(N(0, 0, 0), outFrames)]);
+      expect(after(90)).toEqual([]); // 3 s out, still: inside the cooldown
+      expect(after(150)).toHaveLength(1); // the same pause, past 4 s
+    });
+
+    it('waits 4 s after "Back into position"', () => {
+      const long = { ...two, id: 't-nudge-long', holdSec: 3 } satisfies ExerciseDefinition;
+      const run = (outFrames: number) =>
+        fold(long, [...repeat(N(0, 0, 28), 45), ...repeat(N(0, 0, 0), outFrames)]).events;
+      expect(of(run(100), 'holdBroken')).toHaveLength(1);
+      expect(of(run(100), 'nudge')).toEqual([]);
+      expect(of(run(150), 'nudge')).toHaveLength(1);
+    });
+
+    it('a face dropout mid-hold is neither a broken hold nor a nudge (D43)', () => {
+      const long = { ...two, id: 't-nudge-face', holdSec: 3 } satisfies ExerciseDefinition;
+      const { events } = foldFace(long, [
+        ...repeat(N(0, 0, 28), 45).map((r): [Euler, boolean] => [r, true]),
+        ...repeat(N(0, 0, 28), 60).map((r): [Euler, boolean] => [r, false]),
+      ]);
+      expect(of(events, 'positionLost')).toHaveLength(1);
+      expect(of(events, 'holdBroken')).toEqual([]);
+      expect(of(events, 'nudge')).toEqual([]);
+    });
+  });
+
   it('requires leaving the zone between reps', () => {
     const twoRep = {
       ...stretch,
@@ -576,6 +749,30 @@ describe('reposition', () => {
     expect(state.phase).toBe('complete');
   });
 
+  it('speaks each step — away, back, still — and not the far-end turnaround (D39)', () => {
+    const two = { ...jps, id: 't-jps-2', reps: 2 } satisfies ExerciseDefinition;
+    const ramp = (from: number, to: number, n: number) =>
+      Array.from({ length: n }, (_, i) => N(0, from + ((to - from) * (i + 1)) / n));
+    const trial = [
+      ...ramp(0, 32, 20), // out past 25° → "Back to neutral"
+      ...repeat(N(0, 32, 0), 10), // a pause at the far end: settling there, silent
+      ...ramp(32, 2, 20), // back
+      ...repeat(N(0, 2, 0), 40), // still near neutral → "Hold still", then the trial
+    ];
+    const { events } = fold(two, [N(0), ...trial, ...trial], { startAt: 0 });
+    expect(events.map((e) => (e.type === 'repositionPrompt' ? e.sub : e.type))).toEqual([
+      'away',
+      'returning',
+      'settling',
+      'trialCompleted',
+      'away',
+      'returning',
+      'settling',
+      'trialCompleted',
+      'setCompleted',
+    ]);
+  });
+
   it('needs a real excursion first (no trial without moving away)', () => {
     const { events } = fold(jps, repeat(N(0, 2, 0), 50), { startAt: 0 });
     expect(of(events, 'trialCompleted')).toHaveLength(0);
@@ -604,6 +801,8 @@ describe('oscillation', () => {
       N(0, 20 * Math.sin(2 * Math.PI * f * (i / fps))),
     );
     const { state, events } = fold(gaze, rels, { startAt: 0, fps });
+    expect(events[0]).toEqual({ type: 'setStarted' }); // "Go" (D39)
+    expect(of(events, 'setStarted')).toHaveLength(1);
     const cycles = of(events, 'cycleCompleted');
     expect(cycles.length).toBeGreaterThanOrEqual(2);
     // peak-to-peak of a ±20° sine ≈ 40°

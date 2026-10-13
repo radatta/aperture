@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
@@ -87,14 +87,14 @@ describe('Flux exercise stage', () => {
   it('calibration: hint until set, refusal without a face, then Re-calibrate', async () => {
     const s = await stage('/flux/cervical-rotation');
     await running(s);
-    expect(screen.getByText(/to zero the angles/)).toBeTruthy();
+    expect(screen.getByText(/your neutral sets itself/)).toBeTruthy();
     await s.user.click(screen.getByRole('button', { name: 'Calibrate neutral' }));
     expect(s.fake().calls).toContain('calibrate');
     act(() => s.fake().calibrated(false));
     expect(screen.getByText('Face the camera to calibrate')).toBeTruthy();
     act(() => s.fake().calibrated(true));
     expect(screen.getByText('Neutral set')).toBeTruthy();
-    expect(screen.queryByText(/to zero the angles/)).toBeNull();
+    expect(screen.queryByText(/your neutral sets itself/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Re-calibrate' })).toBeTruthy();
     expect(screen.getByText(/Range since calibrating/)).toBeTruthy();
   });
@@ -221,8 +221,54 @@ describe('Flux exercise stage', () => {
     const s = await stage('/flux/chin-tuck');
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
-    expect(screen.getByText('Sets this session · 1')).toBeTruthy();
+    expect(screen.getByText('Sets this session · 1 of 2')).toBeTruthy();
     expect(screen.getByText('Set complete. Well done.')).toBeTruthy();
+  });
+});
+
+describe('Flux session, hands free (D40–D42)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('the sets stepper sits beside Start camera: 1–5, two by default, gone once started', async () => {
+    const s = await stage('/flux/chin-tuck');
+    const group = screen.getByRole('group', { name: 'Sets this session' });
+    expect(within(group).getByText('2 sets')).toBeTruthy();
+    await s.user.click(screen.getByRole('button', { name: 'Fewer sets' }));
+    expect(within(group).getByText('1 set')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fewer sets' })).toHaveProperty('disabled', true);
+    for (let i = 0; i < 5; i++)
+      await s.user.click(screen.getByRole('button', { name: 'More sets' }));
+    expect(within(group).getByText('5 sets')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'More sets' })).toHaveProperty('disabled', true);
+    await s.user.click(screen.getByRole('button', { name: 'Start camera' }));
+    expect(screen.queryByRole('group', { name: 'Sets this session' })).toBeNull();
+  });
+
+  it('a timed exercise starts itself 3 s after the neutral sets itself', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = await stage('/flux/deep-neck-flexor');
+    await running(s);
+    act(() => s.fake().calibrated(true, true));
+    expect(screen.getByText('Get ready')).toBeTruthy();
+    expect(s.fake().calls).not.toContain('control:start');
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(s.fake().calls).toContain('control:start');
+  });
+
+  it('a sided stretch switches sides after the rest, then ends itself after the last set', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = await stage('/flux/upper-trap-stretch');
+    await running(s);
+    const done = { type: 'setCompleted', summary: { count: 3 } } as const;
+    act(() => s.fake().event(done));
+    expect(screen.getByRole('button', { name: 'Side A', pressed: true })).toBeTruthy();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByRole('button', { name: 'Side B', pressed: true })).toBeTruthy();
+    expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'b' });
+    expect(screen.getByText('Other side')).toBeTruthy();
+    act(() => s.fake().event(done));
+    expect(s.fake().calls.at(-1)).toBe('stop');
+    expect(await screen.findByRole('button', { name: 'Start camera' })).toBeTruthy();
   });
 });
 
@@ -264,6 +310,16 @@ describe('Flux Roll tie', () => {
     await waitFor(async () => expect((await s.rep())?.status).toBe('done'));
     expect((await s.rep())?.actualAccruedMin).toBe(12);
     expect(await screen.findByText(/Neck rep done today/)).toBeTruthy();
+  });
+
+  it('a session that ends itself offers the DoneForm with no Stop tap', async () => {
+    const s = await linked(true);
+    await screen.findByText(/your first finished set starts it/);
+    await s.user.click(screen.getByRole('button', { name: 'Fewer sets' }));
+    await running(s);
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
+    expect(await screen.findByText("Log today's Neck rep")).toBeTruthy();
+    expect(s.fake().calls.at(-1)).toBe('stop');
   });
 
   it('a later session with no set offers nothing, even after an earlier session logged sets', async () => {

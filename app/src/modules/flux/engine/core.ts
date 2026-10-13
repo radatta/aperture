@@ -12,18 +12,32 @@ import {
   type ExerciseState,
 } from '@aperture/shared/flux';
 import { evaluate, initialState } from './evaluate';
-import { matrixToEuler, OneEuroFilter, RomTracker, relativeTo, ZERO } from './headPose';
+import {
+  matrixToEuler,
+  OneEuroFilter,
+  RomTracker,
+  relativeTo,
+  speedOf,
+  STILL_SPEED,
+  ZERO,
+} from './headPose';
 import type { Sample } from './protocol';
 import { mirrorForSide, type Side } from './side';
 
 // Post exercise-state updates at ~15fps (events are never throttled).
 const STATE_INTERVAL_SEC = 1 / 15;
+// With no neutral yet, a face held still this long sets one by itself (D40) — no tap to calibrate.
+const AUTO_CAL_STILL_SEC = 2;
+// A frame gap counted toward stillness at most this long (a paused tab resuming).
+const MAX_STILL_DT = 0.5;
 
 export interface FrameResult {
   readonly sample: Sample;
   readonly events: readonly ExerciseEvent[];
   // Present only when the 15 Hz state throttle lets one through.
   readonly state?: ExerciseState;
+  // The neutral this frame set by itself (D40); the caller reports it like a Calibrate.
+  readonly autoCalibrated?: Euler;
 }
 
 export interface ControlResult {
@@ -40,6 +54,7 @@ export class FluxCore {
   private lastStatePostSec = 0;
   private fps = 0;
   private faceVisible = false;
+  private stillSec = 0; // a visible face held still, while there's no neutral
   private def: ExerciseDefinition | null = null;
   private exerciseState: ExerciseState | null = null;
   private readonly filters = {
@@ -69,6 +84,8 @@ export class FluxCore {
     this.lastTs = tMs;
     const tSec = tMs / 1000;
 
+    const hadFace = this.faceVisible;
+    const prevSmoothed = this.lastSmoothed;
     this.faceVisible = matrix !== null;
     if (matrix) {
       const raw = matrixToEuler(matrix);
@@ -86,10 +103,24 @@ export class FluxCore {
       }
     }
 
-    // No face holds the last pose (flux parity) — only hold/guided kinds check faceVisible.
-    const rel = relativeTo(this.lastSmoothed, this.neutral);
     const dt = tSec - (this.lastFrameSec || tSec);
     this.lastFrameSec = tSec;
+
+    // No neutral yet: hold still with your face in view and it sets itself (D40).
+    let autoCalibrated: Euler | undefined;
+    if (!this.neutral) {
+      const stillDt = Math.min(dt, MAX_STILL_DT);
+      const still =
+        hadFace &&
+        this.faceVisible &&
+        speedOf(this.lastSmoothed, prevSmoothed, stillDt) < STILL_SPEED;
+      this.stillSec = still ? this.stillSec + stillDt : 0;
+      if (this.stillSec >= AUTO_CAL_STILL_SEC && this.calibrate())
+        autoCalibrated = { ...this.lastSmoothed };
+    }
+
+    // No face holds the last pose (flux parity) — only hold/guided kinds check faceVisible.
+    const rel = relativeTo(this.lastSmoothed, this.neutral);
     // ~1 s EWMA instead of flux's per-frame 1/dt, so the badge doesn't flicker.
     if (dt > 0) this.fps += (1 / dt - this.fps) * Math.min(1, dt);
 
@@ -102,12 +133,18 @@ export class FluxCore {
       tSec,
     };
 
-    if (!this.def || !this.exerciseState) return { sample, events: [] };
-    const r = evaluate(this.def, this.exerciseState, { rel, tSec, faceVisible: this.faceVisible });
+    const auto = autoCalibrated && { autoCalibrated };
+    if (!this.def || !this.exerciseState) return { sample, events: [], ...auto };
+    // The evaluator waits for a neutral (D40): raw angles would count "Hold" and reps against wherever
+    // the head happened to point. The state still posts at the throttle, so the panel shows "0 / 20".
+    const r = this.neutral
+      ? evaluate(this.def, this.exerciseState, { rel, tSec, faceVisible: this.faceVisible })
+      : { state: this.exerciseState, events: [] };
     this.exerciseState = r.state;
-    if (tSec - this.lastStatePostSec < STATE_INTERVAL_SEC) return { sample, events: r.events };
+    if (tSec - this.lastStatePostSec < STATE_INTERVAL_SEC)
+      return { sample, events: r.events, ...auto };
     this.lastStatePostSec = tSec;
-    return { sample, events: r.events, state: r.state };
+    return { sample, events: r.events, state: r.state, ...auto };
   }
 
   // Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks.

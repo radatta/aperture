@@ -23,7 +23,7 @@ export interface FakeControls {
   ready(delegate?: Delegate, fallback?: boolean): void;
   fail(stage: ErrorStage, message: string): void;
   sample(partial?: Partial<Sample>): void;
-  calibrated(ok: boolean): void;
+  calibrated(ok: boolean, auto?: boolean): void;
   state(state: ExerciseState): void;
   event(event: ExerciseEvent): void;
   pause(): void;
@@ -67,6 +67,7 @@ export function createFakeEngine(opts: { auto?: boolean } = {}): {
     const r = core.frame(eulerToMatrix(pose), tMs);
     if (!r) return;
     emit({ type: 'sample', sample: r.sample });
+    if (r.autoCalibrated) emit({ type: 'calibrated', ok: true, auto: true });
     for (const event of r.events) emit({ type: 'exerciseEvent', event });
     if (r.state) emit({ type: 'exerciseState', state: r.state });
     drawDot(canvas, pose);
@@ -152,7 +153,7 @@ export function createFakeEngine(opts: { auto?: boolean } = {}): {
     },
     fail: (stage, message) => emit({ type: 'error', stage, message }),
     sample: (partial) => emit({ type: 'sample', sample: { ...ZERO_SAMPLE, ...partial } }),
-    calibrated: (ok) => emit({ type: 'calibrated', ok }),
+    calibrated: (ok, auto) => emit({ type: 'calibrated', ok, ...(auto && { auto: true }) }),
     state: (state) => emit({ type: 'exerciseState', state }),
     event: (event) => emit({ type: 'exerciseEvent', event }),
     pause: () => emit({ type: 'paused' }),
@@ -185,9 +186,15 @@ function excursion(t: number, holdSec: number, rest = 0.75): { f: number; cycle:
 
 const jitter = (t: number): number => 0.4 * Math.sin(7.3 * t);
 
+// The head holds still this long first, so the core sets its neutral by itself (D40) and the
+// headless review never needs a Calibrate tap.
+export const STILL_LEAD_SEC = 2.5;
+
 // A head that performs `def` (exported for tests). Calibrate first: neutral is the zero pose.
-export function syntheticPose(def: ExerciseDefinition | null, t: number): Euler {
-  const still: Euler = { pitch: jitter(t), yaw: jitter(t + 1), roll: jitter(t + 2) };
+export function syntheticPose(def: ExerciseDefinition | null, tLead: number): Euler {
+  const still: Euler = { pitch: jitter(tLead), yaw: jitter(tLead + 1), roll: jitter(tLead + 2) };
+  if (tLead < STILL_LEAD_SEC) return still;
+  const t = tLead - STILL_LEAD_SEC;
   if (!def) {
     // Library default: a slow yaw sweep, so the overlay and readout move.
     return { ...still, yaw: 40 * Math.sin((2 * Math.PI * t) / 6) };

@@ -27,6 +27,8 @@ export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null
     const done = state.phase === 'complete';
     const holdSec = def.holdSec ?? 0;
     const inExcursion = state.zone !== 'neutral';
+    // The clock runs only in the hold zone near the target (D36); short of it the ring says go further.
+    const holding = inExcursion && (state.inHoldZone || state.holdAccumSec > 0);
     return {
       count: {
         n: state.repsPos + state.repsNeg,
@@ -36,9 +38,13 @@ export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null
       ring:
         holdSec > 0 && !done
           ? {
-              progress: inExcursion ? Math.min(1, state.holdAccumSec / holdSec) : 0,
-              label: inExcursion ? secs(holdSec - state.holdAccumSec) : 'hold',
-              tone: inExcursion && state.holdAccumSec >= holdSec ? 'gold' : 'teal',
+              progress: holding ? Math.min(1, state.holdAccumSec / holdSec) : 0,
+              label: holding
+                ? secs(holdSec - state.holdAccumSec)
+                : inExcursion
+                  ? 'further'
+                  : 'hold',
+              tone: holding && state.holdAccumSec >= holdSec ? 'gold' : 'teal',
             }
           : null,
       note: null,

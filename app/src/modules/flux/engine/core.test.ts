@@ -103,6 +103,65 @@ describe('FluxCore', () => {
     expect(reached('b')).toBe(true);
   });
 
+  describe('auto-calibrate (D40)', () => {
+    // Frames at 30 fps from t, one matrix each; returns every result and the last ms.
+    const run = (core: FluxCore, ms: (number[] | null)[], t0 = 0) => {
+      let t = t0;
+      const out = ms.map((m) => core.frame(m, (t += 1000 / 30)));
+      return { out, t };
+    };
+    const hold = (m: number[] | null, n: number) => Array.from({ length: n }, () => m);
+
+    it('sets the neutral once a visible face has held still for 2 s, once', () => {
+      const core = new FluxCore();
+      const { out } = run(core, hold(yaw(12), 90));
+      const auto = out.flatMap((r, i) => (r?.autoCalibrated ? [i] : []));
+      expect(auto).toHaveLength(1);
+      expect(auto[0]).toBeGreaterThanOrEqual(60); // 2 s at 30 fps
+      expect(auto[0]).toBeLessThan(64);
+      expect(out[auto[0] ?? 0]?.autoCalibrated?.yaw).toBeCloseTo(12, 0);
+      expect(core.calibrated).toBe(true);
+      expect(out.at(-1)?.sample.rel.yaw).toBeCloseTo(0, 1);
+    });
+
+    it('not while moving, nor without a face, and a dropout restarts the clock', () => {
+      const moving = new FluxCore();
+      run(
+        moving,
+        Array.from({ length: 120 }, (_, i) => yaw(30 * Math.sin(i / 5))),
+      );
+      expect(moving.calibrated).toBe(false);
+      const faceless = new FluxCore();
+      run(faceless, hold(null, 120));
+      expect(faceless.calibrated).toBe(false);
+      const dropout = new FluxCore();
+      run(dropout, [...hold(yaw(0), 45), null, ...hold(yaw(0), 45)]);
+      expect(dropout.calibrated).toBe(false); // 1.5 s + 1.5 s, never 2 s in a row
+      run(dropout, hold(yaw(0), 30), 5000);
+      expect(dropout.calibrated).toBe(true);
+    });
+
+    it('the evaluator waits for the neutral, while its state still posts at the throttle', () => {
+      const core = new FluxCore();
+      core.selectExercise('cervical-rotation', 'a');
+      // A raw 50° turn before any neutral: no "Hold", no rep, no count.
+      const { out, t } = run(core, [
+        ...hold(yaw(50), 40),
+        ...hold(yaw(0), 10),
+        ...hold(yaw(50), 10),
+      ]);
+      expect(out.flatMap((r) => r?.events ?? [])).toEqual([]);
+      expect(out.filter((r) => r?.state).length).toBeGreaterThan(20);
+      expect(core.calibrated).toBe(false);
+      // Then held still to a neutral, a real rep counts.
+      const after = run(core, [...hold(yaw(0), 70), ...hold(yaw(55), 160), ...hold(yaw(0), 30)], t);
+      expect(core.calibrated).toBe(true);
+      const types = after.out.flatMap((r) => r?.events ?? []).map((e) => e.type);
+      expect(types).toContain('holdEntered');
+      expect(types).toContain('repCompleted');
+    });
+  });
+
   it('applies start/stop controls between frames', () => {
     const core = new FluxCore();
     core.selectExercise('deep-neck-flexor', 'a');

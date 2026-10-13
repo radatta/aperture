@@ -17,11 +17,15 @@ import type { Delegate, ErrorStage, Sample } from './engine/protocol';
 import type { Side } from './engine/side';
 import { readForcedCpu, readGpuBootMark } from './prefs';
 import type { VoiceControl } from './useVoice';
-import { initialCueState, reduceCue, type CueState } from './voice/cues';
+import { initialCueState, isMirrored, reduceCue, type CueEvent, type CueState } from './voice/cues';
 
 // The Flux stage's state machine over a FluxEngine — what flux-track's route held in a dozen useStates,
 // with a live error and a paused state it never had. Only derived numbers reach React: samples are
 // throttled to ~16 Hz for display, exercise state arrives at ~15 Hz from the engine.
+//
+// Once Start is tapped the session runs itself, eyes and hands free (the guiding principle): the neutral
+// sets itself (D40), timed kinds start on their own (D41), sets follow each other after a rest and the
+// session ends itself (D42), and a lost face is said out loud (D43).
 
 export type FluxStatus = 'idle' | 'loading' | 'running' | 'paused' | 'error';
 
@@ -55,8 +59,25 @@ export interface FluxEngineOptions {
   // The contraindication gate: until acknowledged the engine runs with no exercise selected.
   readonly acknowledged: boolean;
   readonly voice: VoiceControl;
+  readonly sets?: number; // sets this session, set before Start (D42); DEFAULT_SETS
   readonly onSetCompleted?: (set: FluxSetDraft, index: number) => void;
+  // The rest is over and set `index` (0-based) is about to start — a sided stretch flips its side here.
+  readonly onNextSet?: (index: number) => void;
+  // The last set finished and the session stopped itself — the same summary Stop returns.
+  readonly onSessionEnd?: (summary: SessionSummary) => void;
 }
+
+export const DEFAULT_SETS = 2;
+// Kinds that wait for a Start: the session starts them itself, after a lead-in (D41).
+const READY_KINDS: ReadonlySet<ExerciseKind> = new Set(['guidedHold', 'reposition', 'oscillation']);
+const SET_LEAD_MS = 3000; // "Get ready" → the set starts
+const SET_REST_MS = 30_000; // between sets (D42)
+const FACE_LOST_SEC = 1; // gone this long → "Can't see you" (D43)
+const FACE_BACK_SEC = 0.5; // back this long → "Tracking"
+const HOLD_STILL_HINT_SEC = 20; // a visible face with no neutral this long → the hint (D40)
+
+// A pending automatic step, kept so a pause can cancel it and Resume can re-arm it.
+type AutoStep = { readonly kind: 'start' } | { readonly kind: 'rest'; readonly index: number };
 
 const DISPLAY_MS = 60;
 const NOTICE_MS = 2500;
@@ -118,12 +139,80 @@ export function useFluxEngine(opts: FluxEngineOptions) {
 
   const noticeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const cueTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The session's automatic steps (D41, D42): one timer, and what it will do.
+  const autoTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const autoStep = useRef<AutoStep | null>(null);
+  const planDoneRef = useRef(0); // sets of this exercise done this session, toward opts.sets
+  const startOnCalibrate = useRef(false); // "Start now" tapped before there was a neutral
+  // Face-presence cues and the calibration hint, timed in worker seconds (sample.tSec).
+  const face = useRef({
+    seen: false,
+    lostSince: null as number | null,
+    lostSaid: false,
+    backSince: null as number | null,
+    hintSince: null as number | null,
+  });
 
   const flash = useCallback((text: string) => {
     setNotice(text);
     clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(null), NOTICE_MS);
   }, []);
+
+  // Reduce, speak, and mirror on the stage (a muted phone still shows it) — every phrase goes through here.
+  const say = useCallback((cue: CueEvent) => {
+    const r = reduceCue(cueRef.current, cue, performance.now());
+    cueRef.current = r.state;
+    if (!r.utterance) return;
+    optsRef.current.voice.speak(r.utterance);
+    if (!isMirrored(cue)) return;
+    setLastCue(r.utterance.text);
+    clearTimeout(cueTimer.current);
+    cueTimer.current = setTimeout(() => setLastCue(null), CUE_MS);
+  }, []);
+
+  const clearAuto = useCallback(() => {
+    clearTimeout(autoTimer.current);
+    autoTimer.current = undefined;
+    autoStep.current = null;
+  }, []);
+
+  // Run (or re-arm, after a pause) an automatic step: the lead-in before a timed set starts, or the rest
+  // before the next set.
+  const arm = useCallback(
+    (step: AutoStep) => {
+      clearAuto();
+      autoStep.current = step;
+      const startSet = () => engine.control({ type: 'start' });
+      if (step.kind === 'start') {
+        autoTimer.current = setTimeout(() => {
+          autoStep.current = null;
+          startSet();
+        }, SET_LEAD_MS);
+        return;
+      }
+      autoTimer.current = setTimeout(() => {
+        autoStep.current = null;
+        const o = optsRef.current;
+        o.onNextSet?.(step.index);
+        say({ type: 'nextSet', number: step.index + 1, otherSide: o.side !== null });
+        // Self-paced kinds just need the finished set cleared; timed ones get the lead-in.
+        if (READY_KINDS.has(o.kind)) arm({ kind: 'start' });
+        else startSet();
+      }, SET_REST_MS);
+    },
+    [engine, clearAuto, say],
+  );
+
+  const resetFace = () => {
+    face.current = {
+      seen: false,
+      lostSince: null,
+      lostSaid: false,
+      backSince: null,
+      hintSince: null,
+    };
+  };
 
   useEffect(() => {
     const onEvent = (e: FluxEngineEvent) => {
@@ -140,6 +229,17 @@ export function useFluxEngine(opts: FluxEngineOptions) {
             e.delegate === 'CPU' && !e.fallback && readGpuBootMark() && !readForcedCpu(),
           );
           setStartRef.current = performance.now();
+          resetFace(); // a new worker restarts the sample clock
+          // A fallback restarts a timed set from ready (D26): lead it in again, unless a step is pending.
+          if (
+            e.fallback &&
+            latest.current.calibrated &&
+            READY_KINDS.has(o.kind) &&
+            !autoStep.current
+          ) {
+            say({ type: 'getReady' });
+            arm({ kind: 'start' });
+          }
           // A worker that comes up while the camera is paused (backgrounded mid-download, a fallback)
           // leaves the stage paused — Resume is still the way back.
           if (pausedRef.current) return;
@@ -147,6 +247,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return setStatus('running');
         case 'sample': {
           latest.current.sample = e.sample;
+          if (readyRef.current && !pausedRef.current) watchFace(e.sample);
           const now = performance.now();
           if (now - lastDisplayRef.current < DISPLAY_MS) return;
           lastDisplayRef.current = now;
@@ -156,23 +257,28 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           if (!e.ok) return flash('Face the camera to calibrate');
           latest.current.calibrated = true;
           setCalibrated(true);
-          return flash('Neutral set');
+          face.current.hintSince = null;
+          // Spoken and mirrored as a cue (not a notice), so a "Get ready" right after it shows too; it
+          // supersedes a "Face the camera" refusal still on screen.
+          setNotice(null);
+          say({ type: 'neutralSet' });
+          // Calibrating resets the set, so a timed kind starts itself again (D41) — at once if
+          // "Start now" was what asked for the neutral.
+          if (!READY_KINDS.has(o.kind) || !o.acknowledged) return;
+          if (startOnCalibrate.current) {
+            startOnCalibrate.current = false;
+            clearAuto();
+            return engine.control({ type: 'start' });
+          }
+          say({ type: 'getReady' });
+          return arm({ kind: 'start' });
         case 'exerciseState':
           return setExState(e.state);
         case 'exerciseEvent': {
-          const r = reduceCue(cueRef.current, e.event, performance.now());
-          cueRef.current = r.state;
-          if (r.utterance) {
-            o.voice.speak(r.utterance);
-            // Mirrored on the HUD, so a muted phone (silent switch, ducking) still shows the cue —
-            // except counts (repCompleted, holdReached), the only unmirrored cues: the readout's number
-            // (or, at the hold, its ring turning gold) already says it. "Hold longer" is mirrored.
-            if (e.event.type !== 'repCompleted' && e.event.type !== 'holdReached') {
-              setLastCue(r.utterance.text);
-              clearTimeout(cueTimer.current);
-              cueTimer.current = setTimeout(() => setLastCue(null), CUE_MS);
-            }
-          }
+          const sets = Math.max(1, o.sets ?? DEFAULT_SETS);
+          const last = e.event.type === 'setCompleted' && planDoneRef.current + 1 >= sets;
+          // The last set says "Session complete." in place of "Set complete" (D42).
+          say(last ? { type: 'sessionComplete' } : e.event);
           if (e.event.type !== 'setCompleted') return;
           const { summary } = e.event;
           const now = performance.now();
@@ -194,19 +300,55 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           const index = setsRef.current++;
           setSessionSets((s) => [...s, set]);
           o.onSetCompleted?.(set, index);
-          return;
+          const done = ++planDoneRef.current;
+          if (!last) return arm({ kind: 'rest', index: done });
+          // Ends itself: the camera goes off with no tap, and the queued "Session complete." still plays.
+          return o.onSessionEnd?.(endRef.current(false));
         }
-        case 'paused':
+        case 'paused': {
           pausedRef.current = true;
           pauseClock(clock.current);
+          // Hold the pending step; Resume re-arms it from the start.
+          const step = autoStep.current;
+          clearAuto();
+          autoStep.current = step;
           return setStatus('paused');
+        }
         case 'error':
           pauseClock(clock.current);
           readyRef.current = false;
+          clearAuto();
           engine.stop();
           setError({ stage: e.stage, message: e.message });
           return setStatus('error');
       }
+    };
+    // "Can't see you" after a second gone, "Tracking" once back; the calibration hint while uncalibrated.
+    const watchFace = (smp: Sample) => {
+      const f = face.current;
+      if (!smp.faceVisible) {
+        f.backSince = null;
+        f.hintSince = null;
+        if (!f.seen || f.lostSaid) return;
+        f.lostSince ??= smp.tSec;
+        if (smp.tSec - f.lostSince < FACE_LOST_SEC) return;
+        f.lostSaid = true;
+        return say({ type: 'faceLost' });
+      }
+      f.seen = true;
+      f.lostSince = null;
+      if (f.lostSaid) {
+        f.backSince ??= smp.tSec;
+        if (smp.tSec - f.backSince >= FACE_BACK_SEC) {
+          f.lostSaid = false;
+          f.backSince = null;
+          say({ type: 'faceFound' });
+        }
+      }
+      if (latest.current.calibrated) return;
+      f.hintSince ??= smp.tSec;
+      // The reducer paces repeats to every 20 s.
+      if (smp.tSec - f.hintSince >= HOLD_STILL_HINT_SEC) say({ type: 'holdStillHint' });
     };
     const off = engine.subscribe(onEvent);
     return () => {
@@ -214,8 +356,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       engine.stop();
       clearTimeout(noticeTimer.current);
       clearTimeout(cueTimer.current);
+      clearAuto();
     };
-  }, [engine, flash]);
+  }, [engine, flash, say, arm, clearAuto]);
 
   // Feed the engine the exercise only once safety is acknowledged; a fresh selection starts a fresh
   // cue history (no cooldowns leaking between exercises).
@@ -227,6 +370,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     setExState(null);
     engine.selectExercise(selected, side);
   }, [engine, selected, side]);
+  // A different exercise starts its own run of sets; a side flip between sets (onNextSet) doesn't.
+  useEffect(() => {
+    clearAuto();
+    planDoneRef.current = 0;
+    startOnCalibrate.current = false;
+  }, [selected, clearAuto]);
 
   const reset = useCallback(() => {
     setCalibrated(false);
@@ -250,22 +399,32 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       reset();
       setSessionSets([]);
       setsRef.current = 0;
+      planDoneRef.current = 0;
+      startOnCalibrate.current = false;
+      clearAuto();
+      resetFace();
       clock.current = { activeMs: 0, since: null };
       setStatus('loading');
       await engine.start(els);
     },
-    [engine, reset],
+    [engine, reset, clearAuto],
   );
 
-  const stop = useCallback((): SessionSummary => {
+  // `cancelVoice` false only when the session ends itself, so its last words aren't cut off.
+  function endSession(cancelVoice: boolean): SessionSummary {
     pauseClock(clock.current);
     const summary = { activeMs: clock.current.activeMs, sets: setsRef.current };
+    clearAuto();
+    startOnCalibrate.current = false;
     engine.stop();
-    optsRef.current.voice.cancel();
+    if (cancelVoice) optsRef.current.voice.cancel();
     reset();
     setStatus('idle');
     return summary;
-  }, [engine, reset]);
+  }
+  const endRef = useRef(endSession);
+  endRef.current = endSession;
+  const stop = useCallback((): SessionSummary => endRef.current(true), []);
 
   const resume = useCallback(async () => {
     optsRef.current.voice.prime();
@@ -274,8 +433,10 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       runClock(clock.current);
       setStatus('running');
     } else setStatus('loading'); // the model is still coming; `ready` will take it to running
+    resetFace();
+    if (autoStep.current) arm(autoStep.current);
     await engine.resume();
-  }, [engine]);
+  }, [engine, arm]);
 
   // Live active time, for the Roll strip while a session runs.
   const activeMs = useCallback(() => {
@@ -284,7 +445,23 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   }, []);
 
   const calibrate = useCallback(() => engine.calibrate(), [engine]);
-  const control = useCallback((c: EvalControl) => engine.control(c), [engine]);
+  // A tap is the override: it cancels any pending lead-in or rest. "Start now" with no neutral yet asks
+  // for one, and the set starts the moment it's set (now, or when auto-calibrate gets there).
+  const control = useCallback(
+    (c: EvalControl) => {
+      clearAuto();
+      if (
+        c.type === 'start' &&
+        !latest.current.calibrated &&
+        READY_KINDS.has(optsRef.current.kind)
+      ) {
+        startOnCalibrate.current = true;
+        return engine.calibrate();
+      }
+      engine.control(c);
+    },
+    [engine, clearAuto],
+  );
   const setForcedCpu = useCallback(
     (on: boolean) => {
       setFellBack(false);

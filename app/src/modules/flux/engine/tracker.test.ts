@@ -190,6 +190,17 @@ describe('FluxTracker', () => {
     expect(t.debug().fallbacks).toBe(1);
   });
 
+  it('forwards an automatic neutral and carries it into a CPU replacement (D40)', async () => {
+    const t = setup();
+    await t.start({ video, canvas: document.createElement('canvas') });
+    last().reply({ type: 'ready', delegate: 'GPU' });
+    const neutral = { pitch: 4, yaw: 5, roll: 6 };
+    last().reply({ type: 'calibrated', ok: true, neutral, auto: true });
+    expect(events).toContainEqual({ type: 'calibrated', ok: true, auto: true });
+    last().reply({ type: 'error', stage: 'detect', message: 'boom' });
+    expect(last().posted[0]).toEqual({ type: 'init', delegate: 'CPU', neutral, select: null });
+  });
+
   it('a CPU worker that fails is an error, not another fallback', async () => {
     const t = setup();
     t.setForcedCpu(true);

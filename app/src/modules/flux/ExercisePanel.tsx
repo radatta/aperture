@@ -4,6 +4,7 @@ import { Card } from '../../components/Card';
 import { CheckCircleIcon, PlayIcon, RotateIcon, WarningIcon } from '../../components/icons';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
+import { romHoldDeg } from './engine/evaluate';
 import type { Sample } from './engine/protocol';
 import { HoldRing } from './HoldRing';
 import { liveReadout } from './readout';
@@ -75,6 +76,8 @@ function Feedback({
     const hit = mag >= def.targetDeg;
     const complete = state.phase === 'complete';
     const ring = live?.ring;
+    // Where the hold clock starts on the bar (D36) — only for exercises with a hold.
+    const zonePct = def.holdSec ? (romHoldDeg(def) / def.targetDeg) * 100 : null;
     return (
       <div>
         <Metric big={`${live?.count?.n ?? 0}`} unit={`/ ${total} reps`} done={complete} />
@@ -87,7 +90,11 @@ function Feedback({
                 <HoldRing
                   {...ring}
                   sublabel={
-                    state.zone !== 'neutral' ? 'hold at end range' : `hold ${def.holdSec}s to count`
+                    state.zone === 'neutral'
+                      ? `hold ${def.holdSec}s to count`
+                      : ring.label === 'further'
+                        ? 'a little further'
+                        : 'hold at end range'
                   }
                 />
               </div>
@@ -97,21 +104,31 @@ function Feedback({
                 <span>current {fmt(sample.rel[def.axis])}</span>
                 <span>target {def.targetDeg}°</span>
               </div>
-              <div
-                role="progressbar"
-                aria-label="Range toward target"
-                aria-valuenow={Math.round(pct)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className="h-2 overflow-hidden rounded-full bg-panel-2"
-              >
+              <div className="relative">
                 <div
-                  className={cx(
-                    'h-full rounded-full transition-[width] duration-75',
-                    hit ? 'bg-gold' : 'bg-teal',
-                  )}
-                  style={{ width: `${pct}%` }}
-                />
+                  role="progressbar"
+                  aria-label="Range toward target"
+                  aria-valuenow={Math.round(pct)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  className="h-2 overflow-hidden rounded-full bg-panel-2"
+                >
+                  <div
+                    className={cx(
+                      'h-full rounded-full transition-[width] duration-75',
+                      hit ? 'bg-gold' : 'bg-teal',
+                    )}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                {zonePct !== null && (
+                  <span
+                    aria-hidden
+                    data-testid="hold-zone-mark"
+                    className="absolute -top-0.5 h-3 w-0.5 rounded-full bg-ink-muted"
+                    style={{ left: `${zonePct}%` }}
+                  />
+                )}
               </div>
             </div>
           </>
@@ -191,6 +208,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
+            auto
             reps={def.reps}
             onStart={() => onControl(start)}
           />
@@ -229,6 +247,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
+            auto
             reps={def.reps}
             onStart={() => onControl(start)}
             avgError={avg}
@@ -251,6 +270,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
+            auto
             reps={0}
             label={`${def.durationSec}s`}
             onStart={() => onControl(start)}
@@ -293,14 +313,17 @@ function SideStat({ label, n, target }: { label: string; n: number; target: numb
   );
 }
 
+// `auto`: a kind the session starts by itself once the neutral is set (D41) — the button is the override.
 function StartBlock({
   done,
+  auto = false,
   reps,
   label,
   avgError,
   onStart,
 }: {
   done: boolean;
+  auto?: boolean;
   reps: number;
   label?: string;
   avgError?: number | null;
@@ -322,12 +345,13 @@ function StartBlock({
         </div>
       ) : (
         <Text as="p" size="sm" tone="muted">
-          {reps > 0 ? `${reps} reps` : label} · get into position, then start
+          {reps > 0 ? `${reps} reps` : label} ·{' '}
+          {auto ? 'starts on its own once your neutral is set' : 'get into position, then start'}
         </Text>
       )}
       <Button onClick={onStart} className="gap-2 px-5">
         {done ? <RotateIcon /> : <PlayIcon />}
-        {done ? 'Again' : 'Start'}
+        {done ? 'Again' : auto ? 'Start now' : 'Start'}
       </Button>
     </div>
   );

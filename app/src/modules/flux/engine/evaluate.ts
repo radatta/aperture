@@ -3,7 +3,7 @@
 // `kind`. No DOM, no timers, no Date.now — all time comes from `input.tSec`, so
 // it's deterministic and unit-testable, and it runs unchanged inside the worker.
 
-import { magnitude } from './headPose';
+import { magnitude, speedOf, STILL_SPEED } from './headPose';
 import type {
   Axis,
   Euler,
@@ -24,8 +24,6 @@ import type {
 
 // Clamp a frame gap so a paused tab resuming can't overshoot a timer.
 const MAX_DT = 0.5;
-// Angular speed (deg/s) below which the head counts as "still".
-const STILL_SPEED = 6;
 // Off-plane head movement (deg) that flags compensation in a single-axis move.
 const OFF_AXIS_DEG = 20; // flux's 15 fired constantly in the dev test (D28)
 // Min seconds between posture warnings.
@@ -38,6 +36,17 @@ const HOLD_BROKEN_OUT_SEC = 0.3;
 // A ROM return before the hold is up is said (a failed attempt, D35) only past the same bar; shorter is
 // settling-in jitter.
 const HOLD_SHORT_MIN_SEC = HOLD_BROKEN_MIN_SEC;
+// A ROM hold is timed only this close to the target (D36): 75 % — rotation 45° of 60°.
+const HOLD_ZONE_FRACTION = 0.75;
+// "Further" (D37): still this long short of the zone, at most once per pause and this often.
+const FURTHER_STILL_SEC = 0.6;
+const FURTHER_COOLDOWN_SEC = 3;
+// …or a swing back that never reached the zone and lasted this long.
+const FURTHER_SWING_SEC = 1;
+// Stretch direction nudges (D38): still this long out of position, once per pause, and no sooner than
+// this after the last nudge, release or broken hold (a pause that starts inside it still gets one).
+const NUDGE_STILL_SEC = 0.8;
+const NUDGE_COOLDOWN_SEC = 4;
 const AXES: readonly Axis[] = ['pitch', 'yaw', 'roll'];
 
 // The full definition narrowed to one kind (base fields + that kind's spec).
@@ -62,15 +71,9 @@ function dominantAxis(e: Euler): Axis {
   return 'roll';
 }
 
-function speedOf(rel: Euler, lastRel: Euler | null, dtv: number): number {
-  if (!lastRel) return 0;
-  const delta: Euler = {
-    pitch: rel.pitch - lastRel.pitch,
-    yaw: rel.yaw - lastRel.yaw,
-    roll: rel.roll - lastRel.roll,
-  };
-  return magnitude(delta) / (dtv || 1);
-}
+// Where a ROM rep's end-range hold starts timing (D36). Derived, not a definition field.
+export const romHoldDeg = (def: { readonly targetDeg: number }): number =>
+  def.targetDeg * HOLD_ZONE_FRACTION;
 
 // Per-kind builders are the single source of truth for a fresh state; each
 // returns its concrete variant, so `evaluate` narrows cast-free after `switch`.
@@ -89,6 +92,11 @@ function buildRom(def: DefOf<'romReps'>): RomRepsState {
     peakSum: 0,
     peakCount: 0,
     holdAccumSec: 0,
+    inHoldZone: false,
+    stillShortSec: 0,
+    lastFurtherAt: Number.NEGATIVE_INFINITY,
+    furtherSaid: false,
+    excursionSec: 0,
     compensating: false,
     lastPostureWarnAt: Number.NEGATIVE_INFINITY,
   };
@@ -104,6 +112,9 @@ function buildHold(def: DefOf<'holdAtTarget'>): HoldAtTargetState {
     awaitingRelease: false,
     brokenHeldSec: 0,
     outSec: 0,
+    stillOutSec: 0,
+    lastNudgeAt: Number.NEGATIVE_INFINITY,
+    nudgeSaid: false,
   };
 }
 function buildGuided(def: DefOf<'guidedHold'>): GuidedHoldState {
@@ -207,34 +218,58 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
 
   const dtv = dt(state.lastTSec, input.tSec);
   const holdSec = def.holdSec ?? 0;
+  const holdDeg = romHoldDeg(def);
   const v = input.rel[def.axis];
+  const speed = speedOf(input.rel, state.lastRel, dtv);
   let { zone, peakThisRep, repsPos, repsNeg, peakSum, peakCount, holdAccumSec } = state;
+  let { stillShortSec, lastFurtherAt, furtherSaid, excursionSec } = state;
+  let inHoldZone = false;
   const allowPos = def.direction === 'positive' || def.direction === 'bilateral';
   const allowNeg = def.direction === 'negative' || def.direction === 'bilateral';
 
   if (zone === 'neutral') {
-    if (allowPos && v >= def.enterDeg) {
-      zone = 'positive';
+    if ((allowPos && v >= def.enterDeg) || (allowNeg && v <= -def.enterDeg)) {
+      zone = v > 0 ? 'positive' : 'negative';
       peakThisRep = v;
       holdAccumSec = 0;
-    } else if (allowNeg && v <= -def.enterDeg) {
-      zone = 'negative';
-      peakThisRep = v;
-      holdAccumSec = 0;
+      stillShortSec = 0;
+      furtherSaid = false;
+      excursionSec = 0;
     }
   } else {
     peakThisRep = zone === 'positive' ? Math.max(peakThisRep, v) : Math.min(peakThisRep, v);
     // The excursion measured on its own side: a jump straight to the other side (a face dropout
     // mid-swing) is a return, never hold time on the wrong side.
     const out = zone === 'positive' ? v : -v;
-    // Accumulate the end-range hold while the position is held past enterDeg, and say the count the
-    // moment it's up (eyes closed, D32) — once per excursion; the rep counts on return only if the
-    // hold reached holdSec (D35).
-    if (out >= def.enterDeg) {
+    // The end-range hold is timed only in the hold zone near the target (D36): "Hold" on the first frame
+    // in it, the count the moment the time is up (eyes closed, D32) — once per excursion; the rep counts
+    // on return only if the hold reached holdSec (D35). A dip below the zone pauses the clock.
+    inHoldZone = holdSec > 0 && out >= holdDeg;
+    if (inHoldZone) {
       const prev = holdAccumSec;
+      if (prev === 0 && !state.inHoldZone)
+        events.push({ type: 'holdEntered', count: repsPos + repsNeg + 1 });
       holdAccumSec += dtv;
-      if (holdSec > 0 && prev < holdSec && holdAccumSec >= holdSec)
+      if (prev < holdSec && holdAccumSec >= holdSec)
         events.push({ type: 'holdReached', count: repsPos + repsNeg + 1 });
+      stillShortSec = 0;
+      furtherSaid = false;
+      excursionSec = 0;
+    } else if (holdSec > 0 && out > def.exitDeg && holdAccumSec < holdSec) {
+      // Short of the zone: a pause there says "Further" (D37) — once per pause, so a user whose range
+      // ends short of the zone hears it once per excursion, not on a loop.
+      excursionSec += dtv;
+      stillShortSec = speed < STILL_SPEED ? stillShortSec + dtv : 0;
+      const sinceLast = input.tSec - lastFurtherAt;
+      if (
+        stillShortSec >= FURTHER_STILL_SEC &&
+        sinceLast >= FURTHER_COOLDOWN_SEC &&
+        sinceLast > stillShortSec // not yet this pause
+      ) {
+        events.push({ type: 'stoppedShort', shortDeg: holdDeg - out });
+        lastFurtherAt = input.tSec;
+        furtherSaid = true;
+      }
     }
     if (out <= def.exitDeg) {
       const peakDeg = Math.abs(peakThisRep);
@@ -243,6 +278,11 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       // Back before the hold was up: not a rep (D35). Below the bar it's jitter — say nothing.
       if (short && holdAccumSec >= HOLD_SHORT_MIN_SEC)
         events.push({ type: 'holdShort', heldSec: holdAccumSec });
+      // A swing out and back that never reached the zone, with no pause to say it at (D37).
+      if (short && holdAccumSec === 0 && !furtherSaid && excursionSec >= FURTHER_SWING_SEC) {
+        events.push({ type: 'stoppedShort', shortDeg: holdDeg - Math.abs(peakThisRep) });
+        lastFurtherAt = input.tSec;
+      }
       if (!short) {
         const side =
           def.direction === 'bilateral'
@@ -266,6 +306,10 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       zone = 'neutral';
       peakThisRep = 0;
       holdAccumSec = 0;
+      inHoldZone = false;
+      stillShortSec = 0;
+      furtherSaid = false;
+      excursionSec = 0;
     }
   }
 
@@ -312,6 +356,11 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       peakSum,
       peakCount,
       holdAccumSec,
+      inHoldZone,
+      stillShortSec,
+      lastFurtherAt,
+      furtherSaid,
+      excursionSec,
       compensating,
       lastPostureWarnAt,
       lastTSec: input.tSec,
@@ -338,6 +387,7 @@ function evalHold(
     axes.every((a) => Math.abs(input.rel[a] - (def.target[a] ?? 0)) <= def.toleranceDeg);
 
   let { holdsDone, inPosition, holdElapsedSec, awaitingRelease, brokenHeldSec, outSec } = state;
+  let { stillOutSec, lastNudgeAt, nudgeSaid } = state;
 
   // Between reps the user must leave the target zone before the next hold counts.
   if (awaitingRelease) {
@@ -348,6 +398,8 @@ function evalHold(
         inPosition: false,
         holdElapsedSec: 0,
         awaitingRelease,
+        stillOutSec: 0,
+        nudgeSaid: false,
         lastTSec: input.tSec,
         lastRel: input.rel,
       },
@@ -362,17 +414,53 @@ function evalHold(
     outSec = 0;
     events.push({ type: 'positionReached' });
   } else if (!rawInPos && inPosition) {
-    if (holdElapsedSec >= HOLD_BROKEN_MIN_SEC) brokenHeldSec = holdElapsedSec;
+    // A face dropout isn't a broken hold — the session says "Can't see you" instead (D43).
+    if (input.faceVisible && holdElapsedSec >= HOLD_BROKEN_MIN_SEC) brokenHeldSec = holdElapsedSec;
     outSec = 0;
     inPosition = false;
     holdElapsedSec = 0;
     events.push({ type: 'positionLost' });
   } else if (!rawInPos && brokenHeldSec > 0) {
-    outSec += dtv;
+    if (input.faceVisible) outSec += dtv;
     if (outSec >= HOLD_BROKEN_OUT_SEC) {
       events.push({ type: 'holdBroken', heldSec: brokenHeldSec });
       brokenHeldSec = 0;
+      lastNudgeAt = input.tSec;
     }
+  }
+
+  // Still and out of position: say which way to go on the worst axis (D38), once per pause.
+  if (!rawInPos && input.faceVisible) {
+    const still = speedOf(input.rel, state.lastRel, dtv) < STILL_SPEED;
+    stillOutSec = still ? stillOutSec + dtv : 0;
+    if (!still) nudgeSaid = false;
+    if (
+      !nudgeSaid &&
+      stillOutSec >= NUDGE_STILL_SEC &&
+      input.tSec - lastNudgeAt >= NUDGE_COOLDOWN_SEC
+    ) {
+      let worst: Axis | null = null;
+      let worstOff = 0;
+      for (const a of axes) {
+        const off = Math.abs(input.rel[a] - (def.target[a] ?? 0)) - def.toleranceDeg;
+        if (off > worstOff) [worst, worstOff] = [a, off];
+      }
+      if (worst) {
+        const target = def.target[worst] ?? 0;
+        const deg = target - input.rel[worst];
+        events.push({
+          type: 'nudge',
+          axis: worst,
+          toward: Math.sign(deg) === Math.sign(target) ? 'more' : 'less',
+          deg,
+        });
+        lastNudgeAt = input.tSec;
+        nudgeSaid = true;
+      }
+    }
+  } else {
+    stillOutSec = 0;
+    nudgeSaid = false;
   }
 
   let phase: Phase = state.phase;
@@ -388,6 +476,7 @@ function evalHold(
       holdElapsedSec = 0;
       inPosition = false;
       awaitingRelease = true;
+      lastNudgeAt = input.tSec;
       if (holdsDone >= def.reps) {
         phase = 'complete';
         events.push({ type: 'setCompleted', summary: { count: holdsDone } });
@@ -405,6 +494,9 @@ function evalHold(
       awaitingRelease,
       brokenHeldSec,
       outSec,
+      stillOutSec,
+      lastNudgeAt,
+      nudgeSaid,
       lastTSec: input.tSec,
       lastRel: input.rel,
     },
@@ -506,6 +598,7 @@ function evalReposition(
   const events: ExerciseEvent[] = [];
 
   if (control?.type === 'start' && state.phase !== 'active') {
+    events.push({ type: 'repositionPrompt', sub: 'away' });
     return {
       state: {
         ...state,
@@ -563,6 +656,17 @@ function evalReposition(
     }
   }
 
+  // The sub-phase is spoken so the drill runs eyes closed (D39), after any trial result. Not every
+  // change: the turnaround at the far end slows below STILL_SPEED and flips returning ⇄ settling, so
+  // "Hold still" is said only near neutral and a move back out stays silent.
+  const prompt =
+    sub === 'away'
+      ? state.sub !== 'away'
+      : sub === 'returning'
+        ? state.sub === 'away'
+        : state.sub !== 'settling' && mag < def.excursionDeg;
+  if (prompt) events.push({ type: 'repositionPrompt', sub });
+
   return {
     state: {
       ...state,
@@ -591,6 +695,7 @@ function evalOscillation(
 
   if (control?.type === 'start' && state.phase !== 'active') {
     const v0 = input.rel[def.axis];
+    events.push({ type: 'setStarted' });
     return {
       state: {
         ...state,

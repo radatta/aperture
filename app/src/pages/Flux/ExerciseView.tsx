@@ -22,8 +22,9 @@ import { EndRangeBadge, MeasurementBadge } from '../../modules/flux/ExerciseLibr
 import { PrecautionBanner } from '../../modules/flux/PrecautionBanner';
 import { readCondition } from '../../modules/flux/prefs';
 import { RepTieStrip } from '../../modules/flux/RepTie';
+import { SetsStepper } from '../../modules/flux/SetsStepper';
 import { useRepTie } from '../../modules/flux/useRepTie';
-import { useFluxEngine } from '../../modules/flux/useFluxEngine';
+import { DEFAULT_SETS, useFluxEngine, type SessionSummary } from '../../modules/flux/useFluxEngine';
 import { useVoice } from '../../modules/flux/useVoice';
 
 // /flux/:exerciseId — one exercise's stage. Keyed by id, so moving between exercises is a fresh stage
@@ -55,9 +56,14 @@ function Stage({ id }: { id: ExerciseId }) {
   const sided = hasSide(def);
   const [side, setSide] = useState<Side>('a');
   const shown = mirrorForSide(def, side);
+  const [sets, setSets] = useState(DEFAULT_SETS);
 
   const voice = useVoice();
   const rep = useRepTie();
+  // A finished session — by Stop, or by itself after the last set (D42) — offers the Roll tie.
+  const finish = (session: SessionSummary) => {
+    if (session.sets > 0) void rep.onStop(session.activeMs);
+  };
   const engine = useFluxEngine({
     exerciseId: id,
     kind: def.kind,
@@ -65,7 +71,11 @@ function Stage({ id }: { id: ExerciseId }) {
     condition,
     acknowledged,
     voice,
+    sets,
     onSetCompleted: rep.onSetCompleted,
+    // A sided stretch alternates sides set by set, starting from the side picked.
+    onNextSet: () => sided && setSide((s) => (s === 'a' ? 'b' : 'a')),
+    onSessionEnd: finish,
   });
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -76,10 +86,7 @@ function Stage({ id }: { id: ExerciseId }) {
     if (video && canvas) void engine.start({ video, canvas });
   }, [engine]);
 
-  const stop = () => {
-    const session = engine.stop();
-    if (session.sets > 0) void rep.onStop(session.activeMs);
-  };
+  const stop = () => finish(engine.stop());
 
   const live = engine.status === 'running';
 
@@ -101,6 +108,7 @@ function Stage({ id }: { id: ExerciseId }) {
         canvasRef={canvasRef}
         onStart={start}
         onStop={stop}
+        startAccessory={<SetsStepper value={sets} onChange={setSets} />}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -133,9 +141,10 @@ function Stage({ id }: { id: ExerciseId }) {
         onAcknowledge={() => setAcked(true)}
       />
 
-      {live && !engine.calibrated && def.measurement !== 'guided' && (
+      {live && !engine.calibrated && (
         <p className="rounded-lg bg-teal-soft px-3 py-2 text-xs text-ink">
-          Look straight ahead and hit <b>Calibrate neutral</b> to zero the angles.
+          Look straight ahead and hold still — your neutral sets itself in a couple of seconds, or
+          tap <b>Calibrate neutral</b>.
         </p>
       )}
       {engine.fellBack && (
@@ -171,7 +180,7 @@ function Stage({ id }: { id: ExerciseId }) {
         />
       )}
 
-      <SessionLine engine={engine} def={def} />
+      <SessionLine engine={engine} def={def} sets={sets} />
       <RepTieStrip handle={rep} activeMs={engine.activeMs()} />
       <DebugReadout engine={engine} />
     </div>
@@ -202,7 +211,7 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => voi
         ))}
       </div>
       <Text size="xs" tone="muted">
-        Side B is the mirror of Side A — do one, then the other.
+        Side B is the mirror of Side A — the next set switches sides on its own.
       </Text>
     </div>
   );
@@ -211,9 +220,11 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => voi
 function SessionLine({
   engine,
   def,
+  sets,
 }: {
   engine: ReturnType<typeof useFluxEngine>;
   def: ExerciseDefinition;
+  sets: number;
 }) {
   const n = engine.sessionSets.length;
   const rom = engine.sample.rom;
@@ -223,7 +234,7 @@ function SessionLine({
     <div className="flex flex-wrap gap-x-4 gap-y-1">
       {n > 0 && (
         <Text size="sm" tone="muted" tabular>
-          Sets this session · {n}
+          Sets this session · {n} of {sets}
         </Text>
       )}
       {showRom && (

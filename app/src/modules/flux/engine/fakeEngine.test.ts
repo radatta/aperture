@@ -82,4 +82,20 @@ describe('createFakeEngine', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(seen.length).toBe(n);
   });
+
+  it('auto mode: the synthetic head holds still first, so the neutral sets itself (D40)', async () => {
+    vi.useFakeTimers();
+    const { engine } = createFakeEngine({ auto: true });
+    const seen: FluxEngineEvent[] = [];
+    engine.subscribe((e) => seen.push(e));
+    engine.selectExercise('cervical-rotation', 'a');
+    await engine.start(STAGE);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(seen.some((e) => e.type === 'calibrated')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(seen.filter((e) => e.type === 'calibrated')).toEqual([
+      { type: 'calibrated', ok: true, auto: true },
+    ]);
+    engine.stop();
+  });
 });
