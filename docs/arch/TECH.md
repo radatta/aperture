@@ -208,9 +208,9 @@ aperture/
 
 ## 5. The AI seam (v1.1+, boundary only)
 
-Nothing built in the app — just a clean boundary so reflection is additive later.
-- **Server-side only:** the Lambda calls the model (key in Secrets Manager); never from the browser. This is why sending journal text out is a Lambda concern.
-- **One carve-out (2026-10-09):** the Raycast quick-add (`tools/raycast/`, a personal Mac client) calls Haiku from the Mac with the user's own key in Keychain, to parse the one line just typed — no stored data goes out except category labels. Parsing on the server instead would mean a new endpoint, a Secrets Manager key and a deploy for one capture surface; revisit if a second client wants parsing ([areas/mcp → Raycast](../areas/mcp/index.md)).
+Reflection isn't built — just a clean boundary so it's additive later. The first model call that *is* built is quick add's parse ([tasks/quick-add](../areas/tasks/quick-add.md), 2026-10-12), and it set the pattern.
+- **Server-side only:** the Lambda calls the model; never from the browser. This is why sending journal text out is a Lambda concern. The call is a **gated gateway** (`lambdas/src/anthropic/`): noop under testMode/smoke, a fake in tests, live fetch + the SSM key (INFRA §10) only in the Lambda entrypoints.
+- **The 2026-10-09 carve-out is closed (2026-10-12):** the Raycast quick-add (`tools/raycast/`) used to call Haiku from the Mac with the user's own key in Keychain; a second client (the app's capture bar) wanted parsing, so the parse moved behind `parseTask` / the `parse_task` MCP tool and the Mac holds no model key ([areas/mcp → Raycast](../areas/mcp/index.md)).
 - **Substrate already exists:** reflection reads `logEntries` / `tasks` / `pomodoroSessions` over a date range — existing access patterns. **No schema change** needed for basic reflection.
 - **Reserved entity** (not built): `reflections` — `id · periodType(week|month|year) · periodKey · generatedAt · promptVersion · content`.
 - **Model:** Claude (Anthropic API), latest at build time, per repo norms.

@@ -127,10 +127,10 @@ No static credentials — OIDC role assumption. GitHub Flow, simplified:
 ## 10. Secrets
 
 - No static AWS creds anywhere (Cognito public keys are public).
-- **Third-party credentials live in SSM Parameter Store** (SecureString, Standard tier, the default `aws/ssm` key — no KMS statement needed): Google under `/aperture/<stage>/google/*` ([calendar/](../areas/calendar/index.md)); Plaid under `/aperture/<stage>/plaid/` — `client_id` + `secret` written once by the operator, `items/<itemId>/access_token` written/deleted by the BFF and read by the sync; the MCP function gets none of Plaid ([finances/ → Operator checklist](../areas/finances/index.md#12-operator-checklist)).
+- **Third-party credentials live in SSM Parameter Store** (SecureString, Standard tier, the default `aws/ssm` key — no KMS statement needed): Google under `/aperture/<stage>/google/*` ([calendar/](../areas/calendar/index.md)); Plaid under `/aperture/<stage>/plaid/` — `client_id` + `secret` written once by the operator, `items/<itemId>/access_token` written/deleted by the BFF and read by the sync; the MCP function gets none of Plaid ([finances/ → Operator checklist](../areas/finances/index.md#12-operator-checklist)); the Claude API key at `/aperture/<stage>/anthropic/api_key`, written once by the operator and readable (that parameter only) by the BFF and the MCP function ([tasks/quick-add](../areas/tasks/quick-add.md#operator-step-once-per-stage)).
 - **Origin secret** — CloudFront→Lambda origin lockdown. A plain Lambda env var, sourced from `APERTURE_ORIGIN_SECRET` (CI) or a gitignored `cdk/.secrets/` file. Anti-abuse only; the JWT is the real gate.
 - **Device token** — auth for the extension's LeetCode ingest endpoint. **Same class and same pattern as the origin secret** (single-user, one write method, tiny blast radius) → a plain env var from `APERTURE_DEVICE_TOKEN` / a gitignored file, deliberately **not** Secrets Manager. Paired with `APERTURE_DEVICE_USER_ID` (not secret, but account-specific → also uncommitted). What happens when either is unset in CI, plus the operator checklist: **[recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup)**.
-- v1.1 AI: the model API key goes in **Secrets Manager**, fetched at Lambda cold start. Never in env vars or CDK config.
+- The model API key: _planned_ for Secrets Manager here; **built 2026-10-12 as the SSM SecureString above** (quick add — same pattern and SDK client as Plaid, free; read on first use and held for the warm container). Never in env vars or CDK config.
 
 ## 11. Cost
 

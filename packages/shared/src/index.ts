@@ -16,6 +16,7 @@ export * from './calendarSync';
 export * from './calendarPull';
 export * from './api';
 export * from './bulkTasks';
+export * from './quickParse';
 export * from './rpc';
 export * from './finance';
 export * from './financeFixtures';

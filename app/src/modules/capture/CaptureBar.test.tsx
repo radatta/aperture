@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
-import { todayKey } from '@aperture/shared';
+import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
+import { STUB_FAIL_NEXT_PARSE_KEY } from '../../data/stubParse';
 import { CaptureBar } from './CaptureBar';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -445,6 +446,201 @@ describe('CaptureBar', () => {
       await user.type(box(), 'memo | #ad');
       await user.keyboard('{Escape}');
       expect(document.activeElement).not.toBe(box());
+    });
+  });
+
+  // Quick add (docs/areas/tasks/quick-add.md): the stub's heuristic stands in for Haiku, through the
+  // same shared flow and validator as the Lambda.
+  describe('quick add', () => {
+    const adminId = async (api: { listCategories(): Promise<{ id: string; label: string }[]> }) =>
+      (await api.listCategories()).find((c) => c.label === 'Admin')!.id;
+
+    it('Enter clears at once, saves what the parse read, and says what it saved', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'admin, file taxes due tmw 30m');
+      await user.keyboard('{Enter}');
+      expect(box().value).toBe('');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'file taxes',
+          categoryId: await adminId(api),
+          dueDay: addDays(todayKey(4), 1),
+          estimateMin: 30,
+        }),
+      );
+      expect(await screen.findByText('file taxes · Admin · due tomorrow · 30m')).toBeTruthy();
+      // Announced once, by the receipt's live region (the visible readback is aria-hidden).
+      expect(screen.getByRole('status').textContent).toMatch(
+        /Task added → backlog: file taxes · Admin/,
+      );
+    });
+
+    it("a ' | ' line never reaches the model", async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'memo | ~30');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'memo', estimateMin: 30 }),
+      );
+      expect(parse).not.toHaveBeenCalled();
+    });
+
+    it('Review shows the parse; a second press saves exactly it, without parsing again', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, file taxes 45m');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      expect(screen.getByText('#Admin')).toBeTruthy();
+      expect(screen.getByText('45m')).toBeTruthy();
+      expect(box().value).toBe('admin, file taxes 45m'); // the text stays until you save
+      await user.click(screen.getByRole('button', { name: 'Save reviewed task' }));
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'file taxes', estimateMin: 45 }),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(box().value).toBe('');
+    });
+
+    it('⌘Enter reviews, and Enter on a shown preview saves it', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, renew passport');
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      expect(await screen.findByText('renew passport')).toBeTruthy();
+      expect(await api.listTasks()).toHaveLength(0);
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'renew passport' }),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    it('editing the text hides the preview, and the next save parses the new text', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'admin, call bank');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText('call bank')).toBeTruthy();
+      await user.type(box(), ' 15m');
+      expect(screen.queryByText('call bank')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'call bank', estimateMin: 15 }),
+      );
+    });
+
+    it('a parse that lands after the text changed never shows', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'old text');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.type(box(), '!');
+      resolve({
+        ok: true,
+        source: 'haiku',
+        input: { title: 'STALE' },
+        categoryLabel: null,
+        dropped: [],
+        today: todayKey(4),
+      });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('STALE')).toBeNull();
+      expect(screen.queryByText('Reading it…')).toBeNull();
+    });
+
+    it('a failed parse saves the line as typed, and says so', async () => {
+      const { api, user, box } = await taskBar();
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, file taxes 30m',
+          categoryId: null,
+          estimateMin: null,
+        }),
+      );
+      expect(await screen.findByText(/Saved unparsed → backlog/)).toBeTruthy();
+      expect(
+        screen.getByText(/Couldn’t parse \(unavailable: stub failNextParse\) — saved as typed/),
+      ).toBeTruthy();
+      expect(box().value).toBe('');
+    });
+
+    it('a transport error on the parse is a raw save too', async () => {
+      const { api, user, box } = await taskBar();
+      vi.spyOn(api, 'parseTask').mockRejectedValueOnce(new Error('offline'));
+      await user.type(box(), 'water plants');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'water plants' }),
+      );
+      expect(await screen.findByText(/Saved unparsed/)).toBeTruthy();
+    });
+
+    it('a failed Review says so in the preview, and saving keeps the line as typed', async () => {
+      const { api, user, box } = await taskBar();
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.type(box(), 'admin, file taxes');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText(/Couldn't parse \(unavailable/)).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'admin, file taxes' }),
+      );
+    });
+
+    it('a failed create puts the typed text back and says so', async () => {
+      const { api, user, box } = await taskBar();
+      api.createTask = () => Promise.reject(new Error('offline'));
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
+    });
+
+    // mutate()'s per-call callbacks fire only for the latest call, so a failed capture followed by a
+    // quick second one used to lose its restore. Each save now owns its promise.
+    it('restores a failed capture even when another one follows it at once', async () => {
+      const { api, user, box } = await taskBar();
+      let reject!: (e: Error) => void;
+      const real = api.createTask.bind(api);
+      api.createTask = vi
+        .fn()
+        .mockReturnValueOnce(new Promise((_, r) => (reject = r)))
+        .mockImplementation(real);
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      await user.type(box(), 'second');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(2));
+      reject(new Error('offline'));
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('first'));
+    });
+
+    it('"→ today" plans a quick-added task, from Auto and from Review', async () => {
+      const { api, user, box } = await taskBar();
+      const today = todayKey(4);
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'admin, pay rent 10m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Task added → today/)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'admin, book flight');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      await screen.findByText('book flight');
+      await user.click(screen.getByRole('button', { name: 'Save reviewed task' }));
+      await waitFor(async () => expect(await api.listPlansForDay(today)).toHaveLength(2));
+      const titles = await Promise.all(
+        (await api.listPlansForDay(today)).map(async (p) => (await api.getTask(p.taskId))?.title),
+      );
+      expect(titles.sort()).toEqual(['book flight', 'pay rent']);
     });
   });
 });

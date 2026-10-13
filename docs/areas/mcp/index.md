@@ -67,7 +67,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 | group            | tools                                                                                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}` |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
@@ -330,15 +330,26 @@ timezone; each capture is a claude.ai conversation; the D13 refresh token isn't 
 configured), so the connector needs re-auth roughly monthly — the first thing to
 check if voice capture suddenly fails.
 
-## Raycast quick-add — a Mac capture surface (no server code)
+## Raycast quick-add — a Mac capture surface
 
 `tools/raycast/aperture-add.sh` ([README](../../../tools/raycast/README.md)): a Raycast hotkey → one
-line → **Claude Haiku 5.5** parses it into `create_task` fields (short title + notes, category id, due
-day/time, estimate) → `create_task`. Each Aperture call is a plain `curl` of one stateless `tools/call`
+line → `parse_task` (**Claude Haiku 5.5**, server-side — the same parse as the app's quick add,
+[quick-add](../tasks/quick-add.md)) turns it into `create_task` fields (short title + notes, category id,
+due day/time, estimate) → `create_task`. Each Aperture call is a plain `curl` of one stateless `tools/call`
 (no `initialize` needed) with the prod agent token from Keychain. Capture only, by decision (2026-10-09):
 updates and reorganizing stay in the claude.ai chat and the app. The script checks the HTTP status **and**
 the body — MCP returns a param error (`error`) and a tool failure (`result.isError`) inside a 200 — and
 trims and rejects a blank title itself, since `createTask` stores the title verbatim.
+
+Decisions (2026-10-12) — the parse moved to the server ([quick-add](../tasks/quick-add.md) D6):
+
+- **The BFF owns the one prompt; the Mac holds no Anthropic key.** `parse_task` runs the shared
+  `runQuickParse` against the user's live active categories and real `dayStartHour`, and validates
+  server-side, so the script lost its prompt, schema, field re-check and category cache. The
+  2026-10-09 bullets below on structured outputs, the cache and the 4am default describe the parse
+  that now runs in the Lambda (`lambdas/src/anthropic/`), except that "today" now reads Settings.
+- **A failed `parse_task` (an `ok: false` result, an RPC error, a timeout at 12s) still adds the task
+  raw**, with the reason in the red toast — unchanged behaviour, new reasons.
 
 Decisions (2026-10-09):
 
@@ -358,11 +369,12 @@ Decisions (2026-10-09):
 
 ## Deferred
 
-- A **create-only token** for Raycast (scoped to `create_task` + `list_categories`, like the recruiting
+- A **create-only token** for Raycast (scoped to `parse_task` + `create_task`, like the recruiting
   device token's single method) — the Mac's Keychain holds the full agent token until then.
-- **`create_task` doesn't check that `categoryId` exists.** A category deleted within the Raycast cache's
-  day can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix server-side
-  (reject an unknown/deleted id), which also covers any other caller.
+- **`create_task` doesn't check that `categoryId` exists.** A category deleted between Raycast's
+  `parse_task` and its `create_task` (seconds, since 2026-10-12; a day while the script cached
+  categories) can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix
+  server-side (reject an unknown/deleted id), which also covers any other caller.
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
 - Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).

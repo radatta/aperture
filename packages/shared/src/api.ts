@@ -30,6 +30,7 @@ import type {
 } from './types';
 import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
+import type { ParseTaskResult } from './quickParse';
 import type {
   CreateLinkTokenInput,
   ExchangePublicTokenInput,
@@ -296,6 +297,10 @@ export interface ApiClient {
   // Bulk create — every input lands as an unlocked backlog task, in the given order (one createdAt
   // stamp for the batch so they sort together). Best-effort over batchPut; empty input writes nothing.
   createTasks(inputs: CreateTaskInput[]): Promise<Task[]>;
+  // Quick add: one natural-language line → createTask fields, parsed by Claude Haiku against the user's
+  // active categories and day start (quickParse.ts). Writes nothing. A ' | ' line takes the strict
+  // grammar instead. Never throws for a parse failure — `ok: false` means save the line raw.
+  parseTask(text: string): Promise<ParseTaskResult>;
   // The working estimate — any open status; rejects done/cancelled. Never touches estimateLockedMin.
   setTaskEstimate(id: string, estimateMin: number | null, bufferMin: number | null): Promise<Task>;
   // Category can change any time — labels resolve live and wasWork is snapshotted on sessions, so

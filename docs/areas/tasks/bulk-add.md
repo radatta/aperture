@@ -18,7 +18,9 @@ reviewable sit-down where structure is welcome. So tokens-at-entry here is not a
 capture rule; it's the plan pass wearing a keyboard.
 
 Capture later took the same grammar as an *optional* single line (2026-09-28): typing `#Aperture` at
-capture time was wanted, and an opt-in token asks nothing of a bare capture.
+capture time was wanted, and an opt-in token asks nothing of a bare capture. Since 2026-10-12 a Task line
+*without* ` | ` is parsed by Claude Haiku instead ([quick-add.md](quick-add.md)); ` | ` is the deterministic
+bypass — the model never sees a grammar line.
 
 ## 2. Decision log
 

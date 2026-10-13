@@ -10,6 +10,8 @@ import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
+import { noopAnthropic } from './anthropic/gateway';
+import type { AnthropicGateway } from './anthropic/gateway';
 
 export interface RpcCall {
   userId: string;
@@ -27,6 +29,7 @@ export interface RpcDeps {
   presigner?: Presigner;
   plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
   financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
+  anthropic?: AnthropicGateway; // live Claude API seam (index.ts, mcp/index.ts); ignored in testMode
 }
 
 // Transport-agnostic RPC core: validate the method against the shared allowlist, build a BackendClient
@@ -47,9 +50,11 @@ export async function handleRpc(
     google,
     stateSecret: call.stateSecret,
     presigner: deps.presigner,
-    // testMode forces these inert too — a smoke run reads no Plaid token and starts no sync.
+    // testMode forces these inert too — a smoke run reads no Plaid token or API key, starts no sync, and
+    // makes no Claude call.
     plaid: call.testMode ? noopPlaid() : (deps.plaid ?? noopPlaid()),
     financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
+    anthropic: call.testMode ? noopAnthropic() : (deps.anthropic ?? noopAnthropic()),
   });
   const fn = (
     backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>

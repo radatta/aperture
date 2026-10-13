@@ -1,0 +1,15 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`parseSystemPrompt > names the day with its weekday and lists categories as id: label 1`] = `
+"You turn one quick-capture line into fields for a task tracker. Today is 2026-10-12 (Monday) in America/Los_Angeles.
+Categories (id: label) — use the id, or null if none clearly matches:
+c1: Aperture
+c2: System Design
+Rules:
+- title: short and imperative-ish, at most 80 characters, in the user's own words. Strip the parsed meta: a leading category word ("aperture,"), due phrases ("due tmw", "by friday") and estimates ("30m", "2h").
+- notes: if the line has more detail than fits the title, move the rest here with light cleanup only (fix obvious typos, keep the user's wording and order). Otherwise null.
+- dueDay: YYYY-MM-DD, only if the user gave a day ("tmw" = tomorrow, a weekday name = the next such day, "today" = today), or today if they gave only a clock time. Otherwise null.
+- dueTime: HH:MM 24h, only if a clock time was given (a time with no day means today). Otherwise null.
+- estimateMin: whole minutes, only if the user gave an estimate. Never invent one. Otherwise null.
+- Set a field only when the user stated it. Do not add tasks, advice or commentary."
+`;

@@ -2,15 +2,17 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import type { KeyboardEvent, ReactNode, SyntheticEvent } from 'react';
 import {
   hasTaskTokens,
+  parseFailText,
   parseTaskLine,
   toCreateInput,
   todayKey,
   tokenAtCaret,
 } from '@aperture/shared';
+import type { CreateTaskInput } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
 import { ModeToggle } from '../../components/ModeToggle';
-import { SendIcon } from '../../components/icons';
+import { SendIcon, SparkleIcon } from '../../components/icons';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useCreateLogEntry } from '../../data/hooks/useLog';
 import { useCreateTask } from '../../data/hooks/useTasks';
@@ -23,8 +25,12 @@ import { useAutoGrow } from './useAutoGrow';
 import { applySuggestion, suggestionsFor, type Suggestion } from './suggestions';
 import { TokenSuggestions } from './TokenSuggestions';
 import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode } from './mode';
+import { useQuickParse } from './useQuickParse';
+import { previewLine, savedSummary } from './parsePreview';
 
 const RECEIPT_MS = 1800;
+// A quick add's receipt carries what was parsed — more to read than "Logged", so it stays longer.
+const PARSED_RECEIPT_MS = 4000;
 
 // Why a submit was refused. Each keeps the text and says so — a refused capture is never silent. The
 // visible notice is just "Not saved" (the mode row is ~375px on a phone); the reason is in the preview row.
@@ -33,8 +39,12 @@ type Blocked = 'invalid' | 'categories' | 'categories-failed';
 // The global capture bar — PRODUCT's #1 mechanic. Always present, bottom-docked for thumb reach.
 // Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
 // the current mode. It never asks for structure — no estimate/category/due field exists here by design.
-// Task mode optionally takes one line of the bulk grammar after ' | ' (`memo | ~30 #Admin`); without the
-// separator nothing is parsed. A red error refuses the submit and keeps the text (docs/areas/tasks/bulk-add.md).
+// Task mode is quick add (docs/areas/tasks/quick-add.md): you type it the way you'd say it (`aperture,
+// fix login bug due fri 30m`) and Haiku reads the structure out of it. Enter (Auto) clears at once and
+// saves what the parse returns; Review (✨ / ⌘Enter) shows the parse first and a second press saves exactly
+// that. A failed parse saves the line as typed and says so — never silently, never lost.
+// A line with ' | ' skips the model: it takes one line of the bulk grammar (`memo | ~30 #Admin`), and a red
+// error refuses the submit and keeps the text (docs/areas/tasks/bulk-add.md).
 // Once you've typed `#`, `~` or `due:` there, chips offer completions; a tap (or Tab) types the literal
 // token, so the grammar is unchanged — and nothing appears until you start a token, so it never asks.
 //
@@ -63,10 +73,14 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     dest?: { today: boolean; planned: boolean };
     failed?: boolean;
     blocked?: Blocked;
+    parsed?: string; // a quick add's readback (savedSummary)
+    unparsed?: string; // why a quick add saved as typed (parseFailText)
     at: number;
   } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previewId = useId();
+  const parseId = useId();
+  const quick = useQuickParse();
 
   const createLog = useCreateLogEntry(today);
   const createTask = useCreateTask();
@@ -118,6 +132,8 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     : categoriesFailed
       ? 'Couldn’t load categories — remove the #label to save without one'
       : 'Loading categories…';
+  // A Review's preview — only while the field still holds exactly the text it was parsed from.
+  const preview = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
   // line fixed) it goes too, and its text always names the current cause.
   const shown = receipt?.blocked && !block ? null : receipt;
@@ -145,7 +161,8 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   // stays put: it's telling you your text was restored and needs another try.
   useEffect(() => {
     if (!receipt || receipt.failed || receipt.blocked) return;
-    const id = setTimeout(() => setReceipt(null), RECEIPT_MS);
+    const ms = receipt.parsed || receipt.unparsed ? PARSED_RECEIPT_MS : RECEIPT_MS;
+    const id = setTimeout(() => setReceipt(null), ms);
     return () => clearTimeout(id);
   }, [receipt]);
 
@@ -157,41 +174,76 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
       setReceipt({ mode: submitted, blocked: block, at: Date.now() });
       return;
     }
-    const input = line ? toCreateInput(line) : value;
     const goesToday = submitted === 'task' && toToday;
     // The field clears optimistically so capture stays instant — which means a failed write would
     // otherwise destroy the thought outright: the creates roll back, the entry disappears from the
     // list, and the text is already gone from the field. Capture is the #1 mechanic and the whole
     // premise is that it's safe to hand it something, so a failure puts the text back and says so.
-    const handlers = {
-      onSuccess: () => setReceipt({ mode: submitted, at: Date.now() }),
-      onError: () => {
-        setText((current) => (current === '' ? value : current));
-        setCaret(value.length);
-        setMode(submitted);
-        if (goesToday) setToToday(true); // the retry should go where the first attempt was headed
-        setReceipt({ mode: submitted, failed: true, at: Date.now() });
-      },
+    // Promises (mutateAsync), not mutate's per-call callbacks: those fire only for the LATEST mutate, so
+    // a failed capture followed by a quick second one would never restore — and quick add's parse puts
+    // a second or more between Enter and the write, which made that window wide open.
+    const restore = () => {
+      setText((current) => (current === '' ? value : current));
+      setCaret(value.length);
+      setMode(submitted);
+      if (goesToday) setToToday(true); // the retry should go where the first attempt was headed
+      setReceipt({ mode: submitted, failed: true, at: Date.now() });
     };
-    if (goesToday)
-      createToday(input).then(
-        (r) =>
-          setReceipt({
-            mode: submitted,
-            dest: { today: true, planned: r.planned },
-            at: Date.now(),
-          }),
-        handlers.onError,
+    const done = () => setReceipt({ mode: submitted, at: Date.now() });
+    if (submitted === 'task' && line) saveTask(toCreateInput(line), goesToday, restore, {});
+    else if (submitted === 'task') {
+      // Quick add (Auto): saves the shown preview if there is one, else waits on the parse — a Review
+      // still in flight for this text is reused, never asked twice. A failed parse saves the line raw.
+      const shown = quick.previewFor(value)?.result;
+      void (shown ? Promise.resolve(shown) : quick.parse(value)).then((r) =>
+        r.ok
+          ? saveTask(r.input, goesToday, restore, {
+              parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped),
+            })
+          : saveTask({ title: value }, goesToday, restore, { unparsed: parseFailText(r) }),
       );
-    else if (submitted === 'log') createLog.mutate(value, handlers);
-    else if (submitted === 'task') createTask.mutate(input, handlers);
-    else createIdea.mutate(value, handlers);
+      quick.clear();
+    } else if (submitted === 'log') void createLog.mutateAsync(value).then(done, restore);
+    else void createIdea.mutateAsync(value).then(done, restore);
     setText('');
     setCaret(0);
     setToToday(false);
     // Stay in the current mode after a submit — if you're logging tasks or ideas, the next capture is
     // almost always the same kind, so snapping back to Log every time just made you re-pick it.
     inputRef.current?.focus();
+  }
+
+  function saveTask(
+    input: CreateTaskInput,
+    goesToday: boolean,
+    restore: () => void,
+    note: { parsed?: string; unparsed?: string },
+  ) {
+    if (goesToday)
+      void createToday(input).then(
+        (r) =>
+          setReceipt({
+            mode: 'task',
+            dest: { today: true, planned: r.planned },
+            ...note,
+            at: Date.now(),
+          }),
+        restore,
+      );
+    else
+      void createTask
+        .mutateAsync(input)
+        .then(() => setReceipt({ mode: 'task', ...note, at: Date.now() }), restore);
+  }
+
+  // Review: the first press parses into a preview; a press while the preview shows saves exactly it.
+  // A ' | ' line has no model step — its grammar preview is already showing — so a press saves it.
+  function review() {
+    const value = text.trim();
+    if (mode !== 'task' || !value) return;
+    const p = quick.previewFor(value);
+    if (line || p?.result) submit();
+    else if (!p) quick.review(value); // a parse already running for this text: wait for it
   }
 
   function update(value: string) {
@@ -224,7 +276,11 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     // Shift+Enter is a newline — the log takes multi-line entries now that the field can show them.
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      if (mode === 'task') review();
+      else submit();
+    } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
     } else if (e.key === 'Tab') {
@@ -275,7 +331,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
           <div aria-live="polite" role="status" className="min-w-0">
             {shown && <Receipt key={shown.at} receipt={shown} reason={blockReason} />}
           </div>
-          {!shown && <Hint suggesting={suggestions.length > 0} />}
+          {!shown && <Hint suggesting={suggestions.length > 0} task={mode === 'task'} />}
           {/* On a phone the row can't hold both, so it gives way to a receipt there (a failure
               notice stays until the next capture). Desktop has room for both. */}
           <div className={cx('shrink-0', shown && 'max-sm:hidden')}>{trailing}</div>
@@ -295,13 +351,32 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
           onKeyDown={onKeyDown}
           placeholder={placeholderFor(mode, toToday)}
           aria-label={`Capture ${mode}`}
-          aria-describedby={line ? previewId : undefined}
+          aria-describedby={line ? previewId : preview ? parseId : undefined}
           aria-invalid={invalid || undefined}
           className={cx(
             'min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-ink outline-none',
             'placeholder:text-ink-muted',
           )}
         />
+        {mode === 'task' && (
+          <button
+            type="button"
+            onClick={review}
+            disabled={!text.trim()}
+            aria-label={preview?.result ? 'Save reviewed task' : 'Review before saving'}
+            title="Review before saving (⌘Enter)"
+            className={cx(
+              'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition',
+              preview?.result
+                ? 'border-teal bg-teal-soft text-ink'
+                : text.trim()
+                  ? 'border-line text-ink-muted hover:text-ink'
+                  : 'border-line text-ink-subtle',
+            )}
+          >
+            <SparkleIcon size={16} />
+          </button>
+        )}
         <button
           type="button"
           onClick={submit}
@@ -320,6 +395,62 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
         </button>
       </div>
       <TokenSuggestions items={suggestions} onPick={accept} />
+      {/* Live, unlike the grammar row: it changes only on a Review press, so it speaks once per parse
+          (busy while parsing, so "Reading it…" isn't read first). */}
+      {preview && (
+        <div
+          id={parseId}
+          aria-live="polite"
+          aria-busy={preview.result === null || undefined}
+          className="flex max-h-24 flex-col gap-0.5 overflow-auto px-2 pt-1"
+        >
+          {preview.result === null ? (
+            <Text size="xs" tone="muted">
+              Reading it…
+            </Text>
+          ) : preview.result.ok ? (
+            <>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <Text size="xs" weight="medium" className="break-words">
+                  {preview.result.input.title}
+                </Text>
+                {preview.result.categoryLabel === null && (
+                  <Text size="xs" tone="muted">
+                    no category
+                  </Text>
+                )}
+                <TaskTokenChips line={previewLine(preview.result)} />
+              </div>
+              {preview.result.input.notes && (
+                <Text size="xs" tone="muted" className="line-clamp-2 break-words">
+                  {preview.result.input.notes}
+                </Text>
+              )}
+              {preview.result.dropped.map((w, i) => (
+                <Text key={`d${i}`} size="xs" tone="gold" className="break-words">
+                  {w}
+                </Text>
+              ))}
+            </>
+          ) : (
+            <Text size="xs" tone="gold" className="break-words">
+              Couldn&apos;t parse ({parseFailText(preview.result)}) — saving keeps it as typed
+            </Text>
+          )}
+        </div>
+      )}
+      {/* What a quick add saved, readable on a phone (the receipt above truncates). Hidden from screen
+          readers: the receipt's live region already announced the same summary. */}
+      {!line && !preview && (shown?.parsed || shown?.unparsed) && (
+        <Text
+          size="xs"
+          tone={shown.parsed ? 'teal' : 'gold'}
+          aria-hidden
+          className="block truncate px-2 pt-1"
+        >
+          {shown.parsed ?? `Couldn’t parse (${shown.unparsed}) — saved as typed`}
+        </Text>
+      )}
       {/* Not a live region — it would chatter on every keystroke. The field points here via
           aria-describedby, and a refused submit announces once through the receipt. */}
       {line && (
@@ -352,12 +483,14 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
 
 // Desktop-only keyboard affordance — on a phone there's no Tab key and the hint is just clutter,
 // which is also why the Send button is never hidden.
-function Hint({ suggesting }: { suggesting: boolean }) {
+function Hint({ suggesting, task }: { suggesting: boolean; task: boolean }) {
   return (
     <Text size="xs" tone="muted" className="hidden pr-1 sm:block">
       {suggesting
         ? 'Tab accepts · Enter saves · Shift+Tab switches'
-        : 'Tab switches · Enter saves · Shift+Enter new line'}
+        : task
+          ? 'Enter saves · ⌘Enter reviews · Tab switches'
+          : 'Tab switches · Enter saves · Shift+Enter new line'}
     </Text>
   );
 }
@@ -375,6 +508,8 @@ function Receipt({
     dest?: { today: boolean; planned: boolean };
     failed?: boolean;
     blocked?: Blocked;
+    parsed?: string;
+    unparsed?: string;
   };
 }) {
   if (receipt.blocked)
@@ -390,6 +525,21 @@ function Receipt({
       </Text>
     );
   const r = receiptFor(receipt.mode, receipt.dest);
+  // Not a failure — the task is saved — but it isn't what you meant, so it reads gold, not teal.
+  if (receipt.unparsed)
+    return (
+      <Text size="xs" tone="gold" className="block truncate pr-1">
+        Saved unparsed → {r.label}
+        <span className="sr-only">: couldn&apos;t parse ({receipt.unparsed}), saved as typed</span>
+      </Text>
+    );
+  if (receipt.parsed)
+    return (
+      <Text size="xs" tone="teal" className="block truncate pr-1">
+        {r.text} → {r.label}
+        <span className="sr-only">: {receipt.parsed}</span>
+      </Text>
+    );
   return (
     <Text size="xs" tone="teal" className="block truncate pr-1">
       {r.text} → {r.label}

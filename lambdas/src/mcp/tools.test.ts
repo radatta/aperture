@@ -6,6 +6,7 @@ import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
 import { BackendClient } from '../backend';
 import { InMemoryGoogle } from '../google/gateway';
+import { FakeAnthropic } from '../anthropic/gateway';
 import { fakePresigner } from '../s3/presigner';
 import { handleRpc } from '../handler';
 import { TOOLS } from './tools';
@@ -17,6 +18,7 @@ import type { ToolContext } from './types';
 function makeEnv() {
   const doc = new InMemoryDoc();
   const google = new InMemoryGoogle();
+  const anthropic = new FakeAnthropic();
   const uploads: { url: string; bytes: Buffer; contentType: string }[] = [];
   const now = () => 1_700_000_000_000;
   const setup = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
@@ -30,7 +32,7 @@ function makeEnv() {
       handleRpc(
         doc,
         { userId: 'local', method, args, now, google, stateSecret: 'test' },
-        { presigner: fakePresigner() },
+        { presigner: fakePresigner(), anthropic },
       ),
     upload: async (url, bytes, contentType) => {
       uploads.push({ url, bytes, contentType });
@@ -43,8 +45,55 @@ function makeEnv() {
     if (!tool) throw new Error(`no tool ${name}`);
     return tool.run(args, ctx);
   };
-  return { doc, google, uploads, setup, call };
+  return { doc, google, anthropic, uploads, setup, call };
 }
+
+describe('mcp tools — parse_task (Raycast quick add)', () => {
+  it("parses through the backend's flow against the active categories, writing nothing", async () => {
+    const { call, setup, anthropic } = makeEnv();
+    const cat = await setup.upsertCategory({ label: 'Aperture', isWork: true });
+    anthropic.next = {
+      ok: true,
+      fields: {
+        title: 'fix login',
+        notes: null,
+        categoryId: cat.id,
+        dueDay: null,
+        dueTime: '16:00',
+        estimateMin: 30,
+      },
+    };
+    const r = await call('parse_task', { text: 'aperture, fix login 4pm 30m' });
+    expect(r).toMatchObject({
+      ok: true,
+      source: 'haiku',
+      input: { title: 'fix login', categoryId: cat.id, dueTime: '16:00', estimateMin: 30 },
+      categoryLabel: 'Aperture',
+      dropped: [],
+    });
+    expect(anthropic.calls[0]).toMatchObject({
+      text: 'aperture, fix login 4pm 30m',
+      categories: [{ id: cat.id, label: 'Aperture' }],
+    });
+    expect((await call('list_tasks')) as Task[]).toHaveLength(0);
+  });
+
+  it('a model failure comes back as ok:false for a raw save', async () => {
+    const { call, anthropic } = makeEnv();
+    anthropic.next = { ok: false, reason: 'timeout' };
+    expect(await call('parse_task', { text: 'call bank' })).toEqual({
+      ok: false,
+      reason: 'timeout',
+    });
+  });
+
+  it('text is required and must be a string', async () => {
+    const { call, anthropic } = makeEnv();
+    await expect(call('parse_task', {})).rejects.toThrow(/"text" is required/);
+    await expect(call('parse_task', { text: 7 })).rejects.toThrow(/must be a string/);
+    expect(anthropic.calls).toHaveLength(0);
+  });
+});
 
 describe('mcp tools — tasks', () => {
   it('create → list, and status filter', async () => {

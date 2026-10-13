@@ -1,0 +1,144 @@
+import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
+import type { ModelOutcome } from '@aperture/shared';
+import type { AnthropicGateway, ParseRequest } from './gateway';
+import { PARSE_MODEL, parseOutputSchema, parseSystemPrompt } from './parsePrompt';
+
+// The live Claude API gateway: one raw fetch to /v1/messages (no SDK — a single fixed POST is neither
+// substantial logic nor subtle correctness, and matches the hand-rolled Google/Plaid gateways) plus the
+// API key from SSM SecureString `/aperture/<stage>/anthropic/api_key`, held for the warm container.
+// Wired ONLY in the Lambda entrypoints; testMode never reaches it. One attempt, no retries: a failure is
+// a raw save, which is cheaper than a second wait. One JSON log line per call — never the text or key.
+
+const API_URL = 'https://api.anthropic.com/v1/messages';
+
+type SsmLike = Pick<SSMClient, 'send'>;
+
+export interface LiveAnthropicConfig {
+  stage: string;
+  fetch?: typeof fetch;
+  ssm?: SsmLike;
+  log?: (line: string) => void;
+}
+
+interface MessagesResponse {
+  stop_reason?: string;
+  content?: { type: string; text?: string }[];
+  usage?: { input_tokens?: number; output_tokens?: number };
+  error?: { message?: string };
+}
+
+export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway {
+  const doFetch = cfg.fetch ?? fetch;
+  const ssm: SsmLike = cfg.ssm ?? new SSMClient({});
+  const log = cfg.log ?? ((line: string) => console.log(line));
+  const keyParam = `/aperture/${cfg.stage}/anthropic/api_key`;
+  let key: string | null = null;
+
+  async function apiKey(): Promise<string | null> {
+    if (key) return key;
+    try {
+      const res = await ssm.send(new GetParameterCommand({ Name: keyParam, WithDecryption: true }));
+      key = res.Parameter?.Value || null;
+    } catch (err) {
+      if (!(err instanceof Error && err.name === 'ParameterNotFound')) throw err;
+    }
+    return key;
+  }
+
+  async function call(
+    req: ParseRequest,
+  ): Promise<ModelOutcome & { usage?: MessagesResponse['usage'] }> {
+    let k: string | null;
+    try {
+      k = await apiKey();
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'unavailable',
+        detail: `key read failed (${(err as Error).name})`,
+      };
+    }
+    if (!k) return { ok: false, reason: 'unavailable', detail: 'no API key on this stage' };
+
+    let res: Response;
+    try {
+      res = await doFetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': k,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: PARSE_MODEL,
+          max_tokens: 1024,
+          thinking: { type: 'disabled' },
+          output_config: {
+            effort: 'low',
+            format: {
+              type: 'json_schema',
+              schema: parseOutputSchema(req.categories.map((c) => c.id)),
+            },
+          },
+          system: parseSystemPrompt(req.today, req.categories),
+          messages: [{ role: 'user', content: req.text }],
+        }),
+        signal: AbortSignal.timeout(req.timeoutMs),
+      });
+    } catch (err) {
+      const name = (err as Error).name;
+      return name === 'TimeoutError' || name === 'AbortError'
+        ? { ok: false, reason: 'timeout' }
+        : { ok: false, reason: 'network', detail: (err as Error).message };
+    }
+
+    let body: MessagesResponse;
+    try {
+      body = (await res.json()) as MessagesResponse;
+    } catch {
+      return { ok: false, reason: 'api', detail: `HTTP ${res.status}` };
+    }
+    if (!res.ok)
+      return {
+        ok: false,
+        reason: 'api',
+        detail: `HTTP ${res.status} ${body.error?.message ?? ''}`.trim(),
+      };
+    if (body.stop_reason !== 'end_turn')
+      return {
+        ok: false,
+        reason: 'api',
+        detail: body.stop_reason ?? 'no stop_reason',
+        usage: body.usage,
+      };
+    const text = body.content?.find((b) => b.type === 'text')?.text;
+    let fields: unknown;
+    try {
+      fields = JSON.parse(text ?? '');
+    } catch {
+      return { ok: false, reason: 'bad-json', usage: body.usage };
+    }
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields))
+      return { ok: false, reason: 'bad-json', usage: body.usage };
+    return { ok: true, fields, usage: body.usage };
+  }
+
+  return {
+    async parseTask(req) {
+      const started = Date.now();
+      const { usage, ...out } = await call(req);
+      log(
+        JSON.stringify({
+          event: 'parse_task',
+          ok: out.ok,
+          reason: out.ok ? undefined : out.reason,
+          ms: Date.now() - started,
+          chars: req.text.length,
+          input_tokens: usage?.input_tokens,
+          output_tokens: usage?.output_tokens,
+        }),
+      );
+      return out;
+    },
+  };
+}

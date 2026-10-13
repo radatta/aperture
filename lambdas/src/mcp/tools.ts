@@ -260,6 +260,18 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: 'parse_task',
+    description:
+      'Parse ONE natural-language quick-capture line (e.g. "aperture, fix login bug due fri 4pm 30m") into create_task fields with the server\'s Claude Haiku prompt — the same parse as the app\'s quick add — against the user\'s real day start and active categories. Writes nothing. Returns {ok:true, source, input, categoryLabel, dropped, today}: pass `input` straight to create_task; `dropped` names fields the model returned that were invalid and left out. {ok:false, reason, detail?} (reason: unavailable, timeout, network, api, bad-json, empty-title, grammar) means save the line raw as the title — never drop it. A line containing " | " is parsed by the strict bulk grammar instead (no model call); a grammar error returns ok:false with reason "grammar". When you can parse a line yourself, call create_task directly — this tool is for clients with no model (the Raycast hotkey).',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'the line as typed' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    run: (args, ctx) => ctx.dispatch('parseTask', [reqStr(args, 'text')]),
+  },
+  {
     name: 'update_task',
     description:
       'Patch fields on a task: title, categoryId (null clears), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→due→notes→estimate→status. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task. Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task).',
