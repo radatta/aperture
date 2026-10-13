@@ -11,7 +11,9 @@ import type { CreateTaskInput } from './api';
 import type { Category } from './types';
 
 // Longer than this is never sent to the model; the raw save still takes the whole line as the title.
-export const PARSE_TEXT_MAX = 5_000;
+// Sized to the model's output: the overflow comes back as notes, so a much longer line can't fit in
+// max_tokens (lambdas/src/anthropic/liveAnthropic.ts) or the 8s budget.
+export const PARSE_TEXT_MAX = 2_500;
 // The title length the prompt asks for. A prompt rule only — titles are stored verbatim.
 export const PARSE_TITLE_MAX = 80;
 
@@ -63,6 +65,11 @@ export const parseBudgetMs = (text: string): number =>
   Math.min(4_000 + Math.floor(text.length / 400) * 1_000, 8_000);
 
 const str = (v: unknown): v is string => typeof v === 'string';
+
+// One `input` shape for both sources: only the fields that are set. create_task (MCP) reads a present
+// null as "given" and rejects it, so a grammar line's nulls would turn a good parse into a raw save.
+const present = (input: CreateTaskInput): CreateTaskInput =>
+  Object.fromEntries(Object.entries(input).filter(([, v]) => v != null)) as CreateTaskInput;
 
 // Keep each field the server would accept; a bad one is dropped and named. The model's JSON is untrusted
 // (structured outputs can't carry numeric or calendar constraints), so this takes `unknown`. Returns null
@@ -133,7 +140,7 @@ export async function runQuickParse(
     return {
       ok: true,
       source: 'grammar',
-      input: toCreateInput(l),
+      input: present(toCreateInput(l)),
       categoryLabel: label,
       dropped: l.warnings,
       today: ctx.today,

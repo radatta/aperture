@@ -71,7 +71,7 @@ function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: {
 // deliberately gets the READ ssm grant only (no PutParameter/DeleteParameter): it never connects or
 // disconnects a Google account (that's the browser-only OAuth callback), so a write grant would be dead
 // permission. This is the ceiling on what the agent token can reach — DynamoDB + calendar events + the
-// user's own attachments, and nothing else.
+// user's own attachments — plus the Claude API key for parse_task (granted at the call site below).
 function grantBackendData(
   fn: NodejsFunction,
   table: dynamodb.Table,

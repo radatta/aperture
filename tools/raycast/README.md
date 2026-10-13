@@ -38,10 +38,10 @@ If macOS asks whether `security` may read a Keychain item, choose **Always Allow
 Type it the way you'd say it: a leading category word (`aperture,`), `due tmw` / `due fri 4pm`, `30m`.
 Haiku only sets what you stated — it never invents an estimate — and moves extra detail into notes.
 "Today" follows the app's day start (Settings, 4am by default), so `due tmw` typed at 1am means the day
-after the one you're still in. A line with `|` skips the model and takes the strict
-[bulk-add grammar](../../docs/areas/tasks/bulk-add.md). A time with no day (`call dentist 4pm`) means today. A due **time** also puts the task on
-Google Calendar (auto-sync). The toast shows what was
-**saved** (the server's copy), so a wrong guess is visible at once:
+after the one you're still in. A grammar line (space, pipe, space — `memo | ~30 #Admin`) skips the
+model and takes the strict [bulk-add grammar](../../docs/areas/tasks/bulk-add.md). A time with no day
+(`call dentist 4pm`) means today. A due **time** also puts the task on Google Calendar (auto-sync). The
+toast shows what was **saved** (the server's copy), so a wrong guess is visible at once:
 
 | toast                                                 | means                                                                                                                                                                                              |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

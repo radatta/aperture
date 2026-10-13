@@ -606,6 +606,7 @@ class StubClient implements ApiClient {
   // Quick add, offline: the same flow as the Lambda (shared runQuickParse) with a heuristic standing in
   // for Haiku. STUB_FAIL_NEXT_PARSE_KEY (stubParse.ts) fails the next one, to see the raw-save path.
   async parseTask(text: string): Promise<ParseTaskResult> {
+    if (typeof text !== 'string') throw new Error('text must be a string');
     const categories = this.alive(this.store.categories)
       .filter((c) => c.active)
       .map(({ id, label }) => ({ id, label }));

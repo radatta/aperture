@@ -45,9 +45,13 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     return key;
   }
 
-  async function call(
-    req: ParseRequest,
-  ): Promise<ModelOutcome & { usage?: MessagesResponse['usage'] }> {
+  // The outcome plus what the log line needs (`meta` never leaves this module).
+  type Called = ModelOutcome & {
+    meta?: { status?: number; stop?: string; usage?: MessagesResponse['usage'] };
+  };
+  const isTimeout = (err: unknown) => ['TimeoutError', 'AbortError'].includes((err as Error).name);
+
+  async function call(req: ParseRequest): Promise<Called> {
     let k: string | null;
     try {
       k = await apiKey();
@@ -71,7 +75,7 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         },
         body: JSON.stringify({
           model: PARSE_MODEL,
-          max_tokens: 1024,
+          max_tokens: 2048,
           thinking: { type: 'disabled' },
           output_config: {
             effort: 'low',
@@ -86,56 +90,65 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         signal: AbortSignal.timeout(req.timeoutMs),
       });
     } catch (err) {
-      const name = (err as Error).name;
-      return name === 'TimeoutError' || name === 'AbortError'
+      return isTimeout(err)
         ? { ok: false, reason: 'timeout' }
         : { ok: false, reason: 'network', detail: (err as Error).message };
     }
+    // A rotated or revoked key: drop the cached one so the next call re-reads SSM, not a recycle away.
+    if (res.status === 401) key = null;
 
     let body: MessagesResponse;
     try {
       body = (await res.json()) as MessagesResponse;
-    } catch {
-      return { ok: false, reason: 'api', detail: `HTTP ${res.status}` };
+    } catch (err) {
+      // The timeout signal also covers the body — a stream that stalls after the headers is a timeout.
+      if (isTimeout(err)) return { ok: false, reason: 'timeout', meta: { status: res.status } };
+      return {
+        ok: false,
+        reason: 'api',
+        detail: `HTTP ${res.status}`,
+        meta: { status: res.status },
+      };
     }
+    const meta = { status: res.status, stop: body.stop_reason, usage: body.usage };
     if (!res.ok)
       return {
         ok: false,
         reason: 'api',
         detail: `HTTP ${res.status} ${body.error?.message ?? ''}`.trim(),
+        meta,
       };
     if (body.stop_reason !== 'end_turn')
-      return {
-        ok: false,
-        reason: 'api',
-        detail: body.stop_reason ?? 'no stop_reason',
-        usage: body.usage,
-      };
+      return { ok: false, reason: 'api', detail: body.stop_reason ?? 'no stop_reason', meta };
     const text = body.content?.find((b) => b.type === 'text')?.text;
     let fields: unknown;
     try {
       fields = JSON.parse(text ?? '');
     } catch {
-      return { ok: false, reason: 'bad-json', usage: body.usage };
+      return { ok: false, reason: 'bad-json', meta };
     }
     if (!fields || typeof fields !== 'object' || Array.isArray(fields))
-      return { ok: false, reason: 'bad-json', usage: body.usage };
-    return { ok: true, fields, usage: body.usage };
+      return { ok: false, reason: 'bad-json', meta };
+    return { ok: true, fields, meta };
   }
 
   return {
     async parseTask(req) {
       const started = Date.now();
-      const { usage, ...out } = await call(req);
+      const { meta, ...out } = await call(req);
+      // status + stop_reason tell a revoked key (401) from a rate limit (429), an overload (529), a
+      // refusal or max_tokens — all `reason: 'api'` to the caller.
       log(
         JSON.stringify({
           event: 'parse_task',
           ok: out.ok,
           reason: out.ok ? undefined : out.reason,
+          status: meta?.status,
+          stop_reason: meta?.stop,
           ms: Date.now() - started,
           chars: req.text.length,
-          input_tokens: usage?.input_tokens,
-          output_tokens: usage?.output_tokens,
+          input_tokens: meta?.usage?.input_tokens,
+          output_tokens: meta?.usage?.output_tokens,
         }),
       );
       return out;

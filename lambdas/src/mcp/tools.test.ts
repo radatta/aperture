@@ -78,6 +78,20 @@ describe('mcp tools — parse_task (Raycast quick add)', () => {
     expect((await call('list_tasks')) as Task[]).toHaveLength(0);
   });
 
+  // Raycast passes `input` straight to create_task — a grammar line's unset fields must not arrive as
+  // nulls, which create_task reads as given and rejects (-32602).
+  it("a ' | ' line's input goes straight into create_task", async () => {
+    const { call, setup, anthropic } = makeEnv();
+    const cat = await setup.upsertCategory({ label: 'Admin', isWork: true });
+    const r = (await call('parse_task', { text: 'memo | #admin' })) as {
+      input: Record<string, unknown>;
+    };
+    expect(r.input).toEqual({ title: 'memo', categoryId: cat.id });
+    const t = (await call('create_task', r.input)) as Task;
+    expect(t).toMatchObject({ title: 'memo', categoryId: cat.id, estimateMin: null });
+    expect(anthropic.calls).toHaveLength(0);
+  });
+
   it('a model failure comes back as ok:false for a raw save', async () => {
     const { call, anthropic } = makeEnv();
     anthropic.next = { ok: false, reason: 'timeout' };

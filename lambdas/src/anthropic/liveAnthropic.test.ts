@@ -80,7 +80,7 @@ describe('createLiveAnthropic', () => {
     const body = JSON.parse(init.body as string);
     expect(body).toMatchObject({
       model: 'claude-haiku-5-5',
-      max_tokens: 1024,
+      max_tokens: 2048,
       thinking: { type: 'disabled' },
       output_config: { effort: 'low', format: { type: 'json_schema' } },
       messages: [{ role: 'user', content: LINE }],
@@ -95,6 +95,20 @@ describe('createLiveAnthropic', () => {
     await gw.parseTask(req);
     await gw.parseTask(req);
     expect(gets).toEqual([KEY_PARAM]);
+  });
+
+  it('a 401 drops the cached key, so a rotated key is picked up on the next call', async () => {
+    let status = 401;
+    const { gw, gets } = setup(() =>
+      status === 401
+        ? json(401, { error: { message: 'invalid x-api-key' } })
+        : message(JSON.stringify(FIELDS)),
+    );
+    expect(await gw.parseTask(req)).toMatchObject({ ok: false, reason: 'api' });
+    status = 200;
+    expect(await gw.parseTask(req)).toMatchObject({ ok: true });
+    await gw.parseTask(req);
+    expect(gets).toEqual([KEY_PARAM, KEY_PARAM]); // re-read once after the 401, then cached again
   });
 
   it('no key on the stage → unavailable, and no request is made', async () => {
@@ -133,6 +147,21 @@ describe('createLiveAnthropic', () => {
         { ok: false, reason: 'api', detail: 'HTTP 502' },
       ],
       [() => message('{}', 'refusal'), { ok: false, reason: 'api', detail: 'refusal' }],
+      [
+        () => message('{"title":"cut', 'max_tokens'),
+        { ok: false, reason: 'api', detail: 'max_tokens' },
+      ],
+      [
+        // Headers arrived, then the body stalled until the timeout signal fired.
+        () =>
+          ({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' })),
+          }) as unknown as Response,
+        { ok: false, reason: 'timeout' },
+      ],
       [() => message('not json'), { ok: false, reason: 'bad-json' }],
       [() => message('[1,2]'), { ok: false, reason: 'bad-json' }],
       [
@@ -174,14 +203,18 @@ describe('createLiveAnthropic', () => {
     expect(JSON.parse(logs[0]!)).toMatchObject({
       event: 'parse_task',
       ok: true,
+      status: 200,
+      stop_reason: 'end_turn',
       input_tokens: 420,
       output_tokens: 37,
       chars: LINE.length,
     });
+    // The status is what tells a revoked key from a rate limit or an overload in CloudWatch.
     expect(JSON.parse(failing.logs[0]!)).toMatchObject({
       event: 'parse_task',
       ok: false,
       reason: 'api',
+      status: 401,
     });
     for (const l of all) {
       expect(l).not.toContain(KEY);

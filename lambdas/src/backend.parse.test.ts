@@ -134,7 +134,7 @@ describe('backend parseTask', () => {
     const { b, anthropic } = makeBackend();
     anthropic.next = { ok: false, reason: 'timeout' };
     await b.parseTask('y'.repeat(1_000));
-    await b.parseTask('y'.repeat(4_000));
+    await b.parseTask('y'.repeat(2_000)); // 4s + 5s, capped at 8s
     expect(anthropic.calls.map((c) => c.timeoutMs)).toEqual([6_000, 8_000]);
   });
 });

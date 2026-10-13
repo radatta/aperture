@@ -176,7 +176,6 @@ describe('runQuickParse', () => {
         estimateMin: 30,
         dueDay: '2026-10-16',
         dueTime: '16:00',
-        notes: null,
       },
       categoryLabel: 'Aperture',
       dropped: [],
@@ -190,7 +189,9 @@ describe('runQuickParse', () => {
     expect(bad).toMatchObject({ ok: false, reason: 'grammar' });
     expect((bad as { detail: string }).detail).toMatch(/~/);
     const warn = await runQuickParse('fix it | #nope', ctx, model);
-    expect(warn).toMatchObject({ ok: true, categoryLabel: null, input: { categoryId: null } });
+    // Only set fields, same as a model parse — MCP's create_task rejects a present null.
+    expect(warn).toMatchObject({ ok: true, categoryLabel: null, input: { title: 'fix it' } });
+    expect(Object.keys((warn as { input: object }).input)).toEqual(['title']);
     expect((warn as { dropped: string[] }).dropped).toHaveLength(1);
     expect(model).not.toHaveBeenCalled();
   });

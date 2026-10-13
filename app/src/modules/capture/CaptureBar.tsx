@@ -26,11 +26,28 @@ import { applySuggestion, suggestionsFor, type Suggestion } from './suggestions'
 import { TokenSuggestions } from './TokenSuggestions';
 import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode } from './mode';
 import { useQuickParse } from './useQuickParse';
+import { outboxAdd, outboxRemove, outboxTakeStale } from './captureOutbox';
 import { previewLine, savedSummary } from './parsePreview';
 
 const RECEIPT_MS = 1800;
 // A quick add's receipt carries what was parsed — more to read than "Logged", so it stays longer.
 const PARSED_RECEIPT_MS = 4000;
+
+// A capture that couldn't go straight back into the field: its save failed while the field held a newer
+// one, it was left unsent when the app last closed (captureOutbox.ts), or Put back displaced it. It stays
+// visible, in full, until put back or discarded — a capture is never dropped behind the user's back.
+interface Parked {
+  key: number;
+  text: string;
+  mode: CaptureMode;
+  toToday: boolean;
+  why: 'failed' | 'restored' | 'set-aside';
+}
+const PARKED_LABEL: Record<Parked['why'], string> = {
+  failed: 'Couldn’t save:',
+  restored: 'Unsent when the app closed — it may have saved, check first:',
+  'set-aside': 'Set aside:',
+};
 
 // Why a submit was refused. Each keeps the text and says so — a refused capture is never silent. The
 // visible notice is just "Not saved" (the mode row is ~375px on a phone); the reason is in the preview row.
@@ -73,6 +90,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     dest?: { today: boolean; planned: boolean };
     failed?: boolean;
     blocked?: Blocked;
+    parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
     parsed?: string; // a quick add's readback (savedSummary)
     unparsed?: string; // why a quick add saved as typed (parseFailText)
     at: number;
@@ -81,6 +99,17 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   const previewId = useId();
   const parseId = useId();
   const quick = useQuickParse();
+  const clearPreview = quick.clear;
+  const [parked, setParked] = useState<Parked[]>([]);
+  const parkKey = useRef(0);
+  const park = (p: Omit<Parked, 'key'>) =>
+    setParked((list) => [...list, { ...p, key: ++parkKey.current }]);
+  // What the field holds right now, for a save that fails seconds later (Auto waits on the parse first):
+  // its restore must not overwrite a newer capture typed meanwhile.
+  const textRef = useRef(text);
+  useLayoutEffect(() => {
+    textRef.current = text;
+  });
 
   const createLog = useCreateLogEntry(today);
   const createTask = useCreateTask();
@@ -143,6 +172,25 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
 
   useAutoGrow(inputRef, text);
 
+  // A capture left unsent when the app last closed comes back, parked, never silently.
+  useEffect(() => {
+    const stale = outboxTakeStale(Date.now());
+    if (stale.length)
+      setParked((list) => [
+        ...list,
+        ...stale.map((e) => ({
+          key: ++parkKey.current,
+          text: e.text,
+          mode: e.mode,
+          toToday: e.toToday,
+          why: 'restored' as const,
+        })),
+      ]);
+  }, []);
+
+  // A preview belongs to the mode it was made in; switching away drops it.
+  useEffect(() => clearPreview(), [mode, clearPreview]);
+
   // "/" focuses capture from anywhere, unless you're already typing or a page claimed it first (the
   // Finances All tab's search, in the capture phase).
   useEffect(() => {
@@ -182,29 +230,47 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     // Promises (mutateAsync), not mutate's per-call callbacks: those fire only for the LATEST mutate, so
     // a failed capture followed by a quick second one would never restore — and quick add's parse puts
     // a second or more between Enter and the write, which made that window wide open.
+    // Back into the field only while it's empty: a newer capture typed meanwhile is never overwritten —
+    // the failed one is parked below instead, in full, and the receipt says where it went.
     const restore = () => {
-      setText((current) => (current === '' ? value : current));
+      if (textRef.current.trim()) {
+        park({ text: value, mode: submitted, toToday: goesToday, why: 'failed' });
+        setReceipt({ mode: submitted, failed: true, parked: true, at: Date.now() });
+        return;
+      }
+      textRef.current = value; // a second failure in the same tick must see the field as taken
+      setText(value);
       setCaret(value.length);
       setMode(submitted);
       if (goesToday) setToToday(true); // the retry should go where the first attempt was headed
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
     };
     const done = () => setReceipt({ mode: submitted, at: Date.now() });
-    if (submitted === 'task' && line) saveTask(toCreateInput(line), goesToday, restore, {});
+    if (submitted === 'task' && line) saveTask(toCreateInput(line), goesToday, restore, null, {});
     else if (submitted === 'task') {
       // Quick add (Auto): saves the shown preview if there is one, else waits on the parse — a Review
       // still in flight for this text is reused, never asked twice. A failed parse saves the line raw.
-      const shown = quick.previewFor(value)?.result;
-      void (shown ? Promise.resolve(shown) : quick.parse(value)).then((r) =>
-        r.ok
-          ? saveTask(r.input, goesToday, restore, {
-              parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped),
-            })
-          : saveTask({ title: value }, goesToday, restore, { unparsed: parseFailText(r) }),
-      );
-      quick.clear();
+      // Until the create settles the capture is also in the outbox, so closing the app can't lose it.
+      const reviewed = quick.previewFor(value)?.result;
+      const sent = outboxAdd({ text: value, mode: 'task', toToday: goesToday, at: Date.now() });
+      const settled = () => outboxRemove(sent);
+      void (reviewed ? Promise.resolve(reviewed) : quick.parse(value))
+        .then((r) =>
+          r.ok
+            ? saveTask(r.input, goesToday, restore, settled, {
+                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped),
+              })
+            : saveTask({ title: value }, goesToday, restore, settled, {
+                unparsed: parseFailText(r),
+              }),
+        )
+        .catch(() => {
+          settled();
+          restore();
+        });
     } else if (submitted === 'log') void createLog.mutateAsync(value).then(done, restore);
     else void createIdea.mutateAsync(value).then(done, restore);
+    quick.clear();
     setText('');
     setCaret(0);
     setToToday(false);
@@ -217,34 +283,60 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     input: CreateTaskInput,
     goesToday: boolean,
     restore: () => void,
+    settled: (() => void) | null,
     note: { parsed?: string; unparsed?: string },
   ) {
-    if (goesToday)
-      void createToday(input).then(
-        (r) =>
-          setReceipt({
-            mode: 'task',
-            dest: { today: true, planned: r.planned },
-            ...note,
-            at: Date.now(),
-          }),
-        restore,
-      );
-    else
-      void createTask
-        .mutateAsync(input)
-        .then(() => setReceipt({ mode: 'task', ...note, at: Date.now() }), restore);
+    const saved = goesToday
+      ? createToday(input).then(
+          (r) =>
+            setReceipt({
+              mode: 'task',
+              dest: { today: true, planned: r.planned },
+              ...note,
+              at: Date.now(),
+            }),
+          restore,
+        )
+      : createTask
+          .mutateAsync(input)
+          .then(() => setReceipt({ mode: 'task', ...note, at: Date.now() }), restore);
+    if (settled) void saved.finally(settled);
   }
 
-  // Review: the first press parses into a preview; a press while the preview shows saves exactly it.
-  // A ' | ' line has no model step — its grammar preview is already showing — so a press saves it.
+  // Put a parked capture back in the field; whatever the field held trades places with it (set aside,
+  // not lost).
+  function putBack(p: Parked) {
+    const current = text.trim();
+    setParked((list) => [
+      ...list.filter((x) => x !== p),
+      ...(current
+        ? [{ key: ++parkKey.current, text, mode, toToday, why: 'set-aside' as const }]
+        : []),
+    ]);
+    textRef.current = p.text;
+    setText(p.text);
+    setCaret(p.text.length);
+    setMode(p.mode);
+    setToToday(p.toToday);
+    inputRef.current?.focus();
+  }
+
+  // Review: the first press parses into a preview; a press while the preview shows saves exactly it, and
+  // a press on a failed one parses again (Enter still saves it as typed). A ' | ' line has no model step —
+  // its grammar preview is already showing — so a press saves it.
   function review() {
     const value = text.trim();
     if (mode !== 'task' || !value) return;
     const p = quick.previewFor(value);
-    if (line || p?.result) submit();
-    else if (!p) quick.review(value); // a parse already running for this text: wait for it
+    if (line || p?.result?.ok) submit();
+    else if (!p || p.result) quick.review(value); // null result = a parse already running: wait for it
+    inputRef.current?.focus();
   }
+  const reviewLabel = !preview?.result
+    ? 'Review before saving'
+    : preview.result.ok
+      ? 'Save reviewed task'
+      : 'Retry parse';
 
   function update(value: string) {
     setText(value);
@@ -358,19 +450,22 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
             'placeholder:text-ink-muted',
           )}
         />
-        {mode === 'task' && (
+        {/* No ✨ on a ' | ' line: it has no model step (⌘Enter still saves it, like Enter). */}
+        {mode === 'task' && !line && (
           <button
             type="button"
+            // Keep focus (and the phone keyboard) in the field, like the suggestion chips do.
+            onMouseDown={(e) => e.preventDefault()}
             onClick={review}
             disabled={!text.trim()}
-            aria-label={preview?.result ? 'Save reviewed task' : 'Review before saving'}
-            title="Review before saving (⌘Enter)"
+            aria-label={reviewLabel}
+            title={`${reviewLabel} (⌘Enter)`}
             className={cx(
               'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition',
-              preview?.result
+              preview?.result?.ok
                 ? 'border-teal bg-teal-soft text-ink'
                 : text.trim()
-                  ? 'border-line text-ink-muted hover:text-ink'
+                  ? 'border-teal text-teal hover:bg-teal-soft'
                   : 'border-line text-ink-subtle',
             )}
           >
@@ -419,7 +514,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
                     no category
                   </Text>
                 )}
-                <TaskTokenChips line={previewLine(preview.result)} />
+                <TaskTokenChips line={previewLine(preview.result)} today={preview.result.today} />
               </div>
               {preview.result.input.notes && (
                 <Text size="xs" tone="muted" className="line-clamp-2 break-words">
@@ -434,23 +529,51 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
             </>
           ) : (
             <Text size="xs" tone="gold" className="break-words">
-              Couldn&apos;t parse ({parseFailText(preview.result)}) — saving keeps it as typed
+              Couldn’t parse ({parseFailText(preview.result)}) — ✨ tries again, Enter saves it as
+              typed
             </Text>
           )}
         </div>
       )}
-      {/* What a quick add saved, readable on a phone (the receipt above truncates). Hidden from screen
-          readers: the receipt's live region already announced the same summary. */}
-      {!line && !preview && (shown?.parsed || shown?.unparsed) && (
+      {/* What a quick add saved, readable on a phone (the receipt above truncates), so it wraps. Hidden
+          from screen readers: the receipt's live region already announced the same summary. It gives
+          way as soon as you start the next capture or switch modes. */}
+      {!text && mode === 'task' && (shown?.parsed || shown?.unparsed) && (
         <Text
           size="xs"
           tone={shown.parsed ? 'teal' : 'gold'}
           aria-hidden
-          className="block truncate px-2 pt-1"
+          className="block break-words px-2 pt-1"
         >
-          {shown.parsed ?? `Couldn’t parse (${shown.unparsed}) — saved as typed`}
+          {shown.parsed ?? `Saved as typed — couldn’t parse (${shown.unparsed})`}
         </Text>
       )}
+      {parked.map((p) => (
+        <div key={p.key} className="flex items-start gap-2 px-2 pt-1">
+          <Text
+            size="xs"
+            tone={p.why === 'set-aside' ? 'muted' : 'danger'}
+            className="line-clamp-3 min-w-0 flex-1 break-words"
+          >
+            {PARKED_LABEL[p.why]} “{p.text}”
+          </Text>
+          <button
+            type="button"
+            onClick={() => putBack(p)}
+            className="shrink-0 rounded-md px-1 text-xs text-teal hover:underline"
+          >
+            Put back
+          </button>
+          <button
+            type="button"
+            aria-label={`Discard “${p.text}”`}
+            onClick={() => setParked((list) => list.filter((x) => x !== p))}
+            className="shrink-0 rounded-md px-1 text-xs text-ink-muted hover:text-ink"
+          >
+            ×
+          </button>
+        </div>
+      ))}
       {/* Not a live region — it would chatter on every keystroke. The field points here via
           aria-describedby, and a refused submit announces once through the receipt. */}
       {line && (
@@ -508,6 +631,7 @@ function Receipt({
     dest?: { today: boolean; planned: boolean };
     failed?: boolean;
     blocked?: Blocked;
+    parked?: boolean;
     parsed?: string;
     unparsed?: string;
   };
@@ -516,6 +640,12 @@ function Receipt({
     return (
       <Text size="xs" tone="danger" className="block truncate pr-1">
         Not saved<span className="sr-only">: {reason}</span>
+      </Text>
+    );
+  if (receipt.failed && receipt.parked)
+    return (
+      <Text size="xs" tone="danger" className="block truncate pr-1">
+        Couldn&apos;t save — kept below the box.
       </Text>
     );
   if (receipt.failed)

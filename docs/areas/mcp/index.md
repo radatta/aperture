@@ -49,6 +49,9 @@ every task/log/story/settings row, calendar event inserts on the connected Googl
 - **touch S3 keys outside `u/<sub>/`** — keys are minted server-side; IAM is object-scoped to `u/*`.
 - **delete a calendar event Aperture didn't create** — the pointer rule (only events whose `eventId`
   Aperture stored).
+- **spend the Claude API key beyond the parse** — `parse_task` sends one line to Haiku per call and
+  returns fields; it writes nothing. There is no rate cap on it (single user, ~$0.0003 a call, every call
+  logged as `event: parse_task`) — a leaked token could run up model spend until it's rotated.
 - **reach Plaid or change anything financial** — the MCP role has no Plaid SSM path or Lambda-invoke IAM,
   and the edge pins the Plaid gateway + sync invoker to no-ops (cdk `stacks.test` "the MCP function gets
   nothing Plaid"; `mcp/index.test` drives a finance tool through the edge and asserts the live ones are
@@ -345,9 +348,10 @@ Decisions (2026-10-12) — the parse moved to the server ([quick-add](../tasks/q
 
 - **The BFF owns the one prompt; the Mac holds no Anthropic key.** `parse_task` runs the shared
   `runQuickParse` against the user's live active categories and real `dayStartHour`, and validates
-  server-side, so the script lost its prompt, schema, field re-check and category cache. The
-  2026-10-09 bullets below on structured outputs, the cache and the 4am default describe the parse
-  that now runs in the Lambda (`lambdas/src/anthropic/`), except that "today" now reads Settings.
+  server-side, so the script lost its prompt, schema, field re-check and category cache. Of the
+  2026-10-09 bullets below, structured outputs and the field re-check now run in the Lambda
+  (`lambdas/src/anthropic/`, `validateParsedTask`); the category cache and the hard-coded 4am are
+  *superseded* — the enum is the live active list and "today" reads Settings.
 - **A failed `parse_task` (an `ok: false` result, an RPC error, a timeout at 12s) still adds the task
   raw**, with the reason in the red toast — unchanged behaviour, new reasons.
 
@@ -356,12 +360,14 @@ Decisions (2026-10-09):
 - **Haiku only parses; the script writes.** Rejected: giving Haiku the tools (the API's MCP connector, or
   `claude -p`) — the connector's bearer fails this edge's Cognito path, it adds model turns, it puts prod
   write tools in front of a one-liner, and a timeout no longer says whether the task was saved.
-- **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out). The ids
+- **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out; the cache
+  is superseded 2026-10-12, above). The ids
   come from `list_categories`, cached a day per stage on the Mac; a failed refresh uses the stale copy.
   The script re-checks each field against the server's rules and drops a bad one, naming it in the toast;
   if the server still rejects the args (`-32602`, raised before any write) it resends the line raw.
 - **"Today" uses the 4am day start** (`dayStartHour`'s default — no MCP tool reads Settings), so a
-  relative due date means what the app's Today means.
+  relative due date means what the app's Today means. *Superseded 2026-10-12:* the server reads the real
+  `dayStartHour`.
 - **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
   parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is quiet.
 - **A time with no day means today** (`call dentist 4pm`) — the user's call; a time whose day was
