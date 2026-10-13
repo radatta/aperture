@@ -140,7 +140,7 @@ describe('romReps', () => {
     expect(warn[0]?.axis).toBe('roll');
   });
 
-  it('requires an end-range hold to hit target when holdSec is set', () => {
+  it('a rep on a hold exercise counts only once the hold is up (D35)', () => {
     const holdRom = {
       ...base,
       id: 't-hold-rom',
@@ -155,14 +155,110 @@ describe('romReps', () => {
       reps: 10,
       holdSec: 1,
     } satisfies ExerciseDefinition;
-    // reached target range but returned immediately → not held → not "on target"
+    // reached target range but returned immediately → not held → no rep (and too brief to say so)
     const quick = fold(holdRom, [N(0, 0), N(0, 40), N(0, 0)]);
-    expect(of(quick.events, 'repCompleted')[0]?.reachedTarget).toBe(false);
-    expect(of(quick.events, 'repCompleted')[0]?.holdReached).toBe(false);
-    // held at end range ~1.3s before returning → on target
+    expect(of(quick.events, 'repCompleted')).toHaveLength(0);
+    expect(of(quick.events, 'holdReached')).toHaveLength(0);
+    expect(of(quick.events, 'holdShort')).toHaveLength(0);
+    // held at end range ~1.3s before returning → a rep, on target
     const held = fold(holdRom, [N(0, 0), ...repeat(N(0, 40), 40), N(0, 0)]);
-    expect(of(held.events, 'repCompleted')[0]?.reachedTarget).toBe(true);
-    expect(of(held.events, 'repCompleted')[0]?.holdReached).toBe(true);
+    expect(of(held.events, 'repCompleted')).toEqual([
+      expect.objectContaining({ reachedTarget: true, holdReached: true, count: 1 }),
+    ]);
+  });
+
+  describe('holdShort (a rep that came back early — D35)', () => {
+    const rom3 = {
+      ...base,
+      id: 't-hold-rom3',
+      name: 't',
+      measurement: 'measured',
+      kind: 'romReps',
+      axis: 'yaw',
+      direction: 'positive',
+      enterDeg: 15,
+      exitDeg: 8,
+      targetDeg: 30,
+      reps: 10,
+      holdSec: 3,
+    } satisfies ExerciseDefinition;
+    // n frames at 40° (the first only enters the zone, so held = (n − 1) / 30 s), then back to 0.
+    const out = (n: number, deg = 40) => [...repeat(N(0, deg), n), N(0, 0)];
+
+    it('a return before the hold is up says how long it was held and counts nothing', () => {
+      const { state, events } = fold(rom3, [N(0, 0), ...out(61)]);
+      const short = of(events, 'holdShort');
+      expect(short).toHaveLength(1);
+      expect(short[0]?.heldSec).toBeCloseTo(2, 5);
+      expect(of(events, 'repCompleted')).toHaveLength(0);
+      expect(of(events, 'holdReached')).toHaveLength(0);
+      expect(state).toMatchObject({ repsPos: 0, peakCount: 0, peakSum: 0, zone: 'neutral' });
+    });
+
+    it('the next full hold still counts as rep one', () => {
+      const { events } = fold(rom3, [N(0, 0), ...out(61), ...out(100)]);
+      expect(events.map((e) => e.type)).toEqual(['holdShort', 'holdReached', 'repCompleted']);
+      expect(of(events, 'holdReached')[0]?.count).toBe(1);
+      expect(of(events, 'repCompleted')[0]).toMatchObject({ count: 1, holdReached: true });
+    });
+
+    it('a sub-second excursion is silent (settling-in jitter); past a second it is said', () => {
+      expect(fold(rom3, [N(0, 0), ...out(25)]).events).toEqual([]); // ≈ 0.8 s
+      expect(of(fold(rom3, [N(0, 0), ...out(32)]).events, 'holdShort')).toHaveLength(1); // ≈ 1.03 s
+    });
+
+    it('short holds never complete the set, nor count toward the peak average', () => {
+      const one = { ...rom3, id: 't-hold-one', reps: 1 } satisfies ExerciseDefinition;
+      const shorts = fold(one, [N(0, 0), ...out(61, 50), ...out(61, 50)]);
+      expect(of(shorts.events, 'setCompleted')).toHaveLength(0);
+      expect(shorts.state.phase).toBe('active');
+      const done = fold(one, [N(0, 0), ...out(61, 50), ...out(100)]);
+      expect(of(done.events, 'setCompleted')[0]?.summary).toMatchObject({
+        count: 1,
+        avgPeakDeg: 40,
+      });
+    });
+
+    it('bilateral: a short hold on one side moves neither side nor the total', () => {
+      const bi = { ...rom3, id: 't-hold-bi', direction: 'bilateral' } satisfies ExerciseDefinition;
+      const { state, events } = fold(bi, [N(0, 0), ...out(61), ...out(100, -40)]);
+      expect(of(events, 'repCompleted')).toEqual([
+        expect.objectContaining({ side: 'negative', count: 1 }),
+      ]);
+      expect(state).toMatchObject({ repsPos: 0, repsNeg: 1 });
+    });
+
+    it('a hold that was reached still counts after dipping into the 8–15° band (the spoken count holds)', () => {
+      const { events } = fold(rom3, [
+        N(0, 0),
+        ...repeat(N(0, 40), 100), // ≈ 3.3 s — hold reached, count spoken
+        ...repeat(N(0, 12), 20), // easing off, still above exitDeg
+        N(0, 0),
+      ]);
+      expect(events.map((e) => e.type)).toEqual(['holdReached', 'repCompleted']);
+      expect(of(events, 'repCompleted')[0]?.count).toBe(1);
+    });
+
+    it('bilateral: a jump straight to the other side is a return, not hold time there', () => {
+      const bi = {
+        ...rom3,
+        id: 't-hold-jump',
+        direction: 'bilateral',
+      } satisfies ExerciseDefinition;
+      // 2 s at +40, then a dropout-style jump to −40 held another 2 s, then neutral
+      const { state, events } = fold(bi, [N(0, 0), ...repeat(N(0, 40), 61), ...out(61, -40)]);
+      expect(of(events, 'holdReached')).toHaveLength(0); // 2 s + 2 s never adds up to one 3 s hold
+      expect(of(events, 'holdShort').map((e) => Math.round(e.heldSec))).toEqual([2, 2]);
+      expect(state).toMatchObject({ repsPos: 0, repsNeg: 0 });
+    });
+
+    it('once held, reachedTarget is purely the peak', () => {
+      const { events } = fold(rom3, [N(0, 0), ...out(100, 20)]);
+      expect(of(events, 'repCompleted')[0]).toMatchObject({
+        reachedTarget: false,
+        holdReached: true,
+      });
+    });
   });
 
   describe('holdReached (the count, spoken when the hold is up — D32)', () => {
@@ -208,10 +304,10 @@ describe('romReps', () => {
       expect(before).toBe(1);
     });
 
-    it('is not emitted on an early return (the rep still counts, aloud)', () => {
-      const { events } = fold(holdRom, [N(0, 0), N(0, 40), N(0, 0)]);
-      expect(of(events, 'holdReached')).toHaveLength(0);
-      expect(of(events, 'repCompleted')[0]).toMatchObject({ holdReached: false, count: 1 });
+    it('an early return is not a rep: no holdReached, no count', () => {
+      const { state, events } = fold(holdRom, [N(0, 0), N(0, 40), N(0, 0)]);
+      expect(events).toEqual([]); // and too brief for "Hold longer"
+      expect(state).toMatchObject({ repsPos: 0, zone: 'neutral' });
     });
 
     it('is not emitted when the exercise has no hold', () => {

@@ -62,7 +62,7 @@ export interface RomRepsSpec {
   readonly exitDeg: number; // must return below this (exit < enter → hysteresis)
   readonly targetDeg: number; // goal excursion (drives the ring + reachedTarget)
   readonly reps: number; // per side if bilateral, else total
-  readonly holdSec?: number; // optional end-range hold per rep (0/undefined = none)
+  readonly holdSec?: number; // end-range hold per rep — a return before it's up doesn't count (D35); 0/undefined = none
 }
 
 // B. Hold at a (possibly multi-signal) target head position for holdSec.
@@ -201,9 +201,11 @@ export type ExerciseEvent =
       readonly peakDeg: number;
       readonly reachedTarget: boolean;
       readonly count: number; // reps done this set, this one included — what the voice counts
-      readonly holdReached: boolean; // the count was already spoken at holdReached — the voice stays quiet
+      // True for every counted rep of a hold exercise (a short hold isn't a rep, D35), whose count was
+      // spoken at holdReached — the voice stays quiet; false with no hold, so it counts on return.
+      readonly holdReached: boolean;
     }
-  // romReps with holdSec: the end-range hold time is up — the voice counts now, the rep counts on return.
+  // romReps with holdSec: the end-range hold time is up — the voice counts now; the rep counts on return.
   | { readonly type: 'holdReached'; readonly count: number } // repsPos + repsNeg + 1, the pending count
   | { readonly type: 'holdStarted'; readonly index: number }
   | {
@@ -215,6 +217,8 @@ export type ExerciseEvent =
   | { readonly type: 'positionLost' }
   // holdAtTarget: left the target after a meaningful hold; positionLost stays silent for flicker.
   | { readonly type: 'holdBroken'; readonly heldSec: number }
+  // romReps with holdSec: back below exitDeg before the hold was up — no rep (D35); said past 1 s held.
+  | { readonly type: 'holdShort'; readonly heldSec: number }
   | { readonly type: 'driftWarning'; readonly axis: Axis; readonly deg: number }
   | {
       readonly type: 'postureWarning'; // moving off-plane during a single-axis move

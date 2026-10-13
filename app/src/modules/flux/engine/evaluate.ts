@@ -35,6 +35,9 @@ const HOLD_BROKEN_MIN_SEC = 1;
 // …and only once the head has stayed out this long (edge jitter or a dropped face frame late in a
 // long hold comes straight back; saying it then would be wrong with your eyes closed).
 const HOLD_BROKEN_OUT_SEC = 0.3;
+// A ROM return before the hold is up is said (a failed attempt, D35) only past the same bar; shorter is
+// settling-in jitter.
+const HOLD_SHORT_MIN_SEC = HOLD_BROKEN_MIN_SEC;
 const AXES: readonly Axis[] = ['pitch', 'yaw', 'roll'];
 
 // The full definition narrowed to one kind (base fields + that kind's spec).
@@ -221,33 +224,45 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
     }
   } else {
     peakThisRep = zone === 'positive' ? Math.max(peakThisRep, v) : Math.min(peakThisRep, v);
+    // The excursion measured on its own side: a jump straight to the other side (a face dropout
+    // mid-swing) is a return, never hold time on the wrong side.
+    const out = zone === 'positive' ? v : -v;
     // Accumulate the end-range hold while the position is held past enterDeg, and say the count the
-    // moment it's up (eyes closed, D32) — once per excursion; the rep still counts on return.
-    if (Math.abs(v) >= def.enterDeg) {
+    // moment it's up (eyes closed, D32) — once per excursion; the rep counts on return only if the
+    // hold reached holdSec (D35).
+    if (out >= def.enterDeg) {
       const prev = holdAccumSec;
       holdAccumSec += dtv;
       if (holdSec > 0 && prev < holdSec && holdAccumSec >= holdSec)
         events.push({ type: 'holdReached', count: repsPos + repsNeg + 1 });
     }
-    if (Math.abs(v) <= def.exitDeg) {
+    if (out <= def.exitDeg) {
       const peakDeg = Math.abs(peakThisRep);
       const holdReached = holdSec > 0 && holdAccumSec >= holdSec;
-      const held = holdSec === 0 || holdReached;
-      const reachedTarget = peakDeg >= def.targetDeg && held;
-      const side =
-        def.direction === 'bilateral' ? (zone === 'positive' ? 'positive' : 'negative') : 'single';
-      if (zone === 'positive') repsPos++;
-      else repsNeg++;
-      peakSum += peakDeg;
-      peakCount++;
-      events.push({
-        type: 'repCompleted',
-        side,
-        peakDeg,
-        reachedTarget,
-        holdReached,
-        count: repsPos + repsNeg,
-      });
+      const short = holdSec > 0 && !holdReached;
+      // Back before the hold was up: not a rep (D35). Below the bar it's jitter — say nothing.
+      if (short && holdAccumSec >= HOLD_SHORT_MIN_SEC)
+        events.push({ type: 'holdShort', heldSec: holdAccumSec });
+      if (!short) {
+        const side =
+          def.direction === 'bilateral'
+            ? zone === 'positive'
+              ? 'positive'
+              : 'negative'
+            : 'single';
+        if (zone === 'positive') repsPos++;
+        else repsNeg++;
+        peakSum += peakDeg;
+        peakCount++;
+        events.push({
+          type: 'repCompleted',
+          side,
+          peakDeg,
+          reachedTarget: peakDeg >= def.targetDeg, // held is guaranteed here
+          holdReached,
+          count: repsPos + repsNeg,
+        });
+      }
       zone = 'neutral';
       peakThisRep = 0;
       holdAccumSec = 0;

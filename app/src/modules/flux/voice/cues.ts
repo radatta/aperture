@@ -2,8 +2,8 @@
 // no Date.now — time is passed in — so it's deterministic and unit-testable. The
 // effectful SpeechSynthesis calls live in speaker.ts. Cooldowns run off the last
 // *spoken* time so dropped candidates don't shift the clock. Rep counts, "Set
-// complete" and "And release" bypass every gate and queue, so a number — or the
-// release you're waiting for with your eyes closed — is never dropped (D27, D34).
+// complete", "And release" and "Hold longer" bypass every gate and queue, so a number — or the
+// release you're waiting for with your eyes closed — is never dropped (D27, D34, D35).
 
 import type { ExerciseEvent } from '@aperture/shared/flux';
 
@@ -53,7 +53,7 @@ function phraseFor(e: ExerciseEvent): Utterance | null {
     case 'holdReached':
       return { text: countWord(e.count), priority: 'always' };
     case 'repCompleted':
-      // With an end-range hold the count was spoken at holdReached; an early return still counts aloud.
+      // With an end-range hold the count was spoken at holdReached; with no hold it counts aloud on return.
       return e.holdReached ? null : { text: countWord(e.count), priority: 'always' };
     case 'holdStarted':
       return { text: 'Hold', priority: 'normal' };
@@ -62,6 +62,9 @@ function phraseFor(e: ExerciseEvent): Utterance | null {
       return { text: 'And release', priority: 'always' };
     case 'holdBroken':
       return { text: 'Back into position', priority: 'normal' };
+    case 'holdShort':
+      // Eyes closed, it's the only sign the rep didn't count; paced by a full excursion, so it can't chatter.
+      return { text: 'Hold longer', priority: 'always' };
     case 'positionReached':
       return { text: 'Hold it there', priority: 'normal' };
     case 'trialCompleted':

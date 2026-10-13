@@ -165,8 +165,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           if (r.utterance) {
             o.voice.speak(r.utterance);
             // Mirrored on the HUD, so a muted phone (silent switch, ducking) still shows the cue —
-            // except counts (repCompleted, holdReached): the readout's number (or, at the hold, its
-            // ring turning gold) already says it.
+            // except counts (repCompleted, holdReached), the only unmirrored cues: the readout's number
+            // (or, at the hold, its ring turning gold) already says it. "Hold longer" is mirrored.
             if (e.event.type !== 'repCompleted' && e.event.type !== 'holdReached') {
               setLastCue(r.utterance.text);
               clearTimeout(cueTimer.current);

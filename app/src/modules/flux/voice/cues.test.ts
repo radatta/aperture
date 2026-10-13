@@ -75,7 +75,7 @@ describe('reduceCue', () => {
     expect(out).toEqual(['Three']);
   });
 
-  it('an early return (hold not reached) is still counted aloud', () => {
+  it('a rep with no hold (eye–head coordination) is counted aloud on return', () => {
     expect(reduceCue(initialCueState, rep(4, false, false), 0).utterance?.text).toBe('Four');
   });
 
@@ -92,6 +92,26 @@ describe('reduceCue', () => {
       { e: SET_DONE, t: 1500 },
     ]);
     expect(out).toEqual(['Twenty', 'Set complete. Well done.']);
+  });
+
+  it('says Hold longer for a short hold, never dropped', () => {
+    const short: ExerciseEvent = { type: 'holdShort', heldSec: 2 };
+    expect(reduceCue(initialCueState, short, 0).utterance).toEqual({
+      text: 'Hold longer',
+      priority: 'always',
+    });
+    expect(
+      speak([
+        { e: holdUp(2), t: 0 },
+        { e: short, t: 100 }, // inside the 600 ms gap
+      ]),
+    ).toEqual(['Two', 'Hold longer']);
+    expect(
+      speak([
+        { e: short, t: 0 },
+        { e: short, t: 1000 }, // inside the 1.2 s dedup
+      ]),
+    ).toEqual(['Hold longer', 'Hold longer']);
   });
 
   it('says Back into position after a broken hold, on a 3 s cooldown', () => {

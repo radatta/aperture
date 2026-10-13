@@ -87,7 +87,7 @@ function Feedback({
                 <HoldRing
                   {...ring}
                   sublabel={
-                    state.zone !== 'neutral' ? 'hold at end range' : `${def.holdSec}s each rep`
+                    state.zone !== 'neutral' ? 'hold at end range' : `hold ${def.holdSec}s to count`
                   }
                 />
               </div>

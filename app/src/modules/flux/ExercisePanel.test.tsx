@@ -58,7 +58,7 @@ describe('ExercisePanel', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
     expect(screen.getByText('Side A')).toBeTruthy();
     expect(screen.getByText('Side B')).toBeTruthy();
-    expect(screen.getByText('4s each rep')).toBeTruthy();
+    expect(screen.getByText('hold 4s to count')).toBeTruthy();
     expect(screen.getByText(/Keep steady — move only in this plane/)).toBeTruthy();
   });
 
