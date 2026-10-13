@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getExercise, type ExerciseDefinition, type ExerciseState } from '@aperture/shared/flux';
 import { initialState } from './engine/evaluate';
@@ -124,7 +124,7 @@ describe('ExercisePanel', () => {
     const def = getExercise('deep-neck-flexor');
     const onControl = panel(def, initialState(def));
     // Starts itself once the neutral is set (D41); the button is the override.
-    expect(screen.getByText('10 reps · starts on its own once your neutral is set')).toBeTruthy();
+    expect(screen.getByText('10 reps · starts once your neutral is set')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Start now' }));
     expect(onControl).toHaveBeenCalledWith({ type: 'start' });
     render(
@@ -145,6 +145,35 @@ describe('ExercisePanel', () => {
     );
     expect(screen.getByText('HOLD')).toBeTruthy();
     expect(screen.getByText('Rep 1 / 10')).toBeTruthy();
+    cleanup();
+    // Once the neutral is set the lead-in is running: no longer "once your neutral is set".
+    render(
+      <ExercisePanel
+        def={def}
+        sample={IDLE_SAMPLE}
+        state={initialState(def)}
+        calibrated
+        onControl={() => {}}
+      />,
+    );
+    expect(screen.getByText('10 reps · starting…')).toBeTruthy();
+    cleanup();
+    render(
+      <ExercisePanel
+        def={def}
+        sample={IDLE_SAMPLE}
+        state={
+          {
+            ...initialState(def),
+            phase: 'active',
+            segment: 'hold',
+            segmentElapsedSec: 4,
+            drifting: true,
+          } as ExerciseState
+        }
+        onControl={() => {}}
+      />,
+    );
     expect(screen.getByText('Keep your head still')).toBeTruthy();
     expect(screen.getAllByText(/the angle isn't measured/).length).toBeGreaterThan(0);
   });
@@ -174,7 +203,7 @@ describe('ExercisePanel', () => {
         onControl={() => {}}
       />,
     );
-    expect(screen.getByText('30s · starts on its own once your neutral is set')).toBeTruthy();
+    expect(screen.getByText('30s · starts once your neutral is set')).toBeTruthy();
     unmount();
     panel(def, {
       ...initialState(def),

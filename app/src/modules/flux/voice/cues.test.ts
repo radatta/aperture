@@ -160,7 +160,13 @@ describe('reduceCue', () => {
     expect(out).toEqual(['And release', 'Set complete. Well done.']);
   });
 
-  it('still gates the other phrases: a second Hold inside the gap is dropped', () => {
+  it('the guided Hold is never gapped (it starts the push), but keeps its 500 ms cooldown', () => {
+    expect(
+      speak([
+        { e: { type: 'neutralSet' }, t: 0 },
+        { e: { type: 'holdStarted', index: 0 }, t: 100 }, // inside the 600 ms gap
+      ]),
+    ).toEqual(['Neutral set', 'Hold']);
     const out = speak([
       { e: { type: 'holdStarted', index: 0 }, t: 0 },
       { e: { type: 'holdStarted', index: 1 }, t: 300 },
@@ -283,11 +289,18 @@ describe('reduceCue', () => {
         { text: 'Other side', priority: 'always' },
         { text: 'Session complete.', priority: 'always' },
         { text: "Can't see you", priority: 'always' },
-        { text: 'Tracking', priority: 'normal' },
+        { text: 'Tracking', priority: 'always' },
+      ]);
+      expect(
+        (['cameraPaused', 'trackingStopped', 'setRestarted'] as const).map((type) => say({ type })),
+      ).toEqual([
+        { text: 'Camera paused', priority: 'always' },
+        { text: 'Tracking stopped', priority: 'always' },
+        { text: 'Set restarted', priority: 'always' },
       ]);
     });
 
-    it('"Can\'t see you" is never gapped but repeats no sooner than 5 s; "Tracking" is deduped', () => {
+    it('"Can\'t see you" is never gapped but repeats no sooner than 5 s; "Tracking" is never gapped', () => {
       expect(
         speak([
           { e: { type: 'holdEntered', count: 1 }, t: 0 },
@@ -298,11 +311,10 @@ describe('reduceCue', () => {
       ).toEqual(['Hold', "Can't see you", "Can't see you"]);
       expect(
         speak([
-          { e: { type: 'faceFound' }, t: 0 },
-          { e: { type: 'faceFound' }, t: 1000 }, // inside the 1.2 s dedup
-          { e: { type: 'faceFound' }, t: 1300 },
+          { e: { type: 'faceLost' }, t: 0 },
+          { e: { type: 'faceFound' }, t: 300 }, // inside the gap — the hook paces it, once per loss
         ]),
-      ).toEqual(['Tracking', 'Tracking']);
+      ).toEqual(["Can't see you", 'Tracking']);
     });
 
     it('the hint repeats no sooner than every 20 s', () => {

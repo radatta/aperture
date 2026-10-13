@@ -269,6 +269,8 @@ describe('Flux session, hands free (D40–D42)', () => {
     act(() => s.fake().event(done));
     expect(s.fake().calls.at(-1)).toBe('stop');
     expect(await screen.findByRole('button', { name: 'Start camera' })).toBeTruthy();
+    // The spoken end has a visual mirror on the idle stage, for a muted phone.
+    expect(screen.getByText('Session complete.')).toBeTruthy();
   });
 });
 

@@ -7,7 +7,7 @@ import { cx } from '../../lib/cx';
 import { romHoldDeg } from './engine/evaluate';
 import type { Sample } from './engine/protocol';
 import { HoldRing } from './HoldRing';
-import { liveReadout } from './readout';
+import { liveReadout, repositionStep, romShort } from './readout';
 
 // Live, per-kind exercise feedback derived from definition + evaluator state — flux-track's panel, with
 // its strings, restyled to Aperture's tokens. Aperture adds a finished state + Again to the two kinds
@@ -21,12 +21,14 @@ export function ExercisePanel({
   sample,
   state,
   idle = false,
+  calibrated = false,
   onControl,
 }: {
   def: ExerciseDefinition;
   sample: Sample;
   state: ExerciseState | null;
   idle?: boolean; // camera not started: say so instead of "Getting ready…"
+  calibrated?: boolean; // a timed kind's Start block then says it's starting, not waiting (D41)
   onControl: (c: EvalControl) => void;
 }) {
   return (
@@ -36,7 +38,13 @@ export function ExercisePanel({
           Start the camera to begin.
         </Text>
       ) : (
-        <Feedback def={def} sample={sample} state={state} onControl={onControl} />
+        <Feedback
+          def={def}
+          sample={sample}
+          state={state}
+          calibrated={calibrated}
+          onControl={onControl}
+        />
       )}
       <div className="mt-5 flex flex-col gap-3 border-t border-line pt-4">
         <Text as="p" size="sm" className="leading-relaxed">
@@ -61,11 +69,13 @@ function Feedback({
   def,
   sample,
   state,
+  calibrated,
   onControl,
 }: {
   def: ExerciseDefinition;
   sample: Sample;
   state: ExerciseState | null;
+  calibrated: boolean;
   onControl: (c: EvalControl) => void;
 }) {
   const live = liveReadout(def, state);
@@ -92,9 +102,11 @@ function Feedback({
                   sublabel={
                     state.zone === 'neutral'
                       ? `hold ${def.holdSec}s to count`
-                      : ring.label === 'further'
+                      : romShort(def, state)
                         ? 'a little further'
-                        : 'hold at end range'
+                        : state.holdAccumSec >= (def.holdSec ?? 0)
+                          ? 'now come back'
+                          : 'hold at end range'
                   }
                 />
               </div>
@@ -125,7 +137,7 @@ function Feedback({
                   <span
                     aria-hidden
                     data-testid="hold-zone-mark"
-                    className="absolute -top-0.5 h-3 w-0.5 rounded-full bg-ink-muted"
+                    className="absolute -top-0.5 h-3 w-0.5 rounded-full bg-ink"
                     style={{ left: `${zonePct}%` }}
                   />
                 )}
@@ -208,7 +220,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
-            auto
+            auto={calibrated ? 'starting' : 'waiting'}
             reps={def.reps}
             onStart={() => onControl(start)}
           />
@@ -221,12 +233,13 @@ function Feedback({
   }
 
   if (def.kind === 'reposition' && state?.kind === 'reposition') {
+    const step = repositionStep(def, state);
     const prompt =
       state.phase !== 'active'
         ? null
-        : state.sub === 'away'
+        : step === 'away'
           ? 'Turn your head away from neutral'
-          : state.sub === 'returning'
+          : step === 'returning'
             ? 'Now return to your neutral'
             : 'Hold still…';
     const avg = state.errorCount ? state.errorSum / state.errorCount : null;
@@ -247,7 +260,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
-            auto
+            auto={calibrated ? 'starting' : 'waiting'}
             reps={def.reps}
             onStart={() => onControl(start)}
             avgError={avg}
@@ -270,7 +283,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
-            auto
+            auto={calibrated ? 'starting' : 'waiting'}
             reps={0}
             label={`${def.durationSec}s`}
             onStart={() => onControl(start)}
@@ -313,17 +326,18 @@ function SideStat({ label, n, target }: { label: string; n: number; target: numb
   );
 }
 
-// `auto`: a kind the session starts by itself once the neutral is set (D41) — the button is the override.
+// `auto`: a kind the session starts by itself once the neutral is set (D41) — waiting for the neutral, or
+// already counting down to the start. The button is the override.
 function StartBlock({
   done,
-  auto = false,
+  auto,
   reps,
   label,
   avgError,
   onStart,
 }: {
   done: boolean;
-  auto?: boolean;
+  auto?: 'waiting' | 'starting';
   reps: number;
   label?: string;
   avgError?: number | null;
@@ -346,7 +360,11 @@ function StartBlock({
       ) : (
         <Text as="p" size="sm" tone="muted">
           {reps > 0 ? `${reps} reps` : label} ·{' '}
-          {auto ? 'starts on its own once your neutral is set' : 'get into position, then start'}
+          {auto === 'waiting'
+            ? 'starts once your neutral is set'
+            : auto === 'starting'
+              ? 'starting…'
+              : 'get into position, then start'}
         </Text>
       )}
       <Button onClick={onStart} className="gap-2 px-5">

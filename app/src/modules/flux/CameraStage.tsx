@@ -97,6 +97,13 @@ export function CameraStage({
             </>
           ) : (
             <>
+              {engine.sessionDone && status === 'idle' && (
+                // The spoken "Session complete." ends the session in the same tick, so the cue bubble
+                // never shows it — this is its mirror for a muted phone (D42).
+                <Text as="p" size="sm" weight="medium" tone="gold">
+                  Session complete.
+                </Text>
+              )}
               <Text as="p" size="sm" className="max-w-xs">
                 Sit facing the camera at arm&apos;s length. Nothing leaves your device — all
                 tracking runs locally.

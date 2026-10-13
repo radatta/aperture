@@ -425,4 +425,95 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(v.cancel).toHaveBeenCalled();
     expect(onSessionEnd).not.toHaveBeenCalled();
   });
+
+  it('a second loss inside the 5 s cooldown is said once the cooldown allows, not dropped', async () => {
+    const { v, fake, advance } = await running();
+    act(() => fake().sample({ faceVisible: true, tSec: 0 }));
+    act(() => fake().sample({ faceVisible: false, tSec: 0.1 }));
+    act(() => fake().sample({ faceVisible: false, tSec: 1.2 })); // "Can't see you" at clock 1 s
+    act(() => fake().sample({ faceVisible: true, tSec: 1.3 }));
+    advance(700);
+    act(() => fake().sample({ faceVisible: true, tSec: 2 })); // "Tracking"
+    act(() => fake().sample({ faceVisible: false, tSec: 2.1 }));
+    advance(1_500);
+    act(() => fake().sample({ faceVisible: false, tSec: 3.3 })); // lost again — inside the cooldown
+    expect(spoken(v).filter((t) => t === "Can't see you")).toHaveLength(1);
+    advance(3_000);
+    act(() => fake().sample({ faceVisible: false, tSec: 6.3 }));
+    expect(spoken(v)).toEqual(["Can't see you", 'Tracking', "Can't see you"]);
+  });
+
+  it('Again during the rest is the next set now: its cue, its side flip, a clean start', async () => {
+    const { hook, v, fake, onNextSet, advance } = await running({
+      exerciseId: 'upper-trap-stretch',
+      side: 'a',
+    });
+    act(() => fake().event(DONE));
+    advance(5_000);
+    act(() => hook.result.current.control({ type: 'start' }));
+    expect(onNextSet).toHaveBeenCalledWith(1);
+    expect(spoken(v).at(-1)).toBe('Other side');
+    expect(fake().calls.slice(-2)).toEqual(['control:stop', 'control:start']);
+    advance(30_000); // the rest is spent: nothing fires again
+    expect(onNextSet).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Re-calibrate during the rest keeps the rest and its next-set cue', async () => {
+    const { v, fake, onNextSet, advance } = await running({
+      exerciseId: 'deep-neck-flexor',
+      kind: 'guidedHold',
+    });
+    act(() => fake().calibrated(true, true));
+    advance(3_000);
+    act(() => fake().event(DONE));
+    advance(10_000);
+    act(() => fake().calibrated(true));
+    advance(5_000);
+    expect(starts(fake().calls)).toBe(1); // no 3 s lead-in cut the rest short
+    advance(15_000);
+    expect(onNextSet).toHaveBeenCalledWith(1);
+    expect(spoken(v).at(-1)).toBe('Set two');
+    advance(3_000);
+    expect(starts(fake().calls)).toBe(2);
+  });
+
+  it('a timed exercise acknowledged after the neutral still starts itself', async () => {
+    const { hook, v, fake, advance } = await running({
+      exerciseId: 'deep-neck-flexor',
+      kind: 'guidedHold',
+      acknowledged: false,
+    });
+    act(() => fake().calibrated(true, true));
+    expect(spoken(v)).toEqual(['Neutral set']);
+    hook.rerender({
+      exerciseId: 'deep-neck-flexor',
+      kind: 'guidedHold',
+      side: null,
+      condition: null,
+      acknowledged: true,
+      voice: v,
+    });
+    expect(spoken(v).at(-1)).toBe('Get ready');
+    advance(3_000);
+    expect(starts(fake().calls)).toBe(1);
+  });
+
+  it('says when the camera pauses, tracking stops, or a fallback restarts a self-paced set', async () => {
+    const { v, fake } = await running();
+    act(() => fake().calibrated(true));
+    act(() => fake().ready('CPU', true));
+    expect(spoken(v).at(-1)).toBe('Set restarted');
+    act(() => fake().pause());
+    expect(spoken(v).at(-1)).toBe('Camera paused');
+    act(() => fake().fail('detect', 'boom'));
+    expect(spoken(v).at(-1)).toBe('Tracking stopped');
+  });
+
+  it('the idle stage knows a session ended itself, until the next Start', async () => {
+    const { hook, fake } = await running({ sets: 1 });
+    act(() => fake().event(DONE));
+    expect(hook.result.current.sessionDone).toBe(true);
+    await act(() => hook.result.current.start(els));
+    expect(hook.result.current.sessionDone).toBe(false);
+  });
 });

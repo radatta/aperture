@@ -368,6 +368,19 @@ describe('romReps', () => {
       expect(further).toHaveLength(2);
     });
 
+    it('only a pause at the far end is "Further" — not one on the way back, nor a drifted rest', () => {
+      const { events } = fold(rom3, [
+        N(0, 0),
+        ...ramp(0, 25, 20),
+        ...repeat(N(0, 25), 25), // paused at the far end → "Further"
+        ...ramp(25, 18, 5),
+        ...repeat(N(0, 18), 150), // paused 7° back from the peak for 5 s: coming back, not short
+        ...ramp(18, 10, 5),
+        ...repeat(N(0, 10), 150), // resting just past exitDeg, below enterDeg
+      ]);
+      expect(of(events, 'stoppedShort')).toHaveLength(1);
+    });
+
     it('nothing without a hold: no zone, no "Hold", no "Further"', () => {
       const flex = { ...rom3, id: 't-zone-none', holdSec: undefined } satisfies ExerciseDefinition;
       const { events } = fold(flex, [N(0, 0), ...repeat(N(0, 20), 90), N(0, 0)]);

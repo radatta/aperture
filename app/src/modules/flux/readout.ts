@@ -1,4 +1,5 @@
-import type { ExerciseDefinition, ExerciseState } from '@aperture/shared/flux';
+import type { ExerciseDefinition, ExerciseState, RepositionState } from '@aperture/shared/flux';
+import { magnitude } from './engine/headPose';
 
 // The live numbers a set shows — rep count and the hold/countdown ring — derived once from definition
 // + evaluator state, so the panel and the overlay on the video (StageReadout) show the same numbers.
@@ -20,6 +21,24 @@ export interface Readout {
 
 const secs = (n: number) => `${Math.max(0, Math.ceil(n))}`;
 
+// Out in a ROM excursion but short of the hold zone, the hold not yet done — the voice says "Further"
+// (D37), so the ring says it too. A dip below the zone keeps the ring's progress.
+export function romShort(def: ExerciseDefinition, state: ExerciseState): boolean {
+  if (def.kind !== 'romReps' || state.kind !== 'romReps' || !def.holdSec) return false;
+  return state.zone !== 'neutral' && !state.inHoldZone && state.holdAccumSec < def.holdSec;
+}
+
+// Joint position's step to show: the evaluator briefly reads "settling" at the far-end turnaround, but
+// "Hold still" is only right near neutral (D39 — the voice stays quiet there too).
+export function repositionStep(
+  def: ExerciseDefinition,
+  state: RepositionState,
+): RepositionState['sub'] {
+  if (def.kind !== 'reposition' || state.sub !== 'settling' || !state.lastRel) return state.sub;
+  const mag = def.axis === 'any' ? magnitude(state.lastRel) : Math.abs(state.lastRel[def.axis]);
+  return mag < def.excursionDeg ? 'settling' : 'returning';
+}
+
 // null when there's nothing live yet: no state, a stale state from another kind, or a kind that waits
 // on its own Start button.
 export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null): Readout | null {
@@ -28,7 +47,7 @@ export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null
     const holdSec = def.holdSec ?? 0;
     const inExcursion = state.zone !== 'neutral';
     // The clock runs only in the hold zone near the target (D36); short of it the ring says go further.
-    const holding = inExcursion && (state.inHoldZone || state.holdAccumSec > 0);
+    const short = romShort(def, state);
     return {
       count: {
         n: state.repsPos + state.repsNeg,
@@ -38,13 +57,9 @@ export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null
       ring:
         holdSec > 0 && !done
           ? {
-              progress: holding ? Math.min(1, state.holdAccumSec / holdSec) : 0,
-              label: holding
-                ? secs(holdSec - state.holdAccumSec)
-                : inExcursion
-                  ? 'further'
-                  : 'hold',
-              tone: holding && state.holdAccumSec >= holdSec ? 'gold' : 'teal',
+              progress: inExcursion ? Math.min(1, state.holdAccumSec / holdSec) : 0,
+              label: !inExcursion ? 'hold' : short ? 'further' : secs(holdSec - state.holdAccumSec),
+              tone: inExcursion && state.holdAccumSec >= holdSec ? 'gold' : 'teal',
             }
           : null,
       note: null,
@@ -108,12 +123,9 @@ export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null
     return {
       count: { n: state.trialsDone, of: def.reps, unit: 'trials' },
       ring: null,
-      note:
-        state.sub === 'away'
-          ? 'Turn away'
-          : state.sub === 'returning'
-            ? 'Back to neutral'
-            : 'Hold still…',
+      note: { away: 'Turn away', returning: 'Back to neutral', settling: 'Hold still…' }[
+        repositionStep(def, state)
+      ],
       done: false,
     };
   }

@@ -43,6 +43,9 @@ const FURTHER_STILL_SEC = 0.6;
 const FURTHER_COOLDOWN_SEC = 3;
 // …or a swing back that never reached the zone and lasted this long.
 const FURTHER_SWING_SEC = 1;
+// A pause counts as stopping short only this close to the excursion's peak, past enterDeg — not a
+// pause on the way back, nor a resting head drifted just past exitDeg.
+const FURTHER_PEAK_DEG = 3;
 // Stretch direction nudges (D38): still this long out of position, once per pause, and no sooner than
 // this after the last nudge, release or broken hold (a pause that starts inside it still gets one).
 const NUDGE_STILL_SEC = 0.8;
@@ -256,10 +259,11 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       furtherSaid = false;
       excursionSec = 0;
     } else if (holdSec > 0 && out > def.exitDeg && holdAccumSec < holdSec) {
-      // Short of the zone: a pause there says "Further" (D37) — once per pause, so a user whose range
-      // ends short of the zone hears it once per excursion, not on a loop.
+      // Short of the zone: a pause at the far end says "Further" (D37) — once per pause, at most every
+      // 3 s; moving and pausing again can say it again.
       excursionSec += dtv;
-      stillShortSec = speed < STILL_SPEED ? stillShortSec + dtv : 0;
+      const atFarEnd = out >= def.enterDeg && out >= Math.abs(peakThisRep) - FURTHER_PEAK_DEG;
+      stillShortSec = atFarEnd && speed < STILL_SPEED ? stillShortSec + dtv : 0;
       const sinceLast = input.tSec - lastFurtherAt;
       if (
         stillShortSec >= FURTHER_STILL_SEC &&

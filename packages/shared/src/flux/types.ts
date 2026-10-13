@@ -247,7 +247,8 @@ export type ExerciseEvent =
       readonly toward: 'more' | 'less';
       readonly deg: number; // signed distance still to go (target − current)
     }
-  // reposition: every sub-phase change, so the drill can be done eyes closed (D39).
+  // reposition: the sub-phase to act on, so the drill can be done eyes closed (D39) — "Hold still" only
+  // near neutral.
   | { readonly type: 'repositionPrompt'; readonly sub: RepositionState['sub'] }
   // oscillation: the timed set began — "Go" (D39).
   | { readonly type: 'setStarted' }

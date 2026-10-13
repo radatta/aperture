@@ -135,9 +135,12 @@ describe('FluxCore', () => {
       run(faceless, hold(null, 120));
       expect(faceless.calibrated).toBe(false);
       const dropout = new FluxCore();
-      run(dropout, [...hold(yaw(0), 45), null, ...hold(yaw(0), 45)]);
+      const first = run(dropout, [...hold(yaw(0), 45), null, ...hold(yaw(0), 45)]);
       expect(dropout.calibrated).toBe(false); // 1.5 s + 1.5 s, never 2 s in a row
-      run(dropout, hold(yaw(0), 30), 5000);
+      // The clock restarted at the dropout: 44 still frames after it, then 2 s needs ~16 more.
+      const more = run(dropout, hold(yaw(0), 14), first.t);
+      expect(dropout.calibrated).toBe(false);
+      run(dropout, hold(yaw(0), 3), more.t);
       expect(dropout.calibrated).toBe(true);
     });
 

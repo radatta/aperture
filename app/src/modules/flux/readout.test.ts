@@ -23,11 +23,16 @@ describe('liveReadout', () => {
       note: null,
       done: false,
     });
+    expect(
+      liveReadout(def, with_(s, { zone: 'positive', inHoldZone: true, holdAccumSec: 1.2 }))?.ring,
+    ).toEqual({ progress: 0.3, label: '3', tone: 'teal' });
+    // A dip below the zone mid-hold: the voice says Further, so does the ring — progress kept.
     expect(liveReadout(def, with_(s, { zone: 'positive', holdAccumSec: 1.2 }))?.ring).toEqual({
       progress: 0.3,
-      label: '3',
+      label: 'further',
       tone: 'teal',
     });
+    // Once the hold is done, easing off below the zone is fine: the ring stays gold.
     expect(liveReadout(def, with_(s, { zone: 'positive', holdAccumSec: 4.5 }))?.ring).toEqual({
       progress: 1,
       label: '0',
@@ -104,6 +109,14 @@ describe('liveReadout', () => {
       note: 'Back to neutral',
       done: false,
     });
+    // "Hold still" only near neutral: settling at the far-end turnaround still reads Back to neutral.
+    const settling = (yaw: number) =>
+      liveReadout(
+        def,
+        with_(s, { phase: 'active', sub: 'settling', lastRel: { pitch: 0, yaw, roll: 0 } }),
+      )?.note;
+    expect(settling(3)).toBe('Hold still…');
+    expect(settling(32)).toBe('Back to neutral');
     expect(liveReadout(def, with_(s, { phase: 'complete', trialsDone: 10 }))).toEqual({
       count: { n: 10, of: 10, unit: 'trials' },
       ring: null,

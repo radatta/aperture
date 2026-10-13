@@ -17,7 +17,11 @@ export type SessionCue =
   | { readonly type: 'nextSet'; readonly number: number; readonly otherSide: boolean }
   | { readonly type: 'sessionComplete' }
   | { readonly type: 'faceLost' }
-  | { readonly type: 'faceFound' };
+  | { readonly type: 'faceFound' }
+  // The camera or the tracker stopped, or a fallback restarted a self-paced set — said, not only shown.
+  | { readonly type: 'cameraPaused' }
+  | { readonly type: 'trackingStopped' }
+  | { readonly type: 'setRestarted' };
 
 export type CueEvent = ExerciseEvent | SessionCue;
 
@@ -91,7 +95,8 @@ function phraseFor(e: CueEvent): Utterance | null {
     case 'stoppedShort':
       return { text: 'Further', priority: 'normal' };
     case 'holdStarted':
-      return { text: 'Hold', priority: 'normal' };
+      // The cue to start pushing in an isometric — acted on, so never dropped.
+      return { text: 'Hold', priority: 'always' };
     case 'holdCompleted':
       // The eyes-closed signal that the time is up — never gated; timer-paced, so it can't chatter.
       return { text: 'And release', priority: 'always' };
@@ -134,7 +139,14 @@ function phraseFor(e: CueEvent): Utterance | null {
     case 'faceLost':
       return { text: "Can't see you", priority: 'always' };
     case 'faceFound':
-      return { text: 'Tracking', priority: 'normal' };
+      // Paced by the hook (once per loss), so it can't chatter — and never dropped behind the gap.
+      return { text: 'Tracking', priority: 'always' };
+    case 'cameraPaused':
+      return { text: 'Camera paused', priority: 'always' };
+    case 'trackingStopped':
+      return { text: 'Tracking stopped', priority: 'always' };
+    case 'setRestarted':
+      return { text: 'Set restarted', priority: 'always' };
   }
 }
 

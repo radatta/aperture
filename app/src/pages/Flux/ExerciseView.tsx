@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   contraindicationFor,
@@ -57,6 +57,7 @@ function Stage({ id }: { id: ExerciseId }) {
   const [side, setSide] = useState<Side>('a');
   const shown = mirrorForSide(def, side);
   const [sets, setSets] = useState(DEFAULT_SETS);
+  const sessionSide = useRef<Side>('a');
 
   const voice = useVoice();
   const rep = useRepTie();
@@ -73,18 +74,20 @@ function Stage({ id }: { id: ExerciseId }) {
     voice,
     sets,
     onSetCompleted: rep.onSetCompleted,
-    // A sided stretch alternates sides set by set, starting from the side picked.
-    onNextSet: () => sided && setSide((s) => (s === 'a' ? 'b' : 'a')),
+    // A sided stretch alternates sides set by set from the side the session started on, so a manual
+    // toggle during a rest doesn't knock it out of step.
+    onNextSet: (i) => sided && setSide(i % 2 ? other(sessionSide.current) : sessionSide.current),
     onSessionEnd: finish,
   });
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const start = useCallback(() => {
+  const start = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
+    sessionSide.current = side;
     if (video && canvas) void engine.start({ video, canvas });
-  }, [engine]);
+  };
 
   const stop = () => finish(engine.stop());
 
@@ -176,6 +179,7 @@ function Stage({ id }: { id: ExerciseId }) {
           sample={engine.sample}
           state={engine.exState}
           idle={engine.status === 'idle'}
+          calibrated={engine.calibrated}
           onControl={engine.control}
         />
       )}
@@ -186,6 +190,8 @@ function Stage({ id }: { id: ExerciseId }) {
     </div>
   );
 }
+
+const other = (s: Side): Side => (s === 'a' ? 'b' : 'a');
 
 function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => void }) {
   return (

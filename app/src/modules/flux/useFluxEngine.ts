@@ -119,6 +119,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const [notice, setNotice] = useState<string | null>(null);
   const [lastCue, setLastCue] = useState<string | null>(null);
   const [sessionSets, setSessionSets] = useState<readonly FluxSetDraft[]>([]);
+  // The last session ended itself after its last set (D42) — the idle stage says so.
+  const [sessionDone, setSessionDone] = useState(false);
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -159,16 +161,18 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     noticeTimer.current = setTimeout(() => setNotice(null), NOTICE_MS);
   }, []);
 
-  // Reduce, speak, and mirror on the stage (a muted phone still shows it) — every phrase goes through here.
-  const say = useCallback((cue: CueEvent) => {
+  // Reduce, speak, and mirror on the stage (a muted phone still shows it) — every phrase goes through
+  // here. True if it was said (a gated cue can be dropped).
+  const say = useCallback((cue: CueEvent): boolean => {
     const r = reduceCue(cueRef.current, cue, performance.now());
     cueRef.current = r.state;
-    if (!r.utterance) return;
+    if (!r.utterance) return false;
     optsRef.current.voice.speak(r.utterance);
-    if (!isMirrored(cue)) return;
+    if (!isMirrored(cue)) return true;
     setLastCue(r.utterance.text);
     clearTimeout(cueTimer.current);
     cueTimer.current = setTimeout(() => setLastCue(null), CUE_MS);
+    return true;
   }, []);
 
   const clearAuto = useCallback(() => {
@@ -177,32 +181,38 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     autoStep.current = null;
   }, []);
 
+  // The rest is over (or Again cut it short) — assigned below, once `arm` exists.
+  const nextSetRef = useRef<(index: number, now: boolean) => void>(() => {});
+
   // Run (or re-arm, after a pause) an automatic step: the lead-in before a timed set starts, or the rest
   // before the next set.
   const arm = useCallback(
     (step: AutoStep) => {
       clearAuto();
       autoStep.current = step;
-      const startSet = () => engine.control({ type: 'start' });
-      if (step.kind === 'start') {
-        autoTimer.current = setTimeout(() => {
+      autoTimer.current = setTimeout(
+        () => {
           autoStep.current = null;
-          startSet();
-        }, SET_LEAD_MS);
-        return;
-      }
-      autoTimer.current = setTimeout(() => {
-        autoStep.current = null;
-        const o = optsRef.current;
-        o.onNextSet?.(step.index);
-        say({ type: 'nextSet', number: step.index + 1, otherSide: o.side !== null });
-        // Self-paced kinds just need the finished set cleared; timed ones get the lead-in.
-        if (READY_KINDS.has(o.kind)) arm({ kind: 'start' });
-        else startSet();
-      }, SET_REST_MS);
+          if (step.kind === 'start') engine.control({ type: 'start' });
+          else nextSetRef.current(step.index, false);
+        },
+        step.kind === 'start' ? SET_LEAD_MS : SET_REST_MS,
+      );
     },
-    [engine, clearAuto, say],
+    [engine, clearAuto],
   );
+
+  // Flip a sided stretch, say the set, and start it from a clean slate (a Re-calibrate during the rest may
+  // have reopened the finished set). Timed kinds get the lead-in unless a tap asked for now.
+  nextSetRef.current = (index, now) => {
+    clearAuto();
+    const o = optsRef.current;
+    o.onNextSet?.(index);
+    say({ type: 'nextSet', number: index + 1, otherSide: o.side !== null });
+    engine.control({ type: 'stop' });
+    if (READY_KINDS.has(o.kind) && !now) arm({ kind: 'start' });
+    else engine.control({ type: 'start' });
+  };
 
   const resetFace = () => {
     face.current = {
@@ -230,15 +240,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           );
           setStartRef.current = performance.now();
           resetFace(); // a new worker restarts the sample clock
-          // A fallback restarts a timed set from ready (D26): lead it in again, unless a step is pending.
-          if (
-            e.fallback &&
-            latest.current.calibrated &&
-            READY_KINDS.has(o.kind) &&
-            !autoStep.current
-          ) {
-            say({ type: 'getReady' });
-            arm({ kind: 'start' });
+          // A fallback restarts the set (D26) — said, not only shown: a timed set is led in again, a
+          // self-paced one says so. A pending lead-in or rest carries on as it was.
+          if (e.fallback && latest.current.calibrated && o.acknowledged && !autoStep.current) {
+            if (READY_KINDS.has(o.kind)) {
+              say({ type: 'getReady' });
+              arm({ kind: 'start' });
+            } else say({ type: 'setRestarted' });
           }
           // A worker that comes up while the camera is paused (backgrounded mid-download, a fallback)
           // leaves the stage paused — Resume is still the way back.
@@ -263,8 +271,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           setNotice(null);
           say({ type: 'neutralSet' });
           // Calibrating resets the set, so a timed kind starts itself again (D41) — at once if
-          // "Start now" was what asked for the neutral.
+          // "Start now" was what asked for the neutral. A rest in progress runs on: its end starts the set.
           if (!READY_KINDS.has(o.kind) || !o.acknowledged) return;
+          if (autoStep.current?.kind === 'rest') return;
           if (startOnCalibrate.current) {
             startOnCalibrate.current = false;
             clearAuto();
@@ -303,7 +312,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           const done = ++planDoneRef.current;
           if (!last) return arm({ kind: 'rest', index: done });
           // Ends itself: the camera goes off with no tap, and the queued "Session complete." still plays.
-          return o.onSessionEnd?.(endRef.current(false));
+          const session = endRef.current(false);
+          setSessionDone(true);
+          return o.onSessionEnd?.(session);
         }
         case 'paused': {
           pausedRef.current = true;
@@ -312,6 +323,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           const step = autoStep.current;
           clearAuto();
           autoStep.current = step;
+          say({ type: 'cameraPaused' });
           return setStatus('paused');
         }
         case 'error':
@@ -319,6 +331,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           readyRef.current = false;
           clearAuto();
           engine.stop();
+          say({ type: 'trackingStopped' });
           setError({ stage: e.stage, message: e.message });
           return setStatus('error');
       }
@@ -332,8 +345,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         if (!f.seen || f.lostSaid) return;
         f.lostSince ??= smp.tSec;
         if (smp.tSec - f.lostSince < FACE_LOST_SEC) return;
-        f.lostSaid = true;
-        return say({ type: 'faceLost' });
+        // Latched only once said: inside its 5 s cooldown it's retried each frame until it is.
+        f.lostSaid = say({ type: 'faceLost' });
+        return;
       }
       f.seen = true;
       f.lostSince = null;
@@ -370,12 +384,16 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     setExState(null);
     engine.selectExercise(selected, side);
   }, [engine, selected, side]);
-  // A different exercise starts its own run of sets; a side flip between sets (onNextSet) doesn't.
+  // A different exercise starts its own run of sets; a side flip between sets (onNextSet) doesn't. One
+  // acknowledged after the neutral is set (a contraindication) still starts itself if it's timed.
   useEffect(() => {
     clearAuto();
     planDoneRef.current = 0;
     startOnCalibrate.current = false;
-  }, [selected, clearAuto]);
+    if (!selected || !latest.current.calibrated || !READY_KINDS.has(optsRef.current.kind)) return;
+    say({ type: 'getReady' });
+    arm({ kind: 'start' });
+  }, [selected, clearAuto, say, arm]);
 
   const reset = useCallback(() => {
     setCalibrated(false);
@@ -399,6 +417,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       reset();
       setSessionSets([]);
       setsRef.current = 0;
+      setSessionDone(false);
       planDoneRef.current = 0;
       startOnCalibrate.current = false;
       clearAuto();
@@ -434,8 +453,10 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       setStatus('running');
     } else setStatus('loading'); // the model is still coming; `ready` will take it to running
     resetFace();
-    if (autoStep.current) arm(autoStep.current);
+    // Re-arm the held step once the camera is back, so a lead-in can't run out while it re-acquires.
+    const step = autoStep.current;
     await engine.resume();
+    if (step && !pausedRef.current && autoStep.current === step) arm(step);
   }, [engine, arm]);
 
   // Live active time, for the Roll strip while a session runs.
@@ -449,6 +470,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   // for one, and the set starts the moment it's set (now, or when auto-calibrate gets there).
   const control = useCallback(
     (c: EvalControl) => {
+      // Again during the rest is the next set, now — with its side flip and cue.
+      const step = autoStep.current;
+      if (c.type === 'start' && step?.kind === 'rest') return nextSetRef.current(step.index, true);
       clearAuto();
       if (
         c.type === 'start' &&
@@ -484,6 +508,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     notice,
     lastCue,
     sessionSets,
+    sessionDone,
     activeMs,
     start,
     stop,
