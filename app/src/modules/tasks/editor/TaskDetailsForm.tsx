@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Ref } from 'react';
-import { canEditEstimate, fmtClock12, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
+import {
+  canEditEstimate,
+  endsAfterParent,
+  fmtClock12,
+  fmtMonthDayYear,
+  TASK_NOTES_MAX,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -27,17 +33,18 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
 // due locks once finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
 // (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
-// (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts).
+// (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts),
+// with a quiet note when that's after its parent's deadline.
 export function TaskDetailsForm({
   task: live,
   parts,
-  isPart = false,
+  parent,
   onDirtyChange,
   estimateRef,
 }: {
   task: Task;
   parts?: { estimateMin: number | null; unscoped: number }; // set when it's a parent
-  isPart?: boolean;
+  parent?: Pick<Task, 'title' | 'dueDay' | 'dueTime'>; // set when it's a part
   onDirtyChange?: (dirty: boolean) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
@@ -53,6 +60,7 @@ export function TaskDetailsForm({
   const setDue = useSetDue();
   const setNotes = useSetTaskNotes();
 
+  const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
   // A finished task is history: its due date is locked (re-dating it is meaningless). Category and
   // title stay editable at every status — recategorizing a done task matters (calibration aggregates
@@ -305,6 +313,15 @@ export function TaskDetailsForm({
           </>
         )}
       </div>
+      {parent &&
+        endsAfterParent(
+          isTerminal ? task : { dueDay: dueDay || null, dueTime: dueTime || null },
+          parent,
+        ) && (
+          <Text size="sm" tone="subtle">
+            Ends after {parent.title} is due.
+          </Text>
+        )}
       <NotesField
         saved={task.notes}
         value={notes}

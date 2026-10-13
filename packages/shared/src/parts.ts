@@ -18,7 +18,24 @@ export const PARENT_NO_ACTUAL_ERROR =
   'A task with parts has no actual of its own — it’s the sum of its parts.';
 export const PARENT_NO_SPLIT_ERROR = 'A task with parts isn’t split — add a part instead.';
 export const PARENT_NO_EVENT_ERROR =
-  'A task with parts has no calendar block of its own — its parts do. Add the event to a part instead.';
+  'A task with parts is on the calendar as its due marker, not a block — add the event to a part instead.';
+
+// A part's block is named after its parent ("P2 · Part 1"); a parent's marker and a plain task's block
+// carry the plain title, as does a part titled the same as its parent (never "P2 · P2").
+export const BLOCK_TITLE_SEP = ' · ';
+export const blockTitle = (task: Pick<Task, 'title'>, parentTitle?: string | null): string =>
+  parentTitle && parentTitle.trim() !== task.title.trim()
+    ? `${parentTitle}${BLOCK_TITLE_SEP}${task.title}`
+    : task.title;
+// A Google rename of a part's block: the parent prefix isn't the part's title; without it, the whole is.
+// Blank = only the prefix is left (Google trims "P2 · " to "P2 ·").
+export function titleFromBlock(title: string, parentTitle?: string | null): string {
+  const t = title.trim();
+  if (!parentTitle) return t;
+  const prefix = `${parentTitle}${BLOCK_TITLE_SEP}`;
+  if (t.startsWith(prefix)) return t.slice(prefix.length).trim();
+  return t === prefix.trim() ? '' : t;
+}
 
 const finished = (t: Pick<Task, 'status'>) => t.status === 'done' || t.status === 'cancelled';
 
@@ -200,6 +217,17 @@ export function deadlineOf(task: Task, tasks: Task[]): Pick<Task, 'dueDay' | 'du
   return parent
     ? { dueDay: parent.dueDay, dueTime: parent.dueTime ?? null, status: task.status }
     : { dueDay: task.dueDay, dueTime: task.dueTime ?? null, status: task.status };
+}
+
+// A part set to end after its parent's deadline — a quiet note in the editor, nothing more. Wall-clock
+// keys compare in order; when either side has no time, by day.
+export function endsAfterParent(
+  part: Pick<Task, 'dueDay' | 'dueTime'>,
+  parent: Pick<Task, 'dueDay' | 'dueTime'>,
+): boolean {
+  if (!part.dueDay || !parent.dueDay) return false;
+  if (part.dueDay !== parent.dueDay) return part.dueDay > parent.dueDay;
+  return !!part.dueTime && !!parent.dueTime && part.dueTime > parent.dueTime;
 }
 
 // 1-based position among its parent's parts ("Part 2 of 3"); 0 when it isn't one of them.

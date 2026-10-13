@@ -7,13 +7,24 @@ import { Textarea } from '../../../components/Textarea';
 import { useCreateTasks } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 
-// A line's parse errors, plus the tokens a part can't take: its category is its parent's, and the
-// deadline belongs to the parent (a part's own time is set on the part, as when its block ends).
+// A line's parse errors in this form's terms, plus the tokens a part can't take: its category is its
+// parent's, and the deadline belongs to the parent (a part's own time is set on the part, as when its
+// block ends). The bulk-add grammar for those (#, due:) never shows here — a part has no use for it.
+const CATEGORY = 'a part takes its parent’s category — remove the category';
+const DEADLINE = 'the deadline is the parent’s — remove the date (a part’s end is set on the part)';
 function lineErrors(line: ReturnType<typeof parseBulkTasks>['lines'][number]): string[] {
-  const out = [...line.errors];
-  if (line.categoryLabel !== null) out.push('a part takes its parent’s category — drop the #');
-  if (line.dueDay !== null) out.push('the deadline is the parent’s — drop the due:');
-  return out;
+  const out = new Set<string>();
+  for (const e of line.errors) {
+    const unknown = /^unrecognized token '(.*)' —/.exec(e)?.[1];
+    if (/categor/.test(e)) out.add(CATEGORY);
+    else if (/^(invalid|duplicate) due\b/.test(e)) out.add(DEADLINE);
+    else if (unknown !== undefined)
+      out.add(`“${unknown}” isn’t something a part takes — after “ | ”, only minutes, like ~30`);
+    else out.add(e);
+  }
+  if (line.categoryLabel !== null) out.add(CATEGORY);
+  if (line.dueDay !== null) out.add(DEADLINE);
+  return [...out];
 }
 
 // Add parts to a task, one per line: `title | ~minutes` (the bulk-add grammar, minutes only). On a task

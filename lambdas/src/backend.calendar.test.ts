@@ -5,7 +5,13 @@ import { liveWrites } from './ddb/writes';
 import { BackendClient } from './backend';
 import { InMemoryGoogle } from './google/gateway';
 import { handleRpc } from './handler';
-import { USER_TIME_ZONE, zonedEpoch } from '@aperture/shared';
+import {
+  DEFAULT_EVENT_MIN,
+  MARKER_MIN,
+  PARENT_NO_EVENT_ERROR,
+  USER_TIME_ZONE,
+  zonedEpoch,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 
 function makeBackend(google: InMemoryGoogle) {
@@ -453,8 +459,8 @@ describe('calendar auto-sync (timed tasks)', () => {
     });
     expect(original.gcalEventId).toBeNull();
     expect(followUp.gcalEventId).toBe(t.gcalEventId);
-    expect(g.events.size).toBe(1);
-    expect(only(g)[1].title).toBe('x, part 2');
+    expect(g.events.size).toBe(2); // the moved block, and the new parent's due marker
+    expect(only(g)[1].title).toBe('x · x, part 2'); // named after its parent
   });
 
   it('a done split clears the original’s two-way state and gives the follow-up the event’s', async () => {
@@ -468,7 +474,7 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(original.gcalSeen ?? null).toBeNull();
     expect(followUp).toMatchObject({
       gcalSeen: {
-        title: 'x, part 2',
+        title: 'x · x, part 2',
         endMs: at('2026-10-09', '16:00'),
         updatedMs: expect.any(Number),
       },
@@ -496,9 +502,9 @@ describe('calendar auto-sync (timed tasks)', () => {
     // A timed task's one block is its auto block, whatever placed it.
     expect(original.gcalEventId).toBeNull();
     expect(followUp.gcalEventId).toBe(manual.gcalEventId);
-    expect(g.events.size).toBe(1);
+    expect(g.events.size).toBe(2); // + the new parent's due marker
     expect(g.events.get(manual.gcalEventId!)).toMatchObject({
-      title: 'x, part 2',
+      title: 'x · x, part 2',
       endMs: at('2026-10-09', '16:00'),
     });
   });
@@ -544,8 +550,14 @@ describe('calendar auto-sync (timed tasks)', () => {
     expect(original.gcalEventId).toBe(t.gcalEventId);
     expect(followUp.gcalEventId).not.toBeNull();
     expect(followUp.gcalEventId).not.toBe(t.gcalEventId);
-    // Two blocks, one per part (Part 1 is the original renamed); the new parent has none.
-    expect([...g.events.values()].map((e) => e.title).sort()).toEqual(['Part 1', 'x, part 2']);
+    // A block per part, named after the parent (Part 1 is the original renamed), and the new parent's
+    // due marker.
+    expect([...g.events.values()].map((e) => e.title).sort()).toEqual([
+      'x',
+      'x · Part 1',
+      'x · x, part 2',
+    ]);
+    expect([...g.events.values()].filter((e) => e.marker).map((e) => e.title)).toEqual(['x']);
   });
 
   it("a started task's estimate edit re-times its event", async () => {
@@ -611,8 +623,8 @@ describe('calendar auto-sync (timed tasks)', () => {
     }
   });
 
-  // Parent + parts (parts.ts): a parent never owns an event, by any path. Parity: the stub's
-  // "stub calendar: parent + parts".
+  // Parent + parts (parts.ts): a parent's one event is its due marker — MARKER_MIN ending at its
+  // deadline, free + graphite (the gateway's `marker`). Parity: the stub's "stub calendar: parent + parts".
   describe('parent + parts', () => {
     const pick = (b: Awaited<ReturnType<typeof connected>>['b'], taskId: string) =>
       b.insertCalendarEvent({
@@ -623,16 +635,51 @@ describe('calendar auto-sync (timed tasks)', () => {
         startMs: at('2026-10-08', '14:00'),
         endMs: at('2026-10-08', '15:00'),
       });
+    const markerOf = (day: string, hhmm: string) => ({
+      startMs: at(day, hhmm) - MARKER_MIN * 60_000,
+      endMs: at(day, hhmm),
+    });
 
-    it('a timed task that takes its first part loses its block; a retry on it never makes one', async () => {
+    it('Break down of a timed task patches its block into the marker — one call, no insert', async () => {
       const { g, b } = await connected();
-      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '23:59' });
-      expect(g.events.size).toBe(1);
+      const p = await b.createTask({
+        title: 'P2',
+        dueDay: '2026-10-09',
+        dueTime: '23:59',
+        estimateMin: 15, // the windows coincide: the marker flag still goes
+      });
+      const insert = vi.spyOn(g, 'insertEvent');
       await b.createTask({ title: 'read', parentId: p.id });
-      expect(g.events.size).toBe(0);
-      expect((await b.getTask(p.id))?.gcalEventId).toBeNull();
-      expect((await b.syncCalendarEvent(p.id)).gcalEventId).toBeNull();
+      expect(insert).not.toHaveBeenCalled();
+      expect(g.patches).toHaveLength(1);
+      expect(g.patches[0]).toMatchObject({ marker: true, ...markerOf('2026-10-09', '23:59') });
+      expect(g.events.get(p.gcalEventId!)).toMatchObject({
+        title: 'P2',
+        marker: true,
+        ...markerOf('2026-10-09', '23:59'),
+      });
+    });
+
+    it('a due change moves the marker; done leaves it; the retry on an unlinked one creates it', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      const part = await b.createTask({ title: 'read', parentId: p.id, estimateMin: 30 });
       await b.setTaskDue(p.id, { dueDay: '2026-10-10', dueTime: '12:00' });
+      expect(g.events.get(p.gcalEventId!)).toMatchObject(markerOf('2026-10-10', '12:00'));
+      await b.deleteCalendarEvent(p.id);
+      const created = await b.syncCalendarEvent(p.id);
+      expect(g.events.get(created.gcalEventId!)).toMatchObject({ marker: true, title: 'P2' });
+      await b.transitionTask(part.id, 'in_progress');
+      await b.transitionTask(part.id, 'done');
+      const done = await b.transitionTask(p.id, 'done');
+      expect(g.events.has(done.gcalEventId!)).toBe(true);
+    });
+
+    it('an untimed parent has no marker; the retry never makes one', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09' });
+      await b.createTask({ title: 'read', parentId: p.id });
+      expect((await b.syncCalendarEvent(p.id)).gcalEventId).toBeNull();
       expect(g.events.size).toBe(0);
     });
 
@@ -640,12 +687,58 @@ describe('calendar auto-sync (timed tasks)', () => {
       const { g, b } = await connected();
       const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '23:59' });
       const part = await b.createTask({ title: 'read', parentId: p.id });
-      await expect(pick(b, p.id)).rejects.toThrow(/its parts do/);
-      expect(g.events.size).toBe(0);
+      const before = g.events.size;
+      await expect(pick(b, p.id)).rejects.toThrow(PARENT_NO_EVENT_ERROR);
+      expect(g.events.size).toBe(before);
       await expect(pick(b, part.id)).resolves.toMatchObject({ gcalEventId: expect.any(String) });
     });
 
-    it('a timed standalone done split moves the event and its base to Part 2; the parent never inserts', async () => {
+    it('a part’s block is named after its parent; a rename patches each open part, a failure lands on that part', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2' });
+      const t = { dueDay: '2026-10-09', dueTime: '10:00' };
+      const [a, c, d] = await b.createTasks([
+        { title: 'Part 1', parentId: p.id, ...t },
+        { title: 'Part 2', parentId: p.id, ...t },
+        { title: 'Part 3', parentId: p.id, ...t },
+      ]);
+      expect(g.events.get(a!.gcalEventId!)!.title).toBe('P2 · Part 1');
+      await b.transitionTask(d!.id, 'in_progress');
+      await b.transitionTask(d!.id, 'done');
+      g.patches.length = 0;
+      g.events.delete(c!.gcalEventId!); // Part 2's block is gone in Google — its patch unlinks it
+      await b.setTaskTitle(p.id, 'P2 final');
+      expect(g.events.get(a!.gcalEventId!)!.title).toBe('P2 final · Part 1');
+      expect(g.events.get(d!.gcalEventId!)!.title).toBe('P2 · Part 3'); // done: never pushes
+      expect(g.patches.every((x) => x.marker === undefined)).toBe(true); // a block stays a block
+      expect((await b.getTask(c!.id))!.gcalEventId).toBeNull();
+      expect((await b.getTask(p.id))!.title).toBe('P2 final');
+
+      g.markDead('A');
+      const renamed = await b.setTaskTitle(p.id, 'P2 v3');
+      expect(renamed.gcalSyncError).toBeNull(); // the rename itself never fails
+      expect((await b.getTask(a!.id))!.gcalSyncError).toMatch(
+        /^Couldn’t update the calendar event/,
+      );
+    });
+
+    it('a timed standalone keep split: a marker for the parent, a named block per part', async () => {
+      const { g, b } = await connected();
+      const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
+      const { parent, original, followUp } = await b.splitTask(t.id, {
+        finish: 'keep',
+        followUp: { title: 'x, part 2', estimateMin: 30 },
+      });
+      expect(g.events.get(parent.gcalEventId!)).toMatchObject({
+        marker: true,
+        title: 'x',
+        ...markerOf('2026-10-09', '16:00'),
+      });
+      expect(g.events.get(original.gcalEventId!)).toMatchObject({ title: `x · ${original.title}` });
+      expect(g.events.get(followUp.gcalEventId!)!.marker).toBe(false);
+    });
+
+    it('a timed standalone done split moves the event and its base to Part 2; the parent inserts its marker', async () => {
       const { g, b } = await connected();
       const t = await b.createTask({ title: 'x', dueDay: '2026-10-09', dueTime: '16:00' });
       await b.transitionTask(t.id, 'in_progress');
@@ -654,12 +747,51 @@ describe('calendar auto-sync (timed tasks)', () => {
         finish: 'done',
         followUp: { title: 'x, part 2', estimateMin: null },
       });
-      expect(insert).not.toHaveBeenCalled();
-      expect(parent.gcalEventId).toBeNull();
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect(insert.mock.calls[0]![0]).toMatchObject({ marker: true, title: 'x' });
+      expect(parent.gcalEventId).toBeTruthy();
       expect(original.gcalEventId).toBeNull();
       expect(followUp.gcalEventId).toBe(t.gcalEventId);
-      expect(followUp.gcalSeen?.title).toBe('x, part 2'); // the base came along; its push renamed it
-      expect(g.events.size).toBe(1);
+      expect(followUp.gcalSeen?.title).toBe('x · x, part 2'); // the base came along; its push renamed it
+    });
+
+    it('its last part going patches the marker back into a block; deleting the parent sends no patch', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      const part = await b.createTask({ title: 'read', parentId: p.id });
+      g.patches.length = 0;
+      await b.deleteTask(part.id);
+      expect(g.patches).toHaveLength(1);
+      expect(g.patches[0]).toMatchObject({ marker: false });
+      expect(g.events.get(p.gcalEventId!)).toMatchObject({
+        marker: false,
+        startMs: at('2026-10-09', '17:00') - DEFAULT_EVENT_MIN * 60_000,
+      });
+
+      const q = await b.createTask({ title: 'Q', dueDay: '2026-10-09', dueTime: '17:00' });
+      await b.createTask({ title: 'read', parentId: q.id });
+      g.patches.length = 0;
+      await b.deleteTask(q.id);
+      expect(g.patches).toHaveLength(0);
+      expect(g.events.has(q.gcalEventId!)).toBe(false);
+    });
+
+    it('detaching the last part releases the marker too', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      const part = await b.createTask({ title: 'read', parentId: p.id });
+      await b.setTaskParent(part.id, null);
+      expect(g.events.get(p.gcalEventId!)!.marker).toBe(false);
+    });
+
+    it('cancelling a parent removes its open parts’ blocks, then its marker', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      await b.createTask({ title: 'a', parentId: p.id, dueDay: '2026-10-09', dueTime: '10:00' });
+      expect(g.events.size).toBe(2);
+      const dropped = await b.transitionTask(p.id, 'cancelled');
+      expect(dropped.gcalEventId).toBeNull();
+      expect(g.events.size).toBe(0);
     });
 
     it('cancelling a parent removes its open parts’ blocks; deleting it removes them all', async () => {
@@ -865,6 +997,36 @@ describe('calendar pull (two-way sync)', () => {
       },
     });
     expect(g.patches.length).toBe(patchesBefore); // a pull never writes to Google
+  });
+
+  it('a parent’s marker: an end drag moves its deadline, a stretch maps to nothing', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const p = await timed({ title: 'P2' });
+    await b.createTask({ title: 'read', parentId: p.id, estimateMin: 30 });
+    await baseline();
+    g.editEvent(p.gcalEventId!, {
+      startMs: at('2026-10-10', '11:45'),
+      endMs: at('2026-10-10', '12:00'),
+    });
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([p.id]);
+    expect(await b.getTask(p.id)).toMatchObject({ dueDay: '2026-10-10', dueTime: '12:00' });
+    tick();
+    g.editEvent(p.gcalEventId!, { startMs: at('2026-10-10', '09:00') });
+    tick();
+    expect((await b.pullCalendar()).changedTaskIds).toEqual([]);
+    expect((await b.getTask(p.id))!.estimateMin).toBeNull();
+  });
+
+  it('a part block renamed in Google loses its parent prefix', async () => {
+    const { g, b, tick, baseline, timed } = await setup();
+    const p = await b.createTask({ title: 'P2' });
+    const part = await timed({ title: 'Part 1', parentId: p.id });
+    await baseline();
+    g.editEvent(part.gcalEventId!, { title: 'P2 · Part 1 reading' });
+    tick();
+    await b.pullCalendar();
+    expect((await b.getTask(part.id))!.title).toBe('Part 1 reading');
   });
 
   it('our own push coming back is a no-op — including a no-estimate task’s 30-minute block', async () => {

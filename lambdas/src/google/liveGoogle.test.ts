@@ -35,6 +35,22 @@ describe('LiveGoogle.patchEvent', () => {
     expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ summary: 'renamed' });
   });
 
+  it('a due marker is free + graphite; false turns it back into a busy block with its own colour', async () => {
+    const { g, calls } = gateway(() => Response.json({ status: 'confirmed' }));
+    await g.patchEvent({ ...input, startMs: 0, endMs: 900_000, marker: true });
+    expect(JSON.parse(calls[0]!.init.body as string)).toMatchObject({
+      transparency: 'transparent',
+      colorId: '8',
+    });
+    await g.patchEvent({ ...input, startMs: 0, endMs: 1_800_000, marker: false });
+    expect(JSON.parse(calls[1]!.init.body as string)).toMatchObject({
+      transparency: 'opaque',
+      colorId: null, // null deletes the override in a patch
+    });
+    await g.patchEvent({ ...input, title: 'x' });
+    expect(Object.keys(JSON.parse(calls[2]!.init.body as string))).toEqual(['summary']);
+  });
+
   it("returns Google's `updated` for the write (Google's clock, not ours)", async () => {
     const { g } = gateway(() =>
       Response.json({ status: 'confirmed', updated: '2026-10-05T10:00:00.000Z' }),
@@ -168,5 +184,19 @@ describe('LiveGoogle.insertEvent', () => {
       private: { apertureTaskId: 'T1' },
     });
     expect(res).toEqual({ eventId: 'new', updatedMs: Date.UTC(2026, 9, 5, 10) });
+  });
+
+  it('a due marker is inserted free + graphite; a block carries neither', async () => {
+    const { g, calls } = gateway(() => Response.json({ id: 'new' }));
+    const base = { sub: 'A', calendarId: 'me@example.com', title: 't', startMs: 0, endMs: 900_000 };
+    await g.insertEvent({ ...base, marker: true });
+    expect(JSON.parse(calls[0]!.init.body as string)).toMatchObject({
+      transparency: 'transparent',
+      colorId: '8',
+    });
+    await g.insertEvent({ ...base, marker: false });
+    const block = JSON.parse(calls[1]!.init.body as string);
+    expect(block.transparency).toBeUndefined();
+    expect(block.colorId).toBeUndefined();
   });
 });

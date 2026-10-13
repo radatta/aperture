@@ -26,6 +26,20 @@ export function aggregate(all: CalibrationPoint[]): CalibrationAggregate {
   };
 }
 
+// The latest `n` points, newest first. A day's points come in no set order, so within a day the later
+// completion goes first (a parent's rollup above the parts that finished it). Unknown → oldest.
+export function recentPoints(
+  points: CalibrationPoint[],
+  completedAt: (taskId: string) => number | null | undefined,
+  n = 8,
+): CalibrationPoint[] {
+  const at = (p: CalibrationPoint) => completedAt(p.taskId) ?? 0;
+  return [...points]
+    .sort((a, b) => a.day.localeCompare(b.day) || at(a) - at(b))
+    .slice(-n)
+    .reverse();
+}
+
 // A done parent's bar label: the rollup says how many parts it covers.
 export const rollupLabel = (title: string, parts: number): string =>
   parts > 0 ? `${title} · ${parts} ${parts === 1 ? 'part' : 'parts'}` : title;

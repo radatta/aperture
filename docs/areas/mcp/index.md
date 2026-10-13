@@ -88,7 +88,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   task a part (breaking a deliverable down is one `create_tasks` call), and `update_task {parentId}` attaches or
   (`null`) detaches. `list_tasks` annotates a parent with `parts: {total, done, estimateMin}`, from the same
   read. `delete_task` on a parent deletes every part and returns their ids. `create_calendar_event` refuses a
-  parent (its parts carry the blocks).
+  parent (its one event is its due marker — `sync_calendar_event` places it), and names a part's block
+  `Parent · Part` by default ([tasks/parts.md](../tasks/parts.md) D12/D13).
 - **`update_task`** fan-out order is title → categoryId → parentId → due → notes → estimate → status; the estimate
   (the working one) is editable until the task is done/cancelled — `estimateMin` or `bufferMin` alone keeps the
   other (before 2026-10-06 an estimate-only call zeroed the buffer) — the calibration baseline frozen at start
@@ -139,8 +140,9 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   over Google, finishes an owed removal. It runs the shared `calendarSyncPlan` first, so it reports what
   the backend decides — `{ outcome: created | updated | removed | unlinked, task }` (`unlinked`: Google
   had already deleted it; call again to create) — and refuses with the reason when the plan is `none`
-  (a parent — `PARENT_NO_EVENT_ERROR`, [tasks/parts.md](../tasks/parts.md) D8 — done/cancelled, auto-sync
-  off, no due time and no event, no write default); a refusal still clears a moot `gcalSyncError` the way
+  (a parent with no due time — its marker needs one, [tasks/parts.md](../tasks/parts.md) D13 —
+  done/cancelled, auto-sync off, no due time and no event, no write default). On a timed parent it syncs
+  the due marker; a refusal still clears a moot `gcalSyncError` the way
   the backend's ensure pass does (no Google call). A Google failure is an
   error; its text is also the task's `gcalSyncError`.
 - **Attachments** — two byte paths: `attach_file` sends content inline (base64, capped **64 KB** — tool

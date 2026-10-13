@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CalibrationPoint } from '@aperture/shared';
-import { aggregate, plannedVsAvailable } from './calibration';
+import { aggregate, plannedVsAvailable, recentPoints } from './calibration';
 
 const pt = (estimateLockedMin: number, actualAccruedMin: number): CalibrationPoint => ({
   taskId: 't',
@@ -48,5 +48,31 @@ describe('plannedVsAvailable', () => {
     const r = plannedVsAvailable(240, null);
     expect(r.availableMin).toBeNull();
     expect(r.over).toBe(false);
+  });
+});
+
+describe('recentPoints', () => {
+  const point = (taskId: string, day: string): CalibrationPoint => ({
+    taskId,
+    day,
+    estimateLockedMin: 30,
+    actualAccruedMin: 30,
+    categoryId: null,
+    parts: 0,
+  });
+  it('newest day first; within a day, the later completion first', () => {
+    const at: Record<string, number> = { a: 300, b: 100, c: 200, d: 50 };
+    const points = [
+      point('a', '2026-10-12'),
+      point('b', '2026-10-12'),
+      point('c', '2026-10-12'),
+      point('d', '2026-10-13'),
+    ];
+    expect(recentPoints(points, (id) => at[id]).map((p) => p.taskId)).toEqual(['d', 'a', 'c', 'b']);
+  });
+  it('keeps the latest n; an unknown completion sorts oldest in its day', () => {
+    const points = [point('x', '2026-10-12'), point('y', '2026-10-12'), point('z', '2026-10-11')];
+    const at = (id: string) => (id === 'y' ? 10 : undefined);
+    expect(recentPoints(points, at, 2).map((p) => p.taskId)).toEqual(['y', 'x']);
   });
 });

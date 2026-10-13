@@ -450,6 +450,18 @@ describe('parent + parts', () => {
     expect(screen.getByRole('button', { name: 'Week · 1' })).toBeTruthy();
   });
 
+  it('a linked parent’s card reads “due marker”, not “on calendar”', async () => {
+    const { api, p } = await seeded(false);
+    const all = await api.listTasks();
+    vi.spyOn(api, 'listTasks').mockResolvedValue(
+      all.map((t) => (t.id === p.id ? { ...t, gcalEventId: 'evt' } : t)),
+    );
+    renderApp({ api, path: '/tasks?lens=week' });
+    const row = await waitFor(() => rowOf('P2'));
+    expect(within(row).getByText('due marker')).toBeTruthy();
+    expect(within(row).queryByText('on calendar')).toBeNull();
+  });
+
   it('“unscoped” counts open parts only — a done one’s estimate can’t be set any more', async () => {
     const { api, p } = await seeded(false);
     const c = await api.createTask({ title: 'cite', parentId: p.id });

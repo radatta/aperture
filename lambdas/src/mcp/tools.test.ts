@@ -236,7 +236,7 @@ describe('mcp tools — tasks', () => {
         start: '2026-10-08T14:00:00-07:00',
         durationMin: 30,
       }),
-    ).rejects.toThrow(/its parts do/);
+    ).rejects.toThrow(PARENT_NO_EVENT_ERROR);
     expect(await call('delete_task', { id: p.id })).toEqual({ deleted: p.id, parts: [x.id] });
     expect(((await call('list_tasks')) as Task[]).some((t) => t.id === x.id)).toBe(false);
   });
@@ -602,22 +602,45 @@ describe('mcp tools — sync_calendar_event', () => {
     expect(google.events.size).toBe(events); // a refusal never reaches Google
   });
 
-  it('refuses a parent with the reason — its parts carry the blocks', async () => {
+  it('on a timed parent it syncs the due marker; an untimed parent is refused with the reason', async () => {
     const { call, setup, google } = makeEnv();
     await setup.completeGoogleConnect('A');
     const p = (await call('create_task', timed)) as Task;
-    await call('create_task', { title: 'read', estimateMin: 30, parentId: p.id }); // its block goes
-    expect(google.events.size).toBe(0);
-    await expect(call('sync_calendar_event', { taskId: p.id })).rejects.toThrow(
-      PARENT_NO_EVENT_ERROR,
-    );
-    expect(google.events.size).toBe(0);
+    await call('create_task', { title: 'read', estimateMin: 30, parentId: p.id }); // its block → marker
+    const marker = google.events.get(p.gcalEventId!)!;
+    expect(marker).toMatchObject({ marker: true, endMs: marker.startMs + 15 * 60_000 });
+    google.events.delete(p.gcalEventId!); // removed by hand in Google
+    const res = (await call('sync_calendar_event', { taskId: p.id })) as {
+      outcome: string;
+      task: Task;
+    };
+    expect(res.outcome).toBe('unlinked');
+    const again = (await call('sync_calendar_event', { taskId: p.id })) as {
+      outcome: string;
+      task: Task;
+    };
+    expect(again.outcome).toBe('created');
+    expect(google.events.get(again.task.gcalEventId!)).toMatchObject({
+      marker: true,
+      title: 'pset',
+    });
+
+    const u = (await call('create_task', { title: 'U', dueDay: '2026-10-09' })) as Task;
+    await call('create_task', { title: 'read', parentId: u.id });
+    const before = google.events.size;
+    await expect(call('sync_calendar_event', { taskId: u.id })).rejects.toThrow(/needs a due time/);
+    expect(google.events.size).toBe(before);
   });
 
-  it('a stray event on a parent is removed', async () => {
+  it('a stray event on an untimed parent is removed', async () => {
     const { call, setup, doc, google } = makeEnv();
     await setup.completeGoogleConnect('A');
-    const p = (await call('create_task', timed)) as Task;
+    const p = (await call('create_task', { title: 'P2', dueDay: '2026-10-09' })) as Task;
+    await call('create_calendar_event', {
+      taskId: p.id,
+      start: '2026-10-08T14:00:00-07:00',
+      durationMin: 30,
+    });
     const part = (await call('create_task', { title: 'read' })) as Task;
     // Attached behind the impl's back, so the parent keeps its block (a row from before parts, say).
     const repo = new Repo(doc, liveWrites(doc), 'local');
@@ -627,6 +650,19 @@ describe('mcp tools — sync_calendar_event', () => {
       task: { gcalEventId: null },
     });
     expect(google.events.size).toBe(0);
+  });
+
+  it('create_calendar_event names a part’s block after its parent by default', async () => {
+    const { call, setup, google } = makeEnv();
+    await setup.completeGoogleConnect('A');
+    const p = (await call('create_task', { title: 'P2' })) as Task;
+    const part = (await call('create_task', { title: 'read', parentId: p.id })) as Task;
+    const t = (await call('create_calendar_event', {
+      taskId: part.id,
+      start: '2026-10-08T14:00:00-07:00',
+      durationMin: 30,
+    })) as Task;
+    expect(google.events.get(t.gcalEventId!)!.title).toBe('P2 · read');
   });
 
   it('a refusal clears a moot failure note — a Retry that can’t do anything never lingers', async () => {

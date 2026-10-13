@@ -3,6 +3,7 @@ import {
   AUTO_PLACED_ERROR,
   TASK_NOTES_MAX,
   UPLOAD_URL_TTL_MS,
+  blockTitle,
   calendarSyncPlan,
   computeDayShape,
   hasParts,
@@ -11,7 +12,7 @@ import {
   normalizeContentType,
   normalizeNotes,
   PARENT_NO_ACTUAL_ERROR,
-  PARENT_NO_EVENT_ERROR,
+  parentOf,
   partsOf,
   partsSummary,
   userDueEpoch,
@@ -105,13 +106,15 @@ function nullableTime(args: Record<string, unknown>, key: string): string | null
   return v;
 }
 const DUE_TIME_DESC =
-  'deadline clock time HH:MM (24h) in the user\'s local time (America/Los_Angeles) on dueDay — "due Friday 4pm" is dueDay + dueTime "16:00". Needs a dueDay. A timed task is added to Google Calendar automatically when that is on (an event ending at the deadline, as long as the estimate); a sync failure shows as gcalSyncError on the returned task — sync_calendar_event retries it';
+  'deadline clock time HH:MM (24h) in the user\'s local time (America/Los_Angeles) on dueDay — "due Friday 4pm" is dueDay + dueTime "16:00". Needs a dueDay. A timed task is added to Google Calendar automatically when that is on (an event ending at the deadline, as long as the estimate; a part’s block is named "Parent · Part"; a parent’s is its 15-minute due marker, free, which a due change moves); a sync failure shows as gcalSyncError on the returned task — sync_calendar_event retries it';
 // Why sync_calendar_event would do nothing — calendarSyncPlan's `none` gates, in its order.
-function syncRefusal(task: Task, settings: Settings): string {
+function syncRefusal(task: Task, settings: Settings, parent: boolean): string {
   if (settings.autoCalendar === false)
     return 'Auto-sync is off — the user turns it on in the app; nothing syncs until then.';
   if (task.status === 'done' || task.status === 'cancelled')
     return `A ${task.status} task never syncs to the calendar.`;
+  if (parent && !task.gcalEventId && !(task.dueDay && task.dueTime))
+    return 'A task with parts is on the calendar as its due marker, which needs a due time — set dueDay + dueTime with update_task (its parts take blocks of their own).';
   if (!task.gcalEventId && !(task.dueDay && task.dueTime))
     return 'No due time and no event — set dueDay + dueTime with update_task (the block follows), or add a manual block with create_calendar_event.';
   if (!task.gcalEventId && !settings.calendarWriteDefault)
@@ -643,7 +646,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_calendar_event',
     description:
-      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title. For a task with no due time: a manual time block — renaming it in Google renames the task; its time maps to no task field. Refused on a parent (a task with parts — its parts carry the blocks; add the event to a part). Refused on a task with a due time while auto-sync is on (with a calendar to write to): that task’s block is placed at its deadline automatically — sync_calendar_event puts it (back) there, update_task changes the time. On error, re-read the task before retrying — the event may already exist.',
+      'Create a Google Calendar event linked to a task (a task can hold one event). start is an ISO timestamp WITH offset; give either end (ISO) or durationMin. accountSub/calendarId default to the write-default (see list_calendars); title defaults to the task title (on a part, "Parent · Part", as its auto block is named). For a task with no due time: a manual time block — renaming it in Google renames the task; its time maps to no task field. Refused on a parent (a task with parts — its one event is its due marker, placed by sync_calendar_event; add the event to a part). Refused on a task with a due time while auto-sync is on (with a calendar to write to): that task’s block is placed at its deadline automatically — sync_calendar_event puts it (back) there, update_task changes the time. On error, re-read the task before retrying — the event may already exist.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -696,7 +699,10 @@ export const TOOLS: Tool[] = [
       if (!title) {
         const task = (await ctx.dispatch('getTask', [taskId])) as Task | null;
         if (!task) throw new Error(`Not found: ${taskId}`);
-        title = task.title;
+        const parent = task.parentId
+          ? ((await ctx.dispatch('getTask', [task.parentId])) as Task | null)
+          : null;
+        title = blockTitle(task, parent?.title);
       }
       try {
         return await ctx.dispatch('insertCalendarEvent', [
@@ -727,7 +733,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'sync_calendar_event',
     description:
-      'Sync a task’s Google Calendar event to the task as it is now — the app’s Add to calendar / Retry / Send to Google. Nothing is picked: a timed task’s block goes on the write default (see list_calendars), ends at its due time (on a part, when its block ends) and is as long as the estimate. Writes a REAL Google Calendar event. Returns { outcome, task }: "created" (a timed task with no event gets one — e.g. after its block was removed), "updated" (a linked event gets the task’s title and time — a failed sync is retried, and a value kept over a Google edit is sent), "removed" (a removal that failed earlier is finished), "unlinked" (Google had already deleted the event — call again to create a fresh one). Refused, with the reason, when nothing would happen: a parent (a task with parts — its parts carry the blocks; a stray event on one is removed), a done or cancelled task (beyond an owed removal), auto-sync off, no due time and no event, no calendar to write to. A Google failure is an error; its text is also stored on the task as gcalSyncError.',
+      'Sync a task’s Google Calendar event to the task as it is now — the app’s Add to calendar / Retry / Send to Google. Nothing is picked: a timed task’s block goes on the write default (see list_calendars), ends at its due time (on a part, when its block ends; named "Parent · Part") and is as long as the estimate; a parent’s is its due marker — 15 minutes ending at its deadline, shown free and graphite. Writes a REAL Google Calendar event. Returns { outcome, task }: "created" (a timed task with no event gets one — e.g. after its block was removed), "updated" (a linked event gets the task’s title and time — a failed sync is retried, and a value kept over a Google edit is sent), "removed" (a removal that failed earlier is finished), "unlinked" (Google had already deleted the event — call again to create a fresh one). Refused, with the reason, when nothing would happen: a parent with no due time (its marker needs one; a stray event on one is removed), a done or cancelled task (beyond an owed removal), auto-sync off, no due time and no event, no calendar to write to. A Google failure is an error; its text is also stored on the task as gcalSyncError.',
     inputSchema: {
       type: 'object',
       properties: { taskId: { type: 'string' } },
@@ -741,15 +747,21 @@ export const TOOLS: Tool[] = [
       const settings = (await ctx.dispatch('getSettings', [])) as Settings;
       // An eventually consistent read, unlike the backend's: a part attached or detached a moment ago
       // can be missed — rare, and the outcome below is still named from what came back.
-      const parent = hasParts((await ctx.dispatch('listTasks', [])) as Task[], taskId);
-      // The same planner the backend runs (ensure = the button, parent = it has parts), so the outcome is
-      // what it decides — a skipped sync never reads as "updated".
-      const plan = calendarSyncPlan(null, before, settings, userDueEpoch, { ensure: true, parent });
+      const all = (await ctx.dispatch('listTasks', [])) as Task[];
+      const parent = hasParts(all, taskId);
+      const parentTitle = parentOf(all, before)?.title ?? null;
+      // The same planner the backend runs (ensure = the button, parent = it has parts — its event is the
+      // due marker), so the outcome is what it decides — a skipped sync never reads as "updated".
+      const plan = calendarSyncPlan(null, before, settings, userDueEpoch, {
+        ensure: true,
+        parent,
+        parentTitle,
+      });
       if (plan.kind === 'none') {
         // The backend's ensure pass clears a moot failure note without calling Google (sync off, finished,
         // a parent) — run it, so a refusal never leaves a Retry behind that can't do anything.
         if (before.gcalSyncError) await ctx.dispatch('syncCalendarEvent', [taskId]);
-        throw new Error(parent ? PARENT_NO_EVENT_ERROR : syncRefusal(before, settings));
+        throw new Error(syncRefusal(before, settings, parent));
       }
       const task = (await ctx.dispatch('syncCalendarEvent', [taskId])) as Task;
       if (task.gcalSyncError) throw new Error(task.gcalSyncError);

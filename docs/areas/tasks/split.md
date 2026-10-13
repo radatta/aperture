@@ -37,6 +37,7 @@ The split mechanics live in `packages/shared/src/split.ts`, and the parent rules
 
 - **Done, timed:** the event moves to B, whatever placed it (a picked block too — a timed task's one block is its auto block).
 - **Keep, timed:** each part owns a block, so two blocks end at the deadline. Piece 2 is how B's gets dragged earlier.
+- **Titles and the parent (v2a, [parts.md](parts.md) D12/D13):** each part's block is named after the parent (`P2 · Part 1`), and a timed standalone split's new parent gets its due marker.
 - **Manual events on an untimed A:** stay on A.
 - **Owed removals:** carried out through the reporting path.
 

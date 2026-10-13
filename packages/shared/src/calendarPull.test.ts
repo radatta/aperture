@@ -483,6 +483,106 @@ describe('calendarPullPlan', () => {
       ).toBe('none');
     }
   });
+  describe('a parent’s due marker and a part’s named block', () => {
+    const MARK = { startMs: END - 15 * 60_000, endMs: END };
+    const parentTask = (over: Partial<T> = {}) =>
+      task({
+        estimateMin: null,
+        gcalSeen: { title: 'P2', ...MARK, updatedMs: 2_000 },
+        title: 'P2',
+        ...over,
+      });
+    const LATER = { firstSync: false, parent: true };
+    it('dragging the marker’s end moves the parent’s deadline', () => {
+      const end = epoch('2026-10-09', '17:00');
+      const a = calendarPullPlan(
+        parentTask(),
+        event({ title: 'P2', startMs: end - 15 * 60_000, endMs: end, updatedMs: 3_000 }),
+        T0,
+        LATER,
+      );
+      expect(a).toMatchObject({
+        kind: 'apply',
+        fields: { dueDay: '2026-10-09', dueTime: '17:00' },
+      });
+    });
+    it('stretching the marker (a start drag) maps to nothing — never an estimate', () => {
+      const a = calendarPullPlan(
+        parentTask(),
+        event({ title: 'P2', startMs: END - 90 * 60_000, endMs: END, updatedMs: 3_000 }),
+        T0,
+        LATER,
+      );
+      expect(a.kind).toBe('see');
+    });
+    it('a parent whose marker is unmoved has no unsent time (its length isn’t the estimate)', () => {
+      const a = calendarPullPlan(
+        parentTask({ estimateMin: 120 }),
+        event({ title: 'P2 renamed', ...MARK, updatedMs: 3_000 }),
+        T0,
+        LATER,
+      );
+      expect(a).toMatchObject({ kind: 'apply', fields: { title: 'P2 renamed' } });
+    });
+
+    const WIN = { startMs: END - 60 * 60_000, endMs: END };
+    const part = (seenTitle: string) =>
+      task({ title: 'Part 1', gcalSeen: { title: seenTitle, ...WIN, updatedMs: 2_000 } });
+    const named = { firstSync: false, parentTitle: 'P2' };
+    it('a rename keeping the prefix writes only the part’s own title', () => {
+      const a = calendarPullPlan(
+        part('P2 · Part 1'),
+        event({ title: 'P2 · Part 1 reading', updatedMs: 3_000 }),
+        T0,
+        named,
+      );
+      expect(a).toMatchObject({ kind: 'apply', fields: { title: 'Part 1 reading' } });
+    });
+    it('a rename dropping the prefix is taken whole', () => {
+      const a = calendarPullPlan(
+        part('P2 · Part 1'),
+        event({ title: 'Reading', updatedMs: 3_000 }),
+        T0,
+        named,
+      );
+      expect(a).toMatchObject({ kind: 'apply', fields: { title: 'Reading' } });
+    });
+    it('a rename to the bare prefix (blank after stripping) writes nothing', () => {
+      const a = calendarPullPlan(
+        part('P2 · Part 1'),
+        event({ title: 'P2 · ', updatedMs: 3_000 }),
+        T0,
+        named,
+      );
+      expect(a.kind).toBe('see');
+    });
+    it('our own prefixed push echoing back is a no-op', () => {
+      const a = calendarPullPlan(part('P2 · Part 1'), event({ title: 'P2 · Part 1' }), T0, named);
+      expect(a.kind).toBe('none');
+    });
+    it('a v1 block (seen bare) holds an unsent prefix: a Google rename is kept out', () => {
+      const a = calendarPullPlan(
+        part('Part 1'),
+        event({ title: 'Something else', updatedMs: 3_000 }),
+        T0,
+        named,
+      );
+      expect(a).toMatchObject({
+        kind: 'apply',
+        fields: {},
+        note: expect.stringMatching(/^Kept your title/),
+      });
+    });
+    it('first sight after the first sync bases on the prefixed block title', () => {
+      const a = calendarPullPlan(
+        task({ title: 'Part 1', gcalSeen: null }),
+        event({ title: 'P2 · Part 1' }),
+        T0,
+        named,
+      );
+      expect(a).toEqual({ kind: 'see', seen: { title: 'P2 · Part 1', ...WIN, updatedMs: 2_000 } });
+    });
+  });
 });
 
 describe('pullNote', () => {

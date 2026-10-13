@@ -46,6 +46,7 @@ import {
   discardSession,
   eventLengthMin,
   eventWindow,
+  syncWindow,
   isPendingRemoval,
   localDayTime,
   localEpochFromDayTime,
@@ -79,6 +80,7 @@ import {
   PARENT_NO_PLAN_ERROR,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
+  parentOf,
   partsOf,
   rollupParts,
   releaseParent,
@@ -121,6 +123,7 @@ import type {
   SetFinanceBucketInput,
   SetTaskDueInput,
   SplitTaskInput,
+  SyncContext,
   UpsertFinanceRuleInput,
   GetCalendarBusyInput,
   GoogleCalendar,
@@ -403,13 +406,13 @@ class StubClient implements ApiClient {
     };
   }
   // A task taking its first part (parts.ts becomeParent): its estimate goes, it leaves its plan (rows
-  // tombstoned) and any calendar block. Pass the task as it was; returns it as a parent. Call AFTER the
-  // first part is written, so the calendar sync sees it has parts.
+  // tombstoned), and its block becomes its due marker (a timed one with none gets one). Pass the task
+  // as it was; returns it as a parent. Call AFTER the first part is written.
   private adoptAsParent(parent: Task): Task {
     for (const p of this.alive(this.store.plans).filter((p) => p.taskId === parent.id))
       this.writes.softDelete(this.store.plans, p.id);
     const became = this.writes.put(this.store.tasks, becomeParent(parent, this.now()));
-    return this.syncCalendar(parent, became);
+    return this.syncCalendar(parent, became, true, { parent: true });
   }
   // The rollup's baseline, frozen when `starting` — the first part to leave planning — does
   // (parts.ts freezeParentLock).
@@ -420,22 +423,35 @@ class StubClient implements ApiClient {
     const frozen = freezeParentLock(parent, parts, starting, this.now());
     if (frozen) this.writes.put(this.store.tasks, frozen);
   }
-  // A task whose last part just went is plain again, its parts' lock with them (parts.ts releaseParent).
-  private releaseLock(parentId: string | null): void {
+  // A task whose last part just went is plain again: its parts' lock goes (parts.ts releaseParent) and
+  // its due marker turns back into a block.
+  private releaseParentState(parentId: string | null): void {
     const parent = parentId ? this.find(this.store.tasks, parentId) : undefined;
-    if (!parent) return;
-    const released = releaseParent(parent, this.alive(this.store.tasks), this.now());
-    if (released) this.writes.put(this.store.tasks, released);
+    const alive = this.alive(this.store.tasks);
+    if (!parent || hasParts(alive, parent.id)) return;
+    const released = releaseParent(parent, alive, this.now());
+    const plain = released ? this.writes.put(this.store.tasks, released) : parent;
+    if (plain.gcalEventId)
+      this.syncCalendar(plain, plain, true, { parent: false, wasParent: true });
   }
   // Calendar auto-sync parity with the backend: the same shared planner, executed against a fake event
-  // id (no Google here). The browser's clock is the user's, so the local epoch is the right one.
-  private syncCalendar(prev: Task | null, task: Task, ensure = false): Task {
+  // id (no Google here). The browser's clock is the user's, so the local epoch is the right one. `ctx`
+  // overrides what the task list says (adopt and release know before the list does).
+  private syncCalendar(
+    prev: Task | null,
+    task: Task,
+    ensure = false,
+    ctx: Pick<SyncContext, 'parent' | 'wasParent'> = {},
+  ): Task {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
     const settings = this.ensureSettings();
-    const parent = hasParts(this.alive(this.store.tasks), task.id);
+    const alive = this.alive(this.store.tasks);
+    const parent = ctx.parent ?? hasParts(alive, task.id);
     const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, {
       ensure,
       parent,
+      wasParent: ctx.wasParent,
+      parentTitle: parentOf(alive, task)?.title ?? null,
     });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
     // retires an "updated from Google" note it has just superseded.
@@ -445,7 +461,7 @@ class StubClient implements ApiClient {
     if (action.kind === 'none') {
       const moot =
         task.gcalSyncError &&
-        ((!task.gcalEventId && (parent || !eventWindow(task, localEpochFromDayTime))) ||
+        ((!task.gcalEventId && !syncWindow(task, localEpochFromDayTime, parent)) ||
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
@@ -692,7 +708,7 @@ class StubClient implements ApiClient {
     const task = this.mustFind(this.store.tasks, id);
     if (parentId === null) {
       const part = this.writes.patch(this.store.tasks, id, { parentId: null });
-      this.releaseLock(task.parentId);
+      this.releaseParentState(task.parentId);
       return part;
     }
     const parent = this.mustFind(this.store.tasks, parentId);
@@ -702,7 +718,7 @@ class StubClient implements ApiClient {
     const part = this.writes.patch(this.store.tasks, id, { parentId });
     if (first) this.adoptAsParent(parent);
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
-    this.releaseLock(task.parentId); // moved from another parent
+    this.releaseParentState(task.parentId); // moved from another parent
     this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
     return part;
   }
@@ -748,7 +764,14 @@ class StubClient implements ApiClient {
     const trimmed = title.trim();
     if (!trimmed) throw new Error('Title is required');
     const prev = this.mustFind(this.store.tasks, id);
-    return this.syncCalendar(prev, this.writes.patch(this.store.tasks, id, { title: trimmed }));
+    const next = this.syncCalendar(
+      prev,
+      this.writes.patch(this.store.tasks, id, { title: trimmed }),
+    );
+    // A parent's name is in each of its parts' blocks: each linked one is re-sent (a done one isn't).
+    for (const part of partsOf(this.alive(this.store.tasks), id))
+      if (part.gcalEventId) this.syncCalendar(part, part);
+    return this.find(this.store.tasks, id) ?? next;
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { notes: setNotesArg(notes) });
@@ -768,15 +791,18 @@ class StubClient implements ApiClient {
     return this.find(this.store.tasks, id) ?? next;
   }
   // A parent is never worked on itself: it's marked done once its parts are dealt with (a hard block
-  // otherwise), and dropping it drops its open parts first — each through the normal cancel path, so
-  // their calendar blocks go too.
+  // otherwise; its due marker stays, as a done task's block does), and dropping it drops its open parts
+  // first — each through the normal cancel path, so their calendar blocks go — then its marker.
   private async transitionParent(task: Task, parts: Task[], to: TaskStatus): Promise<Task> {
     if (to === 'done')
       return this.writes.put(this.store.tasks, completeParent(task, parts, this.now()));
     if (to === 'cancelled') {
       const { parent, parts: dropped } = cancelParent(task, parts, this.now());
       for (const p of dropped) await this.transitionOne(this.mustFind(this.store.tasks, p.id), to);
-      return this.writes.put(this.store.tasks, parent);
+      this.writes.put(this.store.tasks, parent);
+      return task.gcalEventId
+        ? this.deleteCalendarEvent(task.id)
+        : this.mustFind(this.store.tasks, task.id);
     }
     throw new Error(to === 'in_progress' ? PARENT_NO_START_ERROR : PARENT_NO_PLAN_ERROR);
   }
@@ -806,8 +832,8 @@ class StubClient implements ApiClient {
     if (hasParts(this.alive(this.store.tasks), id)) throw new Error(PARENT_NO_SPLIT_ERROR);
     const standalone = !task.parentId;
     const shaped = splitOriginal(task, input, this.now(), standalone); // validates everything before any write
-    // Split always yields parent + parts: a standalone task gets a new parent (no event — it never owns
-    // one), a part splits under the parent it has.
+    // Split always yields parent + parts: a standalone task gets a new parent (its due marker is synced
+    // last, once it has parts), a part splits under the parent it has.
     const parentId = standalone
       ? this.writes.insert(this.store.tasks, { ...this.base(), ...newParentFrom(task, input) }).id
       : task.parentId!;
@@ -871,13 +897,22 @@ class StubClient implements ApiClient {
     }
     // No freeze here: a standalone split's parent IS the original's lock, and nothing started just now.
     const followUp = this.syncCalendar(null, created);
-    return { parent: this.mustFind(this.store.tasks, parentId), original, followUp };
+    const parent = standalone
+      ? this.syncCalendar(null, this.mustFind(this.store.tasks, parentId), false, { parent: true })
+      : this.mustFind(this.store.tasks, parentId);
+    return { parent, original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
+    return this.deleteOne(id, true);
+  }
+  // `release`: a part's parent is left plain if this was its last part — not when the parent is going
+  // too (its marker is deleted with it, not first turned back into a block).
+  private async deleteOne(id: string, release: boolean): Promise<void> {
     const task = this.find(this.store.tasks, id);
     if (!task) return; // idempotent — already gone or never existed
     // A parent goes with every part — each through this same path (event, plans, attachments), first.
-    for (const part of partsOf(this.alive(this.store.tasks), id)) await this.deleteTask(part.id);
+    for (const part of partsOf(this.alive(this.store.tasks), id))
+      await this.deleteOne(part.id, false);
     // Calendar event before the tombstone: deleteCalendarEvent uses mustFind and clears the pointers.
     if (task.gcalEventId) await this.deleteCalendarEvent(id);
     for (const p of this.alive(this.store.plans).filter((p) => p.taskId === id))
@@ -885,7 +920,7 @@ class StubClient implements ApiClient {
     for (const a of this.alive(this.store.attachments).filter((a) => a.taskId === id))
       this.writes.softDelete(this.store.attachments, a.id);
     this.writes.softDelete(this.store.tasks, id); // task last
-    this.releaseLock(task.parentId);
+    if (release) this.releaseParentState(task.parentId);
   }
 
   // --- Plans ---------------------------------------------------------------
@@ -1398,16 +1433,20 @@ class StubClient implements ApiClient {
         // A linked task with no known event (seeded, or persisted before two-way sync) takes its own
         // block as the known one — the planner's later-delta fallback, prefilled because stubEvent
         // needs a base (the queue is only ever deliberate edits, never a first-sync baseline).
+        const alive = this.alive(this.store.tasks);
+        const parent = hasParts(alive, found.id);
+        const parentTitle = parentOf(alive, found)?.title ?? null;
         const task = {
           ...found,
           gcalSeen:
-            found.gcalSeen ?? seenFromTask(found, eventWindow(found, localEpochFromDayTime)),
+            found.gcalSeen ??
+            seenFromTask(found, syncWindow(found, localEpochFromDayTime, parent), parentTitle),
         };
         const action = calendarPullPlan(
           task,
           this.stubEvent(task, edit, now),
           { epoch: localEpochFromDayTime, clock: localDayTime },
-          { firstSync: false },
+          { firstSync: false, parent, parentTitle },
         );
         if (action.kind === 'none') continue;
         this.writes.patch(

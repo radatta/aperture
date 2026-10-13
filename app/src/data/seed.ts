@@ -4,11 +4,14 @@
 
 import {
   addDays,
+  blockTitle,
   dayKey,
   hhmmOfEpoch,
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
+  localEpochFromDayTime,
   rollRepFields,
+  syncWindow,
 } from '@aperture/shared';
 import type {
   BaseEntity,
@@ -288,8 +291,9 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   });
 
   // Two more parents so every parent state shows on first load: one with every part done (the "mark it
-  // submitted?" nudge), and one whose Part 1 kept its time from a split (a part's time reads "ends …";
-  // its colour is the parent's deadline).
+  // submitted?" nudge), and a timed one with its due marker on the calendar, whose Part 1 kept its time
+  // from a split (a part's time reads "ends …"; its colour is the parent's deadline; its block is
+  // named after the parent).
   const psetDone = nowMs - 5 * HOUR;
   const pset: Task = {
     ...mk(psetDone - 3 * HOUR),
@@ -339,6 +343,16 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     startedAt: null,
     completedAt: null,
   };
+  const seenOn = (t: Task, parent: boolean, parentTitle: string | null = null) => {
+    const w = syncWindow(t, localEpochFromDayTime, parent)!;
+    return { title: blockTitle(t, parentTitle), ...w, updatedMs: nowMs - DAY };
+  };
+  Object.assign(lab, {
+    gcalAccountId: 'seed-personal',
+    gcalCalendarId: 'you@gmail.com',
+    gcalEventId: 'stub-event-seed-lab-marker',
+    gcalSeen: seenOn(lab, true),
+  });
   const openPart = (title: string, est: number, over: Partial<Task> = {}): Task => ({
     ...mk(nowMs - 2 * DAY + 60_000),
     ...partBase,
@@ -353,15 +367,17 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     completedAt: null,
     ...over,
   });
+  const analysis = openPart('Run the analysis', 60, {
+    dueDay: addDays(today, 1),
+    dueTime: '15:00',
+    gcalAccountId: 'seed-personal', // on the calendar, as auto-sync would have left it
+    gcalCalendarId: 'you@gmail.com',
+    gcalEventId: 'stub-event-seed-lab',
+  });
+  analysis.gcalSeen = seenOn(analysis, false, lab.title);
   store.tasks.push(
     lab,
-    openPart('Run the analysis', 60, {
-      dueDay: addDays(today, 1),
-      dueTime: '15:00',
-      gcalAccountId: 'seed-personal', // on the calendar, as auto-sync would have left it
-      gcalCalendarId: 'you@gmail.com',
-      gcalEventId: 'stub-event-seed-lab',
-    }),
+    analysis,
     openPart('Write the discussion', 90, { createdAt: nowMs - 2 * DAY + 120_000 }),
   );
 

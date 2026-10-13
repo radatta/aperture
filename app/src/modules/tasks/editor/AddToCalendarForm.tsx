@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   blockStartBefore,
+  blockTitle,
   DEFAULT_EVENT_MIN,
   fmtClock12,
   localEpochFromDayTime,
@@ -16,7 +17,16 @@ import { useSettings } from '../../../data/hooks/useSettings';
 // Add-to-calendar (the manual path — timed tasks with auto-sync on get theirs automatically): pick a
 // calendar (default = the settings write-default), a start time on the due day, and a duration. A task
 // with a due time prefills the block that ENDS at the deadline; the picked start feeds the event only.
-export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => void }) {
+// A part's block is named after its parent ("P2 · Part 1"), as an auto-synced one is.
+export function AddToCalendarForm({
+  task,
+  parentTitle,
+  onDone,
+}: {
+  task: Task;
+  parentTitle?: string | null;
+  onDone: () => void;
+}) {
   const { data: settings } = useSettings();
   const { data: calendars = [] } = useGoogleCalendars((settings?.googleAccounts.length ?? 0) > 0);
   const insert = useInsertCalendarEvent();
@@ -93,7 +103,7 @@ export function AddToCalendarForm({ task, onDone }: { task: Task; onDone: () => 
                 taskId: task.id,
                 accountSub: cal.accountSub,
                 calendarId: cal.calendarId,
-                title: task.title,
+                title: blockTitle(task, parentTitle),
                 startMs,
                 endMs: startMs + durationMin * 60_000,
               });

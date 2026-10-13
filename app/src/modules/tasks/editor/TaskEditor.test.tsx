@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import type { ApiClient, Task } from '@aperture/shared';
@@ -562,7 +562,10 @@ describe('TaskEditor', () => {
       expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
       expect(screen.queryByLabelText('Buffer (min)')).toBeNull();
       expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
-      expect(screen.getByText('Its parts carry their own calendar blocks.')).toBeTruthy();
+      expect(
+        screen.getByText('Connect Google Calendar in Settings to put its deadline there.'),
+      ).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Add to calendar/ })).toBeNull();
       expect(screen.getByText(/Open · 1 of 2 parts/)).toBeTruthy();
     });
 
@@ -625,6 +628,45 @@ describe('TaskEditor', () => {
       expect(screen.getByText(/Delete “P2” and its 3 parts\?/)).toBeTruthy();
     });
 
+    it('a timed parent’s Calendar section is its due marker: linked → Remove; unlinked → Add', async () => {
+      const client = createStubClient({ seed: true, storageKey: `editor-${Math.random()}` });
+      const { p } = await withParts(client, ['open']);
+      expect(p.gcalEventId).toBeTruthy(); // Break down made its block the marker
+      renderEditor(client, p);
+      expect(await screen.findByText('Due marker on Google Calendar')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+      cleanup();
+
+      const removed = await client.deleteCalendarEvent(p.id);
+      const { user } = renderEditor(client, removed);
+      expect(await screen.findByText('No due marker on your calendar.')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Add due marker' }));
+      await waitFor(async () => expect((await client.getTask(p.id))!.gcalEventId).toBeTruthy());
+    });
+
+    it('a part set to end after its parent is due gets a quiet note, as you type', async () => {
+      const client = api();
+      const { parts } = await withParts(client, ['open']);
+      renderEditor(client, parts[0]!);
+      const ends = await screen.findByLabelText('Ends');
+      expect(screen.queryByText(/Ends after P2 is due/)).toBeNull();
+      await screen.findByRole('button', { name: 'P2' }); // the parent has loaded
+      fireEvent.change(ends, { target: { value: '2026-10-14' } });
+      expect(screen.getByText('Ends after P2 is due.')).toBeTruthy();
+      fireEvent.change(ends, { target: { value: '2026-10-12' } });
+      expect(screen.queryByText(/Ends after P2 is due/)).toBeNull();
+    });
+
+    it('a dropped part’s header reads “Dropped · part of P2”, not a count', async () => {
+      const client = api();
+      const { parts } = await withParts(client, ['open', 'open']);
+      const dropped = await client.transitionTask(parts[1]!.id, 'cancelled');
+      renderEditor(client, dropped);
+      expect(await screen.findByRole('button', { name: 'P2' })).toBeTruthy();
+      expect(screen.getByText(/^Dropped · part of/)).toBeTruthy();
+      expect(screen.queryByText(/Part \d of/)).toBeNull();
+    });
+
     it('a part reads its time as Ends, and its header names the parent and its deadline', async () => {
       const client = api();
       const { parts } = await withParts(client, ['open', 'open']);
@@ -660,6 +702,11 @@ describe('TaskEditor', () => {
       await user.click(screen.getByRole('button', { name: 'Break down…' }));
       await user.type(screen.getByLabelText(/Add parts/), 'run it | ~45 due:2026-10-10');
       expect(screen.getByText(/the deadline is the parent’s/)).toBeTruthy();
+      // In plain words — never the bulk-add grammar (#, due:) a part has no use for.
+      await user.clear(screen.getByLabelText(/Add parts/));
+      await user.type(screen.getByLabelText(/Add parts/), 'run it | soon');
+      const said = screen.getByText(/“soon” isn’t something a part takes/);
+      expect(said.parentElement!.textContent).not.toMatch(/due:|#/);
       expect(screen.getByRole('button', { name: 'Add parts' }).hasAttribute('disabled')).toBe(true);
     });
 

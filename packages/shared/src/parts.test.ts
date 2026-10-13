@@ -3,11 +3,13 @@ import {
   assertCanBePart,
   assertParentCompletable,
   becomeParent,
+  blockTitle,
   calibrationTasks,
   canBecomeParent,
   cancelParent,
   completeParent,
   deadlineOf,
+  endsAfterParent,
   freezeParentLock,
   hasParts,
   isRep,
@@ -18,6 +20,7 @@ import {
   partsSummary,
   releaseParent,
   rollupParts,
+  titleFromBlock,
 } from './parts';
 import type { Task } from './types';
 
@@ -288,5 +291,39 @@ describe('calibrationTasks', () => {
       task({ id: 'nolock', status: 'done' }),
     ];
     expect(calibrationTasks(list).map((t) => t.id)).toEqual(['a1', 'p']);
+  });
+});
+
+describe('block titles', () => {
+  it('a part’s block is "Parent · Part"; anything else keeps its title', () => {
+    expect(blockTitle({ title: 'Part 1' }, 'P2')).toBe('P2 · Part 1');
+    expect(blockTitle({ title: 'Reading' }, 'P2')).toBe('P2 · Reading');
+    expect(blockTitle({ title: 'P2' })).toBe('P2');
+    expect(blockTitle({ title: 'P2' }, null)).toBe('P2');
+    expect(blockTitle({ title: 'P2' }, 'P2')).toBe('P2'); // a part named like its parent
+  });
+  it('a Google title loses the parent prefix; without one it’s taken whole, trimmed', () => {
+    expect(titleFromBlock('P2 · Part 1 reading', 'P2')).toBe('Part 1 reading');
+    expect(titleFromBlock('  Reading  ', 'P2')).toBe('Reading');
+    expect(titleFromBlock('P2 · ', 'P2')).toBe('');
+    expect(titleFromBlock('P2 ·', 'P2')).toBe('');
+    expect(titleFromBlock('P2', 'P2')).toBe('P2');
+    expect(titleFromBlock('P2 · x', null)).toBe('P2 · x');
+  });
+});
+
+describe('endsAfterParent', () => {
+  const at = (dueDay: string | null, dueTime: string | null = null) => ({ dueDay, dueTime });
+  it('a later day, or a later time the same day', () => {
+    expect(endsAfterParent(at('2026-10-09', '09:00'), at('2026-10-08', '17:00'))).toBe(true);
+    expect(endsAfterParent(at('2026-10-08', '17:30'), at('2026-10-08', '17:00'))).toBe(true);
+    expect(endsAfterParent(at('2026-10-08', '17:00'), at('2026-10-08', '17:00'))).toBe(false);
+    expect(endsAfterParent(at('2026-10-07', '23:00'), at('2026-10-08', '09:00'))).toBe(false);
+  });
+  it('an untimed side compares by day; no day on either side is never "after"', () => {
+    expect(endsAfterParent(at('2026-10-08', '23:00'), at('2026-10-08'))).toBe(false);
+    expect(endsAfterParent(at('2026-10-09'), at('2026-10-08', '17:00'))).toBe(true);
+    expect(endsAfterParent(at(null), at('2026-10-08'))).toBe(false);
+    expect(endsAfterParent(at('2026-10-09'), at(null))).toBe(false);
   });
 });

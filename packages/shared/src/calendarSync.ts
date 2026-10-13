@@ -12,15 +12,35 @@
 // The toggle (settings.autoCalendar) gates ALL of it — off means existing events stay put and nothing
 // syncs. Delete-on-cancel is separate (transitionTask) and predates this.
 
-import { eventWindow } from './due';
+import { syncWindow } from './due';
 import type { DueEpoch } from './due';
+import { blockTitle } from './parts';
 import type { CalendarRef, GcalSeen, Settings, Task } from './types';
 
+// `marker`: the event is a parent's due marker (free, graphite); false on a patch turns one back into a
+// block. Absent on a patch = leave how it shows alone.
 export type CalendarSyncAction =
   | { kind: 'none' }
   | { kind: 'delete' }
-  | { kind: 'create'; target: CalendarRef; title: string; startMs: number; endMs: number }
-  | { kind: 'patch'; title?: string; startMs?: number; endMs?: number };
+  | {
+      kind: 'create';
+      target: CalendarRef;
+      title: string;
+      startMs: number;
+      endMs: number;
+      marker: boolean;
+    }
+  | { kind: 'patch'; title?: string; startMs?: number; endMs?: number; marker?: boolean };
+
+// What the caller knows from the task list. `parent` = the task has parts (parts.ts) — its one event is
+// the due marker; `wasParent` = its last part just went, so the marker becomes a block again;
+// `parentTitle` = a part's parent, which names its block.
+export interface SyncContext {
+  ensure?: boolean;
+  parent?: boolean;
+  wasParent?: boolean;
+  parentTitle?: string | null;
+}
 
 type SyncFields = Pick<
   Task,
@@ -51,16 +71,17 @@ export const autoSyncOn = (
 export const AUTO_PLACED_ERROR =
   'Auto-sync places this task’s calendar block at its deadline — change its due time instead, or turn auto-sync off to pick a time.';
 
-const titleUnsent = (t: SyncFields): boolean =>
-  !!t.gcalSeen && !sameTitle(t.gcalSeen.title, t.title);
-
 // Does a linked task hold a change its event doesn't have yet (a failed, skipped or kept-out one)? What
 // the next push would send — the same comparison as calendarSyncPlan's known-event branch.
-export const hasUnsent = (t: SyncFields, epoch: DueEpoch): boolean => {
+export const hasUnsent = (
+  t: SyncFields,
+  epoch: DueEpoch,
+  ctx: Pick<SyncContext, 'parent' | 'parentTitle'> = {},
+): boolean => {
   const seen = t.gcalSeen;
   if (!t.gcalEventId || !seen) return false;
-  if (!sameTitle(seen.title, t.title)) return true;
-  const w = eventWindow(t, epoch);
+  if (!sameTitle(seen.title, blockTitle(t, ctx.parentTitle))) return true;
+  const w = syncWindow(t, epoch, !!ctx.parent);
   return !!w && seen.startMs !== null && (seen.startMs !== w.startMs || seen.endMs !== w.endMs);
 };
 
@@ -92,27 +113,31 @@ export function seenAfter(
   };
 }
 
-// `prev` null = a fresh create; `ensure` = the explicit retry (sync to the task as it is now); `parent` = the
-// task has parts (parts.ts), which the caller knows from the task list.
+// `prev` null = a fresh create; `ensure` = the explicit retry (sync to the task as it is now). A parent's
+// event is its due marker (MARKER_MIN, ending at the deadline); a part's block is named after its parent.
 export function calendarSyncPlan(
   prev: SyncFields | null,
   next: SyncFields,
   settings: Pick<Settings, 'autoCalendar' | 'calendarWriteDefault'>,
   epoch: DueEpoch,
-  opts: { ensure?: boolean; parent?: boolean } = {},
+  opts: SyncContext = {},
 ): CalendarSyncAction {
+  const parent = !!opts.parent;
+  const window = syncWindow(next, epoch, parent);
   // Old settings rows read back undefined → on (the default).
   // A removal already owed (it failed earlier) is carried out on the next sync whatever else holds —
   // finished, or sync turned off since: the user asked for it while sync was on.
-  if (next.gcalEventId && isPendingRemoval(next.gcalSyncError) && !eventWindow(next, epoch))
+  if (next.gcalEventId && isPendingRemoval(next.gcalSyncError) && !window)
     return { kind: 'delete' };
-  // A task with parts never owns an event — its parts carry the blocks. One it had before it became a
-  // parent goes, whatever the toggle says (like delete-on-cancel). v2 swaps this for the due marker.
-  if (opts.parent) return next.gcalEventId ? { kind: 'delete' } : NONE;
+  // A parent's one event is its marker, which needs a time — an untimed parent's event (a manual block
+  // from before it had parts) goes, whatever the toggle says (like delete-on-cancel).
+  if (parent && !window) return next.gcalEventId ? { kind: 'delete' } : NONE;
   if (settings.autoCalendar === false) return NONE;
   if (next.status === 'done' || next.status === 'cancelled') return NONE;
   const ensure = !!opts.ensure;
-  const window = eventWindow(next, epoch);
+  const title = blockTitle(next, opts.parentTitle);
+  // A marker ↔ block switch (adopt, release) re-sends how the event shows along with its window.
+  const shows = parent || opts.wasParent ? { marker: parent } : {};
   // `?? null` so an older row's undefined equals null (and an estimate of 0 stays distinct from none).
   const changed = (k: keyof SyncFields) => prev === null || (prev[k] ?? null) !== (next[k] ?? null);
   const whenChanged = changed('dueDay') || changed('dueTime');
@@ -123,8 +148,10 @@ export function calendarSyncPlan(
       // Lost its time → the event it auto-synced goes. An untimed task with a manual event: gcal owns
       // that clock, so only a rename reaches it.
       if (wasTimed) return { kind: 'delete' };
-      return ensure || changed('title') || titleUnsent(next)
-        ? { kind: 'patch', title: next.title }
+      return ensure ||
+        changed('title') ||
+        (!!next.gcalSeen && !sameTitle(next.gcalSeen.title, title))
+        ? { kind: 'patch', title }
         : NONE;
     }
     // ensure (the retry) sends everything. The window moves as one block.
@@ -140,7 +167,7 @@ export function calendarSyncPlan(
         (seen.startMs === null
           ? whenChanged || changed('estimateMin')
           : seen.startMs !== window.startMs || seen.endMs !== window.endMs);
-      retitle = ensure || !sameTitle(seen.title, next.title);
+      retitle = ensure || !sameTitle(seen.title, title);
     } else {
       // Not known yet (linked before two-way sync): any change sends everything, once — after which the
       // event is known.
@@ -148,12 +175,13 @@ export function calendarSyncPlan(
         ensure || whenChanged || changed('estimateMin') || changed('title') || !wasTimed;
     }
     if (!retime && !retitle) return NONE;
-    return { kind: 'patch', ...(retitle && { title: next.title }), ...(retime && window) };
+    return { kind: 'patch', ...(retitle && { title }), ...(retime && { ...window, ...shows }) };
   }
 
   // Unlinked: only a timed task gets an event, and only when its time is new or moved (a rename alone
   // never resurrects an event you removed by hand).
   if (!window || !settings.calendarWriteDefault) return NONE;
   if (!ensure && !whenChanged) return NONE;
-  return { kind: 'create', target: settings.calendarWriteDefault, title: next.title, ...window };
+  const target = settings.calendarWriteDefault;
+  return { kind: 'create', target, title, ...window, marker: parent };
 }

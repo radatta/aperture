@@ -107,9 +107,9 @@ export function TaskEditor({
   const isParent = parts.length > 0;
   const summary = partsSummary(parts);
   const parent = parentOf(allTasks, task);
-  // "Part 2 of 3" counts the parts not dropped (as the parent's own "1 of 3 parts" does) — and itself.
+  // "Part 2 of 3" counts the parts not dropped (as the parent’s own "1 of 3 parts" does).
   const siblings = parent
-    ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled' || p.id === task.id)
+    ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled')
     : [];
   // Closing Break down / Add parts puts focus back on its opener (whichever shows by then), never <body>.
   const partsRef = useRef<HTMLButtonElement>(null);
@@ -161,6 +161,16 @@ export function TaskEditor({
     task.completedAt != null ||
     task.cancelledAt != null;
 
+  const parentLink = parent && (
+    <button
+      type="button"
+      className="underline decoration-line underline-offset-2 hover:text-ink"
+      onClick={(e) => openTask?.(parent, 'view', e.currentTarget)}
+    >
+      {parent.title}
+    </button>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {/* Header — the status line. The full title is the editable Title field in the details form
@@ -170,18 +180,13 @@ export function TaskEditor({
           {isParent && task.status === 'backlog' ? 'Open' : statusLabel(task.status)}
           {isParent &&
             ` · ${summary.done} of ${summary.total} ${summary.total === 1 ? 'part' : 'parts'}`}
+          {/* A dropped part no longer counts among its parent's parts, so it has no "Part 2 of 2". */}
+          {parentLink && task.status === 'cancelled' && <> · part of {parentLink}</>}
         </Text>
         <CategoryTag categoryId={task.categoryId} />
-        {parent && (
+        {parentLink && task.status !== 'cancelled' && (
           <Text size="sm" tone="muted">
-            Part {partIndex(task, siblings)} of {siblings.length} of{' '}
-            <button
-              type="button"
-              className="underline decoration-line underline-offset-2 hover:text-ink"
-              onClick={(e) => openTask?.(parent, 'view', e.currentTarget)}
-            >
-              {parent.title}
-            </button>
+            Part {partIndex(task, siblings)} of {siblings.length} of {parentLink}
           </Text>
         )}
         {parent?.dueDay && (
@@ -201,7 +206,7 @@ export function TaskEditor({
       <TaskDetailsForm
         task={task}
         parts={isParent ? summary : undefined}
-        isPart={!!task.parentId}
+        parent={parent}
         onDirtyChange={onDirtyChange}
         estimateRef={estimateRef}
       />
@@ -341,90 +346,100 @@ export function TaskEditor({
             </Button>
           </div>
         )}
-        {isParent ? (
-          // A parent never owns an event (parts.ts) — the work is on the calendar as its parts' blocks.
-          <Text size="sm" tone="muted">
-            Its parts carry their own calendar blocks.
-          </Text>
-        ) : (
-          <>
-            {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
-            Aperture kept its value over Google's, Google still shows its own until the next push: one
-            tap sends it (a done task never pushes). */}
-            {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div role="status">
-                  <Text size="sm" tone="gold">
-                    {task.gcalPulled.note}
-                  </Text>
-                </div>
-                {hasKeptPart(task.gcalPulled.note) &&
-                  !isTerminal &&
-                  !!settings &&
-                  settings.autoCalendar !== false &&
-                  !task.gcalSyncError && // Retry shows instead
-                  hasUnsent(task, localEpochFromDayTime) && (
-                    <Button
-                      variant="quiet"
-                      size="sm"
-                      disabled={syncEvent.isPending}
-                      onClick={() => syncEvent.mutate(task.id)}
-                    >
-                      Send to Google
-                    </Button>
-                  )}
-              </div>
-            )}
-            {task.gcalEventId ? (
-              <div className="flex items-center justify-between gap-3">
-                <Text size="sm" tone="teal">
-                  On Google Calendar
-                </Text>
-                <Button variant="quiet" size="sm" onClick={() => deleteEvent.mutate(task.id)}>
-                  Remove
-                </Button>
-              </div>
-            ) : task.dueDay && task.dueTime && autoCalendar && !isTerminal ? (
-              // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
-              // hand or in Google) — one tap creates it, ending at the deadline.
-              !task.gcalSyncError && (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Text size="sm" tone="muted">
-                    Not on your calendar.
-                  </Text>
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    disabled={syncEvent.isPending}
-                    onClick={() => syncEvent.mutate(task.id)}
-                  >
-                    Add to calendar
-                  </Button>
-                </div>
-              )
-            ) : task.dueDay && !isTerminal ? (
-              // A timed task gets the picker only once settings say auto-sync can't place its block.
-              task.dueTime && !settings ? null : reveal === 'calendar' ? (
-                <AddToCalendarForm task={task} onDone={() => setReveal(null)} />
-              ) : (
+        {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
+        Aperture kept its value over Google's, Google still shows its own until the next push: one
+        tap sends it (a done task never pushes). */}
+        {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div role="status">
+              <Text size="sm" tone="gold">
+                {task.gcalPulled.note}
+              </Text>
+            </div>
+            {hasKeptPart(task.gcalPulled.note) &&
+              !isTerminal &&
+              !!settings &&
+              settings.autoCalendar !== false &&
+              !task.gcalSyncError && // Retry shows instead
+              hasUnsent(task, localEpochFromDayTime, {
+                parent: isParent,
+                parentTitle: parent?.title,
+              }) && (
                 <Button
                   variant="quiet"
                   size="sm"
-                  className="self-start"
-                  onClick={() => setReveal('calendar')}
+                  disabled={syncEvent.isPending}
+                  onClick={() => syncEvent.mutate(task.id)}
                 >
-                  Add to calendar…
+                  Send to Google
                 </Button>
-              )
-            ) : !isTerminal ? (
-              <Text size="sm" tone="muted">
-                {task.parentId
-                  ? 'Set when this part ends to add it to your calendar.'
-                  : 'Set a due day to add this to your calendar.'}
-              </Text>
-            ) : null}
-          </>
+              )}
+          </div>
         )}
+        {task.gcalEventId ? (
+          // A parent's one event is its due marker (parts.ts): 15 minutes, free, ending at its deadline.
+          <div className="flex items-center justify-between gap-3">
+            <Text size="sm" tone="teal">
+              {isParent ? 'Due marker on Google Calendar' : 'On Google Calendar'}
+            </Text>
+            <Button variant="quiet" size="sm" onClick={() => deleteEvent.mutate(task.id)}>
+              Remove
+            </Button>
+          </div>
+        ) : task.dueDay && task.dueTime && autoCalendar && !isTerminal ? (
+          // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
+          // hand or in Google) — one tap creates it, ending at the deadline.
+          !task.gcalSyncError && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Text size="sm" tone="muted">
+                {isParent ? 'No due marker on your calendar.' : 'Not on your calendar.'}
+              </Text>
+              <Button
+                variant="quiet"
+                size="sm"
+                disabled={syncEvent.isPending}
+                onClick={() => syncEvent.mutate(task.id)}
+              >
+                {isParent ? 'Add due marker' : 'Add to calendar'}
+              </Button>
+            </div>
+          )
+        ) : isParent ? (
+          // No picked time for a parent: its marker goes where its deadline is, with auto-sync on.
+          !isTerminal && (
+            <Text size="sm" tone="muted">
+              {!task.dueTime
+                ? 'Set a due time to put its deadline on your calendar.'
+                : settings?.calendarWriteDefault
+                  ? 'Its due marker goes on your calendar while auto-sync is on.'
+                  : 'Connect Google Calendar in Settings to put its deadline there.'}
+            </Text>
+          )
+        ) : task.dueDay && !isTerminal ? (
+          // A timed task gets the picker only once settings say auto-sync can't place its block.
+          task.dueTime && !settings ? null : reveal === 'calendar' ? (
+            <AddToCalendarForm
+              task={task}
+              parentTitle={parent?.title}
+              onDone={() => setReveal(null)}
+            />
+          ) : (
+            <Button
+              variant="quiet"
+              size="sm"
+              className="self-start"
+              onClick={() => setReveal('calendar')}
+            >
+              Add to calendar…
+            </Button>
+          )
+        ) : !isTerminal ? (
+          <Text size="sm" tone="muted">
+            {task.parentId
+              ? 'Set when this part ends to add it to your calendar.'
+              : 'Set a due day to add this to your calendar.'}
+          </Text>
+        ) : null}
       </section>
 
       {/* Manage — the lower-frequency, mostly destructive actions. */}

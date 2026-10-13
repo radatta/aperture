@@ -7,9 +7,10 @@
 // delta is dropped untouched by the caller.
 
 import { dayKey, fmtClock12, fmtDuration, fmtMonthShortDay, todayKey } from './dates';
-import { eventLengthMin, eventWindow } from './due';
+import { eventLengthMin, syncWindow } from './due';
 import type { DueClock, DueEpoch } from './due';
 import { isPendingRemoval, sameTitle } from './calendarSync';
+import { blockTitle, titleFromBlock } from './parts';
 import type { GcalSeen, Task } from './types';
 
 // One changed event from the delta, normalised by the gateway.
@@ -58,11 +59,14 @@ const NONE: PullAction = { kind: 'none' };
 // the next push sends it) while the base takes Google's, so it isn't re-detected. An event state older
 // than the base (Google's `updated` < gcalSeen.updatedMs — both Google's clock) is stale: our own push
 // came after it, and that push's echo carries anything newer.
+//
+// A parent's event is its due marker: its end is the deadline, its start/length map to nothing. A part's
+// block is named "P2 · Part 1" — the prefix is stripped before a rename reaches the part's title.
 export function calendarPullPlan(
   task: PullFields,
   ev: PulledEvent,
   time: { epoch: DueEpoch; clock: DueClock },
-  opts: { firstSync: boolean },
+  opts: { firstSync: boolean; parent?: boolean; parentTitle?: string | null },
 ): PullAction {
   if (task.status === 'cancelled') return NONE; // its event went with the cancel
   // Deleted or moved away → unlink, never resurrect. Deletion wins whatever `updated` says.
@@ -72,12 +76,15 @@ export function calendarPullPlan(
 
   const title = ev.title?.trim() || null;
   const timed = !ev.allDay && ev.startMs !== null && ev.endMs !== null;
-  const window = eventWindow(task, time.epoch);
+  const parent = !!opts.parent;
+  const window = syncWindow(task, time.epoch, parent);
+  const known = blockTitle(task, opts.parentTitle); // the title the event should have
   // No gcalSeen (linked before two-way sync): on the first sync, remember Google's state — a difference
   // is Aperture's unsent value. Later, it only shows up by changing in Google, so the task as it is
   // stands in for the base — unless it holds a failed push (docs/areas/calendar → First sight).
   const seen =
-    task.gcalSeen ?? (opts.firstSync || task.gcalSyncError ? null : seenFromTask(task, window));
+    task.gcalSeen ??
+    (opts.firstSync || task.gcalSyncError ? null : seenFromTask(task, window, opts.parentTitle));
   // An all-day conversion's time is ignored: keep the known window, so the block isn't "re-timed" back
   // until the task's own time changes.
   const now: GcalSeen = {
@@ -89,11 +96,12 @@ export function calendarPullPlan(
   if (!seen) return { kind: 'see', seen: now };
   // Stale: predates the base. (`?? 0`: a base from an earlier build of this branch has no version.)
   if (ev.updatedMs < (seen.updatedMs ?? 0)) return NONE;
-  const titleUnsent = !sameTitle(task.title, seen.title);
+  const titleUnsent = !sameTitle(known, seen.title);
   // Aperture changed the time iff the task no longer maps to the base the way a pull would map it: the
   // deadline (the same instant, or the same wall-clock minute — a fall-back hour's second 1:30, an end
-  // with seconds), the length in whole minutes (not on a done task — its start never maps). A window
-  // not known (first seen all-day) isn't unsent: the push side only moves it with the task's time.
+  // with seconds), the length in whole minutes (not on a done task or a marker — their start never
+  // maps). A window not known (first seen all-day) isn't unsent: the push side only moves it with the
+  // task's time.
   const seenEnd = seen.endMs !== null ? time.clock(seen.endMs) : null;
   const timeUnsent =
     !!window &&
@@ -102,15 +110,17 @@ export function calendarPullPlan(
     ((window.endMs !== seen.endMs &&
       (seenEnd!.day !== task.dueDay || seenEnd!.hhmm !== task.dueTime)) ||
       (task.status !== 'done' &&
+        !parent &&
         Math.round((seen.endMs - seen.startMs) / 60_000) !==
           (window.endMs - window.startMs) / 60_000));
 
   const fields: Extract<PullAction, { kind: 'apply' }>['fields'] = {};
   const kept: KeptField[] = [];
   // Title: Google renamed it since Aperture last knew the event (trim-insensitive).
-  if (title && !sameTitle(title, seen.title) && !sameTitle(title, task.title)) {
+  const renamed = title ? titleFromBlock(title, opts.parentTitle) : '';
+  if (title && renamed && !sameTitle(title, seen.title) && !sameTitle(renamed, task.title)) {
     if (titleUnsent) kept.push('title');
-    else fields.title = title;
+    else fields.title = renamed;
   }
   // Time — only a timed task's block maps to task fields; an event on an untimed task syncs its title only.
   const moved = timed && (ev.startMs !== seen.startMs || ev.endMs !== seen.endMs);
@@ -126,9 +136,10 @@ export function calendarPullPlan(
     }
     // The start sets the working estimate (never the frozen estimateLockedMin). A done task's estimate
     // is history — a stretched block doesn't rewrite it. Against eventLengthMin, so a no-estimate task's
-    // default-length block reads as unchanged rather than writing estimateMin = 30.
+    // default-length block reads as unchanged rather than writing estimateMin = 30. A marker's length
+    // is ignored (a parent has no estimate of its own).
     const len = Math.round((ev.endMs! - ev.startMs!) / 60_000);
-    if (task.status !== 'done' && len > 0 && len !== eventLengthMin(task))
+    if (task.status !== 'done' && !parent && len > 0 && len !== eventLengthMin(task))
       timeFields.estimateMin = len;
     if (Object.keys(timeFields).length > 0) {
       if (timeUnsent) kept.push('time');
@@ -148,8 +159,9 @@ export function calendarPullPlan(
 export const seenFromTask = (
   task: Pick<Task, 'title'>,
   window: { startMs: number; endMs: number } | null,
+  parentTitle?: string | null,
 ): GcalSeen => ({
-  title: task.title,
+  title: blockTitle(task, parentTitle),
   startMs: window?.startMs ?? null,
   endMs: window?.endMs ?? null,
   updatedMs: 0,
