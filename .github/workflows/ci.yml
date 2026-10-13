@@ -2,22 +2,21 @@ name: CI
 
 # The quality gate, factored out so pr.yml and deploy.yml run the exact same checks instead of two
 # copies drifting apart. Reusable (workflow_call) — callers own their own triggers + concurrency.
+# Three jobs so the app suite (the long pole) runs beside lint/typecheck/the other tests instead of after
+# them, itself halved with vitest --shard. A caller's `needs` sees one combined result, but a ruleset
+# gates on per-job check names, so both shards must be required checks by name too (INFRA §9).
+# Toolchain + install is the local setup action (.github/actions/setup).
 on:
   workflow_call:
 
 jobs:
-  check:
+  check: # job id unchanged, so the required check `ci / check` keeps its name
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6 # version comes from the root packageManager field
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       # Incremental caches: tsc -b's .tsbuildinfo (TS re-hashes any input newer than its buildinfo, and a
       # checkout stamps every file newer than the restored cache) plus shared's emitted d.ts they vouch
       # for, and ESLint's content-keyed cache (safe only while no lint rule is type-aware). Keyed per
@@ -26,7 +25,8 @@ jobs:
       # resolution change there (exports/types) with no source change would otherwise read as up to date.
       # They're listed, not globbed: hashFiles walks everything a `**` pattern could reach before applying
       # excludes, and after install that's node_modules — measured 8s per evaluation, paid twice (restore
-      # and the post-job save).
+      # and the post-job save). Only this job restores and saves it: the app shards resolve shared from
+      # source and never run tsc, and a second saver would race this one for the same per-commit key.
       - uses: actions/cache@v6
         with:
           path: |
@@ -44,5 +44,26 @@ jobs:
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
       - run: pnpm typecheck
         if: ${{ !cancelled() }}
-      - run: pnpm test
+      # Everything but app, which runs in the test-app shards. The root `pnpm test` (pnpm -r test) is
+      # unchanged for local use; the split lives here only.
+      - run: pnpm -r --filter '!@aperture/app' test
         if: ${{ !cancelled() }}
+
+  test-app:
+    name: test-app-${{ matrix.shard }} # the check name; without it GitHub renders `test-app (1)`
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false # a red shard must not cancel the other — same reasoning as !cancelled() above
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      # Half the suite per job, by vitest's own --shard: a file is assigned by a hash of its path, so it
+      # lands in the same shard every run until a file is added or removed; the shuffle still orders each
+      # half and prints its seed. Each shard runs on vitest's default one worker — a second worker measured
+      # no faster on the 2-vCPU runner. No `--` before the flag: pnpm forwards a `--` itself, and vitest
+      # then runs all 68 files.
+      - run: pnpm --filter @aperture/app test --shard=${{ matrix.shard }}/2
