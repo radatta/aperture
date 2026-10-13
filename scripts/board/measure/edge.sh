@@ -4,7 +4,7 @@
 # ≥ 128, or EDGE_MAX (12) instances run; then stops every instance by PID, waits for anon to settle, and
 # writes board/history/edge-<date>-<HHMM>.json (per step: n, peaks, PSI, memory.events deltas, exits, and
 # the head of any failed run's output).
-#   edge.sh --detach   run in tmux window `board-edge` (a refused clone() can hit the driving session too)
+#   edge.sh --detach   run detached (setsid), progress in history/edge-<date>.log — a refused clone() can hit the driving session too
 #   edge.sh            run in the foreground
 # Refuses while another session was working in the last 5 min (EDGE_FORCE=1, with the user's say-so).
 # Quiet-window only: other sessions exited, Playwright installed beforehand, no /curl-class shapes anywhere.
@@ -12,9 +12,10 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 if [ "${1:-}" = --detach ]; then
-  tmux new-window -d -n board-edge "bash '$SB_SCRIPTS/measure/edge.sh'; echo 'edge done — press enter'; read -r _" &&
-    echo "edge: running in tmux window board-edge → $BOARD_DIR/history/edge-$(sb_today)-*.json"
-  exit $?
+  log="$BOARD_DIR/history/edge-$(sb_today).log"
+  setsid nohup bash "$SB_SCRIPTS/measure/edge.sh" </dev/null >>"$log" 2>&1 &
+  echo "edge: running detached (pid $!), progress in $log → result $BOARD_DIR/history/edge-$(sb_today)-*.json"
+  exit 0
 fi
 
 STEP="${EDGE_STEP:-30}" MAX="${EDGE_MAX:-12}"  # EDGE_CMD (default `pnpm test`) swaps the job for dry runs
@@ -27,7 +28,7 @@ me=$( [ -n "${CLAUDE_PID:-}" ] && echo "$CLAUDE_PID" || sb_claude_pid "$PPID" ) 
 
 if [ "${EDGE_FORCE:-0}" != 1 ]; then
   others=$(bash "$SB_SCRIPTS/board.sh" json | jq -r --argjson me "$me" '
-    .sample.sessions[] | select(.pid != $me and .name != "board-edge" and .state == "working") | .name')
+    .sample.sessions[] | select(.pid != $me and .state == "working") | .name')
   [ -z "$others" ] || { echo "edge: refusing — working now: $others (EDGE_FORCE=1 overrides)" >&2; exit 3; }
 fi
 

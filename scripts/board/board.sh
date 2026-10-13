@@ -132,12 +132,9 @@ cmd_sampler() {
     start)
       sampler_running && { echo "sampler: already running (pid $(cat /tmp/aperture-sampler.pid 2>/dev/null))"; return 0; }
       sb_init_dirs
-      if [ -n "${TMUX:-}" ] && tmux new-window -d -n board-sampler "bash '$SB_SCRIPTS/sampler.sh' 2>>'$BOARD_DIR/sampler.log'" 2>/dev/null; then
-        echo "sampler: started in tmux window board-sampler"
-      else
-        setsid nohup bash "$SB_SCRIPTS/sampler.sh" </dev/null >>"$BOARD_DIR/sampler.log" 2>&1 &
-        echo "sampler: started (setsid)"
-      fi ;;
+      # Detached background process, no tmux window (it has nothing to show); errors → sampler.log.
+      setsid nohup bash "$SB_SCRIPTS/sampler.sh" </dev/null >>"$BOARD_DIR/sampler.log" 2>&1 &
+      echo "sampler: started (pid in /tmp/aperture-sampler.pid, log $BOARD_DIR/sampler.log)" ;;
     stop|restart)
       local p
       p=$(cat /tmp/aperture-sampler.pid 2>/dev/null)

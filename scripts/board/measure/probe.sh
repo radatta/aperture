@@ -19,8 +19,8 @@ JS
 marker="${TMPDIR:-/tmp}/aperture-probe.$$"
 setsid bash -c 'sleep 2; echo ok >"$1"' _ "$marker" </dev/null >/dev/null 2>&1 &
 # Capability (b): tmux can open a detached window from this environment.
-tmux_ok=false
-if [ -n "${TMUX:-}" ] && tmux new-window -d -n board-probe "sleep 1" 2>/dev/null; then tmux_ok=true; fi
+tmux_ok=false  # kept as a capability fact; nothing on the board opens tmux windows
+[ -n "${TMUX:-}" ] && tmux list-panes >/dev/null 2>&1 && tmux_ok=true
 sleep 3
 setsid_ok=false; [ "$(cat_or "$marker")" = ok ] && setsid_ok=true; rm -f "$marker"
 
@@ -55,5 +55,5 @@ jq -r '"probe \(.t) on \(.host): \(.nproc) CPUs, VM RAM \(.memTotal / 1073741824
   "memory.high \(if .cg.memoryHigh then (.cg.memoryHigh / 1073741824 | tostring) + " GiB" else "max" end) · memory.max \(.cg.memoryMax) · anon \(.cg.anon / 1048576 | floor) MiB · file \(.cg.file / 1048576 | floor) MiB · peak \(.cg.peak / 1048576 | floor) MiB",
   "pids \(.cg.pids)/\(.cg.pidsMax) (peak \(.cg.pidsPeak)) · cpu.max \(.cg.cpuMax) · oom_kill \(.cg.oomKill) · high \(.cg.highEvents) · psi full \(.cg.psiMemFull10)",
   "node \(.versions.node) · pnpm \(.versions.pnpm) · vitest \(.versions.vitest) (default workers \(.vitestDefaultWorkers)) · workspace-concurrency \(.pnpmWorkspaceConcurrency)",
-  "setsid survives: \(.capabilities.setsidSurvives) · tmux new-window: \(.capabilities.tmuxNewWindow)"' "$out"
+  "setsid survives: \(.capabilities.setsidSurvives) · tmux reachable: \(.capabilities.tmuxNewWindow)"' "$out"
 echo "→ $out"
