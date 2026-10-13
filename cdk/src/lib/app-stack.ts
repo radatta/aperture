@@ -71,7 +71,7 @@ function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: {
 // deliberately gets the READ ssm grant only (no PutParameter/DeleteParameter): it never connects or
 // disconnects a Google account (that's the browser-only OAuth callback), so a write grant would be dead
 // permission. This is the ceiling on what the agent token can reach — DynamoDB + calendar events + the
-// user's own attachments, and nothing else.
+// user's own attachments — plus the Claude API key for parse_task (granted at the call site below).
 function grantBackendData(
   fn: NodejsFunction,
   table: dynamodb.Table,
@@ -149,6 +149,10 @@ export class ApertureAppStack extends Stack {
     // SecureStrings the operator writes once; item tokens are written by the BFF at link.
     const plaidEnv = stage === 'prod' ? 'production' : 'sandbox';
     const plaidSsmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/plaid`;
+    // Quick add's Claude API key (docs/areas/tasks/quick-add.md): one SecureString the operator writes
+    // once. Both functions read exactly this parameter — the BFF for the app, the MCP function for
+    // Raycast's parse_task. Absent → every parse returns "unavailable" and the line saves raw.
+    const anthropicKeyArn = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/anthropic/api_key`;
     // The finance sync Lambda — declared before the BFF, whose env names it (no reverse edge, no cycle).
     const financeSync = new FinanceSync(this, 'FinanceSync', {
       stage,
@@ -212,6 +216,9 @@ export class ApertureAppStack extends Stack {
         resources: [financeSync.fn.functionArn],
       }),
     );
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [anthropicKeyArn] }),
+    );
     ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true, plaid: true });
 
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
@@ -244,6 +251,9 @@ export class ApertureAppStack extends Stack {
       bundling: { format: OutputFormat.ESM, minify: true, externalModules: ['@aws-sdk/*'] },
     });
     grantBackendData(mcpFn, table, filesBucket, ssmBase, { ssmWrite: false });
+    mcpFn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [anthropicKeyArn] }),
+    );
     ackLambdaIam(mcpFn, stage, Stack.of(this).region, { ssmWrite: false });
     const mcpUrl = mcpFn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
 

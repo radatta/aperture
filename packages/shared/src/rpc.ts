@@ -12,6 +12,7 @@ export const API_METHODS = [
   'getTask',
   'createTask',
   'createTasks',
+  'parseTask',
   'setTaskEstimate',
   'setTaskCategory',
   'setTaskDueDay',

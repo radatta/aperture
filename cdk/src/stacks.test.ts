@@ -508,6 +508,25 @@ describe('ApertureAppStack finance sync', () => {
     expect(invoke[0]!.Resource).toEqual({ 'Fn::GetAtt': [syncFn().id, 'Arn'] }); // never `arn:*`
   });
 
+  // Quick add: both functions read the one Anthropic key — exactly that parameter, never a wildcard.
+  it('the BFF and the MCP function may read exactly the anthropic/api_key parameter', () => {
+    for (const name of ['aperture-bff-dev', 'aperture-mcp-dev']) {
+      const props = Object.values(
+        app.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }),
+      )[0]!.Properties as Record<string, unknown>;
+      const anth = policiesOfRole(props.Role).filter((st) =>
+        JSON.stringify(st.Resource).includes('/anthropic'),
+      );
+      expect(anth.length).toBeGreaterThan(0);
+      for (const st of anth) {
+        expect(st.Action).toBe('ssm:GetParameter');
+        expect(JSON.stringify(st.Resource).match(/parameter\/aperture\/dev\/anthropic[^"]*/g)).toEqual([
+          'parameter/aperture/dev/anthropic/api_key',
+        ]);
+      }
+    }
+  });
+
   it('the MCP function gets nothing Plaid', () => {
     const mcp = Object.values(
       app.findResources('AWS::Lambda::Function', {

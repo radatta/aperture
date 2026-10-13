@@ -49,6 +49,9 @@ every task/log/story/settings row, calendar event inserts on the connected Googl
 - **touch S3 keys outside `u/<sub>/`** — keys are minted server-side; IAM is object-scoped to `u/*`.
 - **delete a calendar event Aperture didn't create** — the pointer rule (only events whose `eventId`
   Aperture stored).
+- **spend the Claude API key beyond the parse** — `parse_task` sends one line to Haiku per call and
+  returns fields; it writes nothing. There is no rate cap on it (single user, ~$0.0003 a call, every call
+  logged as `event: parse_task`) — a leaked token could run up model spend until it's rotated.
 - **reach Plaid or change anything financial** — the MCP role has no Plaid SSM path or Lambda-invoke IAM,
   and the edge pins the Plaid gateway + sync invoker to no-ops (cdk `stacks.test` "the MCP function gets
   nothing Plaid"; `mcp/index.test` drives a finance tool through the edge and asserts the live ones are
@@ -67,7 +70,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 | group            | tools                                                                                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}` |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
@@ -330,27 +333,41 @@ timezone; each capture is a claude.ai conversation; the D13 refresh token isn't 
 configured), so the connector needs re-auth roughly monthly — the first thing to
 check if voice capture suddenly fails.
 
-## Raycast quick-add — a Mac capture surface (no server code)
+## Raycast quick-add — a Mac capture surface
 
 `tools/raycast/aperture-add.sh` ([README](../../../tools/raycast/README.md)): a Raycast hotkey → one
-line → **Claude Haiku 5.5** parses it into `create_task` fields (short title + notes, category id, due
-day/time, estimate) → `create_task`. Each Aperture call is a plain `curl` of one stateless `tools/call`
+line → `parse_task` (**Claude Haiku 5.5**, server-side — the same parse as the app's quick add,
+[quick-add](../tasks/quick-add.md)) turns it into `create_task` fields (short title + notes, category id,
+due day/time, estimate) → `create_task`. Each Aperture call is a plain `curl` of one stateless `tools/call`
 (no `initialize` needed) with the prod agent token from Keychain. Capture only, by decision (2026-10-09):
 updates and reorganizing stay in the claude.ai chat and the app. The script checks the HTTP status **and**
 the body — MCP returns a param error (`error`) and a tool failure (`result.isError`) inside a 200 — and
 trims and rejects a blank title itself, since `createTask` stores the title verbatim.
+
+Decisions (2026-10-12) — the parse moved to the server ([quick-add](../tasks/quick-add.md) D6):
+
+- **The BFF owns the one prompt; the Mac holds no Anthropic key.** `parse_task` runs the shared
+  `runQuickParse` against the user's live active categories and real `dayStartHour`, and validates
+  server-side, so the script lost its prompt, schema, field re-check and category cache. Of the
+  2026-10-09 bullets below, structured outputs and the field re-check now run in the Lambda
+  (`lambdas/src/anthropic/`, `validateParsedTask`); the category cache and the hard-coded 4am are
+  *superseded* — the enum is the live active list and "today" reads Settings.
+- **A failed `parse_task` (an `ok: false` result, an RPC error, a timeout at 12s) still adds the task
+  raw**, with the reason in the red toast — unchanged behaviour, new reasons.
 
 Decisions (2026-10-09):
 
 - **Haiku only parses; the script writes.** Rejected: giving Haiku the tools (the API's MCP connector, or
   `claude -p`) — the connector's bearer fails this edge's Cognito path, it adds model turns, it puts prod
   write tools in front of a one-liner, and a timeout no longer says whether the task was saved.
-- **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out). The ids
+- **Parse via structured outputs**, `categoryId` an `enum` of the cached ids (retired left out; the cache
+  is superseded 2026-10-12, above). The ids
   come from `list_categories`, cached a day per stage on the Mac; a failed refresh uses the stale copy.
   The script re-checks each field against the server's rules and drops a bad one, naming it in the toast;
   if the server still rejects the args (`-32602`, raised before any write) it resends the line raw.
 - **"Today" uses the 4am day start** (`dayStartHour`'s default — no MCP tool reads Settings), so a
-  relative due date means what the app's Today means.
+  relative due date means what the app's Today means. *Superseded 2026-10-12:* the server reads the real
+  `dayStartHour`.
 - **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
   parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is quiet.
 - **A time with no day means today** (`call dentist 4pm`) — the user's call; a time whose day was
@@ -358,11 +375,12 @@ Decisions (2026-10-09):
 
 ## Deferred
 
-- A **create-only token** for Raycast (scoped to `create_task` + `list_categories`, like the recruiting
+- A **create-only token** for Raycast (scoped to `parse_task` + `create_task`, like the recruiting
   device token's single method) — the Mac's Keychain holds the full agent token until then.
-- **`create_task` doesn't check that `categoryId` exists.** A category deleted within the Raycast cache's
-  day can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix server-side
-  (reject an unknown/deleted id), which also covers any other caller.
+- **`create_task` doesn't check that `categoryId` exists.** A category deleted between Raycast's
+  `parse_task` and its `create_task` (seconds, since 2026-10-12; a day while the script cached
+  categories) can still be written onto a new task, after `deleteCategory`'s reassign ran. Fix
+  server-side (reject an unknown/deleted id), which also covers any other caller.
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
 - Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).

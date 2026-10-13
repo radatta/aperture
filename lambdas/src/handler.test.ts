@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Task } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { handleRpc } from './handler';
+import { FakeAnthropic } from './anthropic/gateway';
 
 describe('handleRpc dispatch', () => {
   it('routes a known method with its args', async () => {
@@ -22,6 +23,25 @@ describe('handleRpc dispatch', () => {
     await expect(
       handleRpc(new InMemoryDoc(), { userId: 'local', method: 'dropEverything', args: [] }),
     ).rejects.toThrow(/Unknown method/);
+  });
+
+  it('testMode never reaches the Claude API, even with a live gateway injected', async () => {
+    const anthropic = new FakeAnthropic();
+    anthropic.next = { ok: true, fields: { title: 'parsed' } };
+    const r = await handleRpc(
+      new InMemoryDoc(),
+      { userId: 'local', method: 'parseTask', args: ['fix it 30m'], testMode: true },
+      { anthropic },
+    );
+    expect(r).toMatchObject({ ok: false, reason: 'unavailable' });
+    expect(anthropic.calls).toHaveLength(0);
+    // ...and outside testMode the same deps do reach it.
+    await handleRpc(
+      new InMemoryDoc(),
+      { userId: 'local', method: 'parseTask', args: ['fix it'] },
+      { anthropic },
+    );
+    expect(anthropic.calls).toHaveLength(1);
   });
 
   it('testMode runs the logic but persists nothing (the smoke guarantee)', async () => {

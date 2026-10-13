@@ -21,6 +21,8 @@ import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS } from './financeFixtures';
 // the ApiClient interface (connect is a browser OAuth redirect, not a method), so a fair cross-impl
 // comparison isn't possible in this suite. Parity is instead held by parallel per-impl tests with
 // matching scenarios: lambdas/src/backend.calendar.test.ts and app/src/data/stubClient.calendar.test.ts.
+// parseTask is out for the same reason (it rides a model gateway — Haiku in the Lambda, a heuristic in the
+// stub): lambdas/src/backend.parse.test.ts and app/src/data/stubParse.test.ts.
 export function runApiContract(
   label: string,
   makeClient: (now: () => number) => ApiClient | Promise<ApiClient>,

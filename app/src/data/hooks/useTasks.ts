@@ -1,6 +1,8 @@
+import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   CreateTaskInput,
+  ParseTaskResult,
   SetTaskDueInput,
   SplitTaskInput,
   TaskStatus,
@@ -25,6 +27,13 @@ export function useCreateTask() {
       api.createTask(typeof input === 'string' ? { title: input } : input),
     onSettled: () => invalidateTaskData(qc),
   });
+}
+
+// Quick add's parse (Haiku, server-side). A read that writes nothing and caches nothing — each line is
+// parsed once, on demand — so a plain call rather than a query or a mutation.
+export function useParseTask(): (text: string) => Promise<ParseTaskResult> {
+  const api = useApi();
+  return useCallback((text: string) => api.parseTask(text), [api]);
 }
 
 // Bulk add — the plan-pass surface (PRODUCT §2: batch entry is the morning plan, not capture). Inputs

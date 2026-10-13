@@ -15,6 +15,7 @@ import { createS3Presigner } from './s3/presigner';
 import { createLivePlaid } from './plaid/livePlaid';
 import { noopInvoker } from './finance/invoker';
 import { liveInvoker } from './finance/liveInvoker';
+import { createLiveAnthropic } from './anthropic/liveAnthropic';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
@@ -50,6 +51,10 @@ const plaid = createLivePlaid({
 const financeInvoker = process.env.FINANCE_SYNC_FN
   ? liveInvoker(process.env.FINANCE_SYNC_FN)
   : noopInvoker();
+
+// Quick add's parse (Claude API: raw fetch + the SSM key) — built once, inert until parseTask runs;
+// testMode swaps in noopAnthropic. No key on the stage → every parse says so and the line saves raw.
+const anthropic = createLiveAnthropic({ stage: STAGE });
 
 interface HttpEvent {
   rawPath?: string;
@@ -167,7 +172,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
         google,
         stateSecret: process.env.ORIGIN_SECRET,
       },
-      { presigner, plaid, financeInvoker },
+      { presigner, plaid, financeInvoker, anthropic },
     );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {

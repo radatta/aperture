@@ -73,6 +73,7 @@ import {
   taskTransition,
   UPLOAD_URL_TTL_MS,
   withEstimate,
+  runQuickParse,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -97,6 +98,7 @@ import type {
   GcalSeen,
   GcalSyncState,
   LinkTokenResult,
+  ParseTaskResult,
   PullCalendarResult,
   PulledEvent,
   RequestFinanceSyncResult,
@@ -135,6 +137,7 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
+import { heuristicParse, takeStubParseFailure } from './stubParse';
 import { seedStore } from './seed';
 
 const USER_ID = 'local';
@@ -599,6 +602,20 @@ class StubClient implements ApiClient {
     const t = this.now();
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     return tasks.map((task) => this.syncCalendar(null, this.writes.insert(this.store.tasks, task)));
+  }
+  // Quick add, offline: the same flow as the Lambda (shared runQuickParse) with a heuristic standing in
+  // for Haiku. STUB_FAIL_NEXT_PARSE_KEY (stubParse.ts) fails the next one, to see the raw-save path.
+  async parseTask(text: string): Promise<ParseTaskResult> {
+    if (typeof text !== 'string') throw new Error('text must be a string');
+    const categories = this.alive(this.store.categories)
+      .filter((c) => c.active)
+      .map(({ id, label }) => ({ id, label }));
+    const today = todayKey(this.dayStartHour(), this.now());
+    return runQuickParse(text, { categories, today }, async (line) =>
+      takeStubParseFailure()
+        ? { ok: false, reason: 'unavailable', detail: 'stub failNextParse' }
+        : { ok: true, fields: heuristicParse(line, categories, today) },
+    );
   }
   async setTaskEstimate(
     id: string,

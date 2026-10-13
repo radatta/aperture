@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
-import { todayKey } from '@aperture/shared';
+import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
+import { STUB_FAIL_NEXT_PARSE_KEY } from '../../data/stubParse';
+import { CAPTURE_OUTBOX_KEY, CAPTURE_PARKED_KEY, OUTBOX_STALE_MS } from './captureOutbox';
 import { CaptureBar } from './CaptureBar';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -445,6 +447,399 @@ describe('CaptureBar', () => {
       await user.type(box(), 'memo | #ad');
       await user.keyboard('{Escape}');
       expect(document.activeElement).not.toBe(box());
+    });
+  });
+
+  // Quick add (docs/areas/tasks/quick-add.md): the stub's heuristic stands in for Haiku, through the
+  // same shared flow and validator as the Lambda.
+  describe('quick add', () => {
+    const adminId = async (api: { listCategories(): Promise<{ id: string; label: string }[]> }) =>
+      (await api.listCategories()).find((c) => c.label === 'Admin')!.id;
+
+    it('Enter clears at once, saves what the parse read, and says what it saved', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'admin, file taxes due tmw 30m');
+      await user.keyboard('{Enter}');
+      expect(box().value).toBe('');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'file taxes',
+          categoryId: await adminId(api),
+          dueDay: addDays(todayKey(4), 1),
+          estimateMin: 30,
+        }),
+      );
+      expect(await screen.findByText('file taxes · Admin · due tomorrow · 30m')).toBeTruthy();
+      // Announced once, by the receipt's live region (the visible readback is aria-hidden).
+      expect(screen.getByRole('status').textContent).toMatch(
+        /Task added → backlog: file taxes · Admin/,
+      );
+    });
+
+    it("a ' | ' line never reaches the model", async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'memo | ~30');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'memo', estimateMin: 30 }),
+      );
+      expect(parse).not.toHaveBeenCalled();
+    });
+
+    it('Review shows the parse; a second press saves exactly it, without parsing again', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, file taxes 45m');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      expect(screen.getByText('#Admin')).toBeTruthy();
+      expect(screen.getByText('45m')).toBeTruthy();
+      expect(box().value).toBe('admin, file taxes 45m'); // the text stays until you save
+      await user.click(screen.getByRole('button', { name: 'Save reviewed task' }));
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'file taxes', estimateMin: 45 }),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(box().value).toBe('');
+    });
+
+    it('⌘Enter reviews, and Enter on a shown preview saves it', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, renew passport');
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      expect(await screen.findByText('renew passport')).toBeTruthy();
+      expect(await api.listTasks()).toHaveLength(0);
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'renew passport' }),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    it('editing the text hides the preview, and the next save parses the new text', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'admin, call bank');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText('call bank')).toBeTruthy();
+      await user.type(box(), ' 15m');
+      expect(screen.queryByText('call bank')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'call bank', estimateMin: 15 }),
+      );
+    });
+
+    it('a parse that lands after the text changed never shows', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'old text');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.type(box(), '!');
+      resolve({
+        ok: true,
+        source: 'haiku',
+        input: { title: 'STALE' },
+        categoryLabel: null,
+        dropped: [],
+        today: todayKey(4),
+      });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('STALE')).toBeNull();
+      expect(screen.queryByText('Reading it…')).toBeNull();
+    });
+
+    it('a failed parse saves the line as typed, and says so', async () => {
+      const { api, user, box } = await taskBar();
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, file taxes 30m',
+          categoryId: null,
+          estimateMin: null,
+        }),
+      );
+      expect(await screen.findByText(/Saved unparsed → backlog/)).toBeTruthy();
+      expect(
+        screen.getByText(/Saved as typed — couldn’t parse \(unavailable: stub failNextParse\)/),
+      ).toBeTruthy();
+      expect(box().value).toBe('');
+    });
+
+    it('a transport error on the parse is a raw save too', async () => {
+      const { api, user, box } = await taskBar();
+      vi.spyOn(api, 'parseTask').mockRejectedValueOnce(new Error('offline'));
+      await user.type(box(), 'water plants');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'water plants' }),
+      );
+      expect(await screen.findByText(/Saved unparsed/)).toBeTruthy();
+    });
+
+    it('a failed Review says so in the preview, and saving keeps the line as typed', async () => {
+      const { api, user, box } = await taskBar();
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.type(box(), 'admin, file taxes');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText(/Couldn’t parse \(unavailable/)).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'admin, file taxes' }),
+      );
+    });
+
+    it('a failed create puts the typed text back and says so', async () => {
+      const { api, user, box } = await taskBar();
+      api.createTask = () => Promise.reject(new Error('offline'));
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
+    });
+
+    // mutate()'s per-call callbacks fire only for the latest call, so a failed capture followed by a
+    // quick second one used to lose its restore. Each save now owns its promise.
+    it('restores a failed capture even when another one follows it at once', async () => {
+      const { api, user, box } = await taskBar();
+      let reject!: (e: Error) => void;
+      const real = api.createTask.bind(api);
+      api.createTask = vi
+        .fn()
+        .mockReturnValueOnce(new Promise((_, r) => (reject = r)))
+        .mockImplementation(real);
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      await user.type(box(), 'second');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(2));
+      reject(new Error('offline'));
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('first'));
+    });
+
+    // The restore above only works into an empty field. Auto waits on a parse first, so by the time a
+    // create fails the user may be mid-way through the next capture — that one must not be overwritten.
+    it('a failed save never overwrites a newer capture: it is parked, and Put back trades places', async () => {
+      const { api, user, box } = await taskBar();
+      let reject!: (e: Error) => void;
+      api.createTask = vi.fn().mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      await user.type(box(), 'half-typed second');
+      reject(new Error('offline'));
+      expect(await screen.findByText("Couldn't save — kept below the box.")).toBeTruthy();
+      expect(box().value).toBe('half-typed second');
+      expect(screen.getByText('Couldn’t save: “first”')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Put back' }));
+      expect(box().value).toBe('first');
+      expect(screen.getByText('Set aside: “half-typed second”')).toBeTruthy();
+      const discard = screen.getByRole('button', { name: 'Discard' });
+      // The short name is told apart by its description: the parked text itself.
+      expect(discard.getAttribute('aria-describedby')).toBeTruthy();
+      expect(document.getElementById(discard.getAttribute('aria-describedby')!)?.textContent).toBe(
+        'Set aside: “half-typed second”',
+      );
+      await user.click(discard);
+      expect(screen.queryByText(/Set aside/)).toBeNull();
+    });
+
+    it('an Auto capture sits in the outbox through the parse AND the create, until it settles', async () => {
+      const { api, user, box } = await taskBar();
+      let parsed!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (parsed = r)));
+      const real = api.createTask.bind(api);
+      let created!: () => void;
+      api.createTask = vi.fn(
+        (input) => new Promise((r) => (created = () => r(real(input)))),
+      ) as typeof api.createTask;
+      const outbox = () => JSON.parse(localStorage.getItem(CAPTURE_OUTBOX_KEY) ?? '[]');
+      await user.type(box(), 'call bank');
+      await user.keyboard('{Enter}');
+      expect(box().value).toBe('');
+      expect(outbox()).toMatchObject([{ text: 'call bank', mode: 'task', toToday: false }]);
+      parsed({ ok: false, reason: 'timeout' });
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      expect(outbox()).toHaveLength(1); // parsed, but the create hasn't landed
+      created();
+      await waitFor(async () => expect((await api.listTasks())[0]?.title).toBe('call bank'));
+      await waitFor(() => expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull());
+    });
+
+    it('a failed create leaves the outbox for the field or the parked list — never neither', async () => {
+      const { api, user, box } = await taskBar();
+      let reject!: (e: Error) => void;
+      api.createTask = vi.fn().mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      await user.type(box(), 'busy');
+      reject(new Error('offline'));
+      await screen.findByText('Couldn’t save: “first”');
+      await waitFor(() => expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull());
+      expect(JSON.parse(localStorage.getItem(CAPTURE_PARKED_KEY)!)).toMatchObject([
+        { text: 'first', why: 'failed' },
+      ]);
+    });
+
+    it('"→ today" Auto captures leave the outbox too, planned or not', async () => {
+      const { api, user, box } = await taskBar();
+      api.upsertPlan = () => Promise.reject(new Error('offline'));
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'pay rent');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/couldn’t plan it/)).toBeTruthy();
+      expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull();
+    });
+
+    it('parked captures survive closing the app again', async () => {
+      const { api, user, box } = await taskBar();
+      api.createTask = vi.fn().mockRejectedValueOnce(new Error('offline'));
+      vi.spyOn(api, 'parseTask').mockImplementationOnce(async (t) => {
+        await user.type(box(), 'busy'); // the field is taken by the time the save fails
+        return { ok: false, reason: 'timeout', detail: t };
+      });
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await screen.findByText('Couldn’t save: “first”');
+      cleanup(); // the app closes
+      const api2 = createStubClient({ seed: false, storageKey: `cap-reopen-${Math.random()}` });
+      renderWithProviders(<CaptureBar />, { api: api2 });
+      expect(await screen.findByText('Couldn’t save: “first”')).toBeTruthy();
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Discard' }));
+      expect(localStorage.getItem(CAPTURE_PARKED_KEY)).toBeNull();
+    });
+
+    it("another tab's young entry is left alone, then parked once it's stale (foreground sweep)", async () => {
+      const t0 = Date.now();
+      localStorage.setItem(
+        CAPTURE_OUTBOX_KEY,
+        JSON.stringify([
+          { id: 'young', text: 'from the other tab', mode: 'task', toToday: false, at: t0 - 1_000 },
+        ]),
+      );
+      await taskBar();
+      expect(screen.queryByText(/from the other tab/)).toBeNull();
+      vi.spyOn(Date, 'now').mockReturnValue(t0 + OUTBOX_STALE_MS);
+      try {
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(await screen.findByText(/check first: “from the other tab”/)).toBeTruthy();
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
+    });
+
+    it('a capture left unsent when the app closed comes back on launch, parked, flagged as maybe saved', async () => {
+      localStorage.setItem(
+        CAPTURE_OUTBOX_KEY,
+        JSON.stringify([
+          {
+            id: 'old',
+            text: 'renew passport',
+            mode: 'task',
+            toToday: true,
+            at: Date.now() - OUTBOX_STALE_MS,
+          },
+          { id: 'new', text: 'in flight elsewhere', mode: 'task', toToday: false, at: Date.now() },
+        ]),
+      );
+      const { user, box } = await taskBar();
+      expect(
+        await screen.findByText(/it may have saved, check first: “renew passport”/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/in flight elsewhere/)).toBeNull(); // another tab's save may still land
+      expect(JSON.parse(localStorage.getItem(CAPTURE_OUTBOX_KEY)!)).toMatchObject([{ id: 'new' }]);
+      expect(screen.getByRole('status').textContent).toBe('Unsent capture kept below the box.');
+      await user.click(screen.getByRole('button', { name: 'Put back' }));
+      expect(box().value).toBe('renew passport');
+      expect(screen.getByRole('button', { name: 'today' }).getAttribute('aria-pressed')).toBe(
+        'true',
+      );
+    });
+
+    it('✨ on a failed preview parses again; the preview reads due dates relatively', async () => {
+      const { user, box } = await taskBar();
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.type(box(), 'admin, file taxes due tmw');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText(/Couldn’t parse/)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Retry parse' }));
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      expect(screen.getByText('due tomorrow')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Save reviewed task' })).toBeTruthy();
+    });
+
+    it('switching modes drops the preview; a " | " line has no ✨ and ⌘Enter saves it', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'admin, call bank');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(await screen.findByText('call bank')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Log' }));
+      await user.click(screen.getByRole('button', { name: 'Task' }));
+      expect(box().value).toBe('admin, call bank');
+      expect(screen.queryByText('call bank')).toBeNull();
+      await user.clear(box());
+      await user.type(box(), 'memo | ~30');
+      expect(screen.queryByRole('button', { name: /Review|Retry/ })).toBeNull();
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'memo', estimateMin: 30 }),
+      );
+    });
+
+    it('✨ keeps focus in the field (the phone keyboard stays up)', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'admin, call bank');
+      const blurs = vi.fn();
+      box().addEventListener('blur', blurs);
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      await screen.findByText('call bank');
+      expect(blurs).not.toHaveBeenCalled(); // not merely refocused after: never left
+      expect(document.activeElement).toBe(box());
+    });
+
+    it('a preview parsed against a day that has since rolled over is dropped', async () => {
+      const { api, user, box } = await taskBar();
+      vi.spyOn(api, 'parseTask').mockResolvedValueOnce({
+        ok: true,
+        source: 'haiku',
+        input: { title: 'yesterday parse' },
+        categoryLabel: null,
+        dropped: [],
+        today: addDays(todayKey(4), -1),
+      });
+      await user.type(box(), 'x');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      await waitFor(() => expect(api.parseTask).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('yesterday parse')).toBeNull();
+    });
+
+    it('"→ today" plans a quick-added task, from Auto and from Review', async () => {
+      const { api, user, box } = await taskBar();
+      const today = todayKey(4);
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'admin, pay rent 10m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Task added → today/)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'admin, book flight');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      await screen.findByText('book flight');
+      await user.click(screen.getByRole('button', { name: 'Save reviewed task' }));
+      await waitFor(async () => expect(await api.listPlansForDay(today)).toHaveLength(2));
+      const titles = await Promise.all(
+        (await api.listPlansForDay(today)).map(async (p) => (await api.getTask(p.taskId))?.title),
+      );
+      expect(titles.sort()).toEqual(['book flight', 'pay rent']);
     });
   });
 });

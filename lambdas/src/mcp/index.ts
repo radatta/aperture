@@ -13,6 +13,7 @@ import { createLiveGoogle } from '../google/liveGoogle';
 import { createS3Presigner } from '../s3/presigner';
 import { noopPlaid } from '../plaid/gateway';
 import { noopInvoker } from '../finance/invoker';
+import { createLiveAnthropic } from '../anthropic/liveAnthropic';
 import { handleMcpMessage } from './protocol';
 import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
@@ -25,6 +26,8 @@ const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
 const STAGE = process.env.STAGE ?? 'dev';
 const APP_URL = process.env.APP_URL ?? '';
 const google = createLiveGoogle({ stage: STAGE, appUrl: APP_URL });
+// parse_task's model call (Raycast quick add) — the same gateway and SSM key as the BFF.
+const anthropic = createLiveAnthropic({ stage: STAGE });
 
 interface HttpEvent {
   requestContext?: { http?: { path?: string; method?: string } };
@@ -157,7 +160,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       handleRpc(
         doc,
         { userId, method, args, google, stateSecret: process.env.ORIGIN_SECRET },
-        { presigner, plaid: noopPlaid(), financeInvoker: noopInvoker() },
+        { presigner, plaid: noopPlaid(), financeInvoker: noopInvoker(), anthropic },
       ),
     upload: uploadToPresigned,
   };

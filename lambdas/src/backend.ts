@@ -46,6 +46,9 @@ import {
   zonedDayTime,
   zonedEpoch,
   PULL_THROTTLE_MS,
+  dayKeyInZone,
+  parseBudgetMs,
+  runQuickParse,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -97,6 +100,7 @@ import type {
   GcalSyncState,
   PullAction,
   PullCalendarResult,
+  ParseTaskResult,
   PulledEvent,
   Task,
   TaskPlan,
@@ -118,6 +122,8 @@ import { EventGoneError, noopGoogle, PullIncompleteError } from './google/gatewa
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
 import type { Presigner } from './s3/presigner';
+import { noopAnthropic } from './anthropic/gateway';
+import type { AnthropicGateway } from './anthropic/gateway';
 
 export interface BackendOptions {
   userId?: string;
@@ -127,6 +133,7 @@ export interface BackendOptions {
   presigner?: Presigner;
   plaid?: PlaidGateway; // gated Plaid seam; defaults to the inert noop
   financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
+  anthropic?: AnthropicGateway; // gated Claude API seam (quick add's parse); defaults to the inert noop
 }
 
 // Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
@@ -164,6 +171,7 @@ export class BackendClient implements ApiClient {
   private readonly stateSecret: string;
   private readonly presigner: Presigner;
   private readonly finance: FinanceService;
+  private readonly anthropic: AnthropicGateway;
 
   constructor(
     private readonly repo: Repo,
@@ -175,6 +183,7 @@ export class BackendClient implements ApiClient {
     this.google = opts.google ?? noopGoogle();
     this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
     this.presigner = opts.presigner ?? unconfiguredPresigner;
+    this.anthropic = opts.anthropic ?? noopAnthropic();
     this.finance = new FinanceService({
       repo,
       userId: this.userId,
@@ -538,6 +547,18 @@ export class BackendClient implements ApiClient {
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
     return this.syncCalendar(null, await this.repo.putTask(this.newTask(input, this.now())));
+  }
+  // Quick add's parse (shared runQuickParse; docs/areas/tasks/quick-add.md). The server owns "today" and
+  // the category list — the client sends only the text — so Raycast and the app resolve "tmw" against
+  // the same dayStartHour and can only ever get an active category's id back. Writes nothing.
+  async parseTask(text: string): Promise<ParseTaskResult> {
+    if (typeof text !== 'string') throw new Error('text must be a string');
+    const [settings, all] = await Promise.all([this.ensureSettings(), this.repo.listCategories()]);
+    const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
+    const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
+    return runQuickParse(text, { categories, today }, (line) =>
+      this.anthropic.parseTask({ text: line, today, categories, timeoutMs: parseBudgetMs(line) }),
+    );
   }
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     if (inputs.length === 0) return [];
