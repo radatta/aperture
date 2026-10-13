@@ -26,23 +26,25 @@ import { applySuggestion, suggestionsFor, type Suggestion } from './suggestions'
 import { TokenSuggestions } from './TokenSuggestions';
 import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode } from './mode';
 import { useQuickParse } from './useQuickParse';
-import { outboxAdd, outboxRemove, outboxTakeStale } from './captureOutbox';
+import {
+  newCaptureId,
+  outboxAdd,
+  outboxParkStale,
+  outboxRemove,
+  readParked,
+  writeParked,
+  type Parked,
+} from './captureOutbox';
 import { previewLine, savedSummary } from './parsePreview';
 
 const RECEIPT_MS = 1800;
 // A quick add's receipt carries what was parsed — more to read than "Logged", so it stays longer.
 const PARSED_RECEIPT_MS = 4000;
 
-// A capture that couldn't go straight back into the field: its save failed while the field held a newer
-// one, it was left unsent when the app last closed (captureOutbox.ts), or Put back displaced it. It stays
-// visible, in full, until put back or discarded — a capture is never dropped behind the user's back.
-interface Parked {
-  key: number;
-  text: string;
-  mode: CaptureMode;
-  toToday: boolean;
-  why: 'failed' | 'restored' | 'set-aside';
-}
+// A parked capture couldn't go straight back into the field: its save failed while the field held a newer
+// one, it was left unsent when the app last closed, or Put back displaced it. It stays under the bar (up
+// to three lines; Put back shows all of it), in storage too (captureOutbox.ts), until put back or
+// discarded — a capture is never dropped behind the user's back.
 const PARKED_LABEL: Record<Parked['why'], string> = {
   failed: 'Couldn’t save:',
   restored: 'Unsent when the app closed — it may have saved, check first:',
@@ -91,6 +93,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
+    restored?: boolean; // an unsent capture from a closed session was parked
     parsed?: string; // a quick add's readback (savedSummary)
     unparsed?: string; // why a quick add saved as typed (parseFailText)
     at: number;
@@ -100,10 +103,18 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   const parseId = useId();
   const quick = useQuickParse();
   const clearPreview = quick.clear;
-  const [parked, setParked] = useState<Parked[]>([]);
-  const parkKey = useRef(0);
-  const park = (p: Omit<Parked, 'key'>) =>
-    setParked((list) => [...list, { ...p, key: ++parkKey.current }]);
+  const parkedId = useId();
+  const [parked, setParked] = useState<Parked[]>(() => readParked());
+  // Storage first, synchronously — a failed save's outbox entry is removed right after it parks, and the
+  // effect below only mirrors on the next commit.
+  const park = (p: Omit<Parked, 'id'>) => {
+    const entry = { ...p, id: newCaptureId(Date.now()) };
+    writeParked([...readParked(), entry]);
+    setParked((list) => [...list, entry]);
+  };
+  useEffect(() => writeParked(parked), [parked]);
+  // This page's own outbox entries: their creates are still running here, so the sweep never parks them.
+  const ownSent = useRef(new Set<string>());
   // What the field holds right now, for a save that fails seconds later (Auto waits on the parse first):
   // its restore must not overwrite a newer capture typed meanwhile.
   const textRef = useRef(text);
@@ -162,7 +173,9 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
       ? 'Couldn’t load categories — remove the #label to save without one'
       : 'Loading categories…';
   // A Review's preview — only while the field still holds exactly the text it was parsed from.
-  const preview = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
+  // A parse resolves "tmw" against its day, so one made before the 4am rollover is dropped after it.
+  const previewed = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
+  const preview = previewed?.result?.ok && previewed.result.today !== today ? null : previewed;
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
   // line fixed) it goes too, and its text always names the current cause.
   const shown = receipt?.blocked && !block ? null : receipt;
@@ -172,20 +185,29 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
 
   useAutoGrow(inputRef, text);
 
-  // A capture left unsent when the app last closed comes back, parked, never silently.
+  // A capture left unsent when the app last closed comes back, parked and announced, never silently. On
+  // launch, and again when an entry too young to take (another tab's may still be saving) comes of age,
+  // or the app returns to the foreground — a relaunch within seconds mustn't hide it until some later day.
   useEffect(() => {
-    const stale = outboxTakeStale(Date.now());
-    if (stale.length)
-      setParked((list) => [
-        ...list,
-        ...stale.map((e) => ({
-          key: ++parkKey.current,
-          text: e.text,
-          mode: e.mode,
-          toToday: e.toToday,
-          why: 'restored' as const,
-        })),
-      ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const sweep = () => {
+      clearTimeout(timer);
+      const { moved, retryInMs } = outboxParkStale(Date.now(), ownSent.current);
+      if (moved.length) {
+        setParked((list) => [...list, ...moved.filter((m) => !list.some((x) => x.id === m.id))]);
+        setReceipt({ mode: 'task', restored: true, at: Date.now() });
+      }
+      if (retryInMs !== null) timer = setTimeout(sweep, retryInMs + 50);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sweep();
+    };
+    sweep();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   // A preview belongs to the mode it was made in; switching away drops it.
@@ -208,7 +230,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   // and on unmount so a route change mid-fade can't set state on a dead component. A failure notice
   // stays put: it's telling you your text was restored and needs another try.
   useEffect(() => {
-    if (!receipt || receipt.failed || receipt.blocked) return;
+    if (!receipt || receipt.failed || receipt.blocked || receipt.restored) return;
     const ms = receipt.parsed || receipt.unparsed ? PARSED_RECEIPT_MS : RECEIPT_MS;
     const id = setTimeout(() => setReceipt(null), ms);
     return () => clearTimeout(id);
@@ -242,7 +264,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
       setText(value);
       setCaret(value.length);
       setMode(submitted);
-      if (goesToday) setToToday(true); // the retry should go where the first attempt was headed
+      setToToday(goesToday); // the retry goes where the first attempt was headed, and nowhere else
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
     };
     const done = () => setReceipt({ mode: submitted, at: Date.now() });
@@ -253,7 +275,11 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
       // Until the create settles the capture is also in the outbox, so closing the app can't lose it.
       const reviewed = quick.previewFor(value)?.result;
       const sent = outboxAdd({ text: value, mode: 'task', toToday: goesToday, at: Date.now() });
-      const settled = () => outboxRemove(sent);
+      ownSent.current.add(sent);
+      const settled = () => {
+        outboxRemove(sent);
+        ownSent.current.delete(sent);
+      };
       void (reviewed ? Promise.resolve(reviewed) : quick.parse(value))
         .then((r) =>
           r.ok
@@ -308,9 +334,9 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   function putBack(p: Parked) {
     const current = text.trim();
     setParked((list) => [
-      ...list.filter((x) => x !== p),
+      ...list.filter((x) => x.id !== p.id),
       ...(current
-        ? [{ key: ++parkKey.current, text, mode, toToday, why: 'set-aside' as const }]
+        ? [{ id: newCaptureId(Date.now()), text, mode, toToday, why: 'set-aside' as const }]
         : []),
     ]);
     textRef.current = p.text;
@@ -463,7 +489,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
             className={cx(
               'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition',
               preview?.result?.ok
-                ? 'border-teal bg-teal-soft text-ink'
+                ? 'border-teal bg-teal-soft text-teal ring-1 ring-teal'
                 : text.trim()
                   ? 'border-teal text-teal hover:bg-teal-soft'
                   : 'border-line text-ink-subtle',
@@ -529,7 +555,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
             </>
           ) : (
             <Text size="xs" tone="gold" className="break-words">
-              Couldn’t parse ({parseFailText(preview.result)}) — ✨ tries again, Enter saves it as
+              Couldn’t parse ({parseFailText(preview.result)}) — Retry parse, or Enter saves it as
               typed
             </Text>
           )}
@@ -548,27 +574,32 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
           {shown.parsed ?? `Saved as typed — couldn’t parse (${shown.unparsed})`}
         </Text>
       )}
+      {/* Each row's text describes its two buttons, so with several parked a screen reader can tell
+          their "Put back"s apart. Buttons are padded toward a thumb-sized target. */}
       {parked.map((p) => (
-        <div key={p.key} className="flex items-start gap-2 px-2 pt-1">
+        <div key={p.id} className="flex items-start gap-1 pl-2 pt-1">
           <Text
+            id={`${parkedId}-${p.id}`}
             size="xs"
             tone={p.why === 'set-aside' ? 'muted' : 'danger'}
-            className="line-clamp-3 min-w-0 flex-1 break-words"
+            className="line-clamp-3 min-w-0 flex-1 break-words py-1.5"
           >
             {PARKED_LABEL[p.why]} “{p.text}”
           </Text>
           <button
             type="button"
             onClick={() => putBack(p)}
-            className="shrink-0 rounded-md px-1 text-xs text-teal hover:underline"
+            aria-describedby={`${parkedId}-${p.id}`}
+            className="min-h-8 shrink-0 rounded-md px-2 text-xs text-teal hover:underline"
           >
             Put back
           </button>
           <button
             type="button"
-            aria-label={`Discard “${p.text}”`}
-            onClick={() => setParked((list) => list.filter((x) => x !== p))}
-            className="shrink-0 rounded-md px-1 text-xs text-ink-muted hover:text-ink"
+            aria-label="Discard"
+            aria-describedby={`${parkedId}-${p.id}`}
+            onClick={() => setParked((list) => list.filter((x) => x.id !== p.id))}
+            className="min-h-8 min-w-8 shrink-0 rounded-md text-sm text-ink-muted hover:text-ink"
           >
             ×
           </button>
@@ -632,6 +663,7 @@ function Receipt({
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean;
+    restored?: boolean;
     parsed?: string;
     unparsed?: string;
   };
@@ -640,6 +672,12 @@ function Receipt({
     return (
       <Text size="xs" tone="danger" className="block truncate pr-1">
         Not saved<span className="sr-only">: {reason}</span>
+      </Text>
+    );
+  if (receipt.restored)
+    return (
+      <Text size="xs" tone="danger" className="block truncate pr-1">
+        Unsent capture kept below the box.
       </Text>
     );
   if (receipt.failed && receipt.parked)

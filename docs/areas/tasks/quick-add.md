@@ -20,22 +20,28 @@ Aperture · due Fri 4pm · 30m` — until you start the next capture).
 - **✨ Review (or ⌘/Ctrl+Enter).** Parses into a preview under the field — title, `no category` or the
   category chip, due (relative: `due tomorrow 4pm`), estimate, notes (2 lines), and any dropped field in
   gold. A second press (✨, Enter or Send) saves exactly the preview, without parsing again. On a failed
-  preview ✨ parses again ("Retry parse") and Enter saves the line as typed. Editing the text or
-  switching modes drops the preview. ✨ keeps focus in the field, so the phone keyboard stays up.
+  preview ✨ parses again ("Retry parse") and Enter saves the line as typed. Editing the text,
+  switching modes, or the 4am rollover (the parse resolved "tmw" against yesterday) drops the preview.
+  ✨ keeps focus in the field, so the phone keyboard stays up.
 - **A grammar line — space, pipe, space, as in `memo | ~30 #Admin`** — never reaches the model: it is the
   [bulk-add](bulk-add.md) grammar, as before, and shows no ✨ (⌘Enter saves it like Enter). `a|b` is
   not one; it goes to the model.
 - **A failed parse saves the line as typed, loudly** — gold `Saved unparsed → backlog`, and `Saved as
 typed — couldn't parse (reason)` under the field (`timeout`, `unavailable: no API key on this stage`,
-  …). The app gives a parse 10s before saving raw.
+  …). The app gives a parse 10s before saving raw — a long line (8s model budget) on a Lambda cold start
+  can hit that and save raw; accepted.
 - **A failed create never loses the text.** Into an empty field it goes back ("Couldn't save — your text
-  is back in the box"); if you've started the next capture meanwhile, it's **parked** under the field in
-  full — `Couldn't save: "…"` with **Put back** (trades places with whatever the field holds, which is
-  parked as "Set aside") and **×** (discard).
-- **Closing the app mid-parse can't lose it either.** Each Auto capture sits in a localStorage outbox
-  (`aperture:captureOutbox`) from Enter until its create settles; one left over on the next launch comes
-  back parked as "Unsent when the app closed — it may have saved, check first". Entries under 30s old are
-  left alone (another open tab may still be saving them).
+  is back in the box", and `→ today` set to where it was headed); if you've started the next capture
+  meanwhile, it's **parked** under the field — `Couldn't save: "…"` (up to three lines; Put back shows
+  all of it) with **Put back** (trades places with whatever the field holds, which is parked as "Set
+  aside") and **× Discard**. Each row's text describes its buttons for screen readers.
+- **Closing the app can't lose it either.** Each Auto capture sits in a localStorage outbox
+  (`aperture:captureOutbox`) from Enter until its create settles, and parked captures are stored too
+  (`aperture:captureParked`) until put back or discarded — an outbox entry moves to parked in one
+  storage write, never through memory alone. A leftover outbox entry comes back parked as "Unsent when the
+  app closed — it may have saved, check first", announced ("Unsent capture kept below the box"). The sweep
+  runs on launch, on return to the foreground, and when a waiting entry comes of age; it never takes this
+  page's own in-flight entries, nor another tab's under 30s old.
 - `→ today` composes with both. Log and Idea modes are untouched.
 
 ## Pieces
@@ -100,7 +106,9 @@ autonomous build:
   empty-args reads, and every smoke call already cold-starts the module that builds the gateway.
 - **Round 1 (review), on "never fail silently":** a failed create parks rather than overwriting a newer
   capture; the outbox + the 10s client ceiling close the parse window, where the capture lived only in
-  memory (rejected: keeping the text in the field until sent — Auto would feel like a spinner). A
+  memory (rejected: keeping the text in the field until sent — Auto would feel like a spinner). Round 2
+  made the parked list durable too (it had moved captures from storage back into memory) and added the
+  foreground/age sweep (a relaunch within 30s had hidden a leftover until a later launch). A
   grammar-line error from Raycast stays a red raw save (no model fallback: the pipe is explicit intent).
   No per-period cost cap on `parse_task` (logged per call; revisit if the credit dips). "call 9am" typed
   at 3pm still lands today, already past — the 2026-10-09 rule, the user's call.

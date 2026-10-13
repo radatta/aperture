@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { STUB_FAIL_NEXT_PARSE_KEY } from '../../data/stubParse';
-import { CAPTURE_OUTBOX_KEY, OUTBOX_STALE_MS } from './captureOutbox';
+import { CAPTURE_OUTBOX_KEY, CAPTURE_PARKED_KEY, OUTBOX_STALE_MS } from './captureOutbox';
 import { CaptureBar } from './CaptureBar';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -642,23 +642,99 @@ describe('CaptureBar', () => {
       await user.click(screen.getByRole('button', { name: 'Put back' }));
       expect(box().value).toBe('first');
       expect(screen.getByText('Set aside: “half-typed second”')).toBeTruthy();
-      await user.click(screen.getByRole('button', { name: 'Discard “half-typed second”' }));
+      const discard = screen.getByRole('button', { name: 'Discard' });
+      // The short name is told apart by its description: the parked text itself.
+      expect(discard.getAttribute('aria-describedby')).toBeTruthy();
+      expect(document.getElementById(discard.getAttribute('aria-describedby')!)?.textContent).toBe(
+        'Set aside: “half-typed second”',
+      );
+      await user.click(discard);
       expect(screen.queryByText(/Set aside/)).toBeNull();
     });
 
-    it('an Auto capture sits in the outbox until its create settles', async () => {
+    it('an Auto capture sits in the outbox through the parse AND the create, until it settles', async () => {
       const { api, user, box } = await taskBar();
-      let resolve!: (r: ParseTaskResult) => void;
-      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      let parsed!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (parsed = r)));
+      const real = api.createTask.bind(api);
+      let created!: () => void;
+      api.createTask = vi.fn(
+        (input) => new Promise((r) => (created = () => r(real(input)))),
+      ) as typeof api.createTask;
+      const outbox = () => JSON.parse(localStorage.getItem(CAPTURE_OUTBOX_KEY) ?? '[]');
       await user.type(box(), 'call bank');
       await user.keyboard('{Enter}');
       expect(box().value).toBe('');
-      expect(JSON.parse(localStorage.getItem(CAPTURE_OUTBOX_KEY)!)).toMatchObject([
-        { text: 'call bank', mode: 'task', toToday: false },
-      ]);
-      resolve({ ok: false, reason: 'timeout' });
+      expect(outbox()).toMatchObject([{ text: 'call bank', mode: 'task', toToday: false }]);
+      parsed({ ok: false, reason: 'timeout' });
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      expect(outbox()).toHaveLength(1); // parsed, but the create hasn't landed
+      created();
       await waitFor(async () => expect((await api.listTasks())[0]?.title).toBe('call bank'));
       await waitFor(() => expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull());
+    });
+
+    it('a failed create leaves the outbox for the field or the parked list — never neither', async () => {
+      const { api, user, box } = await taskBar();
+      let reject!: (e: Error) => void;
+      api.createTask = vi.fn().mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      await user.type(box(), 'busy');
+      reject(new Error('offline'));
+      await screen.findByText('Couldn’t save: “first”');
+      await waitFor(() => expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull());
+      expect(JSON.parse(localStorage.getItem(CAPTURE_PARKED_KEY)!)).toMatchObject([
+        { text: 'first', why: 'failed' },
+      ]);
+    });
+
+    it('"→ today" Auto captures leave the outbox too, planned or not', async () => {
+      const { api, user, box } = await taskBar();
+      api.upsertPlan = () => Promise.reject(new Error('offline'));
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), 'pay rent');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/couldn’t plan it/)).toBeTruthy();
+      expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull();
+    });
+
+    it('parked captures survive closing the app again', async () => {
+      const { api, user, box } = await taskBar();
+      api.createTask = vi.fn().mockRejectedValueOnce(new Error('offline'));
+      vi.spyOn(api, 'parseTask').mockImplementationOnce(async (t) => {
+        await user.type(box(), 'busy'); // the field is taken by the time the save fails
+        return { ok: false, reason: 'timeout', detail: t };
+      });
+      await user.type(box(), 'first');
+      await user.keyboard('{Enter}');
+      await screen.findByText('Couldn’t save: “first”');
+      cleanup(); // the app closes
+      const api2 = createStubClient({ seed: false, storageKey: `cap-reopen-${Math.random()}` });
+      renderWithProviders(<CaptureBar />, { api: api2 });
+      expect(await screen.findByText('Couldn’t save: “first”')).toBeTruthy();
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Discard' }));
+      expect(localStorage.getItem(CAPTURE_PARKED_KEY)).toBeNull();
+    });
+
+    it("another tab's young entry is left alone, then parked once it's stale (foreground sweep)", async () => {
+      const t0 = Date.now();
+      localStorage.setItem(
+        CAPTURE_OUTBOX_KEY,
+        JSON.stringify([
+          { id: 'young', text: 'from the other tab', mode: 'task', toToday: false, at: t0 - 1_000 },
+        ]),
+      );
+      await taskBar();
+      expect(screen.queryByText(/from the other tab/)).toBeNull();
+      vi.spyOn(Date, 'now').mockReturnValue(t0 + OUTBOX_STALE_MS);
+      try {
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(await screen.findByText(/check first: “from the other tab”/)).toBeTruthy();
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
     });
 
     it('a capture left unsent when the app closed comes back on launch, parked, flagged as maybe saved', async () => {
@@ -681,6 +757,7 @@ describe('CaptureBar', () => {
       ).toBeTruthy();
       expect(screen.queryByText(/in flight elsewhere/)).toBeNull(); // another tab's save may still land
       expect(JSON.parse(localStorage.getItem(CAPTURE_OUTBOX_KEY)!)).toMatchObject([{ id: 'new' }]);
+      expect(screen.getByRole('status').textContent).toBe('Unsent capture kept below the box.');
       await user.click(screen.getByRole('button', { name: 'Put back' }));
       expect(box().value).toBe('renew passport');
       expect(screen.getByRole('button', { name: 'today' }).getAttribute('aria-pressed')).toBe(
@@ -721,9 +798,29 @@ describe('CaptureBar', () => {
     it('✨ keeps focus in the field (the phone keyboard stays up)', async () => {
       const { user, box } = await taskBar();
       await user.type(box(), 'admin, call bank');
+      const blurs = vi.fn();
+      box().addEventListener('blur', blurs);
       await user.click(screen.getByRole('button', { name: 'Review before saving' }));
       await screen.findByText('call bank');
+      expect(blurs).not.toHaveBeenCalled(); // not merely refocused after: never left
       expect(document.activeElement).toBe(box());
+    });
+
+    it('a preview parsed against a day that has since rolled over is dropped', async () => {
+      const { api, user, box } = await taskBar();
+      vi.spyOn(api, 'parseTask').mockResolvedValueOnce({
+        ok: true,
+        source: 'haiku',
+        input: { title: 'yesterday parse' },
+        categoryLabel: null,
+        dropped: [],
+        today: addDays(todayKey(4), -1),
+      });
+      await user.type(box(), 'x');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      await waitFor(() => expect(api.parseTask).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('yesterday parse')).toBeNull();
     });
 
     it('"→ today" plans a quick-added task, from Auto and from Review', async () => {
