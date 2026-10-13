@@ -275,6 +275,14 @@ third one is ongoing work, and only for these events:
 | Apple Development cert revoked or replaced (e.g. Xcode on another Mac, a cert reset) | the extension stops loading — rebuild both projects. Development signatures carry no secure timestamp, so they don't outlive their cert |
 | Extension code change | rebuild per README → *Build it for Safari* (prod: re-copy files first; both: redo step 4) |
 
+**Every "paste the token" above needs its current value.** A GitHub secret can't be read back, so the
+Lambda is the only place to recover it. Run on the Mac (the container has no AWS credentials), with
+`<stage>` as `prod` or `dev`:
+
+```
+aws lambda get-function-configuration --function-name aperture-bff-<stage> --region us-west-1 --query 'Environment.Variables.DEVICE_TOKEN' --output text
+```
+
 Storage is keyed by extension ID, so the saved token should survive a temporary→signed transition with
 the ID unchanged. Worth confirming on the first signed install rather than assuming.
 
