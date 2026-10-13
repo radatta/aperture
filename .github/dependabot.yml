@@ -2,14 +2,22 @@ version: 2
 
 # Scoped narrow for a solo repo (see docs/arch/CICD_HARDENING.md item 4 for rationale + the Dependabot
 # merge workflow):
-#   - github-actions: keep actions current, all bumps grouped into one weekly PR. The OIDC auth action
-#     (aws-actions/configure-aws-credentials) is the security-relevant one to keep fresh.
+#   - github-actions: keep actions current, all bumps grouped into one weekly PR per entry. The OIDC auth
+#     action (aws-actions/configure-aws-credentials) is the security-relevant one to keep fresh.
 #   - npm: SECURITY updates only. open-pull-requests-limit: 0 suppresses routine version bumps; security
 #     PRs ignore the limit. Avoids drowning a solo operator in version-bump PRs (each one more PR for a
 #     solo operator to review and merge).
 updates:
   - package-ecosystem: github-actions
-    directory: '/'
+    directory: '/' # scans .github/workflows only — local actions need their own entry (below)
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: '/.github/actions/setup' # the setup action's actions/cache
     schedule:
       interval: weekly
     groups:
