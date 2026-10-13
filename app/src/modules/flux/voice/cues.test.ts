@@ -210,21 +210,15 @@ describe('reduceCue', () => {
       ).toEqual(['Further', 'Hold']);
     });
 
-    it('"Further" is gated: dropped inside the gap after a count, and cooled down 2 s', () => {
-      expect(say(further)).toEqual({ text: 'Further', priority: 'normal' });
+    it('"Further" is never dropped — the evaluator says it once per excursion, so it can\'t chatter', () => {
+      expect(say(further)).toEqual({ text: 'Further', priority: 'always' });
       expect(
         speak([
           { e: { type: 'holdReached', count: 1 }, t: 0 },
-          { e: further, t: 300 },
+          { e: further, t: 300 }, // inside the gap
+          { e: further, t: 1300 }, // a fresh excursion right after: no reducer cooldown
         ]),
-      ).toEqual(['One']);
-      expect(
-        speak([
-          { e: further, t: 0 },
-          { e: further, t: 1500 },
-          { e: further, t: 2100 },
-        ]),
-      ).toEqual(['Further', 'Further']);
+      ).toEqual(['One', 'Further', 'Further']);
     });
 
     it('nudges name the way to move, and are cooled down 3 s', () => {
@@ -283,7 +277,7 @@ describe('reduceCue', () => {
       ];
       expect(cues.map(say)).toEqual([
         { text: 'Neutral set', priority: 'always' },
-        { text: 'Hold still to set neutral', priority: 'normal' },
+        { text: 'Face the camera and hold still', priority: 'normal' },
         { text: 'Get ready', priority: 'always' },
         { text: 'Set two', priority: 'always' },
         { text: 'Other side', priority: 'always' },
@@ -325,7 +319,7 @@ describe('reduceCue', () => {
           { e: hint, t: 19_000 },
           { e: hint, t: 20_000 },
         ]),
-      ).toEqual(['Hold still to set neutral', 'Hold still to set neutral']);
+      ).toEqual(['Face the camera and hold still', 'Face the camera and hold still']);
     });
 
     it('the Start queue says "Neutral set" then "Get ready", both at once', () => {

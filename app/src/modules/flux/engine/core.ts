@@ -142,7 +142,11 @@ export class FluxCore {
       if (this.stillSec >= AUTO_CAL_STILL_SEC) {
         // A re-set keeps the finished set and the ROM: a correction, not a Calibrate.
         if (this.neutral) {
+          const old = this.neutral;
           this.neutral = { ...this.lastSmoothed };
+          this.rom.pitch.shift(old.pitch - this.neutral.pitch);
+          this.rom.yaw.shift(old.yaw - this.neutral.yaw);
+          this.rom.roll.shift(old.roll - this.neutral.roll);
           this.recalDone = true;
         } else this.calibrate();
         autoCalibrated = { ...this.lastSmoothed };

@@ -335,14 +335,17 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(spoken(v).filter((t) => t === 'Tracking')).toHaveLength(1);
   });
 
-  it('hints Hold still to set neutral after 20 s of a face with no neutral', async () => {
+  it('hints Face the camera and hold still after 20 s of a face with no neutral', async () => {
     const { v, fake } = await running();
     act(() => fake().sample({ faceVisible: true, tSec: 0 }));
     act(() => fake().sample({ faceVisible: true, tSec: 19.9 }));
     expect(spoken(v)).toEqual([]);
     act(() => fake().sample({ faceVisible: true, tSec: 20 }));
-    expect(spoken(v)).toEqual(['Hold still to set neutral']);
-    expect(v.speak).toHaveBeenCalledWith({ text: 'Hold still to set neutral', priority: 'normal' });
+    expect(spoken(v)).toEqual(['Face the camera and hold still']);
+    expect(v.speak).toHaveBeenCalledWith({
+      text: 'Face the camera and hold still',
+      priority: 'normal',
+    });
   });
 
   it('rests 30 s between sets, then says the next set and starts it', async () => {

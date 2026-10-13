@@ -52,7 +52,6 @@ const COOLDOWN_MS: Partial<Record<CueEvent['type'], number>> = {
   positionReached: 1500,
   holdBroken: 3000,
   driftWarning: 4000,
-  stoppedShort: 2000,
   nudge: 3000,
   holdStillHint: 20_000,
   faceLost: 5000,
@@ -93,7 +92,8 @@ function phraseFor(e: CueEvent): Utterance | null {
       // Eyes closed, it's the only sign you've gone far enough — the hold clock is running (D36).
       return { text: 'Hold', priority: 'always' };
     case 'stoppedShort':
-      return { text: 'Further', priority: 'normal' };
+      // Once per excursion, paced by the evaluator (D37) — so never dropped, or the attempt goes silent.
+      return { text: 'Further', priority: 'always' };
     case 'holdStarted':
       // The cue to start pushing in an isometric — acted on, so never dropped.
       return { text: 'Hold', priority: 'always' };
@@ -126,7 +126,8 @@ function phraseFor(e: CueEvent): Utterance | null {
     case 'neutralSet':
       return { text: 'Neutral set', priority: 'always' };
     case 'holdStillHint':
-      return { text: 'Hold still to set neutral', priority: 'normal' };
+      // Also the only word when the neutral waits on a frontal face (D45), so it says both.
+      return { text: 'Face the camera and hold still', priority: 'normal' };
     case 'getReady':
       return { text: 'Get ready', priority: 'always' };
     case 'nextSet':

@@ -139,4 +139,10 @@ export class RomTracker {
     this.min = Number.POSITIVE_INFINITY;
     this.max = Number.NEGATIVE_INFINITY;
   }
+
+  // Re-key the range to a moved zero (the between-sets re-set, D46), so old and new samples share it.
+  shift(d: number): void {
+    this.min += d;
+    this.max += d;
+  }
 }

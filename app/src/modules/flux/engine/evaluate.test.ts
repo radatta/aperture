@@ -385,6 +385,39 @@ describe('romReps', () => {
       expect(of(events, 'stoppedShort')).toEqual([]);
     });
 
+    it('a dip below the zone after "Hold" says "Further" once, and not again on a second dip', () => {
+      const { events } = fold(rom3, [
+        N(0, 0),
+        ...ramp(0, 31, 20), // into the 30° zone → "Hold"
+        ...ramp(31, 29, 3),
+        ...repeat(N(0, 29), 30), // still, 1° under the zone, 2° off the peak → "Further"
+        ...ramp(29, 31, 3),
+        ...ramp(31, 29, 3),
+        ...repeat(N(0, 29), 60), // the same again: once per excursion, so quiet
+      ]);
+      expect(events.map((e) => e.type)).toEqual(['holdEntered', 'stoppedShort']);
+    });
+
+    it('a dropout freezes the rep: no hold time, no "Further" from the frozen pose (D44)', () => {
+      const face = (rel: Euler, n: number, f: boolean) =>
+        repeat(rel, n).map((r): [Euler, boolean] => [r, f]);
+      const held = (after: number) =>
+        foldFace(rom3, [
+          [N(0, 0), true],
+          ...face(N(0, 35), 45, true), // 44 frames in the zone
+          ...face(N(0, 35), 60, false),
+          ...face(N(0, 35), after, true),
+        ]).events;
+      expect(of(held(40), 'holdReached')).toEqual([]); // 84 frames < 90: the dropout added nothing
+      expect(of(held(50), 'holdReached')).toHaveLength(1);
+      const short = foldFace(rom3, [
+        [N(0, 0), true],
+        ...face(N(0, 20), 5, true),
+        ...face(N(0, 20), 60, false),
+      ]);
+      expect(of(short.events, 'stoppedShort')).toEqual([]);
+    });
+
     it('nothing without a hold: no zone, no "Hold", no "Further"', () => {
       const flex = { ...rom3, id: 't-zone-none', holdSec: undefined } satisfies ExerciseDefinition;
       const { events } = fold(flex, [N(0, 0), ...repeat(N(0, 20), 90), N(0, 0)]);
@@ -654,6 +687,16 @@ describe('holdAtTarget', () => {
       expect(of(events, 'holdBroken')).toEqual([]);
       expect(of(events, 'nudge')).toEqual([]);
     });
+  });
+
+  it("a dropout during the release wait isn't leaving: the next hold still needs a real release", () => {
+    const two = { ...stretch, id: 't-hold-rel', reps: 2 } satisfies ExerciseDefinition;
+    const { events } = foldFace(two, [
+      ...repeat(N(0, 0, 28), 32).map((r): [Euler, boolean] => [r, true]), // a hold → "And release"
+      ...repeat(N(0, 0, 28), 5).map((r): [Euler, boolean] => [r, false]),
+      ...repeat(N(0, 0, 28), 40).map((r): [Euler, boolean] => [r, true]),
+    ]);
+    expect(of(events, 'holdCompleted')).toHaveLength(1);
   });
 
   describe('a dropout mid-hold pauses the clock (D44)', () => {

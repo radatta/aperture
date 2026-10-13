@@ -263,8 +263,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           lastDisplayRef.current = now;
           return setSample(e.sample);
         }
-        case 'calibrated':
+        case 'calibrated': {
           if (!e.ok) return flash('Face the camera to calibrate');
+          const wasCalibrated = latest.current.calibrated;
           latest.current.calibrated = true;
           setCalibrated(true);
           face.current.hintSince = null;
@@ -272,8 +273,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           // supersedes a "Face the camera" refusal still on screen.
           setNotice(null);
           // Between sets the core re-sets a drifted neutral by itself (D46): a correction with nothing
-          // to act on — shown, not said.
-          if (e.auto && autoStep.current?.kind === 'rest') return flash('Neutral reset');
+          // to act on — shown, not said. An automatic neutral while one is already set can only be that
+          // re-set (exact, where the rest timer could race the worker at the rest's end).
+          if (e.auto && wasCalibrated) return flash('Neutral reset');
           say({ type: 'neutralSet' });
           // Calibrating resets the set, so a timed kind starts itself again (D41) — at once if
           // "Start now" was what asked for the neutral. A rest in progress runs on: its end starts the set.
@@ -286,6 +288,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           }
           say({ type: 'getReady' });
           return arm({ kind: 'start' });
+        }
         case 'exerciseState':
           return setExState(e.state);
         case 'exerciseEvent': {

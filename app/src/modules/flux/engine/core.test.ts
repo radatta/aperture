@@ -221,7 +221,35 @@ describe('FluxCore', () => {
       const last = out.filter((r) => r?.state).at(-1)?.state;
       expect(last).toMatchObject({ phase: 'complete', holdsDone: 5 });
       expect(out.at(-1)?.sample.rom.yaw).toBeGreaterThan(5); // the ROM kept
-      expect(autos(run(core, hold(yaw(8), 120), t2).out)).toEqual([]); // once per set
+      const later = run(core, hold(yaw(8), 120), t2);
+      expect(autos(later.out)).toEqual([]); // once per set
+      // Back to the old zero (8° the other way): the range is re-keyed, not 0→8 plus 0→−8.
+      const back = run(core, hold(yaw(0), 30), later.t);
+      expect(back.out.at(-1)?.sample.rom.yaw).toBeCloseTo(8, 0);
+    });
+
+    it('re-arms for the next finished set; needs the head frontal as well as near', () => {
+      const { core, t } = finishedSet();
+      let at = run(core, hold(yaw(8), 75), t).t;
+      core.control({ type: 'start' }); // set two, then finished again
+      let done = false;
+      while (!done) {
+        const r = core.frame(yaw(8), (at += 1000 / 30));
+        done = r?.events.some((e) => e.type === 'setCompleted') ?? false;
+      }
+      expect(autos(run(core, hold(yaw(14), 75), at).out)).toHaveLength(1);
+      // A neutral already 15° to the side: a head 7° further is near it, but no longer frontal.
+      const side = new FluxCore();
+      let ts = run(side, hold(yaw(15), 70)).t;
+      expect(side.calibrated).toBe(true);
+      side.selectExercise('isometric-flexion', 'a');
+      side.control({ type: 'start' });
+      done = false;
+      while (!done) {
+        const r = side.frame(yaw(15), (ts += 1000 / 30));
+        done = r?.events.some((e) => e.type === 'setCompleted') ?? false;
+      }
+      expect(autos(run(side, hold(yaw(22), 120), ts).out)).toEqual([]);
     });
 
     it('not for a pose well away from the neutral (a stretch), nor once the next set starts', () => {

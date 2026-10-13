@@ -35,8 +35,8 @@ const HOLD_BROKEN_MIN_SEC = 1;
 const HOLD_BROKEN_OUT_SEC = 0.3;
 // A ROM hold is timed only this close to the target (D36): 75 % — rotation 45° of 60°.
 const HOLD_ZONE_FRACTION = 0.75;
-// "Further" (D37): still this long short of the zone, once per excursion (the reducer paces excursions
-// 2 s apart).
+// "Further" (D37): still this long short of the zone — once per excursion, literally: a dip below the zone
+// after "Hold" doesn't say it again (the paused clock is the cost; a return says "Hold longer").
 const FURTHER_STILL_SEC = 0.6;
 // …or a swing back that never reached the zone and lasted this long.
 const FURTHER_SWING_SEC = 1;
@@ -214,6 +214,9 @@ export function evaluate(
 function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInput): EvalResult {
   const events: ExerciseEvent[] = [];
   if (state.phase === 'complete') return { state: touch(state, input), events };
+  // A dropout freezes the rep (D44): the core holds the last pose, so the hold clock would run on and a
+  // frozen pose would read as a pause short of the zone. End range is where the face drops.
+  if (!input.faceVisible) return { state: touch(state, input), events };
 
   const dtv = dt(state.lastTSec, input.tSec);
   const holdSec = def.holdSec ?? 0;
@@ -252,7 +255,6 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       if (prev < holdSec && holdAccumSec >= holdSec)
         events.push({ type: 'holdReached', count: repsPos + repsNeg + 1 });
       stillShortSec = 0;
-      furtherSaid = false;
       excursionSec = 0;
     } else if (holdSec > 0 && out > def.exitDeg && holdAccumSec < holdSec) {
       // Short of the zone: a pause at the far end says "Further" (D37) — once per excursion, so a user
@@ -380,9 +382,10 @@ function evalHold(
   let { holdsDone, inPosition, holdElapsedSec, awaitingRelease, brokenHeldSec, outSec } = state;
   let { stillOutSec, lastNudgeAt, nudgeSaid } = state;
 
-  // Between reps the user must leave the target zone before the next hold counts.
+  // Between reps the user must leave the target zone before the next hold counts — a dropout isn't
+  // leaving (the head is most likely still there, D44).
   if (awaitingRelease) {
-    if (!rawInPos) awaitingRelease = false;
+    if (!rawInPos && input.faceVisible) awaitingRelease = false;
     return {
       state: {
         ...state,
