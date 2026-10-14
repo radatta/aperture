@@ -11,14 +11,14 @@ edge the board only offers advice; a heavy job waits only past the measured hard
 
 ## Use it
 
-| Want                              | Run                                                                                                                                     |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Want                              | Run                                                                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines      |
 | Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see |
-| Hold the dev stage for a dev test | `scripts/board/board.sh lease acquire dev [--wait SEC] [--note "…"]` → `lease release dev` when done                                    |
+| Hold the dev stage for a dev test | `scripts/board/board.sh lease acquire dev [--wait SEC] [--note "…"]` → `lease release dev` when done                                   |
 | What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                    |
 | Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                |
-| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                  |
+| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                 |
 
 Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
 pids 315/4096 · dev: flux`) — `scripts/board/statusline-snippet.sh`, sourced at the end of
@@ -45,18 +45,18 @@ snapshot to `history/probe-<date>.json`):
 - `cpu.max` is `max 100000` — the 80 % CPU allowance in `.coi/config.toml` doesn't land (Incident A
   follow-ups).
 
-| File (`/sys/fs/cgroup/`)                     | Meaning                                    | Use                                    |
-| -------------------------------------------- | ------------------------------------------ | -------------------------------------- |
-| `memory.stat` → `anon`                       | real process memory                        | **the number**                         |
-| `memory.current` / `memory.peak`             | anon + cache (+ kernel)                    | context only                           |
-| `memory.high`                                | throttle line                              | thresholds are fractions of it         |
-| `memory.max`                                 | `max` → no cgroup OOM                      | a 137 is the VM or userland            |
-| `memory.events` `high` / `oom_kill`          | throttle hits / kills since boot           | the delta per job is the verdict       |
-| `memory.pressure` `full avg10`               | stall regime                               | the stop signal                        |
-| `pids.current` / `pids.max` / `pids.peak`    | tasks (threads) / ceiling / high-water     | `paste -d/ pids.{current,max}`         |
-| `cpu.stat` `usage_usec`, `cpu.pressure`      | CPU time, CPU stalls                       | cores busy = Δusage / Δt               |
-| `/proc/meminfo` `MemTotal`                   | VM RAM                                     | the real 137 line                      |
-| `/proc/<pid>/stat` (parse after the last `)`) | ppid, threads, rss, cpu ticks, start time | attribution (`comm` may hold spaces)   |
+| File (`/sys/fs/cgroup/`)                      | Meaning                                   | Use                                  |
+| --------------------------------------------- | ----------------------------------------- | ------------------------------------ |
+| `memory.stat` → `anon`                        | real process memory                       | **the number**                       |
+| `memory.current` / `memory.peak`              | anon + cache (+ kernel)                   | context only                         |
+| `memory.high`                                 | throttle line                             | thresholds are fractions of it       |
+| `memory.max`                                  | `max` → no cgroup OOM                     | a 137 is the VM or userland          |
+| `memory.events` `high` / `oom_kill`           | throttle hits / kills since boot          | the delta per job is the verdict     |
+| `memory.pressure` `full avg10`                | stall regime                              | the stop signal                      |
+| `pids.current` / `pids.max` / `pids.peak`     | tasks (threads) / ceiling / high-water    | `paste -d/ pids.{current,max}`       |
+| `cpu.stat` `usage_usec`, `cpu.pressure`       | CPU time, CPU stalls                      | cores busy = Δusage / Δt             |
+| `/proc/meminfo` `MemTotal`                    | VM RAM                                    | the real 137 line                    |
+| `/proc/<pid>/stat` (parse after the last `)`) | ppid, threads, rss, cpu ticks, start time | attribution (`comm` may hold spaces) |
 
 ## History — what the sampler records
 
@@ -126,15 +126,17 @@ GitHub's truth, and dev-e2e's build marker catches an overwrite after the fact. 
 - **expired** → taken over; holder **dead** (pid gone or reused — `/proc` start time) → taken over at once,
   with the `SendMessage` text printed for the new holder to send.
 - The holder's **session ending** flags it `holderGone` but keeps it until TTL (45 min) — dev testing and
-  feedback outlive a session restart. Each prompt in the holder's session on that branch renews it.
+  feedback outlive a session restart. The restarted session on that branch takes it back on its first prompt
+  (`takeover`, reason `resumed`, no message), and each prompt in the holder's session on that branch renews it.
 - Only the holder releases it (`--force` overrides, logged).
 
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
 (not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
 with a one-line note. Past hard → with `enforce: false` (shipped) run anyway and log `wouldWait`; with
-`enforce: true` wait for room, polling every 2 s, up to `--wait` (600 s), then exit **75**: tell the user
-rather than retry. Slots whose wrapper died are dropped on the next acquire and by `gc`.
+`enforce: true` wait for room, polling every 2 s, up to `--wait` (90 s — inside the Bash tool's 120 s
+timeout, so the message reaches Claude), then exit **75** naming the jobs that hold the room: tell the user
+rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the background. Slots whose wrapper died are dropped on the next acquire and by `gc`.
 
 ## `scripts/board/limits.json`
 

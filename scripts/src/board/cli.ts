@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { decideDev, decideHeavy, type Alive } from './lease.ts';
+import { decideDev, decideHeavy, devLease, type Alive } from './lease.ts';
 import { parseLimits, staleness } from './limits.ts';
 import { branchFiles, overlaps, type Tree } from './overlap.ts';
 import { parseLimit, parseStat } from './proc.ts';
@@ -58,6 +58,8 @@ const git = (cwd: string, ...a: string[]) => {
     return execFileSync('git', ['-C', cwd, ...a], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // Read-only scan of other sessions' worktrees: never take their index.lock to refresh the index.
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     });
   } catch {
     return '';
@@ -110,8 +112,12 @@ export function main(argv: string[], stdin: () => string): string {
   const now = new Date();
   switch (cmd) {
     case 'decide-dev': {
-      const { current, req } = JSON.parse(stdin());
-      return JSON.stringify(decideDev(current ?? null, req, now, procAlive));
+      const { current, req, note } = JSON.parse(stdin());
+      const d = decideDev(current ?? null, req, now, procAlive);
+      // grant / takeover carry the lease to write, so the tested builder is the one that runs
+      const lease =
+        d.kind === 'grant' || d.kind === 'takeover' ? devLease(req, now, note) : undefined;
+      return JSON.stringify(lease ? { ...d, lease } : d);
     }
     case 'decide-heavy': {
       const { limits, liveLimits: ll, live, slots, req } = JSON.parse(stdin());

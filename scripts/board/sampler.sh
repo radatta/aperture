@@ -52,8 +52,13 @@ while :; do
   tick
   # Something may sweep /tmp; `board.sh sampler stop` needs the pid.
   [ -s /tmp/aperture-sampler.pid ] || printf '%s\n' "$$" >/tmp/aperture-sampler.pid
-  # File overlaps across worktrees every 5th tick (~2.5 min): git is cheap, but not per prompt.
-  if [ $((n % 5)) -eq 0 ]; then node "$SB_REPO/scripts/src/board/cli.ts" overlap "$SB_REPO" "$BOARD_DIR" >/dev/null 2>&1 & fi
+  # File overlaps across worktrees every 5th tick (~2.5 min): git is cheap, but not per prompt. Skipped
+  # while the last one still runs. Background children close fd 8, or they'd hold the singleton lock
+  # after the sampler is stopped and `sampler restart` would find it taken.
+  if [ $((n % 5)) -eq 0 ] && ! { [ -n "${ov:-}" ] && kill -0 "$ov" 2>/dev/null; }; then
+    node "$SB_REPO/scripts/src/board/cli.ts" overlap "$SB_REPO" "$BOARD_DIR" >/dev/null 2>&1 8>&- &
+    ov=$!
+  fi
   n=$((n + 1))
-  sleep "$interval" & wait $!
+  sleep "$interval" 8>&- & wait $!
 done

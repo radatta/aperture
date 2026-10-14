@@ -11,26 +11,28 @@
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
+me=$( [ -n "${CLAUDE_PID:-}" ] && echo "$CLAUDE_PID" || sb_claude_pid "$PPID" ) || me=0
+# Quiet window only — checked before detaching, so a refusal reaches the caller. "Working" = in any of the
+# last 10 samples (5 min) or now.
+if [ "${EDGE_FORCE:-0}" != 1 ]; then
+  others=$( { tail -n 10 "$BOARD_DIR/history/samples-$(sb_today).jsonl" 2>/dev/null; bash "$SB_SCRIPTS/sampler.sh" --print; } |
+    jq -rs --argjson me "$me" '[.[].sessions[]? | select(.pid != $me and .state == "working") | .name] | unique | join(", ")')
+  [ -z "$others" ] || { echo "edge: refusing — working in the last 5 min: $others (EDGE_FORCE=1 overrides)" >&2; exit 3; }
+fi
+
 if [ "${1:-}" = --detach ]; then
   log="$BOARD_DIR/history/edge-$(sb_today).log"
-  setsid nohup bash "$SB_SCRIPTS/measure/edge.sh" </dev/null >>"$log" 2>&1 &
+  CLAUDE_PID=$me EDGE_FORCE=1 setsid nohup bash "$SB_SCRIPTS/measure/edge.sh" </dev/null >>"$log" 2>&1 &  # already checked
   echo "edge: running detached (pid $!), progress in $log → result $BOARD_DIR/history/edge-$(sb_today)-*.json"
   exit 0
 fi
 
 STEP="${EDGE_STEP:-30}" MAX="${EDGE_MAX:-12}"  # EDGE_CMD (default `pnpm test`) swaps the job for dry runs
-read -r -a TREES <<<"${MATRIX_TREES:-$SB_REPO $SB_REPO/../board-matrix-b $SB_REPO/../board-matrix-c}"
+read -r -a TREES <<<"$(sb_matrix_trees)"
 present=(); for t in "${TREES[@]}"; do [ -d "$t/node_modules" ] && present+=("$t"); done
 [ "${#present[@]}" -gt 0 ] || { echo "edge: no installed tree (matrix.sh setup)" >&2; exit 2; }
 TREES=("${present[@]}")
 eval "$(sb_thresholds)"
-me=$( [ -n "${CLAUDE_PID:-}" ] && echo "$CLAUDE_PID" || sb_claude_pid "$PPID" ) || me=0
-
-if [ "${EDGE_FORCE:-0}" != 1 ]; then
-  others=$(bash "$SB_SCRIPTS/board.sh" json | jq -r --argjson me "$me" '
-    .sample.sessions[] | select(.pid != $me and .state == "working") | .name')
-  [ -z "$others" ] || { echo "edge: refusing — working now: $others (EDGE_FORCE=1 overrides)" >&2; exit 3; }
-fi
 
 run="edge-$(sb_today)-$(date -u +%H%M)"
 out="${TMPDIR:-/tmp}/aperture-$run"
@@ -57,13 +59,14 @@ stop_all() {
   touch "$out/stop"
   local p
   for p in "${inst[@]}"; do kill -TERM "$p" 2>/dev/null; done  # instance loops
-  # heavy.sh wrappers trap TERM and stop their own subtrees; signal them by the PIDs their slots record.
-  for p in $(jq -r '.wrapperPid' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null); do
+  # heavy.sh wrappers trap TERM and stop their own subtrees; signal this run's, by the PIDs their slots record.
+  for p in $(jq -r --arg r "$run#" 'select((.label // "") | startswith($r)) | .wrapperPid' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null); do
     [ "$(sb_comm "$p")" = bash ] && kill -TERM "$p" 2>/dev/null
   done
   wait 2>/dev/null
 }
-trap 'reason="interrupted"; stop_all; exit 130' INT TERM
+trap 'reason="interrupted"; stop_all; exit 130' INT
+trap 'reason="terminated"; stop_all; exit 143' TERM
 
 while :; do
   if [ "$launching" = 1 ] && [ "$n" -lt "$MAX" ]; then

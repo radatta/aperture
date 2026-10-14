@@ -60,6 +60,17 @@ describe('decideDev', () => {
     expect(decideDev(held({ holderGone: true }), req(), now, dead).kind).toBe('wait');
   });
 
+  it("hands a gone holder's lease to the restarted session on the same branch", () => {
+    const gone = held({ holderGone: true });
+    expect(decideDev(gone, req({ branch: 'flux', name: 'flux' }), now, dead)).toMatchObject({
+      kind: 'takeover',
+      reason: 'resumed',
+      previous: gone,
+    });
+    expect(decideDev(gone, req(), now, dead).kind).toBe('wait'); // another branch still waits for the TTL
+    expect(decideDev(held(), req({ branch: 'flux' }), now, alive).kind).toBe('wait'); // live holder: no
+  });
+
   it('honours --force, logged as a takeover', () => {
     expect(decideDev(held(), req({ force: true }), now, alive)).toMatchObject({
       kind: 'takeover',
@@ -74,8 +85,8 @@ describe('decideDev', () => {
       holderStart: 's200',
       holderName: 'session-board',
       branch: 'session-board',
-      acquiredAt: '2026-10-13T18:00:00.000Z',
-      expiresAt: '2026-10-13T18:45:00.000Z',
+      acquiredAt: '2026-10-13T18:00:00Z',
+      expiresAt: '2026-10-13T18:45:00Z',
       ttlSec: 2700,
       note: 'dev-test round 1',
     });
@@ -111,6 +122,14 @@ describe('decideHeavy', () => {
       anonSoftMiB: 11059,
       anonHardMiB: 14746,
     });
+  });
+
+  it('bites only past the hard line: exactly at it is a nudge', () => {
+    // a test job costs 320 pids (shipped classes), so live 3448 lands the prediction exactly on hard 3768
+    const at = decideHeavy(limits(true), ll, { ...idle, pids: 3448 }, [], { class: 'test' }, now);
+    expect(at).toMatchObject({ verdict: 'nudge', wait: false, predicted: { pids: 3768 } });
+    const past = decideHeavy(limits(true), ll, { ...idle, pids: 3449 }, [], { class: 'test' }, now);
+    expect(past).toMatchObject({ verdict: 'over-hard', wait: true, predicted: { pids: 3769 } });
   });
 
   it('counts young slots (not ramped yet) and trusts live numbers for older ones', () => {

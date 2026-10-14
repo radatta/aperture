@@ -9,7 +9,7 @@
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-read -r -a TREES <<<"${MATRIX_TREES:-$SB_REPO $SB_REPO/../board-matrix-b $SB_REPO/../board-matrix-c}"
+read -r -a TREES <<<"$(sb_matrix_trees)"
 GAP="${MATRIX_GAP:-20}"
 
 # cell → "class|command" for one job; pairs and sessions compose these.
@@ -63,7 +63,7 @@ run_cell() {  # $1 cell, $2 rep label prefix
 # Per-rep summary from the events this rep wrote: container peaks across its jobs.
 summarize() {  # $1 label prefix
   cat "$BOARD_DIR"/history/events-*.jsonl 2>/dev/null | jq -sc --arg p "$1" '
-    map(select(.label | startswith($p))) | select(length > 0) |
+    map(select(.kind == "job" and ((.label // "") | startswith($p)))) | select(length > 0) |
     {rep: $p, jobs: length, exits: map(.exit), wallSec: (map(.wallSec) | max),
      dPids: (map(.peak.dPids) | max), dAnonMiB: (map(.peak.dAnonMiB) | max),
      pids: (map(.peak.pids) | max), anonMiB: (map(.peak.anonMiB) | max),

@@ -21,6 +21,14 @@ set -- "${args[@]+"${args[@]}"}"
 
 me_pid() { [ -n "$OPT_PID" ] && { printf '%s' "$OPT_PID"; return; }; [ -n "${CLAUDE_PID:-}" ] && { printf '%s' "$CLAUDE_PID"; return; }; sb_claude_pid "$PPID"; }
 me_file() { printf '%s/sessions/%s.json' "$BOARD_DIR" "$1"; }
+# Two lines, branch then name, for a session in $1 (cwd) — lines, not a TAB pair: `read` drops an empty leading field. The name is its tmux window — the session name the status
+# line sets, and the SendMessage address — falling back to the branch, then the cwd's basename.
+me_ident() {
+  local branch win=
+  branch=$(git -C "$1" branch --show-current 2>/dev/null)
+  [ -n "${TMUX_PANE:-}" ] && win=$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null)
+  printf '%s\n%s\n' "$branch" "${win:-${branch:-${1##*/}}}"
+}
 
 # --- session registry ---
 
@@ -29,11 +37,10 @@ cmd_register() {
   pid=$(me_pid) || { echo "board: no claude ancestor" >&2; return 1; }
   cwd="${OPT_CWD:-$(pwd)}"; sid="${OPT_SID:-${CLAUDE_CODE_SESSION_ID:-}}"
   read -r ps start < <(sb_stat "$pid")
-  branch=$(git -C "$cwd" branch --show-current 2>/dev/null)
-  name="${branch:-${cwd##*/}}"
+  { read -r branch; read -r name; } < <(me_ident "$cwd")
   sb_init_dirs; f=$(me_file "$pid")
   # SessionStart also fires on resume/compact: keep startedAt/note/lastPromptAt for the same process.
-  { [ -f "$f" ] && cat "$f" || echo '{}'; } | jq -c --argjson pid "$pid" --arg start "$start" --arg sid "$sid" \
+  { [ -s "$f" ] && cat "$f" || echo '{}'; } | jq -c --argjson pid "$pid" --arg start "$start" --arg sid "$sid" \
     --arg name "$name" --arg branch "$branch" --arg cwd "$cwd" --arg now "$(sb_now)" '
     (if .pidStart == $start then . else {} end) as $old |
     {v: 1, pid: $pid, pidStart: $start, sid: $sid, name: $name, branch: $branch, cwd: $cwd,
@@ -42,13 +49,16 @@ cmd_register() {
 }
 
 cmd_heartbeat() {
-  local state="$1" pid f
+  local state="$1" pid f branch name
   case "$state" in working|idle) ;; *) echo "usage: board.sh heartbeat working|idle" >&2; return 2 ;; esac
   pid=$(me_pid) || return 1
   f=$(me_file "$pid")
-  [ -f "$f" ] || cmd_register || return 1
-  jq -c --arg s "$state" --arg now "$(sb_now)" \
-    '.state = $s | .updatedAt = $now | if $s == "working" then .lastPromptAt = $now else .lastStopAt = $now end' "$f" | sb_write "$f"
+  [ -s "$f" ] || cmd_register || return 1
+  # Branch and name can change mid-session (a session that starts in detached /workspace, a renamed window).
+  { read -r branch; read -r name; } < <(me_ident "${OPT_CWD:-$(pwd)}")
+  jq -c --arg s "$state" --arg now "$(sb_now)" --arg branch "$branch" --arg name "$name" '
+    .state = $s | .updatedAt = $now | .branch = $branch | .name = $name |
+    if $s == "working" then .lastPromptAt = $now else .lastStopAt = $now end' "$f" | sb_write "$f"
   [ "$state" = working ] && lease_renew_dev "$pid"
   return 0
 }
@@ -160,7 +170,7 @@ cmd_gc() {
     [ -e "$f" ] || continue
     read -r pid start < <(jq -r '"\(.pid) \(.pidStart)"' "$f")
     if ! sb_alive "$pid" "$start"; then
-      find "$f" -mmin +1440 -delete 2>/dev/null && [ ! -e "$f" ] && { rm -f "${f%.json}.tool"; n=$((n + 1)); }
+      find "$f" -mmin +1440 -delete 2>/dev/null && [ ! -e "$f" ] && { rm -f "${f%.json}.tool" "${f%.json}.nudged"; n=$((n + 1)); }
     fi
   done
   # Heavy slots whose wrapper died.

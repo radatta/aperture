@@ -92,6 +92,8 @@ beforeEach(() => {
   const rest = { ...process.env };
   delete rest.CLAUDE_PID;
   delete rest.CLAUDE_CODE_SESSION_ID;
+  delete rest.TMUX_PANE; // else sessions are named after the tmux window running the tests
+  delete rest.TMUX;
   env = {
     ...rest,
     APERTURE_BOARD_DIR: join(tmp, 'board'),
@@ -173,6 +175,41 @@ describe('board.sh dev lease', () => {
   });
 });
 
+describe('board.sh dev lease after a restart', () => {
+  it('hands a gone holder’s lease to the restarted session on its branch, not to another branch', () => {
+    const a = liveSession();
+    const dir = repo('feat-a');
+    board(['register', '--pid', `${a}`, '--cwd', dir]);
+    board(['--pid', `${a}`, 'lease', 'acquire', 'dev']);
+    board(['--pid', `${a}`, 'end']);
+    const other = liveSession();
+    board(['--pid', `${other}`, 'heartbeat', 'working', '--cwd', repo('feat-b')]);
+    expect(JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8')).holderPid).toBe(a);
+    const b = liveSession(); // the same branch, restarted: a new pid
+    expect(board(['--pid', `${b}`, 'heartbeat', 'working', '--cwd', dir]).code).toBe(0);
+    const lease = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
+    expect(lease).toMatchObject({ holderPid: b, branch: 'feat-a' });
+    expect(lease.holderGone).toBeUndefined();
+    expect(events().find((e) => e.reason === 'resumed')).toMatchObject({
+      lease: 'dev',
+      action: 'takeover',
+    });
+  });
+});
+
+describe('sampler.sh', () => {
+  it('categorises every process by its command line, not just the first one /proc lists', () => {
+    // comm is `sleep`; only argv says vitest — so this lands in `vitest` only if args are read per process
+    const c = spawn('sleep', ['300'], { argv0: 'vitest', stdio: 'ignore' });
+    children.push(c);
+    const r = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], {
+      env,
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(r.stdout).cats.vitest.n).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('board.sh gc', () => {
   it('drops heavy slots whose wrapper died (pid gone or reused) and keeps live ones', () => {
     const live = liveSession();
@@ -228,6 +265,36 @@ describe('heavy.sh', () => {
     expect(r.err).toMatch(/tell the user/);
     expect(events().filter((e) => e.kind === 'job')).toEqual([]);
   });
+
+  it('keeps the command’s exit code when limits.json is unreadable', () => {
+    writeFileSync(join(tmp, 'limits.json'), '{');
+    const r = heavy(['--', 'bash', '-c', 'exit 3'], { HEAVY_CLASS: 'typecheck' });
+    expect(r.code).toBe(3);
+  });
+
+  it('stops its whole subtree on TERM and exits 128+15', async () => {
+    const marker = join(tmp, 'kid.pid');
+    const c = spawn(
+      'bash',
+      [join(boardDir, 'heavy.sh'), '--', 'bash', '-c', `sleep 300 & echo $! >${marker}; wait`],
+      { env: { ...env, HEAVY_CLASS: 'build' }, cwd: tmp, stdio: 'ignore' },
+    );
+    for (let i = 0; i < 100 && !existsSync(marker); i++)
+      await new Promise((r) => setTimeout(r, 50));
+    const kid = Number(readFileSync(marker, 'utf8'));
+    const exited = new Promise<number | null>((r) => c.on('exit', (code) => r(code)));
+    c.kill('SIGTERM');
+    expect(await exited).toBe(143);
+    const state = () => {
+      try {
+        return readFileSync(`/proc/${kid}/stat`, 'utf8').split(') ')[1]![0];
+      } catch {
+        return 'gone';
+      }
+    };
+    expect(['gone', 'Z']).toContain(state());
+    expect(readdirSync(join(tmp, 'board/leases/heavy'))).toEqual([]);
+  }, 20000);
 
   it('never takes a slot or waits for a single-file test run', () => {
     cgroup(3700, 2 * GiB);

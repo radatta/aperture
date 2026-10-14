@@ -43,19 +43,26 @@ if [ "$class" != test-file ] && [ "$class" != other ]; then
   lease_heavy_acquire "$slot" "$owner" "$class" "$label" "$cmd" "$me" "$me_start" "${wait_sec:-}" || exit $?
 fi
 
-# Descendants of $1 (inclusive) with their threads/rss — one awk over one /proc pass.
+# Descendants of the PIDs in $1 (space-separated, inclusive) with their threads/rss — one awk over one /proc pass.
 subtree() {
-  sb_procs | awk -F'\t' -v root="$1" -v page="$(getconf PAGESIZE)" '
+  sb_procs | awk -F'\t' -v roots="$1" -v page="$(getconf PAGESIZE)" '
+    BEGIN { k = split(roots, rr, " "); for (i = 1; i <= k; i++) R[rr[i]] = 1 }
     { pp[$1] = $2; th[$1] = $4; rs[$1] = $5 }
-    END { for (p in pp) { q = p; for (n = 0; n < 64 && q > 1; n++) { if (q == root) { print p; t += th[p]; r += rs[p] * page; break } q = pp[q] } }
+    END { for (p in pp) { q = p; for (n = 0; n < 64 && q > 1; n++) { if (q in R) { print p; t += th[p]; r += rs[p] * page; break } q = pp[q] } }
           printf "T %d %d\n", t, r }'
 }
-kill_tree() {  # by PID, deepest-last is fine: TERM all, then KILL survivors
-  local p list
-  list=$(subtree "$1" | awk '$1 != "T"')
-  for p in $list; do kill -TERM "$p" 2>/dev/null; done
-  sleep 3
-  for p in $list; do kill -KILL "$p" 2>/dev/null; done
+# By PID until the subtree is empty: TERM for ~3 s, then KILL. Each pass re-walks from every PID seen so
+# far — forks after the first pass are caught, and so are orphans that reparented away from the root.
+kill_tree() {
+  local seen="$1" live p i sig
+  for ((i = 0; i < 10; i++)); do
+    live=$(subtree "$seen" | awk '$1 != "T"' | tr '\n' ' ')
+    [ -n "${live// /}" ] || return 0
+    seen="$seen $live"
+    sig=TERM; [ "$i" -ge 6 ] && sig=KILL
+    for p in $live; do kill -"$sig" "$p" 2>/dev/null; done
+    sleep 0.5
+  done
 }
 
 pids0=$(cg_pids); anon0=$(cg_anon); oom0=$(cg_oom_kill); high0=$(cg_high_events)
@@ -80,7 +87,7 @@ child=$!
     [ "${rss:-0}" -gt "$pk_rss" ] && pk_rss=$rss
     awk -v a="$psi" -v b="$pk_psi" 'BEGIN{exit !(a > b)}' && pk_psi=$psi
     awk -v a="$cores" -v b="$pk_cores" 'BEGIN{exit !(a > b)}' && pk_cores=$cores
-    echo "$pk_pids $pk_anon $pk_cur $pk_thr $pk_rss $pk_psi $pk_cores" >"$work.peak"
+    echo "$pk_pids $pk_anon $pk_cur $pk_thr $pk_rss $pk_psi $pk_cores" >"$work.peak.tmp" && mv -f "$work.peak.tmp" "$work.peak"
     n=$((n + 1))
     if [ -n "$slot" ] && [ $((n % 30)) -eq 0 ] && [ -f "$slot" ]; then
       jq -c --arg now "$(sb_now)" '.renewedAt = $now' "$slot" | sb_write "$slot"
@@ -94,6 +101,8 @@ child=$!
       [ "$p" -gt "$PIDS_HARD" ] && reason="pids $p > hard $PIDS_HARD"
       [ "$a" -gt "$ANON_HARD" ] && reason="anon $(sb_gib "$a") GiB > hard $(sb_gib "$ANON_HARD")"
       [ "$hot" -ge 2 ] && reason="psi full $psi > $PSI_KILL twice"
+      [ -n "$c" ] && [ "$MEM_HIGH" -gt 0 ] && [ "$c" -gt $((MEM_HIGH - CURRENT_GUARD)) ] && [ "$hot" -ge 1 ] &&
+        reason="memory.current within $((CURRENT_GUARD / 1048576)) MiB of memory.high with PSI rising"
       if [ -n "$reason" ]; then
         echo "$reason" >"$work.stop"; echo "heavy: GUARD stop — $reason" >&2; kill_tree "$child"; break
       fi
@@ -111,7 +120,8 @@ wait "$child"; code=$?
 # `wait` returns early when a trapped signal arrives — wait again for the real exit.
 while kill -0 "$child" 2>/dev/null; do wait "$child"; code=$?; done
 t1=$(date +%s%3N)
-kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+# A guard/duration stop is the monitor's own kill_tree — let it finish its KILL pass rather than cut it short.
+if [ -e "$work.stop" ]; then wait "$mon" 2>/dev/null; else kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null; fi
 [ -n "$slot" ] && rm -f "$slot"
 
 read -r pk_pids pk_anon pk_cur pk_thr pk_rss pk_psi pk_cores 2>/dev/null <"$work.peak" ||

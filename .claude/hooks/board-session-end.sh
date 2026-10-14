@@ -5,7 +5,7 @@ INPUT=$(cat)
 B="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/board" 2>/dev/null && pwd)" || exit 0
 [ -f "$B/lib.sh" ] || exit 0
 . "$B/lib.sh"
-[ -d "${BOARD_DIR%/*}" ] || exit 0
+[ -d "${BOARD_DIR%/*}" ] && [ -r "$CG/memory.stat" ] || exit 0  # container-only: no cgroup (Mac, CI) → nothing to do
 
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
 PID=$(sb_claude_pid "$PPID") || exit 0

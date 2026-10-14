@@ -29,7 +29,7 @@ export type DevRequest = {
 export type DevDecision =
   | { kind: 'grant' }
   | { kind: 'renew' }
-  | { kind: 'takeover'; reason: 'expired' | 'dead' | 'forced'; previous: DevLease }
+  | { kind: 'takeover'; reason: 'expired' | 'dead' | 'resumed' | 'forced'; previous: DevLease }
   | { kind: 'wait'; holder: DevLease };
 
 export type Alive = (pid: number, start: string) => boolean;
@@ -44,13 +44,21 @@ export function decideDev(
   if (current.holderPid === req.pid && current.holderStart === req.start) return { kind: 'renew' };
   if (Date.parse(current.expiresAt) <= now.getTime())
     return { kind: 'takeover', reason: 'expired', previous: current };
-  // A gone holder keeps the lease until TTL (dev testing outlives a session restart); a dead one that
-  // never said goodbye (crash, container restart) loses it at once.
+  // A gone holder keeps the lease until TTL (dev testing outlives a session restart) — and the restarted
+  // session on the same branch picks it back up; a dead holder that never said goodbye (crash, container
+  // restart) loses it at once.
+  if (current.holderGone && current.branch === req.branch)
+    return { kind: 'takeover', reason: 'resumed', previous: current };
   if (!current.holderGone && !alive(current.holderPid, current.holderStart))
     return { kind: 'takeover', reason: 'dead', previous: current };
   if (req.force) return { kind: 'takeover', reason: 'forced', previous: current };
   return { kind: 'wait', holder: current };
 }
+
+// Whole seconds, like every other board timestamp (sb_now, jq `todate` on renew) — a renewal must never
+// read as earlier than the grant.
+const isoSec = (ms: number) =>
+  new Date(Math.floor(ms / 1000) * 1000).toISOString().replace('.000Z', 'Z');
 
 export function devLease(req: DevRequest, now: Date, note?: string): DevLease {
   return {
@@ -59,8 +67,8 @@ export function devLease(req: DevRequest, now: Date, note?: string): DevLease {
     holderStart: req.start,
     holderName: req.name,
     branch: req.branch,
-    acquiredAt: now.toISOString(),
-    expiresAt: new Date(now.getTime() + req.ttlSec * 1000).toISOString(),
+    acquiredAt: isoSec(now.getTime()),
+    expiresAt: isoSec(now.getTime() + req.ttlSec * 1000),
     ttlSec: req.ttlSec,
     ...(note ? { note } : {}),
   };

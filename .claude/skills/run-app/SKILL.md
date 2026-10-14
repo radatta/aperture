@@ -19,12 +19,13 @@ So you launch with **no env flags** — `pnpm dev` is already in a screenshot-ab
 ## Launch Vite
 
 Inside the container, launch it through the session board's heavy wrapper so other sessions see it and its
-peak usage lands in the history (`docs/ops/SESSION-BOARD.md`); keep its PID and its output (`$SCRATCH` is the
-session scratchpad, _Browser setup_ below):
+peak usage lands in the history (`docs/ops/SESSION-BOARD.md`). Shell variables don't survive between Bash
+tool calls, so its PID and output go to files (`$SCRATCH` is the session scratchpad, _Browser setup_ below):
 
 ```bash
-cd /path/to/aperture && HEAVY_CLASS=dev scripts/board/heavy.sh -- pnpm dev >"$SCRATCH/vite.log" 2>&1 &
-DEV_PID=$!
+cd /path/to/aperture
+{ HEAVY_CLASS=dev scripts/board/heavy.sh -- pnpm dev >"$SCRATCH/vite.log" 2>&1 & }
+echo $! >"$SCRATCH/dev.pid"   # the wrapper's PID — `cd … && … &` would background the whole list instead
 ```
 
 (On a bare Mac there is no board: plain `pnpm dev`, same redirect.)
@@ -39,7 +40,7 @@ for _ in $(seq 40); do
   PORT=$(sed 's/\x1b\[[0-9;]*m//g' "$SCRATCH/vite.log" | grep -oE 'localhost:[0-9]+' | head -1 | cut -d: -f2)
   [ -n "$PORT" ] && break; sleep 1
 done
-echo "vite on $PORT"
+echo "vite on $PORT"   # a later Bash call re-reads it with the same sed line
 ```
 
 Poll for readiness (portable — works on macOS and Linux; don't assume `curl`). Keep the probe in a
@@ -55,8 +56,8 @@ JS
 done
 ```
 
-Stop it by its PID: `kill $DEV_PID` (the wrapper stops its whole process tree). Never `pkill -f vite` —
-other sessions' dev servers match too.
+Stop it by its PID: `kill "$(cat "$SCRATCH/dev.pid")"` (the wrapper stops its whole process tree). Never
+`pkill -f vite` — other sessions' dev servers match too.
 
 ## Browser setup — install OUTSIDE the repo
 

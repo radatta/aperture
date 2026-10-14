@@ -10,7 +10,7 @@ INPUT=$(cat)
 B="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/board" 2>/dev/null && pwd)" || exit 0
 [ -f "$B/lib.sh" ] || exit 0
 . "$B/lib.sh"
-[ -d "${BOARD_DIR%/*}" ] || exit 0
+[ -d "${BOARD_DIR%/*}" ] && [ -r "$CG/memory.stat" ] || exit 0  # container-only: no cgroup (Mac, CI) → nothing to do
 
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
 PID=$(sb_claude_pid "$PPID") && [ -d "$BOARD_DIR/sessions" ] && : >"$BOARD_DIR/sessions/$PID.tool"
@@ -33,7 +33,8 @@ emit() {  # $1 decision (allow|deny), $2 message — message over stdin, never a
 }
 
 NOW=$(cat "$BOARD_DIR/status.line" 2>/dev/null)
-OTHERS=$(compgen -G "$BOARD_DIR/leases/heavy/*.json" | wc -l)
+# Running heavy jobs, not counting dev servers — a long-lived one would make every command an offer.
+OTHERS=$(grep -L '"class":"dev"' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | wc -l)
 
 # The measured edge — only when enforcing, and only worth a node start once live load is past soft.
 if [ "$(sb_limit '.enforce')" = true ]; then
@@ -43,7 +44,7 @@ if [ "$(sb_limit '.enforce')" = true ]; then
     . "$B/lease.sh"
     dec=$(sb_locked _heavy_try "" 0 "$CLASS" guard 0 0 2>/dev/null)  # "" = decide only, no slot
     if [ "$(jq -r .wait <<<"$dec" 2>/dev/null)" = true ]; then
-      emit deny "$(jq -r --arg c "$CLASS" --arg now "$NOW" '"Held at the measured edge: this \($c) job would take the container to \(.predicted.pids) pids / \(.predicted.anonMiB) MiB, past the hard line (\(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)). Board: \($now). Run it as `scripts/board/heavy.sh -- <cmd>` — it waits for room (up to 10 min) and then runs; `scripts/board/board.sh status` shows who is running what."' <<<"$dec")"
+      emit deny "$(jq -r --arg c "$CLASS" --arg now "$NOW" '"Held at the measured edge: this \($c) job would take the container to \(.predicted.pids) pids / \(.predicted.anonMiB) MiB, past the hard line (\(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)). Board: \($now). Run it as `scripts/board/heavy.sh -- <cmd>` — it waits up to 90 s for room, then runs or says who holds it; `scripts/board/board.sh status` shows who is running what."' <<<"$dec")"
     fi
   fi
 fi
