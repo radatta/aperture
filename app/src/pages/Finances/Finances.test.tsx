@@ -31,6 +31,21 @@ async function linked(): Promise<ApiClient> {
 
 const group = async (name: RegExp) => (await screen.findAllByRole('group', { name }))[0]!;
 
+// screen.findAllByRole('button', { name }) narrowed to list rows: the same role + name + visibility check,
+// run per <li> whose text matches instead of across the page, which re-ran on every poll (~70–100ms a scan
+// on the All tab). Checked identical to the page-wide query at every call site here (2026-10-12).
+const findRows = (name: RegExp) =>
+  waitFor(
+    () => {
+      const rows = [...document.querySelectorAll('li')]
+        .filter((li) => (li.textContent ?? '').search(name) >= 0)
+        .flatMap((li) => within(li).queryAllByRole('button', { name }));
+      if (!rows.length) throw new Error(`Unable to find a row button named ${name}`);
+      return rows;
+    },
+    { container: document.body },
+  );
+
 describe('Finances page', () => {
   it('is reachable from the nav', async () => {
     renderApp({ path: '/' });
@@ -168,7 +183,7 @@ describe('Finances page', () => {
     await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
     await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'not_spending' });
     renderApp({ api, path: '/finances/all' });
-    await screen.findAllByRole('button', { name: /Amazon/ });
+    await findRows(/Amazon/);
     await user.click(document.querySelector('[data-txn-id="fx-refund-1"]') as HTMLElement);
     const dialog = await screen.findByRole('dialog');
     expect(
@@ -182,7 +197,7 @@ describe('Finances page', () => {
     await api.setFinanceBucket({ ids: ['fx-rent'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
     expect(await screen.findByText('$400 over')).toBeTruthy(); // $1,000.00 of rent in Budget
-    await user.click((await screen.findAllByRole('button', { name: /Family/ }))[0]!);
+    await user.click((await findRows(/Family/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
     expect(within(dialog).getByText(/No Family charge found/)).toBeTruthy();
@@ -194,9 +209,7 @@ describe('Finances page', () => {
     const row = document.querySelector<HTMLElement>('[data-txn-id="fx-reimburse"]')!;
     expect(within(row).getByText(/counts \$1,000\.00/)).toBeTruthy();
     // The charge's detail lists the refund with what it counts.
-    const rentRow = (await screen.findAllByRole('button', { name: /Roommate/ })).find(
-      (el) => el.dataset.txnId === 'fx-rent',
-    )!;
+    const rentRow = (await findRows(/Roommate/)).find((el) => el.dataset.txnId === 'fx-rent')!;
     await user.click(rentRow);
     const charge = await screen.findByRole('dialog', { name: /Roommate/ });
     expect(within(charge).getByText(/Refunded \$1,000\.00 of \$1,000\.00/)).toBeTruthy();
@@ -212,7 +225,7 @@ describe('Finances page', () => {
     await api.setFinanceBucket({ ids: [target.id], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
     expect(await screen.findByText('$587 left')).toBeTruthy(); // $600 - $12.45
-    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const row = (await findRows(/Chipotle/))[0]!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
     await user.click(within(dialog).getByRole('radio', { name: 'Last period' }));
@@ -240,7 +253,7 @@ describe('Finances page', () => {
     await api.setFinanceBucket({ ids: ['fx-card-8'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
     expect(await screen.findByText('$565 left')).toBeTruthy(); // $600 − $34.99
-    const refundRow = (await screen.findAllByRole('button', { name: /Amazon.*\+\$34\.99/ }))[0]!;
+    const refundRow = (await findRows(/Amazon.*\+\$34\.99/))[0]!;
     await user.click(refundRow);
     const dialog = await screen.findByRole('dialog', { name: /Refund: Amazon/ });
     // The best match is the $34.99 Amazon charge — one click.
@@ -268,7 +281,7 @@ describe('Finances page', () => {
     expect(await screen.findByText(/Day 9 · .* since your .* payment/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Start the period there' })).toBeNull();
 
-    const payment = (await screen.findAllByRole('button', { name: /\+\$745\.18/ }))[0]!;
+    const payment = (await findRows(/\+\$745\.18/))[0]!;
     expect(payment.textContent).toMatch(/starts period/);
     await user.click(payment);
     const dialog = await screen.findByRole('dialog', { name: /^Payment: / });
@@ -283,7 +296,7 @@ describe('Finances page', () => {
   it('money into checking opens with a collapsed "Link as a refund"', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });
-    const payroll = (await screen.findAllByRole('button', { name: /Acme Corp/ }))[0]!;
+    const payroll = (await findRows(/Acme Corp/))[0]!;
     await user.click(payroll);
     const dialog = await screen.findByRole('dialog', { name: /^Money in: Acme Corp/ });
     expect(within(dialog).queryByRole('radiogroup', { name: 'Bucket' })).toBeNull();
@@ -300,7 +313,7 @@ describe('Finances page', () => {
     await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
     renderApp({ api, path: '/finances/all' });
     expect(await screen.findByText('$561 left')).toBeTruthy(); // $600 − $38.61
-    const refundRow = (await screen.findAllByRole('button', { name: /Safeway.*\+\$38\.61/ }))[0]!;
+    const refundRow = (await findRows(/Safeway.*\+\$38\.61/))[0]!;
     await user.click(refundRow);
     const dialog = await screen.findByRole('dialog', { name: /^Money in: Safeway/ });
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
@@ -314,7 +327,7 @@ describe('Finances page', () => {
   it('a card credit can be marked as the period start from its detail, and unmarked', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });
-    await user.click((await screen.findAllByRole('button', { name: /Amazon.*\+\$34\.99/ }))[0]!);
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
     await user.click(
       within(dialog).getByRole('button', { name: /card payment — start the period here/ }),
@@ -405,7 +418,7 @@ describe('Finances page', () => {
   it('closing an All-tab detail puts focus back on its row — even after it moves section', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });
-    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const row = (await findRows(/Chipotle/))[0]!;
     const id = row.getAttribute('data-txn-id');
     await user.click(row);
     let dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
@@ -426,7 +439,7 @@ describe('Finances page', () => {
     const api = await linked();
     const save = vi.spyOn(api, 'setFinanceNote');
     renderApp({ api, path: '/finances/all' });
-    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const row = (await findRows(/Chipotle/))[0]!;
     const id = row.getAttribute('data-txn-id')!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
@@ -441,7 +454,7 @@ describe('Finances page', () => {
     const user = userEvent.setup();
     const api = await linked();
     renderApp({ api, path: '/finances/all' });
-    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const row = (await findRows(/Chipotle/))[0]!;
     const id = row.getAttribute('data-txn-id')!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
@@ -476,14 +489,14 @@ describe('Finances page', () => {
     const user = userEvent.setup();
     const api = await linked();
     renderApp({ api, path: '/finances/all' });
-    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const row = (await findRows(/Chipotle/))[0]!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
     await user.click(within(dialog).getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(document.activeElement).toBe(row));
     fireEvent.pointerDown(document.body);
     act(() => row.blur());
-    const other = (await screen.findAllByRole('button', { name: /Uber/ }))[0]!;
+    const other = (await findRows(/Uber/))[0]!;
     await refetchAfter(api, () => api.setFinanceNote(other.getAttribute('data-txn-id')!, 'x'));
     expect(document.activeElement).not.toBe(row);
   });
@@ -492,7 +505,7 @@ describe('Finances page', () => {
     const user = userEvent.setup();
     const api = await linked();
     renderApp({ api, path: '/finances/all' });
-    const row = (await screen.findAllByRole('button', { name: /Chipotle/ }))[0]!;
+    const row = (await findRows(/Chipotle/))[0]!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
     await user.click(within(dialog).getByRole('button', { name: 'Done' }));
@@ -501,7 +514,7 @@ describe('Finances page', () => {
       row.blur(); // no tap: the row still claims focus back
       row.setAttribute('disabled', ''); // as when a change makes it a transfer
     });
-    const other = (await screen.findAllByRole('button', { name: /Uber/ }))[0]!;
+    const other = (await findRows(/Uber/))[0]!;
     await refetchAfter(api, () => api.setFinanceNote(other.getAttribute('data-txn-id')!, 'x'));
     expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Transactions' }));
   });
@@ -516,7 +529,7 @@ describe('Finances page', () => {
       return real(input);
     });
     renderApp({ api, path: '/finances/all' });
-    const row = (await screen.findAllByRole('button', { name: /Uber/ }))[0]!;
+    const row = (await findRows(/Uber/))[0]!;
     const id = row.getAttribute('data-txn-id')!;
     await user.click(row);
     const dialog = await screen.findByRole('dialog', { name: /Uber/ });
@@ -544,7 +557,7 @@ describe('Finances page', () => {
   it('the detail opens on the checked bucket, and arrow keys move and select', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });
-    await user.click((await screen.findAllByRole('button', { name: /Uber/ }))[0]!);
+    await user.click((await findRows(/Uber/))[0]!);
     const dialog = await screen.findByRole('dialog', { name: /Uber/ });
     const unsorted = within(dialog).getByRole('radio', { name: 'Unsorted' });
     await waitFor(() => expect(document.activeElement).toBe(unsorted));
