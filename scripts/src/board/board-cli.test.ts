@@ -198,15 +198,17 @@ describe('board.sh dev lease after a restart', () => {
 });
 
 describe('sampler.sh', () => {
-  it('categorises every process by its command line, not just the first one /proc lists', () => {
-    // comm is `sleep`; only argv says vitest — so this lands in `vitest` only if args are read per process
+  it('reads every process’s own command line, not just the first one /proc lists', () => {
+    // comm is `sleep`; only argv says vitest — its row carries that only if args are read per process
+    // (asserted on this pid's row: the test runner's own workers would satisfy a category count anyway)
     const c = spawn('sleep', ['300'], { argv0: 'vitest', stdio: 'ignore' });
     children.push(c);
-    const r = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], {
+    const r = spawnSync('bash', ['-c', `. ${join(boardDir, 'lib.sh')}; sb_procs args`], {
       env,
       encoding: 'utf8',
     });
-    expect(JSON.parse(r.stdout).cats.vitest.n).toBeGreaterThanOrEqual(1);
+    const row = r.stdout.split('\n').find((l) => l.startsWith(`${c.pid}\t`));
+    expect(row?.split('\t')[6]).toMatch(/^vitest 300/);
   });
 });
 
@@ -295,6 +297,31 @@ describe('heavy.sh', () => {
     expect(['gone', 'Z']).toContain(state());
     expect(readdirSync(join(tmp, 'board/leases/heavy'))).toEqual([]);
   }, 20000);
+
+  it('escalates to KILL for a child that ignores TERM', async () => {
+    const marker = join(tmp, 'kid.pid');
+    // the stubborn sleep ignores TERM, so only the KILL passes can end it
+    const script = `( trap "" TERM; sleep 300 ) & echo $! >${marker}; wait`;
+    const c = spawn('bash', [join(boardDir, 'heavy.sh'), '--', 'bash', '-c', script], {
+      env: { ...env, HEAVY_CLASS: 'build' },
+      cwd: tmp,
+      stdio: 'ignore',
+    });
+    for (let i = 0; i < 100 && !existsSync(marker); i++)
+      await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 300)); // let the subshell exec sleep
+    const kid = Number(readFileSync(marker, 'utf8'));
+    const exited = new Promise<number | null>((r) => c.on('exit', (code) => r(code)));
+    c.kill('SIGTERM');
+    expect(await exited).toBe(143);
+    let state = 'gone';
+    try {
+      state = readFileSync(`/proc/${kid}/stat`, 'utf8').split(') ')[1]![0]!;
+    } catch {
+      // gone
+    }
+    expect(['gone', 'Z']).toContain(state);
+  }, 30000);
 
   it('never takes a slot or waits for a single-file test run', () => {
     cgroup(3700, 2 * GiB);

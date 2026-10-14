@@ -13,10 +13,16 @@ set -u
 
 me=$( [ -n "${CLAUDE_PID:-}" ] && echo "$CLAUDE_PID" || sb_claude_pid "$PPID" ) || me=0
 # Quiet window only — checked before detaching, so a refusal reaches the caller. "Working" = in any of the
-# last 10 samples (5 min) or now.
+# last 10 samples (5 min, across the UTC day boundary) or now. Can't read the board → refuse: this is the
+# one script built to push the container to failure.
 if [ "${EDGE_FORCE:-0}" != 1 ]; then
-  others=$( { tail -n 10 "$BOARD_DIR/history/samples-$(sb_today).jsonl" 2>/dev/null; bash "$SB_SCRIPTS/sampler.sh" --print; } |
-    jq -rs --argjson me "$me" '[.[].sessions[]? | select(.pid != $me and .state == "working") | .name] | unique | join(", ")')
+  cant() { echo "edge: can't read the board — refusing (EDGE_FORCE=1 overrides)" >&2; exit 3; }
+  now=$(bash "$SB_SCRIPTS/sampler.sh" --print) && [ -n "$now" ] || cant
+  mapfile -t recent < <(ls -1 "$BOARD_DIR"/history/samples-*.jsonl 2>/dev/null | sort | tail -n 2)
+  # Line by line, skipping a torn line from a concurrent append rather than failing the whole read.
+  others=$( { [ "${#recent[@]}" -eq 0 ] || cat "${recent[@]}" | tail -n 10; printf '%s\n' "$now"; } |
+    jq -Rrs --argjson me "$me" '[split("\n")[] | fromjson? // empty | .sessions[]? |
+      select(.pid != $me and .state == "working") | .name] | unique | join(", ")') || cant
   [ -z "$others" ] || { echo "edge: refusing — working in the last 5 min: $others (EDGE_FORCE=1 overrides)" >&2; exit 3; }
 fi
 

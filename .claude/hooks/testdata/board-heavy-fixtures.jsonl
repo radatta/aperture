@@ -17,3 +17,7 @@
 {"expect":"deny","why":"enforce on and anon past the measured hard line","cmd":"pnpm --filter @aperture/app test","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 15032385536\nfile 0\n"}}
 {"expect":"nudge","why":"enforce on, over soft but under hard — still only an offer","cmd":"pnpm typecheck","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 12884901888\nfile 0\n"}}
 {"expect":"nudge","why":"another session's heavy job running — the offer repeats with the count","cmd":"pnpm test","running":2}
+{"expect":"allow","why":"already offered for this class, and the only heavy job running is a dev server — no repeat","cmd":"pnpm test","nudged":["test"],"running":1,"runningClass":"dev"}
+{"expect":"nudge","why":"already offered, but another session's test run is going — the offer repeats","cmd":"pnpm test","nudged":["test"],"running":1,"runningClass":"test"}
+{"expect":"allow","why":"outside the container (no cgroup memory.stat) — silent pass-through","cmd":"pnpm test","cgroup":{"memory.stat":null}}
+{"expect":"nudge","why":"unreadable limits.json fails open to the offer — never a deny, even past hard","cmd":"pnpm test","limitsRaw":"{","cgroup":{"pids.current":"3700\n"}}

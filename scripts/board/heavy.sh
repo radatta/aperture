@@ -27,6 +27,7 @@ me=$$
 read -r _ me_start < <(sb_stat "$me")
 owner=$( [ -n "${CLAUDE_PID:-}" ] && echo "$CLAUDE_PID" || sb_claude_pid "$PPID" ) || owner=0
 work="${TMPDIR:-/tmp}/aperture-heavy.$me"
+rm -f "$work".*  # a reused pid's leftovers (a stale `duration` stop would turn a failure into exit 0)
 eval "$(sb_thresholds)"
 
 # Container-only tuning, per limits.json `tuning.test` (null until measured — answer 3: no guessing).
@@ -68,8 +69,15 @@ kill_tree() {
 pids0=$(cg_pids); anon0=$(cg_anon); oom0=$(cg_oom_kill); high0=$(cg_high_events)
 t0=$(date +%s%3N)
 
+# Traps before the fork, so a signal in the gap can't kill the wrapper and orphan the command (subshells
+# and background children reset caught traps, so neither the command nor the monitor inherits these).
+child= sig=
+on_signal() { [ -n "$child" ] && kill_tree "$child"; }
+trap 'on_signal; trap - TERM; sig=15' TERM
+trap 'on_signal; trap - INT; sig=2' INT
 "$@" &
 child=$!
+[ -n "$sig" ] && kill_tree "$child"  # signalled before $child was known
 
 # 1 Hz sampler (subshell): tracks peaks, renews the slot, enforces stop conditions under HEAVY_GUARD=1.
 (
@@ -112,10 +120,6 @@ child=$!
 ) &
 mon=$!
 
-on_signal() { kill_tree "$child"; }
-trap 'on_signal; trap - TERM; sig=15' TERM
-trap 'on_signal; trap - INT; sig=2' INT
-sig=
 wait "$child"; code=$?
 # `wait` returns early when a trapped signal arrives — wait again for the real exit.
 while kill -0 "$child" 2>/dev/null; do wait "$child"; code=$?; done
@@ -127,7 +131,7 @@ if [ -e "$work.stop" ]; then wait "$mon" 2>/dev/null; else kill "$mon" 2>/dev/nu
 read -r pk_pids pk_anon pk_cur pk_thr pk_rss pk_psi pk_cores 2>/dev/null <"$work.peak" ||
   { pk_pids=$pids0 pk_anon=$anon0 pk_cur=0 pk_thr=0 pk_rss=0 pk_psi=0 pk_cores=0; }
 stop=$(cat "$work.stop" 2>/dev/null)
-rm -f "$work.peak" "$work.stop"
+rm -f "$work".*
 oomd=$(( $(cg_oom_kill) - oom0 )); highd=$(( $(cg_high_events) - high0 ))
 signal=null; [ "$code" -gt 128 ] && signal=$((code - 128))
 

@@ -21,12 +21,18 @@ set -- "${args[@]+"${args[@]}"}"
 
 me_pid() { [ -n "$OPT_PID" ] && { printf '%s' "$OPT_PID"; return; }; [ -n "${CLAUDE_PID:-}" ] && { printf '%s' "$CLAUDE_PID"; return; }; sb_claude_pid "$PPID"; }
 me_file() { printf '%s/sessions/%s.json' "$BOARD_DIR" "$1"; }
-# Two lines, branch then name, for a session in $1 (cwd) — lines, not a TAB pair: `read` drops an empty leading field. The name is its tmux window — the session name the status
-# line sets, and the SendMessage address — falling back to the branch, then the cwd's basename.
+# Two lines (not a TAB pair: `read` drops an empty leading field): branch, then name, for session $2 in cwd $1.
+# The name is its tmux window — the session name the status line sets, and the SendMessage address — but only
+# when $2 is that pane's own claude (the pane process or its child, as sample.awk attributes it): a claude
+# started from inside another session's pane inherits TMUX_PANE. Else the branch, then the cwd's basename.
 me_ident() {
-  local branch win=
+  local branch win= pp ps
   branch=$(git -C "$1" branch --show-current 2>/dev/null)
-  [ -n "${TMUX_PANE:-}" ] && win=$(tmux display-message -p -t "$TMUX_PANE" '#W' 2>/dev/null)
+  if [ -n "${TMUX_PANE:-}" ] && [ -n "${2:-}" ]; then
+    read -r pp win < <(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid} #W' 2>/dev/null)  # pid has no spaces; the name may
+    read -r ps _ < <(sb_stat "$2")
+    [ "${pp:-x}" = "$2" ] || [ "${pp:-x}" = "${ps:-y}" ] || win=
+  fi
   printf '%s\n%s\n' "$branch" "${win:-${branch:-${1##*/}}}"
 }
 
@@ -37,10 +43,11 @@ cmd_register() {
   pid=$(me_pid) || { echo "board: no claude ancestor" >&2; return 1; }
   cwd="${OPT_CWD:-$(pwd)}"; sid="${OPT_SID:-${CLAUDE_CODE_SESSION_ID:-}}"
   read -r ps start < <(sb_stat "$pid")
-  { read -r branch; read -r name; } < <(me_ident "$cwd")
+  { read -r branch; read -r name; } < <(me_ident "$cwd" "$pid")
   sb_init_dirs; f=$(me_file "$pid")
   # SessionStart also fires on resume/compact: keep startedAt/note/lastPromptAt for the same process.
-  { [ -s "$f" ] && cat "$f" || echo '{}'; } | jq -c --argjson pid "$pid" --arg start "$start" --arg sid "$sid" \
+  # A missing, empty or corrupt file starts fresh rather than sticking (sb_write refuses empty output).
+  { jq -ce . "$f" 2>/dev/null || echo '{}'; } | jq -c --argjson pid "$pid" --arg start "$start" --arg sid "$sid" \
     --arg name "$name" --arg branch "$branch" --arg cwd "$cwd" --arg now "$(sb_now)" '
     (if .pidStart == $start then . else {} end) as $old |
     {v: 1, pid: $pid, pidStart: $start, sid: $sid, name: $name, branch: $branch, cwd: $cwd,
@@ -55,7 +62,7 @@ cmd_heartbeat() {
   f=$(me_file "$pid")
   [ -s "$f" ] || cmd_register || return 1
   # Branch and name can change mid-session (a session that starts in detached /workspace, a renamed window).
-  { read -r branch; read -r name; } < <(me_ident "${OPT_CWD:-$(pwd)}")
+  { read -r branch; read -r name; } < <(me_ident "${OPT_CWD:-$(pwd)}" "$pid")
   jq -c --arg s "$state" --arg now "$(sb_now)" --arg branch "$branch" --arg name "$name" '
     .state = $s | .updatedAt = $now | .branch = $branch | .name = $name |
     if $s == "working" then .lastPromptAt = $now else .lastStopAt = $now end' "$f" | sb_write "$f"

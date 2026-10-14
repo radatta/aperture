@@ -9,7 +9,7 @@ import {
   type DevLease,
   type DevRequest,
 } from './lease.ts';
-import { parseLimits } from './limits.ts';
+import { classCost, parseLimits, thresholds } from './limits.ts';
 
 const now = new Date('2026-10-13T18:00:00Z');
 const req = (patch: Partial<DevRequest> = {}): DevRequest => ({
@@ -125,11 +125,20 @@ describe('decideHeavy', () => {
   });
 
   it('bites only past the hard line: exactly at it is a nudge', () => {
-    // a test job costs 320 pids (shipped classes), so live 3448 lands the prediction exactly on hard 3768
-    const at = decideHeavy(limits(true), ll, { ...idle, pids: 3448 }, [], { class: 'test' }, now);
-    expect(at).toMatchObject({ verdict: 'nudge', wait: false, predicted: { pids: 3768 } });
-    const past = decideHeavy(limits(true), ll, { ...idle, pids: 3449 }, [], { class: 'test' }, now);
-    expect(past).toMatchObject({ verdict: 'over-hard', wait: true, predicted: { pids: 3769 } });
+    // derived, not hard-coded: the quiet window rewrites the class costs in limits.json
+    const hard = thresholds(limits(true), ll).pidsHard;
+    const onHard = hard - classCost(limits(true), 'test').pids; // live pids that land exactly on hard
+    const at = decideHeavy(limits(true), ll, { ...idle, pids: onHard }, [], { class: 'test' }, now);
+    expect(at).toMatchObject({ verdict: 'nudge', wait: false, predicted: { pids: hard } });
+    const past = decideHeavy(
+      limits(true),
+      ll,
+      { ...idle, pids: onHard + 1 },
+      [],
+      { class: 'test' },
+      now,
+    );
+    expect(past).toMatchObject({ verdict: 'over-hard', wait: true, predicted: { pids: hard + 1 } });
   });
 
   it('counts young slots (not ramped yet) and trusts live numbers for older ones', () => {

@@ -136,7 +136,9 @@ The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost
 with a one-line note. Past hard → with `enforce: false` (shipped) run anyway and log `wouldWait`; with
 `enforce: true` wait for room, polling every 2 s, up to `--wait` (90 s — inside the Bash tool's 120 s
 timeout, so the message reaches Claude), then exit **75** naming the jobs that hold the room: tell the user
-rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the background. Slots whose wrapper died are dropped on the next acquire and by `gc`.
+rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the background. (Room that frees
+late in the wait still starts the command inside the same call, so with `enforce: true` give long jobs a
+longer Bash timeout or run them in the background.) Slots whose wrapper died are dropped on the next acquire and by `gc`.
 
 ## `scripts/board/limits.json`
 
