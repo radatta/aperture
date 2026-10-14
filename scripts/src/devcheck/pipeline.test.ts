@@ -232,6 +232,17 @@ describe('runPipeline', () => {
     expect(r.codes).toContain('LEFTOVERS');
   });
 
+  it('the sweep also refuses to delete a leftover that has unrecorded parts', async () => {
+    const w = world({ existing: ['old1'] });
+    w.tasks.set('users-part', { id: 'users-part', title: 'mine', parentId: 'old1' });
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'old1' }]);
+    const r = await runPipeline(deps(w, [], ledger));
+    expect(w.deleted).toEqual([]);
+    expect(r.swept).toEqual([]);
+    expect(r.blockedDeletes).toEqual(['old1 (unrecorded parts: users-part)']);
+    expect(r.codes).toContain('LEFTOVERS');
+  });
+
   it('LEFTOVERS when a delete does not take', async () => {
     const w = world();
     w.api.writes.deleteTask = async () => undefined; // server ignores it

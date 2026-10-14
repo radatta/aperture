@@ -48,8 +48,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes.
 - **Deletes by recorded id only.** Every task the run creates is recorded in a ledger from the server's create
   response — the API client's `createTask`, and the browser's `createTask`/`createTasks`/`splitTask`
-  responses (a split's follow-up, and its parent only when the split task was already recorded — deleting a
-  parent deletes its parts). Cleanup deletes ledger ids and nothing else; the delete
+  responses (a split's follow-up, and its parent only when the split task was already recorded and the parent
+  didn't exist before the run — deleting a parent deletes its parts). Cleanup deletes ledger ids and nothing else; the delete
   wrapper refuses any other id (`LEDGER_GUARD`). Never by title or marker word — the model rewrites titles.
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
@@ -85,22 +85,22 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
 
-| Code                       | Means                                                                                          | Do                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `ENV_MISSING`              | env file absent or a key missing                                                               | setup step 1                                                            |
-| `PW_MISSING`               | no Playwright in `~/pw`                                                                        | setup step 2                                                            |
-| `DEPLOY_NOT_FOUND`         | no deploy run for the SHA                                                                      | was it pushed to dev?                                                   |
-| `DEPLOY_FAILED`            | the run failed                                                                                 | read the run; a failed `changes` job means dev was behind main — rebase |
-| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                     | the message names what it serves                                        |
-| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                         | check the env file's host                                               |
-| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                       | screenshot in `shots/`; update `login.ts` deliberately                  |
-| `AUTH_REJECTED`            | Cognito refused the credentials                                                                | password expired or user disabled — operator                            |
-| `WRONG_USER`               | the session isn't the test user                                                                | delete `.secrets/devcheck.dev.state.json`, rerun                        |
-| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                     | rerun; persistent → service-worker bug                                  |
-| `STEP_FAILED`              | a scenario step threw                                                                          | its row has the error and a screenshot                                  |
-| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                | a harness bug — never bypass                                            |
-| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, or an unrecorded task appeared | rerun (the sweep retries); else by hand                                 |
-| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                  | read the merged PRs, rebase, gate, push, rerun                          |
+| Code                       | Means                                                                                                                                    | Do                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                            |
+| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                            |
+| `DEPLOY_NOT_FOUND`         | no deploy run for the SHA                                                                                                                | was it pushed to dev?                                                   |
+| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `changes` job means dev was behind main — rebase |
+| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                        |
+| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                               |
+| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately                  |
+| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                            |
+| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                        |
+| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                                  |
+| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                                  |
+| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                            |
+| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                                 |
+| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, push, rerun                          |
 
 ## Writing a scenario
 

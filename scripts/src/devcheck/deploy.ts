@@ -76,7 +76,7 @@ export async function waitForDeploy(
     if (run?.status === 'completed') break;
     // A run should exist within a minute of the push; without one, waiting longer won't help.
     if (!run && deps.now() - start > 2 * 60_000) {
-      const latest = (await deps.listRuns())[0];
+      const latest = runs[0];
       throw new DevcheckError(
         'DEPLOY_NOT_FOUND',
         `no dev deploy for ${sha.slice(0, 7)} (latest dev run: ${latest ? latest.headSha.slice(0, 7) : 'none'}) — was the branch pushed to dev?`,
@@ -100,7 +100,8 @@ export async function waitForDeploy(
 
   const edgeStart = deps.now();
   for (;;) {
-    const marker = parseMarker(await deps.fetchShell());
+    // A network blip is "not yet", like a stale shell; the edge budget still bounds it.
+    const marker = parseMarker(await deps.fetchShell().catch(() => ''));
     if (marker === sha) return run;
     if (deps.now() - edgeStart > budget.edgeMs)
       throw new DevcheckError(

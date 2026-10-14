@@ -44,10 +44,13 @@ case "$TOOL" in
   *) exit 0 ;;
 esac
 
-source "${BASH_SOURCE[0]%/*}/_hook-common.sh"
-LEDGER=""
-if hook_cd "$INPUT"; then
-  COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && LEDGER="${COMMON%/*}/localNotes/devcheck/mcp-ledger.dev.jsonl"
+# The ledger lives in the main checkout, found from THIS script's location — never from the session's cwd, which
+# can be anywhere (~/pw, a nested clone) and would read or write the wrong file, or none. MCP_DEV_LEDGER overrides
+# it for the fixture runner only.
+LEDGER="${MCP_DEV_LEDGER:-}"
+if [ -z "$LEDGER" ]; then
+  COMMON=$(git -C "${BASH_SOURCE[0]%/*}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+    && LEDGER="${COMMON%/*}/localNotes/devcheck/mcp-ledger.dev.jsonl"
 fi
 
 LINES=""
@@ -58,14 +61,16 @@ rec_state() {
   out=$(jq -rs --arg id "$1" 'any(.[]; .op == "created" and .id == $id)' "$LEDGER" 2>/dev/null) || { echo unknown; return; }
   [ "$out" = "true" ] && echo yes || echo no
 }
-# The parent a recorded task last had (created with, or reparented to); empty when none.
-parent_of() { jq -rs --arg id "$1" '[.[] | select(.id == $id and (.op == "created" or .op == "reparented"))] | last | .parent // ""' "$LEDGER" 2>/dev/null; }
+# The parent a recorded task last had (created with, or reparented to); empty when none, `?` when unreadable —
+# only an exact "" may ever count as standalone.
+parent_of() { jq -rs --arg id "$1" '[.[] | select(.id == $id and (.op == "created" or .op == "reparented"))] | last | .parent // ""' "$LEDGER" 2>/dev/null || echo '?'; }
 add() { LINES+="$(jq -nc --arg op "$1" --arg id "$2" --arg parent "${3:-}" '{op:$op, id:$id} + (if $parent == "" then {} else {parent:$parent} end)')"$'\n'; }
+# Appends LINES; non-zero when it couldn't (the Pre path then denies rather than lose a taint).
 flush() {
-  [ -n "$LINES" ] && [ -n "$LEDGER" ] || return 0
-  mkdir -p "${LEDGER%/*}" 2>/dev/null || return 0
+  [ -n "$LINES" ] || return 0
+  [ -n "$LEDGER" ] && mkdir -p "${LEDGER%/*}" 2>/dev/null || return 1
   printf '%s' "$LINES" | jq -c --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg via "mcp:${TOOL##*__}" --arg sid "$SID" \
-    '{t:$t} + . + {via:$via, session:$sid}' >>"$LEDGER"
+    '{t:$t} + . + {via:$via, session:$sid}' >>"$LEDGER" 2>/dev/null
 }
 
 # Anything that isn't a PostToolUse is treated as the Pre check — a missing event name must not allow a delete.
@@ -75,15 +80,16 @@ if [ "$EVENT" != "PostToolUse" ]; then
       # An attach is recorded BEFORE the call: update_task applies fields in order and can fail after the
       # parentId landed, and a failed call gets no PostToolUse. Recording an attach that then didn't happen only
       # costs an extra deny later; missing one that did could let a delete cascade into the user's task.
-      [ -n "$LEDGER" ] || exit 0
       NEWP=$(printf '%s' "$INPUT" | jq -r '.tool_input.parentId // ""')
       ID=$(printf '%s' "$INPUT" | jq -r '.tool_input.id // ""')
       [ -n "$NEWP" ] && [ -n "$ID" ] || exit 0
+      [ -n "$LEDGER" ] || deny "aperture-dev attach blocked: the ledger can't be located, so this attach can't be recorded."
       case "$(rec_state "$ID")" in
         yes) add reparented "$ID" "$NEWP" ;;
         *) [ "$(rec_state "$NEWP")" = no ] || add tainted "$NEWP" ;;
       esac
-      flush; exit 0 ;;
+      flush || deny "aperture-dev attach blocked: couldn't write the ledger, so this attach can't be recorded."
+      exit 0 ;;
     mcp__aperture-dev__delete_task) ;;
     *) exit 0 ;;
   esac

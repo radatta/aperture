@@ -42,11 +42,12 @@ only, deny text over stdin): the Bash guard's header.
 
 ## MCP dev ledger
 
-`mcp-dev-ledger.sh` (PreToolUse on `aperture-dev` `delete_task`, PostToolUse on its create/split/update/delete
+`mcp-dev-ledger.sh` (PreToolUse on `aperture-dev` `delete_task` and `update_task`, PostToolUse on its create/split/update/delete
 tools) records every task id an `aperture-dev` create returns and denies a delete of any id it never recorded,
 or of a recorded parent holding a part it didn't record (the server's delete cascades into parts) — the
 enforcement behind CLAUDE.md's standing approval for dev cleanup. Fails closed (no ledger, no jq, no event name
-→ deny); the PostToolUse half never blocks. Format: `docs/ops/DEV-CHECK.md` → *Ledgers*.
+→ deny; an attach it can't record is denied too); the PostToolUse half never blocks. It finds the ledger from
+its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → *Ledgers*.
 
 ## Testing
 

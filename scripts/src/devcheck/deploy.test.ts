@@ -73,8 +73,10 @@ describe('waitForDeploy', () => {
     const flaky = d.listRuns;
     d.listRuns = async () => (++calls === 1 ? Promise.reject(new Error('gh: network')) : flaky());
     expect((await waitForDeploy(SHA, d)).headSha).toBe(SHA);
-    d.listRuns = async () => Promise.reject(new Error('gh: auth'));
+    let failures = 0;
+    d.listRuns = async () => (failures++, Promise.reject(new Error('gh: auth')));
     await expect(waitForDeploy(SHA, d)).rejects.toThrow(/gh: auth/);
+    expect(failures).toBe(5);
   });
   it('DEPLOY_FAILED when the run failed', async () => {
     await expect(

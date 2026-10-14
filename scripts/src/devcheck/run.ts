@@ -71,14 +71,18 @@ export function takeLock(path: string): () => void {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0) throw err;
       const held = readFileSync(path, 'utf8');
-      let alive = true;
-      try {
-        process.kill(Number(held), 0);
-      } catch (e) {
-        alive = (e as NodeJS.ErrnoException).code !== 'ESRCH'; // EPERM: alive, just not ours
-      }
+      const pid = /^[1-9][0-9]*$/.test(held.trim()) ? Number(held) : 0; // garbage or empty → stale
+      let alive = pid > 0;
       if (alive)
-        throw new Error(`another dev check (pid ${held}) is running — wait for it`, { cause: err });
+        try {
+          process.kill(pid, 0);
+        } catch (e) {
+          alive = (e as NodeJS.ErrnoException).code !== 'ESRCH'; // EPERM: alive, just not ours
+        }
+      if (alive)
+        throw new Error(`another dev check (pid ${pid}) holds ${path} — wait for it`, {
+          cause: err,
+        });
       // Re-read before removing: another run may have taken over the stale lock in between.
       if (readFileSync(path, 'utf8') === held) unlinkSync(path);
     }

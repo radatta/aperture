@@ -51,9 +51,21 @@ describe('takeLock', () => {
   it('is exclusive while held, and free after release', () => {
     const path = join(dir(), 'run.lock');
     const release = takeLock(path);
-    expect(() => takeLock(path)).toThrow(/another dev check \(pid \d+\) is running/);
+    expect(() => takeLock(path)).toThrow(/another dev check \(pid \d+\) holds .*run\.lock/);
     release();
     takeLock(path)();
+  });
+  it("treats a live process it can't signal (EPERM) as alive", () => {
+    const path = join(dir(), 'run.lock');
+    writeFileSync(path, '1'); // init: alive, owned by root
+    expect(() => takeLock(path)).toThrow(/\(pid 1\) holds/);
+  });
+  it('takes over an empty or garbage lock file', () => {
+    for (const junk of ['', 'abc', '0']) {
+      const path = join(dir(), 'run.lock');
+      writeFileSync(path, junk);
+      takeLock(path)();
+    }
   });
   it('takes over a stale lock whose process is gone', () => {
     const path = join(dir(), 'run.lock');

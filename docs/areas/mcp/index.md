@@ -171,7 +171,7 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 
 Every write still needs the user's in-the-moment approval (CLAUDE.md → _Aperture MCP connector_), with two
 narrow exceptions: on prod, the one `CC blocked` / `CC done` task a session keeps (by its recorded id); on
-`aperture-dev`, deleting tasks the session itself created. The second is enforced, not trusted:
+`aperture-dev`, deleting tasks Claude created through the MCP (any session's — the ledger is shared). The second is enforced, not trusted:
 `.claude/hooks/mcp-dev-ledger.sh` records every id `create_task`, `create_tasks` and `split_task` return
 (a split's follow-up, and its parent only when the split task was recorded and standalone), and denies an
 `aperture-dev` `delete_task` for any id it never recorded. Deleting a parent deletes its parts server-side, so
