@@ -45,13 +45,11 @@ case "$TOOL" in
 esac
 
 # The ledger lives in the main checkout, found from THIS script's location — never from the session's cwd, which
-# can be anywhere (~/pw, a nested clone) and would read or write the wrong file, or none. MCP_DEV_LEDGER overrides
-# it for the fixture runner only.
-LEDGER="${MCP_DEV_LEDGER:-}"
-if [ -z "$LEDGER" ]; then
-  COMMON=$(git -C "${BASH_SOURCE[0]%/*}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
-    && LEDGER="${COMMON%/*}/localNotes/devcheck/mcp-ledger.dev.jsonl"
-fi
+# can be anywhere (~/pw, a nested clone) and would read or write the wrong file, or none. No override: the fixture
+# runner runs a copy of this script inside a throwaway repo instead.
+LEDGER=""
+COMMON=$(git -C "${BASH_SOURCE[0]%/*}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+  && LEDGER="${COMMON%/*}/localNotes/devcheck/mcp-ledger.dev.jsonl"
 
 LINES=""
 # Whether the ledger has a `created` line for $1: yes / no / unknown (unreadable or corrupt ledger).

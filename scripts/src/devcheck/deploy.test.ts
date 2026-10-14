@@ -93,6 +93,11 @@ describe('waitForDeploy', () => {
       /DEPLOY_TIMEOUT.*serves build stale/,
     );
   });
+  it('DEPLOY_TIMEOUT names an unreachable edge rather than "serves build none"', async () => {
+    const d = deps([[run({ headSha: SHA })]], []);
+    d.fetchShell = async () => Promise.reject(new Error('ECONNRESET'));
+    await expect(waitForDeploy(SHA, d)).rejects.toThrow(/DEPLOY_TIMEOUT.*unreachable: ECONNRESET/);
+  });
   it('DEPLOY_TIMEOUT when the run never completes', async () => {
     const d = deps([[run({ headSha: SHA, status: 'in_progress', conclusion: '' })]], []);
     await expect(

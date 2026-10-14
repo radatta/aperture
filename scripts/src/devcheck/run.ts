@@ -67,6 +67,10 @@ export function takeLock(path: string): () => void {
   for (let attempt = 0; ; attempt++) {
     try {
       writeFileSync(path, String(process.pid), { flag: 'wx' });
+      // Two runs that both found the same stale lock can each unlink and write; settle, then confirm it's ours.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      if (readFileSync(path, 'utf8') !== String(process.pid))
+        throw new Error(`lost the race for ${path} to another dev check — wait for it`);
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0) throw err;

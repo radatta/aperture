@@ -37,8 +37,8 @@ so the literal never sits in the repo for the CI secret scanner to flag.
 """
 
 import json
-import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,12 +78,7 @@ SUITES = [
 
 
 def decision_for(
-    hook: pathlib.Path,
-    tool: str,
-    tool_input: dict,
-    cwd: str | None,
-    extra: dict | None = None,
-    env: dict | None = None,
+    hook: pathlib.Path, tool: str, tool_input: dict, cwd: str | None, extra: dict | None = None
 ) -> tuple[str, str]:
     """Run the hook with a PreToolUse payload (plus `extra` keys); return its permission decision and reason."""
     payload = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input, **(extra or {})}
@@ -94,7 +89,6 @@ def decision_for(
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        env={**os.environ, **(env or {})},
     )
     if proc.returncode != 0:
         return f"ERROR(rc={proc.returncode}): {proc.stderr.strip()[:120]}", ""
@@ -133,8 +127,15 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None) -> tup
         ledger.write_text(
             "".join((e if isinstance(e, str) else json.dumps(e)) + "\n" for e in case["ledger"]), encoding="utf-8"
         )
-    # The MCP ledger hook finds its ledger from its own location; point it at this case's repo instead.
-    decision = decision_for(hook, tool, tool_input, repo, case.get("payload"), {"MCP_DEV_LEDGER": str(ledger)})
+    if hook.name == "mcp-dev-ledger.sh":
+        # It finds its ledger from its own location, so run a copy that lives in this throwaway repo — the real
+        # ledger is never touched, and the cwd in the payload can point anywhere.
+        hooks = pathlib.Path(repo) / ".claude" / "hooks"
+        hooks.mkdir(parents=True)
+        for name in (hook.name, "_hook-common.sh"):
+            shutil.copy2(hook.parent / name, hooks / name)
+        hook = hooks / hook.name
+    decision = decision_for(hook, tool, tool_input, repo, case.get("payload"))
     if "expect_ledger" in case or "ledger_count" in case:
         lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
         parsed = []

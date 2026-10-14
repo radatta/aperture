@@ -99,14 +99,22 @@ export async function waitForDeploy(
     );
 
   const edgeStart = deps.now();
+  let fetchError = '';
   for (;;) {
     // A network blip is "not yet", like a stale shell; the edge budget still bounds it.
-    const marker = parseMarker(await deps.fetchShell().catch(() => ''));
+    const marker = parseMarker(
+      await deps.fetchShell().then(
+        (html) => ((fetchError = ''), html),
+        (err: unknown) => ((fetchError = err instanceof Error ? err.message : String(err)), ''),
+      ),
+    );
     if (marker === sha) return run;
     if (deps.now() - edgeStart > budget.edgeMs)
       throw new DevcheckError(
         'DEPLOY_TIMEOUT',
-        `${DEV_ORIGIN} serves build ${marker ?? 'none'}, not ${sha.slice(0, 7)}`,
+        fetchError
+          ? `${DEV_ORIGIN} unreachable: ${fetchError}`
+          : `${DEV_ORIGIN} serves build ${marker ?? 'none'}, not ${sha.slice(0, 7)}`,
       );
     await deps.sleep(5_000);
   }
