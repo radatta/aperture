@@ -15,10 +15,10 @@ const limits = (patch: Partial<Limits> = {}): Limits => ({
 });
 
 describe('limits.json', () => {
-  it('ships valid, nudge-only, and unmeasured', () => {
+  it('ships valid, nudge-only, and measured at the live limits', () => {
     const l = parseLimits(shipped);
     expect(l.enforce).toBe(false);
-    expect(l.measuredLimits).toBeNull();
+    expect(l.measuredLimits).toEqual({ pidsMax: 4096, highMiB: 18432 });
     expect(Object.keys(l.classes)).toEqual(
       expect.arrayContaining(['test', 'ui', 'typecheck', 'lint', 'dev', 'build']),
     );
@@ -65,7 +65,8 @@ describe('staleness', () => {
   });
 
   it('flags placeholders and changed limits', () => {
-    expect(staleness(limits(), live, [], now)).toEqual([expect.stringMatching(/placeholders/)]);
+    const unmeasured = limits({ measuredAt: null, measuredLimits: null });
+    expect(staleness(unmeasured, live, [], now)).toEqual([expect.stringMatching(/placeholders/)]);
     const measured = limits({
       measuredAt: '2026-10-14',
       measuredLimits: { pidsMax: 4096, highMiB: 18432 },
@@ -83,7 +84,7 @@ describe('staleness', () => {
     });
     const runs = [ev('test', 300, 4500), ev('test', 310, 4400), ev('test', 290, 4600)];
     expect(staleness(measured, live, runs, now)).toEqual([
-      expect.stringMatching(/class test: p95 Δanon 4600 MiB vs 3300/),
+      expect.stringContaining(`class test: p95 Δanon 4600 MiB vs ${shipped.classes.test.anonMiB}`),
     ]);
     const guarded = runs.map((r) => ({ ...r, guard: true }));
     const old = runs.map((r) => ({ ...r, t: '2026-09-01T00:00:00Z' }));

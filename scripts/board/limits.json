@@ -1,8 +1,8 @@
 {
   "v": 1,
   "enforce": false,
-  "measuredAt": null,
-  "measuredLimits": null,
+  "measuredAt": "2026-10-14T02:52:03Z",
+  "measuredLimits": { "pidsMax": 4096, "highMiB": 18432 },
   "container": {
     "pidsSoftFrac": 0.8,
     "pidsHardFrac": 0.92,
@@ -14,15 +14,35 @@
   "tuning": { "test": null },
   "classes": {
     "test": {
-      "pids": 320,
-      "anonMiB": 3300,
-      "p95Sec": 45,
-      "source": "bench 2026-10-06 ×1.6 (8 workers)"
+      "pids": 260,
+      "anonMiB": 2500,
+      "p95Sec": 33,
+      "source": "quiet window 2026-10-13: max of 3 reps (8 workers, ~7.9 of 9 cores)"
     },
-    "ui": { "pids": 350, "anonMiB": 1800, "p95Sec": 900, "source": "bench 2026-10-06 ×1.6" },
-    "typecheck": { "pids": 40, "anonMiB": 700, "p95Sec": 10, "source": "bench 2026-10-06" },
-    "lint": { "pids": 40, "anonMiB": 900, "p95Sec": 10, "source": "bench 2026-10-06" },
-    "dev": { "pids": 80, "anonMiB": 700, "p95Sec": 0, "source": "estimate" },
-    "build": { "pids": 120, "anonMiB": 1500, "p95Sec": 60, "source": "estimate" }
+    "ui": {
+      "pids": 160,
+      "anonMiB": 700,
+      "p95Sec": 7,
+      "source": "quiet window 2026-10-13: dev server + Chromium, 4 routes at 390 px"
+    },
+    "typecheck": {
+      "pids": 30,
+      "anonMiB": 1100,
+      "p95Sec": 17,
+      "source": "quiet window 2026-10-13: cold tsc -b --force (the incremental gate is far cheaper)"
+    },
+    "lint": {
+      "pids": 30,
+      "anonMiB": 900,
+      "p95Sec": 7,
+      "source": "quiet window 2026-10-13: cold eslint (no cache)"
+    },
+    "dev": {
+      "pids": 70,
+      "anonMiB": 300,
+      "p95Sec": 0,
+      "source": "quiet window 2026-10-13: vite dev, 90 s"
+    },
+    "build": { "pids": 120, "anonMiB": 1500, "p95Sec": 60, "source": "estimate — not in the matrix" }
   }
 }

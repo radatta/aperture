@@ -194,8 +194,8 @@ the edge test need the quiet window.**
    writes `history/edge-<date>-<HHMM>.json` (per step: instances launched and alive, peaks, PSI,
    `memory.events` deltas, exits; and the **head** of the first failed run's output). Refuses while any
    other session is live or was working in the last 5 min, or when it can't read the board (`EDGE_FORCE=1`
-   with the user's say-so). `EDGE_CMD` swaps the job for a dry run. Expected at 18 GiB: the
-   PSI stop at ~4–5 instances, well before pids (~10) — the throttle regime, mapped.
+   with the user's say-so). `EDGE_CMD` swaps the job for a dry run. Expected at 18 GiB was a PSI stop at ~4–5
+   instances; measured, CPU gives out first (_Results_).
 
 **Stop conditions** (1 Hz in `heavy.sh` under `HEAVY_GUARD=1` and in `edge.sh`, all from `limits.json` ×
 live limits): pids past soft → stop launching; pids past hard, anon past hard, PSI `full avg10` past
@@ -219,7 +219,42 @@ kill children; in `edge.sh`, a run failing (any exit but 0 / 143) → stop and r
 
 ### Results
 
-_Pending the quiet window._
+Quiet window 2026-10-13 (18:53–19:52 PDT): every other session exited; 9 CPUs, `memory.high` 18 GiB,
+`pids.max` 4096, baseline 527 MiB anon / 162 pids. Rows: matrix `history/matrix-2026-10-14.jsonl` (3 reps,
+5 when the spread passed 10 %); edge `history/edge-2026-10-14-0248.json`. Δ = the job's added peak; peak =
+the container's. No matrix cell saw memory pressure (PSI `full` 0, `high` 0, `oom_kill` 0); the edge peaked at PSI `full` 0.36.
+
+| Cell                                   | Δpids (max) | Δanon MiB (max) | wall s (median) | cores (max) |
+| -------------------------------------- | ----------- | --------------- | --------------- | ----------- |
+| `typecheck` (cold)                     | 30          | 1023            | 13.7            | 3.3         |
+| `lint` (cold)                          | 23          | 828             | 6.3             | 2.7         |
+| `test` (8 workers)                     | 257         | 2476            | 32.9            | 7.9         |
+| `test-wc1` / `-wc2`                    | 105 / 196   | 2393 / 2381     | 37.8 / 31.6     | 8.1 / 8.4   |
+| `test-w3` / `-w4`                      | 193 / 208   | 1839 / 2116     | 32.6 / 30.2     | 6.8 / 7.2   |
+| `dev` (90 s)                           | 66          | 294             | 90.9            | 3.0         |
+| `ui` / `ui-rpl1`                       | 157 / 158   | 677 / 676       | 6.2 / 6.1       | 2.8 / 2.4   |
+| `pair:test+test`                       | 520         | 4735            | 50.5            | 8.9         |
+| `pair:test+typecheck`                  | 279         | 3011            | 34.2            | 8.0         |
+| `pair:test+ui` / `pair:dev+ui`         | 271 / 213   | 2373 / 925      | 33.6 / 90.1     | 8.3 / 4.3   |
+| `two-sessions` (test → typecheck → ui) | 518         | 4806            | 45.6            | 8.9         |
+| `three-sessions`                       | 776         | 6616            | 66.6            | 9.1         |
+
+**Edge** (a looping `pnpm test` added every 30 s): 1 → 3.1 GiB / 427 pids, 2 → 4.5 / 636, 4 → 6.1 / 839,
+5 → 7.3 / 872, then at 6 launched (5 alive) a run **failed**: `Finances.test.tsx` timed out at vitest's 5 s
+under CPU starvation, with the container at 7.6 GiB anon (42 % of `memory.high`), 1140 pids (28 %) and PSI
+`full` 0.36. Anon settled back to 543 MiB.
+
+What it means:
+
+- **CPU is the edge, not memory or pids.** One `pnpm test` keeps ~7.9 of 9 cores busy; two saturate them.
+  Past ~5 concurrent suites, jsdom tests start timing out — a flaky timeout under parallel load is
+  contention, not a bug. Memory and pids never came near their lines, so the anon/pids budget (and
+  `enforce`) can't see this edge; a concurrent-test cap would be the lever (an open product call).
+- **Three sessions' full gate + UI at once is fine** (+6.6 GiB, +776 pids, all green), just CPU-bound.
+- **Test tuning: none** (answer 3's bar is ≥ 30 % peak-anon cut for ≤ 15 % more wall time).
+  `VITEST_MAX_WORKERS=3` cuts 24 % at no wall cost; `--workspace-concurrency=1` saves nothing and is 15 %
+  slower. `tuning.test` stays null.
+- **Class costs** in `limits.json` are these maxima, rounded up; `build` wasn't measured.
 
 ## Script-shape rules (COI monitor)
 

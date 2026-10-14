@@ -132,12 +132,15 @@ describe('decideHeavy', () => {
     startedAt: new Date(now.getTime() - ageSec * 1000).toISOString(),
   });
 
+  // the measured cost of one test job (limits.json is rewritten by each quiet window)
+  const cost = () => classCost(limits(), 'test');
+
   it('grants under soft and predicts live + request', () => {
     const d = decideHeavy(limits(), ll, idle, [], { class: 'test' }, now);
     expect(d).toMatchObject({
       verdict: 'grant',
       wait: false,
-      predicted: { pids: 620, anonMiB: 2048 + 3300 },
+      predicted: { pids: 300 + cost().pids, anonMiB: 2048 + cost().anonMiB },
     });
     expect(d.thresholds).toEqual({
       pidsSoft: 3276,
@@ -173,7 +176,7 @@ describe('decideHeavy', () => {
       { class: 'test' },
       now,
     );
-    expect(young.predicted.anonMiB).toBe(2048 + 3 * 3300);
+    expect(young.predicted.anonMiB).toBe(2048 + 3 * cost().anonMiB);
     const old = decideHeavy(
       limits(),
       ll,
@@ -182,18 +185,13 @@ describe('decideHeavy', () => {
       { class: 'test' },
       now,
     );
-    expect(old.predicted.anonMiB).toBe(2048 + 3300);
+    expect(old.predicted.anonMiB).toBe(2048 + cost().anonMiB);
   });
 
   it('nudges over soft but never waits there', () => {
-    const d = decideHeavy(
-      limits(true),
-      ll,
-      { pids: 300, anonBytes: 8 * GiB },
-      [],
-      { class: 'test' },
-      now,
-    );
+    const th = thresholds(limits(true), ll); // live anon that lands the prediction midway soft → hard
+    const anonBytes = (th.anonSoft + th.anonHard) / 2 - cost().anonMiB * MiB;
+    const d = decideHeavy(limits(true), ll, { pids: 300, anonBytes }, [], { class: 'test' }, now);
     expect(d).toMatchObject({ verdict: 'nudge', wait: false });
   });
 

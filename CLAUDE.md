@@ -64,8 +64,10 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   under load with the mechanism never confirmed — capture the **head** of the output, don't assume OOM
   (`docs/ops/COI-SANDBOX.md` → _Ops notes_ → _Transient `tsc` crashes_). `scripts/board/board.sh status`
   shows who is running what and the headroom; `scripts/board/heavy.sh -- <cmd>` runs a test, typecheck,
-  lint, build, dev server or browser with its peak usage logged and a budget slot others can see. Within
-  one session, still serialise: screenshot, kill the browser, then test. Measured edges and the rest:
+  lint, build, dev server or browser with its peak usage logged and a budget slot others can see. Measured
+  (2026-10-13): **CPU gives out first** — one `pnpm test` keeps ~8 of 9 cores busy, and past ~5 concurrent
+  suites jsdom tests time out at 7.6 GiB / 1140 threads, so a timeout under parallel load is contention,
+  not a bug. Within one session, still serialise: screenshot, kill the browser, then test. Measured edges and the rest:
   `docs/ops/SESSION-BOARD.md`.
 
 Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/ops/COI-INCIDENTS.md`.
