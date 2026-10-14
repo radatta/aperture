@@ -8,7 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { decideDev, decideHeavy, devLease, type Alive } from './lease.ts';
+import { decideDev, decideHeavy, leaseFor, type Alive } from './lease.ts';
 import { parseLimits, staleness } from './limits.ts';
 import { branchFiles, overlaps, type Tree } from './overlap.ts';
 import { parseLimit, parseStat } from './proc.ts';
@@ -115,8 +115,7 @@ export function main(argv: string[], stdin: () => string): string {
       const { current, req, note } = JSON.parse(stdin());
       const d = decideDev(current ?? null, req, now, procAlive);
       // grant / takeover carry the lease to write, so the tested builder is the one that runs
-      const lease =
-        d.kind === 'grant' || d.kind === 'takeover' ? devLease(req, now, note) : undefined;
+      const lease = leaseFor(d, req, now, note);
       return JSON.stringify(lease ? { ...d, lease } : d);
     }
     case 'decide-heavy': {

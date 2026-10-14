@@ -180,7 +180,8 @@ describe('board.sh dev lease after a restart', () => {
     const a = liveSession();
     const dir = repo('feat-a');
     board(['register', '--pid', `${a}`, '--cwd', dir]);
-    board(['--pid', `${a}`, 'lease', 'acquire', 'dev']);
+    board(['--pid', `${a}`, 'lease', 'acquire', 'dev', '--note', 'dev-test round 1']);
+    const granted = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
     board(['--pid', `${a}`, 'end']);
     const other = liveSession();
     board(['--pid', `${other}`, 'heartbeat', 'working', '--cwd', repo('feat-b')]);
@@ -188,7 +189,12 @@ describe('board.sh dev lease after a restart', () => {
     const b = liveSession(); // the same branch, restarted: a new pid
     expect(board(['--pid', `${b}`, 'heartbeat', 'working', '--cwd', dir]).code).toBe(0);
     const lease = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
-    expect(lease).toMatchObject({ holderPid: b, branch: 'feat-a' });
+    expect(lease).toMatchObject({
+      holderPid: b,
+      branch: 'feat-a',
+      acquiredAt: granted.acquiredAt, // the same dev test continuing
+      note: 'dev-test round 1',
+    });
     expect(lease.holderGone).toBeUndefined();
     expect(events().find((e) => e.reason === 'resumed')).toMatchObject({
       lease: 'dev',
@@ -209,6 +215,47 @@ describe('sampler.sh', () => {
     });
     const row = r.stdout.split('\n').find((l) => l.startsWith(`${c.pid}\t`));
     expect(row?.split('\t')[6]).toMatch(/^vitest 300/);
+  });
+
+  it('prints one parseable sample with the fake cgroup’s numbers', () => {
+    const r = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], {
+      env,
+      encoding: 'utf8',
+    });
+    const s = JSON.parse(r.stdout);
+    expect(s.cg).toMatchObject({ anonMiB: 2048, pids: 300, pidsMax: 4096, highMiB: 18432 });
+    expect(Object.keys(s.cats)).toEqual(expect.arrayContaining(['claude', 'vitest', 'other']));
+    expect(s.mix).toEqual(expect.objectContaining({ working: expect.any(Number) }));
+  });
+});
+
+describe('board.sh lease renew / register repair', () => {
+  it('renew only renews your own lease: it never grants a free one or takes over another’s', () => {
+    const a = liveSession();
+    const b = liveSession();
+    board(['register', '--pid', `${a}`, '--cwd', repo('feat-a')]);
+    board(['register', '--pid', `${b}`, '--cwd', repo('feat-b')]);
+    expect(board(['--pid', `${a}`, 'lease', 'renew', 'dev']).code).toBe(3); // free: no grant
+    expect(existsSync(join(tmp, 'board/leases/dev.json'))).toBe(false);
+    board(['--pid', `${a}`, 'lease', 'acquire', 'dev', '--ttl', '1']);
+    spawnSync('sleep', ['1.2']); // a's lease expires
+    expect(board(['--pid', `${b}`, 'lease', 'renew', 'dev']).code).toBe(3); // expired, but not b's
+    expect(JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8')).holderPid).toBe(a);
+    expect(board(['--pid', `${b}`, 'lease', 'acquire', 'dev']).code).toBe(0); // acquire may take it over
+  });
+
+  it('register heals a corrupt or empty session file instead of keeping it', () => {
+    const a = liveSession();
+    const f = join(tmp, 'board/sessions', `${a}.json`);
+    mkdirSync(join(tmp, 'board/sessions'), { recursive: true });
+    for (const bad of ['{"pid":', '']) {
+      writeFileSync(f, bad);
+      expect(board(['register', '--pid', `${a}`, '--cwd', repo(`r${bad.length}`)]).code).toBe(0);
+      expect(JSON.parse(readFileSync(f, 'utf8'))).toMatchObject({
+        pid: a,
+        branch: `r${bad.length}`,
+      });
+    }
   });
 });
 
@@ -301,7 +348,8 @@ describe('heavy.sh', () => {
   it('escalates to KILL for a child that ignores TERM', async () => {
     const marker = join(tmp, 'kid.pid');
     // the stubborn sleep ignores TERM, so only the KILL passes can end it
-    const script = `( trap "" TERM; sleep 300 ) & echo $! >${marker}; wait`;
+    // the marker is written only once TERM is ignored, so the signal can't land before the trap does
+    const script = `( trap "" TERM; echo $BASHPID >${marker}; exec sleep 300 ) & wait`;
     const c = spawn('bash', [join(boardDir, 'heavy.sh'), '--', 'bash', '-c', script], {
       env: { ...env, HEAVY_CLASS: 'build' },
       cwd: tmp,

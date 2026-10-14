@@ -1,7 +1,8 @@
 #!/bin/bash
 # UserPromptSubmit (`board-heartbeat.sh working`) and Stop (`board-heartbeat.sh idle`) — keeps this
-# session's state on the shared-container board current and renews a dev lease it holds.
-# docs/ops/SESSION-BOARD.md. Hot path: one jq write, no node, no git. Fail-open, silent.
+# session's state, branch and name on the shared-container board current, and renews a dev lease it holds.
+# docs/ops/SESSION-BOARD.md. Hot path: git + tmux (~5 ms) and one jq write; node only on a resumed dev
+# lease. Fail-open, silent.
 INPUT=$(cat)
 B="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/board" 2>/dev/null && pwd)" || exit 0
 [ -f "$B/lib.sh" ] || exit 0

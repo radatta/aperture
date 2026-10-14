@@ -74,6 +74,21 @@ export function devLease(req: DevRequest, now: Date, note?: string): DevLease {
   };
 }
 
+// The lease a decision writes. A resume is the same dev test continuing: it keeps the original
+// acquiredAt and note (a new --note still wins) — the user's call.
+export function leaseFor(
+  d: DevDecision,
+  req: DevRequest,
+  now: Date,
+  note?: string,
+): DevLease | undefined {
+  if (d.kind !== 'grant' && d.kind !== 'takeover') return undefined;
+  const lease = devLease(req, now, note);
+  if (d.kind !== 'takeover' || d.reason !== 'resumed') return lease;
+  const kept = note || d.previous.note;
+  return { ...lease, acquiredAt: d.previous.acquiredAt, ...(kept ? { note: kept } : {}) };
+}
+
 // --- heavy: a counting budget against the measured edge ---
 
 export type HeavySlot = { pid: number; class: string; startedAt: string; wrapperPid: number };

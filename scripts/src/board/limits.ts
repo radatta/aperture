@@ -57,6 +57,7 @@ type HeavyEvent = {
   t?: string;
   peak?: { dPids?: number; dAnonMiB?: number };
   guard?: boolean;
+  loadTest?: boolean; // matrix / edge runs: load-test peaks, not a real job's cost
 };
 
 // Warnings when limits.json no longer matches reality: limits changed since measuring, or a class's
@@ -80,7 +81,7 @@ export function staleness(
   const since = now.getTime() - days * 86400_000;
   const byClass = new Map<string, { pids: number[]; anon: number[] }>();
   for (const e of events) {
-    if (!e.class || !e.peak || e.guard || !e.t || Date.parse(e.t) < since) continue;
+    if (!e.class || !e.peak || e.guard || e.loadTest || !e.t || Date.parse(e.t) < since) continue;
     const b = byClass.get(e.class) ?? { pids: [], anon: [] };
     b.pids.push(e.peak.dPids ?? 0);
     b.anon.push(e.peak.dAnonMiB ?? 0);

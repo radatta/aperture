@@ -264,12 +264,15 @@ def check_registration() -> tuple[int, int]:
                 failures += not ok
                 print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} on {event} {m}")
     # A hook under an event it isn't registered for is dead config — the trace a bad settings.json merge leaves.
-    homes = {**{h: "PreToolUse" for h in REGISTERED}, **{h: "PostToolUse" for h in REGISTERED_POST}}
+    homes: dict[str, set[str]] = {}
+    for event, registered in (("PreToolUse", REGISTERED), ("PostToolUse", REGISTERED_POST)):
+        for h in registered:
+            homes.setdefault(h, set()).add(event)
     for event, entries in settings["hooks"].items():
         for entry in entries:
             for h in entry["hooks"]:
                 name = pathlib.PurePath(h["command"].split()[0]).name
-                if name in homes and homes[name] != event:
+                if name in homes and event not in homes[name]:
                     failures += 1
                     total += 1
                     print(f"FAIL  {name} also registered under {event}")

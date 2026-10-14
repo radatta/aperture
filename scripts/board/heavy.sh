@@ -5,7 +5,9 @@
 # container + the command's process subtree at 1 Hz, and appends the peaks to board/history/events-*.jsonl.
 # stdout/stderr pass straight through; the exit code is the command's (128+sig if signalled).
 # Env: HEAVY_LABEL (label; never argv), HEAVY_CLASS (override), HEAVY_DURATION (stop after N s, e.g. dev),
-#      HEAVY_GUARD=1 (enforce the stop conditions — load tests only).
+#      HEAVY_GUARD=1 (enforce the stop conditions — load tests only), HEAVY_LOADTEST=1 (a load-test run
+#      that manages its own stops, e.g. edge.sh). Either marks the event loadTest:true, which report and
+#      staleness leave out of the per-class costs.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 . "$SB_SCRIPTS/lease.sh"
@@ -157,14 +159,15 @@ event=$(jq -nc --arg t "$(sb_now)" --argjson pid "$owner" --arg name "$name" --a
   --argjson pids0 "$pids0" --argjson anon0 "$((anon0 / 1048576))" --argjson pidsMax "$PIDS_MAX" \
   --argjson highMiB "$((MEM_HIGH / 1048576))" --argjson oomd "$oomd" --argjson highd "$highd" \
   --argjson psi "$pk_psi" --arg verdict "$verdict" --arg stop "$stop" --argjson mix "${mix:-null}" \
-  --arg guard "${HEAVY_GUARD:-0}" '
+  --arg guard "${HEAVY_GUARD:-0}" --arg lt "${HEAVY_LOADTEST:-0}" '
   {v: 1, t: $t, kind: "job", pid: $pid, name: $name, branch: $branch, label: $label, class: $class, cmd: $cmd,
    exit: $exit, signal: $signal, wallSec: ($wall / 10),
    peak: {dPids: $dPids, dAnonMiB: $dAnon, pids: $pkPids, anonMiB: $pkAnon, currentMiB: $pkCur,
           subtreeThr: $thr, subtreeRssMiB: $rss, cores: $cores},
    before: {pids: $pids0, anonMiB: $anon0}, limits: {pidsMax: $pidsMax, highMiB: $highMiB},
    oomKillDelta: $oomd, highDelta: $highd, psiFullMax: $psi, mix: $mix, verdict: $verdict,
-   stop: (if $stop == "" then null else $stop end), guard: ($guard == "1")}')
+   stop: (if $stop == "" then null else $stop end), guard: ($guard == "1"),
+   loadTest: ($guard == "1" or $lt == "1")}')
 sb_append events "$event"
 printf '%s\n' "$event" | jq -r '"heavy: \(.label) exit \(.exit) · \(.wallSec)s · pids +\(.peak.dPids) (peak \(.peak.pids)/\(.limits.pidsMax)) · anon +\(.peak.dAnonMiB) MiB (peak \(.peak.anonMiB)/\(.limits.highMiB)) · subtree \(.peak.subtreeThr) thr / \(.peak.subtreeRssMiB) MiB · \(.peak.cores) cores · psi \(.psiFullMax) · \(.verdict)"' >&2
 [ -n "$sig" ] && exit $((128 + sig))

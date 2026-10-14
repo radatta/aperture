@@ -6,6 +6,11 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/load-context.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/board-session.sh",
+            "timeout": 10
           }
         ]
       },
@@ -15,15 +20,6 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/post-compact-context.sh"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/board-session.sh",
-            "timeout": 10
           }
         ]
       }
@@ -117,6 +113,26 @@
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/coi-grep-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__aperture-dev__delete_task|mcp__aperture-dev__update_task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/mcp-dev-ledger.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__aperture-dev__create_task|mcp__aperture-dev__create_tasks|mcp__aperture-dev__split_task|mcp__aperture-dev__update_task|mcp__aperture-dev__delete_task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/mcp-dev-ledger.sh"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -137,52 +153,6 @@
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/board-session-end.sh",
             "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Monitor",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/coi-reverse-shell-guard.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/gh-safety-guard.sh"
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/precommit-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/coi-grep-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__aperture-dev__delete_task|mcp__aperture-dev__update_task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/mcp-dev-ledger.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "mcp__aperture-dev__create_task|mcp__aperture-dev__create_tasks|mcp__aperture-dev__split_task|mcp__aperture-dev__update_task|mcp__aperture-dev__delete_task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/mcp-dev-ledger.sh"
           }
         ]
       }

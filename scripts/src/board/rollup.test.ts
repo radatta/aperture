@@ -44,6 +44,7 @@ describe('rollup', () => {
     job('test', 3000),
     job('test', 3400, { verdict: 'throttled' }),
     job('test', 9000, { guard: true }), // load test — excluded
+    job('test', 12000, { loadTest: true }), // edge run — excluded too
     { kind: 'lease', t: '2026-10-13T12:00:00Z' } as unknown as JobEvent, // not a job
     job('typecheck', 900),
   ];

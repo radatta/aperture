@@ -77,7 +77,8 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
 
 - A **session** is a `claude` process; every other process is attributed to the nearest `claude` ancestor
   (subagents run in-process, so they count with their session). Its `name` is its tmux window name — the
-  session name, and the `SendMessage` address.
+  session name, and the `SendMessage` address — when the pane runs that `claude` (a `claude` started inside
+  another session's pane inherits `TMUX_PANE`); otherwise its branch, then its cwd's basename.
 - **state** comes from the session's hooks (`stateSrc: "hook"`: working from a prompt until Stop). A session
   that hasn't fired a hook since the hooks were installed falls back to CPU (`"cpu"`, ≥ 5 % of a core) —
   unreliable, because a session waiting on the model uses almost no CPU. `board.sh status` marks those `*`.
@@ -88,7 +89,8 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
 `heavy.sh` adds one **job event** per run to `history/events-<date>.jsonl` (`kind: "job"`, below); lease
 actions are `kind: "lease"`. `cli.ts report` buckets the samples by mix (`2w 5i 1h`) with median / p95 / max
 anon, pids and cores; measures an idle session directly (RSS, threads); estimates each extra session's anon
-from heavy-free ticks; and summarises real jobs (load-test runs excluded) per class.
+from heavy-free ticks; and summarises real jobs per class — load-test runs (`loadTest: true`: `matrix.sh`'s
+guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 
@@ -127,7 +129,7 @@ GitHub's truth, and dev-e2e's build marker catches an overwrite after the fact. 
   with the `SendMessage` text printed for the new holder to send.
 - The holder's **session ending** flags it `holderGone` but keeps it until TTL (45 min) — dev testing and
   feedback outlive a session restart. The restarted session on that branch takes it back on its first prompt
-  (`takeover`, reason `resumed`, no message), and each prompt in the holder's session on that branch renews it.
+  (`takeover`, reason `resumed`, no message; it keeps the original `acquiredAt` and `--note`), and each prompt in the holder's session on that branch renews it.
 - Only the holder releases it (`--force` overrides, logged).
 
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
@@ -178,23 +180,27 @@ the edge test need the quiet window.**
 2. `matrix.sh setup` — scratch worktrees `board-matrix-b` / `-c` (detached at this HEAD, installed), so pair
    cells are real two-tree runs.
 3. `matrix.sh <cell> [reps]` — 3 reps (to 5 when Δanon or Δpids spread > 10 % of the median), 20 s apart, one
-   summary line per rep, a `matrix-<date>.jsonl` row per cell. Cells (`matrix.sh list`): `typecheck` and
+   summary line per rep, a `matrix-<date>.jsonl` row per cell. A 3-rep `test` cell takes ~3 min, past the
+   Bash tool's 120 s default: run cells with `run_in_background` (or a 600 s timeout). Pair and session
+   cells refuse until `setup` has installed their trees. Cells (`matrix.sh list`): `typecheck` and
    `lint` cold (`tsc -b --force`, `eslint` without cache); `test`; `test-wc1`/`-wc2`
    (`--workspace-concurrency`); `test-w3`/`-w4` (`VITEST_MAX_WORKERS`); `dev` (90 s); `ui` and `ui-rpl1`
    (`measure/ui-cell.sh`: dev server + Chromium over 4 routes at phone width, `--renderer-process-limit=1`
    on/off; `PW_DIR` must hold Playwright); `pair:test+test`, `pair:test+ui`, `pair:test+typecheck`,
    `pair:dev+ui`; `two-sessions` / `three-sessions` (test → typecheck → ui per tree, trees in parallel).
 4. `edge.sh --detach` — detached (progress in `history/edge-<date>.log`), adds a looping `pnpm test` instance every 30 s until a
-   stop fires, a run exits ≥ 128, or 12 instances; stops them by PID, waits for anon to settle, writes
-   `history/edge-<date>-<HHMM>.json` (per step: instances, peaks, PSI, `memory.events` deltas, exits, and the
-   **head** of a failed run's output). Refuses while another session was working in the last 5 min
-   (`EDGE_FORCE=1` with the user's say-so). `EDGE_CMD` swaps the job for a dry run. Expected at 18 GiB: the
+   stop fires, a run fails (any exit but 0 / 143 — the gate was green, so the load caused it), or 12
+   instances; stops them by PID (each wrapper's PID is recorded as it starts), waits for anon to settle,
+   writes `history/edge-<date>-<HHMM>.json` (per step: instances launched and alive, peaks, PSI,
+   `memory.events` deltas, exits; and the **head** of the first failed run's output). Refuses while any
+   other session is live or was working in the last 5 min, or when it can't read the board (`EDGE_FORCE=1`
+   with the user's say-so). `EDGE_CMD` swaps the job for a dry run. Expected at 18 GiB: the
    PSI stop at ~4–5 instances, well before pids (~10) — the throttle regime, mapped.
 
 **Stop conditions** (1 Hz in `heavy.sh` under `HEAVY_GUARD=1` and in `edge.sh`, all from `limits.json` ×
 live limits): pids past soft → stop launching; pids past hard, anon past hard, PSI `full avg10` past
 `psiFullKill` twice running, or `memory.current` within `currentGuardMiB` of `memory.high` with PSI rising →
-kill children; a run exiting ≥ 128 (bar the 143 of our own stop) → stop and record.
+kill children; in `edge.sh`, a run failing (any exit but 0 / 143) → stop and record.
 
 **Cheap fixes measured before any gating:** `--workspace-concurrency=1|2`, `VITEST_MAX_WORKERS=3|4`, Chromium
 `--renderer-process-limit=1`. More VM RAM only if the window shows VM-side kills.
@@ -218,8 +224,8 @@ _Pending the quiet window._
 ## Script-shape rules (COI monitor)
 
 The monitor reads every process's argv (`docs/ops/COI-SANDBOX.md`, `localNotes/code-on-incus/APERTURE-ANALYSIS.md`).
-Everything here: never reads `/proc/*/environ`, never `xargs` over `/proc`, no interpreter one-liners (`awk -f`
-files and heredocs only), no `ps | grep` sweeps (it reads `/proc/<pid>/stat` itself), kills by PID, keeps
+Everything here: never reads `/proc/*/environ`, never `xargs` over `/proc`, no `python`/`perl`/`ruby`/`node` one-liners (heredocs
+only; `awk`, inline or `-f`, isn't on the monitor's list), no `ps | grep` sweeps (it reads `/proc/<pid>/stat` itself), kills by PID, keeps
 labels off argv, and has no `/curl` or `/wget` on any command line. Subagent prompts that run these scripts
 carry the same list.
 

@@ -15,6 +15,7 @@ export type JobEvent = {
   class: string;
   wallSec: number;
   guard?: boolean;
+  loadTest?: boolean; // matrix / edge runs: load-test peaks, not a real job's cost
   verdict?: string;
   peak: { dPids: number; dAnonMiB: number; pids: number; anonMiB: number };
 };
@@ -74,7 +75,8 @@ export function rollup(samples: Sample[], events: JobEvent[], since: Date): Repo
 
   const jobsBy = new Map<string, JobEvent[]>();
   for (const e of events) {
-    if ((e.kind && e.kind !== 'job') || e.guard || Date.parse(e.t) < since.getTime()) continue;
+    if ((e.kind && e.kind !== 'job') || e.guard || e.loadTest || Date.parse(e.t) < since.getTime())
+      continue;
     jobsBy.set(e.class, [...(jobsBy.get(e.class) ?? []), e]);
   }
   const jobs = [...jobsBy.entries()]

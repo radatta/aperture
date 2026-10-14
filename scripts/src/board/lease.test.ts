@@ -5,6 +5,7 @@ import {
   decideDev,
   decideHeavy,
   devLease,
+  leaseFor,
   RAMP_SEC,
   type DevLease,
   type DevRequest,
@@ -76,6 +77,28 @@ describe('decideDev', () => {
       kind: 'takeover',
       reason: 'forced',
     });
+  });
+
+  it('a resumed lease keeps its original acquiredAt and note; a new --note wins', () => {
+    const gone = held({ holderGone: true, note: 'dev-test round 1' });
+    const back = req({ branch: 'flux', name: 'flux' });
+    const d = decideDev(gone, back, now, dead);
+    expect(leaseFor(d, back, now)).toMatchObject({
+      holderPid: 200,
+      acquiredAt: gone.acquiredAt,
+      expiresAt: '2026-10-13T18:45:00Z',
+      note: 'dev-test round 1',
+    });
+    expect(leaseFor(d, back, now, 'round 2')?.note).toBe('round 2');
+    // any other takeover starts a fresh lease
+    const expired = decideDev(
+      held({ expiresAt: '2026-10-13T17:59:59Z', note: 'x' }),
+      req(),
+      now,
+      alive,
+    );
+    expect(leaseFor(expired, req(), now)).toEqual(devLease(req(), now));
+    expect(leaseFor({ kind: 'renew' }, req(), now)).toBeUndefined();
   });
 
   it('builds the lease with the TTL', () => {

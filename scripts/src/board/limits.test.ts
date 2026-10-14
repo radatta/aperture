@@ -88,6 +88,8 @@ describe('staleness', () => {
     const guarded = runs.map((r) => ({ ...r, guard: true }));
     const old = runs.map((r) => ({ ...r, t: '2026-09-01T00:00:00Z' }));
     expect(staleness(measured, live, [...guarded, ...old], now)).toEqual([]);
+    const edgeRuns = runs.map((r) => ({ ...r, loadTest: true })); // edge.sh: unguarded, still a load test
+    expect(staleness(measured, live, edgeRuns, now)).toEqual([]);
     expect(staleness(measured, live, runs.slice(0, 2), now)).toEqual([]); // < 3 runs: not enough to judge
   });
 

@@ -171,7 +171,7 @@ lease_heavy_acquire() {
 }
 
 cmd_lease() {
-  local sub="${1:-status}" kind="${2:-dev}" wait=0 force=false note= ttl=2700 pid
+  local sub="${1:-status}" kind="${2:-dev}" wait=0 force=false note= ttl= pid
   shift 2 2>/dev/null || shift $#
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -186,8 +186,8 @@ cmd_lease() {
   [ "$kind" = dev ] || { echo "board: only the dev lease is taken by hand (heavy slots come from heavy.sh)" >&2; return 2; }
   pid=$(me_pid) || { echo "board: no claude ancestor" >&2; return 1; }
   case "$sub" in
-    acquire) lease_dev_acquire "$pid" "$wait" "$ttl" "$force" "$note" ;;
-    renew) sb_locked _dev_try "$pid" "$ttl" false "$note" renew ;;  # renews yours, resumes your branch's gone lease, else 3
+    acquire) lease_dev_acquire "$pid" "$wait" "${ttl:-2700}" "$force" "$note" ;;
+    renew) sb_locked _dev_try "$pid" "${ttl:-$(jq -r '.ttlSec // 2700' "$DEV" 2>/dev/null || echo 2700)}" false "$note" renew ;;  # keeps its TTL  # renews yours, resumes your branch's gone lease, else 3
     release) sb_locked _dev_release "$pid" "$force" ;;
     *) echo "usage: board.sh lease acquire|renew|release|status dev" >&2; return 2 ;;
   esac

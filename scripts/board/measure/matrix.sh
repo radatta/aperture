@@ -39,14 +39,18 @@ run_job() {
     export HEAVY_GUARD=1 HEAVY_LABEL="$3" HEAVY_CLASS="$class"
     [ "$class" = dev ] && export HEAVY_DURATION="${MATRIX_DEV_SEC:-90}"
     # shellcheck disable=SC2086 — cmd is a fixed string from job()
-    bash scripts/board/heavy.sh -- $cmd >"${TMPDIR:-/tmp}/aperture-matrix.${3//[^a-z0-9]/_}.log" 2>&1 )
+    bash scripts/board/heavy.sh -- $cmd >"${TMPDIR:-/tmp}/aperture-matrix.${3//[^A-Za-z0-9]/_}.log" 2>&1 )  # A/B kept apart
 }
 
-# A session's round in tree $1: test → typecheck → ui.
-run_session() { run_job "$1" test "$2:test" && run_job "$1" typecheck "$2:typecheck" && run_job "$1" ui "$2:ui"; }
+# A session's round in tree $1: test → typecheck → ui — all three whatever each exits (each is its own event).
+run_session() { run_job "$1" test "$2:test"; run_job "$1" typecheck "$2:typecheck"; run_job "$1" ui "$2:ui"; }
 
 run_cell() {  # $1 cell, $2 rep label prefix
-  local cell="$1" pre="$2" a b i pids=()
+  local cell="$1" pre="$2" a b i pids=() need=1
+  case "$cell" in pair:*|two-sessions) need=2 ;; three-sessions) need=3 ;; esac
+  for ((i = 0; i < need; i++)); do  # a missing scratch tree would exit at `cd` and leave no event
+    [ -d "${TREES[$i]:-/nonexistent}/node_modules" ] || { echo "matrix: $cell needs ${TREES[$i]:-tree $((i + 1))} installed — matrix.sh setup" >&2; return 2; }
+  done
   case "$cell" in
     pair:*)
       a=${cell#pair:}; b=${a#*+}; a=${a%%+*}
