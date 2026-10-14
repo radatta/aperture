@@ -20,5 +20,7 @@ export function selectScenarios(tier: RunTier, ids: string[], all = SCENARIOS): 
     return all.filter((s) => s.id === 'smoke' || ids.includes(s.id));
   }
   const inTier = all.filter((s) => s.tiers.includes(tier));
-  return ids.length ? inTier.filter((s) => ids.includes(s.id)) : inTier;
+  const picked = ids.length ? inTier.filter((s) => ids.includes(s.id)) : inTier;
+  if (!picked.length) throw new Error(`no scenario in tier ${tier} matches ${ids.join(', ')}`);
+  return picked;
 }

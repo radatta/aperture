@@ -16,13 +16,20 @@ export function methodOf(url: string): string | undefined {
   return m?.[1];
 }
 
-export function idsFromCreateResponse(method: string, json: unknown): string[] {
+// `isRecorded` guards the split: deleting a parent deletes its parts, so a split's parent is recorded only
+// when the split task was ours (then its parent is ours or new). Same rule as .claude/hooks/mcp-dev-ledger.sh.
+export function idsFromCreateResponse(
+  method: string,
+  json: unknown,
+  isRecorded: (id: string) => boolean = () => false,
+): string[] {
   if (!isCreate(method)) return [];
   if (method === 'createTask') return [idOf(json)].filter((x): x is string => !!x);
   if (method === 'createTasks')
     return Array.isArray(json) ? json.map(idOf).filter((x): x is string => !!x) : [];
-  // splitTask → { parent, original, followUp }: a standalone split makes a NEW parent, and the follow-up is
-  // always new. The original existed before; it's recorded only if it already was.
-  const r = json as { parent?: unknown; followUp?: unknown } | null;
-  return [idOf(r?.parent), idOf(r?.followUp)].filter((x): x is string => !!x);
+  // splitTask → { parent, original, followUp }: the follow-up is always new.
+  const r = json as { parent?: unknown; original?: unknown; followUp?: unknown } | null;
+  const original = idOf(r?.original);
+  const parent = original && isRecorded(original) ? idOf(r?.parent) : undefined;
+  return [parent, idOf(r?.followUp)].filter((x): x is string => !!x);
 }

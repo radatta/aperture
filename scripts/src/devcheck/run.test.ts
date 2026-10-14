@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseArgs } from './run';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseArgs, takeLock } from './run';
 import { SCENARIOS, selectScenarios } from './scenarios/index';
 
 describe('parseArgs', () => {
@@ -35,7 +38,26 @@ describe('selectScenarios', () => {
     expect(ids(selectScenarios('delta', ['capture-task']))).toEqual(['smoke', 'capture-task']);
     expect(() => selectScenarios('delta', [])).toThrow(/needs --scenario/);
   });
+  it('refuses a selection that runs nothing', () => {
+    expect(() => selectScenarios('smoke', ['capture-task'])).toThrow(/no scenario in tier smoke/);
+  });
   it('refuses an unknown scenario', () => {
     expect(() => selectScenarios('full', ['nope'])).toThrow(/unknown scenario nope/);
+  });
+});
+
+describe('takeLock', () => {
+  const dir = () => mkdtempSync(join(tmpdir(), 'lock-'));
+  it('is exclusive while held, and free after release', () => {
+    const path = join(dir(), 'run.lock');
+    const release = takeLock(path);
+    expect(() => takeLock(path)).toThrow(/another dev check \(pid \d+\) is running/);
+    release();
+    takeLock(path)();
+  });
+  it('takes over a stale lock whose process is gone', () => {
+    const path = join(dir(), 'run.lock');
+    writeFileSync(path, '4194304'); // above pid_max: never a live process
+    takeLock(path)();
   });
 });

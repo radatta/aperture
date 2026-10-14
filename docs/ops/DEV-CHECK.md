@@ -36,7 +36,8 @@ the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`
    `DEVCHECK_PASSWORD`, `DEVCHECK_SUB`, `DEVCHECK_COGNITO_HOST`, `DEVCHECK_CLIENT_ID`, `DEVCHECK_POOL_ID`. The
    password is never shown; the harness reads the file. `docs/arch/INFRA.md` §6 records the user.
 2. **Playwright, outside the repo** — it is no package's dependency (it would add a browser download to every
-   CI install, and no test needs it): `mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx
+   CI install, and no test needs it). `~/pw` is a scratch directory outside the monorepo, so npm there doesn't
+   break the pnpm-only rule: `mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx
 playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROOT` overrides;
    `DEVCHECK_CHROMIUM` points at a system Chromium). Check `npm view playwright version` before refreshing.
 
@@ -47,11 +48,15 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes.
 - **Deletes by recorded id only.** Every task the run creates is recorded in a ledger from the server's create
   response — the API client's `createTask`, and the browser's `createTask`/`createTasks`/`splitTask`
-  responses (a split's new parent and follow-up). Cleanup deletes ledger ids and nothing else; the delete
+  responses (a split's follow-up, and its parent only when the split task was already recorded — deleting a
+  parent deletes its parts). Cleanup deletes ledger ids and nothing else; the delete
   wrapper refuses any other id (`LEDGER_GUARD`). Never by title or marker word — the model rewrites titles.
-- **Verified, not assumed.** After cleanup every ledger id is read back (`getTask` → null). A task already gone
-  (deleted with its parent) is `gone`, not a failure. Tasks in the test partition the ledger doesn't know are
-  listed, never deleted. A crashed run's ids stay pending and the next run sweeps them first.
+- **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
+  A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
+  fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't
+  know are never deleted: ones there before the run are listed, ones that appeared during it (a create path the
+  recorder missed) fail the run. A crashed or killed run (Ctrl-C, a timeout — its cleanup doesn't run) leaves
+  its ids pending, and the next run sweeps them first.
 - **The right build.** The deploy run for the SHA must succeed (a `dev` push run by `headSha`, or a dispatched
   `deploy-dev <sha> <key>` run by name), then the edge must serve that SHA in `<meta name="aperture-build">`.
   In the page it reloads up to 3 times — the PWA's service worker can serve the previous shell first — else
@@ -64,30 +69,33 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 | `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser + API creates) |
 | `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`       |
 
-Append-only JSONL, one line per event: `{t, run, op, id, via, title?}` with `op` one of `run-start`,
-`intent` (an API create about to be sent — one with no `created` after it is reported as a possible leak),
-`created`, `deleted`, `gone`, `swept`, `run-end`. `title` is for the report only. The MCP hook denies an
-`aperture-dev` `delete_task` whose id has no `created` line, and records the parts a parent's delete took
-with it (CLAUDE.md → _Aperture MCP connector_, standing approval 2).
+Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?}`, `op`
+one of `run-start`, `intent` (an API create about to be sent — one with no `created` after it is reported as a
+possible leak), `created`, `deleted`, `gone`, `swept`, `run-end`; `title` is for the report only. The MCP hook
+writes `{t, op, id, parent?, via, session}`, `op` one of `created`, `reparented`, `tainted` (the id has a part
+the hook never recorded), `deleted`. It denies an `aperture-dev` `delete_task` unless the id has a `created`
+line and no `tainted` one, and records the parts a parent's delete took with it (CLAUDE.md → _Aperture MCP
+connector_, standing approval 2; `docs/areas/mcp/index.md`). The MCP result shape it parses is inferred, not
+yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
 
-| Code                       | Means                                                             | Do                                                                      |
-| -------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `ENV_MISSING`              | env file absent or a key missing                                  | setup step 1                                                            |
-| `PW_MISSING`               | no Playwright in `~/pw`                                           | setup step 2                                                            |
-| `DEPLOY_NOT_FOUND`         | no deploy run for the SHA                                         | was it pushed to dev?                                                   |
-| `DEPLOY_FAILED`            | the run failed                                                    | read the run; a failed `changes` job means dev was behind main — rebase |
-| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build        | the message names what it serves                                        |
-| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                            | check the env file's host                                               |
-| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                          | screenshot in `shots/`; update `login.ts` deliberately                  |
-| `AUTH_REJECTED`            | Cognito refused the credentials                                   | password expired or user disabled — operator                            |
-| `WRONG_USER`               | the session isn't the test user                                   | delete `.secrets/devcheck.dev.state.json`, rerun                        |
-| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                        | rerun; persistent → service-worker bug                                  |
-| `STEP_FAILED`              | a scenario step threw                                             | its row has the error and a screenshot                                  |
-| `LEDGER_GUARD`             | a delete named an unrecorded id                                   | a harness bug — never bypass                                            |
-| `LEFTOVERS`                | a ledger id survived cleanup, or a create's id was never recorded | rerun (the sweep retries); else by hand                                 |
-| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                     | read the merged PRs, rebase, gate, push, rerun                          |
+| Code                       | Means                                                                                          | Do                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `ENV_MISSING`              | env file absent or a key missing                                                               | setup step 1                                                            |
+| `PW_MISSING`               | no Playwright in `~/pw`                                                                        | setup step 2                                                            |
+| `DEPLOY_NOT_FOUND`         | no deploy run for the SHA                                                                      | was it pushed to dev?                                                   |
+| `DEPLOY_FAILED`            | the run failed                                                                                 | read the run; a failed `changes` job means dev was behind main — rebase |
+| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                     | the message names what it serves                                        |
+| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                         | check the env file's host                                               |
+| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                       | screenshot in `shots/`; update `login.ts` deliberately                  |
+| `AUTH_REJECTED`            | Cognito refused the credentials                                                                | password expired or user disabled — operator                            |
+| `WRONG_USER`               | the session isn't the test user                                                                | delete `.secrets/devcheck.dev.state.json`, rerun                        |
+| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                     | rerun; persistent → service-worker bug                                  |
+| `STEP_FAILED`              | a scenario step threw                                                                          | its row has the error and a screenshot                                  |
+| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                | a harness bug — never bypass                                            |
+| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, or an unrecorded task appeared | rerun (the sweep retries); else by hand                                 |
+| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                  | read the merged PRs, rebase, gate, push, rerun                          |
 
 ## Writing a scenario
 

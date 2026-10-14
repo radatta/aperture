@@ -2,7 +2,7 @@
 // storageState) so later runs skip the form until the 7-day refresh token lapses. Selectors are exact, not
 // guessed: if the Hosted UI changes, the run fails AUTH_PAGE_CHANGED with a screenshot rather than typing a
 // password into whatever field looks close.
-import { chmodSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { DEV_ORIGIN, type DevcheckEnv } from './config';
 import { DevcheckError } from './errors';
 import type { PwContext, PwPage } from './pw-types';
@@ -29,6 +29,30 @@ export async function readSession(page: PwPage, env: DevcheckEnv): Promise<Sessi
     storage,
     userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID),
   );
+}
+
+// The cached session must be the test user's BEFORE any page loads: loading the app already writes (getDay
+// materialises recurring tasks), so a wrong cached identity would write to that account. A mismatch or an
+// unreadable cache is deleted and the run signs in fresh.
+export function validateCachedState(
+  path: string,
+  env: DevcheckEnv,
+  log: (msg: string) => void,
+): void {
+  if (!existsSync(path)) return;
+  try {
+    const state = JSON.parse(readFileSync(path, 'utf8')) as {
+      origins?: { origin: string; localStorage?: { name: string; value: string }[] }[];
+    };
+    const ls = state.origins?.find((o) => o.origin === DEV_ORIGIN)?.localStorage ?? [];
+    const storage = Object.fromEntries(ls.map((x) => [x.name, x.value]));
+    const key = userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID);
+    const session = sessionFromStorage(storage, key);
+    if (session) assertTestUser(session, env.DEVCHECK_SUB);
+  } catch (err) {
+    log(`discarding the cached session (${err instanceof Error ? err.message : 'unreadable'})`);
+    unlinkSync(path);
+  }
 }
 
 export async function ensureSignedIn(
@@ -60,9 +84,18 @@ export async function ensureSignedIn(
         `the Hosted UI form at ${page.url()} isn't the classic one`,
       );
     }
-    await page.locator(FORM.username).fill(env.DEVCHECK_EMAIL);
-    await page.locator(FORM.password).fill(env.DEVCHECK_PASSWORD);
-    await page.locator(FORM.submit).click();
+    try {
+      await page.locator(FORM.username).fill(env.DEVCHECK_EMAIL);
+      await page.locator(FORM.password).fill(env.DEVCHECK_PASSWORD);
+      await page.locator(FORM.submit).click();
+    } catch {
+      // Playwright's error text can echo the filled value — never let it reach a report.
+      await opts.shot('auth-page-changed');
+      throw new DevcheckError(
+        'AUTH_PAGE_CHANGED',
+        `filling the Hosted UI form at ${page.url()} failed`,
+      );
+    }
     try {
       await page.waitForURL((u) => u.origin === DEV_ORIGIN, { timeout: 20_000 });
     } catch {
@@ -80,7 +113,7 @@ export async function ensureSignedIn(
   if (!session)
     throw new DevcheckError('WRONG_USER', 'signed-in shell but no oidc session in localStorage');
   assertTestUser(session, env.DEVCHECK_SUB);
-  await context.storageState({ path: opts.statePath });
-  chmodSync(opts.statePath, 0o600); // it holds the refresh token
+  // Written by hand with mode 600 from the start — it holds the refresh token.
+  writeFileSync(opts.statePath, JSON.stringify(await context.storageState()), { mode: 0o600 });
   return session;
 }

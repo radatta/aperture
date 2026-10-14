@@ -80,7 +80,7 @@ export function loadEnv(path: string, warn: (msg: string) => void = console.warn
   } catch {
     throw new DevcheckError(
       'ENV_MISSING',
-      `${path} not found — operator step 2 in docs/ops/DEV-CHECK.md`,
+      `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1`,
     );
   }
   if ((statSync(path).mode & 0o077) !== 0) warn(`${path} is readable by others — chmod 600 it`);

@@ -34,7 +34,8 @@ export interface RunResult {
   steps: StepResult[];
   created: CreatedRecord[];
   swept: string[];
-  unrecorded: string[]; // tasks in the test partition the ledger doesn't know — reported, never deleted
+  unrecorded: string[]; // there before the run and unknown to the ledger — reported, never deleted
+  appeared?: string[]; // appeared DURING the run, unknown to the ledger — a missed create path; fails the run
   orphanIntents: string[]; // API creates that may have landed without their id — check by hand
   consoleErrors: string[];
   shots: string[];
@@ -77,6 +78,10 @@ export function renderReport(r: RunResult): string {
   if (r.unrecorded.length)
     lines.push(
       `- **Not in the ledger** (reported, never deleted — check by hand): ${r.unrecorded.join(', ')}`,
+    );
+  if (r.appeared?.length)
+    lines.push(
+      `- **Appeared during the run, not in the ledger** (a create path the recorder missed — not deleted): ${r.appeared.join(', ')}`,
     );
   if (r.orphanIntents.length)
     lines.push(

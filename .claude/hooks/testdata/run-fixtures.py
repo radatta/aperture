@@ -61,6 +61,7 @@ REGISTERED_POST = {
         "mcp__aperture-dev__create_task",
         "mcp__aperture-dev__create_tasks",
         "mcp__aperture-dev__split_task",
+        "mcp__aperture-dev__update_task",
         "mcp__aperture-dev__delete_task",
     ),
 }

@@ -8,6 +8,12 @@ export interface PwResponse {
   json(): Promise<unknown>;
 }
 
+export interface PwRequest {
+  url(): string;
+  method(): string;
+  response(): Promise<PwResponse | null>;
+}
+
 export interface PwLocator {
   first(): PwLocator;
   click(opts?: { timeout?: number }): Promise<void>;
@@ -38,13 +44,13 @@ export interface PwPage {
   screenshot(opts: { path: string; fullPage?: boolean }): Promise<unknown>;
   on(event: 'console', fn: (msg: { type(): string; text(): string }) => void): void;
   on(event: 'pageerror', fn: (err: Error) => void): void;
-  on(event: 'response', fn: (res: PwResponse) => void): void;
+  on(event: 'request', fn: (req: PwRequest) => void): void;
   close(): Promise<void>;
 }
 
 export interface PwContext {
   newPage(): Promise<PwPage>;
-  storageState(opts: { path: string }): Promise<unknown>;
+  storageState(): Promise<unknown>;
   close(): Promise<void>;
 }
 

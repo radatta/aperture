@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createApiClient } from './api';
 import { launch, loadPlaywright } from './browser';
@@ -21,9 +22,10 @@ import {
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { openLedger } from './ledger';
-import { ensureSignedIn, readSession } from './login';
+import { ensureSignedIn, readSession, validateCachedState } from './login';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
+import { assertTestUser } from './token';
 import { SCENARIOS, selectScenarios, type RunTier } from './scenarios/index';
 
 const exec = promisify(execFile);
@@ -60,27 +62,35 @@ export function parseArgs(argv: string[]): Args {
   return args;
 }
 
-// One live run per container: a pid file in the shared devcheck home.
-function takeLock(path: string): () => void {
-  if (existsSync(path)) {
-    const pid = Number(readFileSync(path, 'utf8'));
-    let alive = false;
+// One live run per container: a pid file in the shared devcheck home, created exclusively (O_EXCL) so two
+// runs starting together can't both take it. A stale file (its pid is dead) is removed and retried once.
+export function takeLock(path: string): () => void {
+  for (let attempt = 0; ; attempt++) {
     try {
-      process.kill(pid, 0);
-      alive = true;
-    } catch {
-      // stale — that run died without releasing
+      writeFileSync(path, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0) throw err;
+      const pid = Number(readFileSync(path, 'utf8'));
+      let alive = false;
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch {
+        // stale — that run died without releasing
+      }
+      if (alive)
+        throw new Error(`another dev check (pid ${pid}) is running — wait for it`, { cause: err });
+      unlinkSync(path);
     }
-    if (alive) throw new Error(`another dev check (pid ${pid}) is running — wait for it`);
   }
-  writeFileSync(path, String(process.pid));
   return () => {
     if (existsSync(path) && readFileSync(path, 'utf8') === String(process.pid)) unlinkSync(path);
   };
 }
 
 async function listRuns(): Promise<DeployRun[]> {
-  const gh = async (args: string[]) => {
+  const gh = async (args: string[], optional = false) => {
     try {
       const { stdout } = await exec('gh', [
         'run',
@@ -92,13 +102,16 @@ async function listRuns(): Promise<DeployRun[]> {
         RUN_FIELDS,
       ]);
       return JSON.parse(stdout) as DeployRun[];
-    } catch {
-      return []; // deploy-dev.yml exists only once ci-bot lands
+    } catch (err) {
+      // deploy-dev.yml exists only once ci-bot lands; any other gh failure (auth, network) is real.
+      const stderr = String((err as { stderr?: unknown }).stderr ?? '');
+      if (optional && /could not find any workflows|not found/i.test(stderr)) return [];
+      throw new Error(`gh run list failed: ${stderr.trim() || String(err)}`, { cause: err });
     }
   };
   const runs = [
     ...(await gh(['--workflow', 'deploy.yml', '--branch', 'dev'])),
-    ...(await gh(['--workflow', 'deploy-dev.yml'])),
+    ...(await gh(['--workflow', 'deploy-dev.yml'], true)),
   ];
   return runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
@@ -123,6 +136,17 @@ async function main(): Promise<number> {
   const home = devcheckHome(main);
   mkdirSync(home, { recursive: true });
   const release = takeLock(join(home, 'run.lock'));
+  // A kill (Ctrl-C, a background job's timeout) skips the pipeline's finally — cleanup doesn't run, and the
+  // next run's sweep deletes what this one left. The lock must not outlive the process either way.
+  for (const [sig, code] of [
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)
+    process.once(sig, () => {
+      release();
+      process.exit(code);
+    });
+  const ledger = openLedger(join(home, 'ledger.dev.jsonl'));
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}-${args.tier}`;
   const out = runDir(worktree, runId);
   const shotsDir = join(out, 'shots');
@@ -136,7 +160,7 @@ async function main(): Promise<number> {
       tier: args.tier,
       expectedSha: sha,
       scenarios,
-      ledger: openLedger(join(home, 'ledger.dev.jsonl')),
+      ledger,
       shotsDir,
       waitForDeploy: args.deployWait
         ? () =>
@@ -150,23 +174,22 @@ async function main(): Promise<number> {
         : undefined,
       fetchShell,
       async openBrowser() {
+        validateCachedState(statePath(main), env, log);
         const { browser, context } = await launch(pw, statePath(main));
         const page = await context.newPage();
         return {
           page,
           signIn: (shot) =>
             ensureSignedIn(page, context, env, { statePath: statePath(main), shot }),
-          readSession: () => readSession(page, env),
+          readSession: async () => {
+            const s = await readSession(page, env);
+            if (s) assertTestUser(s, env.DEVCHECK_SUB);
+            return s;
+          },
           close: () => browser.close(),
         };
       },
-      makeApi: (token) =>
-        createApiClient({
-          fetch,
-          token,
-          ledger: openLedger(join(home, 'ledger.dev.jsonl')),
-          run: runId,
-        }),
+      makeApi: (token) => createApiClient({ fetch, token, ledger, run: runId }),
       now: Date.now,
       log,
     });
@@ -179,7 +202,7 @@ async function main(): Promise<number> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
   main().then(
     (code) => process.exit(code),
     (err: unknown) => {

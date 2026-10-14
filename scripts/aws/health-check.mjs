@@ -84,9 +84,10 @@ await check(`edge serves the new shell (${expectedRefs.length} asset refs)`, asy
   }
 });
 
-// The build marker publish-frontend stamped. Only in CI (a SHA is set): a local publish says 'local'.
-const buildSha = process.env.APERTURE_BUILD_SHA || process.env.GITHUB_SHA;
-if (buildSha)
+// The build marker publish-frontend stamped, read from this build's own index.html (not the environment, so a
+// step-scoped APERTURE_BUILD_SHA can't make it compare against the wrong commit). A local build says 'local'.
+const buildSha = readFileSync(shellPath, 'utf8').match(/<meta name="aperture-build" content="([^"]*)"/)?.[1];
+if (buildSha && buildSha !== 'local')
   await check(`edge shell carries build marker ${buildSha.slice(0, 7)}`, async () => {
     const r = await fetch(`${appUrl}/`);
     const html = await r.text();

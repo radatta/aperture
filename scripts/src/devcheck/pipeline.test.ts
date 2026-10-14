@@ -3,7 +3,7 @@ import type { ApiClient, DevTask } from './api';
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
-import type { PwPage, PwResponse } from './pw-types';
+import type { PwPage, PwRequest } from './pw-types';
 import type { Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
@@ -19,17 +19,18 @@ function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & { entries: 
   };
 }
 
-// A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a response.
+// A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a request
+// whose response arrives when `respond` says (immediately by default).
 function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[] } = {}) {
   const tasks = new Map<string, DevTask>(
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
   );
   const deleted: string[] = [];
-  const listeners: ((r: PwResponse) => void)[] = [];
+  const listeners: ((r: PwRequest) => void)[] = [];
   const inPage = [...(opts.inPage ?? [SHA])];
   let n = 0;
   const page = {
-    on: (ev: string, fn: (r: PwResponse) => void) => void (ev === 'response' && listeners.push(fn)),
+    on: (ev: string, fn: (r: PwRequest) => void) => void (ev === 'request' && listeners.push(fn)),
     evaluate: async (expr: string) =>
       expr.includes('aperture-build') ? (inPage.length > 1 ? inPage.shift() : inPage[0]) : null,
     reload: async () => undefined,
@@ -38,16 +39,23 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     getByRole: () => ({}),
     getByText: () => ({}),
   } as unknown as PwPage;
-  const uiCreate = (title: string) => {
+  const uiCreate = (title: string, respond: Promise<void> | 'never' = Promise.resolve()) => {
     const id = `t${++n}`;
     tasks.set(id, { id, title });
+    const url = 'https://dev.aperture.rahuldatta.dev/api/createTask';
     const res = {
-      url: () => 'https://dev.aperture.rahuldatta.dev/api/createTask',
+      url: () => url,
       status: () => 200,
       request: () => ({ method: () => 'POST' }),
       json: async () => ({ id }),
     };
-    for (const l of listeners) l(res);
+    const req = {
+      url: () => url,
+      method: () => 'POST',
+      response: () =>
+        respond === 'never' ? new Promise<never>(() => undefined) : respond.then(() => res),
+    };
+    for (const l of listeners) l(req);
     return id;
   };
   const api: ApiClient = {
@@ -162,6 +170,56 @@ describe('runPipeline', () => {
     expect(w.deleted).toEqual([]);
   });
 
+  it('a create still in flight when its step fails is waited for and cleaned up', async () => {
+    const w = world();
+    let answer!: () => void;
+    const late = new Promise<void>((res) => (answer = res));
+    const sc = scenario(async (x) => {
+      x.uiCreate('slow', late);
+      setTimeout(answer, 5); // the response lands after the step has already thrown
+      throw new Error('step timed out');
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([['t1', 'deleted']]);
+    expect(w.tasks.size).toBe(0);
+  });
+
+  it('a create that never answers is a possible leak — LEFTOVERS', async () => {
+    const w = world();
+    const sc = scenario(async (x) => void x.uiCreate('lost', 'never'))(w);
+    const r = await runPipeline(deps(w, [sc], memLedger(), { responseWaitMs: 5 }));
+    expect(r.orphanIntents).toEqual(['ui:createTask sent, no response within the wait']);
+    expect(r.codes).toContain('LEFTOVERS');
+  });
+
+  it('a task that appears during the run without a ledger entry fails it, and is not deleted', async () => {
+    const w = world();
+    const sc = scenario(
+      async (x) => void x.tasks.set('ghost', { id: 'ghost', title: 'from getDay' }),
+    )(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.appeared).toEqual(['ghost']);
+    expect(r.codes).toEqual(['LEFTOVERS']);
+    expect(w.deleted).toEqual([]);
+  });
+
+  it('a page session that is no longer the test user stops cleanup with WRONG_USER', async () => {
+    const w = world();
+    w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
+    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    expect(r.codes).toContain('WRONG_USER');
+    expect(w.deleted).toEqual([]);
+  });
+
+  it('a swept id that survives its delete is a leftover', async () => {
+    const w = world({ existing: ['old1'] });
+    w.api.writes.deleteTask = async () => undefined;
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'old1' }]);
+    const r = await runPipeline(deps(w, [], ledger));
+    expect(r.created).toEqual([{ id: 'old1', via: 'swept', final: 'left' }]);
+    expect(r.codes).toEqual(['LEFTOVERS']);
+  });
+
   it('LEFTOVERS when a delete does not take', async () => {
     const w = world();
     w.api.writes.deleteTask = async () => undefined; // server ignores it
@@ -183,8 +241,12 @@ describe('runPipeline', () => {
   it('reloads until the page shows the expected build; BUILD_MISMATCH_IN_PAGE if it never does', async () => {
     const ok = await runPipeline(deps(world({ inPage: ['old', 'old', SHA] }), []));
     expect(ok.status).toBe('PASS');
-    const bad = await runPipeline(deps(world({ inPage: ['old'] }), []));
+    let reloads = 0;
+    const w = world({ inPage: ['old'] });
+    w.browser.page.reload = async () => void reloads++;
+    const bad = await runPipeline(deps(w, []));
     expect(bad.codes).toEqual(['BUILD_MISMATCH_IN_PAGE']);
+    expect(reloads).toBe(3);
   });
 
   it('DEV_CHANGED_MID_RUN when the edge build differs at the end', async () => {

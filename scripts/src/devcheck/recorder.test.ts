@@ -10,14 +10,11 @@ describe('recorder', () => {
   it('takes ids from each create response shape', () => {
     expect(idsFromCreateResponse('createTask', { id: 'a' })).toEqual(['a']);
     expect(idsFromCreateResponse('createTasks', [{ id: 'a' }, { id: 'b' }])).toEqual(['a', 'b']);
-    // a split makes a new parent (standalone) and always a new follow-up; the original isn't new
-    expect(
-      idsFromCreateResponse('splitTask', {
-        parent: { id: 'p' },
-        original: { id: 'o' },
-        followUp: { id: 'f' },
-      }),
-    ).toEqual(['p', 'f']);
+    // the follow-up is always new; the parent only when the split task was ours (deleting a parent
+    // deletes its parts, so an unrecorded original under it must keep the parent off the ledger)
+    const split = { parent: { id: 'p' }, original: { id: 'o' }, followUp: { id: 'f' } };
+    expect(idsFromCreateResponse('splitTask', split, (id) => id === 'o')).toEqual(['p', 'f']);
+    expect(idsFromCreateResponse('splitTask', split)).toEqual(['f']);
   });
 
   it('ignores other methods and malformed bodies', () => {

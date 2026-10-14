@@ -7,16 +7,16 @@ import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, type ReasonCode } from './errors';
 import { orphanIntents, pendingIds, type Ledger } from './ledger';
-import { idsFromCreateResponse, methodOf } from './recorder';
+import { CREATE_METHODS, idsFromCreateResponse, methodOf } from './recorder';
 import type { CreatedRecord, RunResult, StepResult } from './report';
-import type { PwPage, PwResponse } from './pw-types';
+import type { PwPage, PwRequest, PwResponse } from './pw-types';
 import { createUi, datesFor, makeShot, type Ctx, type Scenario } from './scenario';
 import type { Session } from './token';
 
 export interface BrowserSession {
   page: PwPage;
   signIn(shot: (name: string) => Promise<void>): Promise<Session>;
-  readSession(): Promise<Session | null>;
+  readSession(): Promise<Session | null>; // throws WRONG_USER if the page's session isn't the test user
   close(): Promise<void>;
 }
 
@@ -33,6 +33,7 @@ export interface PipelineDeps {
   makeApi: (token: () => string) => ApiClient;
   now: () => number;
   log: (msg: string) => void;
+  responseWaitMs?: number; // how long cleanup waits for a create still in flight (default 30 s)
 }
 
 const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous shell first (pwa-two-launch-refresh)
@@ -59,7 +60,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     r.codes.push(code);
   };
   const runIds: string[] = []; // created in this run, oldest first
-  const pendingRecords: Promise<void>[] = [];
+  const pendingRecords: Promise<void>[] = []; // one per create request, from the moment it's SENT
+  let baseline: Set<string> | undefined; // the partition's task ids right after the sweep
   let browser: BrowserSession | undefined;
   let session: Session | undefined;
   let api: ApiClient | undefined;
@@ -73,7 +75,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const page = browser.page;
     page.on('console', (m) => m.type() === 'error' && r.consoleErrors.push(m.text()));
     page.on('pageerror', (e) => r.consoleErrors.push(String(e)));
-    page.on('response', (res) => pendingRecords.push(record(res)));
+    // Track creates from the request, not the response: one still in flight when a step times out must be
+    // waited for (and its id recorded) before cleanup, not lost.
+    page.on('request', (req) => {
+      const method = req.method() === 'POST' ? methodOf(req.url()) : undefined;
+      if (method && (CREATE_METHODS as readonly string[]).includes(method))
+        pendingRecords.push(awaitCreate(req, method));
+    });
     const ui = createUi(page);
     const shot = makeShot(page, ui, d.shotsDir, () => prefix, r.shots);
 
@@ -89,14 +97,15 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         r.swept.push(id);
       }
     }
+    baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
 
     r.startSha = parseMarker(await d.fetchShell());
     let inPage: string | undefined;
-    for (let i = 0; i <= IN_PAGE_RELOADS; i++) {
+    for (let reloads = 0; ; reloads++) {
       inPage = await page.evaluate<string | undefined>(
         `document.querySelector('meta[name="aperture-build"]')?.content`,
       );
-      if (inPage === d.expectedSha) break;
+      if (inPage === d.expectedSha || reloads === IN_PAGE_RELOADS) break;
       await page.reload({ waitUntil: 'domcontentloaded' });
     }
     if (inPage !== d.expectedSha)
@@ -170,11 +179,20 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   }
   return r;
 
-  async function record(res: PwResponse): Promise<void> {
-    if (res.request().method() !== 'POST' || res.status() !== 200) return;
-    const method = methodOf(res.url());
-    if (!method) return;
-    const ids = idsFromCreateResponse(method, await res.json().catch(() => null));
+  async function awaitCreate(req: PwRequest, method: string): Promise<void> {
+    const timeout = new Promise<'timeout'>((res) =>
+      setTimeout(() => res('timeout'), d.responseWaitMs ?? 30_000).unref(),
+    );
+    const res = await Promise.race([req.response().catch(() => null), timeout]);
+    if (res === 'timeout') r.orphanIntents.push(`ui:${method} sent, no response within the wait`);
+    else if (res) await record(res, method);
+  }
+
+  async function record(res: PwResponse, method: string): Promise<void> {
+    if (res.status() !== 200) return;
+    const known = d.ledger.read();
+    const isRecorded = (id: string) => known.some((e) => e.op === 'created' && e.id === id);
+    const ids = idsFromCreateResponse(method, await res.json().catch(() => null), isRecorded);
     for (const id of ids) {
       if (runIds.includes(id)) continue;
       runIds.push(id);
@@ -184,8 +202,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
 
   async function cleanup(): Promise<void> {
     const entries = d.ledger.read();
-    r.orphanIntents = orphanIntents(entries.filter((e) => e.run === d.runId)).map(
-      (e) => `${e.via} "${e.title ?? ''}"`,
+    r.orphanIntents.push(
+      ...orphanIntents(entries.filter((e) => e.run === d.runId)).map(
+        (e) => `${e.via} "${e.title ?? ''}"`,
+      ),
     );
     if (r.orphanIntents.length) fail('LEFTOVERS');
     const mine = entries.filter((e) => e.run === d.runId && e.op === 'created' && e.id);
@@ -194,9 +214,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if (mine.length) fail('LEFTOVERS');
       return;
     }
-    // The token may have renewed in the page since sign-in.
-    const fresh = await browser?.readSession().catch(() => null);
-    if (fresh) session = fresh;
+    // The token may have renewed in the page since sign-in — and must still be the test user's.
+    try {
+      const fresh = await browser?.readSession();
+      if (fresh) session = fresh;
+    } catch (err) {
+      if (codeOf(err) === 'WRONG_USER') {
+        fail('WRONG_USER');
+        return;
+      }
+      // a dead page: keep the sign-in token
+    }
 
     const pending = new Set(pendingIds(entries));
     for (const e of [...mine].reverse()) {
@@ -217,11 +245,19 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if ((await api.reads.getTask(rec.id)) !== null) continue; // stays 'left'
       rec.final = after.some((e) => e.id === rec.id && e.op === 'gone') ? 'gone' : 'deleted';
     }
+    for (const id of r.swept)
+      if ((await api.reads.getTask(id)) !== null)
+        r.created.push({ id, via: 'swept', final: 'left' });
     if (r.created.some((c) => c.final === 'left')) fail('LEFTOVERS');
 
+    // A task the ledger doesn't know is never deleted. One that was there before the run is reported; one
+    // that appeared during it came from a create path the recorder missed — a leak, so the run fails.
     const known = new Set(after.filter((e) => e.id).map((e) => e.id!));
-    const visible = [...(await api.reads.listTasks()), ...(await api.reads.listBacklog())];
-    r.unrecorded = [...new Set(visible.map((t) => t.id))].filter((id) => !known.has(id));
+    const visible = new Set((await api.reads.listTasks()).map((t) => t.id));
+    const unknown = [...visible].filter((id) => !known.has(id));
+    r.unrecorded = unknown.filter((id) => !baseline || baseline.has(id));
+    r.appeared = baseline ? unknown.filter((id) => !baseline!.has(id)) : [];
+    if (r.appeared.length) fail('LEFTOVERS');
 
     if (r.startSha) {
       r.endSha = parseMarker(await d.fetchShell());

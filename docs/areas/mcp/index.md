@@ -173,13 +173,17 @@ Every write still needs the user's in-the-moment approval (CLAUDE.md → _Apertu
 narrow exceptions: on prod, the one `CC blocked` / `CC done` task a session keeps (by its recorded id); on
 `aperture-dev`, deleting tasks the session itself created. The second is enforced, not trusted:
 `.claude/hooks/mcp-dev-ledger.sh` records every id `create_task`, `create_tasks` and `split_task` return
-(a split's new parent and follow-up), and denies an `aperture-dev` `delete_task` for any id it never recorded.
-Deleting a parent records the parts the server deleted with it. Ledger format and file:
+(a split's follow-up, and its parent only when the split task was recorded and standalone), and denies an
+`aperture-dev` `delete_task` for any id it never recorded. Deleting a parent deletes its parts server-side, so
+a recorded parent with a part the hook didn't record — attached with `update_task`, or split from an
+unrecorded task — is marked `tainted` and can't be deleted either. Parts attached from the app itself are
+invisible to the hook: don't attach your own dev tasks under one Claude created. Ledger format and file:
 [ops/DEV-CHECK.md](../../ops/DEV-CHECK.md) → _Ledgers_. Prod is never matched.
 
 **A session's tool list is fixed when it connects.** After a deploy adds or changes a tool, a running Claude
-Code session still sees the old list; `/mcp` reconnect picks up the new one. Check the live list with
-`tools/list` before concluding a parameter is missing.
+Code session still sees the old list. A `/mcp` reconnect usually picks up the new one, but a schema has been
+seen to stay stale even after one — check the live list with `tools/list` on the server before concluding a
+parameter is missing.
 
 ## Dependency note — the MCP protocol is hand-rolled (no SDK)
 
