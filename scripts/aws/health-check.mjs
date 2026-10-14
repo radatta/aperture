@@ -84,6 +84,16 @@ await check(`edge serves the new shell (${expectedRefs.length} asset refs)`, asy
   }
 });
 
+// The build marker publish-frontend stamped. Only in CI (a SHA is set): a local publish says 'local'.
+const buildSha = process.env.APERTURE_BUILD_SHA || process.env.GITHUB_SHA;
+if (buildSha)
+  await check(`edge shell carries build marker ${buildSha.slice(0, 7)}`, async () => {
+    const r = await fetch(`${appUrl}/`);
+    const html = await r.text();
+    const served = html.match(/<meta name="aperture-build" content="([^"]*)"/)?.[1];
+    expect(served === buildSha, `served marker "${served ?? 'none'}", expected "${buildSha}"`);
+  });
+
 await check('manifest served as application/manifest+json', async () => {
   const r = await fetch(`${appUrl}/manifest.webmanifest`);
   expect(r.status === 200, `expected 200, got ${r.status}`);

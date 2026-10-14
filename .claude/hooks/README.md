@@ -40,11 +40,18 @@ rules: `docs/ops/COI-SANDBOX.md` → *Container killed*; re-derive them from
 `localNotes/code-on-incus/APERTURE-ANALYSIS.md` on every COI upgrade. Implementation constraint (builtins
 only, deny text over stdin): the Bash guard's header.
 
+## MCP dev ledger
+
+`mcp-dev-ledger.sh` (PreToolUse on `aperture-dev` `delete_task`, PostToolUse on its create/split/delete tools)
+records every task id an `aperture-dev` create returns and denies a delete of any id it never recorded — the
+enforcement behind CLAUDE.md's standing approval for dev cleanup. Fails closed (no ledger → deny); the
+PostToolUse half never blocks. Format: `docs/ops/DEV-CHECK.md` → *Ledgers*.
+
 ## Testing
 
 `python3 .claude/hooks/testdata/run-fixtures.py` runs every guard against its fixture file
 (`reverse-shell-fixtures.jsonl`, `grep-guard-fixtures.jsonl`, `precommit-fixtures.jsonl`,
-`gh-safety-fixtures.jsonl`), checks each guard is registered in `settings.json` under its expected
+`gh-safety-fixtures.jsonl`, `mcp-ledger-fixtures.jsonl`), checks each guard is registered in `settings.json` under its expected
 matchers, and exits non-zero on a mismatch. Run it after
 touching a guard. A guard can fail **silently** — `precommit-guard`'s secret scan never worked from the day it was
 added (#4, 2026-08-09) until the fixtures caught it: a hard-wrapped regex made `grep` error out, and the

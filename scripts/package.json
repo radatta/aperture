@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -b",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "devcheck": "tsx src/devcheck/run.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

@@ -12,6 +12,10 @@ import { APERTURE_MANIFEST } from './pwa/manifest.ts';
 // unmapped. `preview` shares the base deliberately — it increments into the same mapped range.
 const DEV_PORT = hostname().startsWith('coi-') ? 6173 : 5173;
 
+// The build marker: index.html's %VITE_BUILD_SHA% and BUILD_SHA (src/shared/env.ts). publish-frontend.mjs
+// sets the deployed commit; any other build says 'local' rather than shipping the literal placeholder.
+process.env.VITE_BUILD_SHA ||= 'local';
+
 // https://vite.dev/config/
 export default defineConfig({
   server: { port: DEV_PORT },

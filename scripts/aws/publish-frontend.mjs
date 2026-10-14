@@ -33,6 +33,9 @@ run('pnpm --filter @aperture/app build', {
     VITE_API_BASE: app.AppUrl,
     VITE_COGNITO_AUTHORITY: data.CognitoAuthority,
     VITE_COGNITO_CLIENT_ID: app.UserPoolClientId,
+    // The build marker (app/index.html meta + Settings stamp). APERTURE_BUILD_SHA wins when a workflow deploys
+    // a ref other than the one it runs on (a dispatched deploy's GITHUB_SHA is main's); health-check asserts it.
+    VITE_BUILD_SHA: process.env.APERTURE_BUILD_SHA || process.env.GITHUB_SHA || 'local',
   },
 });
 
