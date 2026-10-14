@@ -76,10 +76,14 @@ if [[ $T =~ $RE_DEVNET ]]; then
 fi
 
 # Exec watcher nc-exec/ncat-exec (procwatcher.go:41-76): a process whose argv0 starts with `nc` and whose
-# text holds `-e` ANYWHERE → PAUSE — so `nc -z host.us-east-1… 443` trips it via `-east`. Only that
-# command's own segment counts (up to ; | & or a newline).
+# text holds `-e` ANYWHERE → PAUSE — so `nc -z host.us-east-1… 443` trips it via `-east`. A spaced `-e`
+# counts only in nc's own segment (up to ; | & or a newline; `\`-continuations joined first), so `set -e`
+# and `grep -e` pass. A glued one (`us-east-1`) counts anywhere on an nc line: a variable, loop or xargs
+# can carry it into nc's argv from another segment.
+S=${LC//$'\\\n'/ }
 RE_NC="${COI_TOK}nc[^[:space:]]*[[:space:]][^;|&"$'\n'"]*-e"
-if [[ $LC =~ $RE_NC ]]; then
+RE_NCTOK="${COI_TOK}nc[^[:space:]]*[[:space:]]"
+if [[ $S =~ $RE_NC ]] || [[ $S =~ $RE_NCTOK && $S =~ [[:alnum:]]-e ]]; then
   coi_deny "Blocked: an nc/ncat command whose text contains \`-e\` anywhere (a flag, or a hostname like \`us-east-1\`) matches COI's netcat exec pattern and PAUSES the container. Use curl -sI for reachability instead."
 fi
 

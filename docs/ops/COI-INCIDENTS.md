@@ -1241,7 +1241,7 @@ Pattern via Curl/Wget*, level high) requires `/curl`|`/wget` **and** `/tmp/`|`/d
 `procwatcher.go:353-388`). Unchanged v0.12 → v0.15. The Bash tool's own wrapper supplies `sh -c` (as
 `bash -c`) and `/tmp/` on **every** call, so the five characters `/curl` or `/wget` — a path segment, a
 URL, a grep pattern — complete it. Bare `curl` has no leading slash and never matches. The Grep tool
-can't trip it: `rg` carries no `sh -c`.
+shouldn't trip it (*inference*: Claude Code spawns `rg` without a shell, so no `sh -c`).
 
 ## Fix
 
@@ -1249,4 +1249,4 @@ The `/curl`|`/wget` arm in `.claude/hooks/coi-reverse-shell-guard.sh` (hot-fixed
 committed with the v0.15 alignment), plus the `CLAUDE.md` rule. Rejected: `[detection] sigma_dir =
 "/nonexistent"` (switches off every Sigma rule, not just this one) and `auto_pause_on_high = false`
 (also disarms the network HIGHs). After an unfreeze the pause latch holds for the container's life on
-v0.15 — `COI-SANDBOX.md` → *Container frozen*.
+v0.15 (*inference* — no reset code) — `COI-SANDBOX.md` → *Container frozen*.

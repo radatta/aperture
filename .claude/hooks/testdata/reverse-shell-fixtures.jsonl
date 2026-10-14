@@ -60,5 +60,10 @@
 {"expect":"allow","why":"the '-e' belongs to set, not to nc's own argv","cmd":"set -e; nc -z localhost 5432"}
 {"expect":"allow","why":"the '-e' belongs to grep, after &&","cmd":"nc -z localhost 6173 && grep -e x f"}
 {"expect":"deny","why":"argv0 only has to START with nc — nc.openbsd with '-e' inside a hostname","cmd":"nc.openbsd -z db.us-east-1.example.com 443"}
-{"expect":"deny","why":"the Monitor tool runs a shell command too — same rules","tool":"Monitor","cmd":"tail -f docs/curl/log.txt | grep --line-buffered x"}
+{"expect":"deny","reason":"netcat exec pattern","why":"a backslash continuation puts the hostname on the next line, still in nc's argv","cmd":"nc -zv \\\ndynamodb.us-east-1.amazonaws.com 443"}
+{"expect":"deny","reason":"netcat exec pattern","why":"the hostname reaches nc's argv through a variable from another segment","cmd":"H=db.us-east-1.example.com; nc -z $H 443"}
+{"expect":"deny","reason":"netcat exec pattern","why":"the hostname reaches nc's argv through xargs","cmd":"echo db.us-east-1.example.com | xargs nc -z"}
+{"expect":"allow","why":"a continuation with no '-e' anywhere","cmd":"nc -zv \\\nlocalhost 6173"}
+{"expect":"allow","why":"a glued '-e' with no nc on the line","cmd":"aws s3 ls --region us-east-1"}
+{"expect":"deny","reason":"Sigma","why":"the Monitor tool runs a shell command too — same rules","tool":"Monitor","cmd":"tail -f docs/curl/log.txt | grep --line-buffered x"}
 {"expect":"allow","why":"an ordinary Monitor until-loop","tool":"Monitor","cmd":"until [ -f out.txt ]; do sleep 1; done; echo ready"}

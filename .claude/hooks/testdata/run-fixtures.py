@@ -27,6 +27,7 @@ whatever branch the runner happens to be invoked from. A fixture may also set
 "branch" (run in a repo on that branch) and "stage" (file content staged first);
 outside a repo suite, "cwd" (the payload's session cwd) and "tool" (override the
 suite's tool name, e.g. Monitor, which carries a shell command like Bash);
+"reason" (a substring the deny reason must contain, so a deny can't pass via the wrong arm);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
 """
@@ -40,6 +41,15 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE"}
 
+# Matchers each guard must be registered under in .claude/settings.json — a fixture with "tool":"Monitor"
+# proves nothing if the Monitor entry is gone, since the guards never read tool_name.
+REGISTERED = {
+    "coi-reverse-shell-guard.sh": ("Bash", "Monitor"),
+    "coi-grep-guard.sh": ("Grep",),
+    "precommit-guard.sh": ("Bash", "Monitor"),
+    "gh-safety-guard.sh": ("Bash", "Monitor"),
+}
+
 # (hook, fixtures, tool, needs_repo)
 SUITES = [
     ("coi-reverse-shell-guard.sh", "reverse-shell-fixtures.jsonl", "Bash", False),
@@ -49,8 +59,8 @@ SUITES = [
 ]
 
 
-def decision_for(hook: pathlib.Path, tool: str, tool_input: dict, cwd: str | None) -> str:
-    """Run the hook with a PreToolUse payload; return its permission decision."""
+def decision_for(hook: pathlib.Path, tool: str, tool_input: dict, cwd: str | None) -> tuple[str, str]:
+    """Run the hook with a PreToolUse payload; return its permission decision and reason."""
     payload = {"tool_name": tool, "tool_input": tool_input}
     if cwd:
         payload["cwd"] = cwd
@@ -61,14 +71,15 @@ def decision_for(hook: pathlib.Path, tool: str, tool_input: dict, cwd: str | Non
         text=True,
     )
     if proc.returncode != 0:
-        return f"ERROR(rc={proc.returncode}): {proc.stderr.strip()[:120]}"
+        return f"ERROR(rc={proc.returncode}): {proc.stderr.strip()[:120]}", ""
     out = proc.stdout.strip()
     if not out:
-        return "allow"  # silent pass-through
+        return "allow", ""  # silent pass-through
     try:
-        return json.loads(out)["hookSpecificOutput"]["permissionDecision"]
+        hso = json.loads(out)["hookSpecificOutput"]
+        return hso["permissionDecision"], hso.get("permissionDecisionReason", "")
     except (ValueError, KeyError) as exc:
-        return f"ERROR(unparsable): {exc}"
+        return f"ERROR(unparsable): {exc}", ""
 
 
 def make_repo(root: str, branch: str) -> str:
@@ -77,7 +88,7 @@ def make_repo(root: str, branch: str) -> str:
     return repo
 
 
-def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None) -> str:
+def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None) -> tuple[str, str]:
     tool = case.get("tool", tool)
     tool_input = case.get("input") or {"command": case["cmd"]}
     if root is None:
@@ -106,8 +117,8 @@ def run_suite(hook_name: str, fixtures_name: str, tool: str, root: str | None) -
         total += 1
         case = json.loads(line)
         expected = case["expect"]
-        actual = run_case(hook, tool, case, root)
-        ok = actual == expected
+        actual, reason = run_case(hook, tool, case, root)
+        ok = actual == expected and case.get("reason", "") in reason
         if not ok:
             failures += 1
         label = (case.get("cmd") or json.dumps(case["input"])).splitlines()[0][:56]
@@ -117,8 +128,26 @@ def run_suite(hook_name: str, fixtures_name: str, tool: str, root: str | None) -
     return failures, total
 
 
-def main() -> int:
+def check_registration() -> tuple[int, int]:
+    settings = json.loads((HERE.parent.parent / "settings.json").read_text(encoding="utf-8"))
+    found: dict[str, set[str]] = {}
+    for entry in settings["hooks"]["PreToolUse"]:
+        tools = set(entry.get("matcher", "").split("|"))
+        for h in entry["hooks"]:
+            found.setdefault(pathlib.PurePath(h["command"]).name, set()).update(tools)
+    print("\n== settings.json registration ==")
     failures = total = 0
+    for hook_name, matchers in REGISTERED.items():
+        for m in matchers:
+            total += 1
+            ok = m in found.get(hook_name, set())
+            failures += not ok
+            print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} on {m}")
+    return failures, total
+
+
+def main() -> int:
+    failures, total = check_registration()
     with tempfile.TemporaryDirectory() as root:  # each repo-needing fixture gets a fresh repo under here
         for hook_name, fixtures_name, tool, needs_repo in SUITES:
             f, t = run_suite(hook_name, fixtures_name, tool, root if needs_repo else None)

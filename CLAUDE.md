@@ -43,7 +43,7 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   in a Bash line pauses the container** (a Sigma rule the Bash wrapper pre-satisfies) — bare `curl` is
   fine; read `…/curl/…` paths with the Read tool. So do two exec-watcher shapes — `nc…` with `-e`
   anywhere in its text (even `us-east-1`) and `node -e` with `child_process` + `net`
-  (`docs/ops/COI-SANDBOX.md` → _Container frozen_). **Any remote `:8080` connection is a kill.** This
+  (`docs/ops/COI-SANDBOX.md` → _Container frozen_). **A remote `:8080` connection pauses the container, and kills it when COI's nft monitor runs.** This
   applies to the literal text anywhere — test fixtures, echoed strings, heredocs — so file content
   carrying these belongs in the Write/Edit tools, and every subagent prompt that may run Bash or Grep
   must carry this rule. `.claude/hooks/coi-reverse-shell-guard.sh` (Bash and Monitor) and

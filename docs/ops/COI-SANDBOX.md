@@ -329,7 +329,7 @@ A network token (`process.go:500-508`) is `tcp`, `udp`, `socket`, `fsockopen`, `
 whitespace-delimited IP, or a non-loopback `host:port` — anywhere on the same command line, and the
 Bash wrapper is one command line. Until v0.14 any `:` satisfied it (Incident F). **Grep is exposed
 too:** its `rg` argv is a command line, so a pattern carrying a strong token kills (`/dev/tcp/` and the
-`/curl` pause can't fire there — `rg` is no shell and has no `sh -c`).
+`/curl` pause shouldn't fire there — *inference*: `rg` is spawned without a shell, so no `sh -c`).
 
 **The fix is not `auto_kill_on_critical = false`** — that flag is the sandbox's actual purpose. The
 list is compiled in, but `[monitoring] reverse_shell_one_liners = "warn"` (set in `.coi/config.toml`)
@@ -385,8 +385,8 @@ To relaunch Claude this way instead of `bash`, add the token env var — see *Op
 # ── in the VM ──  to apply a .coi/config.toml change and KEEP the container (v0.15; done 2026-10-13):
 # 3. after step 2, stop it, then start it again from the repo folder. `coi shell` reuses a STOPPED
 #    persistent container (a running one gets a second container instead). The stop exports nothing;
-#    the container's disk keeps ~/.claude. cpu/memory are applied only when a container is created, so
-#    set them on the stopped one too (processes as well — re-applying it on reuse isn't verified).
+#    the container's disk keeps ~/.claude. cpu/memory seem applied only when a container is created (unverified),
+#    so set them on the stopped one too (processes as well — re-applying it on reuse isn't verified).
 #    Then, inside, `claude --resume` from /workspace for each session.
 coi container stop coi-88cded0c-1
 incus config set coi-88cded0c-1 limits.cpu=N limits.memory=NGiB limits.processes=N   # only if [limits] changed
