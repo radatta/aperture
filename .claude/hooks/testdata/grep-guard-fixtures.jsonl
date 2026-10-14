@@ -1,0 +1,23 @@
+{"expect":"deny","why":"strong token in rg's argv kills","input":{"pattern":"socket.socket","path":"src"}}
+{"expect":"deny","why":"strong token","input":{"pattern":"fsockopen"}}
+{"expect":"deny","why":"interactive shell","input":{"pattern":"bash -i"}}
+{"expect":"deny","why":"netcat exec, with a glob","input":{"pattern":"nc -e","glob":"*.sh"}}
+{"expect":"deny","why":"matched after lowercasing","input":{"pattern":"System.Net.Sockets"}}
+{"expect":"deny","why":"powershell + 'tcp' from the path — the whole argv counts","input":{"pattern":"powershell","path":"vendor/tcp-tools"}}
+{"expect":"deny","why":"socat + exec:","input":{"pattern":"socat.*exec:"}}
+{"expect":"deny","why":"one-liner + network token","input":{"pattern":"python3 -c .*socket"}}
+{"expect":"deny","why":"perl socket module","input":{"pattern":"perl -MIO::Socket"}}
+{"expect":"deny","why":"another named shell","input":{"pattern":"zsh -i","glob":"*.md"}}
+{"expect":"allow","why":"escaped fragment — the advised form","input":{"pattern":"socket\\.sock","path":"src"}}
+{"expect":"allow","why":"regex class instead of the literal space","input":{"pattern":"bash\\s-i"}}
+{"expect":"allow","why":"token-anchored: ssh -i is safe","input":{"pattern":"ssh -i"}}
+{"expect":"allow","why":"bare powershell, no network token","input":{"pattern":"powershell","path":"docs"}}
+{"expect":"allow","why":"one-liner without a network token","input":{"pattern":"python3 -c"}}
+{"expect":"allow","why":"rg carries no sh -c, so the Sigma /curl rule can't fire","input":{"pattern":"/curl","path":"docs"}}
+{"expect":"allow","why":"rg is not a shell, so /dev/tcp/ can't fire","input":{"pattern":"/dev/tcp/","path":"docs"}}
+{"expect":"allow","why":"exec: without socat","input":{"pattern":"exec:","path":"src"}}
+{"expect":"allow","why":"ordinary search","input":{"pattern":"deny","path":".claude/hooks","glob":"*.sh"}}
+{"expect":"deny","why":"no path → rg searches the cwd, which reaches its argv; a cwd naming 'websocket' is a network token next to socat","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat"}}
+{"expect":"deny","why":"a relative path resolves against the cwd before it reaches rg's argv","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":"docs"}}
+{"expect":"deny","why":"an empty path means the cwd","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":""}}
+{"expect":"allow","why":"an absolute path outside the cwd replaces it","cwd":"/workspace/.claude/worktrees/websocket-x","input":{"pattern":"socat","path":"/workspace/docs"}}

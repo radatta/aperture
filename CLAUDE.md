@@ -32,22 +32,30 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
 
 **Inside the COI container (the usual case), four things bite:**
 
-- **Never put a reverse-shell literal on a Bash command line — it kills the container.** COI's monitor
-  matches a hardcoded list: `python -c` / `python3 -c`, `perl -e`, `php -r`, `ruby -e`, `bash -i`,
-  `sh -i`, `nc -e`, `socat`, `/dev/tcp/`. A match is **CRITICAL**, and `auto_kill_on_critical` kills
-  the whole container (no latch — it repeats; `docs/ops/COI-INCIDENTS.md` → Incident F). For the interpreter one-liners the "is this network related?" gate is satisfied
-  by **any `:` in the command** (a dict, a slice like `v[-5:]`, a URL, a timestamp — every JSON
-  one-liner). Use `python3 - <<'PY' … PY` (runs as `python3 -`, not on the list) or `jq`. **This
-  applies to the literal text anywhere in the command**, including test fixtures and echoed strings —
-  file contents mentioning these belong in the Write/Edit tools, not a Bash heredoc.
-  `.claude/hooks/coi-reverse-shell-guard.sh` enforces this; the rule stands whether or not it's registered.
+- **Never put a reverse-shell shape on a Bash command line or in a Grep pattern — it kills the container.**
+  COI v0.15 kills on these anywhere in any process's argv (token-anchored, lowercased): `nc -e`/`ncat -e`;
+  `bash -i`/`sh -i` (any shell); `socket.socket`, `fsockopen`, `System.Net.Sockets`, `ruby -rsocket`;
+  `socat`/`powershell` next to a network token; `/dev/tcp/<host>/…` with a non-loopback host (in a
+  shell line — the Bash wrapper is one); and `python3 -c`/`python -c`/`perl -e`/`ruby -e`/`php -r`
+  **only when the same command also mentions `tcp`, `udp`, `socket`, an IP, or a `host:port`**
+  (`[monitoring] reverse_shell_one_liners = "warn"` downgrades that class). Prefer
+  `python3 - <<'PY' … PY` and `jq` anyway. Separately, **`/curl` or `/wget` (with the slash) anywhere
+  in a Bash line pauses the container** (a Sigma rule the Bash wrapper pre-satisfies) — bare `curl` is
+  fine; read `…/curl/…` paths with the Read tool. So do two exec-watcher shapes — `nc…` with `-e`
+  anywhere in its text (even `us-east-1`) and `node -e` with `child_process` + `net`
+  (`docs/ops/COI-SANDBOX.md` → _Container frozen_). **A remote `:8080` connection pauses the container, and kills it when COI's nft monitor runs.** This
+  applies to the literal text anywhere — test fixtures, echoed strings, heredocs — so file content
+  carrying these belongs in the Write/Edit tools, and every subagent prompt that may run Bash or Grep
+  must carry this rule. `.claude/hooks/coi-reverse-shell-guard.sh` (Bash and Monitor) and
+  `coi-grep-guard.sh` (Grep) enforce it; the rule stands whether or not they're registered. Mechanism:
+  `docs/ops/COI-INCIDENTS.md` → Incidents F and H.
 
 - **`pnpm install` needs `CI=true`** or it aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
 - **`node_modules` is shared with the macOS host** — native binaries belong to whichever side installed
   last. `vite dev`/`vite build` dying with `Cannot find module '../lightningcss.*.node'` is this;
   `pnpm install` fixes it for the current platform (and breaks the other side until they do the same).
   Doesn't affect `tsc` or `vitest`. Mechanism: `docs/ops/COI-INCIDENTS.md` → Incident B → _Related_.
-- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 12 GiB / 6 CPUs, and
+- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 18 GiB / 9 CPUs, and
   **two different ceilings** bite, which is why the crashes read as code bugs when they aren't: the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`,
   _not_ memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory itself (`SIGKILL`/137). A `tsgo`
   fatal has also been seen under load with the mechanism never confirmed — capture the **head** of the

@@ -15,8 +15,9 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 | C | `vite` can't find a native binding | ongoing | `node_modules` shared with the macOS host across two platforms |
 | D | VM rebuilt from scratch; sessions and `coi` profiles gone | 2026-09-06 | A stray `-` in `limactl edit`'s `mounts:` block; `~/.coi/` was VM-local, so the rebuild deleted it |
 | E | Container froze on a HIGH threat verdict 2 min into a session | 2026-09-06 | False positive: session-start read I/O tripped `file_read_rate_mb_per_sec`; `coi audit` then failed to surface the event it had on disk |
-| F | Container **killed** three times mid-session, CRITICAL "reverse shell" | 2026-09-07 | False positive: a hardcoded pattern list flags `python3 -c`, gated only on "the command contains a `:`". Routine JSON one-liners match |
+| F | Container **killed** three times mid-session, CRITICAL "reverse shell" | 2026-09-07 | False positive: a hardcoded pattern list flags `python3 -c`, gated only on "the command contains a `:`". Routine JSON one-liners match (fixed in v0.14; guard kept for the strong patterns and the Sigma pause) |
 | G | 2026-09-07 config-iteration afternoon: session forks on every `--resume`; container-local dotfiles (git identity, mise shadowing) | 2026-09-07 | `--fork-session` on every resume (not COI's doing); `~/.gitconfig` + mise pins live on the rootfs and evaporate per container |
+| H | Container paused by a Bash line containing `/curl` | 2026-10-09, 2026-10-13 | Sigma download-and-execute rule; the Bash wrapper supplies its `/tmp/` + `sh -c` clauses, so `/curl`/`/wget` text alone matches |
 
 ---
 
@@ -25,7 +26,8 @@ Dead ends are recorded on purpose so nobody re-explores them. Applies to any COI
 **TL;DR:** Not memory, not a Claude Code bug. The container's pids cgroup ceiling
 (`limits.processes`, templated to `300` by coi) was saturated at ~295. A second session needs ~15
 more threads, `clone()` returns `EAGAIN`, and the runtime `abort()`s. Fix: raise `max_processes` in
-`.coi/config.toml` — now `2048`, and **verified landing** as of `54fbe95`. Raising the number is not
+`.coi/config.toml` — `4096` since 2026-10-13 (with 18 GiB / 9 CPUs); `2048` (`54fbe95`) was the first
+value **measured landing**. Raising the number is not
 by itself the fix: the first bump (`1024`) never reached Incus and the reason was never confirmed, so
 always measure. See *Verify it took*.
 
@@ -237,8 +239,10 @@ Close numbers ⇒ pids exhaustion, whatever the error claims. Then in order:
 At ~16 threads per foreground session plus a browser and a dev server, **300 only ever budgeted for
 one session.** A pids ceiling is a *ceiling, not a reservation* — raising it costs nothing, memory is
 the real constraint, so be generous. Honest steady-state budget: chromium 60 + vite 60 + 4 sessions ×
-16 + docker 23 ≈ **210**, with `pnpm -r` fanning out on top. `1024` is the floor; **`2048` is what's
-set** (`54fbe95`) and measured landing, at ~10× the honest budget. Go higher only if a real ceiling
+16 + docker 23 ≈ **210**, with `pnpm -r` fanning out on top. `1024` is the floor; **`4096` is what's
+set** since 2026-10-13 — raised with 18 GiB / 9 CPUs when the VM grew to 10 CPU / 22 GiB (user's call,
+no ceiling hit), applied with `incus config set` and read back as `247/4096`; `2048` (`54fbe95`) was the
+first value measured landing, at ~10× the honest budget. Go higher only if a real ceiling
 is ever hit again — the number costs nothing, but a change that doesn't land is worse than no change.
 
 ### Open follow-ups
@@ -1057,7 +1061,8 @@ Checked, so nobody re-derives them:
 daemon still believes the container is paused, so further HIGH threats are logged rather than
 acted on — convenient for finishing the session, but a fresh `coi shell` starts a fresh responder
 with `paused = false` and will freeze you again on the next big install. Fix the config; don't
-rely on this.
+rely on this. (Superseded on v0.15: the responder lives in `coi supervise` until the container stops —
+`COI-SANDBOX.md` → *Container frozen*.)
 
 ## What went right (both incidents)
 
@@ -1106,9 +1111,14 @@ against, because the patterns were on the bash command line rather than in a fil
   `sh -i` bypass the gate and always fire.
 - `internal/monitor/responder.go:137-147` — `ThreatLevelCritical` + `auto_kill_on_critical` →
   `killContainer()`.
-  **No dedupe latch**, unlike HIGH's `r.paused`, so it recurs on every match.
+  **No dedupe latch**, unlike HIGH's `r.paused`, so it recurs on every match (imprecise — the
+  recurrence was the *next* container; see *Worth filing upstream*).
 - Sampling is per `poll_interval_sec` (2s). Fast one-liners often slip between samples; ones blocked
   on a slow pipe (`gh api`, `npm view`) are reliably caught. Prior successes were timing, not safety.
+- **Resolved upstream in COI v0.14.0** (#842, #846, #855–#859): the `:` gate is replaced by a real
+  network-indicator test (`process.go:500-508`), matching is token-anchored, and the class is
+  downgradable via `[monitoring] reverse_shell_one_liners`. On v0.15.0 none of the three commands above
+  would kill.
 
 ## Assessment — false positive, and a costly detector
 
@@ -1124,16 +1134,21 @@ container.
 
 `auto_kill_on_critical = false` would stop the kills and was rejected: it is the sandbox's whole
 point, and it would also disarm the network CRITICALs that matter. The pattern list is compiled in,
-so there is nothing to tune. So:
+so there is nothing to tune (true until v0.14 — see item 3). So:
 
 1. **`.claude/hooks/coi-reverse-shell-guard.sh`** — `PreToolUse` on Bash, denies these shapes before
    they run (behaviour and the substitution table: `COI-SANDBOX.md` → *Container killed*).
 2. **A `CLAUDE.md` rule**, so the constraint survives the hook being unregistered: use
    `python3 - <<'PY' … PY` (runs as `python3 -`, unmatched) or `jq`.
+3. **`[monitoring] reverse_shell_one_liners = "warn"`** in `.coi/config.toml` (v0.14+, set 2026-10-13)
+   — the one-liner class becomes audit-only; the strong patterns stay CRITICAL. The hook was narrowed to
+   v0.15's real shapes at the same time.
 
 ## Worth filing upstream
 
-Two defects, both narrow:
+Both done upstream in v0.14 — the gate (`process.go:500-508`) and the kill path (now one atomic
+delete, `responder.go:279-314`; `r.killed` is set at `:273-275`). The "no dedupe latch" critique was
+imprecise anyway: the recurrence was the *next* container. As filed:
 
 - **The `:` heuristic is not a network test.** Requiring an actual socket indicator — an IP, a port,
   `socket`, `connect` — would remove essentially every false positive here without weakening real
@@ -1200,3 +1215,38 @@ Bare `tsc` and `tsx` stop existing, which is the point — nothing should invoke
 project. Verified nothing did: `scripts/package.json` runs `tsx src/smoke.ts` as a pnpm script and
 `deploy.yml` uses `pnpm --filter @aperture/scripts exec tsx`, both resolving via
 `node_modules/.bin`.
+
+---
+
+# Incident H — Sigma pauses from the text `/curl`
+
+**2026-10-09 (twice, v0.12.0) and 2026-10-13 (twice: once on v0.12.0, once on v0.15.0).** Level
+**HIGH**, container **paused**, `coi unfreeze` needed each time. No download ran; nothing was
+executed.
+
+## What ran
+
+- 2026-10-13, v0.15.0, after the upgrade: a research subagent's Bash `grep -E` whose pattern held
+  `/curl`. Its wrapper command line was `/bin/bash -c source …/shell-snapshots/… && eval '<cmd>' && pwd
+  -P >| /tmp/claude-<pid>-cwd` — read off `/proc/<pid>/cmdline` on the VM.
+- 2026-10-13 11:45 PDT, v0.12.0: a Bash command in the `dev-e2e` worktree; the command itself was not
+  captured.
+- 2026-10-09: two pauses, commands not captured here (the later analysis attributes both to this rule).
+
+## Mechanism
+
+Upstream Sigma rule `proc_creation_lnx_curl_wget_exec_tmp.yml` (*Suspicious Download and Execute
+Pattern via Curl/Wget*, level high) requires `/curl`|`/wget` **and** `/tmp/`|`/dev/shm/` **and**
+`sh -c` in one process's command line, evaluated by the exec watcher (`sigma.go:46-68`,
+`procwatcher.go:353-388`). Unchanged v0.12 → v0.15. The Bash tool's own wrapper supplies `sh -c` (as
+`bash -c`) and `/tmp/` on **every** call, so the five characters `/curl` or `/wget` — a path segment, a
+URL, a grep pattern — complete it. Bare `curl` has no leading slash and never matches. The Grep tool
+shouldn't trip it (*inference*: Claude Code spawns `rg` without a shell, so no `sh -c`).
+
+## Fix
+
+The `/curl`|`/wget` arm in `.claude/hooks/coi-reverse-shell-guard.sh` (hot-fixed live 2026-10-13,
+committed with the v0.15 alignment), plus the `CLAUDE.md` rule. Rejected: `[detection] sigma_dir =
+"/nonexistent"` (switches off every Sigma rule, not just this one) and `auto_pause_on_high = false`
+(also disarms the network HIGHs). After an unfreeze the pause latch holds for the container's life on
+v0.15 (*inference* — no reset code) — `COI-SANDBOX.md` → *Container frozen*.

