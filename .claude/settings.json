@@ -100,7 +100,7 @@
         ]
       },
       {
-        "matcher": "mcp__aperture-dev__delete_task",
+        "matcher": "mcp__aperture-dev__delete_task|mcp__aperture-dev__update_task",
         "hooks": [
           {
             "type": "command",

@@ -14,6 +14,7 @@ const base: RunResult = {
   swept: [],
   unrecorded: [],
   orphanIntents: [],
+  blockedDeletes: [],
   consoleErrors: [],
   shots: ['smoke-home-home-light.png'],
   durationMs: 61_000,

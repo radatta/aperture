@@ -67,6 +67,15 @@ describe('waitForDeploy', () => {
     );
     expect((await waitForDeploy(SHA, d)).headSha).toBe(SHA);
   });
+  it('rides out a transient gh failure, but not five in a row', async () => {
+    const d = deps([[run({ headSha: SHA })]], [shell(SHA)]);
+    let calls = 0;
+    const flaky = d.listRuns;
+    d.listRuns = async () => (++calls === 1 ? Promise.reject(new Error('gh: network')) : flaky());
+    expect((await waitForDeploy(SHA, d)).headSha).toBe(SHA);
+    d.listRuns = async () => Promise.reject(new Error('gh: auth'));
+    await expect(waitForDeploy(SHA, d)).rejects.toThrow(/gh: auth/);
+  });
   it('DEPLOY_FAILED when the run failed', async () => {
     await expect(
       waitForDeploy(SHA, deps([[run({ headSha: SHA, conclusion: 'failure' })]], [])),

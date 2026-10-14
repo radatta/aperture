@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DEV_ORIGIN, TEST_USER_EMAIL, type DevcheckEnv } from './config';
-import { validateCachedState } from './login';
+import { readCheckedSession, validateCachedState } from './login';
+import type { PwPage } from './pw-types';
 import { cognitoAuthority, userStoreKey } from './token';
 
 const env = {
@@ -46,10 +47,43 @@ describe('validateCachedState', () => {
     expect(existsSync(path)).toBe(false);
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/WRONG_USER/));
   });
+  it('checks every oidc user entry, not only the env client id', () => {
+    const other = JSON.parse(state('s1', TEST_USER_EMAIL));
+    other.origins[0].localStorage.push({
+      name: 'oidc.user:https://elsewhere:old-client',
+      value: JSON.stringify({
+        access_token: jwt('s9'),
+        profile: { sub: 's9', email: 'x@example.com' },
+      }),
+    });
+    const path = file(JSON.stringify(other));
+    validateCachedState(path, env, vi.fn());
+    expect(existsSync(path)).toBe(false);
+  });
   it('discards an unreadable cache, and ignores a missing one', () => {
     const path = file('{not json');
     validateCachedState(path, env, vi.fn());
     expect(existsSync(path)).toBe(false);
     validateCachedState(path, env, vi.fn());
+  });
+});
+
+describe('readCheckedSession', () => {
+  const page = (sub: string, email: string) =>
+    ({
+      evaluate: async () =>
+        Object.fromEntries(
+          JSON.parse(state(sub, email)).origins[0].localStorage.map(
+            (x: { name: string; value: string }) => [x.name, x.value],
+          ),
+        ),
+    }) as unknown as PwPage;
+  it("returns the test user's session", async () => {
+    expect((await readCheckedSession(page('s1', TEST_USER_EMAIL), env))?.sub).toBe('s1');
+  });
+  it('throws WRONG_USER for anyone else', async () => {
+    await expect(readCheckedSession(page('s9', 'x@example.com'), env)).rejects.toThrow(
+      /WRONG_USER/,
+    );
   });
 });

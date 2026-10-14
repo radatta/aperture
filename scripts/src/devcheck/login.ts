@@ -21,6 +21,13 @@ const FORM = {
   submit: 'input[name="signInSubmitButton"]:visible',
 };
 
+// The page's session, which must still be the test user's (WRONG_USER otherwise) — cleanup re-reads it.
+export async function readCheckedSession(page: PwPage, env: DevcheckEnv): Promise<Session | null> {
+  const session = await readSession(page, env);
+  if (session) assertTestUser(session, env.DEVCHECK_SUB);
+  return session;
+}
+
 export async function readSession(page: PwPage, env: DevcheckEnv): Promise<Session | null> {
   const storage = await page.evaluate<Record<string, string>>(
     'Object.assign({}, window.localStorage)',
@@ -46,9 +53,12 @@ export function validateCachedState(
     };
     const ls = state.origins?.find((o) => o.origin === DEV_ORIGIN)?.localStorage ?? [];
     const storage = Object.fromEntries(ls.map((x) => [x.name, x.value]));
-    const key = userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID);
-    const session = sessionFromStorage(storage, key);
-    if (session) assertTestUser(session, env.DEVCHECK_SUB);
+    // Every oidc user entry, not just the env's key: a drifted client id would leave another one unchecked,
+    // and the app would load it.
+    for (const key of Object.keys(storage).filter((k) => k.startsWith('oidc.user:'))) {
+      const session = sessionFromStorage(storage, key);
+      if (session) assertTestUser(session, env.DEVCHECK_SUB);
+    }
   } catch (err) {
     log(`discarding the cached session (${err instanceof Error ? err.message : 'unreadable'})`);
     unlinkSync(path);

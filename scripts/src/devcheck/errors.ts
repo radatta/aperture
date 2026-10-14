@@ -13,7 +13,7 @@ export const REASON_CODES = [
   'BUILD_MISMATCH_IN_PAGE', // the page kept serving another build after reloads (PWA service worker)
   'STEP_FAILED', // a scenario step threw
   'LEDGER_GUARD', // a delete was attempted on an id the ledger never recorded
-  'LEFTOVERS', // a ledger id still exists after cleanup
+  'LEFTOVERS', // something may be left on dev: a surviving or undeletable ledger id, an unanswered create, an unrecorded new task
   'DEV_CHANGED_MID_RUN', // dev's build changed between start and end — main won; rebase and rerun
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];

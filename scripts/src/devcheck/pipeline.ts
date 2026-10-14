@@ -51,6 +51,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     swept: [],
     unrecorded: [],
     orphanIntents: [],
+    blockedDeletes: [],
     consoleErrors: [],
     shots: [],
     durationMs: 0,
@@ -91,8 +92,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
     for (const id of pendingIds(d.ledger.read())) {
       if ((await api.reads.getTask(id)) === null) d.ledger.append({ run: d.runId, op: 'gone', id });
-      else {
-        await api.writes.deleteTask(id);
+      else if (await safeDelete(api, id)) {
         d.ledger.append({ run: d.runId, op: 'swept', id });
         r.swept.push(id);
       }
@@ -191,13 +191,37 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   async function record(res: PwResponse, method: string): Promise<void> {
     if (res.status() !== 200) return;
     const known = d.ledger.read();
-    const isRecorded = (id: string) => known.some((e) => e.op === 'created' && e.id === id);
-    const ids = idsFromCreateResponse(method, await res.json().catch(() => null), isRecorded);
+    const owns = (original: string, parent: string) =>
+      known.some((e) => e.op === 'created' && e.id === original) &&
+      !!baseline &&
+      !baseline.has(parent);
+    const ids = idsFromCreateResponse(method, await res.json().catch(() => null), owns);
     for (const id of ids) {
       if (runIds.includes(id)) continue;
       runIds.push(id);
       d.ledger.append({ run: d.runId, op: 'created', id, via: `ui:${method}` });
     }
+  }
+
+  // Deleting a parent deletes its parts server-side. Before any delete, the server is asked for parts the
+  // ledger doesn't know; if there are any, the delete is skipped and the run fails — never a cascade into them.
+  async function safeDelete(client: ApiClient, id: string): Promise<boolean> {
+    const known = new Set(
+      d.ledger
+        .read()
+        .filter((e) => e.op === 'created')
+        .map((e) => e.id),
+    );
+    const unknownParts = (await client.reads.listTasks())
+      .filter((t) => t.parentId === id && !known.has(t.id))
+      .map((t) => t.id);
+    if (unknownParts.length) {
+      r.blockedDeletes.push(`${id} (unrecorded parts: ${unknownParts.join(', ')})`);
+      fail('LEFTOVERS');
+      return false;
+    }
+    await client.writes.deleteTask(id);
+    return true;
   }
 
   async function cleanup(): Promise<void> {
@@ -236,8 +260,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         d.ledger.append({ run: d.runId, op: 'gone', id });
         continue;
       }
-      await api.writes.deleteTask(id);
-      d.ledger.append({ run: d.runId, op: 'deleted', id });
+      if (await safeDelete(api, id)) d.ledger.append({ run: d.runId, op: 'deleted', id });
     }
     // Verify by reading back, not by trusting the deletes.
     const after = d.ledger.read();

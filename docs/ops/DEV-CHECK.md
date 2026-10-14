@@ -19,7 +19,7 @@ From the worktree whose commit is on dev, with nothing else heavy running (no `p
 CLAUDE.md → COI ceilings):
 
 ```bash
-pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages, an API read; writes nothing
+pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages, an API read; creates nothing
 pnpm devcheck --tier full                          # every scenario
 pnpm devcheck --tier delta --scenario capture-task # smoke + the named feature scenarios
 ```
@@ -55,8 +55,13 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't
   know are never deleted: ones there before the run are listed, ones that appeared during it (a create path the
-  recorder missed) fail the run. A crashed or killed run (Ctrl-C, a timeout — its cleanup doesn't run) leaves
-  its ids pending, and the next run sweeps them first.
+  recorder missed) fail the run — keep the test user free of recurring series, whose day's occurrence can
+  appear mid-run around the 4am day start. Before any delete the server is asked for parts the ledger doesn't
+  know; a task with one is never deleted (deleting a parent deletes its parts) and the run fails. A crashed or
+  killed run (Ctrl-C, a timeout — its cleanup doesn't run) leaves its recorded ids pending, and the next run
+  sweeps them first; a create still in flight at the kill was never recorded, so the next run lists it as not in
+  the ledger. Loading the app writes server-side too (`getDay` materialises the day), always as the test user —
+  the cached session is checked before any page loads.
 - **The right build.** The deploy run for the SHA must succeed (a `dev` push run by `headSha`, or a dispatched
   `deploy-dev <sha> <key>` run by name), then the edge must serve that SHA in `<meta name="aperture-build">`.
   In the page it reloads up to 3 times — the PWA's service worker can serve the previous shell first — else
@@ -73,7 +78,7 @@ Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` after it is reported as a
 possible leak), `created`, `deleted`, `gone`, `swept`, `run-end`; `title` is for the report only. The MCP hook
 writes `{t, op, id, parent?, via, session}`, `op` one of `created`, `reparented`, `tainted` (the id has a part
-the hook never recorded), `deleted`. It denies an `aperture-dev` `delete_task` unless the id has a `created`
+the hook never recorded — it never clears, so that parent stays undeletable), `deleted`. It denies an `aperture-dev` `delete_task` unless the id has a `created`
 line and no `tainted` one, and records the parts a parent's delete took with it (CLAUDE.md → _Aperture MCP
 connector_, standing approval 2; `docs/areas/mcp/index.md`). The MCP result shape it parses is inferred, not
 yet pinned against a live call — a mismatch records nothing, so deletes deny.

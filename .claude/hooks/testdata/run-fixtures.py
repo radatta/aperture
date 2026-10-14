@@ -30,7 +30,7 @@ outside a repo suite, "cwd" (the payload's session cwd) and "tool" (override the
 suite's tool name, e.g. Monitor, which carries a shell command like Bash);
 "reason" (a substring the deny reason must contain, so a deny can't pass via the wrong arm);
 "payload" (extra top-level payload keys, e.g. hook_event_name and tool_response for a PostToolUse case);
-"ledger" (lines pre-written to the repo's MCP ledger), "expect_ledger" ("op:id" lines that must be in it
+"ledger" (lines pre-written to the repo's MCP ledger; a string is written raw, e.g. a corrupt line), "expect_ledger" ("op:id" lines that must be in it
 after the hook ran) and "ledger_count" (its exact line count after);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
@@ -48,7 +48,7 @@ PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE"}
 # Matchers each guard must be registered under in .claude/settings.json — a fixture with "tool":"Monitor"
 # proves nothing if the Monitor entry is gone, since the guards never read tool_name.
 REGISTERED = {
-    "mcp-dev-ledger.sh": ("mcp__aperture-dev__delete_task",),
+    "mcp-dev-ledger.sh": ("mcp__aperture-dev__delete_task", "mcp__aperture-dev__update_task"),
     "coi-reverse-shell-guard.sh": ("Bash", "Monitor"),
     "coi-grep-guard.sh": ("Grep",),
     "precommit-guard.sh": ("Bash", "Monitor"),
@@ -122,11 +122,20 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None) -> tup
     ledger = pathlib.Path(repo) / "localNotes" / "devcheck" / "mcp-ledger.dev.jsonl"
     if "ledger" in case:
         ledger.parent.mkdir(parents=True)
-        ledger.write_text("".join(json.dumps(e) + "\n" for e in case["ledger"]), encoding="utf-8")
+        # A string entry is written raw — that's how a fixture plants a corrupt line.
+        ledger.write_text(
+            "".join((e if isinstance(e, str) else json.dumps(e)) + "\n" for e in case["ledger"]), encoding="utf-8"
+        )
     decision = decision_for(hook, tool, tool_input, repo, case.get("payload"))
     if "expect_ledger" in case or "ledger_count" in case:
-        lines = [json.loads(x) for x in ledger.read_text(encoding="utf-8").splitlines()] if ledger.exists() else []
-        have = {f"{e.get('op')}:{e.get('id')}" for e in lines}
+        lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
+        parsed = []
+        for x in lines:
+            try:
+                parsed.append(json.loads(x))
+            except ValueError:
+                pass
+        have = {f"{e.get('op')}:{e.get('id')}" for e in parsed if isinstance(e, dict)}
         missing = [x for x in case.get("expect_ledger", []) if x not in have]
         if missing:
             return f"ledger-missing {','.join(missing)}", ""

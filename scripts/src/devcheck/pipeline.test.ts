@@ -220,6 +220,18 @@ describe('runPipeline', () => {
     expect(r.codes).toEqual(['LEFTOVERS']);
   });
 
+  it("never deletes a task whose server-side parts the ledger doesn't know — the cascade would take them", async () => {
+    const w = world();
+    const sc = scenario(async (x) => {
+      const id = x.uiCreate('parent');
+      x.tasks.set('users-part', { id: 'users-part', title: 'mine', parentId: id }); // attached outside the ledger
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(w.deleted).toEqual([]);
+    expect(r.blockedDeletes).toEqual(['t1 (unrecorded parts: users-part)']);
+    expect(r.codes).toContain('LEFTOVERS');
+  });
+
   it('LEFTOVERS when a delete does not take', async () => {
     const w = world();
     w.api.writes.deleteTask = async () => undefined; // server ignores it

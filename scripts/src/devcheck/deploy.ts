@@ -57,8 +57,22 @@ export async function waitForDeploy(
 ): Promise<DeployRun> {
   const start = deps.now();
   let run: DeployRun | undefined;
+  let ghErrors = 0;
   for (;;) {
-    run = pickDeployRun(await deps.listRuns(), sha);
+    let runs: DeployRun[];
+    try {
+      runs = await deps.listRuns();
+      ghErrors = 0;
+    } catch (err) {
+      // A gh hiccup mid-wait isn't a failed deploy; five in a row is a real problem.
+      if (++ghErrors >= 5) throw err;
+      deps.log(
+        `gh failed (${ghErrors}/5), retrying: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      await deps.sleep(budget.pollMs);
+      continue;
+    }
+    run = pickDeployRun(runs, sha);
     if (run?.status === 'completed') break;
     // A run should exist within a minute of the push; without one, waiting longer won't help.
     if (!run && deps.now() - start > 2 * 60_000) {

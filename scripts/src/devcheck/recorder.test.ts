@@ -13,7 +13,10 @@ describe('recorder', () => {
     // the follow-up is always new; the parent only when the split task was ours (deleting a parent
     // deletes its parts, so an unrecorded original under it must keep the parent off the ledger)
     const split = { parent: { id: 'p' }, original: { id: 'o' }, followUp: { id: 'f' } };
-    expect(idsFromCreateResponse('splitTask', split, (id) => id === 'o')).toEqual(['p', 'f']);
+    expect(idsFromCreateResponse('splitTask', split, (o, p) => o === 'o' && p === 'p')).toEqual([
+      'p',
+      'f',
+    ]);
     expect(idsFromCreateResponse('splitTask', split)).toEqual(['f']);
   });
 

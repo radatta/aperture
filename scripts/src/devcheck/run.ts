@@ -22,10 +22,9 @@ import {
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { openLedger } from './ledger';
-import { ensureSignedIn, readSession, validateCachedState } from './login';
+import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
-import { assertTestUser } from './token';
 import { SCENARIOS, selectScenarios, type RunTier } from './scenarios/index';
 
 const exec = promisify(execFile);
@@ -71,17 +70,17 @@ export function takeLock(path: string): () => void {
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0) throw err;
-      const pid = Number(readFileSync(path, 'utf8'));
-      let alive = false;
+      const held = readFileSync(path, 'utf8');
+      let alive = true;
       try {
-        process.kill(pid, 0);
-        alive = true;
-      } catch {
-        // stale — that run died without releasing
+        process.kill(Number(held), 0);
+      } catch (e) {
+        alive = (e as NodeJS.ErrnoException).code !== 'ESRCH'; // EPERM: alive, just not ours
       }
       if (alive)
-        throw new Error(`another dev check (pid ${pid}) is running — wait for it`, { cause: err });
-      unlinkSync(path);
+        throw new Error(`another dev check (pid ${held}) is running — wait for it`, { cause: err });
+      // Re-read before removing: another run may have taken over the stale lock in between.
+      if (readFileSync(path, 'utf8') === held) unlinkSync(path);
     }
   }
   return () => {
@@ -181,11 +180,7 @@ async function main(): Promise<number> {
           page,
           signIn: (shot) =>
             ensureSignedIn(page, context, env, { statePath: statePath(main), shot }),
-          readSession: async () => {
-            const s = await readSession(page, env);
-            if (s) assertTestUser(s, env.DEVCHECK_SUB);
-            return s;
-          },
+          readSession: () => readCheckedSession(page, env),
           close: () => browser.close(),
         };
       },

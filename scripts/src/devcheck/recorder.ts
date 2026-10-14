@@ -16,12 +16,14 @@ export function methodOf(url: string): string | undefined {
   return m?.[1];
 }
 
-// `isRecorded` guards the split: deleting a parent deletes its parts, so a split's parent is recorded only
-// when the split task was ours (then its parent is ours or new). Same rule as .claude/hooks/mcp-dev-ledger.sh.
+// `ownsSplitParent(original, parent)` guards the split: deleting a parent deletes its parts, so a split's parent
+// is recorded only when the split task was ours AND the parent didn't exist before the run (pipeline.ts). The
+// MCP hook's rule is the same idea from what it can see (.claude/hooks/mcp-dev-ledger.sh); cleanup also checks
+// the server for unknown parts before every delete.
 export function idsFromCreateResponse(
   method: string,
   json: unknown,
-  isRecorded: (id: string) => boolean = () => false,
+  ownsSplitParent: (original: string, parent: string) => boolean = () => false,
 ): string[] {
   if (!isCreate(method)) return [];
   if (method === 'createTask') return [idOf(json)].filter((x): x is string => !!x);
@@ -30,6 +32,7 @@ export function idsFromCreateResponse(
   // splitTask → { parent, original, followUp }: the follow-up is always new.
   const r = json as { parent?: unknown; original?: unknown; followUp?: unknown } | null;
   const original = idOf(r?.original);
-  const parent = original && isRecorded(original) ? idOf(r?.parent) : undefined;
+  const parentId = idOf(r?.parent);
+  const parent = original && parentId && ownsSplitParent(original, parentId) ? parentId : undefined;
   return [parent, idOf(r?.followUp)].filter((x): x is string => !!x);
 }

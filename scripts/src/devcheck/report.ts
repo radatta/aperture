@@ -37,6 +37,7 @@ export interface RunResult {
   unrecorded: string[]; // there before the run and unknown to the ledger — reported, never deleted
   appeared?: string[]; // appeared DURING the run, unknown to the ledger — a missed create path; fails the run
   orphanIntents: string[]; // API creates that may have landed without their id — check by hand
+  blockedDeletes: string[]; // ledger ids NOT deleted because the server showed parts the ledger doesn't know
   consoleErrors: string[];
   shots: string[];
   durationMs: number;
@@ -82,6 +83,10 @@ export function renderReport(r: RunResult): string {
   if (r.appeared?.length)
     lines.push(
       `- **Appeared during the run, not in the ledger** (a create path the recorder missed — not deleted): ${r.appeared.join(', ')}`,
+    );
+  if (r.blockedDeletes.length)
+    lines.push(
+      `- **Not deleted — it has parts the ledger doesn't know** (a delete would cascade into them): ${r.blockedDeletes.join('; ')}`,
     );
   if (r.orphanIntents.length)
     lines.push(

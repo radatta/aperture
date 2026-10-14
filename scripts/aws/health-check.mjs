@@ -87,7 +87,12 @@ await check(`edge serves the new shell (${expectedRefs.length} asset refs)`, asy
 // The build marker publish-frontend stamped, read from this build's own index.html (not the environment, so a
 // step-scoped APERTURE_BUILD_SHA can't make it compare against the wrong commit). A local build says 'local'.
 const buildSha = readFileSync(shellPath, 'utf8').match(/<meta name="aperture-build" content="([^"]*)"/)?.[1];
-if (buildSha && buildSha !== 'local')
+// In CI a missing or 'local' marker is itself a failure — the check must not pass by skipping.
+if (process.env.CI && (!buildSha || buildSha === 'local'))
+  await check('build marker stamped', async () => {
+    throw new Error(`app/dist/index.html marker is "${buildSha ?? 'missing'}" in CI`);
+  });
+else if (buildSha && buildSha !== 'local')
   await check(`edge shell carries build marker ${buildSha.slice(0, 7)}`, async () => {
     const r = await fetch(`${appUrl}/`);
     const html = await r.text();
