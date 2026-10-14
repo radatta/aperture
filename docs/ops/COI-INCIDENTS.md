@@ -259,6 +259,10 @@ is ever hit again — the number costs nothing, but a change that doesn't land i
 - [x] Add the pids check to the session-start ritual, since the failure mode is silent — done
       (COI-SANDBOX.md → *Run* → "First command in a new container", and *One-time setup* step 11)
 - [ ] Trim MCP servers per-session — they multiply N×M with no dedup
+- [x] Measure what a mix of sessions really costs instead of guessing — the session board
+      (`docs/ops/SESSION-BOARD.md`) samples usage every 30 s, logs each heavy job's peaks, and its
+      quiet-window load test fills `scripts/board/limits.json`; it supersedes the ad hoc
+      `localNotes/perf/bench.sh`
 
 ---
 
