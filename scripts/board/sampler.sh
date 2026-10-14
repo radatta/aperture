@@ -50,6 +50,8 @@ trap 'rm -f "$work".*; exit 0' TERM INT
 n=0
 while :; do
   tick
+  # Something may sweep /tmp; `board.sh sampler stop` needs the pid.
+  [ -s /tmp/aperture-sampler.pid ] || printf '%s\n' "$$" >/tmp/aperture-sampler.pid
   # File overlaps across worktrees every 5th tick (~2.5 min): git is cheap, but not per prompt.
   if [ $((n % 5)) -eq 0 ]; then node "$SB_REPO/scripts/src/board/cli.ts" overlap "$SB_REPO" "$BOARD_DIR" >/dev/null 2>&1 & fi
   n=$((n + 1))
