@@ -66,6 +66,13 @@ runs the full suite before every dev push and PR). So:
 - **File order is shuffled every run.** A failure that comes and goes is order-dependence; the seed is
   printed — reproduce with `--sequence.seed=<n>`.
 
+**Testing Library queries: `within()` changes what a query asserts.** `getBy…`/`findBy…` assert
+"exactly one on the page" and a null `queryBy…` asserts "absent everywhere"; scoped, they only check
+that region, so keep them on `screen`. Only `getAllBy…`/`findAllBy…`, which claim no uniqueness, can be
+narrowed safely. That is worth doing when a page-wide `findAllByRole` sits inside `waitFor`/`findBy`,
+because the full role + accessible-name scan repeats on every poll (70–100ms each on the Finances All
+tab; see `findRows` in `app/src/pages/Finances/Finances.test.tsx`).
+
 Lint and typecheck are cached (ESLint `--cache-strategy content`, `tsc -b`'s `.tsbuildinfo`, restored in
 CI). The ESLint cache is only safe because no rule is type-aware — enabling `recommendedTypeChecked`
 means dropping `--cache`.
