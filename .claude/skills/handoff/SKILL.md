@@ -69,12 +69,16 @@ memory. "Couldn't verify" is useful; a stale guess presented as fact is not.
 
 ### 2. Find the previous handoff for this branch
 
-Branch from step 1's `git status -sb` line; `detached` when HEAD is detached. Substitute it literally —
-no `$(...)` in the command:
+`<branch>` is the branch from step 1's `git status -sb` line with every `/` replaced by `-`, or
+`detached` when HEAD is detached — the same rule `.claude/hooks/_hook-common.sh` → `handoff_branch`
+applies. Substitute it literally (no `$(...)` in the command):
 
 ```bash
-ls -1 localNotes/handoffs/ | grep -E -- "^handoff-.*-<branch>(-[0-9a-f]{8})?\.md$" | tail -1
+ls -1 localNotes/handoffs/ | grep -F -- "-<branch>" | grep '^handoff-' | tail -1
 ```
+
+It's a pointer for the `Previous:` line, so a near-miss match from a similarly named branch is harmless —
+check the name before citing it.
 
 ### 3. Write `localNotes/handoffs/handoff-YYYY-MM-DD-HHMM-<branch>-<sid8>.md`
 
@@ -138,8 +142,8 @@ One concrete step, not a list of everything remaining.
   source of truth that drifts from the first.
 - **Anything genuinely durable belongs in `docs/`, not here.** `localNotes/` is explicitly not a source
   of truth (CLAUDE.md). If something surfaces that the project should know permanently — a convention,
-  a gotcha, a resolved architecture question — say so and offer to write it to `docs/` instead. A
-  handoff that accumulates project knowledge is a doc-rot vector.
+  a gotcha, a resolved architecture question — list it under Open questions as a `docs/` candidate,
+  with where it belongs. A handoff that accumulates project knowledge is a doc-rot vector.
 - **Narrate the arc, not the transcript.** The arc belongs here, compressed to one line per exchange
   (*Why this exists* covers why `/compact`'s summary is not enough). What does *not* belong is
   blow-by-blow: individual tool calls, what was read in what order, or anything a reader wouldn't

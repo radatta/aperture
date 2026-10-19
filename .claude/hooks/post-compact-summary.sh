@@ -7,13 +7,13 @@
 
 set -uo pipefail
 
+INPUT=$(cat)  # drain stdin before any exit
 [ -n "${APERTURE_HANDOFF_FORK:-}" ] && exit 0  # a handoff fork's own compaction isn't worth keeping
-INPUT=$(cat)
 source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null)
-[[ "$SID" =~ ^[0-9a-f]{8}-[0-9a-f-]{27}$ ]] || exit 0
+[[ "$SID" =~ $SID_RE ]] || exit 0
 SUMMARY=$(jq -r '.compact_summary // empty' <<<"$INPUT" 2>/dev/null)
 [ -n "$SUMMARY" ] || exit 0
 

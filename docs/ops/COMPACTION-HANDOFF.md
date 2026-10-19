@@ -27,8 +27,14 @@ the handoff keeps the decisions, dead ends and open questions the summary drops.
 
 `PreCompact` has no matcher, so it runs on `manual` and `auto`. **Idle compaction and context-full
 compaction both report `auto`** — the hook can't tell them apart. Idle compaction (Claude Code ≥ 2.1.299,
-server-gated) needs 200k+ tokens and fires after ~54 min idle. Measured 2026-10-18: `PreCompact` fired
-with `trigger: auto`, `custom_instructions: null`; compaction followed 76 s later at 206,326 tokens.
+server-gated) needs 200k+ tokens (read from the 2.1.302 binary) and fired after ~54 min idle (measured).
+Measured 2026-10-18: `PreCompact` fired with `trigger: auto`, `custom_instructions: null`; compaction
+followed 76 s later at 206,326 tokens.
+
+**Context-full is unmeasured, and probably degrades** (inference): the fork resumes a transcript already
+at the compaction threshold and adds the skill and tool output, so it may compact itself — writing the
+handoff from a summary — or overflow (`rc` ≠ 0). A `skip reason=fork` log line just before the parent's
+line is the fork compacting.
 
 ## What you control
 
@@ -45,15 +51,21 @@ with `trigger: auto`, `custom_instructions: null`; compaction followed 76 s late
 The exact command is in the hook. What each choice is for:
 
 - **`--resume <sid> --fork-session`** — a copy; the parent is untouched. It finds the transcript from a
-  worktree cwd even when the session was started at `/workspace`.
+  worktree cwd even when the session was started at `/workspace` (measured).
 - **Cache** — no `--model` (resume restores it), `--settings`, `--append-system-prompt`, `--bare` or
   `--tools`, same cwd. A bare tool name in `--disallowedTools`, `--tools`, or `--permission-prompts`
   removes tools from the request, and the tool array is the front of the cached prefix.
 - **`--permission-mode dontAsk`** — unlisted tools are denied without a prompt. A resumed `-p` session
   does **not** inherit the parent's mode; it starts from this flag, else `defaultMode` from settings —
-  which is `bypassPermissions` in the container, where allow rules are ignored. Deny rules bind in every
-  mode, so the scoped `--disallowedTools` list (push, commit, add, stash, checkout, switch, reset,
-  rebase, `gh pr create/merge/close`, `rm`) is the second lock. The repo's guard hooks run in the fork too.
+  which is `bypassPermissions` in the container, where allow rules are ignored (Claude Code permissions
+  docs). Deny rules bind in every mode, so the scoped `--disallowedTools` list (push, commit, add, stash,
+  checkout, switch, reset, rebase, `gh pr create/merge/close`, `rm`) is the second lock. The repo's
+  guard hooks run in the fork too. The lock assumes no settings file adds allow rules of its own —
+  today `~/.claude/settings.json` sets only `defaultMode`.
+- **Allowlist** — the skill's commands plus `git diff`, `head`, `tail`, `grep`, `ls`, `date`, Read/Grep/Glob.
+  `git log`/`git diff --output=<path>` writes a file, hence `Bash(git log *--output*)` and its `diff`
+  twin in the deny list. Measured 2026-10-19: `--output=` denied on both, and `head x > file` denied
+  (output redirection isn't covered by `Bash(head *)`).
 - **`Edit(localNotes/handoffs/**)`** is the only write surface. `Write(...)` rules are accepted but
   never consulted — `Edit` rules govern the Write tool.
 - **`--no-session-persistence`** — no fork transcript on disk (verified with `--fork-session`). Each fork
@@ -66,8 +78,10 @@ The exact command is in the hook. What each choice is for:
 backstop, so the log line is always written. Compaction waits for it.
 
 **Failure** never blocks compaction: the hook exits 0 and prints nothing whatever happens. The log line
-carries `rc` (124 = timed out); a failed fork keeps `localNotes/handoffs/.fork-<sid8>-<ts>.err`; the
-post-compact hook falls back to the newest handoff for the branch. Skips log `skip reason=` (`fork`,
+carries `rc` (124 = timed out) and `subtype` (`error_max_turns` / `error_max_budget_usd` name a runaway
+stop); a fork that wrote to stderr keeps `localNotes/handoffs/.fork-<sid8>-<ts>.err` (pruned after 7
+days). The post-compact hook injects a handoff only when the log's last line for the session names it;
+otherwise it surfaces the newest handoff for the branch by path. Skips log `skip reason=` (`fork`,
 `bad-session-id`, `no-transcript`, `no-claude`, `locked`). Detached HEAD still gets one, named `detached`.
 
 ## Log
@@ -75,23 +89,25 @@ post-compact hook falls back to the newest handoff for the branch. Skips log `sk
 `localNotes/handoffs/precompact.log`, one line per compaction:
 
 ```
-2026-10-19T14:02:11-07:00 trigger=manual sid=4cee5162 branch=precompact-handoff rc=0 dur=41s fork=… turns=6 cache_read=… cache_new=… out=… denials=0 error=false file=handoff-…-4cee5162.md
+2026-10-19T14:02:11-07:00 trigger=manual sid=4cee5162 branch=precompact-handoff rc=0 dur=41s fork=… subtype=success turns=6 cache_read=… cache_new=… out=… denials=0 error=false file=handoff-…-4cee5162.md
 ```
 
 `denials` > 0 means the skill asked for something the allowlist refuses — fix the skill or the list.
 The json's `total_cost_usd` is **cumulative over the resumed session's whole history** (a 1-turn fork
-reported $4.56), so the log carries tokens, not dollars.
+reported $4.56), so the log carries tokens, not dollars. `--max-budget-usd 2` didn't stop a 9-turn fork
+of that session, so it appears not to use the cumulative figure — `subtype` will show if it ever does.
 
 ## Cost and measurements
 
 Measured, Claude Code 2.1.302–2.1.303, Opus, from a ~120–140k-token session:
 
-| Run (date)                             | Turns | Time | Cache read | Cache write  | Notes                                                                       |
-| -------------------------------------- | ----- | ---- | ---------- | ------------ | --------------------------------------------------------------------------- |
-| bare fork, "ok" (2026-10-18)           | 1     | —    | 141,862    | 1,771        | before the flag set existed                                                 |
-| full flag set, "ok" (2026-10-19)       | 1     | 4 s  | 107,891    | 14,176 (1 h) | no transcript left                                                          |
-| permission probe (2026-10-19)          | 8     | 17 s | 737,331    | 17,242       | denied: `git stash` (deny rule), `touch` (unlisted), Write outside handoffs |
-| real handoff via the hook (2026-10-19) | 9     | 40 s | 732,007    | 25,240       | 3,891 output tokens, 0 denials, `/compact` instructions honoured            |
+| Run (date)                               | Turns | Time | Cache read | Cache write  | Notes                                                                                       |
+| ---------------------------------------- | ----- | ---- | ---------- | ------------ | ------------------------------------------------------------------------------------------- |
+| bare fork, "ok" (2026-10-18)             | 1     | —    | 141,862    | 1,771        | before the flag set existed                                                                 |
+| full flag set, "ok" (2026-10-19)         | 1     | 4 s  | 107,891    | 14,176 (1 h) | no transcript left                                                                          |
+| permission probe (2026-10-19)            | 8     | 17 s | 737,331    | 17,242       | denied: `git stash` (deny rule), `touch` (unlisted), Write outside handoffs                 |
+| `--output` / redirect probe (2026-10-19) | 6     | 20 s | 435,639    | 23,330       | denied: `git log`/`git diff --output=`, `head … > file`; plain `git log`/`git diff` allowed |
+| real handoff via the hook (2026-10-19)   | 9     | 40 s | 732,007    | 25,240       | 3,891 output tokens, 0 denials, `/compact` instructions honoured                            |
 
 Inferred from those tokens, not billed: a handoff is roughly **$0.20–0.50** at list price, mostly cache
 reads at 0.05× plus any cache write. **Unexplained:** the ~14k-token write on 2026-10-19 against ~1.8k

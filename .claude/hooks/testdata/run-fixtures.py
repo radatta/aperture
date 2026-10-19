@@ -41,6 +41,7 @@ after the hook ran) and "ledger_count" (its exact line count after);
 so the literal never sits in the repo for the CI secret scanner to flag.
 """
 
+import fcntl
 import json
 import os
 import pathlib
@@ -302,6 +303,13 @@ def check_registration() -> tuple[int, int]:
                     failures += 1
                     total += 1
                     print(f"FAIL  {name} also registered under {event}")
+    # settings.json runs each hook by path, so a lost exec bit fails every run silently — and the suites
+    # below run hooks via `bash <hook>`, so they'd never notice.
+    for hook_name in [*REGISTERED, *REGISTERED_POST, *REGISTERED_EVENTS]:
+        total += 1
+        ok = os.access(HERE.parent / hook_name, os.X_OK)
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} is executable")
     for hook_name, (event, matcher) in REGISTERED_EVENTS.items():
         total += 1
         ok = any(
@@ -318,6 +326,16 @@ def check_registration() -> tuple[int, int]:
 # PATH replaced by stub-claude.sh, and asserts on exit code, stdout, the hook's log, the stub's recorded argv
 # and the files left in localNotes/handoffs/. The stub never reaches the network.
 SID = "4cee5162-0000-4000-8000-000000000000"
+SILENT = {"precompact-handoff.sh", "post-compact-summary.sh"}  # must never print: compaction reads their stdout
+
+
+def disallowed_unscoped(argv: list[str]) -> list[str]:
+    """--disallowedTools entries without a (scope): a bare tool name removes the tool and misses the prompt cache."""
+    if "--disallowedTools" not in argv:
+        return []
+    rest = argv[argv.index("--disallowedTools") + 1 :]
+    rules = rest[: next((i for i, a in enumerate(rest) if a.startswith("--")), len(rest))]
+    return [r for r in rules if "(" not in r]
 
 
 def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
@@ -336,8 +354,12 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
             os.utime(path, (old, old))
 
     stub_dir = tempfile.mkdtemp(dir=root)
-    shutil.copy(HERE / "stub-claude.sh", pathlib.Path(stub_dir) / "claude")
-    os.chmod(pathlib.Path(stub_dir) / "claude", 0o755)
+    if not case.get("no_claude"):
+        shutil.copy(HERE / "stub-claude.sh", pathlib.Path(stub_dir) / "claude")
+        os.chmod(pathlib.Path(stub_dir) / "claude", 0o755)
+    gh = pathlib.Path(stub_dir) / "gh"  # post-compact-context.sh calls gh; never let a fixture reach GitHub
+    gh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    os.chmod(gh, 0o755)
     argv_file = pathlib.Path(stub_dir) / "argv.txt"
     transcript = pathlib.Path(stub_dir) / "transcript.jsonl"
     if case.get("transcript", True):
@@ -350,23 +372,39 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
         payload["custom_instructions"] = case["custom"]
     if "summary" in case:
         payload["compact_summary"] = case["summary"]
-    env = {k: v for k, v in os.environ.items() if k != "APERTURE_HANDOFF_FORK"}
-    env.update(PATH=f"{stub_dir}:{env['PATH']}", APERTURE_HANDOFF_TIMEOUT="2", STUB_ARGV_FILE=str(argv_file))
+    env = {k: v for k, v in os.environ.items() if k not in ("APERTURE_HANDOFF_FORK", "GH_REPO", "GH_TOKEN")}
+    path = env["PATH"]
+    if case.get("no_claude"):  # drop every PATH dir holding a real claude; HOME hides ~/.local/bin/claude
+        path = ":".join(d for d in path.split(":") if not os.access(os.path.join(d, "claude"), os.X_OK))
+        env["HOME"] = stub_dir
+    env.update(PATH=f"{stub_dir}:{path}", APERTURE_HANDOFF_TIMEOUT="2", STUB_ARGV_FILE=str(argv_file))
     env.update(case.get("stub", {}), **case.get("env", {}))
-    proc = subprocess.run(["bash", str(hook)], input=json.dumps(payload), capture_output=True, text=True, env=env)
+    held = None
+    if case.get("hold_lock"):  # flock(2), the same lock flock(1) takes in the hook
+        held = open(handoffs / f".lock-{SID[:8]}", "w")
+        fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        proc = subprocess.run(["bash", str(hook)], input=json.dumps(payload), capture_output=True, text=True, env=env)
+    finally:
+        if held:
+            held.close()
 
     problems = []
     if proc.returncode != 0:
         problems.append(f"exit {proc.returncode}: {proc.stderr.strip()[:120]}")
-    if case.get("stdout_empty") and proc.stdout.strip():
+    if (case.get("stdout_empty") or case["hook"] in SILENT) and proc.stdout.strip():
         problems.append(f"stdout not empty: {proc.stdout.strip()[:80]}")
+    if case.get("stderr_empty") and proc.stderr.strip():
+        problems.append(f"stderr not empty: {proc.stderr.strip()[:80]}")
     problems += [f"stdout lacks {x!r}" for x in case.get("stdout", []) if x not in proc.stdout]
     problems += [f"stdout has {x!r}" for x in case.get("stdout_absent", []) if x in proc.stdout]
     if "called" in case and argv_file.exists() != case["called"]:
         problems.append(f"stub called={argv_file.exists()}, expected {case['called']}")
     argv = argv_file.read_text(encoding="utf-8") if argv_file.exists() else ""
     problems += [f"argv lacks {x!r}" for x in case.get("argv", []) if x not in argv]
-    argv_only = "\n".join(line for line in argv.splitlines() if not line.startswith("instructions: "))
+    argv_lines = [line for line in argv.splitlines() if not line.startswith("instructions: ")]
+    argv_only = "\n".join(argv_lines)
+    problems += [f"unscoped deny rule {r!r}" for r in disallowed_unscoped(argv_lines)]
     problems += [f"argv has {x!r}" for x in case.get("argv_absent", []) if x in argv_only]
     log_path = handoffs / "precompact.log"
     log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""

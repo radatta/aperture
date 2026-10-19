@@ -74,28 +74,38 @@ if command -v gh >/dev/null 2>&1; then
   echo
 fi
 
-# The handoff precompact-handoff.sh wrote seconds ago for THIS session is matched by session id and its
-# head injected: it was written for exactly this moment. Anything else — an older handoff from this
-# session, or the newest for this branch from another — is surfaced by path only; reading it is a
-# decision for the session, and dumping a stale file into a just-compacted context defeats compaction.
-SID8=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null | cut -c1-8)
+# The handoff precompact-handoff.sh wrote for THIS compaction — its log's last line for this session names
+# the file, and the file is under 30 min old — is injected: it was written for exactly this moment.
+# Otherwise the newest handoff for this branch is surfaced by path only; reading it is a decision for the
+# session, and dumping a stale file into a just-compacted context defeats compaction.
+H=localNotes/handoffs
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 OWN=""
-[ -n "$SID8" ] && OWN=$(ls -1 localNotes/handoffs/ 2>/dev/null | grep -E -- "^handoff-.*-${SID8}\.md$" | tail -1)
-if [ -n "$OWN" ] && [ $(($(date +%s) - $(stat -c %Y "localNotes/handoffs/$OWN" 2>/dev/null || echo 0))) -lt 1800 ]; then
-  echo "## Handoff written just before this compaction — localNotes/handoffs/$OWN"
+if [[ "$SID" =~ $SID_RE ]]; then
+  SID8=${SID:0:8}
+  LAST=$(grep -F -- " sid=$SID8" "$H/precompact.log" 2>/dev/null | tail -1)
+  OWN=$(sed -n 's/.* file=\(handoff-[^ ]*\.md\)$/\1/p' <<<"$LAST")
+  [ -n "$OWN" ] && [ -f "$H/$OWN" ] && [ $(($(date +%s) - $(stat -c %Y "$H/$OWN"))) -lt 1800 ] || OWN=""
+fi
+if [ -n "$OWN" ]; then
+  echo "## Handoff written just before this compaction — $H/$OWN"
   echo "Written by a fork of this session moments ago. Its decisions, dead ends and open questions are"
   echo "what the summary may have dropped; its 'State as of' block is superseded by the live state above."
   echo
-  head -150 "localNotes/handoffs/$OWN"
-  LINES=$(wc -l < "localNotes/handoffs/$OWN")
+  head -150 "$H/$OWN"
+  LINES=$(wc -l < "$H/$OWN")
   [ "$LINES" -gt 150 ] && echo "… (first 150 of $LINES lines — read the file for the rest)"
   echo
 else
-  [ -n "$BRANCH" ] && LATEST=$(ls -1 localNotes/handoffs/ 2>/dev/null | grep -E -- "^handoff-.*-${BRANCH}(-[0-9a-f]{8})?\.md$" | tail -1)
-  LATEST=${OWN:-${LATEST:-}}
+  # Fixed-string match on the dated name (`handoff-<YYYY-MM-DD-HHMM>-<branch>[-<sid8>].md`), so a branch
+  # like `c++` can't break a regex and `main` can't match `…-other-main.md`.
+  B=$(handoff_branch)
+  D='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]'
+  X='[0-9a-f]'
+  LATEST=$(cd "$H" 2>/dev/null && ls -1d handoff-$D-"$B".md handoff-$D-"$B"-$X$X$X$X$X$X$X$X.md 2>/dev/null | sort | tail -1)
   if [ -n "$LATEST" ]; then
     echo "## Handoff available"
-    echo "localNotes/handoffs/$LATEST"
+    echo "$H/$LATEST"
     echo "Durable context (decisions, dead ends, open questions). Its 'State as of' block is a frozen"
     echo "snapshot — the live state above supersedes it. Read the file if picking up unfamiliar work."
     echo

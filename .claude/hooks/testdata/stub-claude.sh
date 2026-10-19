@@ -14,6 +14,6 @@ if [ "${STUB_RC:-0}" -ne 0 ]; then
   echo "stub failure" >&2
   exit "$STUB_RC"
 fi
-branch=$(git branch --show-current); branch=${branch:-detached}
+branch=$(git branch --show-current); branch=${branch:-detached}; branch=${branch//\//-}
 echo "# Handoff — stub" > "localNotes/handoffs/handoff-$(date +%Y-%m-%d-%H%M)-$branch-$sid8.md"
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":5,"session_id":"f0f0f0f0-0000-4000-8000-000000000000","usage":{"cache_read_input_tokens":500000,"cache_creation_input_tokens":2000,"output_tokens":1500},"permission_denials":[]}'
