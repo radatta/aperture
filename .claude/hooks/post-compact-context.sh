@@ -25,6 +25,7 @@ set -uo pipefail  # deliberately NOT -e: a failing probe must not kill the hook
 INPUT=$(cat)
 source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+cd "$(git rev-parse --show-toplevel)" || exit 0  # handoffs live at the repo root even if the session cd'd into app/
 
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
@@ -75,7 +76,7 @@ if command -v gh >/dev/null 2>&1; then
 fi
 
 # The handoff precompact-handoff.sh wrote for THIS compaction — its log's last line for this session names
-# the file, and the file is under 30 min old — is injected: it was written for exactly this moment.
+# the file and was written in the last 10 min — is injected: it was written for exactly this moment.
 # Otherwise the newest handoff for this branch is surfaced by path only; reading it is a decision for the
 # session, and dumping a stale file into a just-compacted context defeats compaction.
 H=localNotes/handoffs
@@ -85,7 +86,8 @@ if [[ "$SID" =~ $SID_RE ]]; then
   SID8=${SID:0:8}
   LAST=$(grep -F -- " sid=$SID8" "$H/precompact.log" 2>/dev/null | tail -1)
   OWN=$(sed -n 's/.* file=\(handoff-[^ ]*\.md\)$/\1/p' <<<"$LAST")
-  [ -n "$OWN" ] && [ -f "$H/$OWN" ] && [ $(($(date +%s) - $(stat -c %Y "$H/$OWN"))) -lt 1800 ] || OWN=""
+  LOGGED=$(date -d "${LAST%% *}" +%s 2>/dev/null || echo 0)
+  [ -n "$OWN" ] && [ -f "$H/$OWN" ] && [ $(($(date +%s) - LOGGED)) -lt 600 ] || OWN=""
 fi
 if [ -n "$OWN" ]; then
   echo "## Handoff written just before this compaction — $H/$OWN"

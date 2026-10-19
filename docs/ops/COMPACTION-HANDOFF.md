@@ -61,7 +61,9 @@ The exact command is in the hook. What each choice is for:
   docs). Deny rules bind in every mode, so the scoped `--disallowedTools` list (push, commit, add, stash,
   checkout, switch, reset, rebase, `gh pr create/merge/close`, `rm`) is the second lock. The repo's
   guard hooks run in the fork too. The lock assumes no settings file adds allow rules of its own —
-  today `~/.claude/settings.json` sets only `defaultMode`.
+  today `~/.claude/settings.json` sets only `defaultMode`. The stakes: the user-scope `aperture` (prod)
+  and `aperture-dev` MCP tools are in the fork's tool array, and only `dontAsk` with no allow rule for
+  them keeps them out.
 - **Allowlist** — the skill's commands plus `git diff`, `head`, `tail`, `grep`, `ls`, `date`, Read/Grep/Glob.
   `git log`/`git diff --output=<path>` writes a file, hence `Bash(git log *--output*)` and its `diff`
   twin in the deny list. Measured 2026-10-19: `--output=` denied on both, and `head x > file` denied
@@ -72,15 +74,21 @@ The exact command is in the hook. What each choice is for:
   still leaves a ~20 KB `~/.claude/projects/<cwd>/<fork-id>/tool-results/` dir (the `load-context.sh`
   output); left alone rather than `rm -r` from a hook.
 - **`--max-turns 20 --max-budget-usd 2`** — runaway stops, not targets.
-- **Recursion** — the fork runs with `APERTURE_HANDOFF_FORK=1`; both compaction hooks exit on it.
+- **Recursion** — the fork runs with `APERTURE_HANDOFF_FORK=1`; `precompact-handoff.sh` and
+  `post-compact-summary.sh` exit on it (`post-compact-context.sh` still runs if the fork compacts).
+- **Repo root** — all three hooks `cd` to `git rev-parse --show-toplevel`, so a session that `cd`'d into
+  `app/` still writes and finds handoffs at the root, and the fork starts where the session was launched.
 
-**Timeout:** inner `timeout 480` (override: `APERTURE_HANDOFF_TIMEOUT`), settings `timeout: 600` as the
-backstop, so the log line is always written. Compaction waits for it.
+**Timeout:** inner `timeout 480` (override: `APERTURE_HANDOFF_TIMEOUT`, kept under 585 so `timeout -k 15`
+finishes inside it), settings `timeout: 600` as the backstop, so the log line is written. Compaction waits
+for it. If Claude Code kills the hook anyway, the fork (its own process group under `timeout`) can
+outlive it and write its handoff after compaction, with no log line.
 
 **Failure** never blocks compaction: the hook exits 0 and prints nothing whatever happens. The log line
 carries `rc` (124 = timed out) and `subtype` (`error_max_turns` / `error_max_budget_usd` name a runaway
-stop); a fork that wrote to stderr keeps `localNotes/handoffs/.fork-<sid8>-<ts>.err` (pruned after 7
-days). The post-compact hook injects a handoff only when the log's last line for the session names it;
+stop); a fork that wrote to stderr keeps `localNotes/handoffs/.fork-<sid8>-<ts>.err` (pruned once more
+than 7 whole days old). The post-compact hook injects a handoff only when the log's last line for the
+session names it and is under 10 min old;
 otherwise it surfaces the newest handoff for the branch by path. Skips log `skip reason=` (`fork`,
 `bad-session-id`, `no-transcript`, `no-claude`, `locked`). Detached HEAD still gets one, named `detached`.
 

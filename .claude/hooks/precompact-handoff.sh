@@ -14,6 +14,7 @@ set -uo pipefail  # deliberately NOT -e: every failure is logged, then exit 0
 INPUT=$(cat)
 source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+cd "$(git rev-parse --show-toplevel)" || exit 0  # handoffs live at the repo root even if the session cd'd into app/
 
 DIR=localNotes/handoffs
 LOG="$DIR/precompact.log"
@@ -42,7 +43,8 @@ exec 9>"$DIR/.lock-$SID8"
 flock -n 9 || skip locked "sid=$SID8"
 
 # `/compact <instructions>` reach the fork via a file, never argv: user-typed text on a command line is
-# COI's kill surface (CLAUDE.md → COI container). The trap also covers Claude Code killing this hook.
+# COI's kill surface (CLAUDE.md → COI container). The trap runs if Claude Code kills this hook, but the
+# fork (its own process group under `timeout`) may outlive it — hence `9>&-`, so it never holds the lock.
 INSTR="$DIR/.instructions-$SID8.txt"
 trap 'rm -f "$INSTR" "$DIR/.lock-$SID8"' EXIT
 EXTRA=""
@@ -70,13 +72,13 @@ OUT=$(APERTURE_HANDOFF_FORK=1 timeout -k 15 "${APERTURE_HANDOFF_TIMEOUT:-480}" "
   "Bash(gh pr create *)" "Bash(gh pr merge *)" "Bash(gh pr close *)" "Bash(rm *)" \
   --max-turns 20 --max-budget-usd 2 \
   --output-format json --no-session-persistence \
-  "/handoff session=$SID trigger=$TRIGGER$EXTRA" </dev/null 2>"$ERR")
+  "/handoff session=$SID trigger=$TRIGGER$EXTRA" </dev/null 2>"$ERR" 9>&-)
 RC=$?
 DUR=$(($(date +%s) - START))
 
 # total_cost_usd is cumulative over the resumed session's whole history, so tokens are logged instead.
 # subtype names a max-turns / max-budget stop.
-STATS=$(jq -r '"fork=\(.session_id // "-" | .[0:8]) subtype=\(.subtype // "-") turns=\(.num_turns // "-") cache_read=\(.usage.cache_read_input_tokens // "-") cache_new=\(.usage.cache_creation_input_tokens // "-") out=\(.usage.output_tokens // "-") denials=\(.permission_denials // [] | length) error=\(.is_error)"' <<<"$OUT" 2>/dev/null)
+STATS=$(jq -rs 'last | "fork=\(.session_id // "-" | .[0:8]) subtype=\(.subtype // "-") turns=\(.num_turns // "-") cache_read=\(.usage.cache_read_input_tokens // "-") cache_new=\(.usage.cache_creation_input_tokens // "-") out=\(.usage.output_tokens // "-") denials=\(.permission_denials // [] | length) error=\(.is_error)"' <<<"$OUT" 2>/dev/null)
 FILE=$(find "$DIR" -maxdepth 1 -name "handoff-*-$SID8.md" -newermt "@$START" -printf '%f\n' 2>/dev/null | sort | tail -1)
 log "trigger=$TRIGGER sid=$SID8 branch=$BRANCH rc=$RC dur=${DUR}s ${STATS:-stats=unparsable} file=${FILE:-none}"
 

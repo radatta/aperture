@@ -346,9 +346,16 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
         subprocess.run([*git, "checkout", "-q", "--detach"], check=True)
     handoffs = pathlib.Path(repo) / "localNotes" / "handoffs"
     handoffs.mkdir(parents=True)
+    stamps = {  # log lines carry `date -Is` stamps; freshness is judged from them
+        "{NOW}": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "{OLD}": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - 7200)),
+    }
     for f in case.get("setup", []):
         path = handoffs / f["name"]
-        path.write_text(f["content"] + "\n", encoding="utf-8")
+        content = f["content"]
+        for key, value in stamps.items():
+            content = content.replace(key, value)
+        path.write_text(content + "\n", encoding="utf-8")
         if "age_min" in f:
             old = time.time() - 60 * f["age_min"]
             os.utime(path, (old, old))
@@ -365,7 +372,9 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
     if case.get("transcript", True):
         transcript.write_text("{}\n", encoding="utf-8")
 
-    payload = {"session_id": case.get("session_id", SID), "transcript_path": str(transcript), "cwd": repo}
+    cwd = os.path.join(repo, case["subdir"]) if "subdir" in case else repo
+    os.makedirs(cwd, exist_ok=True)
+    payload = {"session_id": case.get("session_id", SID), "transcript_path": str(transcript), "cwd": cwd}
     if "trigger" in case:
         payload["trigger"] = case["trigger"]
     if "custom" in case:

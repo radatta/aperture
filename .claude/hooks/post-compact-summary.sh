@@ -11,6 +11,7 @@ INPUT=$(cat)  # drain stdin before any exit
 [ -n "${APERTURE_HANDOFF_FORK:-}" ] && exit 0  # a handoff fork's own compaction isn't worth keeping
 source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+cd "$(git rev-parse --show-toplevel)" || exit 0  # handoffs live at the repo root even if the session cd'd into app/
 
 SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null)
 [[ "$SID" =~ $SID_RE ]] || exit 0
