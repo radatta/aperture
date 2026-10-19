@@ -628,10 +628,12 @@ export function searchRefundCharges(input: {
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
   const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
   const needle = query.trim().toLowerCase();
-  const amountNeedle = needle.replace(/[$,]/g, '');
+  // "+$34.99" pasted from a row's signed amount still matches.
+  const amountNeedle = needle.replace(/[+\-$,]/g, '');
   const matches = (c: FinanceTransaction) =>
     needle === '' ||
     matchesFinanceText(c, needle, { note: true }) ||
+    // Cents as dollar text here too (app money.ts is the page's): integer cents ÷ 100 is exact at 2dp.
     (amountNeedle !== '' && (amount(c) / 100).toFixed(2).includes(amountNeedle));
   return txns
     .filter(

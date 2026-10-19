@@ -72,8 +72,9 @@ export function TransactionDetail({
   const cents = view.amount(txn);
   const acct = view.accounts.get(txn.accountId);
   const markable = acct?.type === 'credit' && cents < 0;
-  // Money in that could be a refund at all — a Venmo cash-out or a transfer never is.
-  const linkableIncome = isIncome && refundSideError(txn, acct, view.moves) === null;
+  // Money in that could be a refund at all — a Venmo cash-out, a transfer or a period mark never is.
+  const linkable = refundSideError(txn, acct, view.moves) === null;
+  const linkableIncome = isIncome && linkable;
   // Focus follows a link/unlink/mark (the clicked button unmounts) — but never on first open, where
   // a focused Link button would make a stray Enter link the refund.
   const [acted, setActed] = useState(false);
@@ -152,13 +153,13 @@ export function TransactionDetail({
             </Button>
           </div>
         )}
-        {isRefund && !txn.refundOfId && (
+        {isRefund && linkable && !txn.refundOfId && (
           <RefundSuggestions
             refund={txn}
             view={view}
             busy={link.isPending}
             focus={acted}
-            fallback="No likely charge found — search for it below, or sort it below instead."
+            fallback="No likely charge found — search for it, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
           />
         )}
@@ -363,10 +364,11 @@ function RefundSuggestions({
   // How far this refund overshoots what's left of a charge (the overshoot won't count).
   const over = (c: FinanceTransaction) =>
     -view.amount(refund) - (view.amount(c) - (view.refunded.get(c.id) ?? 0));
-  // Charges on shown accounts only — a hidden account's rows never resolve as a link target.
+  // Every row, not view.sortable: a deposit's refund must count against its charge's "left" (as
+  // view.refunded does); chargeSideError keeps hidden accounts, moves and marks out as targets.
   const args = {
     refund,
-    txns: view.sortable,
+    txns: view.allTxns,
     accounts: [...view.accounts.values()],
     moves: view.moves,
     links: view.links,

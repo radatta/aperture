@@ -1217,6 +1217,7 @@ describe('refund links', () => {
     expect(ids('1,000.50')).toEqual(['big']);
     expect(ids('$1000.5')).toEqual(['big']);
     expect(ids('12.00')).toEqual(['m']);
+    expect(ids('+$12.00')).toEqual(['m']); // pasted from a row's signed amount
     expect(ids('zzz')).toEqual([]);
   });
 

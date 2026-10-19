@@ -719,22 +719,33 @@ describe('Refund link search', () => {
     expect(await screen.findByText('$600 left')).toBeTruthy();
   });
 
-  it('Escape clears the search, brings the suggestions back, and leaves focus in the box', async () => {
+  it('Escape clears the search and brings the suggestions back without taking focus from the box', async () => {
     const user = userEvent.setup();
     renderApp({ api: await linked(), path: '/finances/all' });
-    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
-    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.click((await findRows(/Family/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    // Opened by hand, so its best Link takes focus — and would again when the suggestions come back.
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
     const box = searchBox(dialog);
     await user.type(box, 'zzz');
     expect(within(dialog).getByText('No charge matches “zzz”.')).toBeTruthy();
     expect(within(dialog).queryByRole('button', { name: /^Link to/ })).toBeNull();
     await user.keyboard('{Escape}');
     expect((box as HTMLInputElement).value).toBe('');
-    expect(screen.getByRole('dialog', { name: /^Refund: Amazon/ })).toBeTruthy();
-    expect(
-      within(dialog).getAllByRole('button', { name: /Link to Amazon/ }).length,
-    ).toBeGreaterThan(0);
+    expect(within(dialog).getByRole('button', { name: /Link to Roommate/ })).toBeTruthy();
     expect(document.activeElement).toBe(box);
+    // That the dialog stays open is a browser check: jsdom never turns Escape into a dialog cancel.
+  });
+
+  it('a charge a linked deposit already paid back in full is not offered', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.linkFinanceRefund('fx-reimburse', 'fx-safeway');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.type(searchBox(dialog), 'safeway');
+    expect(within(dialog).getByText('No charge matches “safeway”.')).toBeTruthy();
   });
 
   it('money in with no likely charge can still search, by name or amount, and Cancel', async () => {
