@@ -17,8 +17,8 @@
 # repo); each is guarded so the hook always exits 0. A hook that errors on a plane is worse than one
 # that says less.
 #
-# Wired in .claude/settings.json (SessionStart, matcher "compact").
-# See .claude/skills/handoff/SKILL.md and docs/ops/COI-SANDBOX.md.
+# Wired in .claude/settings.json (SessionStart, matcher "compact"). The handoff itself is written before
+# compaction by precompact-handoff.sh — see docs/ops/COMPACTION-HANDOFF.md.
 
 set -uo pipefail  # deliberately NOT -e: a failing probe must not kill the hook
 
@@ -74,10 +74,25 @@ if command -v gh >/dev/null 2>&1; then
   echo
 fi
 
-# Surface the newest handoff for this branch rather than its contents — reading it is a decision for
-# the session, and dumping a few hundred lines into a just-compacted context defeats the compaction.
-if [ -n "$BRANCH" ]; then
-  LATEST=$(ls -1 localNotes/handoffs/ 2>/dev/null | grep -- "-${BRANCH}\.md$" | tail -1)
+# The handoff precompact-handoff.sh wrote seconds ago for THIS session is matched by session id and its
+# head injected: it was written for exactly this moment. Anything else — an older handoff from this
+# session, or the newest for this branch from another — is surfaced by path only; reading it is a
+# decision for the session, and dumping a stale file into a just-compacted context defeats compaction.
+SID8=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null | cut -c1-8)
+OWN=""
+[ -n "$SID8" ] && OWN=$(ls -1 localNotes/handoffs/ 2>/dev/null | grep -E -- "^handoff-.*-${SID8}\.md$" | tail -1)
+if [ -n "$OWN" ] && [ $(($(date +%s) - $(stat -c %Y "localNotes/handoffs/$OWN" 2>/dev/null || echo 0))) -lt 1800 ]; then
+  echo "## Handoff written just before this compaction — localNotes/handoffs/$OWN"
+  echo "Written by a fork of this session moments ago. Its decisions, dead ends and open questions are"
+  echo "what the summary may have dropped; its 'State as of' block is superseded by the live state above."
+  echo
+  head -150 "localNotes/handoffs/$OWN"
+  LINES=$(wc -l < "localNotes/handoffs/$OWN")
+  [ "$LINES" -gt 150 ] && echo "… (first 150 of $LINES lines — read the file for the rest)"
+  echo
+else
+  [ -n "$BRANCH" ] && LATEST=$(ls -1 localNotes/handoffs/ 2>/dev/null | grep -E -- "^handoff-.*-${BRANCH}(-[0-9a-f]{8})?\.md$" | tail -1)
+  LATEST=${OWN:-${LATEST:-}}
   if [ -n "$LATEST" ]; then
     echo "## Handoff available"
     echo "localNotes/handoffs/$LATEST"
