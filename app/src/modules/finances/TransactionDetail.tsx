@@ -8,6 +8,7 @@ import {
   periodOf,
   REFUND_MATCH_WINDOW_DAYS,
   refundSideError,
+  searchRefundCharges,
   suggestRefundMatches,
 } from '@aperture/shared';
 import type {
@@ -29,6 +30,7 @@ import {
   useSetFinancePeriodOverride,
   useSetFinancePeriodStart,
 } from '../../data/hooks/useFinances';
+import { SearchBox } from './LedgerControls';
 import { fmtMoney, fmtSigned } from './money';
 import type { FinanceView } from './useFinanceData';
 
@@ -156,7 +158,7 @@ export function TransactionDetail({
             view={view}
             busy={link.isPending}
             focus={acted}
-            fallback="Nothing it could reverse. Sort it below instead."
+            fallback="No likely charge found — search for it below, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
           />
         )}
@@ -168,7 +170,7 @@ export function TransactionDetail({
               view={view}
               busy={link.isPending}
               focus
-              fallback="Nothing it could reverse — it stays money in, outside the budget."
+              fallback="No likely charge found — search for it below, or it stays money in, outside the budget."
               onLink={(chargeId) => setLink(chargeId)}
               onCancel={incomeLink.onClose}
             />
@@ -331,7 +333,11 @@ function LinkedRefund({
   );
 }
 
-// The charges this refund could reverse: the best as a one-click Link, then a few runners-up.
+const REFUND_SEARCH_LIMIT = 8;
+
+// The charges this refund could reverse: the best as a one-click Link, then a few runners-up. Under
+// them, a search over every charge it could link to, for the one they miss; while you search, its
+// results replace them.
 function RefundSuggestions({
   refund,
   view,
@@ -349,85 +355,135 @@ function RefundSuggestions({
   onLink: (chargeId: string) => void;
   onCancel?: () => void; // a collapsible list gets a way back (and a focus target when it's empty)
 }) {
+  const [query, setQuery] = useState('');
+  // Once you've typed, nothing autofocuses: clearing the box remounts the suggestions, and their
+  // Link would pull focus out of it mid-edit.
+  const [typed, setTyped] = useState(false);
+  const autoFocus = focus && !typed;
   // How far this refund overshoots what's left of a charge (the overshoot won't count).
   const over = (c: FinanceTransaction) =>
     -view.amount(refund) - (view.amount(c) - (view.refunded.get(c.id) ?? 0));
   // Charges on shown accounts only — a hidden account's rows never resolve as a link target.
+  const args = {
+    refund,
+    txns: view.sortable,
+    accounts: [...view.accounts.values()],
+    moves: view.moves,
+    links: view.links,
+  };
   const suggest = (anyMerchant: boolean) =>
-    suggestRefundMatches({
-      refund,
-      txns: view.sortable,
-      accounts: [...view.accounts.values()],
-      moves: view.moves,
-      links: view.links,
-      anyMerchant,
-    }).slice(0, 5);
+    suggestRefundMatches({ ...args, anyMerchant }).slice(0, 5);
   const sameMerchant = suggest(false);
   // A card credit's descriptor doesn't always match its charge's merchant — fall back to any charge.
   const matches = sameMerchant.length ? sameMerchant : suggest(true);
+  const searching = query.trim() !== '';
+  const found = searching ? searchRefundCharges({ ...args, query }) : [];
   const merchant = refund.merchantName ?? refund.name;
   const labelId = `refund-of-${refund.id}`;
+  const statusId = `refund-search-${refund.id}`;
+
+  const row = (
+    c: FinanceTransaction,
+    opts: { named: boolean; primary: boolean; focus: boolean },
+  ) => {
+    const refunded = view.refunded.get(c.id) ?? 0;
+    return (
+      <li
+        key={c.id}
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line px-3 py-2"
+      >
+        <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
+          {fmtMonthShortDay(c.date)}
+        </Text>
+        <Text size="sm" className="min-w-0 flex-1 truncate">
+          {opts.named ? `${c.merchantName ?? c.name} · ` : ''}
+          {c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted'}
+          {refunded > 0 ? ` · ${fmtMoney(refunded)} already refunded` : ''}
+        </Text>
+        <Text size="sm" tabular>
+          {fmtMoney(view.amount(c))}
+        </Text>
+        <Button
+          size="sm"
+          variant={opts.primary ? 'primary' : 'ghost'}
+          disabled={busy}
+          autoFocus={opts.focus}
+          onClick={() => onLink(c.id)}
+          aria-label={`Link to ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
+        >
+          Link
+        </Button>
+        {/* Its own line: the row above truncates on a phone, and this is why it only counts
+            part of the money. */}
+        {over(c) > 0 && (
+          <Text size="xs" tone="muted" className="w-full">
+            {fmtMoney(over(c))} more than what&apos;s left of the charge — only that counts.
+          </Text>
+        )}
+      </li>
+    );
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
-      {matches.length > 0 && (
-        <Text id={labelId} size="sm" tone="muted">
-          {sameMerchant.length
-            ? `Refund of which ${merchant} charge?`
-            : `No ${merchant} charge found from the ${REFUND_MATCH_WINDOW_DAYS} days before it. Other charges it could be:`}
-        </Text>
+      {!searching && matches.length > 0 && (
+        <>
+          <Text id={labelId} size="sm" tone="muted">
+            {sameMerchant.length
+              ? `Refund of which ${merchant} charge?`
+              : `No ${merchant} charge found from the ${REFUND_MATCH_WINDOW_DAYS} days before it. Other charges it could be:`}
+          </Text>
+          <ul aria-labelledby={labelId} className="flex flex-col gap-1.5">
+            {matches.map((c, i) =>
+              row(c, {
+                named: !sameMerchant.length,
+                primary: i === 0,
+                focus: autoFocus && i === 0,
+              }),
+            )}
+          </ul>
+        </>
       )}
-      {matches.length === 0 ? (
+      {!searching && matches.length === 0 && (
         <Text size="sm" tone="muted">
           {fallback}
         </Text>
-      ) : (
-        <ul aria-labelledby={labelId} className="flex flex-col gap-1.5">
-          {matches.map((c, i) => {
-            const refunded = view.refunded.get(c.id) ?? 0;
-            return (
-              <li
-                key={c.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line px-3 py-2"
-              >
-                <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
-                  {fmtMonthShortDay(c.date)}
-                </Text>
-                <Text size="sm" className="min-w-0 flex-1 truncate">
-                  {sameMerchant.length ? '' : `${c.merchantName ?? c.name} · `}
-                  {c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted'}
-                  {refunded > 0 ? ` · ${fmtMoney(refunded)} already refunded` : ''}
-                </Text>
-                <Text size="sm" tabular>
-                  {fmtMoney(view.amount(c))}
-                </Text>
-                <Button
-                  size="sm"
-                  variant={i === 0 ? 'primary' : 'ghost'}
-                  disabled={busy}
-                  autoFocus={focus && i === 0}
-                  onClick={() => onLink(c.id)}
-                  aria-label={`Link to ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
-                >
-                  Link
-                </Button>
-                {/* Its own line: the row above truncates on a phone, and this is why it only counts
-                    part of the money. */}
-                {over(c) > 0 && (
-                  <Text size="xs" tone="muted" className="w-full">
-                    {fmtMoney(over(c))} more than what&apos;s left of the charge — only that counts.
-                  </Text>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+      )}
+      <SearchBox
+        value={query}
+        onChange={(v) => {
+          setTyped(true);
+          setQuery(v);
+        }}
+        label="Search charges to link"
+        placeholder="Search merchant, bank text, note or amount"
+        keyshortcut={null}
+        onPanel
+      />
+      {searching && (
+        <>
+          <Text id={statusId} size="sm" tone="muted">
+            {found.length === 0
+              ? `No charge matches “${query.trim()}”.`
+              : found.length > REFUND_SEARCH_LIMIT
+                ? `Showing ${REFUND_SEARCH_LIMIT} of ${found.length} — add a word to narrow it.`
+                : `${found.length} ${found.length === 1 ? 'charge' : 'charges'}`}
+          </Text>
+          {found.length > 0 && (
+            <ul aria-labelledby={statusId} className="flex flex-col gap-1.5">
+              {found
+                .slice(0, REFUND_SEARCH_LIMIT)
+                .map((c) => row(c, { named: true, primary: false, focus: false }))}
+            </ul>
+          )}
+        </>
       )}
       {onCancel && (
         <Button
           size="sm"
           variant="ghost"
           className="self-start"
-          autoFocus={focus && matches.length === 0}
+          autoFocus={autoFocus && matches.length === 0}
           onClick={onCancel}
         >
           Cancel

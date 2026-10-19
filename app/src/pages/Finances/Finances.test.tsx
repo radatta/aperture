@@ -303,7 +303,9 @@ describe('Finances page', () => {
     expect(within(dialog).queryByRole('button', { name: /^Link to/ })).toBeNull();
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
     expect(
-      await within(dialog).findByText(/Nothing it could reverse — it stays money in/),
+      await within(dialog).findByText(
+        /No likely charge found — search for it below, or it stays money in/,
+      ),
     ).toBeTruthy();
   });
 
@@ -673,6 +675,103 @@ describe('Finances page', () => {
     await user.type(screen.getByLabelText('When the merchant contains'), 'Netflix');
     await user.click(screen.getByRole('button', { name: 'Add rule' }));
     expect(await screen.findByText('“netflix”')).toBeTruthy();
+  });
+});
+
+describe('Refund link search', () => {
+  const searchBox = (dialog: HTMLElement) =>
+    within(dialog).getByRole('searchbox', { name: 'Search charges to link' });
+
+  it('a card credit links to a charge the suggestions never offered', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    expect(
+      within(dialog).getAllByRole('button', { name: /Link to Amazon/ }).length,
+    ).toBeGreaterThan(0);
+    await user.type(searchBox(dialog), 'chipotle');
+    // The suggestions give way to the results; a $12.45 charge is far past the 10% the suggestions allow.
+    expect(within(dialog).queryByRole('button', { name: /Link to Amazon/ })).toBeNull();
+    const chipotle = within(dialog).getAllByRole('button', { name: /Link to Chipotle .*\$12\.45/ });
+    expect(within(dialog).getAllByText(/\$22\.54 more than what's left of the charge/).length).toBe(
+      chipotle.length,
+    );
+    await user.click(chipotle[0]!);
+    expect(await within(dialog).findByText(/it follows the charge/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByRole('radiogroup', { name: 'Bucket' })).toBeTruthy();
+  });
+
+  it('a deposit links past the 10% bound and counts only the charge', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
+    renderApp({ api, path: '/finances/all' });
+    expect(await screen.findByText('$561 left')).toBeTruthy(); // $600 − $38.61
+    await user.click((await findRows(/Family/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    expect(within(dialog).queryByRole('button', { name: /Link to Safeway/ })).toBeNull();
+    await user.type(searchBox(dialog), 'SAFEWAY');
+    await user.click(within(dialog).getByRole('button', { name: /Link to Safeway/ }));
+    expect(await within(dialog).findByText(/Only \$38\.61 of it counts/)).toBeTruthy();
+    expect(await screen.findByText('$600 left')).toBeTruthy();
+  });
+
+  it('Escape clears the search, brings the suggestions back, and leaves focus in the box', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    const box = searchBox(dialog);
+    await user.type(box, 'zzz');
+    expect(within(dialog).getByText('No charge matches “zzz”.')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^Link to/ })).toBeNull();
+    await user.keyboard('{Escape}');
+    expect((box as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('dialog', { name: /^Refund: Amazon/ })).toBeTruthy();
+    expect(
+      within(dialog).getAllByRole('button', { name: /Link to Amazon/ }).length,
+    ).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(box);
+  });
+
+  it('money in with no likely charge can still search, by name or amount, and Cancel', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Acme Corp/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Acme Corp/ });
+    const trigger = within(dialog).getByRole('button', { name: 'Link as a refund' });
+    await user.click(trigger);
+    expect(within(dialog).getByText(/No likely charge found/)).toBeTruthy();
+    await user.type(searchBox(dialog), 'target');
+    expect(within(dialog).getByText(/^\d+ charges?$/)).toBeTruthy();
+    const targets = within(dialog).getAllByRole('button', { name: /^Link to/ });
+    expect(targets.every((b) => /^Link to Target /.test(b.getAttribute('aria-label')!))).toBe(true);
+    await user.clear(searchBox(dialog));
+    await user.type(searchBox(dialog), '$26.89');
+    expect(
+      within(dialog)
+        .getAllByRole('button', { name: /^Link to/ })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual(targets.map((b) => b.getAttribute('aria-label')));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(dialog).getByRole('button', { name: 'Link as a refund' }),
+      ),
+    );
+  });
+
+  it('a broad search shows eight and says how many more', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.type(searchBox(dialog), 'a');
+    expect(within(dialog).getByText(/^Showing 8 of \d+ — add a word to narrow it\.$/)).toBeTruthy();
+    expect(within(dialog).getAllByRole('button', { name: /^Link to/ })).toHaveLength(8);
   });
 });
 
