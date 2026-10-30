@@ -137,8 +137,9 @@ State lives on the shared mount (`/workspace/localNotes/board/`, visible from th
 Every lease change runs under `flock /tmp/aperture-board.lock` — on the container's rootfs, because the whole
 population is this one container (virtiofs `flock` semantics aren't worth trusting).
 
-**`dev`** — one branch on the dev stage at a time. Advisory and local; ci-bot's `refs/locks/dev` will be
-GitHub's truth, and dev-e2e's build marker catches an overwrite after the fact. Lease
+**`dev`** — one branch on the dev stage at a time. Advisory and local; the feature workflow takes it before
+asking the user for the `dev` push (phase 8) and releases it at the PR (phase 10). Once bot dev deploys are on,
+ci-bot's `refs/locks/dev` is GitHub's truth (`docs/ops/CI-BOT.md` → _Dev lock_), and dev-e2e's build marker catches an overwrite after the fact. Lease
 `{holderPid, holderStart, holderName, branch, acquiredAt, expiresAt, ttlSec: 2700, note}`:
 
 - free → granted; the holder again → renewed; someone else → exit 3 with who and until when
