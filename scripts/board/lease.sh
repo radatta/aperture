@@ -186,16 +186,21 @@ lease_heavy_acquire() {
   local slot="$1" owner="$2" class="$3" label="$4" cmd="$5" wp="$6" ws="$7" wait="${8:-90}" t0 dec rc v first=
   t0=$(sb_epoch)
   while :; do
-    dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws"); rc=$?
-    # The board lock was busy for 5 s — likeliest at a full cap, with every waiter polling. Retry until our own
-    # deadline rather than run unslotted (invisible to everyone else's count); fail open only then, logged.
+    dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws" 2>/dev/null); rc=$?
     if [ "$rc" = 75 ]; then
+      # The board lock was busy for 5 s — likeliest at a full cap, with every waiter polling. Nudge-only
+      # (enforce off): never wait on board plumbing. Enforcing: retry until our deadline rather than run unslotted
+      # (invisible to everyone else's count). A run that was already held gives up as usual; one that never got
+      # a decision fails open, logged as lockBusy.
+      [ "${ENFORCE:-false}" = true ] || return 0
       if [ $(( $(sb_epoch) - t0 )) -lt "$wait" ]; then sleep 2; continue; fi
+      [ -n "$first" ] && { _heavy_give_up "$first" "$owner" "$class" "$label" "$cmd" "$wait"; return 75; }
       _heavy_event lockBusy '{"verdict":"lock-busy"}' "$owner" "$class" "$label" "$cmd" "$(( $(sb_epoch) - t0 ))"
       echo "heavy: the board lock stayed busy for ${wait}s — running without a slot (logged)" >&2
       return 0
     fi
-    dec=$(_heavy_with_holders "$dec")
+    # Holders only for a decision we report: the first block, or a run that goes ahead (wouldWait).
+    { [ -z "$first" ] || [ "$rc" = 0 ]; } && dec=$(_heavy_with_holders "$dec")
     v=$(jq -r .verdict <<<"$dec" 2>/dev/null)
     if [ "$rc" = 0 ]; then
       case "$v" in
@@ -207,7 +212,7 @@ lease_heavy_acquire() {
       [ -n "$first" ] && _heavy_event waited "$first" "$owner" "$class" "$label" "$cmd" "$(( $(sb_epoch) - t0 ))"
       return 0
     fi
-    [ "$rc" = 3 ] || return 0  # lock trouble: fail open, never block work on board plumbing
+    [ "$rc" = 3 ] || return 0  # other lock trouble: fail open, never block work on board plumbing
     if [ -z "$first" ]; then
       first=$dec
       if [ "$v" = cap-full ]; then
@@ -219,18 +224,24 @@ lease_heavy_acquire() {
       fi
     fi
     if [ $(( $(sb_epoch) - t0 )) -ge "$wait" ]; then
-      _heavy_event gaveUp "$first" "$owner" "$class" "$label" "$cmd" "$wait"
-      if [ "$(jq -r .verdict <<<"$first")" = cap-full ]; then
-        echo "heavy: $class cap still full after ${wait}s — running: $(_heavy_holders "$class") — tell the user (board.sh status)" \
-          "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
-      else
-        echo "heavy: still past the measured edge after ${wait}s — running: $(_heavy_holders) — tell the user (board.sh status)" \
-          "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
-      fi
+      _heavy_give_up "$first" "$owner" "$class" "$label" "$cmd" "$wait"
       return 75
     fi
     sleep 2
   done
+}
+
+# Past the wait: record the hold (from the first blocking decision) and tell Claude to tell the user.
+_heavy_give_up() {
+  local first="$1" owner="$2" class="$3" label="$4" cmd="$5" wait="$6"
+  _heavy_event gaveUp "$first" "$owner" "$class" "$label" "$cmd" "$wait"
+  if [ "$(jq -r .verdict <<<"$first")" = cap-full ]; then
+    echo "heavy: $class cap still full after ${wait}s — running: $(_heavy_holders "$class") — tell the user (board.sh status)" \
+      "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
+  else
+    echo "heavy: still past the measured edge after ${wait}s — running: $(_heavy_holders) — tell the user (board.sh status)" \
+      "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
+  fi
 }
 
 cmd_lease() {

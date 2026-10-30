@@ -22,24 +22,39 @@ case "$LC" in
   "git "*|"gh "*|"echo "*|"printf "*) exit 0 ;;  # text that merely mentions a heavy command
 esac
 
-# Does some segment of $1 actually start a runner (pnpm, vitest, tsc, node, …), rather than read or write text
-# that mentions one (`cat vitest.config.ts`, `grep -rn "pnpm test" docs/`)? A heredoc's body is text, so only
-# its first line counts. Leading env assignments and wrappers (env, timeout N, nice) are skipped. Builtins only.
-runs_heavy() {
-  local c="$1" seg w
-  case "$c" in *"<<"*) c=${c%%$'\n'*} ;; esac
-  c=${c//&&/$'\n'}; c=${c//||/$'\n'}; c=${c//;/$'\n'}; c=${c//|/$'\n'}; c=${c//(/ }; c=${c//)/ }
+# The segments of $1 that actually start a runner (pnpm, vitest, tsc, node, …), one per line — not text that
+# mentions one (`cat vitest.config.ts`, `rg -n "vitest|pnpm test" docs/`, a heredoc body). Quoted spans are text
+# (blanked before splitting on && || ; | & and parens); heredoc bodies (`<<WORD` … `WORD`) are dropped; leading
+# env assignments, wrappers (env, timeout -s SIG N, nice, nohup, setsid, command) and shell keywords are skipped;
+# package-management pnpm verbs (add, why, install, …) aren't runs. Builtins only. The class comes from these.
+run_segments() {
+  local c="$1" line seg w end= body= re="\"[^\"]*\"|'[^']*'"
+  while IFS= read -r line; do  # drop heredoc bodies, keep the line that opens one
+    if [ -n "$end" ]; then [ "${line//[[:space:]]/}" = "$end" ] && end=; continue; fi
+    body+="$line"$'\n'
+    if [[ $line =~ \<\<-?[[:space:]]*[\'\"]?([A-Za-z_][A-Za-z0-9_]*) ]]; then end=${BASH_REMATCH[1]}; fi
+  done <<<"$c"
+  c=$body
+  while [[ $c =~ $re ]]; do c=${c/"${BASH_REMATCH[0]}"/ Q }; done
+  c=${c//&&/$'\n'}; c=${c//||/$'\n'}; c=${c//;/$'\n'}; c=${c//|/$'\n'}; c=${c//&/$'\n'}; c=${c//(/ }; c=${c//)/ }
   while IFS= read -r seg; do
     read -r -a w <<<"$seg"
     while [ "${#w[@]}" -gt 0 ]; do
-      case "${w[0]}" in *=*|env|timeout|time|nice|exec|-*|[0-9]*) w=("${w[@]:1}") ;; *) break ;; esac
+      case "${w[0]}" in
+        *=*|env|timeout|time|nice|nohup|setsid|command|exec|-*|[0-9]*|kill|term|int|hup|"{"|"}"|"!"|if|then|do|else|elif|while|until) w=("${w[@]:1}") ;;
+        *) break ;;
+      esac
     done
-    case "${w[0]:-}" in pnpm|npx|vitest|*/vitest|tsc|*/tsc|tsgo|eslint|*/eslint|vite|*/vite|node|bash|sh|scripts/*|./*) return 0 ;; esac
+    case "${w[0]:-}" in
+      pnpm) case "${w[1]:-}" in add|remove|why|install|i|list|ls|outdated|update|up|view|info) continue ;; esac
+            printf '%s\n' "${w[*]}" ;;
+      npx|vitest|*/vitest|tsc|*/tsc|tsgo|eslint|*/eslint|vite|*/vite|node|bash|sh|xargs|scripts/*|./*) printf '%s\n' "${w[*]}" ;;
+    esac
   done <<<"$c"
-  return 1
 }
-runs_heavy "$LC" || exit 0
-CLASS=$(sb_classify "$CMD")
+SEGS=$(run_segments "$LC")
+[ -n "$SEGS" ] || exit 0
+CLASS=$(sb_classify "$SEGS")
 case "$CLASS" in test|typecheck|lint|build|dev|ui) ;; *) exit 0 ;; esac
 
 emit() {  # $1 decision (allow|deny), $2 message — message over stdin, never argv

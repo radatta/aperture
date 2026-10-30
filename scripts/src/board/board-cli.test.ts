@@ -496,10 +496,64 @@ describe('heavy.sh test cap', () => {
       env,
       encoding: 'utf8',
     });
+    const j = spawnSync('node', [cli, 'barriers', join(tmp, 'board/history'), '--json'], {
+      env,
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(j.stdout)).toMatchObject({
+      days: 7,
+      blocks: 1,
+      denied: 1,
+      gaveUp: 1,
+      merged: 1,
+    }); // --json isn't the days
     expect(r.stdout).toMatch(
       /1 block \(0\.1\/day\) · 0 waited · 1 gave up · 1 denied \(1 re-run, counted once\)/,
     );
   });
+
+  // The board lock held by someone else for the whole test (e.g. a slow guard or a stuck waiter).
+  async function holdLock(sec: number) {
+    const c = spawn('flock', [join(tmp, 'lock'), 'sleep', String(sec)], { stdio: 'ignore' });
+    children.push(c);
+    await new Promise((r) => setTimeout(r, 300));
+    return c;
+  }
+  const heavyAsync = (args: string[], extra: NodeJS.ProcessEnv) =>
+    new Promise<number | null>((r) =>
+      spawn('bash', [join(boardDir, 'heavy.sh'), ...args], {
+        env: { ...env, ...extra },
+        cwd: tmp,
+        stdio: 'ignore',
+      }).on('exit', (code) => r(code)),
+    );
+
+  it('lock busy and no decision ever: fails open at the deadline, logged as lockBusy (not a block)', async () => {
+    limits({ enforce: true });
+    await holdLock(15);
+    expect(await heavyAsync(['--wait', '3', '--', 'true'], { HEAVY_CLASS: 'test' })).toBe(0);
+    expect(leases()).toEqual([expect.objectContaining({ action: 'lockBusy', reason: 'lock' })]);
+  }, 30000);
+
+  it('held at the cap, then the lock stays busy: still gives up with 75 — never a 5th unslotted suite', async () => {
+    limits({ enforce: true });
+    testSlots(4);
+    const run = heavyAsync(['--wait', '6', '--', 'true'], { HEAVY_CLASS: 'test' });
+    await new Promise((r) => setTimeout(r, 1000)); // after its first (blocking) decision
+    await holdLock(20);
+    expect(await run).toBe(75);
+    expect(leases()).toEqual([expect.objectContaining({ action: 'gaveUp', reason: 'cap' })]);
+    expect(events().filter((e) => e.kind === 'job')).toEqual([]);
+  }, 40000);
+
+  it('enforce off: a busy lock never makes it wait on board plumbing', async () => {
+    limits({ enforce: false });
+    await holdLock(30);
+    const t = Date.now();
+    expect(await heavyAsync(['--wait', '60', '--', 'true'], { HEAVY_CLASS: 'test' })).toBe(0);
+    expect(Date.now() - t).toBeLessThan(15000); // one 5 s lock attempt, not the 60 s wait
+    expect(leases()).toEqual([]);
+  }, 40000);
 
   it('with enforce off it runs at a full cap and logs wouldWait', () => {
     limits({ enforce: false });

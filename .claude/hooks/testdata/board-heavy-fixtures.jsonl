@@ -13,7 +13,7 @@
 {"expect":"allow","why":"not heavy","cmd":"ls scripts/board"}
 {"expect":"nudge","why":"enforce on but load below soft — offers, never blocks","cmd":"pnpm test","limits":{"enforce":true}}
 {"expect":"nudge","why":"past hard but enforce off — runs, with the offer","cmd":"pnpm test","limits":{"enforce":false},"cgroup":{"pids.current":"3700\n"}}
-{"expect":"deny","why":"enforce on and pids past the measured hard line — held at the edge","cmd":"pnpm test","limits":{"enforce":true},"cgroup":{"pids.current":"3700\n"}}
+{"expect":"deny","why":"enforce on and pids past the measured hard line — held at the edge","cmd":"pnpm test","limits":{"enforce":true},"cgroup":{"pids.current":"3700\n"},"reason":"board.sh status"}
 {"expect":"deny","why":"enforce on and anon past the measured hard line","cmd":"pnpm --filter @aperture/app test","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 15032385536\nfile 0\n"}}
 {"expect":"nudge","why":"enforce on, over soft but under hard — still only an offer","cmd":"pnpm typecheck","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 12884901888\nfile 0\n"}}
 {"expect":"nudge","why":"another session's heavy job running — the offer repeats with the count","cmd":"pnpm test","running":2}
@@ -34,3 +34,8 @@
 {"expect":"allow","why":"a heredoc body that mentions pnpm test is text","cmd":"cat > localNotes/pr.md <<'EOF'\nRan pnpm test: green\nEOF","running":4,"runningClass":"test"}
 {"expect":"deny","why":"env assignments and cd before the runner still count as a real run","cmd":"cd app && CI=true pnpm test","running":4,"runningClass":"test","reason":"cap is full"}
 {"expect":"deny","why":"the deny names this board's own heavy.sh by absolute path (other worktrees have none)","cmd":"pnpm test","running":4,"runningClass":"test","reason":"/scripts/board/heavy.sh -- <cmd>"}
+{"expect":"allow","why":"a regex alternation inside quotes is text, not a pipe into pnpm","cmd":"rg -n \"vitest|pnpm test\" docs/","running":4,"runningClass":"test"}
+{"expect":"allow","why":"the class comes from the segment that runs: pnpm install, then a search that mentions pnpm test","cmd":"pnpm install && rg -n \"pnpm test\" docs","running":4,"runningClass":"test"}
+{"expect":"allow","why":"package management is not a test run","cmd":"pnpm add -D vitest@4","running":4,"runningClass":"test"}
+{"expect":"deny","why":"a test run inside a brace group and pipe is still a run","cmd":"{ pnpm test; } 2>&1 | tail -n 3","running":4,"runningClass":"test","reason":"cap is full"}
+{"expect":"nudge","why":"a heredoc body is dropped, but the command after it runs","cmd":"cat > x.md <<'EOF'\nRan pnpm test\nEOF\npnpm lint"}

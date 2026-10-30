@@ -96,7 +96,7 @@ from heavy-free ticks; and summarises real jobs per class — load-test runs (`l
 guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
 
 **Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
-envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard", cap: {max, running,
+envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard"|"lock", cap: {max, running,
 full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?}`.
 `action`: `waited` (ran after the wait; `waitedSec` real), `gaveUp` (exit 75; `waitedSec` = the budget),
 `denied` (the PreToolUse guard refused a raw command; `label: "guard"`), `wouldWait` (enforce off — the
@@ -104,8 +104,10 @@ counterfactual). `holders` and `cap` are the ones at the first block, the cause.
 report's _Barriers_ section) counts **blocks** = waited + gaveUp + denied, except that a deny followed within
 2 min by the same session's held `heavy.sh` re-run of the same class is **one** block (`merged`; each re-run
 absorbs one deny, the earliest). It gives blocks/day over the real window, total / p50 / p90 / max wait, and
-counts by reason, class, mix, holder and blocked session — counted per block, so each adds up to the headline.
-`lockBusy` (the board lock stayed busy for the whole wait, so the job ran unslotted — fail-open) is reported,
+counts by reason, class, mix, holder and blocked session — per block, so reason, class and blocked session add
+up to the headline (a block can have several holders, and older events no mix).
+`lockBusy` (enforcing, the board lock stayed busy for the whole wait before any decision, so the job ran
+unslotted — fail-open; a job already held gives up instead, and with `enforce: false` a busy lock never waits) is reported,
 not counted as a block. Load tests are excluded.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
@@ -182,7 +184,9 @@ the Bash PreToolUse guard offers `heavy.sh` and, with `enforce: true`, denies a 
 measured edge or a full cap (recording a `denied` barrier event, pointing at this board's `heavy.sh` by absolute
 path — other worktrees have none until merge — which waits). Only a command that actually starts a runner counts:
 some `&&` / `;` / `|` segment begins (after env assignments, `env`, `timeout N`) with `pnpm`, `vitest`, `tsc`,
-`node`, … — `cat vitest.config.ts`, `grep -rn "pnpm test"` or a heredoc body mentioning one is text, not a run;
+`node`, … — `cat vitest.config.ts`, `rg -n "vitest|pnpm test"` (quoted spans are text), a heredoc body, or `pnpm add vitest` is
+text, not a run — and the class comes only from the segments that run. It misses some real runs (`bash -c "pnpm
+test"`, `make`), which only costs the offer: the hook fails open;
 SessionEnd marks the session gone.
 
 ## Overlaps
