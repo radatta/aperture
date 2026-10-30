@@ -931,6 +931,33 @@ describe('All tab: sort into and search', () => {
     expect(screen.getByText(/^1 row · /)).toBeTruthy();
   });
 
+  it('a refund linked to a charge from before last period stays listed, and can be unlinked', async () => {
+    const user = userEvent.setup();
+    // fx-card-50 is from before last period: the deposit follows it out of both period lists.
+    await openAll((a) => a.linkFinanceRefund('fx-reimburse', 'fx-card-50'));
+    const followed = await screen.findByRole('region', { name: 'Linked to older charges' });
+    expect(within(followed).getByText(/Family/)).toBeTruthy();
+    // Only what was moved out — not every older row.
+    expect(row('fx-card-50')).toBeNull();
+    // The Show chip and the search narrow it like any section, and it counts in the summary.
+    await user.click(showChip('Budget'));
+    await waitFor(() => expect(row('fx-reimburse')).toBeNull());
+    await user.click(showChip('All'));
+    await user.type(screen.getByRole('searchbox', { name: 'Search transactions' }), 'family');
+    await waitFor(() => expect(ids()).toEqual(['fx-reimburse']));
+    expect(screen.getByText(/^1 row · /)).toBeTruthy();
+    await user.click(row('fx-reimburse')!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByRole('button', { name: 'Link as a refund' })).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    // Unlinked, it's back in its own period.
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Linked to older charges' })).toBeNull(),
+    );
+    expect(row('fx-reimburse')).toBeTruthy();
+  });
+
   it('changing the search ends the painted rows’ stay, and the detail opens again once stopped', async () => {
     const user = userEvent.setup();
     const api = await openAll();

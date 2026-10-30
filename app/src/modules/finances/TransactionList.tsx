@@ -43,7 +43,8 @@ const KIND_LABEL: Record<Exclude<FinanceTxnKind, 'expense' | 'refund'>, string> 
   card_payment: 'card payment',
 };
 
-// Every transaction in the current and previous period, newest first. Card payments, transfers and
+// Every transaction in the current and previous period, newest first (plus, on their own, refunds
+// that followed a link out to an older charge's period). Card payments, transfers and
 // money into the bank are listed (so the ledger reconciles with the bank) but never sorted or totalled.
 // Card refunds are sorted like charges and net against their bucket; a deposit counts only once it's
 // linked as a refund. Card payments open to be marked as a period start.
@@ -186,11 +187,18 @@ export function TransactionList({
 
   const kindOf = view.kindOf;
   const needle = search.trim().toLowerCase();
-  const shown = view.txns.filter(
+  const matches = (t: FinanceTransaction) =>
+    (!needle || matchesFinanceText(t, needle, { note: true })) &&
+    (kept.has(t.id) || matchesFinanceFilter(t, view, filter));
+  // Dated in a listed period, but linked to a charge from before them: it follows the charge out of
+  // both, so it gets its own section — else nothing reaches it to unlink.
+  const followed = view.allTxns.filter(
     (t) =>
-      (!needle || matchesFinanceText(t, needle, { note: true })) &&
-      (kept.has(t.id) || matchesFinanceFilter(t, view, filter)),
+      periodOf(t, overview.period) !== null &&
+      periodOf(t, overview.period, view.links) === null &&
+      matches(t),
   );
+  const shown = [...view.txns.filter(matches), ...followed];
   const narrowed = needle !== '' || filter !== 'all';
   const sections = [
     {
@@ -207,6 +215,9 @@ export function TransactionList({
       title: `Last period · ${fmtMonthShortDay(overview.period.previous.start)} – ${fmtMonthShortDay(overview.period.previous.end)}`,
       rows: shown.filter((t) => periodOf(t, overview.period, view.links) === 'previous'),
     },
+    ...(followed.length
+      ? [{ key: 'followed', title: 'Linked to older charges', rows: followed }]
+      : []),
   ];
   // allTxns, not txns: linking to an older charge can move a refund out of both windows mid-edit.
   const open = openId ? view.allTxns.find((t) => t.id === openId) : undefined;

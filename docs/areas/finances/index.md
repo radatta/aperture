@@ -35,6 +35,10 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   of what's shown (`netCents`: money in subtracts) — the same total the MCP's `totalUsd` uses. Search covers
   the two loaded periods only. While the brush holds painted rows in place, the count includes them even
   if they no longer match the chip; it agrees again once you stop.
+- **Linked to older charges**: a refund dated in either period but linked to a charge from before them
+  follows the charge out of both lists (`periodOf`), so it's listed in its own section — the only way
+  back to it to unlink. The chip and search narrow it, and it counts in "N rows · $X"; the MCP's list
+  (`page.txns`) leaves it out.
 
 ## 2. Buckets and money
 
