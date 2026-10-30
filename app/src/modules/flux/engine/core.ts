@@ -40,9 +40,9 @@ const isFrontal = (e: Euler): boolean =>
   Math.abs(e.yaw) <= FRONTAL_YAW_ROLL_DEG &&
   Math.abs(e.roll) <= FRONTAL_YAW_ROLL_DEG &&
   Math.abs(e.pitch) <= FRONTAL_PITCH_DEG;
-// Between sets (the set complete, nothing measured) a still, frontal head within this much of the neutral
-// re-sets it, once per set: a slow slouch can't skew the next set, a stretch pose can't become neutral
-// (D46).
+// Between sets (the set complete, nothing measured) a still, frontal head within this much of the set's
+// neutral re-sets it — every fresh 2 s pause, so the last one before the next set wins (the posture it
+// starts from) and the first is the fallback; a stretch pose can't become neutral (D46).
 const RECAL_MAX_SHIFT_DEG = 10;
 
 export interface FrameResult {
@@ -70,7 +70,8 @@ export class FluxCore {
   private fps = 0;
   private faceVisible = false;
   private stillSec = 0; // a visible, frontal face held still — with no neutral, or between sets
-  private recalDone = false; // this finished set has had its between-sets re-set
+  private restNeutral: Euler | null = null; // the neutral the finished set ended on — re-sets stay near it
+  private pauseRecal = false; // this still pause has re-set already; moving clears it
   private def: ExerciseDefinition | null = null;
   private exerciseState: ExerciseState | null = null;
   private readonly filters = {
@@ -122,16 +123,19 @@ export class FluxCore {
     const dt = tSec - (this.lastFrameSec || tSec);
     this.lastFrameSec = tSec;
 
-    // No neutral yet: hold still facing the camera and it sets itself (D40, D45). Between sets, the
-    // same near the neutral re-sets it once (D46).
-    const resting = this.exerciseState?.phase === 'complete';
-    if (!resting) this.recalDone = false;
+    // No neutral yet: hold still facing the camera and it sets itself (D40, D45). Between sets, each
+    // fresh pause near the set's neutral re-sets it (D46).
+    const resting = this.exerciseState?.phase === 'complete' && this.neutral !== null;
+    if (!resting) {
+      this.restNeutral = null;
+      this.pauseRecal = false;
+    } else if (!this.restNeutral && this.neutral) this.restNeutral = { ...this.neutral };
     let autoCalibrated: Euler | undefined;
-    if (!this.neutral || (resting && !this.recalDone)) {
+    if (!this.neutral || resting) {
       const stillDt = Math.min(dt, MAX_STILL_DT);
+      const anchor = this.restNeutral;
       const near =
-        !this.neutral ||
-        magnitude(relativeTo(this.lastSmoothed, this.neutral)) <= RECAL_MAX_SHIFT_DEG;
+        !anchor || magnitude(relativeTo(this.lastSmoothed, anchor)) <= RECAL_MAX_SHIFT_DEG;
       const still =
         hadFace &&
         this.faceVisible &&
@@ -139,7 +143,8 @@ export class FluxCore {
         isFrontal(this.lastSmoothed) &&
         speedOf(this.lastSmoothed, prevSmoothed, stillDt) < STILL_SPEED;
       this.stillSec = still ? this.stillSec + stillDt : 0;
-      if (this.stillSec >= AUTO_CAL_STILL_SEC) {
+      if (!still) this.pauseRecal = false;
+      if (this.stillSec >= AUTO_CAL_STILL_SEC && !this.pauseRecal) {
         // A re-set keeps the finished set and the ROM: a correction, not a Calibrate.
         if (this.neutral) {
           const old = this.neutral;
@@ -147,7 +152,7 @@ export class FluxCore {
           this.rom.pitch.shift(old.pitch - this.neutral.pitch);
           this.rom.yaw.shift(old.yaw - this.neutral.yaw);
           this.rom.roll.shift(old.roll - this.neutral.roll);
-          this.recalDone = true;
+          this.pauseRecal = true;
         } else this.calibrate();
         autoCalibrated = { ...this.lastSmoothed };
         this.stillSec = 0;

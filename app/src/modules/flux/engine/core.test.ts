@@ -212,7 +212,7 @@ describe('FluxCore', () => {
       return { core, t };
     }
 
-    it('between sets, a still head near the neutral re-sets it once, keeping the set', () => {
+    it('between sets, a still head near the neutral re-sets it once per pause, keeping the set', () => {
       const { core, t } = finishedSet();
       const { out, t: t2 } = run(core, hold(yaw(8), 75), t);
       expect(autos(out)).toHaveLength(1);
@@ -222,10 +222,24 @@ describe('FluxCore', () => {
       expect(last).toMatchObject({ phase: 'complete', holdsDone: 5 });
       expect(out.at(-1)?.sample.rom.yaw).toBeGreaterThan(5); // the ROM kept
       const later = run(core, hold(yaw(8), 120), t2);
-      expect(autos(later.out)).toEqual([]); // once per set
+      expect(autos(later.out)).toEqual([]); // the same pause: once
       // Back to the old zero (8° the other way): the range is re-keyed, not 0→8 plus 0→−8.
       const back = run(core, hold(yaw(0), 30), later.t);
       expect(back.out.at(-1)?.sample.rom.yaw).toBeCloseTo(8, 0);
+    });
+
+    it('every fresh pause in the rest re-sets it, so the last before the next set wins', () => {
+      const { core, t } = finishedSet();
+      const first = run(core, hold(yaw(4), 75), t);
+      const second = run(core, hold(yaw(8), 75), first.t); // moved, then a new pause
+      const yaws = [...autos(first.out), ...autos(second.out)].map((r) =>
+        Math.round(r?.autoCalibrated?.yaw ?? NaN),
+      );
+      expect(yaws).toEqual([4, 8]);
+      expect(second.out.at(-1)?.sample.rel.yaw).toBeCloseTo(0, 0);
+      // Kept near the set's own neutral, so re-sets can't creep: 16° is 8° from the last re-set but
+      // 16° from where the set ended.
+      expect(autos(run(core, hold(yaw(16), 120), second.t).out)).toEqual([]);
     });
 
     it('re-arms for the next finished set; needs the head frontal as well as near', () => {
