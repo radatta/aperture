@@ -246,6 +246,15 @@ describe('FluxCore', () => {
       return { core, t };
     }
 
+    it('a manual Re-calibrate in the rest isn’t overwritten by a quiet re-set in the same pause (D55)', () => {
+      const { core, t } = finishedSet();
+      const t2 = run(core, hold(yaw(6), 10), t).t;
+      expect(core.calibrate()).toBe(true); // the user's own neutral, at 6°
+      const { out } = run(core, hold(yaw(6), 120), t2); // 4 s still, right there
+      expect(autos(out)).toEqual([]);
+      expect(out.at(-1)?.sample.rel.yaw).toBeCloseTo(0, 0);
+    });
+
     it('between sets, a still head near the neutral re-sets it once per pause, keeping the set', () => {
       const { core, t } = finishedSet();
       const { out, t: t2 } = run(core, hold(yaw(8), 75), t);
