@@ -47,6 +47,7 @@ on:
 permissions:
   id-token: write # assume the AWS deploy role via OIDC
   contents: read
+  deployments: read
 
 jobs:
   deploy:
@@ -66,6 +67,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      deployments: read # the prod "never moves backwards" check reads prod's deployment history
     env:
       APERTURE_ORIGIN_SECRET: ${{ secrets.origin_secret }}
       APERTURE_CERT_ARN: ${{ inputs.cert_arn }}
@@ -81,6 +83,32 @@ jobs:
           case "${{ inputs.mode }}" in
             none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }}" ;;
             *) echo "::error::invalid mode '${{ inputs.mode }}'"; exit 1 ;;
+          esac
+      # Prod never moves backwards. Re-running an old successful run (Actions: write can, for 30 days — the bot holds
+      # it) would otherwise redeploy that commit to prod with no human step; `prod` has no reviewers. So the commit
+      # must be at or ahead of prod's last successful deployment (GitHub records one per `environment: prod` job).
+      # Comparing to what prod runs — not to main's head — keeps back-to-back merges working: the older run, queued
+      # behind the deploy group, is still ahead of prod and deploys before the newer one. The cost: no rollback by
+      # re-run — a revert goes through a PR (docs/ops/CI-BOT.md → Threat model).
+      - name: Prod never moves backwards
+        if: inputs.stage == 'prod'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.ref || github.sha }}
+        run: |
+          deployed=''
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=prod&per_page=30" --jq '.[].id'); do
+            state=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
+            if [ "$state" = success ]; then
+              deployed=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id" --jq .sha); break
+            fi
+          done
+          if [ -z "$deployed" ]; then echo "No successful prod deployment in the last 30 — nothing to compare."; exit 0; fi
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$deployed...$SHA" --jq .status)
+          echo "prod runs $deployed; this run deploys $SHA ($status)"
+          case "$status" in
+            ahead|identical) ;;
+            *) echo "::error::$SHA is $status prod's $deployed — prod never moves backwards (a re-run of an old run?); revert through a PR"; exit 1 ;;
           esac
       # Shallow — the history-dependent checks (base diff, ancestry) live in the caller, so the deploy itself
       # needs no history. `ref` is a feature commit only on a deploy-dev.yml dispatch: on main, its verify job

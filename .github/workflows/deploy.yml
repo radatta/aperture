@@ -126,6 +126,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      deployments: read # deploy-stage's prod never-backwards check
     uses: ./.github/workflows/deploy-stage.yml
     with:
       stage: prod
