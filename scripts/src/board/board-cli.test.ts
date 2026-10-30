@@ -479,8 +479,11 @@ describe('heavy.sh test cap', () => {
     const guard = fileURLToPath(
       new URL('../../../.claude/hooks/board-heavy-guard.sh', import.meta.url),
     );
+    // Same cwd as heavy() below — one session. Without a claude ancestor (CI) both log pid 0 and the board tells
+    // sessions apart by name (branch, else cwd), so a different cwd would read as a second session.
     const g = spawnSync('bash', [guard], {
       env,
+      cwd: tmp,
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pnpm test' } }),
       encoding: 'utf8',
     });
