@@ -62,7 +62,7 @@ Workflow changes: the App has no `workflows` permission, so GitHub refuses a bot
 
 `refs/locks/dev` → an annotated tag on the feature sha (it must be pushed) whose message is `{"branch","sha","expiresAt"}`. Acquire = create the ref (a 422 means held). Holder = branch. TTL 45 minutes, `renew` to extend; an expired or unreadable lock is taken over by the next `acquire` (it re-reads the ref and deletes it only if it still points at the tag it judged expired). Residual races: two sessions taking over the same expired lock within that window can both believe they hold it, and a holder's `renew`/`release` (read, then PATCH or DELETE) can clobber a take-over that lands in between — the devcheck's build-marker check catches the result. GitHub's Git refs API has no compare-and-swap.
 
-**Until dispatch is on**, the user's `dev` push is guarded by the session board's local dev lease instead (`docs/ops/SESSION-BOARD.md` → _Leases_): phase 8 takes it before asking for the push, phase 10 releases it. It sees only this container's sessions; `refs/locks/dev` sees every machine. Whether `deploy-dev` also takes the board lease once dispatch is on is `dev-bootstrap`'s call.
+**Until dispatch is on**, the user's `dev` push is guarded by the session board's local dev lease instead (`docs/ops/SESSION-BOARD.md` → _Leases_): phase 8 takes it before asking for the push and re-takes it (a renew) before each devcheck or re-push, since it renews only on a user prompt; phase 10 releases it. It sees only this container's sessions; `refs/locks/dev` sees every machine. Whether `deploy-dev` also takes the board lease once dispatch is on is `dev-bootstrap`'s call.
 
 ## Dev logs
 
