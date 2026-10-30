@@ -13,7 +13,8 @@ import type { OpenTask } from './task-modal-context';
 // What the user asked to leave: out, another task, or (the editor's section buttons) the open reveal.
 // `of` says whose edits stand in the way — all of the editor's, or the reveal's alone: the details form
 // stays mounted across a section swap, so its edits aren't at risk and mustn't prompt.
-type Exit = { go: () => void; of: 'editor' | 'reveal' };
+// `waits` (set when it's held for a write) names the form whose write it waits on.
+type Exit = { go: () => void; of: 'editor' | 'reveal'; waits?: 'details' | 'reveal' };
 
 // Wraps the Modal primitive around the task editor. Owns what the editor body shouldn't:
 //   - initial focus: the dialog itself (initialFocus="dialog"), so a title tap focuses no field and
@@ -68,10 +69,14 @@ export function TaskModal({
     (next: Exit) => {
       const s = standing(next);
       if (s === 'clean') return next.go();
-      setPending(next);
-      if (s === 'dirty') setConfirming(true);
+      if (s === 'dirty') {
+        setPending(next);
+        return setConfirming(true);
+      }
+      const waits = next.of === 'editor' && edits.details === 'saving' ? 'details' : 'reveal';
+      setPending({ ...next, waits });
     },
-    [standing],
+    [standing, edits],
   );
   const requestClose = useCallback(() => exit({ go: onClose, of: 'editor' }), [exit, onClose]);
   const guardedOpen = useCallback<OpenTask>(
@@ -80,13 +85,18 @@ export function TaskModal({
   );
   const leaveReveal = useCallback((go: () => void) => exit({ go, of: 'reveal' }), [exit]);
 
-  // The save landed: clean → go on. Still dirty → it failed (or more was typed): stay, with the
-  // failure showing — the next exit asks as usual.
+  // The write landed. Clean → go on. Its own form still dirty → it failed (or more was typed): stay,
+  // with the failure showing — the next exit asks as usual. Another form's edits still unsaved (details
+  // typed before a split was sent) → ask, as any exit would.
   useEffect(() => {
-    if (!pending || confirming || standing(pending) === 'saving') return;
+    if (!pending?.waits || confirming || standing(pending) === 'saving') return;
+    if (standing(pending) === 'dirty' && edits[pending.waits] === 'clean') {
+      setPending({ ...pending, waits: undefined });
+      return setConfirming(true);
+    }
     setPending(null);
     if (standing(pending) === 'clean') pending.go();
-  }, [editTick, pending, confirming, standing]);
+  }, [editTick, pending, confirming, standing, edits]);
 
   // Finished here: out through the guard, so a due date or estimate typed before (locked now, never
   // saveable) no longer counts, while a title or note still asks and a save in flight is waited for.
@@ -98,7 +108,10 @@ export function TaskModal({
     setExiting(false);
     if (!open) return setFinished(null);
     if (pending?.of === 'editor' || finished?.id !== live.id) return;
-    if (pending) setPending(null);
+    if (pending) {
+      setPending(null);
+      setConfirming(false); // the swap's confirm, if it was asking
+    }
     requestClose();
   }, [exiting, open, pending, finished, live.id, requestClose]);
 

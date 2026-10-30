@@ -46,9 +46,12 @@ export function DeleteConfirm({
       >
         Delete
       </Button>
-      <Button variant="quiet" size="sm" onClick={onCancel}>
-        Cancel
-      </Button>
+      {/* Gone already: nothing left to cancel back to. */}
+      {!del.isSuccess && (
+        <Button variant="quiet" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      )}
       {/* Closes once the task leaves the list; until that refetch lands, say it went. */}
       {del.isSuccess && (
         <span role="status">

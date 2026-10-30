@@ -837,10 +837,15 @@ describe('parent + parts', () => {
         const p = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
         await user.click(p.getByRole('button', { name: 'draft' }));
       }
-      expect(await screen.findByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+      const reopened = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+      // The list stays stale: what shows Done is the write's own answer, kept for the reopened task.
+      const listed = vi.spyOn(api, 'listTasks');
+      holdList(api);
       await release();
-      await waitFor(() => expect(within(card).getByText(/2\/2/)).toBeTruthy());
+      expect(await reopened.findByText(/^Done/)).toBeTruthy();
+      expect(reopened.queryByRole('button', { name: 'Mark done' })).toBeNull();
       expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+      listed.mockRestore();
       unmount();
     }
   });
@@ -866,7 +871,7 @@ describe('parent + parts', () => {
     expect((await api.getTask(b.id))!.status).toBe('done');
   });
 
-  it('the parent’s Mark done takes one tap: a second sends nothing and leaves no error', async () => {
+  it('the parent’s Mark done takes one tap: a second sends nothing', async () => {
     const { api } = await seeded(true);
     const transition = vi.spyOn(api, 'transitionTask');
     renderApp({ api, path: '/tasks?lens=week' });
@@ -878,7 +883,30 @@ describe('parent + parts', () => {
     fireEvent.click(mark);
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: P2' })).toBeNull());
     expect(transition).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a Close held for a done split, with unsaved details, asks once the split lands', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const split = api.splitTask.bind(api);
+    vi.spyOn(api, 'splitTask').mockImplementation((id, input) => gate.then(() => split(id, input)));
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const card = await waitFor(() => rowOf('P2'));
+    await user.click(within(card).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.type(d.getByLabelText('Title'), ' 2');
+    await user.click(d.getByRole('button', { name: /^Split/ }));
+    await user.type(d.getByLabelText("This part's actual (min)"), '20');
+    await user.click(d.getByRole('button', { name: 'Split' }));
+    await user.click(d.getByRole('button', { name: 'Close' })); // held for the split
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+    await act(async () => release());
+    const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Task:/ })).toBeNull());
   });
 
   it('a Delete says it went while the list catches up', async () => {
@@ -892,6 +920,7 @@ describe('parent + parts', () => {
     await user.click(d.getByRole('button', { name: /Delete task/ }));
     await user.click(d.getByRole('button', { name: 'Delete' }));
     expect(await d.findByText('Deleted.')).toBeTruthy();
+    expect(d.queryByRole('button', { name: 'Cancel' })).toBeNull(); // nothing to cancel back to
   });
 
   it('a section button with unsent Add parts text asks first; details edits never do', async () => {

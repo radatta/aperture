@@ -82,7 +82,7 @@ export function DoneForm({
         >
           Mark done
         </Button>
-        <Button variant="ghost" size="sm" onClick={onCancel ?? (onDone as () => void)}>
+        <Button variant="ghost" size="sm" onClick={onCancel ?? (() => (onDone as () => void)())}>
           Cancel
         </Button>
       </div>
