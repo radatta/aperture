@@ -450,6 +450,39 @@ describe('parent + parts', () => {
     expect(screen.getByRole('button', { name: 'Week · 1' })).toBeTruthy();
   });
 
+  it('opening another task from inside the editor asks first when there are unsaved edits — never carries them over', async () => {
+    const { api, a, b } = await seeded(false);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    let d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.clear(d.getByLabelText('Title'));
+    await user.type(d.getByLabelText('Title'), 'draft 2');
+
+    // The parent's name in the header: asked first; Keep editing stays, edits intact.
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    let confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
+    d = within(screen.getByRole('dialog', { name: 'Task: draft' }));
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('draft 2');
+
+    // Discard opens the parent, showing the parent's own title — the part's edit went nowhere.
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Discard' }));
+    d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('P2');
+    expect((await api.getTask(b.id))!.title).toBe('draft');
+
+    // With nothing unsaved, a part's row opens straight away.
+    await user.click(d.getByRole('button', { name: 'read' }));
+    d = within(await screen.findByRole('dialog', { name: 'Task: read' }));
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('read');
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+    expect(a.id).toBeTruthy();
+  });
+
   it('a linked parent’s card reads “due marker”, not “on calendar”', async () => {
     const { api, p } = await seeded(false);
     const all = await api.listTasks();

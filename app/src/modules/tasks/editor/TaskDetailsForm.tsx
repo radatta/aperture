@@ -6,6 +6,7 @@ import {
   fmtClock12,
   fmtMonthDayYear,
   TASK_NOTES_MAX,
+  timeKeyOfInput,
 } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
@@ -307,7 +308,7 @@ export function TaskDetailsForm({
               step={60}
               value={dueTime}
               disabled={!dueDay}
-              onChange={(e) => setDueTime(e.target.value)}
+              onChange={(e) => setDueTime(timeKeyOfInput(e.target.value))}
               className="w-32"
             />
           </>

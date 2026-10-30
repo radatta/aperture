@@ -168,6 +168,19 @@ describe('TaskEditor', () => {
     expect(await client.getTask(t.id)).toMatchObject({ dueDay: null, dueTime: null });
   });
 
+  it('a due time the field reports with seconds (Safari) saves as HH:MM, first try', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Timed' });
+    const setDue = vi.spyOn(client, 'setTaskDue');
+    const { user } = renderEditor(client, t);
+    fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-30' } });
+    fireEvent.change(screen.getByLabelText('Due time'), { target: { value: '03:00:00' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(setDue).toHaveBeenCalledWith(t.id, { dueDay: '2026-10-30', dueTime: '03:00' });
+    expect(await screen.findByText('Saved')).toBeTruthy();
+    expect((await client.getTask(t.id))?.dueTime).toBe('03:00');
+  });
+
   it('a failed calendar sync is said in the editor, with a retry', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Synced', dueDay: '2026-10-01', dueTime: '16:00' });
