@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useDisclosure } from '../../lib/useDisclosure';
@@ -38,6 +39,16 @@ export function UnsavedSetsStrip() {
   }, [graceLeft]); // each tick re-renders with a fresh `now`, so a new graceLeft re-arms it
 
   const n = shown.length;
+  // The strip emptied (saved, discarded, or a flush in the background): a question left open would come
+  // back with the next failure, already asking; and focus that was in the strip moves on past it.
+  const lastN = useRef(n);
+  useEffect(() => {
+    const was = lastN.current;
+    lastN.current = n;
+    if (n > 0) return;
+    if (confirming) onClose();
+    if (was > 0 && stripRef.current) moveFocus(focusablesAfter(stripRef.current), stripRef.current);
+  }, [n, confirming, onClose]);
   const sets = `${n} ${n === 1 ? 'set' : 'sets'}`;
   const it = n === 1 ? 'it' : 'them';
   const saves = n === 1 ? 'it saves' : 'they save';
@@ -124,8 +135,10 @@ export function UnsavedSetsStrip() {
                 const from = stripRef.current;
                 setRetrying(true);
                 await flush();
-                setRetrying(false);
-                if (readOutbox().length === 0) moveFocus(to, from); // all saved: the buttons left
+                flushSync(() => setRetrying(false)); // Discard re-enabled before focus can land on it
+                // Only refused sets left: Retry itself is gone, the strip stays — Discard is next.
+                if (!readOutbox().some((e) => !e.refused))
+                  moveFocus([triggerRef.current, ...to], from);
               }}
             >
               {retrying ? 'Retrying…' : 'Retry'}
@@ -135,7 +148,8 @@ export function UnsavedSetsStrip() {
             ref={triggerRef}
             variant="quiet"
             size="sm"
-            disabled={retrying} // a set discarded mid-send would still save
+            // A set discarded mid-send would still save, against "won't be saved anywhere".
+            disabled={retrying || shown.some((e) => isSending(e.input.id))}
             onClick={onOpen}
           >
             Discard

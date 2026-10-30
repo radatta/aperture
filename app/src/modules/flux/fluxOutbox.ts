@@ -22,6 +22,9 @@ export interface FluxOutboxEntry {
 const listeners = new Set<() => void>();
 // The list, when storage refused to hold it (this tab only). Takes over every read until a write sticks.
 let memory: FluxOutboxEntry[] | null = null;
+// Ids removed (saved or discarded) while in memory — storage may still hold them, and the merge back must
+// not bring a discarded set back to be sent.
+const removedInMemory = new Set<string>();
 
 function storedRaw(): string {
   try {
@@ -48,16 +51,22 @@ function write(list: readonly FluxOutboxEntry[]): void {
   try {
     const ls = globalThis.localStorage;
     if (!ls) throw new Error('no storage');
-    // Back from memory: another tab may have queued sets in storage meanwhile — keep them. (One this tab
-    // removed while in memory can come back too; resending it is harmless, the save is idempotent.)
+    // Back from memory: another tab may have queued sets in storage meanwhile — keep them, but not the
+    // ones this tab removed while it couldn't write.
     let out = list;
     if (memory) {
       const ids = new Set(list.map((e) => e.input.id));
-      out = [...list, ...parse(storedRaw()).filter((e) => !ids.has(e.input.id))];
+      out = [
+        ...list,
+        ...parse(storedRaw()).filter(
+          (e) => !ids.has(e.input.id) && !removedInMemory.has(e.input.id),
+        ),
+      ];
     }
     if (out.length) ls.setItem(FLUX_OUTBOX_KEY, JSON.stringify(out));
     else ls.removeItem(FLUX_OUTBOX_KEY);
     memory = null;
+    removedInMemory.clear();
   } catch {
     memory = [...list];
   }
@@ -74,8 +83,10 @@ export function outboxAdd(input: RecordFluxSetInput, at: number): void {
   if (list.some((e) => e.input.id === input.id)) return;
   write([...list, { input, at, error: null }]);
 }
-export const outboxRemove = (id: string): void =>
+export function outboxRemove(id: string): void {
   write(readOutbox().filter((e) => e.input.id !== id));
+  if (memory) removedInMemory.add(id); // the removal didn't reach storage
+}
 export const outboxMarkError = (id: string, error: string, refused = false): void =>
   write(readOutbox().map((e) => (e.input.id === id ? { ...e, error, refused } : e)));
 
@@ -127,5 +138,6 @@ export const useOutboxEntries = (): FluxOutboxEntry[] => useSyncExternalStore(su
 // Tests share one module graph (app/src/test/setup.ts).
 export function resetFluxOutboxStore(): void {
   memory = null;
+  removedInMemory.clear();
   cache = { raw: '', list: [] };
 }

@@ -308,6 +308,17 @@ describe('backend flux sets', () => {
     expect((await live.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
   });
 
+  it('a delete right after the save finds the row, read strongly', async () => {
+    const { doc, live } = setup();
+    const set = await live.recordFluxSet(input(ulid()));
+    doc.staleNextQueries('u#local', sk.flux(set.day, set.id), null, 5); // not visible to an eventual read yet
+    await live.deleteFluxSet(set.id);
+    const row = await new Repo(doc, liveWrites(doc), 'local').findFluxSet(set.id, {
+      consistent: true,
+    });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
   it('a retry that loses the conditional write returns the row that won, read strongly', async () => {
     const { doc, live } = setup();
     const id = ulid();

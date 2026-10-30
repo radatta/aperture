@@ -15,13 +15,13 @@ export function focusablesAfter(el: Element): HTMLElement[] {
   );
 }
 
-// Is focus lost — nowhere, or parked by the page's focus rescue (a tabindex=-1 heading), or still in the
-// thing that left? Then moving it is a repair; otherwise the user has moved on and keeps their place.
+// Is focus lost — nowhere, or parked by the page's focus rescue (marked `data-focus-rescue`), or still in
+// the thing that left? Then moving it is a repair; otherwise the user has moved on and keeps their place.
 function focusLost(from: Element | null): boolean {
   const a = document.activeElement;
   if (!a || a === document.body) return true;
   if (from?.contains(a)) return true;
-  return a.getAttribute('tabindex') === '-1' && !a.matches(FOCUSABLE);
+  return a.matches('[data-focus-rescue]');
 }
 
 // Hand focus to the first candidate that takes it, the way a closing disclosure does (ring only for a

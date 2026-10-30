@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { addDays, fmtDayHeading, fmtMonthShortDay, todayKey, type FluxSet } from '@aperture/shared';
 import {
   getExercise,
@@ -41,6 +41,10 @@ export function FluxHistoryTab() {
   const ids = [...new Set(sets.map((s) => s.exerciseId))].filter(isExerciseId);
   // A chip whose last set was just deleted is gone — so is its filter.
   const exerciseId = picked && ids.includes(picked as (typeof ids)[number]) ? picked : null;
+  // …and stays gone: a set of it coming back later (a refetch, another device) mustn't switch it on again.
+  useEffect(() => {
+    if (picked && !exerciseId && !loading) setPicked(null);
+  }, [picked, exerciseId, loading]);
   const shown = exerciseId ? sets.filter((s) => s.exerciseId === exerciseId) : sets;
   const def = exerciseId && isExerciseId(exerciseId) ? getExercise(exerciseId) : null;
   const chipsRef = useRef<HTMLDivElement>(null);
@@ -49,7 +53,7 @@ export function FluxHistoryTab() {
     exerciseId ? (chipsRef.current?.querySelector<HTMLElement>('button') ?? null) : null;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <FluxTabs />
       <UnsavedSetsStrip />
       {sets.length === 0 ? (
@@ -100,7 +104,10 @@ export function FluxHistoryTab() {
         // One button that flips, so focus stays put when the list grows or shrinks under it.
         <div className="flex flex-wrap items-center gap-2">
           <Text size="xs" tone="muted">
-            {all ? 'Showing every saved set.' : `Showing the last ${WINDOW_DAYS} days.`}
+            {/* Says what's on screen: the old window's rows while the new one loads. */}
+            {all && !q.isPlaceholderData
+              ? 'Showing every saved set.'
+              : `Showing the last ${WINDOW_DAYS} days.`}
           </Text>
           <Button variant="quiet" size="sm" onClick={() => setAll(!all)}>
             {all ? `Last ${WINDOW_DAYS} days` : 'Show all'}

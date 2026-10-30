@@ -6,7 +6,7 @@ import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { FLUX_OUTBOX_KEY, outboxAdd, outboxMarkError } from './fluxOutbox';
 import { UnsavedSetsStrip } from './UnsavedSetsStrip';
-import { useFluxOutbox } from './useFluxOutbox';
+import { useFluxOutbox, useFluxOutboxFlush } from './useFluxOutbox';
 
 // The outbox's send path (D49) under a controllable server: a first send in flight isn't "unsaved", a
 // set is sent once however many triggers race, another tab's queue shows up, and nothing is silent.
@@ -222,5 +222,91 @@ describe('useFluxOutbox', () => {
     act(() => window.dispatchEvent(new StorageEvent('storage', { key: FLUX_OUTBOX_KEY })));
     expect(screen.getByRole('status')).toBe(region);
     expect(region.textContent).toMatch(/1 set not saved yet/);
+  });
+
+  it('a Discard question left open closes when the strip empties on its own', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    renderWithProviders(<Harness set={input()} />, { api });
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    await user.click(await screen.findByRole('button', { name: 'Discard' }));
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'flush' })); // a background flush gets it through
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'save' })); // and the next failure…
+    await act(async () => pending[2]!.reject(new Error('Load failed')));
+    await screen.findByText('1 set not saved yet');
+    expect(screen.queryByRole('alertdialog')).toBeNull(); // …starts at Retry, not mid-question
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('when only refused sets are left, Retry’s focus goes to Discard', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    localStorage.setItem(
+      FLUX_OUTBOX_KEY,
+      JSON.stringify([{ input: input({ count: -1 }), at: 1, error: 'bad', refused: true }]),
+    );
+    renderWithProviders(<Harness set={input()} />, { api });
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard' }));
+  });
+
+  it('Discard waits while a set is still being sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const { api } = server();
+    renderWithProviders(<Harness set={input()} />, { api });
+    act(() => screen.getByRole('button', { name: 'save' }).click());
+    act(() => vi.advanceTimersByTime(8_000)); // shown, but still on its way
+    expect(screen.getByRole('button', { name: 'Discard' })).toHaveProperty('disabled', true);
+  });
+
+  it('only the page’s focus rescue counts as lost focus — another tabindex=-1 target keeps it', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <Harness set={input()} />
+        <div tabIndex={-1} data-testid="announcer" />
+      </>,
+      { api },
+    );
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    const announcer = screen.getByTestId('announcer');
+    announcer.focus(); // something on the page placed focus here on purpose
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
+    expect(document.activeElement).toBe(announcer);
+  });
+
+  it('a background flush that empties the strip moves focus on from inside it', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    function Online() {
+      useFluxOutboxFlush();
+      return null;
+    }
+    renderWithProviders(
+      <>
+        <Online />
+        <Harness set={input()} />
+      </>,
+      { api },
+    );
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    act(() => screen.getByRole('button', { name: 'Discard' }).focus());
+    act(() => window.dispatchEvent(new Event('online')));
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'after' }));
   });
 });

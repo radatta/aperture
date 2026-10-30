@@ -79,6 +79,9 @@ describe('Flux History tab', () => {
     expect(names).toHaveLength(2);
     expect(names[0]).toMatch(/from [A-Z][a-z]{2} \d{1,2}, \d/);
     expect(new Set(names).size).toBe(2);
+    expect(
+      screen.getByRole('button', { name: /^Delete Upper Trapezius Stretch \(Right\) set from / }),
+    ).toBeTruthy();
     // Side A goes right on upper trap, but scalene's Side A tilts left (D48).
     const trap = screen.getByText('Upper Trapezius Stretch').closest('li')!;
     expect(within(trap).getByText('Right')).toBeTruthy();
@@ -171,7 +174,7 @@ describe('Flux History tab', () => {
       avgPeakDeg: null,
       completedAt: t - 1000,
     });
-    const { user } = await history([a, b, tuck]);
+    const { api, user } = await history([a, b, tuck]);
     const deletes = await screen.findAllByRole('button', { name: /^Delete .* set from / });
     expect(deletes).toHaveLength(3);
     await user.click(deletes[1]!); // the newer rotation row
@@ -191,6 +194,15 @@ describe('Flux History tab', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'chin tuck' })).toBeNull());
     expect(screen.getAllByText(/20 reps · avg 50°/)).toHaveLength(1);
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All' })); // still in view
+    // A chin tuck set arriving later (another device; here, the next fetch) doesn't switch the old
+    // filter back on.
+    await api.recordFluxSet({ ...tuck, id: ulid(), completedAt: t - 500 });
+    await user.click(screen.getByRole('button', { name: 'Show all' }));
+    expect(await screen.findByRole('button', { name: 'chin tuck' })).toHaveProperty(
+      'ariaPressed',
+      'false',
+    );
+    expect(screen.getAllByText(/20 reps · avg 50°/)).toHaveLength(1);
   });
 
   it('a deleted row skips a neighbour whose own confirm is open', async () => {

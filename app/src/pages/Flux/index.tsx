@@ -28,6 +28,7 @@ export function FluxPage() {
           as="h1"
           ref={headingRef}
           tabIndex={-1}
+          data-focus-rescue
           size="2xl"
           weight="semibold"
           className="outline-none"

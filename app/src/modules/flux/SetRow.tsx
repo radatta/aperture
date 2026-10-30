@@ -79,7 +79,7 @@ export function SetRow({
             variant="quiet"
             size="sm"
             data-flux-delete=""
-            aria-label={`Delete ${name} set from ${fmtMonthShortDay(set.day)}, ${time}`}
+            aria-label={`Delete ${name}${side ? ` (${side})` : ''} set from ${fmtMonthShortDay(set.day)}, ${time}`}
             onClick={onOpen}
           >
             Delete

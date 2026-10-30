@@ -88,6 +88,21 @@ describe('fluxOutbox (D49)', () => {
     expect(readOutbox().map((e) => e.input.id)).toEqual([mine.id, theirs.id]);
   });
 
+  it('back from memory, a set discarded meanwhile stays discarded', () => {
+    const gone = input();
+    outboxAdd(gone, 1); // in storage
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    outboxRemove(gone.id); // discarded — but storage still holds it
+    vi.restoreAllMocks();
+    outboxAdd(input(), 2); // storage is back
+    expect(readOutbox().map((e) => e.input.id)).not.toContain(gone.id);
+  });
+
   it('builds the server input from the stage draft plus its keys', () => {
     const draft: FluxSetDraft = {
       exerciseId: 'upper-trap-stretch',
