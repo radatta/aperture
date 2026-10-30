@@ -120,6 +120,11 @@ export class ApertureDevSandboxStack extends Stack {
     });
 
     const arn = devArns(partition, account, region);
+    // TRANSITIONAL — the one default-bootstrap name here. `cdk deploy` keeps an existing stack's parameter values
+    // (previous-parameters), so the dev stacks' BootstrapVersion stays `/cdk-bootstrap/hnb659fds/version` however the
+    // template default changes, and CloudFormation resolves it with the caller's credentials. A version number, read
+    // only. dev-cutover passes the devsandbox parameter explicitly and drops this.
+    const defaultVersionParam = `arn:${partition}:ssm:${region}:${account}:parameter/cdk-bootstrap/hnb659fds/version`;
 
     // ---- The ceiling on every role a dev stack creates (applied by dev-stage.ts applyDevBoundary). It grants nothing
     // by itself; a role's own policy still has to. No sts:, no iam:, nothing named for prod.
@@ -178,7 +183,7 @@ export class ApertureDevSandboxStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-          resources: [version.parameterArn],
+          resources: [version.parameterArn, defaultVersionParam],
         }),
         new iam.PolicyStatement({ actions: ['dynamodb:*'], resources: arn.table }),
         new iam.PolicyStatement({ actions: ['s3:*'], resources: arn.buckets }),
@@ -334,7 +339,7 @@ export class ApertureDevSandboxStack extends Stack {
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-        resources: [version.parameterArn],
+        resources: [version.parameterArn, defaultVersionParam],
       }),
     );
 

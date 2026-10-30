@@ -99,10 +99,13 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
       expect(r.Properties.ManagedPolicyArns).toBeUndefined();
   });
 
-  it('grants nothing on prod or the default bootstrap, anywhere', () => {
+  it('grants nothing on prod or the default bootstrap, anywhere — but its version number, transitionally', () => {
     const all = text(t.toJSON());
     expect(all).not.toMatch(/prod/i);
-    expect(all).not.toContain('hnb659fds');
+    // The dev stacks' BootstrapVersion parameter keeps its previous value (the default's) until dev-cutover.
+    expect(all.replaceAll('parameter/cdk-bootstrap/hnb659fds/version', '')).not.toContain(
+      'hnb659fds',
+    );
   });
 
   it('lets the deploy role touch only the two dev stacks, and change them only with the sandbox execution role', () => {
@@ -175,6 +178,7 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
           r.includes('Version') ||
           r.includes(POOL) ||
           r.includes(DIST) ||
+          r.includes('parameter/cdk-bootstrap/hnb659fds/version') || // transitional (see the stack)
           /origin-access-control\/\*|cache-policy\/\*|origin-request-policy\/\*/.test(r);
         expect(scoped, `${actionsOf(s).join(',')} on ${r}`).toBe(true);
       }
@@ -242,6 +246,25 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
       `arn:aws:cognito-idp:us-west-1:${ACCOUNT}:userpool/us-west-1_PRODPOOL`,
       `arn:aws:cloudfront::${ACCOUNT}:distribution/EPRODDIST`,
     ];
+    // `*` only where each policy's unscopable actions need it: none for the deploy, lookup and publishing roles.
+    const starOk: Record<string, string[]> = {
+      [DEV_EXEC_POLICY_NAME]: [
+        'logs:DescribeLogGroups',
+        'cognito-idp:DescribeUserPoolDomain',
+        'acm:DescribeCertificate',
+        'acm:ListCertificates',
+      ],
+      [DEV_BOUNDARY_NAME]: ['kms:Decrypt', 'kms:Encrypt', 'kms:GenerateDataKey'],
+    };
+    for (const r of Object.values(resources).filter((x) =>
+      /AWS::IAM::(Managed)?Policy/.test(x.Type),
+    )) {
+      const name = String(r.Properties.PolicyName ?? r.Properties.ManagedPolicyName);
+      for (const st of (r.Properties.PolicyDocument as { Statement: Stmt[] }).Statement)
+        if (st.Effect === 'Allow' && resourcesOf(st).includes('*'))
+          for (const act of actionsOf(st))
+            expect(starOk[name] ?? [], `${name}: ${act} on *`).toContain(act);
+    }
     const policies = Object.values(resources).filter((r) =>
       /AWS::IAM::(Managed)?Policy/.test(r.Type),
     );
@@ -253,7 +276,7 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
     expect(allows.length).toBeGreaterThan(20);
     for (const s of allows)
       for (const pattern of resourcesOf(s).map(resolve)) {
-        if (pattern === '*') continue; // the allowlisted unscopable actions, checked above
+        if (pattern === '*') continue; // per-policy allowlist, above
         for (const name of prod)
           expect(globMatches(pattern, name), `${pattern} matches ${name}`).toBe(false);
       }
