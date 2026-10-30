@@ -78,6 +78,31 @@ describe('createApiClient', () => {
     );
   });
 
+  it('retries a Lambda throttle (429), which never ran the call, then succeeds', async () => {
+    let n = 0;
+    const fetch = vi.fn<FetchLike>(async () =>
+      ++n < 3 ? reply(429, { Reason: 'ConcurrentInvocationLimitExceeded' }) : reply(200, []),
+    );
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => undefined);
+    const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1', sleep });
+    expect(await api.reads.listTasks()).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([500, 1000]);
+  });
+
+  it('gives up after five throttle retries with the 429 in the error', async () => {
+    const fetch = vi.fn<FetchLike>(async () => reply(429, { message: 'Rate Exceeded.' }));
+    const api = createApiClient({
+      fetch,
+      token: () => 't',
+      ledger: memLedger(),
+      run: 'r1',
+      sleep: async () => undefined,
+    });
+    await expect(api.reads.listTasks()).rejects.toThrow(/HTTP 429.*Rate Exceeded/);
+    expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
   it('throws on a non-200 with the status and body', async () => {
     const fetch = vi.fn<FetchLike>(async () => reply(401, { error: 'Unauthorized' }));
     const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });

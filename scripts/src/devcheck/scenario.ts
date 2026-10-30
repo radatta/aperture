@@ -45,7 +45,14 @@ export interface Ui {
   captureTask(line: string): Promise<void>;
   expectText(text: string | RegExp, timeoutMs?: number): Promise<void>;
   setTheme(theme: 'light' | 'dark'): Promise<void>;
+  settle(): Promise<void>;
 }
+
+// Resolves once every finite CSS transition/animation on the page has finished — a theme flip animates the
+// palette, and a shot taken mid-way mixes both themes. Infinite ones (spinners) are left out.
+const SETTLE = `Promise.all(document.getAnimations()
+  .filter((a) => a.effect && a.effect.getComputedTiming().endTime !== Infinity)
+  .map((a) => a.finished.catch(() => null))).then(() => null)`;
 
 export const laDay = (d: Date): string =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(d);
@@ -75,6 +82,10 @@ export function createUi(page: PwPage): Ui {
     // ThemeProvider writes data-theme only when the setting changes, so a direct flip holds for a shot.
     async setTheme(theme) {
       await page.evaluate(`document.documentElement.setAttribute('data-theme', '${theme}')`);
+      await ui.settle();
+    },
+    async settle() {
+      await page.evaluate(SETTLE);
     },
   };
   return ui;
@@ -83,6 +94,7 @@ export function createUi(page: PwPage): Ui {
 // Light then dark, then back to whatever the app had set.
 export function makeShot(page: PwPage, ui: Ui, dir: string, prefix: () => string, index: string[]) {
   return async (name: string) => {
+    await ui.settle(); // whatever the last click started (a lens pill's fade) finishes first
     const before = await page.evaluate<string | null>(
       `document.documentElement.getAttribute('data-theme')`,
     );

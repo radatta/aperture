@@ -36,17 +36,35 @@ export interface ApiDeps {
   token: () => string; // read per call — the browser session may have renewed it
   ledger: Ledger;
   run: string;
+  sleep?: (ms: number) => Promise<void>;
 }
 
-export function createApiClient({ fetch, token, ledger, run }: ApiDeps) {
+// A 429 is Lambda refusing to start the function (the account's concurrency limit — the app's own page load
+// fires many requests at once), so the call never ran: retrying is safe for every method, createTask too.
+const THROTTLE_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
+
+export function createApiClient({
+  fetch,
+  token,
+  ledger,
+  run,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+}: ApiDeps) {
   async function call<T>(method: string, args: unknown[]): Promise<T> {
     const url = `${DEV_ORIGIN}/api/${method}`;
     assertDevOrigin(url);
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token()}` },
-      body: JSON.stringify({ args }),
-    });
+    const send = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token()}` },
+        body: JSON.stringify({ args }),
+      });
+    let res = await send();
+    for (const wait of THROTTLE_BACKOFF_MS) {
+      if (res.status !== 429) break;
+      await sleep(wait);
+      res = await send();
+    }
     const text = await res.text();
     if (res.status !== 200)
       throw new Error(`${method} → HTTP ${res.status}: ${text.slice(0, 200)}`);
