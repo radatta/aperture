@@ -204,6 +204,8 @@ export interface RecordFluxSetInput {
   durationSec: number;
   completedAt: number;
   repTaskId: string | null;
+  stoppedEarly: boolean;
+  planned: number | null;
 }
 
 // One object, so omitted keys survive JSON (positional undefined doesn't). from/to: both or neither.

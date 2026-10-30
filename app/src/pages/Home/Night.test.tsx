@@ -124,7 +124,13 @@ describe('night: today in review', () => {
 });
 
 describe('night: the Flux line (D51)', () => {
-  const fluxSet = (api: ApiClient, exerciseId: string, day: string, completedAt: number) =>
+  const fluxSet = (
+    api: ApiClient,
+    exerciseId: string,
+    day: string,
+    completedAt: number,
+    stoppedEarly = false,
+  ) =>
     api.recordFluxSet({
       id: ulid(),
       day,
@@ -141,13 +147,15 @@ describe('night: the Flux line (D51)', () => {
       durationSec: 100,
       completedAt,
       repTaskId: null,
+      stoppedEarly,
+      planned: 10,
     });
 
   it('says what Flux did today, links to History, and stays off Morning', async () => {
     const api = createStubClient({ seed: false, storageKey: `night-flux-${Math.random()}` });
     const t = Date.now();
     await fluxSet(api, 'cervical-rotation', today(), t - 3000);
-    await fluxSet(api, 'cervical-rotation', today(), t - 2000);
+    await fluxSet(api, 'cervical-rotation', today(), t - 2000, true); // a stopped set is a set (D55)
     await fluxSet(api, 'upper-trap-stretch', today(), t - 1000);
     await fluxSet(api, 'chin-tuck', addDays(today(), -1), t - 86_400_000); // yesterday's doesn't count
     const user = userEvent.setup();

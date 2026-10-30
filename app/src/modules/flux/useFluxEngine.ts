@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  Condition,
-  Euler,
-  EvalControl,
-  ExerciseId,
-  ExerciseKind,
-  ExerciseState,
+import {
+  getExercise,
+  plannedCount,
+  type Condition,
+  type Euler,
+  type EvalControl,
+  type ExerciseId,
+  type ExerciseKind,
+  type ExerciseState,
+  type SetSummary,
 } from '@aperture/shared/flux';
+import { summaryOf } from './engine/evaluate';
 import {
   createFluxEngine,
   type EngineDebug,
@@ -44,7 +48,11 @@ export interface FluxSetDraft {
   readonly delegate: Delegate | null;
   readonly durationSec: number; // from the set's start (selection, Start/Again, or the last set) to done
   readonly completedAt: number; // epoch ms
+  readonly stoppedEarly: boolean; // saved from a set ended before its prescription (D55)
+  readonly planned: number | null; // plannedCount at set time
 }
+
+type SetContext = Pick<FluxSetDraft, 'exerciseId' | 'kind' | 'side' | 'condition'>;
 
 // What Stop hands back: the session's active minutes (paused time excluded) and how many sets it held.
 export interface SessionSummary {
@@ -134,6 +142,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     delegate: null as Delegate | null,
   });
   const setsRef = useRef(0);
+  // The set in progress as of the worker's last state post, and what it's a set of (D55).
+  const live = useRef<{ state: ExerciseState; ctx: SetContext } | null>(null);
   const readyRef = useRef(false); // the engine is ready — apart from whether the camera is live
   const pausedRef = useRef(false); // the camera is paused — apart from whether the engine is ready
   // Active session time: accumulated across pauses, so a backgrounded phone doesn't inflate the
@@ -277,8 +287,11 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           // re-set (exact, where the rest timer could race the worker at the rest's end).
           if (e.auto && wasCalibrated) return flash('Neutral reset');
           say({ type: 'neutralSet' });
-          // Calibrating resets the set, so a timed kind starts itself again (D41) — at once if
-          // "Start now" was what asked for the neutral. A rest in progress runs on: its end starts the set.
+          // A Re-calibrate mid-set just carries on: the count stands, measured from the new neutral (D55).
+          if (live.current?.state.phase === 'active') return;
+          // Otherwise calibrating starts the set afresh, so a timed kind starts itself again (D41) — at
+          // once if "Start now" was what asked for the neutral. A rest in progress runs on: its end starts
+          // the set.
           if (!READY_KINDS.has(o.kind) || !o.acknowledged) return;
           if (autoStep.current?.kind === 'rest') return;
           if (startOnCalibrate.current) {
@@ -290,6 +303,10 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return arm({ kind: 'start' });
         }
         case 'exerciseState':
+          live.current = {
+            state: e.state,
+            ctx: { exerciseId: o.exerciseId, kind: o.kind, side: o.side, condition: o.condition },
+          };
           return setExState(e.state);
         case 'exerciseEvent': {
           const sets = Math.max(1, o.sets ?? DEFAULT_SETS);
@@ -297,26 +314,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           // The last set says "Session complete." in place of "Set complete" (D42).
           say(last ? { type: 'sessionComplete' } : e.event);
           if (e.event.type !== 'setCompleted') return;
-          const { summary } = e.event;
-          const now = performance.now();
-          const set: FluxSetDraft = {
+          live.current = null; // recorded here — a Stop before the next state post mustn't save it again
+          recordRef.current(e.event.summary, false, {
             exerciseId: o.exerciseId,
             kind: o.kind,
             side: o.side,
             condition: o.condition,
-            count: summary.count,
-            ...(summary.avgPeakDeg !== undefined && { avgPeakDeg: summary.avgPeakDeg }),
-            ...(summary.avgErrorDeg !== undefined && { avgErrorDeg: summary.avgErrorDeg }),
-            rom: latest.current.sample.rom,
-            calibrated: latest.current.calibrated,
-            delegate: latest.current.delegate,
-            durationSec: Math.round((now - setStartRef.current) / 1000),
-            completedAt: Date.now(),
-          };
-          setStartRef.current = now;
-          const index = setsRef.current++;
-          setSessionSets((s) => [...s, set]);
-          o.onSetCompleted?.(set, index);
+          });
           const done = ++planDoneRef.current;
           if (!last) return arm({ kind: 'rest', index: done });
           // Ends itself: the camera goes off with no tap, and the queued "Session complete." still plays.
@@ -335,6 +339,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return setStatus('paused');
         }
         case 'error':
+          takeRef.current(); // the reps were real, and "Try again" is a new session (D55)
           pauseClock(clock.current);
           readyRef.current = false;
           clearAuto();
@@ -376,6 +381,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     const off = engine.subscribe(onEvent);
     return () => {
       off();
+      takeRef.current(); // leaving the page mid-set ends it (D55)
       engine.stop();
       clearTimeout(noticeTimer.current);
       clearTimeout(cueTimer.current);
@@ -388,6 +394,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const selected = opts.acknowledged ? opts.exerciseId : null;
   const side = opts.side ?? 'a';
   useEffect(() => {
+    takeRef.current(); // a side switched mid-set: what was done is that side's set (D55)
     cueRef.current = initialCueState;
     setStartRef.current = performance.now();
     setExState(null);
@@ -405,6 +412,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   }, [selected, clearAuto, say, arm]);
 
   const reset = useCallback(() => {
+    live.current = null;
     setCalibrated(false);
     latest.current.calibrated = false;
     setExState(null);
@@ -439,7 +447,44 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   );
 
   // `cancelVoice` false only when the session ends itself, so its last words aren't cut off.
+  // A set's draft, recorded and handed to the page — finished (setCompleted) or ended early (D55).
+  function recordSet(summary: SetSummary, stoppedEarly: boolean, ctx: SetContext): void {
+    const now = performance.now();
+    const set: FluxSetDraft = {
+      ...ctx,
+      count: summary.count,
+      ...(summary.avgPeakDeg !== undefined && { avgPeakDeg: summary.avgPeakDeg }),
+      ...(summary.avgErrorDeg !== undefined && { avgErrorDeg: summary.avgErrorDeg }),
+      rom: latest.current.sample.rom,
+      calibrated: latest.current.calibrated,
+      delegate: latest.current.delegate,
+      durationSec: Math.round((now - setStartRef.current) / 1000),
+      completedAt: Date.now(),
+      stoppedEarly,
+      planned: plannedCount(getExercise(ctx.exerciseId)),
+    };
+    setStartRef.current = now;
+    const index = setsRef.current++;
+    setSessionSets((s) => [...s, set]);
+    optsRef.current.onSetCompleted?.(set, index);
+  }
+  const recordRef = useRef(recordSet);
+  recordRef.current = recordSet;
+  // A set ended before its prescription — Stop, Back, leaving the page, a tracker error, a side switched
+  // mid-set — is saved if it has anything in it (D55), from the last state the worker posted (≤ one
+  // throttle old; the worker can't answer once it's stopped). Taken once: the ref is cleared.
+  function takePartialSet(): void {
+    const l = live.current;
+    live.current = null;
+    if (!l || l.state.phase === 'complete') return;
+    const summary = summaryOf(l.state);
+    if (summary.count >= 1) recordSet(summary, true, l.ctx);
+  }
+  const takeRef = useRef(takePartialSet);
+  takeRef.current = takePartialSet;
+
   function endSession(cancelVoice: boolean): SessionSummary {
+    takePartialSet();
     pauseClock(clock.current);
     const summary = { activeMs: clock.current.activeMs, sets: setsRef.current };
     clearAuto();

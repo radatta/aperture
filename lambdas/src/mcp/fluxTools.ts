@@ -39,6 +39,8 @@ function setRow(s: FluxSet) {
     calibrated: s.calibrated,
     durationSec: s.durationSec,
     countedTowardRollRep: s.repTaskId !== null,
+    stoppedEarly: s.stoppedEarly, // ended before its prescription; `count` is what was done
+    planned: s.planned, // the count it was going for (null for a timed set)
   };
 }
 
@@ -110,7 +112,7 @@ export const FLUX_TOOLS: Tool[] = [
   {
     name: 'list_flux_sets',
     description: [
-      'Saved Flux neck-rehab sets (webcam-tracked exercises), newest first — "how\'s my neck rehab going?". Each row has the exercise, side (right/left for the three one-sided stretches), count, and its one number (`metric`: avg peak degrees for ROM reps, holds done, avg error degrees for joint position — lower is better).',
+      'Saved Flux neck-rehab sets (webcam-tracked exercises), newest first — "how\'s my neck rehab going?". Each row has the exercise, side (right/left for the three one-sided stretches), count, and its one number (`metric`: avg peak degrees for ROM reps, holds done, avg error degrees for joint position — lower is better). A set stopped before its prescription has `stoppedEarly: true`; `planned` is the count it was going for.',
       '`summary` gives per-exercise first → latest over the window, and `daySummary` a one-line summary when the window is a single day (from = to).',
       'Optional from/to ISO dates (pass BOTH or NEITHER) and exerciseId (see list_flux_exercises).',
       HONESTY,

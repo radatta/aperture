@@ -74,6 +74,8 @@ describe('createApiClient', () => {
       durationSec: 60,
       completedAt: 1,
       repTaskId: null,
+      stoppedEarly: false,
+      planned: 10,
     });
     expect(ledger.entries).toEqual([
       { run: 'r1', op: 'created', id: 'F1', via: 'api:recordFluxSet', title: 'flux chin-tuck' },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, initialState, romHoldDeg } from './evaluate';
+import { evaluate, initialState, romHoldDeg, summaryOf } from './evaluate';
 import { EXERCISES } from '@aperture/shared/flux';
 import type {
   Euler,
@@ -527,7 +527,15 @@ describe('romReps', () => {
     const done = of(events, 'setCompleted');
     expect(done).toHaveLength(1);
     expect(done[0]?.summary.count).toBe(2);
+    expect(done[0]?.summary).toEqual(summaryOf(state)); // one reading of a set (D55)
     expect(state.phase).toBe('complete');
+  });
+
+  it('a set ended after two reps reads as two reps and their average peak (D55)', () => {
+    const fiveReps = { ...flexion, id: 't-5', reps: 5 } satisfies ExerciseDefinition;
+    const { state } = fold(fiveReps, [N(0), N(-40), N(0), N(-50), N(0), N(-30)]);
+    expect(state.phase).not.toBe('complete');
+    expect(summaryOf(state)).toEqual({ count: 2, avgPeakDeg: 45 });
   });
 });
 
@@ -551,6 +559,7 @@ describe('holdAtTarget', () => {
     expect(of(events, 'positionReached')).toHaveLength(1);
     expect(of(events, 'holdCompleted')).toHaveLength(1);
     expect(of(events, 'setCompleted')).toHaveLength(1);
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
     expect(state.phase).toBe('complete');
   });
 
@@ -791,6 +800,7 @@ describe('guidedHold', () => {
     expect(of(events, 'holdStarted').length).toBeGreaterThanOrEqual(2);
     expect(of(events, 'holdCompleted')).toHaveLength(2);
     expect(of(events, 'setCompleted')).toHaveLength(1);
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
     expect(state.phase).toBe('complete');
   });
 
@@ -863,7 +873,11 @@ describe('reposition', () => {
       ...ramp(32, 2, 20), // back
       ...repeat(N(0, 2, 0), 40), // still near neutral → "Hold still", then the trial
     ];
-    const { events } = fold(two, [N(0), ...trial, ...trial], { startAt: 0 });
+    const { state, events } = fold(two, [N(0), ...trial, ...trial], { startAt: 0 });
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
+    const one = fold(two, [N(0), ...trial], { startAt: 0 }).state; // ended after one trial
+    expect(summaryOf(one)).toMatchObject({ count: 1 });
+    expect(summaryOf(one).avgErrorDeg).toBeCloseTo(2, 0);
     expect(events.map((e) => (e.type === 'repositionPrompt' ? e.sub : e.type))).toEqual([
       'away',
       'returning',
@@ -914,7 +928,15 @@ describe('oscillation', () => {
     expect(amp).toBeGreaterThan(30);
     expect(amp).toBeLessThan(45);
     expect(of(events, 'setCompleted')).toHaveLength(1);
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
     expect(state.phase).toBe('complete');
+    // Ended part-way: the whole cycles so far.
+    const half = fold(gaze, rels.slice(0, fps), { startAt: 0, fps }).state;
+    expect(summaryOf(half).count).toBe(Math.floor((half as { cycles: number }).cycles));
+  });
+
+  it('every kind starts at a count of 0 — the "stopped before the first rep" line (D55)', () => {
+    for (const def of EXERCISES) expect(summaryOf(initialState(def)).count).toBe(0);
   });
 });
 

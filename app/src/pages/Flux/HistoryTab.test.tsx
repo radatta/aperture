@@ -25,6 +25,8 @@ const set = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
   durationSec: 250,
   completedAt: Date.now(),
   repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
   ...over,
 });
 
@@ -265,6 +267,29 @@ describe('Flux History tab', () => {
     expect(screen.queryByText('No sets in the last 90 days.')).toBeNull();
     release();
     expect(await screen.findByText(/20 reps · avg 50°/)).toBeTruthy();
+  });
+
+  it('a stopped set says what it was going for, and still counts in the trend (D55)', async () => {
+    const t = Date.now();
+    const { user } = await history([
+      set({ day: addDays(today, -4), completedAt: t - 4e8, avgPeakDeg: 44 }),
+      set({ day: addDays(today, -2), completedAt: t - 2e8, avgPeakDeg: 46 }),
+      set({ completedAt: t - 2000, count: 2, planned: 10, stoppedEarly: true, avgPeakDeg: 48 }),
+      set({
+        exerciseId: 'gaze-stability',
+        kind: 'oscillation',
+        count: 12,
+        planned: null,
+        stoppedEarly: true,
+        avgPeakDeg: 18,
+        completedAt: t - 1000,
+      }),
+    ]);
+    expect(await screen.findByText(/2 of 10 reps · avg 48° · stopped early/)).toBeTruthy();
+    expect(screen.getByText(/12 cycles · stopped early/)).toBeTruthy();
+    expect(screen.getByText(/20 reps · avg 46°/).textContent).not.toMatch(/stopped/);
+    await user.click(screen.getByRole('button', { name: 'rotation' }));
+    expect(screen.getByRole('img', { name: /rotation · avg peak, 3 sets/ })).toBeTruthy();
   });
 
   it('a hold count never trends — only an angle does', async () => {

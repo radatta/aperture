@@ -85,7 +85,28 @@ export function fluxSetError(input: RecordFluxSetInput): string | null {
     return `Unknown tracking delegate "${String(input.delegate)}".`;
   if (input.repTaskId !== null && (typeof input.repTaskId !== 'string' || !input.repTaskId))
     return 'A Flux set links to its Roll rep by task id.';
+  if (typeof input.stoppedEarly !== 'boolean')
+    return 'A Flux set must say whether it was stopped early.';
+  if (input.planned !== null && (!Number.isInteger(input.planned) || input.planned < 1))
+    return "A Flux set's planned count must be a whole number.";
+  if (input.stoppedEarly && input.count < 1)
+    return "A set stopped before its first rep isn't saved.";
   return null;
+}
+
+// The count a set goes for under its prescription (D56): both sides for a bilateral drill, none for a
+// timed one. One home for the live readout's "/ 10", the draft's `planned` and so History's "2 of 10".
+export function plannedCount(def: ExerciseDefinition): number | null {
+  switch (def.kind) {
+    case 'romReps':
+      return def.direction === 'bilateral' ? def.reps * 2 : def.reps;
+    case 'holdAtTarget':
+    case 'guidedHold':
+    case 'reposition':
+      return def.reps;
+    case 'oscillation':
+      return null;
+  }
 }
 
 // from/to both or neither (the LeetCode rule), each a day key.

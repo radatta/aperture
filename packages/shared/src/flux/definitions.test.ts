@@ -97,3 +97,34 @@ describe('hold times', () => {
     });
   });
 });
+
+// The rep counts were lowered after the history dev test (docs/areas/flux D56) — pinned like the hold
+// times. Per side for the bilateral ROM drills; gaze stability is a duration.
+describe('rep counts', () => {
+  it('match the lowered values', () => {
+    const counts = Object.fromEntries(
+      all.map((d) => [d.id, 'reps' in d ? d.reps : `${d.durationSec}s`]),
+    );
+    expect(counts).toEqual({
+      'cervical-rotation': 5,
+      'cervical-lateral-flexion': 5,
+      'cervical-flexion': 6,
+      'cervical-extension': 5,
+      'chin-tuck': 6,
+      'retraction-extension': 5,
+      'upper-trap-stretch': 2,
+      'levator-scapulae-stretch': 2,
+      'scalene-stretch': 2,
+      'eye-head-coordination': 5,
+      'deep-neck-flexor': 6,
+      'isometric-flexion': 5,
+      'isometric-extension': 5,
+      'isometric-lateral-flexion': 5,
+      'isometric-rotation': 5,
+      'scapular-retraction': 6,
+      'median-nerve-glide': 10,
+      'joint-position-sense': 6,
+      'gaze-stability': '30s',
+    });
+  });
+});

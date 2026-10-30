@@ -257,6 +257,7 @@ function SessionLine({
   sets: number;
 }) {
   const n = engine.sessionSets.length;
+  const stopped = engine.sessionSets.filter((s) => s.stoppedEarly).length;
   const rom = engine.sample.rom;
   const showRom = engine.status === 'running' && engine.calibrated && def.measurement !== 'guided';
   if (n === 0 && !showRom) return null;
@@ -265,6 +266,7 @@ function SessionLine({
       {n > 0 && (
         <Text size="sm" tone="muted" tabular>
           Sets this session · {n} of {sets}
+          {stopped > 0 && ` · ${stopped} stopped early`}
         </Text>
       )}
       {showRom && (

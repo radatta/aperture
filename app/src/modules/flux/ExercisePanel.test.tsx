@@ -52,7 +52,7 @@ describe('ExercisePanel', () => {
     } as ExerciseState;
     panel(def, state, at({ yaw: 30 }));
     expect(screen.getByText('5')).toBeTruthy();
-    expect(screen.getByText('/ 20 reps')).toBeTruthy();
+    expect(screen.getByText('/ 10 reps')).toBeTruthy();
     expect(screen.getByText('current +30°')).toBeTruthy();
     expect(screen.getByText('target 60°')).toBeTruthy();
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
@@ -115,7 +115,7 @@ describe('ExercisePanel', () => {
 
   it('holdAtTarget complete: Set complete + Again (new in Aperture)', () => {
     const def = getExercise('chin-tuck');
-    panel(def, { ...initialState(def), phase: 'complete', holdsDone: 10 } as ExerciseState);
+    panel(def, { ...initialState(def), phase: 'complete', holdsDone: 6 } as ExerciseState);
     expect(screen.getByText('Set complete')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Again' })).toBeTruthy();
   });
@@ -124,7 +124,7 @@ describe('ExercisePanel', () => {
     const def = getExercise('deep-neck-flexor');
     const onControl = panel(def, initialState(def));
     // Starts itself once the neutral is set (D41); the button is the override.
-    expect(screen.getByText('10 reps · starts once your neutral is set')).toBeTruthy();
+    expect(screen.getByText('6 reps · starts once your neutral is set')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Start now' }));
     expect(onControl).toHaveBeenCalledWith({ type: 'start' });
     render(
@@ -144,7 +144,7 @@ describe('ExercisePanel', () => {
       />,
     );
     expect(screen.getByText('HOLD')).toBeTruthy();
-    expect(screen.getByText('Rep 1 / 10')).toBeTruthy();
+    expect(screen.getByText('Rep 1 / 6')).toBeTruthy();
     cleanup();
     // Once the neutral is set the lead-in is running: no longer "once your neutral is set".
     render(
@@ -156,7 +156,7 @@ describe('ExercisePanel', () => {
         onControl={() => {}}
       />,
     );
-    expect(screen.getByText('10 reps · starting…')).toBeTruthy();
+    expect(screen.getByText('6 reps · starting…')).toBeTruthy();
     cleanup();
     render(
       <ExercisePanel

@@ -173,7 +173,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   recorded by the app's stage only; deleting one is the History tab's. `from`/`to` are both or neither
   (one alone is a param error, like the RPC's `fluxFilterError`). Every label is resolved server-side from
   the shared catalog — the exercise name, `side` as `right`/`left` (`sideLabel`, D48), and `metric`, the one
-  number History judges a set by (`setMetric`) — plus a per-exercise first → latest `summary`, and `daySummary`
+  number History judges a set by (`setMetric`), `stoppedEarly` and `planned` (a set ended before its
+  prescription, and the count it was going for — [flux](../flux/index.md) D55) — plus a per-exercise first → latest `summary`, and `daySummary`
   (the night line's sentence, `summarizeSets`) when the window is one day (`from = to`, any day). Every result carries the
   honesty `note`: angles are relative to each session's own neutral, a trend and not a clinical
   measurement. `list_flux_exercises` gives the ids, sides and prescriptions.

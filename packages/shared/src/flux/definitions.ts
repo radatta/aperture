@@ -12,7 +12,8 @@
 //
 // Parameters are flux-track's, except the hold times, retuned after the dev test
 // (docs/areas/flux D31): ROM reps 2→4 s, the three stretches 30→10 s, the four
-// isometrics 10→5 s.
+// isometrics 10→5 s; and the rep counts, lowered after the next (D56): about half
+// the volume — 2 sets a session is the default (D42).
 
 import type { ExerciseDefinition } from './types';
 
@@ -29,7 +30,7 @@ export const EXERCISES = [
     enterDeg: 15,
     exitDeg: 8,
     targetDeg: 60,
-    reps: 10,
+    reps: 5,
     holdSec: 4,
     instructions:
       'Sit tall, eyes forward. Slowly turn your head to look over one shoulder, return to center, then the other side.',
@@ -49,7 +50,7 @@ export const EXERCISES = [
     enterDeg: 12,
     exitDeg: 6,
     targetDeg: 40,
-    reps: 10,
+    reps: 5,
     holdSec: 4,
     instructions:
       'Tilt your head to bring one ear toward that shoulder without lifting the shoulder. Return to center and repeat the other side.',
@@ -69,7 +70,7 @@ export const EXERCISES = [
     enterDeg: 15,
     exitDeg: 8,
     targetDeg: 45,
-    reps: 10,
+    reps: 6,
     holdSec: 4,
     instructions: 'Slowly lower your chin toward your chest, then return to neutral.',
     cues: ['Move smoothly, no bouncing'],
@@ -90,7 +91,7 @@ export const EXERCISES = [
     enterDeg: 15,
     exitDeg: 8,
     targetDeg: 55,
-    reps: 8,
+    reps: 5,
     holdSec: 4,
     provocative: true,
     instructions: 'Slowly tip your head back to look toward the ceiling, then return to neutral.',
@@ -120,7 +121,7 @@ export const EXERCISES = [
     target: { pitch: 5 },
     toleranceDeg: 7,
     holdSec: 4,
-    reps: 10,
+    reps: 6,
     instructions:
       "Glide your head straight back to make a gentle 'double chin', keeping your eyes level. Hold, then release.",
     cues: ["Small movement — glide back, don't nod down", 'Keep it gentle, no forcing'],
@@ -140,7 +141,7 @@ export const EXERCISES = [
     target: { pitch: -20 },
     toleranceDeg: 10,
     holdSec: 3,
-    reps: 8,
+    reps: 5,
     provocative: true,
     instructions:
       'From a chin-tuck, slowly extend to look up, then return. A derangement-reduction technique — only use if it eases arm symptoms.',
@@ -222,7 +223,7 @@ export const EXERCISES = [
     enterDeg: 15,
     exitDeg: 8,
     targetDeg: 40,
-    reps: 8,
+    reps: 5,
     instructions:
       'Look toward a target to one side with your eyes first, then turn your head to follow and line up with it. Return and repeat both ways.',
     cues: ['Eyes lead, head follows', 'Keep the target in focus'],
@@ -239,7 +240,7 @@ export const EXERCISES = [
     kind: 'guidedHold',
     measurement: 'guided',
     holdSec: 10,
-    reps: 10,
+    reps: 6,
     restSec: 5,
     driftToleranceDeg: 8,
     instructions:
@@ -326,7 +327,7 @@ export const EXERCISES = [
     kind: 'guidedHold',
     measurement: 'guided',
     holdSec: 10,
-    reps: 10,
+    reps: 6,
     restSec: 3,
     driftToleranceDeg: 12,
     instructions:
@@ -369,7 +370,7 @@ export const EXERCISES = [
     axis: 'any',
     excursionDeg: 25,
     settleSec: 2,
-    reps: 10,
+    reps: 6,
     instructions:
       'Close your eyes, turn or tip your head away, then try to bring it back to your exact neutral starting position. Open your eyes to see how close you got.',
     cues: ['Trust your sense of position', 'Move back smoothly, then hold still'],

@@ -18,6 +18,7 @@ import type {
   HoldAtTargetState,
   OscillationState,
   Phase,
+  SetSummary,
   RepositionState,
   RomRepsState,
 } from '@aperture/shared/flux';
@@ -166,6 +167,29 @@ export function initialState(def: ExerciseDefinition): ExerciseState {
       return buildReposition(def);
     case 'oscillation':
       return buildOscillation(def);
+  }
+}
+
+// What a set amounts to, from its state: the count and its one measurement. A finished set's
+// `setCompleted` summary is exactly this of its final state (evaluate.test pins it per kind), and a set
+// ended early is saved from this of its last state (D55) — one reading, so the two can't drift.
+export function summaryOf(state: ExerciseState): SetSummary {
+  switch (state.kind) {
+    case 'romReps':
+      return {
+        count: state.repsPos + state.repsNeg,
+        avgPeakDeg: state.peakCount ? state.peakSum / state.peakCount : undefined,
+      };
+    case 'holdAtTarget':
+    case 'guidedHold':
+      return { count: state.holdsDone };
+    case 'reposition':
+      return {
+        count: state.trialsDone,
+        avgErrorDeg: state.errorCount ? state.errorSum / state.errorCount : undefined,
+      };
+    case 'oscillation':
+      return { count: Math.floor(state.cycles), avgPeakDeg: state.amplitudeEwma };
   }
 }
 

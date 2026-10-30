@@ -122,6 +122,8 @@ export function draftToInput(
     durationSec: draft.durationSec,
     completedAt: draft.completedAt,
     repTaskId: keys.repTaskId,
+    stoppedEarly: draft.stoppedEarly,
+    planned: draft.planned,
   };
 }
 

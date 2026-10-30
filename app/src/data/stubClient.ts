@@ -623,6 +623,8 @@ class StubClient implements ApiClient {
       durationSec: input.durationSec,
       completedAt: input.completedAt,
       repTaskId: input.repTaskId,
+      stoppedEarly: input.stoppedEarly,
+      planned: input.planned,
     });
   }
   async listFluxSets(filter?: FluxSetFilter): Promise<FluxSet[]> {

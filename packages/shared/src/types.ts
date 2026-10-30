@@ -314,6 +314,8 @@ export interface FluxSet extends BaseEntity {
   durationSec: number;
   completedAt: number; // epoch ms
   repTaskId: string | null; // the Roll rep this set counted toward
+  stoppedEarly: boolean; // ended before its prescription — Stop, Back, leaving, an error (D55)
+  planned: number | null; // the count it was going for, at set time (bilateral ×2); null when timed
 }
 
 // --- Task attachments ------------------------------------------------------

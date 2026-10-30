@@ -48,6 +48,8 @@ const record = (over: Partial<RecordFluxSetInput>) =>
     durationSec: 240,
     completedAt: 1_000,
     repTaskId: null,
+    stoppedEarly: false,
+    planned: 10,
     ...over,
   });
 
@@ -57,6 +59,8 @@ interface SetsOut {
     side: string | null;
     metric: { value: number } | null;
     countedTowardRollRep: boolean;
+    stoppedEarly: boolean;
+    planned: number | null;
   }[];
   summary: { exerciseId: string; sets: number; first?: number; latest?: number }[];
   daySummary?: string;
@@ -82,6 +86,7 @@ describe('list_flux_sets', () => {
       ['Neck Rotation', null, 46],
     ]);
     expect(out.sets[1]?.countedTowardRollRep).toBe(true);
+    expect(out.sets[1]).toMatchObject({ stoppedEarly: false, planned: 10 });
     expect(out.summary).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

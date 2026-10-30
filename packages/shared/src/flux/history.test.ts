@@ -9,6 +9,7 @@ import {
   groupByDay,
   hasSide,
   inRange,
+  plannedCount,
   setMetric,
   SHORT_NAMES,
   sideLabel,
@@ -31,6 +32,8 @@ const input = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
   durationSec: 200,
   completedAt: 1_000,
   repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
   ...over,
 });
 const row = (over: Partial<FluxSet> = {}): FluxSet => ({
@@ -90,8 +93,31 @@ describe('fluxSetError', () => {
     ['a missing rom axis', { rom: { pitch: 1, yaw: 2 } as never }, 'not a number'],
     ['an unknown delegate', { delegate: 'TPU' as never }, 'delegate'],
     ['an empty rep id', { repTaskId: '' }, 'Roll rep'],
+    ['no stopped-early flag', { stoppedEarly: undefined as never }, 'stopped early'],
+    ['a fractional planned count', { planned: 2.5 }, 'planned count'],
+    ['a zero planned count', { planned: 0 }, 'planned count'],
+    ['a stopped set with nothing in it', { stoppedEarly: true, count: 0 }, 'first rep'],
   ])('refuses %s', (_, over, msg) => {
     expect(fluxSetError(input(over))).toContain(msg);
+  });
+
+  it('takes a stopped set with something in it, and a timed set with no planned count (D55)', () => {
+    expect(fluxSetError(input({ stoppedEarly: true, count: 2, planned: 10 }))).toBeNull();
+    expect(
+      fluxSetError(input({ exerciseId: 'gaze-stability', kind: 'oscillation', planned: null })),
+    ).toBeNull();
+  });
+});
+
+describe('plannedCount (D56)', () => {
+  it('is both sides for a bilateral drill, the reps otherwise, none for a timed set', () => {
+    const planned = (id: Parameters<typeof getExercise>[0]) => plannedCount(getExercise(id));
+    expect(planned('cervical-rotation')).toBe(10);
+    expect(planned('cervical-flexion')).toBe(6);
+    expect(planned('chin-tuck')).toBe(6);
+    expect(planned('deep-neck-flexor')).toBe(6);
+    expect(planned('joint-position-sense')).toBe(6);
+    expect(planned('gaze-stability')).toBeNull();
   });
 });
 
@@ -125,7 +151,7 @@ describe('setMetric', () => {
       betterWhen: 'higher',
     });
     expect(m('cervical-rotation', {})).toBeNull();
-    expect(m('chin-tuck', { count: 8 })).toMatchObject({ value: 8, unit: 'holds', target: 10 });
+    expect(m('chin-tuck', { count: 8 })).toMatchObject({ value: 8, unit: 'holds', target: 6 });
     expect(m('deep-neck-flexor', { count: 10 })).toMatchObject({ unit: 'reps' });
     expect(m('joint-position-sense', { avgErrorDeg: 3.1 })).toMatchObject({
       value: 3.1,

@@ -31,6 +31,8 @@ const fluxSet = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => 
   durationSec: 240,
   completedAt: 1_700_000_000_000,
   repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
   ...over,
 });
 
@@ -1338,6 +1340,20 @@ export function runApiContract(
         ),
       ).rejects.toThrow('needs a side');
       expect(await api.listFluxSets()).toEqual([]);
+    });
+
+    it('flux: a stopped-early set round-trips its flag and planned count; an empty one is refused', async () => {
+      const stopped = await api.recordFluxSet(
+        fluxSet({ count: 2, stoppedEarly: true, planned: 10 }),
+      );
+      expect(stopped).toMatchObject({ count: 2, stoppedEarly: true, planned: 10 });
+      expect((await api.listFluxSets()).find((s) => s.id === stopped.id)).toMatchObject({
+        stoppedEarly: true,
+        planned: 10,
+      });
+      await expect(
+        api.recordFluxSet(fluxSet({ count: 0, stoppedEarly: true, planned: 10 })),
+      ).rejects.toThrow('first rep');
     });
 
     it('flux: delete is a soft-delete — gone from list and export, and a retry of it stays gone', async () => {

@@ -8,7 +8,7 @@ import { useTodayPlan } from '../tasks/useTodayPlan';
 import { prefillMinutes, repTie } from './repState';
 
 // The Roll tie's state for the stage (RepTie.tsx renders it): which rep a Flux session counts toward,
-// and the two moments that touch it — the first finished set, and Stop.
+// and the two moments that touch it — the first set saved (finished or stopped early), and Stop.
 export function useRepTie() {
   const settingsQ = useSettings();
   const rollsQ = useRolls();

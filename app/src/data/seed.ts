@@ -594,7 +594,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
 
   // Flux sets — three weeks of neck work so History's rows and trends aren't judged empty: rotation every
   // other day with a slowly rising peak, chin tuck, upper-trap pairs on both sides, a few joint-position
-  // trials with a shrinking error, one gaze set. No Neck roll in the seed, so none links to a rep.
+  // trials with a shrinking error, one gaze set, and one rotation set stopped early (D55). No Neck roll in
+  // the seed, so none links to a rep. Their `planned` is the prescription of the day they were done.
   const flux = (
     dAgo: number,
     minute: number,
@@ -610,6 +611,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     calibrated: true,
     delegate: 'GPU',
     repTaskId: null,
+    stoppedEarly: false,
   } as const;
   [20, 18, 16, 14, 12, 10, 8, 6, 4, 2].forEach((d, i) => {
     flux(d, 0, {
@@ -618,6 +620,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       kind: 'romReps',
       side: null,
       count: 20,
+      planned: 20,
       avgPeakDeg: 44 + i * 1.3,
       rom: { pitch: 6, yaw: 88 + i * 2.6, roll: 7 },
       durationSec: 260,
@@ -629,6 +632,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         kind: 'holdAtTarget',
         side: null,
         count: 10,
+        planned: 10,
         rom: { pitch: 9, yaw: 2, roll: 2 },
         durationSec: 150,
       });
@@ -641,6 +645,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         kind: 'holdAtTarget',
         side,
         count: 2,
+        planned: 2,
         rom: { pitch: 3, yaw: 4, roll: 31 },
         durationSec: 75,
       }),
@@ -653,6 +658,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       kind: 'reposition',
       side: null,
       count: 5,
+      planned: 5,
       avgErrorDeg: 4.4 - i * 0.6,
       rom: { pitch: 5, yaw: 34, roll: 4 },
       durationSec: 90,
@@ -664,10 +670,23 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     kind: 'oscillation',
     side: null,
     count: 22,
+    planned: null,
     avgPeakDeg: 18,
     rom: { pitch: 3, yaw: 21, roll: 2 },
     durationSec: 30,
     delegate: 'CPU',
+  });
+  flux(1, 20, {
+    ...fluxBase,
+    exerciseId: 'cervical-rotation',
+    kind: 'romReps',
+    side: null,
+    count: 4,
+    planned: 10,
+    stoppedEarly: true,
+    avgPeakDeg: 52,
+    rom: { pitch: 5, yaw: 101, roll: 6 },
+    durationSec: 70,
   });
 
   // Story bank — a couple of STAR stories so page-first isn't judged against an empty bank. One is fully

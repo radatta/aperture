@@ -541,6 +541,8 @@ export class BackendClient implements ApiClient {
       durationSec: input.durationSec,
       completedAt: input.completedAt,
       repTaskId: input.repTaskId,
+      stoppedEarly: input.stoppedEarly,
+      planned: input.planned,
     };
     if (await this.repo.putFluxSetIfAbsent(set)) return set;
     // A concurrent retry won the write — read it back strongly, or an eventual read can miss the row.

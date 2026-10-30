@@ -201,7 +201,7 @@ describe('Flux exercise stage', () => {
     act(() => s.fake().state({ ...initialState(def), repsPos: 3, repsNeg: 2 } as ExerciseState));
     const overlay = screen.getByLabelText('Live readout');
     expect(within(overlay).getByText('5')).toBeTruthy();
-    expect(within(overlay).getByText(/\/ 20 reps/)).toBeTruthy();
+    expect(within(overlay).getByText(/\/ 10 reps/)).toBeTruthy();
   });
 
   it.each<[ExerciseId, Record<string, unknown>, RegExp | string]>([
@@ -309,6 +309,37 @@ describe('Flux saved sets (D47, D49)', () => {
     expect(localStorage.getItem(FLUX_OUTBOX_KEY)).toBeNull(); // sent, so nothing waits
   });
 
+  it('Stop part-way saves the set, marked stopped early; Stop before the first hold saves nothing (D55)', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    const tuck = initialState(getExercise('chin-tuck'));
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 0 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(await s.api.listFluxSets()).toEqual([]);
+
+    await running(s);
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 3 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]).toMatchObject({
+      exerciseId: 'chin-tuck',
+      count: 3,
+      stoppedEarly: true,
+      planned: 6,
+    });
+    expect(screen.getByText('Sets this session · 1 of 2 · 1 stopped early')).toBeTruthy();
+  });
+
+  it('leaving the stage mid-set saves the set too', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    const tuck = initialState(getExercise('chin-tuck'));
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 2 } as ExerciseState));
+    await s.user.click(screen.getByRole('link', { name: 'Tasks' }));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]).toMatchObject({ count: 2, stoppedEarly: true });
+  });
+
   it('files the set under the user’s own day start, not the calendar date', async () => {
     vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 21, 5, 0) }); // 5am, before a 6am start
     const s = await stage('/flux/chin-tuck', (api) =>
@@ -373,12 +404,12 @@ describe('Flux Roll tie', () => {
     const s = await linked(false);
     await s.user.click(await screen.findByRole('button', { name: 'Pick Neck for today' }));
     await waitFor(async () => expect((await s.rep())?.status).toBe('planned'));
-    expect(await screen.findByText(/your first finished set starts it/)).toBeTruthy();
+    expect(await screen.findByText(/your first set starts it/)).toBeTruthy();
   });
 
   it('first set starts the rep; Stop offers the DoneForm; Mark done finishes it', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
     await waitFor(async () => expect((await s.rep())?.status).toBe('in_progress'));
@@ -396,9 +427,22 @@ describe('Flux Roll tie', () => {
     expect(await screen.findByText(/Neck rep done today/)).toBeTruthy();
   });
 
+  it('a set stopped part-way starts the rep and offers the DoneForm, like a finished one (D55)', async () => {
+    const s = await linked(true);
+    await screen.findByText(/your first set starts it/);
+    await running(s);
+    const tuck = initialState(getExercise('chin-tuck'));
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 2 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(async () => expect((await s.rep())?.status).toBe('in_progress'));
+    expect(await screen.findByText("Log today's Neck rep")).toBeTruthy();
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]?.repTaskId).toBe((await s.rep())?.id);
+  });
+
   it('every saved set links to the rep it counted toward — the first, and the next with it running', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
     await waitFor(async () => expect((await s.rep())?.status).toBe('in_progress'));
@@ -410,7 +454,7 @@ describe('Flux Roll tie', () => {
 
   it('a session that ends itself offers the DoneForm with no Stop tap', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await s.user.click(screen.getByRole('button', { name: 'Fewer sets' }));
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
@@ -420,7 +464,7 @@ describe('Flux Roll tie', () => {
 
   it('a later session with no set offers nothing, even after an earlier session logged sets', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
     await screen.findByText(/Neck rep in progress/);
@@ -437,7 +481,7 @@ describe('Flux Roll tie', () => {
 
   it('Stop before any set offers nothing', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     await s.user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(screen.queryByText("Log today's Neck rep")).toBeNull();

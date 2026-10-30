@@ -705,8 +705,8 @@ function FluxSection() {
           className="w-60"
         />
         <Text size="xs" tone="muted">
-          The first finished set of a session starts that Roll&apos;s rep for today; stopping offers
-          to log it with the session&apos;s minutes.
+          The first set of a session (one stopped early too) starts that Roll&apos;s rep for today;
+          stopping offers to log it with the session&apos;s minutes.
           {active.length === 0 && ' Add a Roll on the Rolls page first.'}
         </Text>
         {settings.fluxDisclaimerAckAt !== null && (

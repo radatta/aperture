@@ -24,35 +24,43 @@ export const fluxHistory: Scenario = {
   steps: [
     {
       id: 'record',
-      title: 'recordFluxSet as the test user, read back',
+      title: 'recordFluxSet as the test user — a finished set and one stopped early — read back',
       async run(ctx) {
-        const setId = devUlid();
         // The app's day, not the calendar's: before the user's day start (4am) a set belongs to yesterday,
         // and History and the night line both read the app's today.
         const { dayStartHour } = await ctx.api.reads.getSettings();
-        await ctx.api.writes.recordFluxSet({
-          id: setId,
-          day: laDay(new Date(Date.now() - dayStartHour * 3_600_000)),
-          exerciseId: 'chin-tuck',
-          kind: 'holdAtTarget',
-          side: null,
-          condition: null,
-          count: 10,
-          avgPeakDeg: null,
-          avgErrorDeg: null,
-          rom: { pitch: 9, yaw: 2, roll: 2 },
-          calibrated: true,
-          delegate: 'CPU',
-          durationSec: 150,
-          completedAt: Date.now(),
-          repTaskId: null,
-        });
-        if (!(await ctx.api.reads.getFluxSet(setId))) throw new Error('the server has no such set');
+        const day = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
+        const record = async (count: number, stoppedEarly: boolean, completedAt: number) => {
+          const id = devUlid(completedAt);
+          await ctx.api.writes.recordFluxSet({
+            id,
+            day,
+            exerciseId: 'chin-tuck',
+            kind: 'holdAtTarget',
+            side: null,
+            condition: null,
+            count,
+            avgPeakDeg: null,
+            avgErrorDeg: null,
+            rom: { pitch: 9, yaw: 2, roll: 2 },
+            calibrated: true,
+            delegate: 'CPU',
+            durationSec: 150,
+            completedAt,
+            repTaskId: null,
+            stoppedEarly,
+            planned: 6,
+          });
+          if (!(await ctx.api.reads.getFluxSet(id))) throw new Error(`the server has no set ${id}`);
+        };
+        const now = Date.now();
+        await record(6, false, now - 1000);
+        await record(2, true, now); // stopped after two holds (D55)
       },
     },
     {
       id: 'history',
-      title: 'History lists it under Today',
+      title: 'History lists both under Today, the stopped one marked',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
@@ -67,6 +75,8 @@ export const fluxHistory: Scenario = {
         }
         await ctx.ui.expectText('Today', 15_000);
         await ctx.ui.expectText(EXERCISE, 15_000);
+        await ctx.ui.expectText('2 of 6 holds', 15_000);
+        await ctx.ui.expectText('stopped early', 15_000);
         await ctx.shot('history');
       },
     },

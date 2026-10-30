@@ -92,6 +92,32 @@ describe('FluxCore', () => {
     expect(core.control({ type: 'start' })).toBeNull();
   });
 
+  it('a Re-calibrate mid-set keeps the count; one before the set starts it afresh (D55)', () => {
+    const core = new FluxCore();
+    let t = feed(core, yaw(0), 10, 0);
+    core.calibrate();
+    core.selectExercise('cervical-rotation', 'a');
+    const reps = () => {
+      let last = null as null | { repsPos: number; repsNeg: number };
+      for (let i = 0; i < 2; i++) {
+        for (let k = 0; k < 150; k++) {
+          const r = core.frame(yaw(55), (t += 1000 / 30));
+          if (r?.state?.kind === 'romReps') last = r.state;
+        }
+        for (let k = 0; k < 40; k++) {
+          const r = core.frame(yaw(0), (t += 1000 / 30));
+          if (r?.state?.kind === 'romReps') last = r.state;
+        }
+      }
+      return last;
+    };
+    const two = reps();
+    expect((two?.repsPos ?? 0) + (two?.repsNeg ?? 0)).toBe(2);
+    expect(core.calibrate()).toBe(true);
+    const after = reps();
+    expect((after?.repsPos ?? 0) + (after?.repsNeg ?? 0)).toBe(4);
+  });
+
   it('applies side B by mirroring the stretch target', () => {
     // upper-trap-stretch targets roll +28; side B is roll −28.
     const reached = (side: 'a' | 'b') => {

@@ -42,6 +42,8 @@ export interface DevFluxSetInput {
   durationSec: number;
   completedAt: number;
   repTaskId: null;
+  stoppedEarly: boolean;
+  planned: number | null;
 }
 export interface DevFluxSet {
   id: string;

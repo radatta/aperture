@@ -27,6 +27,8 @@ const input = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
   durationSec: 120,
   completedAt: 1_000,
   repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
   ...over,
 });
 

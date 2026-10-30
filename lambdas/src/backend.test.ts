@@ -289,6 +289,8 @@ describe('backend flux sets', () => {
     durationSec: 120,
     completedAt: 1_700_000_000_000,
     repTaskId: null,
+    stoppedEarly: false,
+    planned: 10,
   });
 
   it('a delete tombstones the row under flux#<day>#<id> — kept in the table, gone from the list', async () => {

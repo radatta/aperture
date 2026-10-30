@@ -8,7 +8,7 @@ export type RepTie =
   | { readonly kind: 'unlinked' }
   // Linked, but no open rep and none done today: offer "Pick <roll> for today".
   | { readonly kind: 'none'; readonly roll: Roll }
-  // An open rep (backlog or planned) — the first finished set starts it.
+  // An open rep (backlog or planned) — the first set saved starts it.
   | { readonly kind: 'ready'; readonly roll: Roll; readonly task: Task }
   | { readonly kind: 'in_progress'; readonly roll: Roll; readonly task: Task }
   | { readonly kind: 'done'; readonly roll: Roll; readonly task: Task };

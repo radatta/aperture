@@ -156,7 +156,7 @@ function Trend({ def, sets }: { def: ExerciseDefinition; sets: readonly FluxSet[
       <Sparkline
         points={points.map((p) => ({
           value: p.m.value,
-          label: `${fmtMonthShortDay(p.s.day)} · ${fmtValue(p.m)}`,
+          label: `${fmtMonthShortDay(p.s.day)} · ${fmtValue(p.m)}${p.s.stoppedEarly ? ' · stopped early' : ''}`,
         }))}
         target={last.m.target}
         label={`${label}, ${points.length} sets: ${deltaText}`}

@@ -36,14 +36,17 @@ export function SetRow({
   const secs = Math.round(set.durationSec);
   const duration = secs < 60 ? `${secs}s` : fmtDuration(secs / 60);
   const time = fmtClock12(hhmmOfEpoch(set.completedAt));
+  // A set stopped early says what it was going for: "2 of 10 reps · avg 48° · stopped early" (D55).
+  const n = `${set.count}${set.stoppedEarly && set.planned !== null ? ` of ${set.planned}` : ''}`;
   const summary =
-    def?.kind === 'romReps'
-      ? `${set.count} reps${metric ? ` · avg ${metric.value.toFixed(0)}°` : ''}`
+    (def?.kind === 'romReps'
+      ? `${n} reps${metric ? ` · avg ${metric.value.toFixed(0)}°` : ''}`
       : def?.kind === 'reposition'
-        ? `${set.count} trials${metric ? ` · ${metric.value.toFixed(1)}° error` : ''}`
+        ? `${n} trials${metric ? ` · ${metric.value.toFixed(1)}° error` : ''}`
         : def?.kind === 'oscillation'
-          ? `${set.count} cycles`
-          : `${set.count} ${def?.kind === 'holdAtTarget' ? 'holds' : 'reps'}`;
+          ? `${n} cycles`
+          : `${n} ${def?.kind === 'holdAtTarget' ? 'holds' : 'reps'}`) +
+    (set.stoppedEarly ? ' · stopped early' : '');
 
   return (
     <li

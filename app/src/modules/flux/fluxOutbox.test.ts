@@ -27,6 +27,8 @@ const input = (id = ulid()): RecordFluxSetInput => ({
   durationSec: 120,
   completedAt: 1_000,
   repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
 });
 
 describe('fluxOutbox (D49)', () => {
@@ -115,6 +117,8 @@ describe('fluxOutbox (D49)', () => {
       delegate: 'CPU',
       durationSec: 70,
       completedAt: 9_000,
+      stoppedEarly: true,
+      planned: 4,
     };
     expect(draftToInput(draft, { id: 'X', day: '2026-10-20', repTaskId: 'T' })).toEqual({
       ...draft,
