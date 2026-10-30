@@ -239,7 +239,21 @@ describe('FluxCore', () => {
       expect(second.out.at(-1)?.sample.rel.yaw).toBeCloseTo(0, 0);
       // Kept near the set's own neutral, so re-sets can't creep: 16° is 8° from the last re-set but
       // 16° from where the set ended.
-      expect(autos(run(core, hold(yaw(16), 120), second.t).out)).toEqual([]);
+      const far = run(core, hold(yaw(16), 120), second.t);
+      expect(autos(far.out)).toEqual([]);
+      // Two re-sets, one range: 0° to 16° seen, re-keyed across both, reads 16.
+      const back = run(core, hold(yaw(0), 30), far.t);
+      expect(back.out.at(-1)?.sample.rom.yaw).toBeCloseTo(16, 0);
+    });
+
+    it("a blink or a dropped frame mid-rest isn't a new pause: a still rest re-sets once", () => {
+      const { core, t } = finishedSet();
+      const { out } = run(
+        core,
+        [...hold(yaw(8), 75), null, ...hold(yaw(8), 75), null, ...hold(yaw(8), 75)],
+        t,
+      );
+      expect(autos(out)).toHaveLength(1);
     });
 
     it('re-arms for the next finished set; needs the head frontal as well as near', () => {
@@ -251,7 +265,10 @@ describe('FluxCore', () => {
         const r = core.frame(yaw(8), (at += 1000 / 30));
         done = r?.events.some((e) => e.type === 'setCompleted') ?? false;
       }
-      expect(autos(run(core, hold(yaw(14), 75), at).out)).toHaveLength(1);
+      // Still at the same pose into the next rest: a new rest re-arms it even without moving.
+      const same = run(core, hold(yaw(8), 75), at);
+      expect(autos(same.out)).toHaveLength(1);
+      expect(autos(run(core, hold(yaw(14), 75), same.t).out)).toHaveLength(1);
       // A neutral already 15° to the side: a head 7° further is near it, but no longer frontal.
       const side = new FluxCore();
       let ts = run(side, hold(yaw(15), 70)).t;

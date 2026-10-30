@@ -44,6 +44,9 @@ const isFrontal = (e: Euler): boolean =>
 // neutral re-sets it — every fresh 2 s pause, so the last one before the next set wins (the posture it
 // starts from) and the first is the fallback; a stretch pose can't become neutral (D46).
 const RECAL_MAX_SHIFT_DEG = 10;
+// …and the next pause counts only after the head really moved off the re-set this far — a blink or a
+// dropped face frame isn't a new pause, so a still rest re-sets once, not on every jitter.
+const RECAL_REARM_DEG = 2;
 
 export interface FrameResult {
   readonly sample: Sample;
@@ -71,7 +74,7 @@ export class FluxCore {
   private faceVisible = false;
   private stillSec = 0; // a visible, frontal face held still — with no neutral, or between sets
   private restNeutral: Euler | null = null; // the neutral the finished set ended on — re-sets stay near it
-  private pauseRecal = false; // this still pause has re-set already; moving clears it
+  private pauseRecal = false; // this pause has re-set already; moving off it clears it
   private def: ExerciseDefinition | null = null;
   private exerciseState: ExerciseState | null = null;
   private readonly filters = {
@@ -143,7 +146,12 @@ export class FluxCore {
         isFrontal(this.lastSmoothed) &&
         speedOf(this.lastSmoothed, prevSmoothed, stillDt) < STILL_SPEED;
       this.stillSec = still ? this.stillSec + stillDt : 0;
-      if (!still) this.pauseRecal = false;
+      if (
+        this.pauseRecal &&
+        this.neutral &&
+        magnitude(relativeTo(this.lastSmoothed, this.neutral)) > RECAL_REARM_DEG
+      )
+        this.pauseRecal = false;
       if (this.stillSec >= AUTO_CAL_STILL_SEC && !this.pauseRecal) {
         // A re-set keeps the finished set and the ROM: a correction, not a Calibrate.
         if (this.neutral) {
