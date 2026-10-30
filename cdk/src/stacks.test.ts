@@ -91,6 +91,15 @@ describe('ApertureAppStack', () => {
     });
   });
 
+  it('gives the BFF and MCP log groups a two-week retention on dev (Lambda-created, never expired before)', () => {
+    // logRetention → one Custom::LogRetention per function, setting the policy on the existing group.
+    const retention = app.findResources('Custom::LogRetention');
+    expect(Object.values(retention).map((r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays)).toEqual([14, 14]);
+    const groupRefs = Object.values(retention).map((r) => JSON.stringify((r as { Properties: { LogGroupName: unknown } }).Properties.LogGroupName));
+    expect(groupRefs.some((g) => g.includes('Bff'))).toBe(true);
+    expect(groupRefs.some((g) => g.includes('Mcp'))).toBe(true);
+  });
+
   it('forwards the OAuth callback query params on /api/* (CloudFront strips them by default)', () => {
     app.hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
       OriginRequestPolicyConfig: Match.objectLike({
@@ -605,6 +614,11 @@ describe('ApertureAppStack finance sync by stage', () => {
         FunctionName: name,
         Environment: { Variables: Match.objectLike({ PLAID_ENV: 'production' }) },
       });
+  });
+
+  it('prod keeps BFF and MCP logs for 90 days', () => {
+    const retention = build('prod', 'u').findResources('Custom::LogRetention');
+    expect(Object.values(retention).map((r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays)).toEqual([90, 90]);
   });
 
   it('no device user → no schedule (the sync still runs on Refresh)', () => {

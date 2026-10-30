@@ -1,6 +1,6 @@
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ApertureCicdStack } from './lib/cicd-stack';
 
 function cicdTemplate() {
@@ -30,9 +30,8 @@ describe('ApertureCicdStack', () => {
             Action: 'sts:AssumeRoleWithWebIdentity',
             Condition: Match.objectLike({
               StringLike: {
-                // environment:dev — deploy-dev always runs in the `dev` GitHub environment (on both the
-                // dev- and main-branch pushes), so that's the only trusted sub. The cutover ref subs were
-                // pruned 2026-08.
+                // environment:dev — every dev deploy runs in the `dev` GitHub environment, on main (a push or
+                // a bot dispatch), so that's the only trusted sub. The cutover ref subs were pruned 2026-08.
                 'token.actions.githubusercontent.com:sub': ['repo:acme/aperture:environment:dev'],
               },
             }),
@@ -65,6 +64,59 @@ describe('ApertureCicdStack', () => {
         Statement: Match.arrayWith([Match.objectLike({ Action: 'sts:AssumeRole' })]),
       }),
     });
+  });
+
+  it('trusts the logs role only from the main-only dev-logs environment', () => {
+    t.hasResourceProperties('AWS::IAM::Role', {
+      RoleName: 'aperture-github-logs-dev',
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Condition: Match.objectLike({
+              StringLike: {
+                'token.actions.githubusercontent.com:sub': [
+                  'repo:acme/aperture:environment:dev-logs',
+                ],
+              },
+            }),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('lets the logs role read only the three dev Lambda groups, and nothing else', () => {
+    const roles = t.findResources('AWS::IAM::Role', {
+      Properties: { RoleName: 'aperture-github-logs-dev' },
+    });
+    const [logicalId = ''] = Object.keys(roles);
+    expect(logicalId).not.toBe('');
+    const policies = Object.values(t.findResources('AWS::IAM::Policy')).filter((p) =>
+      JSON.stringify((p as { Properties: { Roles: unknown } }).Properties.Roles).includes(
+        logicalId,
+      ),
+    );
+    const stmts = policies.flatMap(
+      (p) =>
+        (
+          p as {
+            Properties: {
+              PolicyDocument: { Statement: { Action: string | string[]; Resource: unknown }[] };
+            };
+          }
+        ).Properties.PolicyDocument.Statement,
+    );
+    const actions = stmts.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    expect(actions.every((a) => a.startsWith('logs:'))).toBe(true); // no bootstrap assume, S3, CFN
+    const resources = JSON.stringify(stmts.map((s) => s.Resource));
+    for (const fn of ['bff', 'mcp', 'finance-sync'])
+      expect(resources).toContain(`/aws/lambda/aperture-${fn}-dev:*`);
+    expect(resources).not.toContain('-prod');
+    // Only the three id-addressed query calls sit on `*`.
+    const star = stmts
+      .filter((s) => s.Resource === '*')
+      .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    expect(star.sort()).toEqual(['logs:DescribeQueries', 'logs:GetQueryResults', 'logs:StopQuery']);
   });
 
   it('grants read-only DescribeStacks for the app-only deploy tier', () => {

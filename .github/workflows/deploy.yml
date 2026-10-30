@@ -1,7 +1,9 @@
 name: Deploy
 
 # GitHub Flow: push to main → dev then prod (both auto — no approval pause, and no merge-time deploy gate:
-# the PR's required checks are the only gate before main — INFRA §9). Push to dev → one-off dev deploy.
+# the PR's required checks are the only gate before main — INFRA §9). Push to dev → one-off dev deploy (the
+# user's, by hand — a ruleset keeps the bot off `dev`; the bot's own path is deploy-dev.yml, off until dev's
+# CDK bootstrap is isolated — docs/ops/CI-BOT.md). Never add workflow_dispatch here: this is the prod path.
 # Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
 # changes → deploy each stage at the resulting tier. Exception: an app-only push to dev deploys straight
@@ -124,6 +126,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      deployments: read # deploy-stage's prod never-backwards check
     uses: ./.github/workflows/deploy-stage.yml
     with:
       stage: prod

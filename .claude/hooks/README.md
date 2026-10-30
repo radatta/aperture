@@ -49,11 +49,22 @@ enforcement behind CLAUDE.md's standing approval for dev cleanup. Fails closed (
 → deny; an attach it can't record is denied too); the PostToolUse half never blocks. It finds the ledger from
 its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → *Ledgers*.
 
+## Bot and secrets guards
+
+`gh-safety-guard.sh` also walls the bot CLI (`docs/ops/CI-BOT.md`): `pnpm bot push` aimed at
+`main`/`master`/`dev`, any `pnpm bot` force flag, `gh pr merge|review`, and any Bash line touching `.secrets/` except a bare `ls`/`stat`.
+Its push checks see through git's global options (`git -C dir push`, `git -c k=v push`) and deny
+`--all`/`--mirror`. `secrets-read-guard.sh` (Read, Grep, Glob) denies those tools a path into `.secrets/`, and a
+Grep whose glob could re-admit the gitignored dir (`*`, `*.pem`, `*.env`, brace globs) where a `.secrets` sits
+within reach; a Grep *pattern* is content, so searching the repo for the text stays allowed. Both are second walls — the CLI
+refuses on its own, and the ruleset is the real one.
+
 ## Testing
 
 `python3 .claude/hooks/testdata/run-fixtures.py` runs every guard against its fixture file
 (`reverse-shell-fixtures.jsonl`, `grep-guard-fixtures.jsonl`, `precommit-fixtures.jsonl`,
-`gh-safety-fixtures.jsonl`, `mcp-ledger-fixtures.jsonl`, `board-heavy-fixtures.jsonl`), checks each guard is
+`gh-safety-fixtures.jsonl`, `mcp-ledger-fixtures.jsonl`, `board-heavy-fixtures.jsonl`,
+`secrets-read-fixtures.jsonl`), checks each guard is
 registered in `settings.json` under its expected matchers, and exits non-zero on a mismatch. Run it after
 touching a guard. A guard can fail **silently** — `precommit-guard`'s secret scan never worked from the day it was
 added (#4, 2026-08-09) until the fixtures caught it: a hard-wrapped regex made `grep` error out, and the
