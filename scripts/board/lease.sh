@@ -107,28 +107,48 @@ _heavy_gc() {
   done
 }
 
-# Who holds the heavy slots, for messages: "label (session), …".
+# Who holds the heavy slots (of class $1, if given), for messages: "label (session), …".
 _heavy_holders() {
-  local f pid label name out=
+  local f pid cls label name out=
   for f in "$BOARD_DIR"/leases/heavy/*.json; do
     [ -e "$f" ] || continue
-    read -r pid label < <(jq -r '"\(.pid) \(.label // .class)"' "$f" 2>/dev/null)
+    read -r pid cls label < <(jq -r '"\(.pid) \(.class) \(.label // .class)"' "$f" 2>/dev/null)
+    [ -z "${1:-}" ] || [ "$cls" = "$1" ] || continue
     name=$(jq -r '.name // empty' "$BOARD_DIR/sessions/$pid.json" 2>/dev/null)
     out="${out:+$out, }$label (${name:-pid $pid})"
   done
   printf '%s' "${out:-nothing on the board}"
 }
 
-# Under the lock: gc, decide, and on a go write the slot. Prints the decision JSON; exit 0 go, 3 wait.
+# The same as JSON, for barrier events: [{pid, name, class, label, startedAt}].
+_heavy_holders_json() {
+  local f pid
+  for f in "$BOARD_DIR"/leases/heavy/*.json; do
+    [ -e "$f" ] || continue
+    pid=$(jq -r '.pid' "$f" 2>/dev/null)
+    jq -c --arg name "$(jq -r '.name // empty' "$BOARD_DIR/sessions/$pid.json" 2>/dev/null)" \
+      '{pid, name: (if $name == "" then null else $name end), class, label, startedAt}' "$f" 2>/dev/null
+  done | jq -sc '.'
+}
+
+# matrix.sh (HEAVY_GUARD) and edge.sh (HEAVY_LOADTEST) probe the edge on purpose: the cap never holds them.
+_heavy_is_load() { [ "${HEAVY_GUARD:-0}" = 1 ] || [ "${HEAVY_LOADTEST:-0}" = 1 ]; }
+
+# Under the lock: gc, decide, and on a go write the slot. Prints the decision JSON (with the holders when it
+# blocks); exit 0 go, 3 wait.
 _heavy_try() {
-  local slot="$1" owner="$2" class="$3" label="$4" wp="$5" ws="$6" slots live dec
+  local slot="$1" owner="$2" class="$3" label="$4" wp="$5" ws="$6" slots live dec lt=false
   sb_init_dirs; _heavy_gc
-  slots=$(cat "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | jq -sc 'map({pid, class, startedAt, wrapperPid})')
+  _heavy_is_load && lt=true
+  slots=$(cat "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | jq -sc 'map({pid, class, label, startedAt, wrapperPid})')
   live=$(jq -nc --argjson p "$(cg_pids)" --argjson a "$(cg_anon)" '{pids: $p, anonBytes: $a}')
   dec=$(jq -nc --slurpfile l "$LIMITS_JSON" --argjson pm "$PIDS_MAX" --argjson hi "$MEM_HIGH" --argjson live "$live" \
-    --argjson slots "${slots:-[]}" --arg class "$class" \
-    '{limits: $l[0], liveLimits: {pidsMax: $pm, highBytes: $hi}, live: $live, slots: $slots, req: {class: $class}}' |
+    --argjson slots "${slots:-[]}" --arg class "$class" --argjson lt "$lt" \
+    '{limits: $l[0], liveLimits: {pidsMax: $pm, highBytes: $hi}, live: $live, slots: $slots, req: {class: $class, loadTest: $lt}}' |
     "${BOARD_CLI[@]}" decide-heavy) || { echo '{"verdict":"grant","wait":false,"error":true}'; return 0; }  # fail open
+  case "$(jq -r .verdict <<<"$dec")" in
+    over-hard|cap-full) dec=$(jq -c --argjson h "$(_heavy_holders_json)" '. + {holders: $h}' <<<"$dec") ;;
+  esac
   printf '%s\n' "$dec"
   [ "$(jq -r .wait <<<"$dec")" = true ] && return 3
   [ -n "$slot" ] || return 0  # decide only (the PreToolUse guard)
@@ -137,33 +157,62 @@ _heavy_try() {
     '{v: 1, pid: $pid, class: $class, label: $label, cost: $cost, wrapperPid: $wp, wrapperStart: $ws, startedAt: (now | todate)}' | sb_write "$slot"
 }
 
-# heavy.sh's entry: slot owner class label cmd wrapperPid wrapperStart [waitSec]. Exit 75 past the wait —
-# 90 s by default, inside the Bash tool's 120 s timeout, so the message reaches Claude (--wait N for longer).
+# One barrier event (docs/ops/SESSION-BOARD.md → History): action waited | gaveUp | denied | wouldWait, from the
+# decision that blocked (its cap, holders and prediction are the cause). args: action decision owner class label
+# cmd [waitedSec].
+_heavy_event() {
+  local action="$1" dec="$2" owner="$3" class="$4" label="$5" cmd="$6" waited="${7:-}" start name branch mix lt=false
+  IFS=$'\x1f' read -r start name branch < <(lease_me "$owner")
+  mix=$(tail -n 1 "$BOARD_DIR/history/samples-$(sb_today).jsonl" 2>/dev/null | jq -c '.mix' 2>/dev/null)
+  _heavy_is_load && lt=true
+  lease_event "$(jq -c --arg a "$action" --argjson pid "${owner:-0}" --arg name "$name" --arg branch "$branch" \
+    --arg c "$class" --arg l "$label" --arg cmd "${cmd:0:160}" --arg w "$waited" --argjson mix "${mix:-null}" --argjson lt "$lt" '
+    {lease: "heavy", action: $a, pid: $pid, name: (if $name == "" then null else $name end),
+     branch: (if $branch == "" then null else $branch end), class: $c, label: $l, cmd: $cmd,
+     reason: (if .verdict == "cap-full" then "cap" else "hard" end), cap, holders: (.holders // []),
+     predicted, thresholds, mix: $mix, loadTest: $lt} + (if $w == "" then {} else {waitedSec: ($w | tonumber)} end)' <<<"$dec")"
+}
+
+# heavy.sh's entry: slot owner class label cmd wrapperPid wrapperStart [waitSec]. Waits only with enforce:true,
+# while the budget is past hard or the class's concurrency cap is full; exit 75 past the wait — 90 s by default,
+# inside the Bash tool's 120 s timeout, so the message reaches Claude (--wait N for longer). Every hold is a
+# barrier event (waited / gaveUp; wouldWait when enforce is off).
 lease_heavy_acquire() {
-  local slot="$1" owner="$2" class="$3" label="$4" cmd="$5" wp="$6" ws="$7" wait="${8:-90}" t0 dec rc said=
+  local slot="$1" owner="$2" class="$3" label="$4" cmd="$5" wp="$6" ws="$7" wait="${8:-90}" t0 dec rc v first=
   t0=$(sb_epoch)
   while :; do
     dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws"); rc=$?
-    local v; v=$(jq -r .verdict <<<"$dec" 2>/dev/null)
+    v=$(jq -r .verdict <<<"$dec" 2>/dev/null)
     if [ "$rc" = 0 ]; then
       case "$v" in
         nudge) jq -r '"heavy: over the soft line (predicted \(.predicted.pids) pids / \(.predicted.anonMiB) MiB vs soft \(.thresholds.pidsSoft) / \(.thresholds.anonSoftMiB)) — running"' <<<"$dec" >&2 ;;
         over-hard) jq -r '"heavy: past the measured edge (predicted \(.predicted.pids) pids / \(.predicted.anonMiB) MiB vs hard \(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)) — running (enforce off; logged as wouldWait)"' <<<"$dec" >&2 ;;
+        cap-full) jq -r --arg c "$class" '"heavy: \($c) cap full (\(.cap.running)/\(.cap.max)) — running (enforce off; logged as wouldWait)"' <<<"$dec" >&2 ;;
       esac
-      [ "$v" = over-hard ] && lease_event "$(jq -c --arg c "$class" --arg l "$label" --arg cmd "${cmd:0:160}" \
-        '{lease: "heavy", action: "wouldWait", class: $c, label: $l, cmd: $cmd, predicted, thresholds}' <<<"$dec")"
-      [ -n "$said" ] && lease_event "$(jq -nc --arg c "$class" --arg l "$label" --argjson w "$(( $(sb_epoch) - t0 ))" '{lease: "heavy", action: "waited", class: $c, label: $l, waitedSec: $w}')"
+      case "$v" in over-hard|cap-full) [ -n "$first" ] || _heavy_event wouldWait "$dec" "$owner" "$class" "$label" "$cmd" ;; esac
+      [ -n "$first" ] && _heavy_event waited "$first" "$owner" "$class" "$label" "$cmd" "$(( $(sb_epoch) - t0 ))"
       return 0
     fi
     [ "$rc" = 3 ] || return 0  # lock trouble: fail open, never block work on board plumbing
-    if [ -z "$said" ]; then
-      said=1
-      jq -r '"heavy: past the measured edge (predicted \(.predicted.pids) pids / \(.predicted.anonMiB) MiB vs hard \(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)) — waiting for room (board.sh status shows who)"' <<<"$dec" >&2
+    if [ -z "$first" ]; then
+      first=$dec
+      if [ "$v" = cap-full ]; then
+        echo "heavy: $class cap full ($(jq -r '"\(.cap.running)/\(.cap.max)"' <<<"$dec"): $(_heavy_holders "$class")) — waiting up to ${wait}s" \
+          "for a slot (board.sh status shows who; a slot freed late still runs inside this call — give a full suite a 600 s" \
+          "timeout or run it in the background)" >&2
+      else
+        jq -r '"heavy: past the measured edge (predicted \(.predicted.pids) pids / \(.predicted.anonMiB) MiB vs hard \(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)) — waiting for room (board.sh status shows who)"' <<<"$dec" >&2
+      fi
     fi
     if [ $(( $(sb_epoch) - t0 )) -ge "$wait" ]; then
-      lease_event "$(jq -nc --arg c "$class" --arg l "$label" --argjson w "$wait" '{lease: "heavy", action: "gaveUp", class: $c, label: $l, waitedSec: $w}')"
-      echo "heavy: still past the measured edge after ${wait}s — running: $(_heavy_holders) — tell the user (board.sh status)" \
-        "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
+      _heavy_event gaveUp "$first" "$owner" "$class" "$label" "$cmd" "$wait"
+      if [ "$(jq -r .verdict <<<"$first")" = cap-full ]; then
+        echo "heavy: $class cap still full after ${wait}s — running: $(_heavy_holders "$class") — tell the user (board.sh status)" \
+          "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
+      else
+        echo "heavy: still past the measured edge after ${wait}s — running: $(_heavy_holders) — tell the user (board.sh status)" \
+          "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
+      fi
       return 75
     fi
     sleep 2

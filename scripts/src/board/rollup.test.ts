@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { formatReport, rollup, slope, stat, type JobEvent, type Sample } from './rollup.ts';
+import {
+  barriers,
+  formatBarriers,
+  formatReport,
+  pct,
+  rollup,
+  slope,
+  stat,
+  type BarrierEvent,
+  type JobEvent,
+  type Sample,
+} from './rollup.ts';
 
 const since = new Date('2026-10-13T00:00:00Z');
 
@@ -98,5 +109,93 @@ describe('stat and slope', () => {
     expect(slope([5, 5, 5], [1, 2, 3])).toBeNull();
     expect(slope([1], [1])).toBeNull();
     expect(slope([1, 2, 3], [10, 20, 30])).toBe(10);
+  });
+});
+
+describe('barriers — how limiting the cap is', () => {
+  const now = new Date('2026-10-20T00:00:00Z');
+  const week = new Date('2026-10-13T00:00:00Z');
+  const mix = { working: 3, idle: 2, heavy: 4 };
+  const ev = (
+    action: BarrierEvent['action'],
+    t: string,
+    pid: number,
+    name: string,
+    extra: Partial<BarrierEvent> = {},
+  ): BarrierEvent => ({
+    kind: 'lease',
+    lease: 'heavy',
+    action,
+    t: `2026-10-14T${t}Z`,
+    pid,
+    name,
+    class: 'test',
+    reason: 'cap',
+    mix,
+    holders: [{ name: 'dev-e2e', class: 'test' }],
+    ...extra,
+  });
+  const events = [
+    ev('denied', '10:00:00', 10, 'flux'),
+    ev('waited', '10:01:00', 10, 'flux', { waitedSec: 30 }), // its re-run, 30 s after the deny: one block
+    ev('waited', '11:00:00', 20, 'task-parts', { waitedSec: 12 }),
+    ev('gaveUp', '12:00:00', 20, 'task-parts', { waitedSec: 90 }),
+    ev('denied', '13:00:00', 30, 'ci-bot'), // never re-run through heavy.sh
+    ev('wouldWait', '14:00:00', 30, 'ci-bot'), // enforce off: counterfactual only
+    ev('denied', '15:00:00', 40, 'refund', { reason: 'hard' }),
+    ev('waited', '15:06:00', 40, 'refund', { reason: 'hard', waitedSec: 10 }), // 5 min later: two blocks
+    ev('waited', '16:00:00', 50, 'edge', { loadTest: true, waitedSec: 60 }), // load test: excluded
+    { ...ev('waited', '10:00:00', 60, 'old', { waitedSec: 99 }), t: '2026-10-12T10:00:00Z' }, // before
+    { kind: 'lease', lease: 'dev', action: 'takeover', t: '2026-10-14T09:00:00Z' }, // not a barrier
+  ];
+  const b = barriers(events, week, now);
+
+  it('counts blocks, merging a deny with its re-run within two minutes', () => {
+    expect(b).toMatchObject({
+      days: 7,
+      blocks: 6,
+      merged: 1,
+      waited: 3,
+      gaveUp: 1,
+      denied: 3,
+      wouldWait: 1,
+      perDay: 0.9,
+    });
+  });
+
+  it('sums the waits and their spread (waited + gave up)', () => {
+    expect(b.waitSec).toEqual({ total: 142, p50: 12, p90: 90, max: 90 });
+  });
+
+  it('says what caused them', () => {
+    expect(b.byReason).toEqual([
+      { key: 'cap', n: 5 },
+      { key: 'hard', n: 2 },
+    ]);
+    expect(b.byMix).toEqual([{ key: '3w 2i 4h', n: 7 }]);
+    expect(b.byHolder).toEqual([{ key: 'dev-e2e', n: 7 }]);
+    expect(b.byBlocked.map((c) => c.key)).toEqual(['flux', 'refund', 'task-parts', 'ci-bot']);
+  });
+
+  it('formats one line for board.sh status, and says none when nothing was held', () => {
+    const line = formatBarriers(b);
+    expect(line).toContain('6 blocks (0.9/day)');
+    expect(line).toContain('3 denied (1 re-run, counted once)');
+    expect(line).toContain('waited 142 s total, p50 12 s, p90 90 s');
+    expect(line).toContain('would have held 1× (enforce off)');
+    expect(formatBarriers(barriers([], week, now))).toBe('barriers (7 d): none');
+  });
+
+  it('is part of the report', () => {
+    const r = rollup([], events as unknown as JobEvent[], week, now);
+    expect(r.barriers.blocks).toBe(6);
+    expect(formatReport(r)).toContain('Barriers (test cap / hard-line holds');
+    expect(formatReport(r)).toContain('held by: dev-e2e ×7');
+  });
+
+  it('pct is nearest-rank', () => {
+    expect(pct([], 0.9)).toBe(0);
+    expect(pct([10, 12, 30, 90], 0.5)).toBe(12);
+    expect(pct([10, 12, 30, 90], 0.9)).toBe(90);
   });
 });

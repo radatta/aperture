@@ -12,7 +12,7 @@
 {"expect":"allow","why":"not heavy","cmd":"git status"}
 {"expect":"allow","why":"not heavy","cmd":"ls scripts/board"}
 {"expect":"nudge","why":"enforce on but load below soft — offers, never blocks","cmd":"pnpm test","limits":{"enforce":true}}
-{"expect":"nudge","why":"past hard but enforce off (the shipped default) — runs, with the offer","cmd":"pnpm test","cgroup":{"pids.current":"3700\n"}}
+{"expect":"nudge","why":"past hard but enforce off — runs, with the offer","cmd":"pnpm test","limits":{"enforce":false},"cgroup":{"pids.current":"3700\n"}}
 {"expect":"deny","why":"enforce on and pids past the measured hard line — held at the edge","cmd":"pnpm test","limits":{"enforce":true},"cgroup":{"pids.current":"3700\n"}}
 {"expect":"deny","why":"enforce on and anon past the measured hard line","cmd":"pnpm --filter @aperture/app test","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 15032385536\nfile 0\n"}}
 {"expect":"nudge","why":"enforce on, over soft but under hard — still only an offer","cmd":"pnpm typecheck","limits":{"enforce":true},"cgroup":{"memory.stat":"anon 12884901888\nfile 0\n"}}
@@ -21,3 +21,11 @@
 {"expect":"nudge","why":"already offered, but another session's test run is going — the offer repeats","cmd":"pnpm test","nudged":["test"],"running":1,"runningClass":"test"}
 {"expect":"allow","why":"outside the container (no cgroup memory.stat) — silent pass-through","cmd":"pnpm test","cgroup":{"memory.stat":null}}
 {"expect":"nudge","why":"unreadable limits.json fails open to the offer — never a deny, even past hard","cmd":"pnpm test","limitsRaw":"{","cgroup":{"pids.current":"3700\n"}}
+{"expect":"deny","why":"enforce on and 4 test suites already running — the cap holds a raw 5th","cmd":"pnpm test","running":4,"runningClass":"test","reason":"cap is full"}
+{"expect":"nudge","why":"3 test suites running — below the cap, only the offer","cmd":"pnpm test","running":3,"runningClass":"test"}
+{"expect":"nudge","why":"the cap is per class — typecheck is judged by the budget only","cmd":"pnpm typecheck","running":4,"runningClass":"test"}
+{"expect":"allow","why":"a single-file run is never capped (and gets no offer)","cmd":"pnpm --filter @aperture/app exec vitest run src/data/seed.test.ts","running":4,"runningClass":"test"}
+{"expect":"nudge","why":"cap full but enforce off — nudge-only","cmd":"pnpm test","running":4,"runningClass":"test","limits":{"enforce":false}}
+{"expect":"nudge","why":"cap full but limits.json unreadable — fails open to the offer","cmd":"pnpm test","running":4,"runningClass":"test","limitsRaw":"{"}
+{"expect":"deny","why":"the cap value comes from limits.json","cmd":"pnpm test","running":2,"runningClass":"test","limits":{"concurrency":{"test":2}},"reason":"cap is full"}
+{"expect":"allow","why":"already wrapped — heavy.sh does the waiting","cmd":"scripts/board/heavy.sh -- pnpm test","running":4,"runningClass":"test"}

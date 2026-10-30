@@ -1,6 +1,6 @@
 // Lease decisions for the session board (docs/ops/SESSION-BOARD.md → Leases). Pure: board.sh / heavy.sh
 // gather the state under the board lock, call `cli.ts decide-*`, and act on the answer.
-import { classCost, thresholds, type Limits, type LiveLimits } from './limits.ts';
+import { classCost, concurrencyCap, thresholds, type Limits, type LiveLimits } from './limits.ts';
 
 // --- dev: one branch on the dev stage at a time (advisory; ci-bot's refs/locks/dev is GitHub's truth) ---
 
@@ -91,17 +91,28 @@ export function leaseFor(
 
 // --- heavy: a counting budget against the measured edge ---
 
-export type HeavySlot = { pid: number; class: string; startedAt: string; wrapperPid: number };
+export type HeavySlot = {
+  pid: number;
+  class: string;
+  startedAt: string;
+  wrapperPid: number;
+  label?: string;
+};
 
-export type HeavyRequest = { class: string };
+// loadTest: matrix / edge runs probe the edge on purpose, so the cap never holds them.
+export type HeavyRequest = { class: string; loadTest?: boolean };
+
+export type HeavyCap = { max: number; running: number; full: boolean };
 
 export type Live = { pids: number; anonBytes: number };
 
 export type HeavyDecision = {
-  // grant: under soft. nudge: over soft, at or under hard — runs, says so. over-hard: past the measured edge.
-  verdict: 'grant' | 'nudge' | 'over-hard';
-  // wait only when enforce is on and the prediction is past hard (the user's rule: bite at the edge only).
+  // grant: under soft. nudge: over soft, at or under hard — runs, says so. over-hard: past the measured
+  // edge. cap-full: the class's concurrency cap is reached — wins over over-hard (it names the holders).
+  verdict: 'grant' | 'nudge' | 'over-hard' | 'cap-full';
+  // wait only when enforce is on and the prediction is past hard or the cap is full (bite at the edge only).
   wait: boolean;
+  cap: HeavyCap | null; // null when limits.json caps no jobs of this class
   predicted: { pids: number; anonMiB: number };
   thresholds: { pidsSoft: number; pidsHard: number; anonSoftMiB: number; anonHardMiB: number };
 };
@@ -133,9 +144,15 @@ export function decideHeavy(
   anon += c.anonMiB * MiB;
   const overHard = pids > th.pidsHard || anon > th.anonHard;
   const overSoft = pids > th.pidsSoft || anon > th.anonSoft;
+  // Every running slot of the class counts, however young: a 5 s-old suite is about to take 8 cores.
+  const max = concurrencyCap(limits, req.class);
+  const running = slots.filter((s) => s.class === req.class).length;
+  const cap = max === null ? null : { max, running, full: running >= max };
+  const capFull = !!cap?.full && !req.loadTest;
   return {
-    verdict: overHard ? 'over-hard' : overSoft ? 'nudge' : 'grant',
-    wait: overHard && limits.enforce,
+    verdict: capFull ? 'cap-full' : overHard ? 'over-hard' : overSoft ? 'nudge' : 'grant',
+    wait: (capFull || overHard) && limits.enforce,
+    cap,
     predicted: { pids, anonMiB: Math.round(anon / MiB) },
     thresholds: {
       pidsSoft: th.pidsSoft,

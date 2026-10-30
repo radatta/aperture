@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run one heavy command budgeted + measured (docs/ops/SESSION-BOARD.md → Heavy wrapper):
 #   scripts/board/heavy.sh [--wait SEC] -- <cmd…>
-# Takes a heavy slot (waits only when limits.json enforce:true and the budget is over hard), samples the
+# Takes a heavy slot (waits only when limits.json enforce:true and the budget is over hard or the class's
+# concurrency cap is full — load tests are never capped), samples the
 # container + the command's process subtree at 1 Hz, and appends the peaks to board/history/events-*.jsonl.
 # stdout/stderr pass straight through; the exit code is the command's (128+sig if signalled).
 # Env: HEAVY_LABEL (label; never argv), HEAVY_CLASS (override), HEAVY_DURATION (stop after N s, e.g. dev),

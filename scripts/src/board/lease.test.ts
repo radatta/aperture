@@ -218,4 +218,56 @@ describe('decideHeavy', () => {
       anonMiB: 2048,
     });
   });
+
+  describe('the test cap (concurrency.test in limits.json)', () => {
+    const tests = (n: number, ageSec = 60) =>
+      Array.from({ length: n }, (_, i) => slot('test', ageSec, i + 1));
+    const max = limits().concurrency!.test!;
+
+    it('changes nothing below the cap', () => {
+      const d = decideHeavy(limits(true), ll, idle, tests(max - 1), { class: 'test' }, now);
+      expect(d).toMatchObject({ verdict: 'grant', wait: false });
+      expect(d.cap).toEqual({ max, running: max - 1, full: false });
+    });
+
+    it('holds the next test job at the cap only when enforcing', () => {
+      const on = decideHeavy(limits(true), ll, idle, tests(max), { class: 'test' }, now);
+      expect(on).toMatchObject({
+        verdict: 'cap-full',
+        wait: true,
+        cap: { max, running: max, full: true },
+      });
+      const off = decideHeavy(limits(false), ll, idle, tests(max), { class: 'test' }, now);
+      expect(off).toMatchObject({ verdict: 'cap-full', wait: false });
+    });
+
+    it('counts slots however young — a just-started suite is about to take 8 cores', () => {
+      const d = decideHeavy(limits(true), ll, idle, tests(max, 1), { class: 'test' }, now);
+      expect(d.verdict).toBe('cap-full');
+    });
+
+    it('is per class: other classes are judged by the budget only', () => {
+      const d = decideHeavy(limits(true), ll, idle, tests(max), { class: 'typecheck' }, now);
+      expect(d).toMatchObject({ verdict: 'grant', wait: false, cap: null });
+    });
+
+    it('never holds a load test — they probe the edge on purpose', () => {
+      const req = { class: 'test', loadTest: true };
+      const d = decideHeavy(limits(true), ll, idle, tests(max), req, now);
+      expect(d.verdict).not.toBe('cap-full');
+      expect(d.wait).toBe(false);
+    });
+
+    it('wins over the hard line when both apply', () => {
+      const past = { pids: 4000, anonBytes: 2 * GiB };
+      const d = decideHeavy(limits(true), ll, past, tests(max), { class: 'test' }, now);
+      expect(d).toMatchObject({ verdict: 'cap-full', wait: true });
+    });
+
+    it('reads the cap from limits.json', () => {
+      const two = { ...limits(true), concurrency: { test: 2 } };
+      expect(decideHeavy(two, ll, idle, tests(2), { class: 'test' }, now).verdict).toBe('cap-full');
+      expect(decideHeavy(two, ll, idle, tests(1), { class: 'test' }, now).verdict).toBe('grant');
+    });
+  });
 });

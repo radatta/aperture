@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Session board CLI — who's doing what in this shared container (docs/ops/SESSION-BOARD.md).
-#   board.sh status | json
+#   board.sh status | json   (status ends with the test cap's barrier rollup — cli.ts barriers)
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
 #   board.sh sampler start|restart|stop|status
 #   board.sh gc
@@ -98,7 +98,7 @@ sampler_running() {
 }
 
 board_json() {
-  local sample leases overlap
+  local sample leases overlap bar
   if [ -r "$CG/memory.stat" ]; then
     sample=$(bash "$SB_SCRIPTS/sampler.sh" --print)
   else  # not in the container (the Mac): the sampler's latest tick, read-only
@@ -108,13 +108,15 @@ board_json() {
   fi
   leases=$(jq -s '.' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null) || leases='[]'
   [ -n "$leases" ] || leases='[]'
-  jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" \
+  bar=$(node "$SB_REPO/scripts/src/board/cli.ts" barriers "$BOARD_DIR/history" 7 2>/dev/null)  # none on a Mac without node
+  jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" --arg bar "$bar" --arg cap "$(sb_limit '.concurrency.test')" \
     --slurpfile dev <( [ -f "$BOARD_DIR/leases/dev.json" ] && cat "$BOARD_DIR/leases/dev.json" ) \
     --slurpfile ov <( [ -f "$BOARD_DIR/overlap.json" ] && cat "$BOARD_DIR/overlap.json" ) \
     --slurpfile reg <( cat "$BOARD_DIR"/sessions/*.json 2>/dev/null ) \
     --arg sampler "$(sampler_running && echo running || echo stopped)" \
     --arg thr "$(sb_thresholds 2>/dev/null)" '
-    {sample: $s, sampler: $sampler, thresholds: ($thr | split(" ") | map(select(. != "") | split("=") | {(.[0]): .[1]}) | add),
+    {sample: $s, sampler: $sampler, barriers: (if $bar == "" then null else $bar end),
+     testCap: (if $cap == "" then null else ($cap | tonumber) end), thresholds: ($thr | split(" ") | map(select(. != "") | split("=") | {(.[0]): .[1]}) | add),
      dev: ($dev[0] // null), heavy: $heavy, overlap: ($ov[0] // null),
      registered: ($reg | map({key: (.pid | tostring), value: .}) | from_entries)}'
 }
@@ -135,7 +137,8 @@ cmd_status() {
       (($r[.pid | tostring].note // "") as $n | if $n != "" then "  — " + $n else "" end)),
     (if .dev == null then "dev lease: free"
      else "dev lease: \(.dev.holderName) (\(.dev.branch)) since \(.dev.acquiredAt | hm), expires \(.dev.expiresAt | hm)\(if .dev.holderGone then " — holder gone" else "" end)" end),
-    "heavy: \(.heavy | length) slot(s)\(if (.heavy | length) > 0 then " — " + (.heavy | map("\(.name // .pid): \(.label // .class)") | join(", ")) else "" end)",
+    "heavy: \(.heavy | length) slot(s)\(if .testCap then " · test \([.heavy[] | select(.class == "test")] | length)/\(.testCap)" else "" end)\(if (.heavy | length) > 0 then " — " + (.heavy | map("\(.name // .pid): \(.label // .class)") | join(", ")) else "" end)",
+    (.barriers // empty),
     (if .overlap and ((.overlap.pairs // []) | length) > 0
      then "overlaps:", (.overlap.pairs[] | "  \(.a) ↔ \(.b): \(.files | join(", "))") else empty end),
     "sampler: \(.sampler)\(if .sampler != "running" then " — board.sh sampler start" else "" end)",

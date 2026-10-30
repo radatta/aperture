@@ -4,6 +4,7 @@
 //   node scripts/src/board/cli.ts staleness <limits.json> <historyDir>                    → warning lines
 //   node scripts/src/board/cli.ts overlap <repo> <boardDir>                              → writes <boardDir>/overlap.json
 //   node scripts/src/board/cli.ts report <historyDir> [days] [--json]                     → usage by mix + job peaks
+//   node scripts/src/board/cli.ts barriers <historyDir> [days] [--json]                   → how limiting the cap is
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
@@ -12,7 +13,14 @@ import { decideDev, decideHeavy, leaseFor, type Alive } from './lease.ts';
 import { parseLimits, staleness } from './limits.ts';
 import { branchFiles, overlaps, type Tree } from './overlap.ts';
 import { parseLimit, parseStat } from './proc.ts';
-import { formatReport, rollup, type JobEvent, type Sample } from './rollup.ts';
+import {
+  barriers,
+  formatBarriers,
+  formatReport,
+  rollup,
+  type JobEvent,
+  type Sample,
+} from './rollup.ts';
 
 const cgroup = process.env.APERTURE_CGROUP_DIR ?? '/sys/fs/cgroup';
 
@@ -151,12 +159,20 @@ export function main(argv: string[], stdin: () => string): string {
         readJsonl(historyDir, 'samples-') as Sample[],
         readJsonl(historyDir, 'events-') as JobEvent[],
         since,
+        now,
       );
       return args.includes('--json') ? JSON.stringify(r) : formatReport(r);
     }
+    case 'barriers': {
+      const [historyDir, days = '7'] = args;
+      if (!historyDir) throw new Error('usage: barriers <historyDir> [days] [--json]');
+      const since = new Date(now.getTime() - Number(days) * 86400_000);
+      const b = barriers(readJsonl(historyDir, 'events-'), since, now);
+      return args.includes('--json') ? JSON.stringify(b) : formatBarriers(b);
+    }
     default:
       throw new Error(
-        `usage: cli.ts decide-dev | decide-heavy | staleness | overlap | report (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-dev | decide-heavy | staleness | overlap | report | barriers (got ${cmd ?? 'nothing'})`,
       );
   }
 }

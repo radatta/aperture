@@ -3,7 +3,8 @@
 #   - touches sessions/<pid>.tool (last-tool heartbeat);
 #   - a heavy command not already under heavy.sh → ALLOW with a one-line offer to run it through
 #     scripts/board/heavy.sh (once per class per session, or whenever another heavy job is running);
-#   - DENY only when limits.json has enforce:true AND the predicted load is past the measured hard line.
+#   - DENY only when limits.json has enforce:true AND the predicted load is past the measured hard line or
+#     the class's concurrency cap is full (a `denied` barrier event — docs/ops/SESSION-BOARD.md → History).
 # Never a reason to skip tests or the UI pass: below the measured edge this hook only ever offers.
 # Matching is `case` on the lowercased command (no grep), like coi-reverse-shell-guard.sh. Fail-open.
 INPUT=$(cat)
@@ -36,14 +37,21 @@ NOW=$(cat "$BOARD_DIR/status.line" 2>/dev/null)
 # Running heavy jobs, not counting dev servers — a long-lived one would make every command an offer.
 OTHERS=$(grep -L '"class":"dev"' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | wc -l)
 
-# The measured edge — only when enforcing, and only worth a node start once live load is past soft.
-if [ "$(sb_limit '.enforce')" = true ]; then
+# The measured edge and the class's cap — only when enforcing, and only worth a node start once live load is
+# past soft or the class's slots reach its cap (a grep over the slot files; _heavy_try's gc drops dead ones
+# before the real count).
+read -r ENF CAP < <(jq -r --arg c "$CLASS" '"\(.enforce) \(.concurrency[$c] // "")"' "$LIMITS_JSON" 2>/dev/null)
+if [ "$ENF" = true ]; then
   eval "$(sb_thresholds)"
   p=$(cg_pids); a=$(cg_anon)
-  if [ "${p:-0}" -gt "$PIDS_SOFT" ] || [ "${a:-0}" -gt "$ANON_SOFT" ]; then
+  same=$(grep -l "\"class\":\"$CLASS\"" "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | wc -l)
+  if [ "${p:-0}" -gt "$PIDS_SOFT" ] || [ "${a:-0}" -gt "$ANON_SOFT" ] || { [ -n "$CAP" ] && [ "$same" -ge "$CAP" ]; }; then
     . "$B/lease.sh"
     dec=$(sb_locked _heavy_try "" 0 "$CLASS" guard 0 0 2>/dev/null)  # "" = decide only, no slot
     if [ "$(jq -r .wait <<<"$dec" 2>/dev/null)" = true ]; then
+      _heavy_event denied "$dec" "${PID:-0}" "$CLASS" guard "$CMD" 2>/dev/null
+      [ "$(jq -r .verdict <<<"$dec")" = cap-full ] &&
+        emit deny "Held: the $CLASS cap is full ($(jq -r '"\(.cap.running)/\(.cap.max)"' <<<"$dec") running: $(_heavy_holders "$CLASS")). Run it as \`scripts/board/heavy.sh -- <cmd>\` — it waits up to 90 s for a slot, then runs or says who holds them (give a full suite a 600 s timeout or run it in the background); single-file runs (\`vitest run <file>\`) are never capped; \`scripts/board/board.sh status\` shows who is running what."
       emit deny "$(jq -r --arg c "$CLASS" --arg now "$NOW" '"Held at the measured edge: this \($c) job would take the container to \(.predicted.pids) pids / \(.predicted.anonMiB) MiB, past the hard line (\(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)). Board: \($now). Run it as `scripts/board/heavy.sh -- <cmd>` — it waits up to 90 s for room, then runs or says who holds it; `scripts/board/board.sh status` shows who is running what."' <<<"$dec")"
     fi
   fi

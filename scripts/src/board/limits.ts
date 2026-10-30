@@ -17,6 +17,9 @@ export type Limits = {
     currentGuardMiB: number;
   };
   tuning: { test: { workspaceConcurrency?: number; maxWorkers?: number } | null };
+  // At most this many heavy jobs of a class at once (policy, not a measured cost — the quiet window
+  // rewrites `classes`, never this). `test`: 4, from the 2026-10-13 edge (a 6th suite timed out).
+  concurrency?: Record<string, number>;
   classes: Record<string, ClassCost>;
 };
 
@@ -35,6 +38,9 @@ export function parseLimits(raw: unknown): Limits {
   if (c.pidsSoftFrac > c.pidsHardFrac || c.anonSoftFrac > c.anonHardFrac)
     throw new Error('limits.json: a soft fraction is above its hard fraction');
   if (typeof l.enforce !== 'boolean') throw new Error('limits.json: enforce must be a boolean');
+  for (const [cls, n] of Object.entries(l.concurrency ?? {}))
+    if (!Number.isInteger(n) || n < 1)
+      throw new Error(`limits.json: concurrency.${cls} must be a positive integer`);
   return l;
 }
 
@@ -47,6 +53,9 @@ export function thresholds(l: Limits, live: LiveLimits): Thresholds {
     anonHard: Math.floor(c.anonHardFrac * live.highBytes),
   };
 }
+
+export const concurrencyCap = (l: Limits, cls: string): number | null =>
+  l.concurrency?.[cls] ?? null;
 
 export function classCost(l: Limits, cls: string): ClassCost {
   return l.classes[cls] ?? { pids: 0, anonMiB: 0, p95Sec: 0 };

@@ -15,9 +15,10 @@ const limits = (patch: Partial<Limits> = {}): Limits => ({
 });
 
 describe('limits.json', () => {
-  it('ships valid, nudge-only, and measured at the live limits', () => {
+  it('ships valid, enforcing, with a test cap, measured at the live limits', () => {
     const l = parseLimits(shipped);
-    expect(l.enforce).toBe(false);
+    expect(l.enforce).toBe(true);
+    expect(l.concurrency).toEqual({ test: 4 });
     expect(l.measuredLimits).toEqual({ pidsMax: 4096, highMiB: 18432 });
     expect(Object.keys(l.classes)).toEqual(
       expect.arrayContaining(['test', 'ui', 'typecheck', 'lint', 'dev', 'build']),
@@ -31,6 +32,8 @@ describe('limits.json', () => {
     expect(bad({ anonHardFrac: 1.5 })).toThrow(/fractions/);
     expect(bad({ pidsSoftFrac: 0.95, pidsHardFrac: 0.9 })).toThrow(/soft fraction/);
     expect(() => parseLimits({ ...shipped, enforce: 'yes' })).toThrow(/enforce/);
+    expect(() => parseLimits({ ...shipped, concurrency: { test: 0 } })).toThrow(/concurrency/);
+    expect(() => parseLimits({ ...shipped, concurrency: { test: 2.5 } })).toThrow(/concurrency/);
   });
 });
 

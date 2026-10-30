@@ -22,11 +22,16 @@ export type JobEvent = {
 
 export type Stat = { median: number; p95: number; max: number };
 
+// Nearest-rank percentile of xs (0 for none).
+export function pct(xs: number[], q: number): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))]!;
+}
+
 export function stat(xs: number[]): Stat {
   if (xs.length === 0) return { median: 0, p95: 0, max: 0 };
-  const s = [...xs].sort((a, b) => a - b);
-  const at = (q: number) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))]!;
-  return { median: at(0.5), p95: at(0.95), max: s[s.length - 1]! };
+  return { median: pct(xs, 0.5), p95: pct(xs, 0.95), max: Math.max(...xs) };
 }
 
 export type MixRow = { mix: string; ticks: number; anonMiB: Stat; pids: Stat; cores: Stat };
@@ -48,11 +53,136 @@ export type Report = {
   idleSession: { rssMiB: Stat; thr: Stat; samples: number };
   perSessionAnonMiB: number | null; // regression slope of anon on session count, heavy-free ticks
   jobs: JobRow[];
+  barriers: Barriers;
+};
+
+// A hold by the test cap or the hard line (lease.sh `_heavy_event`, the guard's `denied`).
+export type BarrierEvent = {
+  kind: 'lease';
+  lease: 'heavy';
+  t: string;
+  action: 'waited' | 'gaveUp' | 'denied' | 'wouldWait';
+  pid?: number;
+  name?: string | null;
+  class: string;
+  reason?: 'cap' | 'hard';
+  waitedSec?: number;
+  holders?: { name?: string | null; label?: string; class: string }[];
+  mix?: Sample['mix'] | null;
+  loadTest?: boolean;
+};
+
+export type Count = { key: string; n: number };
+
+// How limiting the cap is. blocks = waited + gaveUp + denied, except that a guard deny followed within
+// RERUN_SEC by the same session's held heavy.sh re-run of the same class is ONE block (the user's rule).
+export type Barriers = {
+  days: number;
+  blocks: number;
+  perDay: number;
+  waited: number;
+  gaveUp: number;
+  denied: number;
+  merged: number; // deny + re-run pairs counted once
+  wouldWait: number; // enforce off: what the cap / hard line would have held
+  waitSec: { total: number; p50: number; p90: number; max: number };
+  byReason: Count[];
+  byClass: Count[];
+  byMix: Count[];
+  byHolder: Count[];
+  byBlocked: Count[];
 };
 
 const mixKey = (m: Sample['mix']) => `${m.working}w ${m.idle}i ${m.heavy}h`;
 
-export function rollup(samples: Sample[], events: JobEvent[], since: Date): Report {
+export const RERUN_SEC = 120;
+
+const counts = (keys: string[]): Count[] => {
+  const m = new Map<string, number>();
+  for (const k of keys) m.set(k, (m.get(k) ?? 0) + 1);
+  return [...m.entries()]
+    .map(([key, n]) => ({ key, n }))
+    .sort((a, b) => b.n - a.n || a.key.localeCompare(b.key));
+};
+
+export function barriers(events: unknown[], since: Date, now: Date): Barriers {
+  const all = (events as BarrierEvent[])
+    .filter(
+      (e) =>
+        e?.kind === 'lease' &&
+        e.lease === 'heavy' &&
+        !e.loadTest &&
+        Date.parse(e.t) >= since.getTime(),
+    )
+    .sort((a, b) => a.t.localeCompare(b.t));
+  const of = (a: BarrierEvent['action']) => all.filter((e) => e.action === a);
+  const who = (e: BarrierEvent) => String(e.pid ?? e.name ?? '?');
+  // A held run's event is written when the wait ends; it started waitedSec earlier.
+  const began = (e: BarrierEvent) => Date.parse(e.t) - (e.waitedSec ?? 0) * 1000;
+  const denies = of('denied');
+  const used = new Set<BarrierEvent>();
+  let merged = 0;
+  for (const h of all.filter((e) => e.action === 'waited' || e.action === 'gaveUp')) {
+    const d = denies.find(
+      (x) =>
+        !used.has(x) &&
+        who(x) === who(h) &&
+        x.class === h.class &&
+        began(h) - Date.parse(x.t) >= 0 &&
+        began(h) - Date.parse(x.t) <= RERUN_SEC * 1000,
+    );
+    if (!d) continue;
+    used.add(d);
+    merged++;
+  }
+  const blocking = all.filter((e) => e.action !== 'wouldWait');
+  const blocks = blocking.length - merged;
+  const days = Math.max(1, Math.round((now.getTime() - since.getTime()) / 86400_000));
+  const waits = all
+    .filter((e) => e.action === 'waited' || e.action === 'gaveUp')
+    .map((e) => e.waitedSec ?? 0);
+  return {
+    days,
+    blocks,
+    perDay: Math.round((blocks / days) * 10) / 10,
+    waited: of('waited').length,
+    gaveUp: of('gaveUp').length,
+    denied: denies.length,
+    merged,
+    wouldWait: of('wouldWait').length,
+    waitSec: {
+      total: waits.reduce((a, b) => a + b, 0),
+      p50: pct(waits, 0.5),
+      p90: pct(waits, 0.9),
+      max: waits.length ? Math.max(...waits) : 0,
+    },
+    byReason: counts(blocking.map((e) => e.reason ?? 'hard')),
+    byClass: counts(blocking.map((e) => e.class)),
+    byMix: counts(blocking.flatMap((e) => (e.mix ? [mixKey(e.mix)] : []))),
+    byHolder: counts(
+      blocking.flatMap((e) => (e.holders ?? []).map((h) => h.name ?? h.label ?? '?')),
+    ),
+    byBlocked: counts(blocking.map((e) => e.name ?? who(e))),
+  };
+}
+
+export function formatBarriers(b: Barriers): string {
+  const would = b.wouldWait ? ` · would have held ${b.wouldWait}× (enforce off)` : '';
+  if (b.blocks === 0) return `barriers (${b.days} d): none${would}`;
+  const reasons = b.byReason.map((r) => `${r.key} ${r.n}`).join(' / ');
+  return (
+    `barriers (${b.days} d): ${b.blocks} block${b.blocks === 1 ? '' : 's'} (${b.perDay}/day) · ${b.waited} waited · ` +
+    `${b.gaveUp} gave up · ${b.denied} denied${b.merged ? ` (${b.merged} re-run, counted once)` : ''} · ` +
+    `waited ${b.waitSec.total} s total, p50 ${b.waitSec.p50} s, p90 ${b.waitSec.p90} s · ${reasons}${would}`
+  );
+}
+
+export function rollup(
+  samples: Sample[],
+  events: JobEvent[],
+  since: Date,
+  now = new Date(),
+): Report {
   const s = samples
     .filter((x) => Date.parse(x.t) >= since.getTime())
     .sort((a, b) => a.t.localeCompare(b.t));
@@ -107,6 +237,7 @@ export function rollup(samples: Sample[], events: JobEvent[], since: Date): Repo
       quiet.map((x) => x.cg.anonMiB),
     ),
     jobs,
+    barriers: barriers(events, since, now),
   };
 }
 
@@ -147,6 +278,16 @@ export function formatReport(r: Report): string {
       (j) =>
         `  ${j.class.padEnd(10)} ${String(j.runs).padStart(4)} runs · Δanon ${fmt(j.dAnonMiB, ' MiB')} · Δpids ${fmt(j.dPids)} · wall ${fmt(j.wallSec, 's')}${j.notClean ? ` · ${j.notClean} not clean` : ''}`,
     ),
+    '',
+    'Barriers (test cap / hard-line holds; blocks = waited + gave up + denied, a deny and its re-run once):',
+    `  ${formatBarriers(r.barriers)}`,
+    ...(r.barriers.blocks
+      ? [
+          `  by mix: ${r.barriers.byMix.map((c) => `${c.key} ×${c.n}`).join(', ') || '—'}`,
+          `  held by: ${r.barriers.byHolder.map((c) => `${c.key} ×${c.n}`).join(', ') || '—'}`,
+          `  blocked: ${r.barriers.byBlocked.map((c) => `${c.key} ×${c.n}`).join(', ') || '—'}`,
+        ]
+      : []),
   ];
   return out.join('\n');
 }
