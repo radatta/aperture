@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../test/utils';
+import { createStubClient } from '../data/stubClient';
+import { setFluxEngineFactory } from '../modules/flux/engine/engine';
+import { createFakeEngine } from '../modules/flux/engine/fakeEngine';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -56,5 +59,38 @@ describe('dock: on-screen keyboard', () => {
       if (originalClient) Object.defineProperty(root, 'clientHeight', originalClient);
       else delete (root as { clientHeight?: unknown }).clientHeight;
     }
+  });
+});
+
+describe('dock: a route that hides capture', () => {
+  it('keeps a running timer on the Flux stage while the capture bar goes', async () => {
+    setFluxEngineFactory(() => createFakeEngine().engine);
+    const api = createStubClient({ seed: false, storageKey: `shell-${Math.random()}` });
+    await api.updateSettings({ fluxDisclaimerAckAt: 1 });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    await user.click(await screen.findByTitle('Start a 25-minute focus block'));
+    await user.click(screen.getByRole('link', { name: 'Flux' }));
+    await user.click(await screen.findByText('Chin Tuck (Cervical Retraction)'));
+    await screen.findByRole('button', { name: 'Start camera' });
+    expect(screen.queryByRole('textbox', { name: 'Capture log' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+  });
+
+  it('keeps a half-typed capture across the hidden stretch, and "/" leaves the hidden field alone', async () => {
+    setFluxEngineFactory(() => createFakeEngine().engine);
+    const api = createStubClient({ seed: false, storageKey: `shell-${Math.random()}` });
+    await api.updateSettings({ fluxDisclaimerAckAt: 1 });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/flux' });
+    await user.type(await screen.findByRole('textbox', { name: 'Capture log' }), 'half a thought');
+    await user.click(screen.getByText('Chin Tuck (Cervical Retraction)'));
+    await screen.findByRole('button', { name: 'Start camera' });
+    (document.activeElement as HTMLElement | null)?.blur();
+    await user.keyboard('/');
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Capture log'));
+    await user.click(screen.getByRole('link', { name: /All exercises/ }));
+    const field = await screen.findByRole('textbox', { name: 'Capture log' });
+    expect((field as HTMLTextAreaElement).value).toBe('half a thought');
   });
 });

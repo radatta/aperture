@@ -11,6 +11,10 @@ import { RollsPage } from './pages/Rolls';
 import { InboxPage } from './pages/Inbox';
 import { SettingsPage } from './pages/Settings';
 import { FinancesAllTab, FinancesPage, FinancesRulesTab, FinancesSortTab } from './pages/Finances';
+import { FluxPage } from './pages/Flux';
+import { FluxExerciseView } from './pages/Flux/ExerciseView';
+import { FluxLibraryTab } from './pages/Flux/LibraryTab';
+import type { RouteHandle } from './lib/routeHandle';
 
 // Route table, shared by the browser router (App) and the memory router used in tests. AppShell is
 // the layout; `/` is the glanceable home, the rest are deep views. Pomodoro + capture are not routes.
@@ -32,6 +36,19 @@ export const routes: RouteObject[] = [
       },
       { path: 'habits', element: <HabitsPage /> },
       { path: 'rolls', element: <RollsPage /> },
+      {
+        path: 'flux',
+        element: <FluxPage />,
+        children: [
+          { index: true, element: <FluxLibraryTab /> },
+          {
+            path: ':exerciseId',
+            element: <FluxExerciseView />,
+            // Nothing to capture mid-set, and the bar ate the phone's bottom strip (flux D30).
+            handle: { hideCapture: true } satisfies RouteHandle,
+          },
+        ],
+      },
       {
         path: 'finances',
         element: <FinancesPage />,

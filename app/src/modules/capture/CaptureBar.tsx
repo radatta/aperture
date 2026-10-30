@@ -71,7 +71,15 @@ type Blocked = 'invalid' | 'categories' | 'categories-failed';
 // phone a segmented [Log|Task|Idea] plus a single-line input left ~22 characters of a sentence
 // visible, so you could never read back the thought you were mid-way through writing.
 // `trailing` sits at the right of the mode row — AppShell docks the idle Focus control there.
-export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
+// `hidden` (a route that drops the bar, lib/routeHandle.ts) hides it without unmounting, so a draft —
+// or text a failed save restores — is still there when you come back.
+export function CaptureBar({
+  trailing,
+  hidden = false,
+}: {
+  trailing?: ReactNode;
+  hidden?: boolean;
+}) {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
   const [mode, setMode] = useState<CaptureMode>('log');
@@ -216,6 +224,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   // "/" focuses capture from anywhere, unless you're already typing or a page claimed it first (the
   // Finances All tab's search, in the capture phase).
   useEffect(() => {
+    if (hidden) return; // don't swallow "/" to focus a field you can't see
     function onKey(e: globalThis.KeyboardEvent) {
       if (e.key !== '/' || e.defaultPrevented) return;
       if (isTypingTarget(document.activeElement)) return;
@@ -224,7 +233,7 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [hidden]);
 
   // The receipt is a transient acknowledgement, not state anyone can act on — clear it on a timer,
   // and on unmount so a route change mid-fade can't set state on a dead component. A failure notice
@@ -413,7 +422,10 @@ export function CaptureBar({ trailing }: { trailing?: ReactNode }) {
   }
 
   return (
-    <div className="pointer-events-auto rounded-2xl border border-line bg-panel-2 p-2 shadow-[var(--shadow-dock)]">
+    <div
+      hidden={hidden}
+      className="pointer-events-auto rounded-2xl border border-line bg-panel-2 p-2 shadow-[var(--shadow-dock)]"
+    >
       <div className="flex items-center justify-between gap-2 pb-1.5">
         <div className="flex shrink-0 items-center gap-1.5">
           <ModeToggle<CaptureMode>

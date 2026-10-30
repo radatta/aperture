@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Outlet } from 'react-router';
+import { Outlet, useMatches } from 'react-router';
 import { AppHeader } from './AppHeader';
 import { AppNav } from './AppNav';
 import { CaptureBar } from '../modules/capture/CaptureBar';
@@ -7,6 +7,7 @@ import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
 import { useKeyboardInset } from '../lib/useKeyboardInset';
 import { useCalendarPull } from '../data/hooks/useCalendar';
 import { cx } from '../lib/cx';
+import { hidesCapture } from '../lib/routeHandle';
 
 // The layout every route renders inside: header + deep-view nav + the routed page, above a single
 // fixed bottom dock.
@@ -20,6 +21,10 @@ export function AppShell() {
   const [dockHeight, setDockHeight] = useState(0);
   // Lifts the dock above the iOS keyboard while you type in it (a fixed bottom sits behind it).
   const lifted = useKeyboardInset(dockRef);
+  // A route can drop the capture bar (its `handle`, lib/routeHandle.ts) — the Flux stage does. Hidden,
+  // never unmounted: the bar holds its draft in state. The idle Focus button rides in the bar's trailing
+  // slot, so it goes too; running timers stay.
+  const hideCapture = hidesCapture(useMatches());
   // Edits made in Google Calendar come back onto their tasks on open/foreground.
   useCalendarPull();
 
@@ -80,7 +85,7 @@ export function AppShell() {
             through the transparent strip beside it. */}
         <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-2">
           <TimerBar />
-          <CaptureBar trailing={<IdleFocus />} />
+          <CaptureBar trailing={<IdleFocus />} hidden={hideCapture} />
         </div>
       </div>
     </div>

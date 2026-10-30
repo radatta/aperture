@@ -20,6 +20,9 @@ process.env.VITE_BUILD_SHA ||= 'local';
 export default defineConfig({
   server: { port: DEV_PORT },
   preview: { port: DEV_PORT },
+  // Flux's tracking worker is a module worker: MediaPipe's module glue sets ModuleFactory via ESM, and
+  // Vite's default IIFE worker would make it silently no-op ("ModuleFactory not set").
+  worker: { format: 'es' },
   plugins: [
     react(),
     tailwindcss(),
@@ -34,6 +37,9 @@ export default defineConfig({
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,
+        // Flux's wasm + model (~17 MB) stay out of the precache (the globs skip .wasm/.task) — only Flux
+        // users pay for them, and modules/flux/engine/assets.ts caches them itself. No SW runtime cache on
+        // top: it would store them twice and could cache a missing asset's SPA-fallback HTML.
       },
       devOptions: { enabled: false }, // SW off in `vite dev`; verify against `vite preview`
     }),

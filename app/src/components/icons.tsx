@@ -170,3 +170,116 @@ export function PaperclipIcon(p: IconProps) {
     </Svg>
   );
 }
+
+// Flux — the stage's back link.
+export function ArrowLeftIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M19 12H5M12 19l-7-7 7-7" />
+    </Svg>
+  );
+}
+
+// Flux voice cues on / off — a speaker with sound waves, or struck through.
+export function VolumeIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M11 5 6 9H3v6h3l5 4Z" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+    </Svg>
+  );
+}
+
+export function VolumeOffIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M11 5 6 9H3v6h3l5 4Z" />
+      <path d="m16 9 5 6M21 9l-5 6" />
+    </Svg>
+  );
+}
+
+// Flux's disclaimer — a shield with a check.
+export function ShieldCheckIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3 4.5 6v5.5c0 4.5 3.2 8.2 7.5 9.5 4.3-1.3 7.5-5 7.5-9.5V6Z" />
+      <path d="m9 12 2 2 4-4" />
+    </Svg>
+  );
+}
+
+// A caution — a triangle with an exclamation mark.
+export function WarningIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9v4M12 17h.01" />
+    </Svg>
+  );
+}
+
+export function InfoIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 16v-4.5M12 8h.01" />
+    </Svg>
+  );
+}
+
+// A finished set — a check in a circle.
+export function CheckCircleIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12 2.5 2.5 4.5-5" />
+    </Svg>
+  );
+}
+
+export function PlayIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M7 4.5v15l12-7.5Z" />
+    </Svg>
+  );
+}
+
+// "Again" — a counter-clockwise arrow.
+export function RotateIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+      <path d="M3 3v5h5" />
+    </Svg>
+  );
+}
+
+// Flux category marks: range of motion (a pulse), stretches (a four-way move), sensorimotor (a target).
+export function ActivityIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M3 12h4l3-8 4 16 3-8h4" />
+    </Svg>
+  );
+}
+
+export function MoveIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3v18M3 12h18" />
+      <path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />
+    </Svg>
+  );
+}
+
+export function TargetIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="5" />
+      <circle cx="12" cy="12" r="1" />
+    </Svg>
+  );
+}

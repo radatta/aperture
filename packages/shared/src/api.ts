@@ -234,6 +234,8 @@ export type SettingsPatch = Partial<
     | 'dayEndHour'
     | 'financeBudgetCents'
     | 'financePaymentDay'
+    | 'fluxRollId'
+    | 'fluxDisclaimerAckAt'
   >
 >;
 

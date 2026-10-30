@@ -42,8 +42,13 @@ run('pnpm --filter @aperture/app build', {
 const bucket = app.SiteBucket;
 console.log(`\n▶ Syncing to s3://${bucket}`);
 // Two-pass sync so the app shell can't go stale. Hashed files in assets/ are immutable → cache forever.
+// .wasm is excluded here and uploaded by the cp below with a pinned Content-Type: Safari's streaming
+// compile refuses anything but application/wasm, and sync guesses by extension (docs/areas/flux).
 run(
-  `aws s3 sync app/dist/assets "s3://${bucket}/assets" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
+  `aws s3 sync app/dist/assets "s3://${bucket}/assets" --exclude "*.wasm" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
+);
+run(
+  `aws s3 cp app/dist/assets "s3://${bucket}/assets" --recursive --exclude "*" --include "*.wasm" --content-type "application/wasm" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
 );
 // Everything else (index.html, icons, …) must revalidate so a client never holds a stale shell.
 // --exclude assets/* leaves the immutable pass above untouched and means old hashes are never deleted, so

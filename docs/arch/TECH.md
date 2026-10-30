@@ -157,7 +157,7 @@ SK (type-prefixed range keys):
 
 **Routes (React Router):**
 - `/` — the glanceable **home** (auto morning/day/night by clock, manual override). The hub; ≤5 things per mode.
-- `/log · /tasks · /recruiting (+ /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
+- `/log · /tasks · /recruiting (+ /recruiting/stories) · /finances (+ /finances/all, /finances/rules) · /habits · /rolls · /flux (+ /flux/:exerciseId) · /inbox · /settings` — the **deep views** (full backlog, browse past log days, LeetCode attempts + the story bank, the budget's sort queue + ledger + rules, manage habits, manage rolls + their contact sheets, guided neck exercises on the camera, triage ideas, edit categories / durations / theme / export). **Home = glance, deep views = work.**
 - **Pomodoro is not a route** — a persistent element; the running (heartbeat-backed) timer follows you across views.
 - **Capture bar is global** — always present, not a route.
 
@@ -184,8 +184,8 @@ pnpm workspaces monorepo.
 aperture/
   app/                 # React PWA (Vite)
     src/
-      pages/           # Home, Log, Tasks, Recruiting, Habits, Rolls, Inbox, Settings (a dir each)
-      modules/         # calendar, calibration, capture, habits, home, log, pomodoro, reflection, rolls, tasks
+      pages/           # Home, Log, Tasks, Recruiting, Habits, Rolls, Finances, Flux, Inbox, Settings (a dir each)
+      modules/         # calendar, calibration, capture, finances, flux, habits, home, log, pomodoro, reflection, rolls, tasks
       components/      # primitives: Card, Text, … (anti-generic token layer)
       data/            # React Query hooks + the api clients (stubClient, httpClient) + seed
       lib/             # cx, format, useDisclosure, useRowAction (ulid/dates live in packages/shared)

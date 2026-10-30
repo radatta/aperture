@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -19,6 +20,7 @@ import {
 } from '../../data/hooks/useCategories';
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import { fmtMoney, parseDollars } from '../../modules/finances/money';
+import { useRolls } from '../../data/hooks/useRolls';
 import {
   useConnectGoogle,
   useDisconnectGoogleAccount,
@@ -38,6 +40,7 @@ export function SettingsPage() {
       <CalendarSection />
       <PreferencesSection />
       <FinancesSection />
+      <FluxSection />
       <DataSection />
       {/* The visible build stamp — the iOS Simulator check reads it off the screen (docs/ops/DEV-CHECK.md). */}
       <Text size="xs" tone="muted" tabular>
@@ -664,6 +667,64 @@ function FinancesSection() {
           Now {fmtMoney(settings.financeBudgetCents)}, payment day {settings.financePaymentDay}. The
           payment day is used until you mark a payment — the period starts the day after it.
         </Text>
+      </Card>
+    </section>
+  );
+}
+
+// Flux (docs/areas/flux): which Roll a Flux session counts toward, and the disclaimer reset. Both are
+// synced Settings fields; Flux's voice and chips are per device and live on the Flux page.
+function FluxSection() {
+  const { data: settings } = useSettings();
+  const { data: rolls = [] } = useRolls();
+  const update = useUpdateSettings();
+  const { hash } = useLocation();
+  const sectionRef = useRef<HTMLElement>(null);
+  const loaded = !!settings;
+  // Flux's "link a Roll" note deep-links to /settings#flux; the section only exists once settings
+  // load, so the browser's own anchor jump misses it.
+  useEffect(() => {
+    if (loaded && hash === '#flux') sectionRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [loaded, hash]);
+  if (!settings) return null;
+  const active = rolls.filter((r) => r.active);
+  return (
+    <section ref={sectionRef} id="flux" className="flex flex-col gap-3">
+      <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
+        Flux
+      </Text>
+      <Card className="flex flex-col gap-3">
+        <Select
+          label="Count sessions as reps of"
+          value={
+            active.some((r) => r.id === settings.fluxRollId) ? (settings.fluxRollId ?? '') : ''
+          }
+          onChange={(e) => update.mutate({ fluxRollId: e.target.value || null })}
+          placeholder="No Roll"
+          options={active.map((r) => ({ value: r.id, label: r.name }))}
+          className="w-60"
+        />
+        <Text size="xs" tone="muted">
+          The first finished set of a session starts that Roll&apos;s rep for today; stopping offers
+          to log it with the session&apos;s minutes.
+          {active.length === 0 && ' Add a Roll on the Rolls page first.'}
+        </Text>
+        {settings.fluxDisclaimerAckAt !== null && (
+          <div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => update.mutate({ fluxDisclaimerAckAt: null })}
+            >
+              Show the Flux disclaimer again
+            </Button>
+          </div>
+        )}
+        {update.isError && (
+          <p role="alert" className="text-xs text-danger">
+            Couldn&apos;t save that — try again.
+          </p>
+        )}
       </Card>
     </section>
   );

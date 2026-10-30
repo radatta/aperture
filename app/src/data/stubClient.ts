@@ -161,6 +161,7 @@ const FINANCE_SETTINGS_DEFAULTS = {
   financeBudgetCents: FINANCE_DEFAULT_BUDGET_CENTS,
   financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
 };
+const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null };
 const STORAGE_KEY = 'aperture.stub.v1';
 
 export interface Store {
@@ -302,7 +303,11 @@ class StubClient implements ApiClient {
       const store = { ...emptyStore(), ...(JSON.parse(raw) as Partial<Store>) };
       // Settings gain fields over time; a persisted row from before them reads the defaults.
       if (store.settings) {
-        store.settings = { ...FINANCE_SETTINGS_DEFAULTS, ...store.settings };
+        store.settings = {
+          ...FINANCE_SETTINGS_DEFAULTS,
+          ...FLUX_SETTINGS_DEFAULTS,
+          ...store.settings,
+        };
         delete (store.settings as { financeCycleDay?: number }).financeCycleDay; // → financePaymentDay
       }
       // Rows persisted before refund linking / period marks existed read as unlinked and unmarked.
@@ -505,6 +510,7 @@ class StubClient implements ApiClient {
       dayFocusStart: 8,
       dayEndHour: 22,
       ...FINANCE_SETTINGS_DEFAULTS,
+      ...FLUX_SETTINGS_DEFAULTS,
     };
     this.store.settings = settings;
     this.persist();
