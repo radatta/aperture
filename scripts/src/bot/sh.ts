@@ -1,4 +1,4 @@
-// Child processes for the bot: argv arrays only (no shell), stdout trimmed, stderr in the error. Secrets travel
+// Child processes for the bot: argv arrays only (no shell), stdout trimmed, both streams in the error. Secrets travel
 // in `env`, never in argv — COI and `ps` see every argv.
 import { execFileSync } from 'node:child_process';
 
@@ -16,8 +16,10 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): string 
       cwd: opts.cwd,
     }).trim();
   } catch (err) {
-    const e = err as { stderr?: string; message: string };
-    throw new Error(`${cmd} ${args[0] ?? ''} failed: ${(e.stderr || e.message).trim()}`, {
+    // stdout too: `git push --porcelain` prints a rejected ref's reason there, not on stderr.
+    const e = err as { stdout?: string; stderr?: string; message: string };
+    const out = [e.stdout?.trim(), (e.stderr || e.message).trim()].filter(Boolean).join('\n');
+    throw new Error(`${cmd} ${args[0] ?? ''} failed: ${out}`, {
       cause: err,
     });
   }
