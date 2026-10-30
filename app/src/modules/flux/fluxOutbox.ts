@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { RecordFluxSetInput } from '@aperture/shared';
+import { getExercise, isExerciseId, plannedCount } from '@aperture/shared/flux';
 import type { FluxSetDraft } from './useFluxEngine';
 
 // Flux's crash- and offline-safety, per device (docs/areas/flux, D49). A finished set is written here
@@ -42,11 +43,27 @@ function parse(raw: string): FluxOutboxEntry[] {
   try {
     const list: unknown = raw ? JSON.parse(raw) : [];
     return Array.isArray(list)
-      ? (list as FluxOutboxEntry[]).filter((e) => typeof e?.input?.id === 'string')
+      ? (list as FluxOutboxEntry[]).filter((e) => typeof e?.input?.id === 'string').map(upgrade)
       : [];
   } catch {
     return [];
   }
+}
+// An entry queued before sets carried `stoppedEarly` / `planned` (D55) was a finished set going for its
+// prescription — filled in so the shared validation doesn't refuse a set that was fine when it was made.
+function upgrade(e: FluxOutboxEntry): FluxOutboxEntry {
+  const input = e.input as Partial<RecordFluxSetInput> &
+    Omit<RecordFluxSetInput, 'stoppedEarly' | 'planned'>;
+  if (input.stoppedEarly !== undefined && input.planned !== undefined) return e;
+  const def = isExerciseId(input.exerciseId) ? getExercise(input.exerciseId) : null;
+  return {
+    ...e,
+    input: {
+      ...input,
+      stoppedEarly: input.stoppedEarly ?? false,
+      planned: input.planned !== undefined ? input.planned : def ? plannedCount(def) : null,
+    },
+  };
 }
 function write(list: readonly FluxOutboxEntry[]): void {
   try {

@@ -88,7 +88,11 @@ export function fluxSetError(input: RecordFluxSetInput): string | null {
   if (typeof input.stoppedEarly !== 'boolean')
     return 'A Flux set must say whether it was stopped early.';
   if (input.planned !== null && (!Number.isInteger(input.planned) || input.planned < 1))
-    return "A Flux set's planned count must be a whole number.";
+    return "A Flux set's planned count must be a positive whole number.";
+  if ((input.planned === null) !== (def.kind === 'oscillation'))
+    return def.kind === 'oscillation'
+      ? `${def.name} is timed — it has no planned count.`
+      : `${def.name} needs its planned count.`;
   if (input.stoppedEarly && input.count < 1)
     return "A set stopped before its first rep isn't saved.";
   return null;

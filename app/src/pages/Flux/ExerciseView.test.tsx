@@ -291,6 +291,33 @@ describe('Flux session, hands free (D40–D42)', () => {
 describe('Flux saved sets (D47, D49)', () => {
   const done = { type: 'setCompleted', summary: { count: 5 } } as const;
 
+  it('a side switched mid-set saves the old side’s holds, and the next set is the other side again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = await stage('/flux/upper-trap-stretch');
+    await running(s);
+    const trap = initialState(getExercise('upper-trap-stretch'));
+    act(() => s.fake().state({ ...trap, phase: 'active', holdsDone: 1 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Left' })); // mid-set
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]).toMatchObject({ side: 'a', stoppedEarly: true });
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 2 } })); // Left, finished
+    expect(screen.getByText('Sets this session · 1 of 2 · 1 stopped early')).toBeTruthy();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByRole('button', { name: 'Right', pressed: true })).toBeTruthy();
+    expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'a' });
+  });
+
+  it('a toggle during the rest doesn’t make the next set repeat a side', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = await stage('/flux/upper-trap-stretch');
+    await running(s);
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 2 } })); // Right, finished
+    await s.user.click(screen.getByRole('button', { name: 'Left' })); // during the rest
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByRole('button', { name: 'Left', pressed: true })).toBeTruthy();
+    expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'b' });
+  });
+
   it('a finished set is saved with its exercise, side, count and day', async () => {
     const s = await stage('/flux/chin-tuck');
     await running(s);
@@ -327,7 +354,7 @@ describe('Flux saved sets (D47, D49)', () => {
       stoppedEarly: true,
       planned: 6,
     });
-    expect(screen.getByText('Sets this session · 1 of 2 · 1 stopped early')).toBeTruthy();
+    expect(screen.getByText('Sets this session · 0 of 2 · 1 stopped early')).toBeTruthy();
   });
 
   it('leaving the stage mid-set saves the set too', async () => {

@@ -92,16 +92,16 @@ describe('FluxCore', () => {
     expect(core.control({ type: 'start' })).toBeNull();
   });
 
-  it('a Re-calibrate mid-set keeps the count; one before the set starts it afresh (D55)', () => {
+  it('a Re-calibrate mid-set keeps the count, and one during the rest keeps the set finished (D55)', () => {
     const core = new FluxCore();
     let t = feed(core, yaw(0), 10, 0);
     core.calibrate();
     core.selectExercise('cervical-rotation', 'a');
-    const reps = () => {
-      let last = null as null | { repsPos: number; repsNeg: number };
+    const reps = (dir = 1) => {
+      let last = null as null | { repsPos: number; repsNeg: number; phase: string };
       for (let i = 0; i < 2; i++) {
         for (let k = 0; k < 150; k++) {
-          const r = core.frame(yaw(55), (t += 1000 / 30));
+          const r = core.frame(yaw(55 * dir), (t += 1000 / 30));
           if (r?.state?.kind === 'romReps') last = r.state;
         }
         for (let k = 0; k < 40; k++) {
@@ -116,6 +116,14 @@ describe('FluxCore', () => {
     expect(core.calibrate()).toBe(true);
     const after = reps();
     expect((after?.repsPos ?? 0) + (after?.repsNeg ?? 0)).toBe(4);
+    // On to the end of the set (5 a side, so 10), then a Re-calibrate during the rest: still complete —
+    // turning during the rest counts nothing.
+    let done = after;
+    for (let i = 0; i < 4 && done?.phase !== 'complete'; i++) done = reps(i < 1 ? 1 : -1);
+    expect(done?.phase).toBe('complete');
+    expect(core.calibrate()).toBe(true);
+    const rest = reps();
+    expect(rest?.phase).toBe('complete');
   });
 
   it('applies side B by mirroring the stretch target', () => {

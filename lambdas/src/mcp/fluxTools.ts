@@ -44,7 +44,9 @@ function setRow(s: FluxSet) {
   };
 }
 
-// Per exercise: how many sets, and its number first → latest in the window (oldest first).
+// Per exercise: how many sets, and its number first → latest in the window (oldest first). Only finished
+// sets give first → latest — a set stopped after one hold would read as a collapse (D55); how many were
+// stopped early is counted beside it.
 function summary(sets: readonly FluxSet[]) {
   const byId = new Map<string, FluxSet[]>();
   for (const s of [...sets].sort((a, b) => a.completedAt - b.completedAt)) {
@@ -54,13 +56,15 @@ function summary(sets: readonly FluxSet[]) {
   }
   return [...byId].map(([id, list]) => {
     const def = isExerciseId(id) ? getExercise(id) : null;
-    const metrics = def ? list.map((s) => setMetric(def, s)).filter((m) => m !== null) : [];
+    const finished = list.filter((s) => !s.stoppedEarly);
+    const metrics = def ? finished.map((s) => setMetric(def, s)).filter((m) => m !== null) : [];
     const first = metrics[0];
     const latest = metrics.at(-1);
     return {
       exerciseId: id,
       exercise: def?.name ?? id,
       sets: list.length,
+      stoppedEarly: list.length - finished.length,
       ...(first && latest
         ? {
             metric: latest.label,

@@ -662,14 +662,41 @@ describe('useFluxEngine stopped sets (D55)', () => {
     expect(onSetCompleted).toHaveBeenCalledTimes(1);
   });
 
-  it('a camera pause or a GPU→CPU fallback is not an end; a pause then Stop saves once', async () => {
+  it('a camera pause is not an end; a pause then Stop saves once', async () => {
     const { hook, onSetCompleted, fake } = await running();
     act(() => fake().state(holds(2)));
     act(() => fake().pause());
-    act(() => fake().ready('CPU', true));
     expect(onSetCompleted).not.toHaveBeenCalled();
     act(() => hook.result.current.stop());
     expect(onSetCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('a GPU→CPU fallback restarts the set (D26): the new worker’s fresh state is what Stop sees', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    act(() => fake().ready('CPU', true));
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    act(() => fake().state(holds(0))); // the new worker's first post
+    act(() => hook.result.current.stop());
+    expect(onSetCompleted).not.toHaveBeenCalled();
+  });
+
+  it('a reload or a closed tab mid-set saves it; a page kept for back/forward doesn’t', async () => {
+    const { onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    const hide = (persisted: boolean) =>
+      act(() => {
+        const e = new Event('pagehide') as PageTransitionEvent;
+        Object.defineProperty(e, 'persisted', { value: persisted });
+        window.dispatchEvent(e);
+      });
+    hide(true);
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    hide(false);
+    expect(onSetCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 2, stoppedEarly: true }),
+      0,
+    );
   });
 
   it('a Re-calibrate mid-set carries on — nothing saved, the set not restarted', async () => {

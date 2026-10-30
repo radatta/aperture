@@ -75,8 +75,8 @@ export const fluxHistory: Scenario = {
         }
         await ctx.ui.expectText('Today', 15_000);
         await ctx.ui.expectText(EXERCISE, 15_000);
-        await ctx.ui.expectText('2 of 6 holds', 15_000);
-        await ctx.ui.expectText('stopped early', 15_000);
+        await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
+        await ctx.ui.expectText(/2 of 6 holds · .* · stopped early/, 15_000);
         await ctx.shot('history');
       },
     },

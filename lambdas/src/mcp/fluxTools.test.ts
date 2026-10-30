@@ -100,6 +100,17 @@ describe('list_flux_sets', () => {
     expect(out.note).toMatch(/not clinical/);
   });
 
+  it('leaves a stopped set out of first → latest, and counts it (D55)', async () => {
+    await record({ day: '2026-10-19', completedAt: 1_000, avgPeakDeg: 46 });
+    await record({ completedAt: 2_000, avgPeakDeg: 52 });
+    await record({ completedAt: 3_000, avgPeakDeg: 20, count: 1, stoppedEarly: true });
+    const out = (await run('list_flux_sets')) as SetsOut;
+    expect(out.sets[0]).toMatchObject({ stoppedEarly: true, planned: 10 });
+    expect(out.summary).toEqual([
+      expect.objectContaining({ sets: 3, stoppedEarly: 1, first: 46, latest: 52 }),
+    ]);
+  });
+
   it('filters by range and exercise, and says one day in a line', async () => {
     await record({ day: '2026-10-19', completedAt: 1_000 });
     await record({ completedAt: 2_000 });

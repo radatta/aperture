@@ -62,7 +62,7 @@ function Stage({ id }: { id: ExerciseId }) {
   const [side, setSide] = useState<Side>('a');
   const shown = mirrorForSide(def, side);
   const [sets, setSets] = useState(DEFAULT_SETS);
-  const sessionSide = useRef<Side>('a');
+  const lastSide = useRef<Side>('a'); // the side the last finished set was done on
 
   const voice = useVoice();
   const rep = useRepTie();
@@ -79,15 +79,17 @@ function Stage({ id }: { id: ExerciseId }) {
     acknowledged,
     voice,
     sets,
-    // Every finished set is saved (D47), through the outbox so a dropped connection can't lose it (D49).
+    // Every set with anything in it is saved — finished (D47) or ended early (D55) — through the outbox
+    // so a dropped connection can't lose it (D49).
     onSetCompleted: (set) => {
+      if (!set.stoppedEarly && set.side) lastSide.current = set.side;
       const repTaskId = rep.onSetCompleted();
       const keys = { id: ulid(), day: dayKey(set.completedAt, rep.dayStartHour), repTaskId };
       void outbox.save(draftToInput(set, keys));
     },
-    // A sided stretch alternates sides set by set from the side the session started on, so a manual
-    // toggle during a rest doesn't knock it out of step.
-    onNextSet: (i) => sided && setSide(i % 2 ? other(sessionSide.current) : sessionSide.current),
+    // A sided stretch alternates: the next set is the other side from the last *finished* set, so neither
+    // a toggle during the rest nor a side switched mid-set (D55) does the same side twice.
+    onNextSet: () => sided && setSide(other(lastSide.current)),
     onSessionEnd: finish,
   });
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -96,7 +98,6 @@ function Stage({ id }: { id: ExerciseId }) {
   const start = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    sessionSide.current = side;
     if (video && canvas) void engine.start({ video, canvas });
   };
 
@@ -256,14 +257,15 @@ function SessionLine({
   def: ExerciseDefinition;
   sets: number;
 }) {
-  const n = engine.sessionSets.length;
+  // Of the plan, only finished sets count (as the session's own count does); stopped ones are said apart.
   const stopped = engine.sessionSets.filter((s) => s.stoppedEarly).length;
+  const n = engine.sessionSets.length - stopped;
   const rom = engine.sample.rom;
   const showRom = engine.status === 'running' && engine.calibrated && def.measurement !== 'guided';
-  if (n === 0 && !showRom) return null;
+  if (n + stopped === 0 && !showRom) return null;
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1">
-      {n > 0 && (
+      {n + stopped > 0 && (
         <Text size="sm" tone="muted" tabular>
           Sets this session · {n} of {sets}
           {stopped > 0 && ` · ${stopped} stopped early`}

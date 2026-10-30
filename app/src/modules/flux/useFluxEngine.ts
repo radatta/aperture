@@ -34,7 +34,8 @@ import { initialCueState, isMirrored, reduceCue, type CueEvent, type CueState } 
 
 export type FluxStatus = 'idle' | 'loading' | 'running' | 'paused' | 'error';
 
-// One finished set, as the session holds it — the shape Flux history (the next PR) persists.
+// One set — finished, or ended early with something in it (D55) — as the session holds it; saved as a
+// FluxSet through the outbox (D47, D49).
 export interface FluxSetDraft {
   readonly exerciseId: ExerciseId;
   readonly kind: ExerciseKind;
@@ -214,8 +215,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     [engine, clearAuto],
   );
 
-  // Flip a sided stretch, say the set, and start it from a clean slate (a Re-calibrate during the rest may
-  // have reopened the finished set). Timed kinds get the lead-in unless a tap asked for now.
+  // Flip a sided stretch, say the set, and start it from a clean slate (stop, then start). Timed kinds get
+  // the lead-in unless a tap asked for now.
   nextSetRef.current = (index, now) => {
     clearAuto();
     const o = optsRef.current;
@@ -379,8 +380,15 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       if (smp.tSec - f.hintSince >= HOLD_STILL_HINT_SEC) say({ type: 'holdStillHint' });
     };
     const off = engine.subscribe(onEvent);
+    // A reload or a closed tab never unmounts: pagehide is the last word. A page kept for back/forward
+    // (`persisted`) may come back running, so only a real unload saves (the outbox writes synchronously).
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (!e.persisted) takeRef.current();
+    };
+    globalThis.addEventListener?.('pagehide', onPageHide);
     return () => {
       off();
+      globalThis.removeEventListener?.('pagehide', onPageHide);
       takeRef.current(); // leaving the page mid-set ends it (D55)
       engine.stop();
       clearTimeout(noticeTimer.current);
@@ -446,7 +454,6 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     [engine, reset, clearAuto],
   );
 
-  // `cancelVoice` false only when the session ends itself, so its last words aren't cut off.
   // A set's draft, recorded and handed to the page — finished (setCompleted) or ended early (D55).
   function recordSet(summary: SetSummary, stoppedEarly: boolean, ctx: SetContext): void {
     const now = performance.now();
@@ -483,6 +490,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const takeRef = useRef(takePartialSet);
   takeRef.current = takePartialSet;
 
+  // `cancelVoice` false only when the session ends itself, so its last words aren't cut off.
   function endSession(cancelVoice: boolean): SessionSummary {
     takePartialSet();
     pauseClock(clock.current);

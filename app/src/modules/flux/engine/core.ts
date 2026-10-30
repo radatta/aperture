@@ -195,15 +195,14 @@ export class FluxCore {
     return { sample, events: r.events, state: r.state, ...auto };
   }
 
-  // Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks. A set
-  // under way carries on with its count, measured from the new neutral (D55); otherwise the set starts
-  // afresh (before the first set, or reopening a finished one between sets).
+  // Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks. The
+  // set is left as it is (D55): one under way carries on with its count, measured from the new neutral;
+  // a finished one stays finished through the rest (the next set starts clean — stop, then start); and
+  // before the first set the evaluator hasn't run (it waits for a neutral, D40), so it's still initial.
   calibrate(): boolean {
     if (!this.faceVisible) return false;
     this.neutral = { ...this.lastSmoothed };
     this.resetRom();
-    if (this.def && this.exerciseState?.phase !== 'active')
-      this.exerciseState = initialState(this.def);
     return true;
   }
 

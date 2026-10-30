@@ -97,6 +97,12 @@ describe('fluxSetError', () => {
     ['a fractional planned count', { planned: 2.5 }, 'planned count'],
     ['a zero planned count', { planned: 0 }, 'planned count'],
     ['a stopped set with nothing in it', { stoppedEarly: true, count: 0 }, 'first rep'],
+    ['no planned count on a counted exercise', { planned: null }, 'needs its planned count'],
+    [
+      'a planned count on a timed exercise',
+      { exerciseId: 'gaze-stability', kind: 'oscillation', planned: 10 },
+      'no planned count',
+    ],
   ])('refuses %s', (_, over, msg) => {
     expect(fluxSetError(input(over))).toContain(msg);
   });

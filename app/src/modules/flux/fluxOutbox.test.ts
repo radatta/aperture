@@ -51,6 +51,14 @@ describe('fluxOutbox (D49)', () => {
     expect(localStorage.getItem(FLUX_OUTBOX_KEY)).toBeNull();
   });
 
+  it('fills in an entry queued before sets said whether they were stopped early (D55)', () => {
+    const old: Partial<RecordFluxSetInput> = { ...input() };
+    delete old.stoppedEarly;
+    delete old.planned;
+    localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: old, at: 1, error: null }]));
+    expect(readOutbox()[0]?.input).toMatchObject({ stoppedEarly: false, planned: 6 }); // chin tuck
+  });
+
   it('reads garbage as empty', () => {
     localStorage.setItem(FLUX_OUTBOX_KEY, '{not json');
     expect(readOutbox()).toEqual([]);
