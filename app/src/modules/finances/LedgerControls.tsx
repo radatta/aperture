@@ -155,7 +155,8 @@ export const SearchBox = forwardRef<
         }
       }}
       className={cx(
-        'w-full rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-teal focus:outline-none',
+        // No text-sm: iOS Safari zooms the page into any field under 16px when you tap it.
+        'w-full rounded-lg border border-line px-3 py-2 text-ink placeholder:text-ink-muted focus:border-teal focus:outline-none',
         onPanel ? 'bg-surface' : 'bg-panel',
       )}
     />
