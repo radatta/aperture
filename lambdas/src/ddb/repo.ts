@@ -7,6 +7,7 @@ import type {
   FinanceRule,
   FinanceSyncState,
   FinanceTransaction,
+  FluxSet,
   Day,
   Habit,
   HabitCheck,
@@ -115,6 +116,29 @@ export class Repo {
   async putLeetcodeAttempt(a: LeetcodeAttempt): Promise<LeetcodeAttempt> {
     await this.writes.put(entityItem(this.userId, sk.lc(a.day, a.id), a));
     return a;
+  }
+
+  // --- Flux sets ---
+  // Tombstones included: the backend filters (inRange), and an outbox retry of a deleted set must find it.
+  async listAllFluxSets(): Promise<FluxSet[]> {
+    return (await this.doc.query(this.p(), sk.fluxAllPrefix())).map((i) => toEntity<FluxSet>(i));
+  }
+  async findFluxSet(id: string): Promise<FluxSet | null> {
+    return (await this.listAllFluxSets()).find((f) => f.id === id) ?? null;
+  }
+  // Write only if absent (D47): a concurrent retry of the same set loses the race instead of overwriting.
+  async putFluxSetIfAbsent(f: FluxSet): Promise<boolean> {
+    try {
+      await this.writes.putIf(entityItem(this.userId, sk.flux(f.day, f.id), f), null);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async putFluxSet(f: FluxSet): Promise<FluxSet> {
+    await this.writes.put(entityItem(this.userId, sk.flux(f.day, f.id), f));
+    return f;
   }
 
   // --- Tasks ---

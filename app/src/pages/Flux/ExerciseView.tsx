@@ -4,9 +4,11 @@ import {
   contraindicationFor,
   getExercise,
   isExerciseId,
+  sideLabel,
   type ExerciseDefinition,
   type ExerciseId,
 } from '@aperture/shared/flux';
+import { dayKey, ulid } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
@@ -24,6 +26,9 @@ import { readCondition } from '../../modules/flux/prefs';
 import { RepTieStrip } from '../../modules/flux/RepTie';
 import { SetsStepper } from '../../modules/flux/SetsStepper';
 import { useRepTie } from '../../modules/flux/useRepTie';
+import { draftToInput } from '../../modules/flux/fluxOutbox';
+import { UnsavedSetsStrip } from '../../modules/flux/UnsavedSetsStrip';
+import { useFluxOutbox } from '../../modules/flux/useFluxOutbox';
 import { DEFAULT_SETS, useFluxEngine, type SessionSummary } from '../../modules/flux/useFluxEngine';
 import { useVoice } from '../../modules/flux/useVoice';
 
@@ -61,6 +66,7 @@ function Stage({ id }: { id: ExerciseId }) {
 
   const voice = useVoice();
   const rep = useRepTie();
+  const outbox = useFluxOutbox();
   // A finished session — by Stop, or by itself after the last set (D42) — offers the Roll tie.
   const finish = (session: SessionSummary) => {
     if (session.sets > 0) void rep.onStop(session.activeMs);
@@ -73,7 +79,12 @@ function Stage({ id }: { id: ExerciseId }) {
     acknowledged,
     voice,
     sets,
-    onSetCompleted: rep.onSetCompleted,
+    // Every finished set is saved (D47), through the outbox so a dropped connection can't lose it (D49).
+    onSetCompleted: (set) => {
+      const repTaskId = rep.onSetCompleted();
+      const keys = { id: ulid(), day: dayKey(set.completedAt, rep.dayStartHour), repTaskId };
+      void outbox.save(draftToInput(set, keys));
+    },
     // A sided stretch alternates sides set by set from the side the session started on, so a manual
     // toggle during a rest doesn't knock it out of step.
     onNextSet: (i) => sided && setSide(i % 2 ? other(sessionSide.current) : sessionSide.current),
@@ -135,7 +146,7 @@ function Stage({ id }: { id: ExerciseId }) {
         )}
       </div>
 
-      {sided && <SideToggle side={side} onChange={setSide} />}
+      {sided && <SideToggle def={def} side={side} onChange={setSide} />}
 
       <PrecautionBanner
         precautions={def.precautions}
@@ -185,6 +196,7 @@ function Stage({ id }: { id: ExerciseId }) {
       )}
 
       <SessionLine engine={engine} def={def} sets={sets} />
+      <UnsavedSetsStrip />
       <RepTieStrip handle={rep} activeMs={engine.activeMs()} />
       <DebugReadout engine={engine} />
     </div>
@@ -193,7 +205,19 @@ function Stage({ id }: { id: ExerciseId }) {
 
 const other = (s: Side): Side => (s === 'a' ? 'b' : 'a');
 
-function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => void }) {
+// Right / Left by where the head mainly goes (D48) — Right first, whichever stored side it is.
+function SideToggle({
+  def,
+  side,
+  onChange,
+}: {
+  def: ExerciseDefinition;
+  side: Side;
+  onChange: (s: Side) => void;
+}) {
+  const sides = (['a', 'b'] as const)
+    .map((s) => ({ s, label: sideLabel(def, s) }))
+    .sort((x, y) => (x.label === 'Right' ? -1 : y.label === 'Right' ? 1 : 0));
   return (
     <div className="flex flex-col gap-1">
       <div
@@ -201,7 +225,7 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => voi
         aria-label="Side"
         className="inline-flex gap-0.5 self-start rounded-xl border border-line bg-surface p-0.5"
       >
-        {(['a', 'b'] as const).map((s) => (
+        {sides.map(({ s, label }) => (
           <button
             key={s}
             type="button"
@@ -212,12 +236,12 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => voi
               side === s ? 'bg-teal-soft font-medium text-ink' : 'text-ink-muted hover:text-ink',
             )}
           >
-            Side {s.toUpperCase()}
+            {label}
           </button>
         ))}
       </div>
       <Text size="xs" tone="muted">
-        Side B is the mirror of Side A — the next set switches sides on its own.
+        Each side is named for where your head goes — the next set switches sides on its own.
       </Text>
     </div>
   );

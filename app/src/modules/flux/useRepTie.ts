@@ -33,14 +33,18 @@ export function useRepTie() {
   const starting = useRef<Promise<unknown> | null>(null);
   const { mutateAsync: transitionAsync } = transition;
 
-  const onSetCompleted = useCallback(() => {
+  // Returns the rep this set counts toward (the saved set links to it, D47): today's rep, whether it's
+  // just being started, already running, or done — a set after the rep is done is still the day's work.
+  const onSetCompleted = useCallback((): string | null => {
     const t = tieRef.current;
-    if (t.kind !== 'ready' || starting.current) return;
+    if (t.kind === 'unlinked' || t.kind === 'none') return null;
+    if (t.kind !== 'ready' || starting.current) return t.task.id;
     setError(null);
     starting.current = transitionAsync({ id: t.task.id, to: 'in_progress' }).catch(() => {
       starting.current = null;
       setError(`Couldn’t start today’s ${t.roll.name} rep. Start it from Home.`);
     });
+    return t.task.id;
   }, [transitionAsync]);
 
   const onStop = useCallback(async (sessionMs: number) => {
@@ -60,6 +64,7 @@ export function useRepTie() {
     loading,
     loadError,
     day,
+    dayStartHour,
     doneMin,
     error,
     closeDone: () => setDoneMin(null),

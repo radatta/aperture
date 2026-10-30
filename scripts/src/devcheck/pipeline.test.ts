@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ApiClient, DevTask } from './api';
+import { FLUX_SET_VIA, type ApiClient, type DevFluxSet, type DevTask } from './api';
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
@@ -26,6 +26,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
   );
   const deleted: string[] = [];
+  const fluxSets = new Map<string, DevFluxSet>();
+  const fluxDeleted: string[] = [];
   const listeners: ((r: PwRequest) => void)[] = [];
   const inPage = [...(opts.inPage ?? [SHA])];
   let n = 0;
@@ -64,10 +66,19 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listBacklog: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [],
+      listFluxSets: async () => [...fluxSets.values()],
+      getFluxSet: async (id) => fluxSets.get(id) ?? null,
     },
     writes: {
       createTask: async () => {
         throw new Error('unused');
+      },
+      recordFluxSet: async () => {
+        throw new Error('unused');
+      },
+      deleteFluxSet: async (id) => {
+        fluxDeleted.push(id);
+        fluxSets.delete(id);
       },
       deleteTask: async (id) => {
         deleted.push(id);
@@ -85,6 +96,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   return {
     tasks,
     deleted,
+    fluxSets,
+    fluxDeleted,
     uiCreate,
     api,
     browser,
@@ -258,6 +271,36 @@ describe('runPipeline', () => {
     expect(r.swept).toEqual(['old1']);
     expect(w.deleted).toEqual(['old1']);
     expect(r.unrecorded).toEqual(['users-own']);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a Flux set in the ledger is read back and deleted as a Flux set, never as a task', async () => {
+    // A crashed earlier run's set: getTask would say "gone" (no such task) and leave it on dev.
+    const w = world();
+    w.fluxSets.set('fx-old', {
+      id: 'fx-old',
+      day: '2026-10-20',
+      exerciseId: 'chin-tuck',
+      count: 10,
+    });
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'fx-old', via: FLUX_SET_VIA }]);
+    // And this run's own set, recorded by a scenario.
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'fx-new', via: FLUX_SET_VIA });
+      x.fluxSets.set('fx-new', {
+        id: 'fx-new',
+        day: '2026-10-21',
+        exerciseId: 'chin-tuck',
+        count: 10,
+      });
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.fluxDeleted).toEqual(['fx-old', 'fx-new']);
+    expect(w.deleted).toEqual([]);
+    expect(r.swept).toEqual(['fx-old']);
+    expect(r.created).toEqual([
+      { id: 'fx-new', via: FLUX_SET_VIA, title: undefined, final: 'deleted' },
+    ]);
     expect(r.status).toBe('PASS');
   });
 

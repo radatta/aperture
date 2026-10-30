@@ -10,6 +10,10 @@ export const qk = {
   calibration: (from: string, to: string) => ['calibration', from, to] as const,
   leetcodeAttempts: (from = 'all', to = 'all') => ['leetcodeAttempts', from, to] as const,
   stories: () => ['stories'] as const,
+  // Flux sets: one prefix, so a save or delete refreshes every History / night-line read.
+  fluxSetsAll: () => ['fluxSets'] as const,
+  fluxSets: (from = 'all', to = 'all', exerciseId = 'all') =>
+    ['fluxSets', from, to, exerciseId] as const,
   attachments: () => ['attachments'] as const,
   attachmentUrl: (id: string) => ['attachmentUrl', id] as const,
   habits: () => ['habits'] as const,

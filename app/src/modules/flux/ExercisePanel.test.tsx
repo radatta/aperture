@@ -56,8 +56,8 @@ describe('ExercisePanel', () => {
     expect(screen.getByText('current +30°')).toBeTruthy();
     expect(screen.getByText('target 60°')).toBeTruthy();
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('50');
-    expect(screen.getByText('Side A')).toBeTruthy();
-    expect(screen.getByText('Side B')).toBeTruthy();
+    expect(screen.getByText('Right')).toBeTruthy(); // +yaw (repsPos) = turning right, verified (D48)
+    expect(screen.getByText('Left')).toBeTruthy();
     expect(screen.getByText('hold 4s to count')).toBeTruthy();
     expect(screen.getByText(/Keep steady — move only in this plane/)).toBeTruthy();
     // The hold zone's mark on the bar: 45° of 60° (D36).

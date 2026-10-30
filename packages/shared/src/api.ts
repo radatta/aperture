@@ -10,6 +10,9 @@ import type {
   CalibrationPoint,
   Category,
   Day,
+  FluxDelegate,
+  FluxSet,
+  FluxSide,
   GcalSyncState,
   Habit,
   HabitCheck,
@@ -30,6 +33,7 @@ import type {
 } from './types';
 import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
+import type { Condition, Euler, ExerciseKind } from './flux/types';
 import type { ParseTaskResult } from './quickParse';
 import type {
   CreateLinkTokenInput,
@@ -182,6 +186,33 @@ export interface RecordLeetcodeAttemptInput {
   topicTags?: string[] | null;
 }
 
+// A finished Flux set, as the stage hands it over (FluxSetDraft plus the three keys). The id and day
+// are the client's (D47): the id is the idempotency key, so an outbox retry returns the stored row.
+export interface RecordFluxSetInput {
+  id: string; // ULID
+  day: string; // YYYY-MM-DD
+  exerciseId: string;
+  kind: ExerciseKind;
+  side: FluxSide | null;
+  condition: Condition | null;
+  count: number;
+  avgPeakDeg?: number | null;
+  avgErrorDeg?: number | null;
+  rom: Euler;
+  calibrated: boolean;
+  delegate: FluxDelegate | null;
+  durationSec: number;
+  completedAt: number;
+  repTaskId: string | null;
+}
+
+// One object, so omitted keys survive JSON (positional undefined doesn't). from/to: both or neither.
+export interface FluxSetFilter {
+  from?: string;
+  to?: string;
+  exerciseId?: string;
+}
+
 // The full export snapshot. Every collection is REQUIRED, and that's the point: the two ApiClient
 // impls build this differently (the stub from its in-memory store, the backend from enumerated repo
 // reads), and a missing collection used to be invisible — leetcodeAttempts shipped absent from the
@@ -208,6 +239,7 @@ export interface ExportBundle {
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
+  fluxSets: FluxSet[];
   // Finances. Access tokens never leave SSM, so they're never exported.
   financeItems: FinanceItem[];
   financeSyncStates: FinanceSyncState[];
@@ -431,6 +463,13 @@ export interface ApiClient {
   // Idempotent on leetcodeSubmissionId; listLeetcodeAttempts is derived/read-only, reverse-chron.
   recordLeetcodeAttempt(input: RecordLeetcodeAttemptInput): Promise<LeetcodeAttempt>;
   listLeetcodeAttempts(range?: DateRange): Promise<LeetcodeAttempt[]>;
+
+  // Flux — one row per finished set (D47). record is idempotent on the client's id (a retry returns the
+  // stored row) and refuses per fluxSetError; list is alive, completedAt desc, from/to both or neither;
+  // delete is a soft-delete and leaves the Roll rep the set counted toward alone (D53).
+  recordFluxSet(input: RecordFluxSetInput): Promise<FluxSet>;
+  listFluxSets(filter?: FluxSetFilter): Promise<FluxSet[]>;
+  deleteFluxSet(id: string): Promise<void>;
 
   // Behavioral story bank — STAR stories authored in-app, tagged by competency. list is alive-filtered,
   // updatedAt desc; delete is a soft-delete (tombstoned, filtered from list).

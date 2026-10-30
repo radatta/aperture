@@ -105,6 +105,9 @@ import type {
   Idea,
   IdeaStatus,
   LeetcodeAttempt,
+  FluxSet,
+  FluxSetFilter,
+  RecordFluxSetInput,
   LogEntry,
   PomodoroSession,
   RecordLeetcodeAttemptInput,
@@ -130,6 +133,7 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
+import { fluxFilterError, fluxSetError, inRange } from '@aperture/shared/flux';
 import type { Repo } from './ddb/repo';
 import { FinanceService } from './finance/service';
 import { noopInvoker } from './finance/invoker';
@@ -507,6 +511,49 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listLeetcodeAttempts())
       .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
       .sort((a, b) => b.submittedAt - a.submittedAt); // reverse-chron
+  }
+
+  // --- Flux sets (D47) ---
+  async recordFluxSet(input: RecordFluxSetInput): Promise<FluxSet> {
+    const err = fluxSetError(input);
+    if (err) throw new Error(err);
+    // Idempotent on the client's id — an outbox retry (even of a deleted set) gets the stored row back.
+    const dup = await this.repo.findFluxSet(input.id);
+    if (dup) return dup;
+    const t = this.now();
+    const set: FluxSet = {
+      id: input.id,
+      userId: this.userId,
+      createdAt: t,
+      updatedAt: t,
+      deletedAt: null,
+      day: input.day,
+      exerciseId: input.exerciseId,
+      kind: input.kind,
+      side: input.side,
+      condition: input.condition,
+      count: input.count,
+      avgPeakDeg: input.avgPeakDeg ?? null,
+      avgErrorDeg: input.avgErrorDeg ?? null,
+      rom: { pitch: input.rom.pitch, yaw: input.rom.yaw, roll: input.rom.roll },
+      calibrated: input.calibrated,
+      delegate: input.delegate,
+      durationSec: input.durationSec,
+      completedAt: input.completedAt,
+      repTaskId: input.repTaskId,
+    };
+    if (await this.repo.putFluxSetIfAbsent(set)) return set;
+    return (await this.repo.findFluxSet(input.id)) ?? set; // a concurrent retry won the write
+  }
+  async listFluxSets(filter?: FluxSetFilter): Promise<FluxSet[]> {
+    const err = fluxFilterError(filter);
+    if (err) throw new Error(err);
+    return inRange(await this.repo.listAllFluxSets(), filter);
+  }
+  async deleteFluxSet(id: string): Promise<void> {
+    const existing = await this.repo.findFluxSet(id);
+    if (existing && existing.deletedAt === null)
+      await this.repo.putFluxSet({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }
 
   // --- Story bank ---
@@ -1675,6 +1722,7 @@ export class BackendClient implements ApiClient {
       leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
       stories: await this.repo.listStories(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
+      fluxSets: inRange(await this.repo.listAllFluxSets()),
       ...(await this.finance.exportCollections()),
       gcalSyncStates: await this.repo.listGcalSyncStates(),
       settings: await this.ensureSettings(),

@@ -7,6 +7,7 @@ import { BackendClient } from './backend';
 import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
 import type { Presigner } from './s3/presigner';
+import { ulid, type RecordFluxSetInput } from '@aperture/shared';
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -220,7 +221,10 @@ describe('backend task delete', () => {
   it('persists nothing under noopWrites (testMode safety)', async () => {
     const doc = new InMemoryDoc();
     const now = () => 1_700_000_000_000;
-    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), { userId: 'local', now });
+    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+    });
     const task = await live.createTask({ title: 'survives' });
 
     const noop = new BackendClient(new Repo(doc, noopWrites(), 'local'), { userId: 'local', now });
@@ -232,7 +236,10 @@ describe('backend task delete', () => {
   it('persists nothing under noopWrites on the parent + parts paths either', async () => {
     const doc = new InMemoryDoc();
     const now = () => 1_700_000_000_000;
-    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), { userId: 'local', now });
+    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+    });
     const p = await live.createTask({ title: 'P2', estimateMin: 60 });
     const a = await live.createTask({ title: 'a', estimateMin: 30 });
     const solo = await live.createTask({ title: 'solo', estimateMin: 30 });
@@ -244,13 +251,83 @@ describe('backend task delete', () => {
     const attempts: (() => Promise<unknown>)[] = [
       () => noop.createTasks([{ title: 'part', parentId: p.id }]),
       () => noop.setTaskParent(a.id, p.id),
-      () => noop.splitTask(solo.id, { finish: 'keep', followUp: { title: 'rest', estimateMin: 10 } }),
+      () =>
+        noop.splitTask(solo.id, { finish: 'keep', followUp: { title: 'rest', estimateMin: 10 } }),
       () => noop.transitionTask(p.id, 'cancelled'),
       () => noop.deleteTask(p.id),
     ];
     for (const attempt of attempts) await attempt().catch(() => undefined);
 
     expect(JSON.stringify(await live.exportData())).toBe(before);
+  });
+});
+
+// Flux sets (D47): what the contract suite can't see — the row stays in the table on delete, a smoke request
+// writes nothing, and a concurrent retry that wins the conditional write is returned rather than overwritten.
+describe('backend flux sets', () => {
+  const setup = () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const live = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now,
+    });
+    const noop = new BackendClient(new Repo(doc, noopWrites(), 'local'), { userId: 'local', now });
+    return { doc, live, noop };
+  };
+  const input = (id: string): RecordFluxSetInput => ({
+    id,
+    day: '2026-10-20',
+    exerciseId: 'chin-tuck',
+    kind: 'holdAtTarget',
+    side: null,
+    condition: null,
+    count: 10,
+    rom: { pitch: 8, yaw: 1, roll: 1 },
+    calibrated: true,
+    delegate: 'CPU',
+    durationSec: 120,
+    completedAt: 1_700_000_000_000,
+    repTaskId: null,
+  });
+
+  it('a delete tombstones the row under flux#<day>#<id> — kept in the table, gone from the list', async () => {
+    const { doc, live } = setup();
+    const set = await live.recordFluxSet(input(ulid()));
+    await live.deleteFluxSet(set.id);
+    const raw = await doc.get('u#local', sk.flux('2026-10-20', set.id));
+    expect(raw?.deletedAt).toBe(1_700_000_000_000);
+    expect(await live.listFluxSets()).toEqual([]);
+  });
+
+  it('persists nothing under noopWrites', async () => {
+    const { live, noop } = setup();
+    const kept = await live.recordFluxSet(input(ulid()));
+    await noop.recordFluxSet(input(ulid()));
+    await noop.deleteFluxSet(kept.id);
+    expect((await live.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
+  });
+
+  it('a retry that loses the conditional write returns the row that won', async () => {
+    const { doc, live } = setup();
+    const id = ulid();
+    const winner = { ...input(id), count: 7 };
+    doc.interceptNextPutIf('u#local', sk.flux('2026-10-20', id), () =>
+      doc.putNow({
+        PK: 'u#local',
+        SK: sk.flux('2026-10-20', id),
+        ...winner,
+        avgPeakDeg: null,
+        avgErrorDeg: null,
+        userId: 'local',
+        createdAt: 1,
+        updatedAt: 1,
+        deletedAt: null,
+      }),
+    );
+    const got = await live.recordFluxSet(input(id));
+    expect(got.count).toBe(7);
+    expect(await live.listFluxSets()).toHaveLength(1);
   });
 });
 

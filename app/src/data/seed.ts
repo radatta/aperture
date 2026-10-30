@@ -20,6 +20,7 @@ import type {
   Habit,
   LeetcodeVerdict,
   PomodoroSession,
+  FluxSet,
   Roll,
   Task,
 } from '@aperture/shared';
@@ -590,6 +591,84 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
   const LST = 'Longest Substring Without Repeating Characters';
   lc(1.02, LS, LST, 'wrong_answer', 'Medium', SW, 'seed-lc-4');
   lc(1, LS, LST, 'accepted', 'Medium', SW, 'seed-lc-5');
+
+  // Flux sets — three weeks of neck work so History's rows and trends aren't judged empty: rotation every
+  // other day with a slowly rising peak, chin tuck, upper-trap pairs on both sides, a few joint-position
+  // trials with a shrinking error, one gaze set. No Neck roll in the seed, so none links to a rep.
+  const flux = (
+    dAgo: number,
+    minute: number,
+    set: Omit<FluxSet, keyof BaseEntity | 'day' | 'completedAt'>,
+  ) => {
+    const t = nowMs - dAgo * DAY - 3 * HOUR + minute * 60_000;
+    store.fluxSets.push({ ...mk(t), day: dayKey(t, START_HOUR), completedAt: t, ...set });
+  };
+  const fluxBase = {
+    condition: null,
+    avgPeakDeg: null,
+    avgErrorDeg: null,
+    calibrated: true,
+    delegate: 'GPU',
+    repTaskId: null,
+  } as const;
+  [20, 18, 16, 14, 12, 10, 8, 6, 4, 2].forEach((d, i) => {
+    flux(d, 0, {
+      ...fluxBase,
+      exerciseId: 'cervical-rotation',
+      kind: 'romReps',
+      side: null,
+      count: 20,
+      avgPeakDeg: 44 + i * 1.3,
+      rom: { pitch: 6, yaw: 88 + i * 2.6, roll: 7 },
+      durationSec: 260,
+    });
+    if (i % 2 === 0)
+      flux(d, 6, {
+        ...fluxBase,
+        exerciseId: 'chin-tuck',
+        kind: 'holdAtTarget',
+        side: null,
+        count: 10,
+        rom: { pitch: 9, yaw: 2, roll: 2 },
+        durationSec: 150,
+      });
+  });
+  [19, 13, 7, 1].forEach((d) =>
+    (['a', 'b'] as const).forEach((side, k) =>
+      flux(d, k * 3, {
+        ...fluxBase,
+        exerciseId: 'upper-trap-stretch',
+        kind: 'holdAtTarget',
+        side,
+        count: 2,
+        rom: { pitch: 3, yaw: 4, roll: 31 },
+        durationSec: 75,
+      }),
+    ),
+  );
+  [15, 9, 3].forEach((d, i) =>
+    flux(d, 10, {
+      ...fluxBase,
+      exerciseId: 'joint-position-sense',
+      kind: 'reposition',
+      side: null,
+      count: 5,
+      avgErrorDeg: 4.4 - i * 0.6,
+      rom: { pitch: 5, yaw: 34, roll: 4 },
+      durationSec: 90,
+    }),
+  );
+  flux(5, 14, {
+    ...fluxBase,
+    exerciseId: 'gaze-stability',
+    kind: 'oscillation',
+    side: null,
+    count: 22,
+    avgPeakDeg: 18,
+    rom: { pitch: 3, yaw: 21, roll: 2 },
+    durationSec: 30,
+    delegate: 'CPU',
+  });
 
   // Story bank — a couple of STAR stories so page-first isn't judged against an empty bank. One is fully
   // written with two tags; the other is a single-tag stub with an empty result — the "start ugly, tighten

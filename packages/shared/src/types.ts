@@ -4,6 +4,7 @@
 
 import type { AttachmentStatus } from './attachments';
 import type { CompetencyTag } from './stories';
+import type { Condition, Euler, ExerciseKind } from './flux/types';
 
 // Every stored item carries these. `deletedAt` is a soft-delete tombstone — we never hard-delete.
 // `updatedAt` is the last-write-wins clock for multi-device conflict resolution.
@@ -289,6 +290,30 @@ export interface Story extends BaseEntity {
   situation: string;
   action: string;
   result: string;
+}
+
+// --- Flux: saved sets ------------------------------------------------------
+// One row per finished Flux set (docs/areas/flux, D47). The client mints the id (an outbox retry can't
+// double-save) and the day (fixed at set time, so a set retried tomorrow keeps its day). `side` is the
+// stored mirror ('a' = the definition's own sign); its Right/Left label is per exercise (sideLabel, D48).
+export type FluxSide = 'a' | 'b';
+export type FluxDelegate = 'GPU' | 'CPU';
+
+export interface FluxSet extends BaseEntity {
+  day: string; // YYYY-MM-DD — the client's day for completedAt (dayStartHour)
+  exerciseId: string; // catalog id (@aperture/shared/flux)
+  kind: ExerciseKind;
+  side: FluxSide | null; // the sided stretches only
+  condition: Condition | null; // the library chip when the set was done
+  count: number; // reps / holds / trials / cycles
+  avgPeakDeg: number | null;
+  avgErrorDeg: number | null;
+  rom: Euler; // range since the neutral, at set end
+  calibrated: boolean;
+  delegate: FluxDelegate | null;
+  durationSec: number;
+  completedAt: number; // epoch ms
+  repTaskId: string | null; // the Roll rep this set counted toward
 }
 
 // --- Task attachments ------------------------------------------------------

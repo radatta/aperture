@@ -3,13 +3,12 @@
 // webcam head-pose engine can actually observe. Validated at COMPILE TIME via
 // `as const satisfies` — no runtime schema dependency (see docs/areas/flux).
 //
-// SIGN CONVENTION (assumed; must be verified on-device — see docs/areas/flux):
-//   pitch  +flexion (chin down)   / −extension (look up)   [verified on-device]
-//   yaw    +turn right            / −turn left             [unverified — phase-8 dev test]
-//   roll   +tilt right (ear→R)    / −tilt left (ear→L)     [unverified — phase-8 dev test]
-// Bilateral ROM exercises are sign-agnostic; only the single-direction pitch
-// drills and the stretch target positions depend on this convention. Flipping a
-// wrong one is a one-field change.
+// SIGN CONVENTION (verified on the iPhone, 2026-10-29 — see docs/areas/flux):
+//   pitch  +flexion (chin down)   / −extension (look up)
+//   yaw    +turn right            / −turn left
+//   roll   +tilt right (ear→R)    / −tilt left (ear→L)
+// The single-direction pitch drills, the stretch target positions and the Right/Left labels (sideLabel,
+// BILATERAL_LABELS — D48) depend on it. Flipping a wrong one is a one-field change.
 //
 // Parameters are flux-track's, except the hold times, retuned after the dev test
 // (docs/areas/flux D31): ROM reps 2→4 s, the three stretches 30→10 s, the four

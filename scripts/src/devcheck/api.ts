@@ -24,6 +24,35 @@ export interface CreateTaskInput {
   parentId?: string | null; // a part of that task (the parts scenario)
 }
 
+// The slice of a saved Flux set the check writes and reads (docs/areas/flux D47). Its id is minted here,
+// like the app's — the server keys the idempotent write on it — and recorded before the call.
+export interface DevFluxSetInput {
+  id: string;
+  day: string;
+  exerciseId: string;
+  kind: string;
+  side: 'a' | 'b' | null;
+  condition: null;
+  count: number;
+  avgPeakDeg: number | null;
+  avgErrorDeg: number | null;
+  rom: { pitch: number; yaw: number; roll: number };
+  calibrated: boolean;
+  delegate: 'GPU' | 'CPU' | null;
+  durationSec: number;
+  completedAt: number;
+  repTaskId: null;
+}
+export interface DevFluxSet {
+  id: string;
+  day: string;
+  exerciseId: string;
+  count: number;
+}
+
+// The ledger's `via` for a Flux set — cleanup reads it to delete the right kind of row.
+export const FLUX_SET_VIA = 'api:recordFluxSet';
+
 export type FetchLike = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
@@ -77,6 +106,10 @@ export function createApiClient({
     listBacklog: () => call<DevTask[]>('listBacklog', []),
     getTask: (id: string) => call<DevTask | null>('getTask', [id]),
     listCategories: () => call<{ id: string; label: string }[]>('listCategories', []),
+    listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
+    // Alive only — a deleted set reads as gone, like getTask.
+    getFluxSet: async (id: string) =>
+      (await call<DevFluxSet[]>('listFluxSets', [{}])).find((f) => f.id === id) ?? null,
   };
 
   const writes = {
@@ -86,8 +119,27 @@ export function createApiClient({
       ledger.append({ run, op: 'created', id: task.id, via: 'api:createTask', title: input.title });
       return task;
     },
+    // The id is known before the call (the client mints it), so `created` is recorded first: a crash
+    // mid-call still leaves the id for the next run's sweep.
+    async recordFluxSet(input: DevFluxSetInput): Promise<DevFluxSet> {
+      const title = `flux ${input.exerciseId}`;
+      ledger.append({ run, op: 'created', id: input.id, via: FLUX_SET_VIA, title });
+      return call<DevFluxSet>('recordFluxSet', [input]);
+    },
+    async deleteFluxSet(id: string): Promise<void> {
+      const recorded = ledger
+        .read()
+        .some((e) => e.op === 'created' && e.id === id && e.via === FLUX_SET_VIA);
+      if (!recorded)
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          `refusing to delete Flux set ${id} — the ledger never recorded it`,
+        );
+      await call<null>('deleteFluxSet', [id]);
+    },
     async deleteTask(id: string): Promise<void> {
-      if (!ledger.has(id))
+      const isFlux = ledger.read().some((e) => e.id === id && e.via === FLUX_SET_VIA);
+      if (!ledger.has(id) || isFlux)
         throw new DevcheckError(
           'LEDGER_GUARD',
           `refusing to delete ${id} — the ledger never recorded it`,

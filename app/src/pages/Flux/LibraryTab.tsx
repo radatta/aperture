@@ -5,6 +5,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { ExerciseLibrary } from '../../modules/flux/ExerciseLibrary';
 import { readCondition, readStage, writeCondition, writeStage } from '../../modules/flux/prefs';
 import { UnlinkedRollNote } from '../../modules/flux/RepTie';
+import { FluxTabs } from './FluxTabs';
 
 // /flux — the exercise library. The condition and stage chips stick (per device): the condition is
 // what makes a contraindication show on the stage, so resetting it on Back (flux did) would hide one.
@@ -18,6 +19,7 @@ export function FluxLibraryTab() {
 
   return (
     <div className="flex flex-col gap-5">
+      <FluxTabs />
       {settings && rolls && !linked && <UnlinkedRollNote />}
       <ExerciseLibrary
         condition={condition}
