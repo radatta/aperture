@@ -279,7 +279,31 @@ describe('stub calendar: parent + parts', () => {
     await api.createTask({ title: 'read', parentId: p.id });
     const parent = (await api.getTask(p.id))!;
     expect(parent.gcalEventId).toBe(p.gcalEventId); // patched, not replaced
-    expect(parent.gcalSeen).toMatchObject({ title: 'P2', ...markerOf('2026-10-09', '23:59') });
+    expect(parent.gcalSeen).toMatchObject({
+      title: 'P2',
+      ...markerOf('2026-10-09', '23:59'),
+      marker: true, // the look sent is recorded
+    });
+  });
+
+  it('“detaching” a task that isn’t a part changes nothing — a parent keeps its marker', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    await api.createTask({ title: 'read', parentId: p.id });
+    const before = (await api.getTask(p.id))!;
+    expect(await api.setTaskParent(p.id, null)).toEqual(before);
+  });
+
+  it('attaching a timed, linked task as a first part: the parent’s block → marker, the part renamed', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    const t = await api.createTask({ title: 'read', dueDay: '2026-10-08', dueTime: '10:00' });
+    const part = await api.setTaskParent(t.id, p.id);
+    expect(part.gcalSeen?.title).toBe('P2 · read');
+    expect((await api.getTask(p.id))!.gcalSeen).toMatchObject({
+      ...markerOf('2026-10-09', '17:00'),
+      marker: true,
+    });
   });
 
   it('an unlinked timed parent gets its marker from Add due marker (the retry); untimed never', async () => {

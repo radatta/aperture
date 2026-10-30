@@ -186,8 +186,9 @@ export function calendarSyncPlan(
     } else {
       // Not known yet (linked before two-way sync): any change sends everything, once — after which the
       // event is known.
+      // A look to send counts as a change too, so the patch leaves a whole base behind.
       retime = retitle =
-        ensure || whenChanged || changed('estimateMin') || changed('title') || !wasTimed;
+        ensure || whenChanged || changed('estimateMin') || changed('title') || !wasTimed || relook;
     }
     if (!retime && !retitle && !relook) return NONE;
     return {

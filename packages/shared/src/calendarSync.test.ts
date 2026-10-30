@@ -174,6 +174,24 @@ describe('calendarSyncPlan', () => {
       updatedMs: 30,
     });
   });
+  it('seenAfter records the look sent: a patch without one keeps it, false overrides true', () => {
+    const marker = { title: 'p', startMs: 1, endMs: 2, updatedMs: 10, marker: true };
+    expect(seenAfter({ kind: 'patch', title: 'q' }, marker, 20).marker).toBe(true);
+    expect(seenAfter({ kind: 'patch', marker: false }, marker, 20).marker).toBe(false);
+    const create = { kind: 'create' as const, target: REF, title: 'p', startMs: 1, endMs: 2 };
+    expect(seenAfter({ ...create, marker: false }, null, 5).marker).toBe(false);
+    expect('marker' in seenAfter({ kind: 'patch', title: 'q' }, null, 5)).toBe(false);
+  });
+  it('a look to send on an event with no base sends everything, so the base it leaves is whole', () => {
+    const unknown = linked({ gcalSeen: null });
+    expect(calendarSyncPlan(unknown, unknown, ON, epoch, { parent: true })).toEqual({
+      kind: 'patch',
+      title: 'pset',
+      startMs: END - 15 * 60_000,
+      endMs: END,
+      marker: true,
+    });
+  });
   it('a manual event on an untimed task moves when the task gains a time', () => {
     const a = calendarSyncPlan(linked({ dueTime: null }), linked(), ON, epoch);
     expect(a).toMatchObject({ kind: 'patch', endMs: END });

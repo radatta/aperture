@@ -706,6 +706,7 @@ class StubClient implements ApiClient {
   async setTaskParent(id: string, parentId: string | null): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
     if (parentId === null) {
+      if (!task.parentId) return task; // not a part: nothing to detach (a parent keeps its marker)
       const part = this.writes.patch(this.store.tasks, id, { parentId: null });
       this.releaseParentState(task.parentId);
       return this.syncCalendar(task, part, false, { parent: false }); // its block loses the prefix

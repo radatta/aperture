@@ -720,6 +720,7 @@ export class BackendClient implements ApiClient {
   async setTaskParent(id: string, parentId: string | null): Promise<Task> {
     const task = await this.mustTask(id);
     if (parentId === null) {
+      if (!task.parentId) return task; // not a part: nothing to detach (a parent keeps its marker)
       const part = await this.repo.putTask({ ...task, parentId: null, updatedAt: this.now() });
       await this.releaseParentState(task.parentId);
       return this.syncCalendar(task, part, false, undefined, { parent: false }); // loses the prefix

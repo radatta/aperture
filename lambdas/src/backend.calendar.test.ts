@@ -299,6 +299,19 @@ describe('calendar auto-sync (timed tasks)', () => {
     await b.completeGoogleConnect('A'); // primary becomes the write default; auto-sync defaults on
     return { g, b };
   }
+  async function connectedWithRepo() {
+    const g = new InMemoryGoogle();
+    const doc = new InMemoryDoc();
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    const b = new BackendClient(repo, {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+      google: g,
+      stateSecret: 'test-secret',
+    });
+    await b.completeGoogleConnect('A');
+    return { g, b, repo };
+  }
   const only = (g: InMemoryGoogle) => [...g.events.entries()][0]!;
 
   it('a timed create makes one event ending at the deadline; untimed makes none', async () => {
@@ -666,6 +679,7 @@ describe('calendar auto-sync (timed tasks)', () => {
       const part = await b.createTask({ title: 'read', parentId: p.id, estimateMin: 30 });
       await b.setTaskDue(p.id, { dueDay: '2026-10-10', dueTime: '12:00' });
       expect(g.events.get(p.gcalEventId!)).toMatchObject(markerOf('2026-10-10', '12:00'));
+      expect(g.patches.at(-1)!.marker).toBeUndefined(); // already a marker: the look isn't resent
       await b.deleteCalendarEvent(p.id);
       const created = await b.syncCalendarEvent(p.id);
       expect(g.events.get(created.gcalEventId!)).toMatchObject({ marker: true, title: 'P2' });
@@ -799,6 +813,39 @@ describe('calendar auto-sync (timed tasks)', () => {
       expect(g.events.get(part.gcalEventId!)!.title).toBe('C · x');
       await b.setTaskParent(part.id, null);
       expect(g.events.get(part.gcalEventId!)!.title).toBe('x');
+    });
+
+    it('“detaching” a task that isn’t a part sends nothing — a parent keeps its marker', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      await b.createTask({ title: 'read', parentId: p.id });
+      g.patches.length = 0;
+      await b.setTaskParent(p.id, null);
+      expect(g.patches).toHaveLength(0);
+      expect(g.events.get(p.gcalEventId!)!.marker).toBe(true);
+    });
+
+    it('attaching a timed, linked task as a first part: the parent’s block → marker, the part renamed', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      const t = await b.createTask({ title: 'read', dueDay: '2026-10-08', dueTime: '10:00' });
+      await b.setTaskParent(t.id, p.id);
+      expect(g.events.get(t.gcalEventId!)!.title).toBe('P2 · read');
+      expect(g.events.get(p.gcalEventId!)).toMatchObject({
+        marker: true,
+        ...markerOf('2026-10-09', '17:00'),
+      });
+    });
+
+    it('renaming a part skips the task-list read (a part has no parts to re-send)', async () => {
+      const { b, repo } = await connectedWithRepo();
+      const p = await b.createTask({ title: 'P2' });
+      const part = await b.createTask({ title: 'read', parentId: p.id });
+      const list = vi.spyOn(repo, 'listTasks');
+      await b.setTaskTitle(part.id, 'read ch 3');
+      expect(list).not.toHaveBeenCalled();
+      await b.setTaskTitle(p.id, 'P2 final');
+      expect(list).toHaveBeenCalled();
     });
 
     it('a release that failed heals on the retry: the block stops showing as a marker', async () => {

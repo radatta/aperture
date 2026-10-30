@@ -10,7 +10,7 @@ import { dayKey, fmtClock12, fmtDuration, fmtMonthShortDay, todayKey } from './d
 import { eventLengthMin, syncWindow } from './due';
 import type { DueClock, DueEpoch } from './due';
 import { isPendingRemoval, sameTitle } from './calendarSync';
-import { blockTitle, titleFromBlock } from './parts';
+import { BLOCK_TITLE_SEP, blockTitle, titleFromBlock } from './parts';
 import type { GcalSeen, Task } from './types';
 
 // One changed event from the delta, normalised by the gateway.
@@ -97,8 +97,15 @@ export function calendarPullPlan(
   // Stale: predates the base. (`?? 0`: a base from an earlier build of this branch has no version.)
   if (ev.updatedMs < (seen.updatedMs ?? 0)) return NONE;
   // In the task's own title space: a part's block title carries its parent's prefix, which isn't the
-  // part's to keep — a prefix-less rename taken from Google isn't an Aperture change waiting to go.
-  const titleUnsent = !sameTitle(task.title, titleFromBlock(seen.title ?? '', opts.parentTitle));
+  // part's to keep — a prefix-less rename taken from Google isn't an Aperture change waiting to go. The
+  // prefix is the one the block was last known with: the parent's title, or an older one when the parent
+  // was renamed in Google since (the pull never re-sends its parts' blocks).
+  const suffix = `${BLOCK_TITLE_SEP}${task.title.trim()}`;
+  const seenPrefix =
+    opts.parentTitle && seen.title?.trim().endsWith(suffix)
+      ? seen.title.trim().slice(0, -suffix.length)
+      : opts.parentTitle;
+  const titleUnsent = !sameTitle(task.title, titleFromBlock(seen.title ?? '', seenPrefix));
   // Aperture changed the time iff the task no longer maps to the base the way a pull would map it: the
   // deadline (the same instant, or the same wall-clock minute — a fall-back hour's second 1:30, an end
   // with seconds), the length in whole minutes (not on a done task or a marker — their start never
@@ -119,7 +126,9 @@ export function calendarPullPlan(
   const fields: Extract<PullAction, { kind: 'apply' }>['fields'] = {};
   const kept: KeptField[] = [];
   // Title: Google renamed it since Aperture last knew the event (trim-insensitive).
-  const renamed = title ? titleFromBlock(title, opts.parentTitle) : '';
+  // Stripped of the prefix it was known with, else the parent's current one.
+  const stripped = title ? titleFromBlock(title, seenPrefix) : '';
+  const renamed = title && stripped === title ? titleFromBlock(title, opts.parentTitle) : stripped;
   if (title && renamed && !sameTitle(title, seen.title) && !sameTitle(renamed, task.title)) {
     if (titleUnsent) kept.push('title');
     else fields.title = renamed;

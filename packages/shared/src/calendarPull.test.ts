@@ -598,6 +598,15 @@ describe('calendarPullPlan', () => {
         note: expect.stringMatching(/^Kept your title/),
       });
     });
+    it('after the parent was renamed in Google, a part block keeps its old prefix — still not "unsent"', () => {
+      // Known as "P2 · x"; the parent is now P3 (its marker renamed in Google, its parts not re-sent).
+      const t = task({ title: 'x', gcalSeen: { title: 'P2 · x', ...WIN, updatedMs: 2_000 } });
+      const p3 = { firstSync: false, parentTitle: 'P3' };
+      const a = calendarPullPlan(t, event({ title: 'P2 · y', updatedMs: 3_000 }), T0, p3);
+      expect(a).toMatchObject({ kind: 'apply', fields: { title: 'y' } });
+      const b = calendarPullPlan(t, event({ title: 'P3 · z', updatedMs: 3_000 }), T0, p3);
+      expect(b).toMatchObject({ kind: 'apply', fields: { title: 'z' } });
+    });
     it('the look Aperture sent rides along in the base (colour is never read back)', () => {
       const seen = {
         title: 'P2',

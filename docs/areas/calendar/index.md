@@ -81,7 +81,8 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
   Absent leaves how the event shows alone. Never read back.
 - Two-way bookkeeping on `Task`, all **optional** (sync state, not task data; old rows lack them):
   `gcalSeen` (the event's title + window as Aperture last knew it, plus Google's `updated` for that
-  state — the merge base and the stale line — and `marker`, the look Aperture last sent, if any) and `gcalPulled` (`{at, note}` — the "updated from Google"
+  state — the merge base and the stale line — and `marker`, the look Aperture last sent: set by every
+  create, absent on a block linked by the picker or before looks were recorded) and `gcalPulled` (`{at, note}` — the "updated from Google"
   mark).
 - `GcalSyncState` (`gcal#sync#<sub>`, one per account): the `events.list` `syncToken`, `lastPulledAt`
   (attempt — the throttle), `lastSyncedAt` (success; Settings' "Checked …"), `lastPullError`. Exported like `financeSyncStates`; tombstoned on disconnect.
@@ -186,9 +187,9 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 - **Parent + parts** ([tasks/parts.md](../tasks/parts.md) D8, D12, D13): a parent's one event is its **due
   marker** — `MARKER_MIN` (15) ending at its deadline (`syncWindow(…, parent)`), free and graphite, titled
   with its plain title. `calendarSyncPlan` takes `opts.parent` (the impls compute it from the task list on
-  every sync but a fresh create, Add/Retry/Send included). `marker` goes on a parent's create, and on a
-  patch only when the event's recorded look (`gcalSeen.marker`) differs from the task's — never on a
-  plain block that was never a marker. A timed task that takes its first part has its block patched into
+  every sync but a fresh create, Add/Retry/Send included). Every create carries `marker` (`true` for a
+  parent), and a patch carries it only when the event's recorded look (`gcalSeen.marker`) differs from
+  the task's — never on a plain block that was never a marker. A timed task that takes its first part has its block patched into
   the marker; its last part going patches it back, and a failed switch heals on the next push. An untimed parent has no marker, and an event it had goes
   whatever the toggle says. `insertCalendarEvent` refuses a parent (`PARENT_NO_EVENT_ERROR`) before its
   other checks. Lazy: nothing is backfilled — a marker appears on a due change, a split or Break down, or
