@@ -21,6 +21,24 @@ case "$LC" in
   *heavy.sh*) exit 0 ;;                        # already wrapped
   "git "*|"gh "*|"echo "*|"printf "*) exit 0 ;;  # text that merely mentions a heavy command
 esac
+
+# Does some segment of $1 actually start a runner (pnpm, vitest, tsc, node, …), rather than read or write text
+# that mentions one (`cat vitest.config.ts`, `grep -rn "pnpm test" docs/`)? A heredoc's body is text, so only
+# its first line counts. Leading env assignments and wrappers (env, timeout N, nice) are skipped. Builtins only.
+runs_heavy() {
+  local c="$1" seg w
+  case "$c" in *"<<"*) c=${c%%$'\n'*} ;; esac
+  c=${c//&&/$'\n'}; c=${c//||/$'\n'}; c=${c//;/$'\n'}; c=${c//|/$'\n'}; c=${c//(/ }; c=${c//)/ }
+  while IFS= read -r seg; do
+    read -r -a w <<<"$seg"
+    while [ "${#w[@]}" -gt 0 ]; do
+      case "${w[0]}" in *=*|env|timeout|time|nice|exec|-*|[0-9]*) w=("${w[@]:1}") ;; *) break ;; esac
+    done
+    case "${w[0]:-}" in pnpm|npx|vitest|*/vitest|tsc|*/tsc|tsgo|eslint|*/eslint|vite|*/vite|node|bash|sh|scripts/*|./*) return 0 ;; esac
+  done <<<"$c"
+  return 1
+}
+runs_heavy "$LC" || exit 0
 CLASS=$(sb_classify "$CMD")
 case "$CLASS" in test|typecheck|lint|build|dev|ui) ;; *) exit 0 ;; esac
 
@@ -49,10 +67,11 @@ if [ "$ENF" = true ]; then
     . "$B/lease.sh"
     dec=$(sb_locked _heavy_try "" 0 "$CLASS" guard 0 0 2>/dev/null)  # "" = decide only, no slot
     if [ "$(jq -r .wait <<<"$dec" 2>/dev/null)" = true ]; then
+      dec=$(_heavy_with_holders "$dec")
       _heavy_event denied "$dec" "${PID:-0}" "$CLASS" guard "$CMD" 2>/dev/null
       [ "$(jq -r .verdict <<<"$dec")" = cap-full ] &&
-        emit deny "Held: the $CLASS cap is full ($(jq -r '"\(.cap.running)/\(.cap.max)"' <<<"$dec") running: $(_heavy_holders "$CLASS")). Run it as \`scripts/board/heavy.sh -- <cmd>\` — it waits up to 90 s for a slot, then runs or says who holds them (give a full suite a 600 s timeout or run it in the background); single-file runs (\`vitest run <file>\`) are never capped; \`scripts/board/board.sh status\` shows who is running what."
-      emit deny "$(jq -r --arg c "$CLASS" --arg now "$NOW" '"Held at the measured edge: this \($c) job would take the container to \(.predicted.pids) pids / \(.predicted.anonMiB) MiB, past the hard line (\(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)). Board: \($now). Run it as `scripts/board/heavy.sh -- <cmd>` — it waits up to 90 s for room, then runs or says who holds it; `scripts/board/board.sh status` shows who is running what."' <<<"$dec")"
+        emit deny "Held: the $CLASS cap is full ($(jq -r '"\(.cap.running)/\(.cap.max)"' <<<"$dec") running: $(_heavy_holders "$CLASS")). Run it as \`$B/heavy.sh -- <cmd>\` — it waits up to 90 s for a slot, then runs or says who holds them (give a full suite a 600 s timeout or run it in the background); single-file runs (\`vitest run <file>\`) are never capped; \`$B/board.sh status\` shows who is running what."
+      emit deny "$(jq -r --arg c "$CLASS" --arg now "$NOW" --arg h "$B/heavy.sh" '"Held at the measured edge: this \($c) job would take the container to \(.predicted.pids) pids / \(.predicted.anonMiB) MiB, past the hard line (\(.thresholds.pidsHard) / \(.thresholds.anonHardMiB)). Board: \($now). Run it as `\($h) -- <cmd>` — it waits up to 90 s for room, then runs or says who holds it; `\($h | sub("heavy.sh$"; "board.sh")) status` shows who is running what."' <<<"$dec")"
     fi
   fi
 fi
@@ -63,6 +82,6 @@ if [ "$OTHERS" -gt 0 ] || ! grep -qx "$CLASS" "$mark" 2>/dev/null; then
   [ -n "${PID:-}" ] && echo "$CLASS" >>"$mark"
   running=; [ "$OTHERS" -gt 0 ] && running=" · $OTHERS heavy job(s) running now"
   short=${CMD:0:120}; [ "${#CMD}" -gt 120 ] && short="$short…"
-  emit allow "Heavy command ($CLASS): consider \`scripts/board/heavy.sh -- $short\` — same output and exit code, plus its peak memory/threads in the board history and a budget slot other sessions can see. Board now: ${NOW:-sampler not running}$running."
+  emit allow "Heavy command ($CLASS): consider \`$B/heavy.sh -- $short\` — same output and exit code, plus its peak memory/threads in the board history and a budget slot other sessions can see. Board now: ${NOW:-sampler not running}$running."
 fi
 exit 0

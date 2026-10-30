@@ -134,8 +134,7 @@ _heavy_holders_json() {
 # matrix.sh (HEAVY_GUARD) and edge.sh (HEAVY_LOADTEST) probe the edge on purpose: the cap never holds them.
 _heavy_is_load() { [ "${HEAVY_GUARD:-0}" = 1 ] || [ "${HEAVY_LOADTEST:-0}" = 1 ]; }
 
-# Under the lock: gc, decide, and on a go write the slot. Prints the decision JSON (with the holders when it
-# blocks); exit 0 go, 3 wait.
+# Under the lock: gc, decide, and on a go write the slot. Prints the decision JSON; exit 0 go, 3 wait.
 _heavy_try() {
   local slot="$1" owner="$2" class="$3" label="$4" wp="$5" ws="$6" slots live dec lt=false
   sb_init_dirs; _heavy_gc
@@ -146,15 +145,20 @@ _heavy_try() {
     --argjson slots "${slots:-[]}" --arg class "$class" --argjson lt "$lt" \
     '{limits: $l[0], liveLimits: {pidsMax: $pm, highBytes: $hi}, live: $live, slots: $slots, req: {class: $class, loadTest: $lt}}' |
     "${BOARD_CLI[@]}" decide-heavy) || { echo '{"verdict":"grant","wait":false,"error":true}'; return 0; }  # fail open
-  case "$(jq -r .verdict <<<"$dec")" in
-    over-hard|cap-full) dec=$(jq -c --argjson h "$(_heavy_holders_json)" '. + {holders: $h}' <<<"$dec") ;;
-  esac
   printf '%s\n' "$dec"
   [ "$(jq -r .wait <<<"$dec")" = true ] && return 3
   [ -n "$slot" ] || return 0  # decide only (the PreToolUse guard)
   jq -nc --argjson pid "$owner" --arg class "$class" --arg label "$label" --argjson wp "$wp" --arg ws "$ws" \
     --argjson cost "$(jq -c --arg c "$class" '.classes[$c] // {pids: 0, anonMiB: 0} | {pids, anonMiB}' "$LIMITS_JSON")" \
     '{v: 1, pid: $pid, class: $class, label: $label, cost: $cost, wrapperPid: $wp, wrapperStart: $ws, startedAt: (now | todate)}' | sb_write "$slot"
+}
+
+# A blocking decision plus who holds the slots (outside the lock: 2 jq per slot is too slow to hold it for).
+_heavy_with_holders() {
+  case "$(jq -r .verdict <<<"$1" 2>/dev/null)" in
+    over-hard|cap-full) jq -c --argjson h "$(_heavy_holders_json)" '. + {holders: $h}' <<<"$1" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
 }
 
 # One barrier event (docs/ops/SESSION-BOARD.md → History): action waited | gaveUp | denied | wouldWait, from the
@@ -169,7 +173,8 @@ _heavy_event() {
     --arg c "$class" --arg l "$label" --arg cmd "${cmd:0:160}" --arg w "$waited" --argjson mix "${mix:-null}" --argjson lt "$lt" '
     {lease: "heavy", action: $a, pid: $pid, name: (if $name == "" then null else $name end),
      branch: (if $branch == "" then null else $branch end), class: $c, label: $l, cmd: $cmd,
-     reason: (if .verdict == "cap-full" then "cap" else "hard" end), cap, holders: (.holders // []),
+     reason: (if .verdict == "cap-full" then "cap" elif .verdict == "lock-busy" then "lock" else "hard" end),
+     cap, holders: (.holders // []),
      predicted, thresholds, mix: $mix, loadTest: $lt} + (if $w == "" then {} else {waitedSec: ($w | tonumber)} end)' <<<"$dec")"
 }
 
@@ -182,6 +187,15 @@ lease_heavy_acquire() {
   t0=$(sb_epoch)
   while :; do
     dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws"); rc=$?
+    # The board lock was busy for 5 s — likeliest at a full cap, with every waiter polling. Retry until our own
+    # deadline rather than run unslotted (invisible to everyone else's count); fail open only then, logged.
+    if [ "$rc" = 75 ]; then
+      if [ $(( $(sb_epoch) - t0 )) -lt "$wait" ]; then sleep 2; continue; fi
+      _heavy_event lockBusy '{"verdict":"lock-busy"}' "$owner" "$class" "$label" "$cmd" "$(( $(sb_epoch) - t0 ))"
+      echo "heavy: the board lock stayed busy for ${wait}s — running without a slot (logged)" >&2
+      return 0
+    fi
+    dec=$(_heavy_with_holders "$dec")
     v=$(jq -r .verdict <<<"$dec" 2>/dev/null)
     if [ "$rc" = 0 ]; then
       case "$v" in

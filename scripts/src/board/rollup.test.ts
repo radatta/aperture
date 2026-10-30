@@ -103,6 +103,8 @@ describe('stat and slope', () => {
   it('computes nearest-rank stats', () => {
     expect(stat([])).toEqual({ median: 0, p95: 0, max: 0 });
     expect(stat([3, 1, 2])).toEqual({ median: 2, p95: 3, max: 3 });
+    // a week of idle-session samples: spreading this many into Math.max throws RangeError
+    expect(stat(Array.from({ length: 200_000 }, (_, i) => i % 7)).max).toBe(6);
   });
 
   it('returns null when the session count never varied', () => {
@@ -167,14 +169,53 @@ describe('barriers — how limiting the cap is', () => {
     expect(b.waitSec).toEqual({ total: 142, p50: 12, p90: 90, max: 90 });
   });
 
-  it('says what caused them', () => {
+  it('says what caused them, counting blocks so the breakdowns add up to the headline', () => {
     expect(b.byReason).toEqual([
-      { key: 'cap', n: 5 },
+      { key: 'cap', n: 4 },
       { key: 'hard', n: 2 },
     ]);
-    expect(b.byMix).toEqual([{ key: '3w 2i 4h', n: 7 }]);
-    expect(b.byHolder).toEqual([{ key: 'dev-e2e', n: 7 }]);
-    expect(b.byBlocked.map((c) => c.key)).toEqual(['flux', 'refund', 'task-parts', 'ci-bot']);
+    expect(b.byMix).toEqual([{ key: '3w 2i 4h', n: 6 }]);
+    expect(b.byHolder).toEqual([{ key: 'dev-e2e', n: 6 }]);
+    expect(b.byBlocked).toEqual([
+      { key: 'refund', n: 2 },
+      { key: 'task-parts', n: 2 },
+      { key: 'ci-bot', n: 1 },
+      { key: 'flux', n: 1 }, // its deny + re-run: one block
+    ]);
+    for (const by of [b.byReason, b.byMix, b.byBlocked])
+      expect(by.reduce((a, c) => a + c.n, 0)).toBe(b.blocks);
+  });
+
+  it('never merges strangers: pid 0 (no claude ancestor) falls back to the name', () => {
+    const x = barriers(
+      [
+        ev('denied', '10:00:00', 0, 'flux'),
+        ev('waited', '10:01:00', 0, 'ci-bot', { waitedSec: 20 }),
+      ],
+      week,
+      now,
+    );
+    expect(x).toMatchObject({ blocks: 2, merged: 0 });
+  });
+
+  it('a lock-busy fail-open is reported, not counted as a block', () => {
+    const x = barriers(
+      [ev('lockBusy', '10:00:00', 10, 'flux', { reason: 'lock', waitedSec: 90 })],
+      week,
+      now,
+    );
+    expect(x).toMatchObject({ blocks: 0, lockBusy: 1 });
+    expect(formatBarriers(x)).toBe('barriers (7 d): none · 1× ran unslotted (board lock busy)');
+  });
+
+  it('uses the real window for the rate', () => {
+    const halfDay = new Date(now.getTime() - 12 * 3600_000);
+    const x = barriers(
+      [{ ...ev('denied', '10:00:00', 10, 'flux'), t: '2026-10-19T18:00:00Z' }],
+      halfDay,
+      now,
+    );
+    expect(x).toMatchObject({ days: 0.5, blocks: 1, perDay: 2 });
   });
 
   it('formats one line for board.sh status, and says none when nothing was held', () => {
@@ -190,7 +231,7 @@ describe('barriers — how limiting the cap is', () => {
     const r = rollup([], events as unknown as JobEvent[], week, now);
     expect(r.barriers.blocks).toBe(6);
     expect(formatReport(r)).toContain('Barriers (test cap / hard-line holds');
-    expect(formatReport(r)).toContain('held by: dev-e2e ×7');
+    expect(formatReport(r)).toContain('held by: dev-e2e ×6');
   });
 
   it('pct is nearest-rank', () => {

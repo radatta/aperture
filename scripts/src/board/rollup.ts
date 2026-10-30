@@ -31,7 +31,8 @@ export function pct(xs: number[], q: number): number {
 
 export function stat(xs: number[]): Stat {
   if (xs.length === 0) return { median: 0, p95: 0, max: 0 };
-  return { median: pct(xs, 0.5), p95: pct(xs, 0.95), max: Math.max(...xs) };
+  // no Math.max(...xs): a week of idle-session samples (~120k) overflows the argument limit
+  return { median: pct(xs, 0.5), p95: pct(xs, 0.95), max: pct(xs, 1) };
 }
 
 export type MixRow = { mix: string; ticks: number; anonMiB: Stat; pids: Stat; cores: Stat };
@@ -61,11 +62,11 @@ export type BarrierEvent = {
   kind: 'lease';
   lease: 'heavy';
   t: string;
-  action: 'waited' | 'gaveUp' | 'denied' | 'wouldWait';
+  action: 'waited' | 'gaveUp' | 'denied' | 'wouldWait' | 'lockBusy';
   pid?: number;
   name?: string | null;
   class: string;
-  reason?: 'cap' | 'hard';
+  reason?: 'cap' | 'hard' | 'lock';
   waitedSec?: number;
   holders?: { name?: string | null; label?: string; class: string }[];
   mix?: Sample['mix'] | null;
@@ -85,6 +86,7 @@ export type Barriers = {
   denied: number;
   merged: number; // deny + re-run pairs counted once
   wouldWait: number; // enforce off: what the cap / hard line would have held
+  lockBusy: number; // ran without a slot because the board lock stayed busy (fail-open) — not a block
   waitSec: { total: number; p50: number; p90: number; max: number };
   byReason: Count[];
   byClass: Count[];
@@ -116,7 +118,8 @@ export function barriers(events: unknown[], since: Date, now: Date): Barriers {
     )
     .sort((a, b) => a.t.localeCompare(b.t));
   const of = (a: BarrierEvent['action']) => all.filter((e) => e.action === a);
-  const who = (e: BarrierEvent) => String(e.pid ?? e.name ?? '?');
+  // pid 0 = no claude ancestor found: unknown, so fall back to the name rather than merge strangers
+  const who = (e: BarrierEvent) => (e.pid ? String(e.pid) : (e.name ?? '?'));
   // A held run's event is written when the wait ends; it started waitedSec earlier.
   const began = (e: BarrierEvent) => Date.parse(e.t) - (e.waitedSec ?? 0) * 1000;
   const denies = of('denied');
@@ -135,26 +138,32 @@ export function barriers(events: unknown[], since: Date, now: Date): Barriers {
     used.add(d);
     merged++;
   }
-  const blocking = all.filter((e) => e.action !== 'wouldWait');
-  const blocks = blocking.length - merged;
-  const days = Math.max(1, Math.round((now.getTime() - since.getTime()) / 86400_000));
+  // The breakdowns count blocks, so they add up to the headline: a merged deny is folded into its re-run.
+  const blocking = all.filter(
+    (e) =>
+      (e.action === 'waited' || e.action === 'gaveUp' || e.action === 'denied') && !used.has(e),
+  );
+  const blocks = blocking.length;
+  const span = Math.max(1 / 24, (now.getTime() - since.getTime()) / 86400_000); // the real window, in days
+  const days = Math.round(span * 10) / 10;
   const waits = all
     .filter((e) => e.action === 'waited' || e.action === 'gaveUp')
     .map((e) => e.waitedSec ?? 0);
   return {
     days,
     blocks,
-    perDay: Math.round((blocks / days) * 10) / 10,
+    perDay: Math.round((blocks / span) * 10) / 10,
     waited: of('waited').length,
     gaveUp: of('gaveUp').length,
     denied: denies.length,
     merged,
     wouldWait: of('wouldWait').length,
+    lockBusy: of('lockBusy').length,
     waitSec: {
       total: waits.reduce((a, b) => a + b, 0),
       p50: pct(waits, 0.5),
       p90: pct(waits, 0.9),
-      max: waits.length ? Math.max(...waits) : 0,
+      max: pct(waits, 1),
     },
     byReason: counts(blocking.map((e) => e.reason ?? 'hard')),
     byClass: counts(blocking.map((e) => e.class)),
@@ -167,7 +176,9 @@ export function barriers(events: unknown[], since: Date, now: Date): Barriers {
 }
 
 export function formatBarriers(b: Barriers): string {
-  const would = b.wouldWait ? ` · would have held ${b.wouldWait}× (enforce off)` : '';
+  const would =
+    (b.wouldWait ? ` · would have held ${b.wouldWait}× (enforce off)` : '') +
+    (b.lockBusy ? ` · ${b.lockBusy}× ran unslotted (board lock busy)` : '');
   if (b.blocks === 0) return `barriers (${b.days} d): none${would}`;
   const reasons = b.byReason.map((r) => `${r.key} ${r.n}`).join(' / ');
   return (

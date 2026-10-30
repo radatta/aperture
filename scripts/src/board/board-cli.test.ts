@@ -94,6 +94,9 @@ beforeEach(() => {
   delete rest.CLAUDE_CODE_SESSION_ID;
   delete rest.TMUX_PANE; // else sessions are named after the tmux window running the tests
   delete rest.TMUX;
+  // edge.sh / matrix.sh run this suite with HEAVY_LOADTEST / HEAVY_GUARD exported: inherited, they'd bypass
+  // the cap these tests check (and their failure would read as a load-caused edge)
+  for (const k of Object.keys(rest)) if (k.startsWith('HEAVY_')) delete rest[k];
   env = {
     ...rest,
     APERTURE_BOARD_DIR: join(tmp, 'board'),

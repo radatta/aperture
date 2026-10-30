@@ -29,3 +29,8 @@
 {"expect":"nudge","why":"cap full but limits.json unreadable — fails open to the offer","cmd":"pnpm test","running":4,"runningClass":"test","limitsRaw":"{"}
 {"expect":"deny","why":"the cap value comes from limits.json","cmd":"pnpm test","running":2,"runningClass":"test","limits":{"concurrency":{"test":2}},"reason":"cap is full"}
 {"expect":"allow","why":"already wrapped — heavy.sh does the waiting","cmd":"scripts/board/heavy.sh -- pnpm test","running":4,"runningClass":"test"}
+{"expect":"allow","why":"reading a vitest config mentions vitest but runs nothing — never denied, even at a full cap","cmd":"cat app/vitest.config.ts","running":4,"runningClass":"test"}
+{"expect":"allow","why":"searching docs for pnpm test runs nothing","cmd":"cd /workspace && grep -rn \"pnpm test\" docs/","running":4,"runningClass":"test"}
+{"expect":"allow","why":"a heredoc body that mentions pnpm test is text","cmd":"cat > localNotes/pr.md <<'EOF'\nRan pnpm test: green\nEOF","running":4,"runningClass":"test"}
+{"expect":"deny","why":"env assignments and cd before the runner still count as a real run","cmd":"cd app && CI=true pnpm test","running":4,"runningClass":"test","reason":"cap is full"}
+{"expect":"deny","why":"the deny names this board's own heavy.sh by absolute path (other worktrees have none)","cmd":"pnpm test","running":4,"runningClass":"test","reason":"/scripts/board/heavy.sh -- <cmd>"}

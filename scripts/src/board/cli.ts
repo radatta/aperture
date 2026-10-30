@@ -116,7 +116,8 @@ function sessionNames(boardDir: string): Record<string, string> {
 }
 
 export function main(argv: string[], stdin: () => string): string {
-  const [cmd, ...args] = argv;
+  const [cmd, ...rest] = argv;
+  const args = rest.filter((a) => !a.startsWith('--')); // flags (--json) are read separately, never as positionals
   const now = new Date();
   switch (cmd) {
     case 'decide-dev': {
@@ -161,14 +162,14 @@ export function main(argv: string[], stdin: () => string): string {
         since,
         now,
       );
-      return args.includes('--json') ? JSON.stringify(r) : formatReport(r);
+      return rest.includes('--json') ? JSON.stringify(r) : formatReport(r);
     }
     case 'barriers': {
       const [historyDir, days = '7'] = args;
       if (!historyDir) throw new Error('usage: barriers <historyDir> [days] [--json]');
       const since = new Date(now.getTime() - Number(days) * 86400_000);
       const b = barriers(readJsonl(historyDir, 'events-'), since, now);
-      return args.includes('--json') ? JSON.stringify(b) : formatBarriers(b);
+      return rest.includes('--json') ? JSON.stringify(b) : formatBarriers(b);
     }
     default:
       throw new Error(

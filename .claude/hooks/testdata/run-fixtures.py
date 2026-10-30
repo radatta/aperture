@@ -169,7 +169,8 @@ def board_env(case: dict, root: str) -> dict:
         (tmp / f"board/sessions/{claude_ancestor()}.nudged").write_text(
             "".join(c + "\n" for c in case["nudged"]), encoding="utf-8"
         )
-    env = dict(os.environ)
+    # Not the caller's HEAVY_* (edge.sh / matrix.sh export them): they'd bypass the cap under test.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HEAVY_")}
     env.update(APERTURE_BOARD_DIR=str(tmp / "board"), APERTURE_BOARD_LOCK=str(tmp / "lock"),
                APERTURE_CGROUP_DIR=str(cg), APERTURE_LIMITS_JSON=str(tmp / "limits.json"))
     return env

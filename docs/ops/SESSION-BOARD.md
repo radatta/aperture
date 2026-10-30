@@ -8,7 +8,7 @@ and leases the two shared things that need it. All of it lives in `scripts/board
 **It must never make a session timid.** Tests and the headless UI pass always run. Below the _measured_
 edge the board only offers advice. A heavy job waits only at a measured edge — past the hard line, or when
 its class's concurrency cap is full (`test`: 4 suites at once, from the CPU edge in _Results_) — and only while
-`limits.json` says `enforce: true` (shipped since the 2026-10-13 quiet window). Every hold is logged, so how
+`limits.json` says `enforce: true` (shipped 2026-10-29, after the 2026-10-13 quiet window found the CPU edge). Every hold is logged, so how
 limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 
 ## Use it
@@ -102,9 +102,11 @@ full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, m
 `denied` (the PreToolUse guard refused a raw command; `label: "guard"`), `wouldWait` (enforce off — the
 counterfactual). `holders` and `cap` are the ones at the first block, the cause. `cli.ts barriers` (and the
 report's _Barriers_ section) counts **blocks** = waited + gaveUp + denied, except that a deny followed within
-2 min by the same session's held `heavy.sh` re-run of the same class is **one** block (`merged`); it gives
-blocks/day, total / p50 / p90 / max wait, and counts by reason, class, mix, holder and blocked session. Load
-tests are excluded.
+2 min by the same session's held `heavy.sh` re-run of the same class is **one** block (`merged`; each re-run
+absorbs one deny, the earliest). It gives blocks/day over the real window, total / p50 / p90 / max wait, and
+counts by reason, class, mix, holder and blocked session — counted per block, so each adds up to the headline.
+`lockBusy` (the board lock stayed busy for the whole wait, so the job ran unslotted — fail-open) is reported,
+not counted as a block. Load tests are excluded.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 
@@ -166,8 +168,8 @@ Thresholds are **fractions of the live `pids.max` / `memory.high`**, so a limit 
 `pidsSoftFrac` 0.80 / `pidsHardFrac` 0.92 (3276 / 3768 at 4096), `anonSoftFrac` 0.60 / `anonHardFrac` 0.80
 (10.8 / 14.4 GiB at 18 GiB), `psiFullKill` 15 (load-test stop), `currentGuardMiB` 1536. `classes` hold each
 job class's cost (`pids`, `anonMiB`, `p95Sec`, `source`) — shipped as the 2026-10-06 bench maxima × 1.6 for the
-8-worker fan-out, `measuredAt: null`, `enforce: false`; the 2026-10-13 quiet window filled them in, set
-`measuredLimits`, and (the user's call) shipped `enforce: true` with `"concurrency": { "test": 4 }` — a policy
+8-worker fan-out, `measuredAt: null`, `enforce: false`; the 2026-10-13 quiet window filled them in and set
+`measuredLimits`; on 2026-10-29 (the user's call) `enforce: true` shipped with `"concurrency": { "test": 4 }` — a policy
 key, top-level like `tuning`, so a quiet window rewriting `classes` never loses it. The value is the CPU edge:
 a 6th concurrent suite timed out (_Results_). Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
@@ -177,7 +179,10 @@ over its cost.
 Four, all fail-open, documented with their fixtures in `.claude/hooks/README.md` → _Board hooks_:
 SessionStart registers and injects headroom / dev lease / overlaps; UserPromptSubmit and Stop keep the state;
 the Bash PreToolUse guard offers `heavy.sh` and, with `enforce: true`, denies a raw heavy command only at the
-measured edge or a full cap (recording a `denied` barrier event, pointing at `heavy.sh`, which waits);
+measured edge or a full cap (recording a `denied` barrier event, pointing at this board's `heavy.sh` by absolute
+path — other worktrees have none until merge — which waits). Only a command that actually starts a runner counts:
+some `&&` / `;` / `|` segment begins (after env assignments, `env`, `timeout N`) with `pnpm`, `vitest`, `tsc`,
+`node`, … — `cat vitest.config.ts`, `grep -rn "pnpm test"` or a heredoc body mentioning one is text, not a run;
 SessionEnd marks the session gone.
 
 ## Overlaps
@@ -303,6 +308,6 @@ carry the same list.
   so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
   overwriting a file in place under the running sampler has killed it once.
 - The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4
-  wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes most of that.
+  wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes only the case where 4 wrapped suites already run.
 - `edge.sh` maps the throttle regime; pids exhaustion is container-wide, so other live sessions can abort —
   hence the quiet-window precondition.
