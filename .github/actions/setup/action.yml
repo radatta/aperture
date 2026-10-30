@@ -1,11 +1,12 @@
 name: Setup
-description: The runner image's Node 22 + pnpm via corepack, and a frozen install.
+description: Node from .nvmrc (setup-node) + pnpm via corepack, and a frozen install.
 
 # One recipe for every job that installs (ci.yml's jobs, deploy-stage.yml). Replaces setup-node +
 # pnpm/action-setup, which cost 9–15s a job against corepack's 3–4s: action-setup installs a current pnpm,
 # then self-updates to the pinned one. corepack reads `packageManager`, so pnpm's version keeps its one
-# source. The guards fail loudly the day the image's default Node stops matching .nvmrc — the fix then is
-# a deliberate one (setup-node back, or bump .nvmrc), not a silent major bump. Actions sets CI, so
+# source. Node itself comes from setup-node reading .nvmrc: the image's default Node was used until
+# 2026-10-30, when ubuntu-latest moved to Node 24 and the guard below failed every job. Tests run on
+# .nvmrc's major, the Lambda runtime's, whatever the image ships; setup-node's own caching stays off. Actions sets CI, so
 # corepack never prompts; if npm rotates its signing keys again, COREPACK_INTEGRITY_KEYS=0 is the
 # break-glass. No pnpm store cache: measured, its 4–6s restore bought nothing — install took 10–12s
 # from the cache or straight from the registry (INFRA §9). The two problem matchers are setup-node's own
@@ -16,6 +17,10 @@ description: The runner image's Node 22 + pnpm via corepack, and a frozen instal
 runs:
   using: composite
   steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version-file: .nvmrc
+        package-manager-cache: false
     - name: Toolchain
       shell: bash
       run: |
