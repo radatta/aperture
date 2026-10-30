@@ -159,7 +159,7 @@ export function TransactionDetail({
             view={view}
             busy={link.isPending}
             focus={acted}
-            fallback="No likely charge found — search for it, or sort it below instead."
+            fallback="No likely charge found — search for it above, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
           />
         )}
@@ -171,7 +171,7 @@ export function TransactionDetail({
               view={view}
               busy={link.isPending}
               focus
-              fallback="No likely charge found — search for it below, or it stays money in, outside the budget."
+              fallback="No likely charge found — search for it above, or it stays money in, outside the budget."
               onLink={(chargeId) => setLink(chargeId)}
               onCancel={incomeLink.onClose}
             />
@@ -336,7 +336,7 @@ function LinkedRefund({
 
 const REFUND_SEARCH_LIMIT = 8;
 
-// The charges this refund could reverse: the best as a one-click Link, then a few runners-up. Under
+// The charges this refund could reverse: the best as a one-click Link, then a few runners-up. Above
 // them, a search over every charge it could link to, for the one they miss; while you search, its
 // results replace them.
 function RefundSuggestions({
@@ -428,6 +428,18 @@ function RefundSuggestions({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {/* First, so it never moves: typing only swaps the list under it. */}
+      <SearchBox
+        value={query}
+        onChange={(v) => {
+          setTyped(true);
+          setQuery(v);
+        }}
+        label="Search charges to link"
+        placeholder="Search merchant, bank text, note or amount"
+        keyshortcut={null}
+        onPanel
+      />
       {!searching && matches.length > 0 && (
         <>
           <Text id={labelId} size="sm" tone="muted">
@@ -451,17 +463,6 @@ function RefundSuggestions({
           {fallback}
         </Text>
       )}
-      <SearchBox
-        value={query}
-        onChange={(v) => {
-          setTyped(true);
-          setQuery(v);
-        }}
-        label="Search charges to link"
-        placeholder="Search merchant, bank text, note or amount"
-        keyshortcut={null}
-        onPanel
-      />
       {searching && (
         <>
           <Text id={statusId} size="sm" tone="muted">

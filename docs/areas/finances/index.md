@@ -100,9 +100,9 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   overshoots by at most `REFUND_OVER_RATIO` (10%) of it (a rounded-up reimbursement) — bounded so a
   paycheck's "Link as a refund" doesn't list every charge. Ranked same account → closest either way (exact
   first; under beats over) → nearest date → posted before pending → id.
-- **Search** (`searchRefundCharges`), under the suggestions, for the charge they miss: every charge in the
-  loaded range on shown accounts — any merchant, any age, any size (the cap still applies) — that
-  `refundLinkError` accepts and has something left to refund. A case-insensitive substring of the
+- **Search** (`searchRefundCharges`), above the suggestions so typing never moves it, for the charge they
+  miss: every charge in the loaded range on shown accounts — any merchant, any age, any size (the cap
+  still applies) — that `refundLinkError` accepts and has something left to refund. A case-insensitive substring of the
   merchant, bank text, note or dollar amount (`$1,000.50`, `34.99`); newest first, eight shown with
   "Showing 8 of N". While you type, its results replace the suggestions; Escape clears it first, then
   closes the detail.

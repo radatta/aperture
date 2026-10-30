@@ -49,12 +49,21 @@ export function Modal({
       // `autofocus` on the dialog itself makes showModal() focus the dialog and never a field inside
       // it. Set imperatively: React drops autoFocus on a <dialog>.
       el.toggleAttribute('autofocus', initialFocus === 'dialog');
-      el.showModal();
-      // Engines predating that step focus the first field anyway; move it back to the dialog.
-      if (initialFocus === 'dialog') el.focus();
       // The browser focuses the first focusable element; a dialog can name a better start instead
-      // (e.g. the checked option of a radio group) with `data-autofocus`.
-      else el.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+      // (e.g. the checked option of a radio group) with `data-autofocus`. Named as `autofocus` for the
+      // showModal() call, so the browser lands there directly — never first on an earlier field, which
+      // on iOS starts raising the keyboard.
+      const start =
+        initialFocus === 'content' ? el.querySelector<HTMLElement>('[data-autofocus]') : null;
+      start?.setAttribute('autofocus', '');
+      try {
+        el.showModal();
+      } finally {
+        start?.removeAttribute('autofocus'); // React owns data-autofocus; don't leave a stale twin
+      }
+      // Engines predating that step focus the first field anyway; move it back to the dialog / start.
+      if (initialFocus === 'dialog') el.focus();
+      else start?.focus();
     } else if (!open && el.open) el.close();
   }, [open, initialFocus]);
 

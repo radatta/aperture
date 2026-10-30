@@ -304,7 +304,7 @@ describe('Finances page', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
     expect(
       await within(dialog).findByText(
-        /No likely charge found — search for it below, or it stays money in/,
+        /No likely charge found — search for it above, or it stays money in/,
       ),
     ).toBeTruthy();
   });
@@ -681,6 +681,19 @@ describe('Finances page', () => {
 describe('Refund link search', () => {
   const searchBox = (dialog: HTMLElement) =>
     within(dialog).getByRole('searchbox', { name: 'Search charges to link' });
+
+  it('the search box sits above the list, so typing never moves it', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    const box = searchBox(dialog);
+    expect(within(dialog).getByText(/Refund of which Amazon charge/)).toBeTruthy();
+    expect(box.previousElementSibling).toBeNull(); // nothing above it that typing could remove
+    await user.type(box, 'chip');
+    expect(within(dialog).queryByText(/Refund of which Amazon charge/)).toBeNull();
+    expect(box.previousElementSibling).toBeNull();
+  });
 
   it('a card credit links to a charge the suggestions never offered', async () => {
     const user = userEvent.setup();

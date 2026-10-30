@@ -16,6 +16,32 @@ describe('Modal initial focus', () => {
     expect(screen.getByRole('dialog').hasAttribute('autofocus')).toBe(false);
   });
 
+  it('hands showModal() the data-autofocus start, so an earlier field is never focused first', () => {
+    const stub = HTMLDialogElement.prototype.showModal;
+    const focused: string[] = [];
+    // The browser's focusing steps: the first [autofocus] descendant, else the first focusable.
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.open = true;
+      (
+        this.querySelector<HTMLElement>('[autofocus]') ?? this.querySelector<HTMLElement>('input')
+      )?.focus();
+    };
+    try {
+      render(
+        <Modal open onClose={() => {}} label="Pick">
+          <input aria-label="Search" onFocus={() => focused.push('input')} />
+          <button data-autofocus onFocus={() => focused.push('chosen')}>
+            Chosen
+          </button>
+        </Modal>,
+      );
+      expect(focused).toEqual(['chosen']);
+      expect(screen.getByRole('button', { name: 'Chosen' }).hasAttribute('autofocus')).toBe(false);
+    } finally {
+      HTMLDialogElement.prototype.showModal = stub;
+    }
+  });
+
   it("focuses the dialog itself with initialFocus='dialog', so no field (and no keyboard)", () => {
     render(
       <Modal open onClose={() => {}} label="Read me" initialFocus="dialog">
