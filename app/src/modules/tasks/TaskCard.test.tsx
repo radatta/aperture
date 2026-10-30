@@ -670,6 +670,49 @@ describe('parent + parts', () => {
     expect(screen.getByRole('dialog', { name: 'Task: P2' })).toBeTruthy();
   });
 
+  it('a done split closes without asking — its typed actual went with the split', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.click(d.getByRole('button', { name: /^Split/ }));
+    await user.type(d.getByLabelText("This part's actual (min)"), '20');
+    await user.click(d.getByRole('button', { name: 'Split' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Task:/ })).toBeNull());
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+    expect((await api.getTask(b.id))!.status).toBe('done');
+  });
+
+  it('a finish followed by a switch before the refetch never closes a task opened later', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    let d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    // Hold the refetch that would show the part as done.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const list = api.listTasks.bind(api);
+    vi.spyOn(api, 'listTasks').mockImplementation(() => held.then(list));
+    await user.type(d.getByLabelText('Actual (min)'), '30');
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    await waitFor(async () => expect((await api.getTask(b.id))!.status).toBe('done'));
+    // Until the task reads as done, the editor takes no second tap (jsdom doesn't enforce inert).
+    expect(d.getByLabelText('Title').closest('[inert]')).toBeTruthy();
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    await act(async () => release());
+    await user.click(await d.findByRole('button', { name: 'draft' }));
+    expect(await screen.findByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+  });
+
   it('a section button with unsent Add parts text asks first; details edits never do', async () => {
     const api = freshApi();
     const t = await api.createTask({ title: 'Lab', estimateMin: 60 });

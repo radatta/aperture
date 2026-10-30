@@ -50,7 +50,8 @@ export function TaskModal({
   // An exit held back: by the confirm (dirty), or until a save in flight lands (saving).
   const [pending, setPending] = useState<Exit | null>(null);
   const [discarded, setDiscarded] = useState<Exit | null>(null);
-  const [finished, setFinished] = useState(false);
+  // The task finished here — by id, so a switch before the refetch can't carry it to another task.
+  const [finished, setFinished] = useState<string | null>(null);
   const openTask = useOpenTask();
 
   const standing = useCallback(
@@ -86,10 +87,15 @@ export function TaskModal({
   // while a title or note still does, and a save in flight is waited for.
   const terminal = task.status === 'done' || task.status === 'cancelled';
   useEffect(() => {
-    if (!finished || !terminal) return;
-    setFinished(false);
+    if (!finished) return;
+    if (finished !== task.id) {
+      setFinished(null); // switched away first: that finish has no close left to make
+      return;
+    }
+    if (!terminal) return;
+    setFinished(null);
     requestClose();
-  }, [finished, terminal, requestClose]);
+  }, [finished, task.id, terminal, requestClose]);
 
   // Discard runs the exit a commit after the confirm has closed, not in the same one: the new content's
   // focus (the switched-to task's dialog, a reveal's autofocused field) would otherwise be placed while
@@ -111,7 +117,7 @@ export function TaskModal({
       setConfirming(false);
       setPending(null);
       setDiscarded(null);
-      setFinished(false);
+      setFinished(null);
     }
   }, [open]);
 
@@ -137,7 +143,7 @@ export function TaskModal({
               task={task}
               intent={intent}
               edits={edits}
-              onFinished={() => setFinished(true)}
+              onFinished={() => setFinished(task.id)}
               onRequestClose={requestClose}
               onLeaveReveal={leaveReveal}
               estimateRef={estimateRef}

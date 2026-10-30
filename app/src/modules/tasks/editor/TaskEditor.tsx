@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode, Ref } from 'react';
+import type { ReactNode, Ref, RefObject } from 'react';
 import {
   autoSyncOn,
   canBecomeParent,
@@ -120,17 +120,31 @@ export function TaskEditor({
   const siblings = parent
     ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled')
     : [];
-  // Closing Break down / Add parts puts focus back on its opener (whichever shows by then), never <body>.
+  // Closing Break down / Add parts, or the split reveal (Cancel, or a kept-going split), puts focus back
+  // on its opener (whichever shows by then), never <body> — unless it already went somewhere: a swap
+  // held for the send has opened another section, whose own field took it.
+  const refocus = (opener: RefObject<HTMLButtonElement | null>) =>
+    requestAnimationFrame(() => {
+      const at = document.activeElement;
+      if (opener.current && (!at || at === document.body || at.tagName === 'DIALOG'))
+        returnFocus(opener.current);
+    });
   const partsRef = useRef<HTMLButtonElement>(null);
   const closeParts = () => {
     setReveal(null);
-    requestAnimationFrame(() => partsRef.current && returnFocus(partsRef.current));
+    refocus(partsRef);
   };
-  // Closing the split reveal (Cancel, or a kept-going split) puts focus back on its opener, never <body>.
   const splitRef = useRef<HTMLButtonElement>(null);
   const closeSplit = () => {
     setReveal(null);
-    requestAnimationFrame(() => splitRef.current && returnFocus(splitRef.current));
+    refocus(splitRef);
+  };
+  // Finished here: the modal closes once the task reads as finished (a refetch away). Until then
+  // nothing in the editor takes a second tap — a second Mark done, Split or Drop on a finished task.
+  const [finishing, setFinishing] = useState(false);
+  const finished = () => {
+    setFinishing(true);
+    onFinished();
   };
 
   const inProgress = task.status === 'in_progress';
@@ -147,7 +161,7 @@ export function TaskEditor({
     inProgress && !isParent ? (
       <section className="flex flex-col gap-2">
         <SectionHeading>Mark done</SectionHeading>
-        <DoneForm task={task} actualRef={actualRef} onDone={onFinished} onCancel={onRequestClose} />
+        <DoneForm task={task} actualRef={actualRef} onDone={finished} onCancel={onRequestClose} />
       </section>
     ) : null;
 
@@ -188,7 +202,7 @@ export function TaskEditor({
   );
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" inert={finishing && !isTerminal}>
       {/* Header — the status line. The full title is the editable Title field in the details form
           below, which is also where it reads unclipped. */}
       <div className="flex flex-wrap items-center gap-2">
@@ -241,7 +255,7 @@ export function TaskEditor({
               </Button>
             )}
           </div>
-          {reveal === 'parts' && (
+          {reveal === 'parts' && !isTerminal && (
             <BreakDownForm
               task={task}
               isParent
@@ -298,7 +312,7 @@ export function TaskEditor({
                 size="sm"
                 disabled={markDone.isPending}
                 onClick={() =>
-                  markDone.mutate({ id: task.id, to: 'done' }, { onSuccess: onFinished })
+                  markDone.mutate({ id: task.id, to: 'done' }, { onSuccess: finished })
                 }
               >
                 Mark done
@@ -505,7 +519,7 @@ export function TaskEditor({
             Close
           </Button>
         </div>
-        {reveal === 'parts' && !isParent && (
+        {reveal === 'parts' && canBreakDown && (
           <BreakDownForm
             task={task}
             isParent={false}
@@ -514,25 +528,25 @@ export function TaskEditor({
             edits={edits}
           />
         )}
-        {reveal === 'split' && (
+        {reveal === 'split' && showSplit && (
           <SplitForm
             task={task}
             parentTitle={parent?.title}
             // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
-            onDone={(finish) => (finish === 'done' ? onFinished() : closeSplit())}
+            onDone={(finish) => (finish === 'done' ? finished() : closeSplit())}
             onCancel={closeSplit}
             edits={edits}
           />
         )}
-        {reveal === 'drop' && (
+        {reveal === 'drop' && canScope && (
           <DropConfirm
             task={task}
             parts={isParent ? summary : undefined}
             onCancel={() => setReveal(null)}
-            onDone={onFinished}
+            onDone={finished}
           />
         )}
-        {reveal === 'delete' && (
+        {reveal === 'delete' && task.seriesId === null && (
           <DeleteConfirm
             task={task}
             parts={isParent ? summary : undefined}
