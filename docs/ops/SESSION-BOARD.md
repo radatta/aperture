@@ -156,7 +156,8 @@ The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost
 with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 4 `test` slots already
 held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
 over the hard line when both apply (it names the holders), other classes and `test-file` runs are never
-capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — they probe the edge on purpose. Past
+capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — and the hard-line wait too: they probe the
+edge on purpose and stop themselves, so a hold would only record a false edge. Past
 hard or at a full cap → with `enforce: false` run anyway and log `wouldWait`; with
 `enforce: true` (shipped) wait for room or a slot, polling every 2 s, up to `--wait` (90 s — inside the Bash tool's 120 s
 timeout, so the message reaches Claude), then exit **75** naming the jobs that hold the room: tell the user

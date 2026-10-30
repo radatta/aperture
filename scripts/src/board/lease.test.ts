@@ -258,6 +258,14 @@ describe('decideHeavy', () => {
       expect(d.wait).toBe(false);
     });
 
+    it('never holds a load test at the hard line either (its own stops protect the container)', () => {
+      const past = { pids: 4000, anonBytes: 2 * GiB };
+      const load = decideHeavy(limits(true), ll, past, [], { class: 'test', loadTest: true }, now);
+      expect(load).toMatchObject({ verdict: 'over-hard', wait: false });
+      const real = decideHeavy(limits(true), ll, past, [], { class: 'test' }, now);
+      expect(real).toMatchObject({ verdict: 'over-hard', wait: true }); // a real job still waits there
+    });
+
     it('wins over the hard line when both apply', () => {
       const past = { pids: 4000, anonBytes: 2 * GiB };
       const d = decideHeavy(limits(true), ll, past, tests(max), { class: 'test' }, now);

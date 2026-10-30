@@ -151,7 +151,9 @@ export function decideHeavy(
   const capFull = !!cap?.full && !req.loadTest;
   return {
     verdict: capFull ? 'cap-full' : overHard ? 'over-hard' : overSoft ? 'nudge' : 'grant',
-    wait: (capFull || overHard) && limits.enforce,
+    // Load tests are never held — not by the cap, not by the hard line: they push toward the edge on purpose and
+    // stop themselves (matrix.sh's HEAVY_GUARD, edge.sh's own stops); a hold would read as a false edge.
+    wait: (capFull || (overHard && !req.loadTest)) && limits.enforce,
     cap,
     predicted: { pids, anonMiB: Math.round(anon / MiB) },
     thresholds: {
