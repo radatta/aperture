@@ -76,7 +76,7 @@ jobs:
       # Shallow — the history-dependent checks (base diff, up-to-date-with-main) live in the caller's
       # `changes` job now, so the deploy itself needs no history.
       - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup # the image's Node 22 + corepack pnpm + install, same as ci.yml
+      - uses: ./.github/actions/setup # .nvmrc's Node + corepack pnpm + install, same as ci.yml
         if: inputs.mode != 'none'
       - uses: aws-actions/configure-aws-credentials@v6
         if: inputs.mode != 'none'

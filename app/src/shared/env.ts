@@ -11,3 +11,8 @@ export const COGNITO_AUTHORITY: string =
   (import.meta.env.VITE_COGNITO_AUTHORITY as string | undefined) ?? '';
 export const COGNITO_CLIENT_ID: string =
   (import.meta.env.VITE_COGNITO_CLIENT_ID as string | undefined) ?? '';
+
+// The deployed commit (publish-frontend.mjs stamps it; vite.config.ts defaults it to 'local'). Also in
+// index.html's <meta name="aperture-build"> — the dev check and the Simulator read it to prove which build
+// they are looking at (docs/ops/DEV-CHECK.md).
+export const BUILD_SHA: string = (import.meta.env.VITE_BUILD_SHA as string | undefined) ?? 'local';

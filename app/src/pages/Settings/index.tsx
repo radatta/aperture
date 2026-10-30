@@ -10,6 +10,7 @@ import { cx } from '../../lib/cx';
 import { fmtDateTime } from '../../lib/format';
 import { ArrowDownIcon, ArrowUpIcon } from '../../components/icons';
 import { useApi } from '../../data/api-context';
+import { BUILD_SHA } from '../../shared/env';
 import {
   useCategories,
   useDeleteCategory,
@@ -38,6 +39,10 @@ export function SettingsPage() {
       <PreferencesSection />
       <FinancesSection />
       <DataSection />
+      {/* The visible build stamp — the iOS Simulator check reads it off the screen (docs/ops/DEV-CHECK.md). */}
+      <Text size="xs" tone="muted" tabular>
+        Build {BUILD_SHA.slice(0, 7)}
+      </Text>
     </div>
   );
 }

@@ -5,7 +5,7 @@ description: Launch the Aperture PWA and screenshot/drive it with headless Chrom
 
 # Run the Aperture app + screenshot it
 
-Use this when you need a *rendered* UI (screenshots, click paths) — not just lint/tests. Vitest covers logic; this covers "does it actually look/behave right."
+Use this when you need a *rendered* UI (screenshots, click paths) — not just lint/tests. Vitest covers logic; this covers "does it actually look/behave right." This is the local stub app; for the **deployed dev stage** use the dev check instead (`devcheck` skill, `docs/ops/DEV-CHECK.md`).
 
 ## The app runs auth-free by default
 
@@ -41,20 +41,20 @@ Stop with `pkill -f vite`.
 
 ## Browser setup — install OUTSIDE the repo
 
-Playwright is a **dev-only tool, not a project dependency** — never add it to any `package.json` (dependency discipline). Install it into your session scratchpad:
+Playwright is a **dev-only tool, not a project dependency** — never add it to any `package.json` (dependency discipline). One shared install in `~/pw`, which the dev check loads too — reuse it if it's there:
 
 ```bash
-mkdir -p "$SCRATCH/pw" && cd "$SCRATCH/pw" && npm init -y && npm install playwright
+mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx playwright install chromium
 ```
 
-`$SCRATCH` = the session scratchpad directory from the system prompt.
+Write your driver scripts beside it (`~/pw/*.mjs`) so `import 'playwright'` resolves.
 
 - **macOS host:** Playwright's bundled Chromium works out of the box — `npx playwright install chromium`, then launch with no `executablePath`.
 - **Linux container (e.g. a sandboxed runtime):** the bundled Chromium may miss libs. Install the system package (`apt-get install -y chromium` on Debian/Ubuntu, `apk add --no-cache chromium` on Alpine) and pass `executablePath` + `--no-sandbox` (see the template's commented lines).
 
 ## Drive + screenshot
 
-Run from `$SCRATCH/pw`. Routes: `/` (home), `/log`, `/tasks`, `/recruiting`, `/recruiting/stories`, `/habits`, `/rolls`, `/inbox`, `/settings`.
+Run from `~/pw`. Routes: `/` (home), `/log`, `/tasks`, `/recruiting`, `/recruiting/stories`, `/habits`, `/rolls`, `/inbox`, `/settings`.
 
 ```js
 import { chromium } from 'playwright';
@@ -85,4 +85,4 @@ Interactions (`fill`, `click`, `press`) go through the real input pipeline, so R
 
 ## Gotchas
 
-- Light/dark is a CSS-variable flip; if you're verifying a theme, toggle it in-app rather than assuming a default.
+- Light/dark is a CSS-variable flip on `<html data-theme>`. For a shot pair, set it directly — `page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))` — `ThemeProvider` only rewrites it when the theme setting changes, so the flip holds.

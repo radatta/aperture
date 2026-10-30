@@ -15,7 +15,8 @@
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/.eslintcache --cache-strategy content",
     "lint:fix": "eslint . --fix --cache --cache-location node_modules/.cache/eslint/.eslintcache --cache-strategy content",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "devcheck": "pnpm --filter @aperture/scripts devcheck"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

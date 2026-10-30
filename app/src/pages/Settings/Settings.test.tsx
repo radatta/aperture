@@ -109,3 +109,10 @@ describe('calendar auto-sync toggle', () => {
     await waitFor(async () => expect((await api.getSettings()).autoCalendar).toBe(false));
   });
 });
+
+describe('build stamp', () => {
+  it('shows the build the page came from — "local" outside a deploy', async () => {
+    renderApp({ path: '/settings' });
+    expect(await screen.findByText('Build local')).toBeTruthy();
+  });
+});
