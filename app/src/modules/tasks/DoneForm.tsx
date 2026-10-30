@@ -13,6 +13,12 @@ import { useSetActual, useTransitionTask } from '../../data/hooks/useTasks';
 // `actualRef` lets the task editor's finish-intent focus the Actual field when the dialog opens.
 // Nothing tracked starts EMPTY, not "0" (you'd type over it), and an empty field can't be submitted —
 // a quiet 0 would land in calibration as a real actual.
+// Either onDone uses the finished task and Cancel is its own (the task modal, which asks about unsaved
+// edits), or onDone is the caller's plain close and Cancel just closes too.
+type DoneProps =
+  | { onDone: (task: Task) => void; onCancel: () => void }
+  | { onDone: () => void; onCancel?: undefined };
+
 export function DoneForm({
   task,
   initialActualMin,
@@ -23,9 +29,7 @@ export function DoneForm({
   task: Task;
   initialActualMin?: number;
   actualRef?: Ref<HTMLInputElement>;
-  onDone: (task: Task) => void; // the task as the finish returned it
-  onCancel?: () => void; // where Cancel isn't just closing (the task modal asks about unsaved edits)
-}) {
+} & DoneProps) {
   const setActual = useSetActual();
   const transition = useTransitionTask();
   const [actual, setActual_] = useState<string>(() => {
@@ -78,8 +82,7 @@ export function DoneForm({
         >
           Mark done
         </Button>
-        {/* Without onCancel, onDone is the caller's close: Cancel just closes. */}
-        <Button variant="ghost" size="sm" onClick={onCancel ?? (() => onDone(task))}>
+        <Button variant="ghost" size="sm" onClick={onCancel ?? (onDone as () => void)}>
           Cancel
         </Button>
       </div>

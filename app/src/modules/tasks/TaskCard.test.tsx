@@ -790,28 +790,108 @@ describe('parent + parts', () => {
     expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
   });
 
-  it('a finish that lands after a switch closes nothing: the switched-to task, and the finished one reopened, stay', async () => {
-    // Guards the late-onFinished path: the switch happens while the write is in flight.
+  // Opens draft (in progress) from P2's card on the Week lens, with its actual typed.
+  async function openDraftToFinish(user: ReturnType<typeof userEvent.setup>) {
+    const card = await waitFor(() => rowOf('P2'));
+    await user.click(within(card).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.type(d.getByLabelText('Actual (min)'), '30');
+    return { card, d };
+  }
+
+  it('a finish that lands after a switch closes nothing — not the task switched to, nor the finished one reopened', async () => {
     const { api, b } = await seeded(false);
     await api.transitionTask(b.id, 'in_progress');
     renderApp({ api, path: '/tasks?lens=week' });
     const user = userEvent.setup();
-    const row = await waitFor(() => rowOf('P2'));
-    await user.click(within(row).getByRole('button', { name: 'draft' }));
-    let d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    const { card, d } = await openDraftToFinish(user);
     const release = gateTransition(api);
-    await user.type(d.getByLabelText('Actual (min)'), '30');
     await user.click(d.getByRole('button', { name: 'Mark done' }));
     await user.click(d.getByRole('button', { name: 'P2' }));
-    d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    const p = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
     await release();
-    await waitFor(async () => expect((await api.getTask(b.id))!.status).toBe('done'));
-    await act(async () => {});
+    // The list has caught up (the card counts both parts done): any close would have come by now.
+    await waitFor(() => expect(within(card).getByText(/2\/2/)).toBeTruthy());
     expect(screen.getByRole('dialog', { name: 'Task: P2' })).toBeTruthy();
-    await user.click(await d.findByRole('button', { name: 'draft' }));
+    await user.click(p.getByRole('button', { name: 'draft' }));
     expect(await screen.findByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
-    await act(async () => {});
-    expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+  });
+
+  it('a finish that lands once the task is open again — reopened, or switched back to — closes nothing', async () => {
+    for (const back of ['reopen', 'switch'] as const) {
+      const { api, b } = await seeded(false);
+      await api.transitionTask(b.id, 'in_progress');
+      const { unmount } = renderApp({ api, path: '/tasks?lens=week' });
+      const user = userEvent.setup();
+      const { card, d } = await openDraftToFinish(user);
+      const release = gateTransition(api);
+      await user.click(d.getByRole('button', { name: 'Mark done' }));
+      if (back === 'reopen') {
+        await user.click(d.getByRole('button', { name: 'Close' }));
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: 'Task: draft' })).toBeNull(),
+        );
+        await user.click(within(card).getByRole('button', { name: 'draft' }));
+      } else {
+        await user.click(d.getByRole('button', { name: 'P2' }));
+        const p = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+        await user.click(p.getByRole('button', { name: 'draft' }));
+      }
+      expect(await screen.findByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+      await release();
+      await waitFor(() => expect(within(card).getByText(/2\/2/)).toBeTruthy());
+      expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it('a done split closes even with a section swap held for it', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const split = api.splitTask.bind(api);
+    vi.spyOn(api, 'splitTask').mockImplementation((id, input) => gate.then(() => split(id, input)));
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const card = await waitFor(() => rowOf('P2'));
+    await user.click(within(card).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.click(d.getByRole('button', { name: /^Split/ }));
+    await user.type(d.getByLabelText("This part's actual (min)"), '20');
+    await user.click(d.getByRole('button', { name: 'Split' }));
+    await user.click(d.getByRole('button', { name: 'Delete task…' })); // held for the split
+    await act(async () => release());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Task:/ })).toBeNull());
+    expect((await api.getTask(b.id))!.status).toBe('done');
+  });
+
+  it('the parent’s Mark done takes one tap: a second sends nothing and leaves no error', async () => {
+    const { api } = await seeded(true);
+    const transition = vi.spyOn(api, 'transitionTask');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    await user.click(within(await waitFor(() => rowOf('P2'))).getByRole('button', { name: 'P2' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    const mark = d.getByRole('button', { name: 'Mark done' });
+    fireEvent.click(mark);
+    fireEvent.click(mark);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: P2' })).toBeNull());
+    expect(transition).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a Delete says it went while the list catches up', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Gone' });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Gone' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Gone' }));
+    holdList(api);
+    await user.click(d.getByRole('button', { name: /Delete task/ }));
+    await user.click(d.getByRole('button', { name: 'Delete' }));
+    expect(await d.findByText('Deleted.')).toBeTruthy();
   });
 
   it('a section button with unsent Add parts text asks first; details edits never do', async () => {

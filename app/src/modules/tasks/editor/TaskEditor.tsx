@@ -80,7 +80,9 @@ export function TaskEditor({
   task: Task;
   intent: TaskEditorIntent;
   edits?: EditSlots; // where each form's edits stand, read by the modal's guard
-  onFinished: (task: Task) => void; // finished here (Mark done, Drop, a done split), as the write returned it: the modal closes, guarded
+  // Finished here (Mark done, Drop, a done split), as the write returned it: the modal closes, guarded.
+  // `here` is false when this editor has gone by the time the write lands (closed or switched away).
+  onFinished: (task: Task, here: boolean) => void;
   onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
   onLeaveReveal: (go: () => void) => void; // the guard for the open reveal's text alone
   estimateRef?: Ref<HTMLInputElement>;
@@ -104,6 +106,28 @@ export function TaskEditor({
   useEffect(() => {
     if (markDone.error) markDoneErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [markDone.error]);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const finished = (done: Task) => onFinished(done, mounted.current);
+  // The parent's Mark done: one per tap, set before the await (isPending arrives a tick late), and its
+  // close from the write's answer, not a per-call onSuccess a second tap would drop.
+  const [marking, setMarking] = useState(false);
+  async function markParentDone() {
+    if (marking) return;
+    setMarking(true);
+    try {
+      finished(await markDone.mutateAsync({ id: task.id, to: 'done' }));
+    } catch {
+      // Said below.
+    } finally {
+      setMarking(false);
+    }
+  }
   const [reveal, setReveal] = useState<Reveal>(null);
   // Another section while the open reveal holds unsent text (part lines, split titles) asks first, via
   // the modal's confirm; a write in flight is waited for. The details form stays mounted — its edits
@@ -158,7 +182,7 @@ export function TaskEditor({
     inProgress && !isParent ? (
       <section className="flex flex-col gap-2">
         <SectionHeading>Mark done</SectionHeading>
-        <DoneForm task={task} actualRef={actualRef} onDone={onFinished} onCancel={onRequestClose} />
+        <DoneForm task={task} actualRef={actualRef} onDone={finished} onCancel={onRequestClose} />
       </section>
     ) : null;
 
@@ -307,13 +331,9 @@ export function TaskEditor({
               <Button
                 variant={summary.allDone ? 'primary' : 'quiet'}
                 size="sm"
-                disabled={markDone.isPending}
-                onClick={() =>
-                  markDone.mutate(
-                    { id: task.id, to: 'done' },
-                    { onSuccess: (done) => onFinished(done) },
-                  )
-                }
+                onClick={markParentDone}
+                aria-disabled={marking}
+                className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
               >
                 Mark done
               </Button>
@@ -533,7 +553,7 @@ export function TaskEditor({
             task={task}
             parentTitle={parent?.title}
             // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
-            onDone={(finish, original) => (finish === 'done' ? onFinished(original) : closeSplit())}
+            onDone={(finish, original) => (finish === 'done' ? finished(original) : closeSplit())}
             onCancel={closeSplit}
             edits={edits}
           />
@@ -543,7 +563,7 @@ export function TaskEditor({
             task={task}
             parts={isParent ? summary : undefined}
             onCancel={() => setReveal(null)}
-            onDone={onFinished}
+            onDone={finished}
           />
         )}
         {reveal === 'delete' && task.seriesId === null && (

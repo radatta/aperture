@@ -57,7 +57,7 @@ export function TaskModal({
   const [finished, setFinished] = useState<Task | null>(null);
   const [exiting, setExiting] = useState(false); // its one close, run once the editor has rendered it
   const task =
-    finished && finished.id === live.id && finished.updatedAt > live.updatedAt ? finished : live;
+    finished && finished.id === live.id && finished.updatedAt >= live.updatedAt ? finished : live;
   const openTask = useOpenTask();
 
   const standing = useCallback(
@@ -90,13 +90,15 @@ export function TaskModal({
 
   // Finished here: out through the guard, so a due date or estimate typed before (locked now, never
   // saveable) no longer counts, while a title or note still asks and a save in flight is waited for.
-  // Closed or switched away before the write landed: no close left to make. An exit already held (Close
-  // or a switch asked for mid-save) goes on as asked once the slots settle.
+  // Closed or switched away before the write landed (the editor that sent it is gone): no close left to
+  // make. A Close or switch already held (asked for mid-save) goes on as asked once the slots settle; a
+  // held section swap has nowhere left to go on a finished task, so the close replaces it.
   useEffect(() => {
     if (!exiting) return;
     setExiting(false);
     if (!open) return setFinished(null);
-    if (pending || finished?.id !== live.id) return;
+    if (pending?.of === 'editor' || finished?.id !== live.id) return;
+    if (pending) setPending(null);
     requestClose();
   }, [exiting, open, pending, finished, live.id, requestClose]);
 
@@ -147,9 +149,9 @@ export function TaskModal({
               task={task}
               intent={intent}
               edits={edits}
-              onFinished={(t) => {
+              onFinished={(t, here) => {
                 setFinished(t);
-                setExiting(true);
+                if (here) setExiting(true);
               }}
               onRequestClose={requestClose}
               onLeaveReveal={leaveReveal}

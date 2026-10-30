@@ -469,6 +469,7 @@ describe('TaskEditor', () => {
     await waitFor(() =>
       expect(onFinished).toHaveBeenCalledWith(
         expect.objectContaining({ id: t.id, status: 'done' }),
+        true,
       ),
     );
     const all = await client.listTasks();
@@ -694,6 +695,7 @@ describe('TaskEditor', () => {
       await waitFor(() =>
         expect(onFinished).toHaveBeenCalledWith(
           expect.objectContaining({ id: p.id, status: 'done' }),
+          true,
         ),
       );
       expect(await client.getTask(p.id)).toMatchObject({ status: 'done', actualAccruedMin: 70 });
@@ -967,6 +969,7 @@ describe('TaskEditor', () => {
     await waitFor(async () => expect((await client.getTask(t.id))?.status).toBe('cancelled'));
     expect(onFinished).toHaveBeenCalledWith(
       expect.objectContaining({ id: t.id, status: 'cancelled' }),
+      true,
     );
   });
 
@@ -988,7 +991,10 @@ describe('TaskEditor', () => {
     await act(async () => release());
     await waitFor(() => expect(onFinished).toHaveBeenCalledTimes(1));
     expect(transition).toHaveBeenCalledTimes(1);
-    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ id: t.id, status: 'done' }));
+    expect(onFinished).toHaveBeenCalledWith(
+      expect.objectContaining({ id: t.id, status: 'done' }),
+      true,
+    );
   });
 
   it('a failed Mark done is said inline; the button works again', async () => {
