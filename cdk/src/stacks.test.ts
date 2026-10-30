@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { ApertureDataStack } from './lib/data-stack';
 import { ApertureAppStack } from './lib/app-stack';
 import { ApertureBillingStack } from './lib/billing-stack';
+import { DEV_STACK_RESOURCE_TYPES } from './lib/dev-sandbox-stack';
+import { DEV_BOUNDARY_NAME, DEV_QUALIFIER } from './lib/dev-stage';
 
 // cdk.json's feature flags, so a test synthesizes what `cdk synth` does (e.g. minimizePolicies merges
 // IAM statements — a test app without it asserts a policy shape that never deploys).
@@ -626,6 +628,79 @@ describe('ApertureAppStack finance sync by stage', () => {
     t.resourceCountIs('AWS::Scheduler::Schedule', 0);
     t.resourceCountIs('AWS::Scheduler::ScheduleGroup', 0);
     t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'aperture-finance-sync-dev' });
+  });
+});
+
+describe('dev stacks on the devsandbox bootstrap (dev-sandbox-stack.ts)', () => {
+  const build = (stage: string) => {
+    const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
+    const env = { account: '111111111111', region: 'us-west-1' };
+    const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
+      stage,
+      env,
+      allowedOrigins: ['*'],
+    });
+    const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
+      stage,
+      env,
+      table: data.table,
+      userPool: data.userPool,
+      filesBucket: data.filesBucket,
+      cognitoDomain: data.cognitoDomain,
+      originSecret: 'o',
+      deviceToken: 'd',
+      agentToken: 'a',
+      deviceUserId: 'u', // CI sets it: the schedule, its group and role exist on dev
+      domainName: `${stage}.example.com`,
+      certificateArn: 'arn:aws:acm:us-east-1:111111111111:certificate/test',
+    });
+    const assembly = app.synth();
+    return {
+      artifacts: [data, appStack].map((st) => assembly.getStackByName(st.stackName)),
+      templates: [Template.fromStack(data), Template.fromStack(appStack)],
+    };
+  };
+  const dev = build('dev');
+  const prod = build('prod');
+
+  it('deploys dev through the devsandbox roles and version parameter, prod through the default bootstrap', () => {
+    for (const a of dev.artifacts) {
+      expect(a.assumeRoleArn).toContain(`role/cdk-${DEV_QUALIFIER}-deploy-role-`);
+      expect(a.cloudFormationExecutionRoleArn).toContain(
+        `role/cdk-${DEV_QUALIFIER}-cfn-exec-role-`,
+      );
+      expect(a.lookupRole?.arn).toContain(`role/cdk-${DEV_QUALIFIER}-lookup-role-`);
+      expect(a.bootstrapStackVersionSsmParameter).toBe(`/cdk-bootstrap/${DEV_QUALIFIER}/version`);
+    }
+    for (const a of prod.artifacts) {
+      expect(a.assumeRoleArn).toContain('role/cdk-hnb659fds-deploy-role-');
+      expect(a.bootstrapStackVersionSsmParameter).toBe('/cdk-bootstrap/hnb659fds/version');
+    }
+  });
+
+  it('puts the dev boundary on every dev role, CDK provider roles included, and none on prod', () => {
+    const roles = (ts: Template[]) =>
+      ts.flatMap((t) => Object.values(t.findResources('AWS::IAM::Role')));
+    const devRoles = roles(dev.templates);
+    expect(devRoles.length).toBeGreaterThanOrEqual(6); // BFF, MCP, finance sync, its schedule, logRetention, auto-delete
+    for (const r of devRoles)
+      expect(JSON.stringify(r.Properties.PermissionsBoundary)).toContain(
+        `:policy/${DEV_BOUNDARY_NAME}`,
+      );
+    for (const r of roles(prod.templates)) expect(r.Properties.PermissionsBoundary).toBeUndefined();
+  });
+
+  it('uses only resource types the sandbox execution policy covers — a new one means granting it and redeploying the sandbox first', () => {
+    const types = new Set(
+      dev.templates.flatMap((t) =>
+        Object.values(t.toJSON().Resources as Record<string, { Type: string }>).map((r) => r.Type),
+      ),
+    );
+    for (const type of types)
+      expect(
+        DEV_STACK_RESOURCE_TYPES,
+        `${type}: extend ApertureDevSandbox, redeploy it, then ship`,
+      ).toContain(type);
   });
 });
 
