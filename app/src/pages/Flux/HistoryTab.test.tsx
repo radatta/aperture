@@ -205,6 +205,28 @@ describe('Flux History tab', () => {
     expect(screen.getAllByText(/20 reps · avg 50°/)).toHaveLength(1);
   });
 
+  it('a slow delete still repairs focus the page’s rescue parked on the heading', async () => {
+    const t = Date.now();
+    const { api, user } = await history([
+      set({ completedAt: t - 2000 }),
+      set({ completedAt: t - 1000 }),
+    ]);
+    let release: () => void = () => undefined;
+    const del = api.deleteFluxSet.bind(api);
+    api.deleteFluxSet = async (id) => {
+      await new Promise<void>((r) => (release = r));
+      return del(id);
+    };
+    const [first, second] = await screen.findAllByRole('button', { name: /^Delete .* set from / });
+    await user.click(first!);
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
+    );
+    screen.getByRole('heading', { name: 'Flux' }).focus(); // the rescue, while the delete is out
+    release();
+    await waitFor(() => expect(document.activeElement).toBe(second));
+  });
+
   it('a deleted row skips a neighbour whose own confirm is open', async () => {
     const t = Date.now();
     await history([

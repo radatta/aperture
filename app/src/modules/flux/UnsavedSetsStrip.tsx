@@ -1,11 +1,10 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useDisclosure } from '../../lib/useDisclosure';
 import { outboxInMemoryOnly, readOutbox } from './fluxOutbox';
 import { focusablesAfter, moveFocus } from './focus';
-import { isSending, useFluxOutbox } from './useFluxOutbox';
+import { useFluxOutbox, useSending } from './useFluxOutbox';
 
 // A first send gets this long before its set counts as "not saved" — every save goes through the outbox,
 // and a normal one shouldn't flash a red strip (or be read out) on its way to the server.
@@ -22,9 +21,13 @@ export function UnsavedSetsStrip() {
   const [retrying, setRetrying] = useState(false);
   const [, tick] = useReducer((n: number) => n + 1, 0);
   const stripRef = useRef<HTMLDivElement>(null);
+  // Was focus inside the strip when it emptied? Removing the focused button fires no blur, so this stays
+  // true through that; it goes false only when focus moves somewhere real outside the strip.
+  const hadFocus = useRef(false);
+  const sending = useSending();
   const now = Date.now();
   const shown = entries.filter(
-    (e) => e.error !== null || !isSending(e.input.id) || now - e.at >= GRACE_MS,
+    (e) => e.error !== null || !sending(e.input.id) || now - e.at >= GRACE_MS,
   );
   // A send still inside its grace: look again when the earliest one's grace is up (re-armed until none
   // are left — a timer can fire early against Date.now()); a reply re-renders sooner.
@@ -47,8 +50,13 @@ export function UnsavedSetsStrip() {
     lastN.current = n;
     if (n > 0) return;
     if (confirming) onClose();
-    if (was > 0 && stripRef.current) moveFocus(focusablesAfter(stripRef.current), stripRef.current);
+    if (was > 0 && hadFocus.current && stripRef.current)
+      moveFocus(focusablesAfter(stripRef.current), stripRef.current);
+    hadFocus.current = false;
   }, [n, confirming, onClose]);
+  // A set on its way (a Retry, or a background flush on `online`) can't be discarded: it may still land,
+  // against "won't be saved anywhere". aria-disabled, so a focused button keeps focus meanwhile.
+  const busy = retrying || shown.some((e) => sending(e.input.id));
   const sets = `${n} ${n === 1 ? 'set' : 'sets'}`;
   const it = n === 1 ? 'it' : 'them';
   const saves = n === 1 ? 'it saves' : 'they save';
@@ -73,6 +81,11 @@ export function UnsavedSetsStrip() {
     // Empty, the strip is an sr-only shell (out of the layout) holding the live region.
     <div
       ref={stripRef}
+      onFocusCapture={() => (hadFocus.current = true)}
+      onBlurCapture={(e) => {
+        const to = e.relatedTarget;
+        if (to instanceof Node && !e.currentTarget.contains(to)) hadFocus.current = false;
+      }}
       className={
         n === 0
           ? 'sr-only'
@@ -105,12 +118,18 @@ export function UnsavedSetsStrip() {
             onClose();
           }}
         >
-          <Text size="xs">Discard {sets}? They won&apos;t be saved anywhere.</Text>
+          <Text size="xs">
+            {busy
+              ? 'Still sending — Discard waits until it answers.'
+              : `Discard ${sets}? They won’t be saved anywhere.`}
+          </Text>
           <div className="flex gap-2">
             <Button
               variant="ghost"
               size="sm"
+              aria-disabled={busy || undefined}
               onClick={() => {
+                if (busy) return;
                 const to = next();
                 shown.forEach((e) => discard(e.input.id));
                 onClose(); // a new failure later starts at Retry, not mid-question
@@ -129,28 +148,30 @@ export function UnsavedSetsStrip() {
           {shown.some((e) => !e.refused) && (
             <Button
               size="sm"
-              disabled={retrying}
+              aria-disabled={busy || undefined}
               onClick={async () => {
+                if (busy) return;
                 const to = next();
                 const from = stripRef.current;
                 setRetrying(true);
                 await flush();
-                flushSync(() => setRetrying(false)); // Discard re-enabled before focus can land on it
-                // Only refused sets left: Retry itself is gone, the strip stays — Discard is next.
-                if (!readOutbox().some((e) => !e.refused))
+                setRetrying(false);
+                // Only refused sets left: Retry itself is gone, the strip stays — Discard is next. (All
+                // saved: the strip empties, and the effect above moves focus past it.)
+                const left = readOutbox();
+                if (left.length > 0 && left.every((e) => e.refused))
                   moveFocus([triggerRef.current, ...to], from);
               }}
             >
-              {retrying ? 'Retrying…' : 'Retry'}
+              {busy ? 'Retrying…' : 'Retry'}
             </Button>
           )}
           <Button
             ref={triggerRef}
             variant="quiet"
             size="sm"
-            // A set discarded mid-send would still save, against "won't be saved anywhere".
-            disabled={retrying || shown.some((e) => isSending(e.input.id))}
-            onClick={onOpen}
+            aria-disabled={busy || undefined}
+            onClick={() => !busy && onOpen()}
           >
             Discard
           </Button>

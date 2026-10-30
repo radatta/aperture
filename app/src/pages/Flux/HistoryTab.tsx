@@ -41,10 +41,11 @@ export function FluxHistoryTab() {
   const ids = [...new Set(sets.map((s) => s.exerciseId))].filter(isExerciseId);
   // A chip whose last set was just deleted is gone — so is its filter.
   const exerciseId = picked && ids.includes(picked as (typeof ids)[number]) ? picked : null;
-  // …and stays gone: a set of it coming back later (a refetch, another device) mustn't switch it on again.
+  // …and stays gone once a loaded window lacks it (a delete, or a window it has no sets in): a set of it
+  // coming back later (a refetch, another device) mustn't switch it on again. A failed fetch isn't one.
   useEffect(() => {
-    if (picked && !exerciseId && !loading) setPicked(null);
-  }, [picked, exerciseId, loading]);
+    if (picked && !exerciseId && q.isSuccess && !q.isPlaceholderData) setPicked(null);
+  }, [picked, exerciseId, q.isSuccess, q.isPlaceholderData]);
   const shown = exerciseId ? sets.filter((s) => s.exerciseId === exerciseId) : sets;
   const def = exerciseId && isExerciseId(exerciseId) ? getExercise(exerciseId) : null;
   const chipsRef = useRef<HTMLDivElement>(null);

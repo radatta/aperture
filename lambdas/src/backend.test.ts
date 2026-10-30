@@ -316,7 +316,7 @@ describe('backend flux sets', () => {
     const row = await new Repo(doc, liveWrites(doc), 'local').findFluxSet(set.id, {
       consistent: true,
     });
-    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedAt).toBe(1_700_000_000_000);
   });
 
   it('a retry that loses the conditional write returns the row that won, read strongly', async () => {

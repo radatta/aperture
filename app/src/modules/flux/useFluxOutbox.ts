@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { RecordFluxSetInput } from '@aperture/shared';
 import { fluxSetError } from '@aperture/shared/flux';
@@ -14,7 +14,26 @@ import {
 
 // Sets being sent right now, across every mounted copy of the hook — a flush and a save of the same set
 // (or two triggers at once) send it once.
+// Observable, because a send starting changes what the strip may offer (Discard waits) even though the
+// outbox itself hasn't changed.
 const inFlight = new Set<string>();
+const sendListeners = new Set<() => void>();
+let sendVersion = 0;
+function setSending(id: string, on: boolean): void {
+  if (on) inFlight.add(id);
+  else inFlight.delete(id);
+  sendVersion++;
+  sendListeners.forEach((l) => l());
+}
+function subscribeSends(l: () => void): () => void {
+  sendListeners.add(l);
+  return () => sendListeners.delete(l);
+}
+// Re-renders the caller whenever a send starts or ends; returns isSending.
+export function useSending(): (id: string) => boolean {
+  useSyncExternalStore(subscribeSends, () => sendVersion);
+  return isSending;
+}
 // The http client has no timeout, and a send that never answers would hold its id in flight — so Retry,
 // `online` and the next save would all skip it. Give up on it after this; a late answer is harmless (the
 // save is idempotent, the next send gets the stored row).
@@ -54,7 +73,7 @@ export function useFluxOutbox() {
         outboxMarkError(input.id, err instanceof Error ? err.message : String(err));
         return false;
       } finally {
-        inFlight.delete(input.id);
+        setSending(input.id, false);
       }
     },
     [api, qc],
@@ -63,7 +82,7 @@ export function useFluxOutbox() {
   const send = useCallback(
     async (input: RecordFluxSetInput): Promise<boolean> => {
       if (inFlight.has(input.id)) return false;
-      inFlight.add(input.id);
+      setSending(input.id, true);
       return deliver(input);
     },
     [deliver],
@@ -78,7 +97,7 @@ export function useFluxOutbox() {
   const save = useCallback(
     async (input: RecordFluxSetInput) => {
       if (inFlight.has(input.id)) return;
-      inFlight.add(input.id);
+      setSending(input.id, true);
       outboxAdd(input, Date.now());
       if ((await deliver(input)) && readOutbox().length) await flush();
     },

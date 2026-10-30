@@ -264,7 +264,9 @@ describe('useFluxOutbox', () => {
     renderWithProviders(<Harness set={input()} />, { api });
     act(() => screen.getByRole('button', { name: 'save' }).click());
     act(() => vi.advanceTimersByTime(8_000)); // shown, but still on its way
-    expect(screen.getByRole('button', { name: 'Discard' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Discard' }).getAttribute('aria-disabled')).toBe(
+      'true',
+    );
   });
 
   it('only the page’s focus rescue counts as lost focus — another tabindex=-1 target keeps it', async () => {
@@ -308,5 +310,56 @@ describe('useFluxOutbox', () => {
     await act(async () => pending[1]!.resolve());
     await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'after' }));
+  });
+
+  it('a background resend blocks Discard — the trigger and an already-open question alike', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    function Online() {
+      useFluxOutboxFlush();
+      return null;
+    }
+    renderWithProviders(
+      <>
+        <Online />
+        <Harness set={input()} />
+      </>,
+      { api },
+    );
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    await user.click(await screen.findByRole('button', { name: 'Discard' })); // the question is open
+    act(() => window.dispatchEvent(new Event('online'))); // …and a resend starts behind it
+    const question = screen.getByRole('alertdialog');
+    expect(question.textContent).toMatch(/Still sending/);
+    const confirm = within(question).getByRole('button', { name: 'Discard' });
+    expect(confirm.getAttribute('aria-disabled')).toBe('true');
+    await user.click(confirm);
+    expect(localStorage.getItem(FLUX_OUTBOX_KEY)).not.toBeNull(); // not discarded
+    await user.click(within(question).getByRole('button', { name: 'Keep' }));
+    const trigger = screen.getByRole('button', { name: 'Discard' });
+    expect(trigger.getAttribute('aria-disabled')).toBe('true');
+    await user.click(trigger);
+    expect(screen.queryByRole('alertdialog')).toBeNull(); // the question doesn't open meanwhile
+    expect(screen.getByRole('button', { name: 'Retrying…' })).toBeTruthy();
+    await act(async () => pending[1]!.reject(new Error('Load failed'))); // the resend answers
+    expect(
+      screen.getByRole('button', { name: 'Discard' }).getAttribute('aria-disabled'),
+    ).toBeNull();
+  });
+
+  it('focus that left the strip for somewhere real stays put when it empties', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    renderWithProviders(<Harness set={input()} />, { api });
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    await user.click(screen.getByRole('button', { name: 'flush' })); // the user moved on
+    document.body.focus(); // …and e.g. tapped the page (Safari leaves focus on body)
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'after' }));
   });
 });
