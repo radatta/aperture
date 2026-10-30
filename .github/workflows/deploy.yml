@@ -81,6 +81,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      deployments: read # deploy-stage's job declares it; a caller granting less fails the whole run at startup
     uses: ./.github/workflows/deploy-stage.yml
     with:
       stage: dev
@@ -105,6 +106,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      deployments: read # deploy-stage's job declares it; a caller granting less fails the whole run at startup
     uses: ./.github/workflows/deploy-stage.yml
     with:
       stage: dev
