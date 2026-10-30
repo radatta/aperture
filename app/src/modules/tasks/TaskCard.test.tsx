@@ -482,6 +482,22 @@ describe('parent + parts', () => {
     expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
   });
 
+  // The list never refreshes from here on (its cached copy stays): a finish must close from what the
+  // write returned, never by waiting on the refetch — eventually consistent, and not retried.
+  const holdList = (api: ReturnType<typeof freshApi>) =>
+    vi.spyOn(api, 'listTasks').mockImplementation(() => new Promise(() => {}));
+
+  // Holds the next status change until released.
+  function gateTransition(api: ReturnType<typeof freshApi>) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = api.transitionTask.bind(api);
+    vi.spyOn(api, 'transitionTask').mockImplementation((id, to) =>
+      gate.then(() => original(id, to)),
+    );
+    return () => act(async () => release());
+  }
+
   // A save whose result the test decides: true lands it, false fails it. Only the first title write
   // is held; a retry goes straight through.
   function gateTitle(api: ReturnType<typeof freshApi>) {
@@ -626,11 +642,16 @@ describe('parent + parts', () => {
     await user.click(within(row).getByRole('button', { name: 'P2' }));
     const d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
     await user.type(d.getByLabelText('Title'), ' final');
+    holdList(api); // the confirm comes from the write's own answer, not a refetch
     await user.click(d.getByRole('button', { name: 'Mark done' }));
     const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
     expect((await api.getTask(p.id))!.status).toBe('done');
     await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
     expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('P2 final');
+    // The editor is the done task's: usable, and nothing left to finish twice.
+    expect(d.getByLabelText('Title').closest('[inert]')).toBeNull();
+    expect(d.queryByRole('button', { name: 'Mark done' })).toBeNull();
+    vi.mocked(api.listTasks).mockRestore();
     await user.click(d.getByRole('button', { name: 'Save' }));
     expect(await d.findByText('Saved')).toBeTruthy();
     expect(await api.getTask(p.id)).toMatchObject({ title: 'P2 final', status: 'done' });
@@ -680,13 +701,97 @@ describe('parent + parts', () => {
     const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
     await user.click(d.getByRole('button', { name: /^Split/ }));
     await user.type(d.getByLabelText("This part's actual (min)"), '20');
+    holdList(api);
     await user.click(d.getByRole('button', { name: 'Split' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Task:/ })).toBeNull());
     expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
     expect((await api.getTask(b.id))!.status).toBe('done');
   });
 
-  it('a finish followed by a switch before the refetch never closes a task opened later', async () => {
+  it('a finish closes from the write’s own answer, never waiting on the list', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    holdList(api);
+    const transition = vi.spyOn(api, 'transitionTask');
+    await user.type(d.getByLabelText('Actual (min)'), '30');
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: draft' })).toBeNull());
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+    expect(transition).toHaveBeenCalledTimes(1);
+    expect((await api.getTask(b.id))!.status).toBe('done');
+  });
+
+  it('a Drop closes from the write’s own answer, never waiting on the list', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Droppable' });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Droppable' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Droppable' }));
+    holdList(api);
+    await user.click(d.getByRole('button', { name: /Drop task/ }));
+    await user.click(d.getByRole('button', { name: 'Drop' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Task: Droppable' })).toBeNull(),
+    );
+    expect((await api.getTask(t.id))!.status).toBe('cancelled');
+  });
+
+  it('a failed Drop or Delete is said inline, and the modal stays', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Keeper' });
+    vi.spyOn(api, 'transitionTask').mockRejectedValueOnce(new Error('offline'));
+    vi.spyOn(api, 'deleteTask').mockRejectedValueOnce(new Error('offline'));
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Keeper' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Keeper' }));
+    await user.click(d.getByRole('button', { name: /Drop task/ }));
+    await user.click(d.getByRole('button', { name: 'Drop' }));
+    expect((await d.findByRole('alert')).textContent).toBe('Couldn’t drop it — try again.');
+    await user.click(d.getByRole('button', { name: 'Cancel' }));
+    await user.click(d.getByRole('button', { name: /Delete task/ }));
+    await user.click(d.getByRole('button', { name: 'Delete' }));
+    expect((await d.findByRole('alert')).textContent).toBe('Couldn’t delete it — try again.');
+    expect(screen.getByRole('dialog', { name: 'Task: Keeper' })).toBeTruthy();
+    expect((await api.getTask(t.id))!.status).toBe('backlog');
+  });
+
+  it('a finish that lands after Close makes no close later — reopening the task stays open', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    const release = gateTransition(api);
+    await user.type(d.getByLabelText('Actual (min)'), '30');
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    await user.click(d.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: draft' })).toBeNull());
+    // The list shows the finish only after the task is open again.
+    let showList!: () => void;
+    const listed = new Promise<void>((r) => (showList = r));
+    const list = api.listTasks.bind(api);
+    vi.spyOn(api, 'listTasks').mockImplementation(() => listed.then(list));
+    await release();
+    await waitFor(async () => expect((await api.getTask(b.id))!.status).toBe('done'));
+    const card = rowOf('P2');
+    await user.click(within(card).getByRole('button', { name: 'draft' }));
+    expect(await screen.findByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+    await act(async () => showList());
+    await waitFor(() => expect(within(card).getByText(/2\/2/)).toBeTruthy());
+    expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+  });
+
+  it('a finish that lands after a switch closes nothing: the switched-to task, and the finished one reopened, stay', async () => {
+    // Guards the late-onFinished path: the switch happens while the write is in flight.
     const { api, b } = await seeded(false);
     await api.transitionTask(b.id, 'in_progress');
     renderApp({ api, path: '/tasks?lens=week' });
@@ -694,22 +799,18 @@ describe('parent + parts', () => {
     const row = await waitFor(() => rowOf('P2'));
     await user.click(within(row).getByRole('button', { name: 'draft' }));
     let d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
-    // Hold the refetch that would show the part as done.
-    let release!: () => void;
-    const held = new Promise<void>((r) => (release = r));
-    const list = api.listTasks.bind(api);
-    vi.spyOn(api, 'listTasks').mockImplementation(() => held.then(list));
+    const release = gateTransition(api);
     await user.type(d.getByLabelText('Actual (min)'), '30');
     await user.click(d.getByRole('button', { name: 'Mark done' }));
-    await waitFor(async () => expect((await api.getTask(b.id))!.status).toBe('done'));
-    // Until the task reads as done, the editor takes no second tap (jsdom doesn't enforce inert).
-    expect(d.getByLabelText('Title').closest('[inert]')).toBeTruthy();
     await user.click(d.getByRole('button', { name: 'P2' }));
     d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
-    await act(async () => release());
+    await release();
+    await waitFor(async () => expect((await api.getTask(b.id))!.status).toBe('done'));
+    await act(async () => {});
+    expect(screen.getByRole('dialog', { name: 'Task: P2' })).toBeTruthy();
     await user.click(await d.findByRole('button', { name: 'draft' }));
     expect(await screen.findByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 50));
+    await act(async () => {});
     expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
   });
 

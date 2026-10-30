@@ -80,7 +80,7 @@ export function TaskEditor({
   task: Task;
   intent: TaskEditorIntent;
   edits?: EditSlots; // where each form's edits stand, read by the modal's guard
-  onFinished: () => void; // finished here (Mark done, Drop, a done split): the modal closes, guarded
+  onFinished: (task: Task) => void; // finished here (Mark done, Drop, a done split), as the write returned it: the modal closes, guarded
   onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
   onLeaveReveal: (go: () => void) => void; // the guard for the open reveal's text alone
   estimateRef?: Ref<HTMLInputElement>;
@@ -121,30 +121,27 @@ export function TaskEditor({
     ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled')
     : [];
   // Closing Break down / Add parts, or the split reveal (Cancel, or a kept-going split), puts focus back
-  // on its opener (whichever shows by then), never <body> — unless it already went somewhere: a swap
-  // held for the send has opened another section, whose own field took it.
-  const refocus = (opener: RefObject<HTMLButtonElement | null>) =>
-    requestAnimationFrame(() => {
-      const at = document.activeElement;
-      if (opener.current && (!at || at === document.body || at.tagName === 'DIALOG'))
-        returnFocus(opener.current);
-    });
+  // on its opener (whichever shows by then), never <body> — from an effect, once the form has left: a
+  // frame callback can run before React's commit on an async close (after the send's await), find focus
+  // still inside the form, and let the unmount drop it to <body>. Never overrides focus that already
+  // went somewhere: a swap held for the send opens another section, whose own field takes it next.
+  const [refocus, setRefocus] = useState<RefObject<HTMLButtonElement | null> | null>(null);
+  useEffect(() => {
+    if (!refocus) return;
+    setRefocus(null);
+    const at = document.activeElement;
+    if (refocus.current && (!at || at === document.body || at.tagName === 'DIALOG'))
+      returnFocus(refocus.current);
+  }, [refocus]);
   const partsRef = useRef<HTMLButtonElement>(null);
   const closeParts = () => {
     setReveal(null);
-    refocus(partsRef);
+    setRefocus(partsRef);
   };
   const splitRef = useRef<HTMLButtonElement>(null);
   const closeSplit = () => {
     setReveal(null);
-    refocus(splitRef);
-  };
-  // Finished here: the modal closes once the task reads as finished (a refetch away). Until then
-  // nothing in the editor takes a second tap — a second Mark done, Split or Drop on a finished task.
-  const [finishing, setFinishing] = useState(false);
-  const finished = () => {
-    setFinishing(true);
-    onFinished();
+    setRefocus(splitRef);
   };
 
   const inProgress = task.status === 'in_progress';
@@ -161,7 +158,7 @@ export function TaskEditor({
     inProgress && !isParent ? (
       <section className="flex flex-col gap-2">
         <SectionHeading>Mark done</SectionHeading>
-        <DoneForm task={task} actualRef={actualRef} onDone={finished} onCancel={onRequestClose} />
+        <DoneForm task={task} actualRef={actualRef} onDone={onFinished} onCancel={onRequestClose} />
       </section>
     ) : null;
 
@@ -202,7 +199,7 @@ export function TaskEditor({
   );
 
   return (
-    <div className="flex flex-col gap-4" inert={finishing && !isTerminal}>
+    <div className="flex flex-col gap-4">
       {/* Header — the status line. The full title is the editable Title field in the details form
           below, which is also where it reads unclipped. */}
       <div className="flex flex-wrap items-center gap-2">
@@ -312,7 +309,10 @@ export function TaskEditor({
                 size="sm"
                 disabled={markDone.isPending}
                 onClick={() =>
-                  markDone.mutate({ id: task.id, to: 'done' }, { onSuccess: finished })
+                  markDone.mutate(
+                    { id: task.id, to: 'done' },
+                    { onSuccess: (done) => onFinished(done) },
+                  )
                 }
               >
                 Mark done
@@ -533,7 +533,7 @@ export function TaskEditor({
             task={task}
             parentTitle={parent?.title}
             // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
-            onDone={(finish) => (finish === 'done' ? finished() : closeSplit())}
+            onDone={(finish, original) => (finish === 'done' ? onFinished(original) : closeSplit())}
             onCancel={closeSplit}
             edits={edits}
           />
@@ -543,7 +543,7 @@ export function TaskEditor({
             task={task}
             parts={isParent ? summary : undefined}
             onCancel={() => setReveal(null)}
-            onDone={finished}
+            onDone={onFinished}
           />
         )}
         {reveal === 'delete' && task.seriesId === null && (

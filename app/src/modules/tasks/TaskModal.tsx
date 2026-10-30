@@ -23,15 +23,16 @@ type Exit = { go: () => void; of: 'editor' | 'reveal' };
 //   - the unsaved-changes guard: every way out — Esc / backdrop / Close, opening another task from
 //     inside this one (a parent's name, a part's row), and the close after Mark done, Drop or a done
 //     split — goes through `exit`. A save in flight is waited for (and the exit dropped if it fails —
-//     the failure stays shown); unsaved edits are asked about first. After a finish it waits for the
-//     task to read as finished, so fields locked by then (due, estimate) no longer count. The editor's
+//     the failure stays shown); unsaved edits are asked about first. After a finish the editor shows
+//     the task as the write returned it (the list's refetch is eventually consistent, so nothing waits
+//     on it), so fields locked by then (due, estimate) no longer count. The editor's
 //     section buttons use the same confirm for unsent Add parts / Split text. Delete closes via
 //     TaskModalHost once the task leaves the list; Save keeps the modal open;
 //   - resetting that guard state when the modal closes (the editor also unmounts, reseeding its form);
 //   - one task per editor: it remounts per task, so one task's edits can never show on — or be saved
 //     onto — another, and the dialog scrolls back to the top on a switch.
 export function TaskModal({
-  task,
+  task: live,
   open,
   intent,
   onClose,
@@ -50,8 +51,13 @@ export function TaskModal({
   // An exit held back: by the confirm (dirty), or until a save in flight lands (saving).
   const [pending, setPending] = useState<Exit | null>(null);
   const [discarded, setDiscarded] = useState<Exit | null>(null);
-  // The task finished here — by id, so a switch before the refetch can't carry it to another task.
-  const [finished, setFinished] = useState<string | null>(null);
+  // A finish made here (Mark done, Drop, a done split): the task as the write returned it. It stands in
+  // for the live copy until the list catches up — the refetch is eventually consistent and not retried,
+  // so nothing waits on it — and the editor renders it in the same commit the guard reads.
+  const [finished, setFinished] = useState<Task | null>(null);
+  const [exiting, setExiting] = useState(false); // its one close, run once the editor has rendered it
+  const task =
+    finished && finished.id === live.id && finished.updatedAt > live.updatedAt ? finished : live;
   const openTask = useOpenTask();
 
   const standing = useCallback(
@@ -82,20 +88,17 @@ export function TaskModal({
     if (standing(pending) === 'clean') pending.go();
   }, [editTick, pending, confirming, standing]);
 
-  // Finished here (Mark done, Drop, a done split): out through the guard — once the task reads as
-  // finished, so a due date or estimate typed before (locked now, never saveable) no longer counts,
-  // while a title or note still does, and a save in flight is waited for.
-  const terminal = task.status === 'done' || task.status === 'cancelled';
+  // Finished here: out through the guard, so a due date or estimate typed before (locked now, never
+  // saveable) no longer counts, while a title or note still asks and a save in flight is waited for.
+  // Closed or switched away before the write landed: no close left to make. An exit already held (Close
+  // or a switch asked for mid-save) goes on as asked once the slots settle.
   useEffect(() => {
-    if (!finished) return;
-    if (finished !== task.id) {
-      setFinished(null); // switched away first: that finish has no close left to make
-      return;
-    }
-    if (!terminal) return;
-    setFinished(null);
+    if (!exiting) return;
+    setExiting(false);
+    if (!open) return setFinished(null);
+    if (pending || finished?.id !== live.id) return;
     requestClose();
-  }, [finished, task.id, terminal, requestClose]);
+  }, [exiting, open, pending, finished, live.id, requestClose]);
 
   // Discard runs the exit a commit after the confirm has closed, not in the same one: the new content's
   // focus (the switched-to task's dialog, a reveal's autofocused field) would otherwise be placed while
@@ -118,6 +121,7 @@ export function TaskModal({
       setPending(null);
       setDiscarded(null);
       setFinished(null);
+      setExiting(false);
     }
   }, [open]);
 
@@ -143,7 +147,10 @@ export function TaskModal({
               task={task}
               intent={intent}
               edits={edits}
-              onFinished={() => setFinished(task.id)}
+              onFinished={(t) => {
+                setFinished(t);
+                setExiting(true);
+              }}
               onRequestClose={requestClose}
               onLeaveReveal={leaveReveal}
               estimateRef={estimateRef}

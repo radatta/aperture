@@ -465,7 +465,12 @@ describe('TaskEditor', () => {
     ).toBeTruthy();
     expect(screen.getByText(/“Pset” keeps the due date/)).toBeTruthy();
     await user.click(submit);
-    await waitFor(() => expect(onFinished).toHaveBeenCalled());
+    // The task as the split returned it: the modal closes from that, not the list's refetch.
+    await waitFor(() =>
+      expect(onFinished).toHaveBeenCalledWith(
+        expect.objectContaining({ id: t.id, status: 'done' }),
+      ),
+    );
     const all = await client.listTasks();
     const parent = all.find((x) => x.title === 'Pset' && x.id !== t.id)!;
     expect(all.find((x) => x.title === 'Part 2')).toMatchObject({
@@ -481,6 +486,12 @@ describe('TaskEditor', () => {
   });
 
   it('a keep split stays open, stores the typed titles, and returns focus to Split…', async () => {
+    // A frame before React's commit (as a browser can run one, after the split's await): focus still
+    // returns once the form has gone.
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      cb(0);
+      return 0;
+    });
     const client = api();
     let t = await client.createTask({ title: 'Essay', estimateMin: 60 });
     t = await client.transitionTask(t.id, 'in_progress');
@@ -680,7 +691,11 @@ describe('TaskEditor', () => {
       const { onFinished, user } = renderEditor(client, p);
       expect(await screen.findByText('All parts done — mark it submitted?')).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'Mark done' }));
-      await waitFor(() => expect(onFinished).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(onFinished).toHaveBeenCalledWith(
+          expect.objectContaining({ id: p.id, status: 'done' }),
+        ),
+      );
       expect(await client.getTask(p.id)).toMatchObject({ status: 'done', actualAccruedMin: 70 });
     });
 
@@ -772,6 +787,20 @@ describe('TaskEditor', () => {
       expect(screen.getByLabelText('Ends')).toBeTruthy();
       expect(screen.getByLabelText('Ends at')).toBeTruthy();
       expect(screen.queryByLabelText('Due')).toBeNull();
+    });
+
+    it('focus returns to Add parts… once the parts land, even with a frame before React’s commit', async () => {
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0);
+        return 0;
+      });
+      const client = api();
+      const t = await client.createTask({ title: 'Lab' });
+      const { user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Break down…' }));
+      await user.type(screen.getByLabelText(/Add parts/), 'run it | ~45');
+      await user.click(screen.getByRole('button', { name: 'Add parts' }));
+      await waitFor(() => expect(document.activeElement?.textContent).toBe('Add parts…'));
     });
 
     it('Break down… turns a plain task into a parent, its estimate prefilling the first part', async () => {
@@ -936,7 +965,49 @@ describe('TaskEditor', () => {
     await user.click(screen.getByRole('button', { name: 'Drop' }));
 
     await waitFor(async () => expect((await client.getTask(t.id))?.status).toBe('cancelled'));
-    expect(onFinished).toHaveBeenCalled();
+    expect(onFinished).toHaveBeenCalledWith(
+      expect.objectContaining({ id: t.id, status: 'cancelled' }),
+    );
+  });
+
+  it('a second Mark done tap during the actual’s write sends nothing', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Read', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = client.setTaskActual.bind(client);
+    vi.spyOn(client, 'setTaskActual').mockImplementation((id, min) =>
+      gate.then(() => original(id, min)),
+    );
+    const transition = vi.spyOn(client, 'transitionTask');
+    const { onFinished, user } = renderEditor(client, t, 'finish');
+    await user.type(screen.getByLabelText('Actual (min)'), '30');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    await act(async () => release());
+    await waitFor(() => expect(onFinished).toHaveBeenCalledTimes(1));
+    expect(transition).toHaveBeenCalledTimes(1);
+    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ id: t.id, status: 'done' }));
+  });
+
+  it('a failed Mark done is said inline; the button works again', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Read', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    vi.spyOn(client, 'transitionTask').mockRejectedValueOnce(new Error('offline'));
+    const { onFinished, user } = renderEditor(client, t, 'finish');
+    await user.type(screen.getByLabelText('Actual (min)'), '30');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Couldn’t mark it done — try again.',
+    );
+    expect(onFinished).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Mark done' }).getAttribute('aria-disabled')).toBe(
+        'false',
+      ),
+    );
   });
 
   it('offers Drop but not Delete on a recurring occurrence', () => {

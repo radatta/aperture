@@ -31,7 +31,7 @@ export function SplitForm({
 }: {
   task: Task;
   parentTitle?: string; // set when it's already a part
-  onDone: (finish: Finish) => void;
+  onDone: (finish: Finish, original: Task) => void; // original: this task as the split returned it
   onCancel: () => void;
   edits?: EditSlots;
 }) {
@@ -74,7 +74,11 @@ export function SplitForm({
     estimate !== initial.estimate ||
     restTitle !== initial.restTitle ||
     (restTyped && restEstimate !== str(splitDefaults(task, finish).rest));
-  useEditSlot(edits, 'reveal', splitting ? 'saving' : dirty ? 'dirty' : 'clean');
+  // Once the split landed the typed values are stored: nothing left to discard, whatever still shows (a
+  // done split hands the close to the modal's guard). Add parts always unmounts on success, so it has
+  // no such flag.
+  const [sent, setSent] = useState(false);
+  useEditSlot(edits, 'reveal', sent ? 'clean' : splitting ? 'saving' : dirty ? 'dirty' : 'clean');
 
   const done = finish === 'done';
   // Where the rest lands — the server rule, stated generally: plan rows are loaded per day here, and a
@@ -99,7 +103,7 @@ export function SplitForm({
     if (!canSubmit || splitting) return;
     setSplitting(true);
     try {
-      await split.mutateAsync({
+      const { original } = await split.mutateAsync({
         id: task.id,
         input: {
           finish,
@@ -113,7 +117,8 @@ export function SplitForm({
           followUp: { title: restTitle.trim(), estimateMin: rest },
         },
       });
-      onDone(finish);
+      setSent(true);
+      onDone(finish, original);
     } catch {
       // Surfaced inline below — swallow so it isn't an unhandled rejection (which leaked the raw error
       // JSON to the page).

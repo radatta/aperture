@@ -23,7 +23,7 @@ export function DoneForm({
   task: Task;
   initialActualMin?: number;
   actualRef?: Ref<HTMLInputElement>;
-  onDone: () => void;
+  onDone: (task: Task) => void; // the task as the finish returned it
   onCancel?: () => void; // where Cancel isn't just closing (the task modal asks about unsaved edits)
 }) {
   const setActual = useSetActual();
@@ -32,6 +32,21 @@ export function DoneForm({
     const tracked = Math.round(initialActualMin ?? task.actualAccruedMin);
     return tracked > 0 ? String(tracked) : '';
   });
+  // One submit per tap, set before the first await: transition.isPending is false during setActual's,
+  // and arrives a tick late anyway.
+  const [busy, setBusy] = useState(false);
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await setActual.mutateAsync({ id: task.id, actualMin: Number(actual) });
+      onDone(await transition.mutateAsync({ id: task.id, to: 'done' }));
+    } catch {
+      // Said below.
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <div className="mt-3 flex flex-col gap-3 rounded-xl border border-line bg-surface p-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -56,19 +71,25 @@ export function DoneForm({
       <div className="flex gap-2">
         <Button
           size="sm"
-          disabled={transition.isPending || actual.trim() === ''}
-          onClick={async () => {
-            await setActual.mutateAsync({ id: task.id, actualMin: Number(actual) });
-            await transition.mutateAsync({ id: task.id, to: 'done' });
-            onDone();
-          }}
+          onClick={submit}
+          aria-disabled={busy}
+          disabled={actual.trim() === ''}
+          className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >
           Mark done
         </Button>
-        <Button variant="ghost" size="sm" onClick={onCancel ?? onDone}>
+        {/* Without onCancel, onDone is the caller's close: Cancel just closes. */}
+        <Button variant="ghost" size="sm" onClick={onCancel ?? (() => onDone(task))}>
           Cancel
         </Button>
       </div>
+      {(setActual.isError || transition.isError) && (
+        <div role="alert">
+          <Text size="sm" tone="danger">
+            Couldn’t mark it done — try again.
+          </Text>
+        </div>
+      )}
     </div>
   );
 }

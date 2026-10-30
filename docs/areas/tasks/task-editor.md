@@ -84,18 +84,30 @@ The card keeps only the actions you press without thinking. No overflow menu.
   disclosure whose `triggerRef` is the opening row's title button; every opener (title/Scope/Done)
   returns focus there on close. If a save re-rendered the row (moved it to another group), its title
   is found again by task id (`data-task-id`); if the row has left the list, focus goes to the list
-  area instead of `<body>`. While a save is in flight the form doesn't report dirty (closing then
-  lets the save finish rather than offering a false "Discard"), and typing during it is kept — only
-  fields untouched since Save are reseeded. After a mouse/touch close the focus comes back without the ring (only Tab counts as
+  area instead of `<body>`. Typing during a save is kept — only fields untouched since Save are
+  reseeded. A switch to another task from inside the modal keeps the first row as the focus target.
+  After a mouse/touch close the focus comes back without the ring (only Tab counts as
   keyboard navigation), so the title doesn't sit outlined until you click elsewhere.
-- **Click-outside closes, but an unsaved edit confirms first.** The task modal opts into backdrop-close
-  (an opt-in `closeOnBackdrop` flag on the shared `Modal`, so paste-heavy dialogs like bulk-add stay
-  unaffected). Every *exit* path — Esc, backdrop, the Close button — routes through `requestClose`,
-  which pops a "Discard changes?" confirm (a second `<dialog>` stacked on top) when the details form is
-  dirty. A *real action* (Mark done / Drop / Delete) closes without the prompt, since it isn't an
-  abandon; Save doesn't close at all. "Dirty" is the details form only (title/estimate/category/due/notes); the Split/Calendar reveal
-  forms have their own Cancel. Backdrop-close requires press *and* release on the backdrop, so a
-  text-selection drag-out can't dismiss.
+- **Click-outside closes, but nothing unsaved is lost without asking.** The task modal opts into
+  backdrop-close (an opt-in `closeOnBackdrop` flag on the shared `Modal`, so paste-heavy dialogs like
+  bulk-add stay unaffected); it requires press *and* release on the backdrop, so a text-selection
+  drag-out can't dismiss. Every way out goes through the modal's guard (`TaskModal` `exit`): Esc,
+  backdrop, Close, opening another task from inside (a parent's name, a part's row), and the close after
+  Mark done / Drop / a done split. Each form reports where its edits stand — clean, dirty or saving —
+  into a slot the guard reads at the moment of the exit (`editState.ts`, written from a layout effect,
+  so an Esc right after a keystroke still sees it):
+  - **Dirty asks** "Discard changes?" (a second `<dialog>` on top): unsaved details
+    (title/estimate/category/due/notes), and unsent Add parts / Split text. The section buttons (Split…,
+    Break down…, Drop…, Delete…, Add to calendar…) ask the same about unsent reveal text before
+    swapping it out ("What you typed hasn’t been added yet…"); details edits never prompt there, since
+    that form stays. Mark done's actual and Add to calendar's picks don't count.
+  - **Saving waits**: an exit asked for during a save or send runs once it lands clean, and is dropped
+    if it fails — the failure stays shown with the text.
+  - **After a finish** the editor shows the task as the write returned it (not the list, whose refetch
+    is eventually consistent and not retried), so fields locked by then (due, estimate) no longer count
+    while a title or note still asks; Keep editing leaves you on the finished task, where Save works.
+  - Delete closes via `TaskModalHost` once the task leaves the list; Save never closes. A failed Mark
+    done, Drop or Delete is said inline and the modal stays.
 
 - **Notes live in the details form** ([notes.md](notes.md)): rendered, with Edit / "Add notes…";
   once editing, a textarea until Save (which shows the rendered note again) or Close. Editable at any status, like the title.
@@ -120,3 +132,6 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - Deleted: `ScopePanel` (absorbed into `TaskDetailsForm`).
 - Tests: `TaskEditor.test.tsx`, migrated `TaskCard.test.tsx` (menu flows → modal flows), plus
   `taskMath`/`format` helper tests. Full app suite green.
+- Later (2026-10-30, parts v2a): the guard above — `editor/editState.ts` (slots), every exit through
+  `TaskModal`'s `exit`, the finish closing from `onFinished(task)`, `Modal` `contentKey` (a switch
+  scrolls to the top and refocuses).
