@@ -9,6 +9,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
@@ -164,6 +165,12 @@ export class ApertureAppStack extends Stack {
 
     // BFF Lambda — esbuild-bundled TS, Node 22, no warming (cold starts are fine at single-user).
     const fnTimeout = Duration.seconds(15); // shared with the Monitoring duration alarm below
+    // Log retention for the BFF + MCP groups, which Lambda created on first invoke and which never expired.
+    // `logRetention` (deprecated, still supported in this aws-cdk-lib) sets it through a custom resource that
+    // tolerates the existing group; `logGroup` would try to CREATE it and fail (AlreadyExists), and the
+    // useCdkManagedLogGroup flag says the same. Moving to `logGroup` needs a `cdk import` — a follow-up.
+    // finance-sync owns its group already (30 d, finance-sync.ts).
+    const logRetention = stage === 'prod' ? logs.RetentionDays.THREE_MONTHS : logs.RetentionDays.TWO_WEEKS;
     const fn = new NodejsFunction(this, 'Bff', {
       functionName: `aperture-bff-${stage}`,
       entry: LAMBDA_ENTRY,
@@ -171,6 +178,7 @@ export class ApertureAppStack extends Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       timeout: fnTimeout,
       memorySize: 512,
+      logRetention,
       environment: {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,
@@ -234,6 +242,7 @@ export class ApertureAppStack extends Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       timeout: fnTimeout,
       memorySize: 512,
+      logRetention,
       environment: {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,
@@ -256,6 +265,16 @@ export class ApertureAppStack extends Stack {
     );
     ackLambdaIam(mcpFn, stage, Stack.of(this).region, { ssmWrite: false });
     const mcpUrl = mcpFn.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.NONE });
+    // The logRetention custom resource's singleton provider (one per stack, shared by both functions): its role
+    // carries the basic-execution managed policy + Put/DeleteRetentionPolicy on `*` (CDK's own grant). The
+    // construct id is CDK's fixed singleton id; ack ids copied from synth's hint, like ackLambdaIam.
+    const retentionProvider = Stack.of(this).node.tryFindChild('LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a');
+    retentionProvider?.node.tryFindChild('ServiceRole')?.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+      'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
+        'CDK-managed logRetention provider; AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
+      'AwsSolutions-IAM5[Resource::*]':
+        'CDK-managed logRetention provider: PutRetentionPolicy/DeleteRetentionPolicy are granted on * by CDK itself.',
+    });
 
     // Private site bucket — assets are synced post-build (not by CDK), so infra ≠ app deploy.
     const bucket = new s3.Bucket(this, 'Site', {

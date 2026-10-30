@@ -22,3 +22,42 @@
 {"expect":"deny","why":"credential lifecycle","cmd":"gh auth login"}
 {"expect":"deny","why":"raw HTTP to the GitHub API","cmd":"curl -s https://api.github.com/repos/o/r"}
 {"expect":"allow","why":"not a push","cmd":"git status"}
+{"expect":"allow","why":"-C into the fixture repo, feature target","cmd":"git -C . push -u origin feature-x"}
+{"expect":"deny","why":"-C used to skip every push check","reason":"deploy branches","cmd":"git -C . push origin dev"}
+{"expect":"deny","why":"-c k=v before push","reason":"deploy branches","cmd":"git -c core.askpass=x push origin main"}
+{"expect":"deny","why":"quoted -c value with a space","reason":"deploy branches","cmd":"git -c 'credential.helper=!f a' push origin master"}
+{"expect":"deny","why":"long global option before push","reason":"deploy branches","cmd":"git --no-pager push origin dev"}
+{"expect":"deny","why":"-C resolves the current branch in that dir","branch":"dev","reason":"protected/deploy branch","cmd":"git -C . push"}
+{"expect":"deny","why":"-C dir the guard can't enter fails closed","reason":"can't enter","cmd":"git -C /nonexistent-ci-bot-dir push origin feature-x"}
+{"expect":"deny","why":"--git-dir hides the branch","reason":"--git-dir","cmd":"git --git-dir=/tmp/x/.git push origin feature-x"}
+{"expect":"deny","why":"--all reaches dev without naming it","reason":"--all","cmd":"git push --all origin"}
+{"expect":"deny","why":"--mirror","reason":"--all","cmd":"git push --mirror origin"}
+{"expect":"deny","why":"--all behind -C","reason":"--all","cmd":"git -C . push origin --all"}
+{"expect":"deny","why":"force behind -C","reason":"Force-push","cmd":"git -C . push --force origin feature-x"}
+{"expect":"deny","why":"+refspec is a force push","reason":"Force-push","cmd":"git push origin +feature-x"}
+{"expect":"deny","why":"-d deletes","reason":"--delete","cmd":"git push -d origin feature-x"}
+{"expect":"deny","why":"empty-source refspec deletes","reason":"--delete","cmd":"git push origin :feature-x"}
+{"expect":"allow","why":"colon inside a refspec is not a delete","cmd":"git push origin HEAD:feature-x"}
+{"expect":"allow","why":"--dry-run is not -d","cmd":"git push --dry-run origin feature-x"}
+{"expect":"allow","why":"bot push of the current feature branch","cmd":"pnpm bot push"}
+{"expect":"allow","why":"deploy-dev's 'dev' follows a hyphen","cmd":"pnpm bot deploy-dev"}
+{"expect":"allow","why":"the sanctioned post-rebase push","cmd":"pnpm bot push --after-rebase"}
+{"expect":"allow","why":"lock and logs subcommands","cmd":"pnpm bot lock release && pnpm bot logs --since 30m --groups bff,mcp"}
+{"expect":"deny","why":"bot aimed at main","reason":"pnpm bot","cmd":"pnpm bot push main"}
+{"expect":"deny","why":"bot via the script path, aimed at dev","reason":"pnpm bot","cmd":"node scripts/src/bot/cli.ts push dev"}
+{"expect":"deny","why":"bot with a force flag","reason":"Force flags","cmd":"pnpm bot push --force"}
+{"expect":"allow","why":"a log filter may say main","cmd":"pnpm bot logs --since 30m --filter main"}
+{"expect":"deny","why":".secret? glob still reaches the key","reason":".secrets","cmd":"cat .secret?/ci-bot/app.env"}
+{"expect":"deny","why":"merging is the user's","reason":"merge","cmd":"gh pr merge 12 --squash"}
+{"expect":"deny","why":"approving is the user's","reason":"merge","cmd":"GH_TOKEN=x gh pr review 12 --approve"}
+{"expect":"deny","why":"merge via the REST path","reason":"merge","cmd":"gh api -X PUT repos/radatta/aperture/pulls/12/merge"}
+{"expect":"allow","why":"reading a PR is fine","cmd":"gh pr view 12 --json title"}
+{"expect":"deny","why":"reading the key","reason":".secrets","cmd":"cat .secrets/ci-bot/private-key.pem"}
+{"expect":"deny","why":"redirect from the key","reason":".secrets","cmd":"base64 < /workspace/.secrets/ci-bot/private-key.pem"}
+{"expect":"deny","why":"copying the dir","reason":".secrets","cmd":"cp -r .secrets /tmp/x"}
+{"expect":"deny","why":"ls chained to a read","reason":".secrets","cmd":"ls .secrets && cat .secrets/ci-bot/app.env"}
+{"expect":"deny","why":"ls then a read on the next line","reason":".secrets","cmd":"ls .secrets\ncat .secrets/ci-bot/app.env"}
+{"expect":"deny","why":"Monitor carries a shell line too","tool":"Monitor","reason":".secrets","cmd":"tail -f .secrets/ci-bot/app.env"}
+{"expect":"allow","why":"bare ls shows names and modes only","cmd":"ls -la .secrets/ci-bot"}
+{"expect":"allow","why":"bare stat","cmd":"stat .secrets/ci-bot/private-key.pem"}
+{"expect":"allow","why":"a word ending in .secrets is not the dir","cmd":"echo app.secrets"}

@@ -1,0 +1,74 @@
+name: Fetch dev logs
+
+# Dev CloudWatch logs for Claude, which has no AWS access in the container (docs/ops/CI-BOT.md). The bot
+# (`pnpm bot logs`) dispatches this on `ref: main` and downloads the artifact. Dev only, by construction:
+# the `dev-logs` environment is main-only, its role (aperture-github-logs-dev, cicd-stack.ts) can read only
+# the three dev Lambda groups, and the script maps a fixed allowlist to `-dev` group names.
+# The run-name is how the bot finds its run: `dev-logs <key>`.
+run-name: dev-logs ${{ inputs.key }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: Window start, ISO 8601
+        required: true
+        type: string
+      end:
+        description: Window end, ISO 8601 (at most 6 h after start)
+        required: true
+        type: string
+      groups:
+        description: Comma list of bff, mcp, finance-sync
+        required: false
+        type: string
+        default: bff,mcp
+      filter:
+        description: CloudWatch filter pattern (optional)
+        required: false
+        type: string
+        default: ''
+      query:
+        description: Logs Insights query (optional; runs instead of the filter)
+        required: false
+        type: string
+        default: ''
+      key:
+        description: Run key — `<branch>-<base36 time>`, unique per dispatch
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    environment: dev-logs # OIDC subject …:environment:dev-logs — the only thing the logs role trusts
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_LOGS_ROLE_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Fetch
+        env:
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          LOG_GROUPS: ${{ inputs.groups }} # not GROUPS — bash reserves it (the group-id array)
+          FILTER: ${{ inputs.filter }}
+          QUERY: ${{ inputs.query }}
+          KEY: ${{ inputs.key }}
+        run: |
+          node --version
+          node scripts/aws/fetch-dev-logs.mjs
+      - uses: actions/upload-artifact@v7
+        if: always() # a failed group still leaves the others (and its own error line) worth reading
+        with:
+          name: dev-logs-${{ inputs.key }}
+          path: dev-logs/
+          retention-days: 3
+          if-no-files-found: error

@@ -17,7 +17,8 @@ const GITHUB_OIDC_URL = `https://${GITHUB_OIDC_HOST}`;
 const CDK_QUALIFIER = 'hnb659fds'; // default bootstrap qualifier (cdk-hnb659fds-*-role)
 
 // Deployed ONCE, by hand, before CI can run — chicken-and-egg: the roles must exist for GitHub to assume
-// them. Creates the GitHub OIDC provider + two keyless deploy roles, then the pipeline never touches it.
+// them. Creates the GitHub OIDC provider + two keyless deploy roles + a dev-logs reader, then the pipeline
+// never touches it (re-run by hand when a role changes — INFRA §9).
 // The roles hold almost no direct power: cdk deploy is funneled through the account's CDK bootstrap roles
 // (they carry the real permissions), and the roles get only the handful of direct actions the frontend
 // publish + smoke step take outside CloudFormation. Prod trust is bound to the `prod` GitHub environment,
@@ -117,11 +118,11 @@ export class ApertureCicdStack extends Stack {
       return role;
     };
 
-    // dev: the `deploy-dev` job always runs in the `dev` GitHub environment, which makes its OIDC sub
-    // `…:environment:dev` on BOTH the `dev`- and `main`-branch pushes. That's the only path that assumes
-    // this role, so the trust is scoped to the environment alone. (The old `ref:refs/heads/{dev,main}` subs were a cutover superset,
-    // pruned 2026-08 once every deploy-dev run was confirmed environment-scoped.) The `dev` environment must
-    // allow the `dev` AND `main` branches, since deploy-dev runs from both.
+    // dev: every dev deploy runs in the `dev` GitHub environment — deploy.yml's deploy-dev on a `main` or `dev`
+    // push, and deploy-dev.yml on a bot dispatch (off until dev's bootstrap is isolated — docs/ops/CI-BOT.md) — so
+    // its OIDC sub is always `…:environment:dev` and the trust is scoped to the environment alone. (The old
+    // `ref:refs/heads/{dev,main}` subs were a cutover superset, pruned 2026-08.) The `dev` environment must allow
+    // the `dev` AND `main` branches, since deploy-dev runs from both.
     const devRole = makeRole(
       'DeployDev',
       'aperture-github-deploy-dev',
@@ -137,7 +138,52 @@ export class ApertureCicdStack extends Stack {
       'prod',
     );
 
+    // dev logs: read-only CloudWatch Logs for fetch-dev-logs.yml (the bot's `pnpm bot logs`). Built apart from
+    // makeRole — it gets none of the deploy power (no bootstrap assume, S3, CloudFront, CFN). Trusted only from
+    // the `dev-logs` environment (main-only branch policy), and reads only the three dev Lambda groups: prod
+    // logs hold the user's real activity and stay unreachable by construction.
+    const logsRole = new iam.Role(this, 'LogsDev', {
+      roleName: 'aperture-github-logs-dev',
+      maxSessionDuration: Duration.hours(1),
+      assumedBy: new iam.OpenIdConnectPrincipal(provider, {
+        StringEquals: { [`${GITHUB_OIDC_HOST}:aud`]: 'sts.amazonaws.com' },
+        StringLike: { [`${GITHUB_OIDC_HOST}:sub`]: [`repo:${githubSubject}:environment:dev-logs`] },
+      }),
+    });
+    const devGroups = ['bff', 'mcp', 'finance-sync'].map(
+      (fn) => `arn:aws:logs:${region}:${account}:log-group:/aws/lambda/aperture-${fn}-dev:*`,
+    );
+    logsRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'logs:FilterLogEvents',
+          'logs:GetLogEvents',
+          'logs:DescribeLogStreams',
+          'logs:StartQuery',
+        ],
+        resources: devGroups,
+      }),
+    );
+    // Query results, listings and stopping a query are addressed by query id, not log group — no resource form.
+    logsRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['logs:GetQueryResults', 'logs:DescribeQueries', 'logs:StopQuery'],
+        resources: ['*'],
+      }),
+    );
+    logsRole.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+      ...Object.fromEntries(
+        ['bff', 'mcp', 'finance-sync'].map((fn) => [
+          `AwsSolutions-IAM5[Resource::arn:aws:logs:${region}:<AWS::AccountId>:log-group:/aws/lambda/aperture-${fn}-dev:*]`,
+          'Log events live under the group ARN with a `:*` stream suffix; the group itself is named exactly.',
+        ]),
+      ),
+      'AwsSolutions-IAM5[Resource::*]':
+        'logs:GetQueryResults, DescribeQueries and StopQuery are addressed by query id and support no resource-level scoping.',
+    });
+
     new CfnOutput(this, 'DevRoleArn', { value: devRole.roleArn });
     new CfnOutput(this, 'ProdRoleArn', { value: prodRole.roleArn });
+    new CfnOutput(this, 'LogsRoleArn', { value: logsRole.roleArn });
   }
 }

@@ -1,0 +1,143 @@
+name: Deploy dev (dispatch)
+
+# A feature branch onto the dev stack without the `dev` branch (docs/ops/CI-BOT.md) — OFF until dev's CDK bootstrap is
+# isolated (the DEV_DEPLOY_ISOLATED check below); until then the user pushes `dev`. The bot
+# (`pnpm bot deploy-dev`) dispatches this on `ref: main` — main's YAML runs and the feature commit only supplies
+# the tree — or, for a branch that changes `.github/`, on that branch, so its own workflows are what run on dev
+# (only the user can push workflow changes: the bot has no `workflows` permission).
+# The run-name is a contract: `deploy-dev <40-hex sha> <key>`. Dispatch returns no run id, so the bot finds
+# its run by that title, and dev-e2e's devcheck matches dispatched runs by it (head_sha is the ref's, not sha).
+run-name: deploy-dev ${{ inputs.sha }} ${{ inputs.key }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Feature commit to deploy (40-hex)
+        required: true
+        type: string
+      key:
+        description: Run key — `<branch>-<base36 time>`, unique per dispatch
+        required: true
+        type: string
+      base:
+        description: Commit dev serves now (the last dispatched sha); empty → origin/main
+        required: false
+        type: string
+        default: ''
+
+# One dispatch at a time; the bot's refs/locks/dev lock already serializes them. Queue, never cancel.
+concurrency:
+  group: deploy-dev-dispatch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything the deploy trusts about the commit, checked before the deploy role is assumed — by main's code on a
+  # main-ref dispatch, by the branch's own on a branch-ref one.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.verify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # every branch, for the ancestry and on-a-branch checks
+      - name: Verify the commit and classify it
+        id: verify
+        env:
+          SHA: ${{ inputs.sha }}
+          KEY: ${{ inputs.key }}
+          BASE: ${{ inputs.base }}
+          # Set to `true` by the user once dev's CDK bootstrap is isolated (the dev-bootstrap PR). A repository
+          # variable: the bot can't set it (the App has no Variables permission).
+          DEV_DEPLOY_ISOLATED: ${{ vars.DEV_DEPLOY_ISOLATED }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          # Until dev deploys run against a dev-only bootstrap, the dev role reaches the whole account through the
+          # shared CDK bootstrap — a dispatched branch would run with that reach and no human step (CI-BOT.md).
+          [ "$DEV_DEPLOY_ISOLATED" = "true" ] || fail "dispatched dev deploys are off until dev's CDK bootstrap is isolated (docs/ops/CI-BOT.md → Dev deploy blast radius)"
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "sha must be 40 lowercase hex"
+          [[ "$KEY" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "key must be [A-Za-z0-9._-], at most 100 chars"
+          git cat-file -e "$SHA^{commit}" 2>/dev/null || fail "$SHA is not on any branch of this repo"
+          # Contains main → dev runs what a squash-merge would produce (the old dev-branch rule).
+          git merge-base --is-ancestor origin/main "$SHA" || fail "$SHA is behind main — rebase and push first"
+          # On a feature branch — not only main, not the dev branch.
+          branches=$(git branch -r --contains "$SHA" --format='%(refname:short)' | grep -vxE 'origin/(HEAD|main|master|dev)' || true)
+          [ -n "$branches" ] || fail "$SHA is not on a pushed feature branch"
+          echo "On: $(echo $branches)"
+          # Which YAML runs: on main, main's — so a `.github/` change would silently not be tested; on the commit's
+          # own branch (workflow testing), that branch's — so the ref must point exactly at this commit.
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            git diff --quiet origin/main "$SHA" -- .github \
+              || fail "$SHA changes .github/ — dispatch on its branch so its workflows run (pnpm bot deploy-dev does)"
+          else
+            ref_sha=$(git rev-parse "origin/${GITHUB_REF#refs/heads/}" 2>/dev/null || true)
+            [ "$ref_sha" = "$SHA" ] || fail "dispatched on $GITHUB_REF, whose head ($ref_sha) is not $SHA"
+          fi
+          # Classify against what dev serves now (the checked-out ref's classifier). An unknown base → full.
+          base=origin/main
+          if [ -n "$BASE" ]; then
+            if [[ "$BASE" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then base=$BASE; else base=''; fi
+          fi
+          if [ -z "$base" ]; then
+            mode=full; echo "Base $BASE unknown — full deploy."
+          else
+            changed=$(git diff --name-only "$base" "$SHA")
+            echo "Changed vs $base:"; echo "$changed"
+            mode=$(printf '%s\n' "$changed" | node scripts/src/classify-changes.ts)
+          fi
+          case "$mode" in none|app|full) ;; *) fail "classifier returned '$mode'" ;; esac
+          # A dispatch always publishes: `none` would leave dev's build marker on the old sha, and the bot and the
+          # devcheck wait for this one.
+          if [ "$mode" = none ]; then mode=app; fi
+          echo "Deploy mode: $mode"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: [verify]
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy-stage.yml
+    with:
+      stage: dev
+      mode: ${{ needs.verify.outputs.mode }}
+      ref: ${{ inputs.sha }}
+      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+      aws_region: ${{ vars.AWS_REGION }}
+      cert_arn: ${{ vars.CERT_ARN_DEV }}
+      device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
+    secrets:
+      origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
+      device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
+      agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
+
+  # Same ntfy channel as deploy.yml; the bot also reports the conclusion to the session that dispatched.
+  notify:
+    needs: [verify, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          DEV_RESULT: ${{ needs.deploy.result }}
+          SHA: ${{ inputs.sha }}
+          KEY: ${{ inputs.key }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
+          body="verify=$VERIFY_RESULT dev=$DEV_RESULT  $SHA"
+          if [ "$VERIFY_RESULT" = "success" ] && [ "$DEV_RESULT" = "success" ]; then
+            curl -s -H "Title: ✅ dev dispatch ok ($KEY)" -H "Priority: min" \
+              -d "$body" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          else
+            curl -s -H "Title: ❌ dev dispatch FAILED ($KEY)" -H "Priority: high" -H "Tags: warning" \
+              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
+          fi

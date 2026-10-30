@@ -1,8 +1,9 @@
 name: Deploy stage
 
 # One reusable deploy, parameterised by stage — deploy-dev and deploy-prod were near-identical 60-line
-# copies (adding one per-stage secret meant editing two env blocks). The caller (deploy.yml) decides the
-# stage, the change tier (`mode`), and which secrets/vars to hand in.
+# copies (adding one per-stage secret meant editing two env blocks). The caller (deploy.yml on a main push,
+# deploy-dev.yml on a bot dispatch) decides the stage, the change tier (`mode`), the commit (`ref`), and which
+# secrets/vars to hand in.
 #
 # `mode` gates the work:
 #   none → nothing is built or deployed (the docs-only fast-path). The job still runs in `environment:`, so
@@ -31,6 +32,10 @@ on:
       device_user_id:
         required: true
         type: string # the stage's Cognito sub (not secret)
+      ref:
+        required: false
+        type: string
+        default: '' # commit to check out and deploy; empty → the triggering commit (github.sha)
     secrets:
       origin_secret:
         required: true
@@ -50,10 +55,11 @@ jobs:
     # records a GitHub deployment against the stage, which nothing consumes since main dropped
     # `required_deployments` (INFRA §9).
     environment: ${{ inputs.stage }}
-    # One deploy per STAGE at a time, across refs. The caller's workflow-level group is per ref, so a main
-    # push (which deploys dev first) and a dev push could otherwise hit the dev stack at once. Queue, never
-    # cancel — a half-applied stack is worse than a wait. At most two jobs contend (one main run, one dev
-    # run — the per-ref group caps each), so GitHub's one-pending-per-group cancellation can't trigger.
+    # One deploy per STAGE at a time, across workflows. A main push (which deploys dev first) and a dev deploy
+    # — a `dev` push, or a bot dispatch (deploy-dev.yml) — could otherwise hit the dev stack at once. Queue, never
+    # cancel — a half-applied stack is worse than a wait. At most two jobs contend: one main run plus one dev
+    # run (dispatches stay off while the `dev` push path exists, and deploy-dev.yml's own group plus the bot's
+    # refs/locks/dev lock cap them at one), so GitHub's one-pending-per-group cancellation can't trigger.
     concurrency:
       group: deploy-stage-${{ inputs.stage }}
       cancel-in-progress: false
@@ -66,6 +72,9 @@ jobs:
       APERTURE_DEVICE_TOKEN: ${{ secrets.device_token }}
       APERTURE_DEVICE_USER_ID: ${{ inputs.device_user_id }}
       APERTURE_AGENT_TOKEN: ${{ secrets.agent_token }}
+      # The commit this deploy serves. A dispatched run's GITHUB_SHA is main's (the workflow ran from main), so
+      # the build marker reads this first and falls back to GITHUB_SHA (contract with dev-e2e — CI-BOT.md).
+      APERTURE_BUILD_SHA: ${{ inputs.ref || github.sha }}
     steps:
       - name: Validate mode
         run: |
@@ -73,9 +82,13 @@ jobs:
             none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }}" ;;
             *) echo "::error::invalid mode '${{ inputs.mode }}'"; exit 1 ;;
           esac
-      # Shallow — the history-dependent checks (base diff, up-to-date-with-main) live in the caller's
-      # `changes` job now, so the deploy itself needs no history.
+      # Shallow — the history-dependent checks (base diff, ancestry) live in the caller, so the deploy itself
+      # needs no history. `ref` is a feature commit only on a deploy-dev.yml dispatch: on main, its verify job
+      # refused any .github/ change; on a branch ref, this checkout is the YAML's own commit. Either way the local
+      # setup action below runs from the code that was verified, under the deploy role.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup # .nvmrc's Node + corepack pnpm + install, same as ci.yml
         if: inputs.mode != 'none'
       - uses: aws-actions/configure-aws-credentials@v6

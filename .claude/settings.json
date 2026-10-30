@@ -115,6 +115,15 @@
         ]
       },
       {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/secrets-read-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__aperture-dev__delete_task|mcp__aperture-dev__update_task",
         "hooks": [
           {

@@ -7,9 +7,10 @@ Suites:
   coi-reverse-shell-guard.sh  <- reverse-shell-fixtures.jsonl
   coi-grep-guard.sh           <- grep-guard-fixtures.jsonl  (Grep payloads: "input" instead of "cmd")
   precommit-guard.sh          <- precommit-fixtures.jsonl  (deploy-branch block, secret scan, commit-message rule)
-  gh-safety-guard.sh          <- gh-safety-fixtures.jsonl  (destructive git, deploy-branch pushes, gh auth)
+  gh-safety-guard.sh          <- gh-safety-fixtures.jsonl  (destructive git, deploy-branch pushes, bot CLI, gh auth)
   mcp-dev-ledger.sh           <- mcp-ledger-fixtures.jsonl (aperture-dev delete guard + create/delete recording)
   board-heavy-guard.sh        <- board-heavy-fixtures.jsonl (session board: offer / measured-edge deny)
+  secrets-read-guard.sh       <- secrets-read-fixtures.jsonl  (Read/Grep/Glob payloads; "tool" per case)
 
 WHY THIS EXISTS AS A FILE-DRIVEN RUNNER, and not as an inline shell loop:
 COI's monitor matches its reverse-shell patterns against every process's argv.
@@ -33,6 +34,7 @@ suite's tool name, e.g. Monitor, which carries a shell command like Bash);
 "payload" (extra top-level payload keys, e.g. hook_event_name and tool_response for a PostToolUse case);
 "ledger" (lines pre-written to the repo's MCP ledger; a string is written raw, e.g. a corrupt line), "expect_ledger" ("op:id" lines that must be in it
 after the hook ran) and "ledger_count" (its exact line count after);
+{SECRETS_PARENT} / {PLAIN_DIR} anywhere in "input" expand to fresh temp dirs with and without `.secrets/ci-bot/`;
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
 """
@@ -57,6 +59,7 @@ REGISTERED = {
     "precommit-guard.sh": ("Bash", "Monitor"),
     "gh-safety-guard.sh": ("Bash", "Monitor"),
     "board-heavy-guard.sh": ("Bash",),
+    "secrets-read-guard.sh": ("Read", "Grep", "Glob"),
 }
 
 # PostToolUse registrations, checked the same way.
@@ -78,6 +81,7 @@ SUITES = [
     ("gh-safety-guard.sh", "gh-safety-fixtures.jsonl", "Bash", True),
     ("mcp-dev-ledger.sh", "mcp-ledger-fixtures.jsonl", "mcp__aperture-dev__delete_task", True),
     ("board-heavy-guard.sh", "board-heavy-fixtures.jsonl", "Bash", False, "board"),
+    ("secrets-read-guard.sh", "secrets-read-fixtures.jsonl", "Read", False),
 ]
 
 
@@ -176,9 +180,18 @@ def board_env(case: dict, root: str) -> dict:
     return env
 
 
-def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, board: bool = False) -> tuple[str, str]:
+def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratch: str, board: bool = False) -> tuple[str, str]:
     tool = case.get("tool", tool)
     tool_input = case["input"] if "input" in case else {"command": case["cmd"]}
+    raw = json.dumps(tool_input)
+    if "{SECRETS_PARENT}" in raw or "{PLAIN_DIR}" in raw:
+        # Throwaway dirs (a space in the name on purpose) — one holding `.secrets/ci-bot/`, one without — for
+        # guards that look for it on disk. Under `scratch`, so they go when the run ends.
+        parent = tempfile.mkdtemp(prefix="with space ", dir=scratch)
+        (pathlib.Path(parent) / ".secrets" / "ci-bot").mkdir(parents=True)
+        plain = tempfile.mkdtemp(prefix="plain ", dir=scratch)
+        raw = raw.replace("{SECRETS_PARENT}", parent).replace("{PLAIN_DIR}", plain)
+        tool_input = json.loads(raw)
     if board:
         return decision_for(hook, tool, tool_input, None, case.get("payload"), env=board_env(case, root))
     if root is None:
@@ -223,7 +236,7 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, board:
     return decision
 
 
-def run_suite(hook_name: str, fixtures_name: str, tool: str, root: str | None, board: bool = False) -> tuple[int, int]:
+def run_suite(hook_name: str, fixtures_name: str, tool: str, root: str | None, scratch: str, board: bool = False) -> tuple[int, int]:
     hook = HERE.parent / hook_name
     if not hook.exists():
         print(f"hook not found: {hook}", file=sys.stderr)
@@ -237,7 +250,7 @@ def run_suite(hook_name: str, fixtures_name: str, tool: str, root: str | None, b
         total += 1
         case = json.loads(line)
         expected = case["expect"]
-        actual, reason = run_case(hook, tool, case, root, board)
+        actual, reason = run_case(hook, tool, case, root, scratch, board)
         ok = actual == expected and case.get("reason", "") in reason
         if not ok:
             failures += 1
@@ -285,7 +298,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as root:  # each repo-needing fixture gets a fresh repo under here
         for hook_name, fixtures_name, tool, needs_repo, *opts in SUITES:
             board = "board" in opts
-            f, t = run_suite(hook_name, fixtures_name, tool, root if needs_repo or board else None, board)
+            f, t = run_suite(hook_name, fixtures_name, tool, root if needs_repo or board else None, root, board)
             failures += f
             total += t
     print(f"\n{total - failures}/{total} passed")

@@ -100,9 +100,13 @@ Same-origin `/api/*` via CloudFront (no CORS); the Function URL is auth `NONE`, 
 
 **GitHub Flow.** Feature branch → PR → squash-merge to `main`. Merging to `main` runs the pipeline (lint/typecheck/test → deploy dev → deploy prod — **no approval pause**; prod follows dev automatically). Pushing to `dev` does a one-off dev deploy. PRs run checks only.
 
-**`main` and `dev` are both deploy branches** — but they are not alike. `main` is protected and permanent. **`dev` is scratch: the user force-pushes it routinely to get a branch onto real infrastructure, and that is the intended workflow.** Its history is disposable and nothing ever merges out of it.
+**`main` and `dev` are both deploy branches** — but they are not alike. `main` is protected and permanent. **`dev` is scratch: the user force-pushes it routinely to get a branch onto real infrastructure, and that is the intended workflow.** Its history is disposable and nothing ever merges out of it. Only the user can push it — a `dev` ruleset (from ci-bot's merge) restricts it to the admin, so the bot can't.
 
 So when a branch can't fast-forward onto `dev`, **do not propose merging `origin/dev` into it, rebasing onto it, or creating a temporary worktree** — the answer is that the user force-pushes over it. Claude still never pushes to `dev` at all (see Hard-blocked); the point is to stop inventing workarounds for a problem the user solves in one command.
+
+**Claude acts on GitHub as the bot** — the GitHub App `aperture-cc-bot`, driven by `pnpm bot …` (`docs/ops/CI-BOT.md`): it pushes feature branches, deploys a pushed commit to dev, and reads dev logs. It never opens or merges PRs — **the user opens every PR**, so `main`'s squash commits are theirs — and can never push `main`: the `main` ruleset requires the user's code-owner approval, and the bot is no bypass actor. The container's own GitHub token stays read-only.
+
+**Bot dev deploys (`pnpm bot deploy-dev`) are off until dev's CDK bootstrap is isolated** (`dev-bootstrap`, `docs/ops/CI-BOT.md` → _Dev deploy blast radius_): the dispatch refuses unless the repository variable `DEV_DEPLOY_ISOLATED` is `true`, and until then the user pushes to `dev` as before. `dev-bootstrap` turns them on and retires the `dev` push path. Once on: **the dev stack is shared — one branch at a time, under the dev lock.** `pnpm bot deploy-dev` takes `refs/locks/dev` (45-minute TTL, `pnpm bot lock renew` to extend), holds it through dev testing, and `pnpm bot lock release` frees it; another branch's lock means wait, not work around. A merge to `main` redeploys dev over a dispatched branch — whichever deploys last wins; re-run `deploy-dev` when the devcheck sees the build change.
 
 ### One worktree per feature — `/workspace` stays on main
 
@@ -116,27 +120,29 @@ The worktree's `localNotes/` holds that feature's PR body, screenshots, and deci
 
 ### Claude drives git — guarded
 
-Claude handles branches, commits, and PRs. **Allowed** git commands:
+Claude handles branches, commits, and PR bodies. **Allowed** git commands:
 
 - `git status`, `git diff`, `git log`, `git branch`, `git show`
 - `git switch -c` / `git checkout -b`, `git switch`, `git checkout <file>`
 - `git add`, `git commit`, `git stash`
-- `git push` **to a feature branch only** (sets upstream on first push) — moot in the container, whose GitHub token is read-only, so the user runs every push (_PR bodies_)
+- `pnpm bot push` — the one way Claude pushes: the current feature branch, as the bot. After a rebase, `pnpm bot push --after-rebase` (a lease on the last push). A branch that changes `.github/workflows/` is the user's to push — the bot has no `workflows` permission (_PR bodies_)
 - `git fetch`, `git rebase origin/main`, `git mv`
 - `git worktree add` / `git worktree list` (feature worktrees, above); `git worktree remove` only at _Feature workflow_ → _Cleanup_
 
 **Hard-blocked (never):**
 
 - **Any commit or push on `main` or `dev`** — branch first. These are deploy branches; a commit/push there is a deploy.
-- Force-push (`-f` / `--force` / `--force-with-lease`), `git push origin --delete`, `git reset --hard`, `git clean -f`, `git branch -D`.
-- `rm -rf`, and raw HTTP against `api.github.com` (use `gh`).
-- **Local deploys** — `cdk deploy` / `cdk destroy`. Deploys go through CI on push to `main`; local deploy is off-path. (`cdk diff` / `cdk synth` are fine.)
+- Force-push (`-f` / `--force` / `--force-with-lease`, `--all`/`--mirror`), `git push origin --delete`, `git reset --hard`, `git clean -f`, `git branch -D`. `pnpm bot push --after-rebase` is the one sanctioned lease.
+- **`.secrets/`** — never read, print, copy or search it, by any tool: it holds the bot's private key. The bot CLI reads it in-process; hooks deny Bash and Read/Grep/Glob on it.
+- `gh pr merge` / `gh pr review` — approving and merging are the user's.
+- `rm -rf`, and raw HTTP against `api.github.com` (use `gh`; the one exception is the bot CLI's in-process `fetch`, `scripts/src/bot/api.ts`).
+- **Local deploys** — `cdk deploy` / `cdk destroy`. Deploys go through CI — on push to `main`, or the bot's dispatched dev deploy; local deploy is off-path. (`cdk diff` / `cdk synth` are fine.)
 
 Merges to `main` happen via PR, not a local push.
 
 **Commit messages: one lowercase line, past tense, 4–5 words — 6 is the hard max.** A hyphenated word counts as one; filenames and acronyms keep their case. No blank line, no body, no trailers — including `Co-Authored-By` and `Claude-Session` (Claude Code's harness adds them by default; this rule overrides that). Say what the change did: `fixed cache policy ttl`, `added oauth metadata facade`, `retuned palette for contrast`. Context that needs recording belongs in `docs/` or the PR body, not the commit. `.claude/hooks/precommit-guard.sh` enforces this — it denies a `git commit` whose message breaks it.
 
-**PR bodies: Claude writes the body to a file, the user opens the PR.** The container's GitHub token is read-only, so the push and `gh pr create` happen on the Mac. Write the body to the worktree's `localNotes/pr-<branch>.md` (gitignored, survives the session), keep it current as the branch changes, and when the user says they're ready hand them the exact commands, run from the worktree path: `git push -u origin <branch>` and `gh pr create --title "<title>" --body-file localNotes/pr-<branch>.md`. **Never write `#<number>` in a PR body or title unless you mean to link that PR or issue** — GitHub autolinks every one, so a test count, a step number, or a merged-PR mention becomes a bogus link. Say "PR 33" or use a date instead. Prefixes like `lc#day` are fine (a letter follows the `#`).
+**PR bodies: Claude writes the body to a file, the user opens the PR** — a squash commit's author is the PR opener, so `main` stays the user's. Write the body to the worktree's `localNotes/pr-<branch>.md` (gitignored, survives the session), keep it current as the branch changes, and on the all-clear `pnpm bot push`, then hand the user, run from the worktree path, `gh pr create --title "<title>" --body-file localNotes/pr-<branch>.md` (until the mac-sim bridge opens PRs for them). A branch that changes `.github/workflows/` can't be pushed by the bot — then the user's command also starts with `git push -u origin <branch>` (after a rebase, `git push --force-with-lease -u origin <branch>`). **Never write `#<number>` in a PR body or title unless you mean to link that PR or issue** — GitHub autolinks every one, so a test count, a step number, or a merged-PR mention becomes a bogus link. Say "PR 33" or use a date instead. Prefixes like `lc#day` are fine (a letter follows the `#`).
 
 ## Claude behavior
 
@@ -151,7 +157,7 @@ Merges to `main` happen via PR, not a local push.
 - **Keep `docs/index.md` current.** Add or update a doc's one-line entry there in the same change — a doc missing from the index is undiscoverable.
 - **Version awareness:** always check the registry for the actual latest version before pinning a package — `npm view <pkg> version` (a read-only registry query; fine even though installs are pnpm-only). Never guess versions from memory.
 - **A piped command hides its exit code.** `pnpm typecheck | tail` reports success even when the typecheck never ran — the exit status you see belongs to `tail`. Before reporting any pass/fail, use `set -o pipefail` and echo `${PIPESTATUS[0]}`. This produced a false "it passed" here on 2026-09-07.
-- **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. Hand the user the exact command(s) to run and read back the output — they are your hands on that resource. Same "verify, don't assert" discipline: reason from real output, not from an assumption about what the resource contains. The deployed dev app and its API are the exception: the dev check reaches them as the test user (`docs/ops/DEV-CHECK.md`).
+- **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. Hand the user the exact command(s) to run and read back the output — they are your hands on that resource. Same "verify, don't assert" discipline: reason from real output, not from an assumption about what the resource contains. The deployed dev app and its API are the exception: the dev check reaches them as the test user (`docs/ops/DEV-CHECK.md`). And dev CloudWatch logs: `pnpm bot logs` (dev groups only, at most 10 fetches an hour; then stop and say so). Prod logs stay the user's to run.
 - **Share the container through the board — never by doing less.** Before heavy work (the gate, a dev server, the headless UI pass), glance at `scripts/board/board.sh status`; if the board says another session is near the edge, wait or serialise, but never skip tests or the UI pass to fit. How it works: `docs/ops/SESSION-BOARD.md`.
 
 ### Feature workflow
@@ -163,7 +169,7 @@ Every feature runs the same phases. **Two modes**, and the user names which:
   - **"Build it, autonomous" is the execute.** Rounds come from Plan's file count — under 10 files → 1, 10–30 → 2, over 30 → 3. Risk overrides size: auth, IAM/cdk, finance, migrations or external-service writes → at least 2. If the last planned round still finds real bugs, one extra round, logged, never more. A number in the kickoff wins.
   - **Every plan opens with _Operator steps_** — the exact one-line Mac commands, in order, each marked before Build / at dev test / at PR. The pause before Build is the only planned one.
   - **Blocked anyway** (a user-only command, a stuck environment, an undecidable call): send a push notification and create one prod `aperture` task `CC blocked: <branch> — <need>` (category Aperture, the commands in its notes, due today at now + 5 minutes so it lands on the calendar). One per session: a new blocker updates it by id and moves the due time; delete it once unblocked.
-  - **Dev test is Claude's after the push:** run `pnpm devcheck --tier full` (it waits for the deploy itself), Read the screenshots. A green full run with zero leftovers plus that review is the all-clear (phase 9). On `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, ask for the push again, rerun.
+  - **Dev test is Claude's after the push:** run `pnpm devcheck --tier full` (it waits for the deploy itself), Read the screenshots. A green full run with zero leftovers plus that review is the all-clear (phase 9). On `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, ask for the push again (once bot dev deploys are on: `pnpm bot deploy-dev`), rerun.
   - **Finished:** push notification, a `CC done: <branch> — PR ready` task (summary + happy-path test in its notes), and the report below.
 
 Phases:
@@ -185,9 +191,9 @@ Phases:
    When the round is back, fix real bugs and convention breaks. Findings that need a product call or add scope: collaborative → a list for the user; autonomous → decide and log. Then the gate runs again, which also starts the next round.
 
 7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's fixes), gate green, PR body current.
-8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (_Claude behavior_, above), then re-run the gate. Then hand the user, run from the worktree path, `git push --force origin <branch>:dev` — the user runs it; Claude never pushes to `dev` (_Git workflow_) — plus `code <Mac worktree path>`, so the user can read the code themselves. With it, a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist. Then run the dev check yourself — `pnpm devcheck --tier full`, plus a `scenarios/<feature>.ts` for what the feature changed (`docs/ops/DEV-CHECK.md`) — and Read its screenshots. Autonomous: the push is the user's (an operator step); everything after it is Claude's.
+8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and rebase (_Claude behavior_, above), then re-run the gate. Then `pnpm bot push`, and get the branch onto dev: once bot dev deploys are on (`DEV_DEPLOY_ISOLATED`, _Git workflow_), `pnpm bot deploy-dev` — the dev lock stays held through dev testing, and a `.github/`-changing branch is dispatched on its own ref so its workflows run; until then hand the user, run from the worktree path, `git push --force origin <branch>:dev` (Claude never pushes to `dev`). A branch that changes `.github/workflows/` is pushed by the user either way (the bot has no `workflows` permission). Also hand the user `code <Mac worktree path>`, so the user can read the code themselves, and a short checklist of what matters most to test on dev for this feature: a handful of items, not the review checklist. Then run the dev check yourself — `pnpm devcheck --tier full`, plus a `scenarios/<feature>.ts` for what the feature changed (`docs/ops/DEV-CHECK.md`) — and Read its screenshots. Autonomous: while bot dev deploys are off, the `dev` push is the user's (an operator step); everything else is Claude's.
 9. **Dev feedback** — ask how dev testing went. Fixes go back through the gate (plus a review round if non-trivial), then back to dev. Repeat until the user gives the all-clear. Autonomous: the all-clear is the green full run.
-10. **PR** — on the all-clear, hand over the push + `gh pr create` commands (_Git workflow_ → _PR bodies_). A later push to an open PR after a rebase (phase 8 pushes only to `dev`, so the first PR push never is one) is `git push --force-with-lease -u origin <branch>` — again the user's to run.
+10. **PR** — on the all-clear, `pnpm bot lock release` (if held), `pnpm bot push`, then hand over the `gh pr create` command (_Git workflow_ → _PR bodies_). A push to an open PR after a rebase is `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's `git push --force-with-lease -u origin <branch>`).
 11. **Cleanup** — once `gh pr view <branch>` shows it merged, confirm with the user, then: copy the worktree's `localNotes/` to `/workspace/localNotes/archive/<branch>/`; from `/workspace`, `git worktree remove .claude/worktrees/<branch>`; hand the user `git branch -D <branch>` (hard-blocked for Claude; squash merges make `-d` refuse).
 
 **Every feature ends with `localNotes/report-<branch>.md`**, either mode, written even when the run never reached a PR: status first (PR ready / blocked / failed, and why), what the feature is, what happened (build, rounds, dev check, decisions), a short happy-path test the user can run themselves, key screenshots (relative links into `localNotes/`). The last message links it (Mac path) and sends it to the phone.

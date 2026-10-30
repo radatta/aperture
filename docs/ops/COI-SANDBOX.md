@@ -907,12 +907,14 @@ gh auth setup-git
 | Actions: read | run status, job logs, the CDK diff |
 | Variables · Secrets · Deployments · Commit statuses: read | verify config instead of asking; secret *values* are never returned by any permission |
 
-Pushes and merges are the operator's, by hand. This isn't belt-and-braces on top of the hooks — with a
-single identity it's the **only** real control. A fine-grained PAT authenticates *as you*, GitHub has no
-per-branch token scoping, and a ruleset binds identities, not credentials — so nothing can distinguish
-"you" from "Claude acting as you". Enforcement would require a separate identity (machine account or
-GitHub App) named in a ruleset's bypass list. Rejected here: everything should be attributable to one
-human.
+**Writes go through a second identity — the bot.** A fine-grained PAT authenticates *as you*, GitHub has
+no per-branch token scoping, and a ruleset binds identities, not credentials — so a write PAT couldn't
+distinguish "you" from "Claude acting as you" (and would inherit your admin bypass). So the PAT stays
+read-only, and pushes, dev deploys and dev logs go through the GitHub App `aperture-cc-bot`
+(`pnpm bot …`, since 2026-10-13), which the `main` ruleset can tell apart: it needs your code-owner
+approval to merge and is never a bypass actor. Its key lives in `.secrets/ci-bot/` on the Mac disk —
+setup, permissions and threat model: `docs/ops/CI-BOT.md`. (This reverses the earlier "one identity,
+attributable to one human" call: commits and PRs stay yours; the bot is only the pusher.)
 
 `Checks: read` does not exist as a fine-grained permission, so `gh pr view --json statusCheckRollup`
 fails regardless. Use `gh run list` / `gh run view` — same information, Actions API.
@@ -1093,9 +1095,12 @@ Not blockers — the rig is fully operational without these. Polish, in rough pr
   them. Deploys are CI/OIDC; local `cdk deploy` is off-path.
 - **No push to `main`/`dev`, ever.** Enforced by the harness (`.claude/hooks/gh-safety-guard.sh`)
   riding in via the workspace mount — fires in-container as long as `jq` is present (it is, in
-  `coi-default`). Feature-branch pushes + `gh` PRs work daytime (restricted net reaches GitHub); the
-  night allowlist omits GitHub, so an unattended run **structurally cannot push**. Since v0.14 COI also
+  `coi-default`) — and, for the bot, by the `main` ruleset (`docs/ops/CI-BOT.md`). Bot pushes and dispatches work
+  daytime (restricted net reaches GitHub); the night allowlist omits GitHub, so an unattended run
+  **structurally cannot push**. Since v0.14 COI also
   blocks commits and pushes to `main`/`master` itself, via root-owned in-container git hooks
   (`[git] protected_branches`, settable only in `~/.coi/config.toml` — the repo value is ignored).
-- **One secret crosses in:** the OAuth token, revocable via `claude setup-token` / account settings.
-  Nothing else is forwarded.
+- **Secrets that cross in:** the OAuth token, revocable via `claude setup-token` / account settings, and
+  the bot's App key on the workspace mount (`.secrets/ci-bot/`, read in-process by `pnpm bot`; hooks deny
+  Claude's own tool calls on it, but any process in the container — an install script, code Claude runs — can
+  read it; rotate in the App's settings — CI-BOT.md → _Threat model_). Nothing else is forwarded.
