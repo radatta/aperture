@@ -401,6 +401,45 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     );
   });
 
+  it('set one leaves out the wait before it: a Start tap, or Start now once the neutral is set', async () => {
+    const timed = { exerciseId: 'joint-position-sense', kind: 'reposition' } as const;
+    const tap = await running(timed);
+    act(() => tap.fake().calibrated(true, true));
+    tap.advance(3_000); // the lead-in starts the set…
+    tap.advance(7_000); // …and Start is tapped later (a restart once the set is done, say)
+    act(() => tap.hook.result.current.control({ type: 'start' }));
+    tap.advance(12_000);
+    act(() => tap.fake().event(DONE));
+    expect(tap.onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 12 }),
+      0,
+    );
+    tap.hook.unmount();
+
+    const now = await running(timed);
+    act(() => now.hook.result.current.control({ type: 'start' })); // no neutral yet
+    now.advance(10_000);
+    act(() => now.fake().calibrated(true, true));
+    now.advance(12_000);
+    act(() => now.fake().event(DONE));
+    expect(now.onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 12 }),
+      0,
+    );
+  });
+
+  it('a self-paced set one counts from the first neutral, not from getting into position', async () => {
+    const { fake, onSetCompleted, advance } = await running();
+    advance(60_000);
+    act(() => fake().calibrated(true, true));
+    advance(20_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 20 }),
+      0,
+    );
+  });
+
   it('a timed kind gets its lead-in after the rest', async () => {
     const { v, fake, advance } = await running({
       exerciseId: 'joint-position-sense',

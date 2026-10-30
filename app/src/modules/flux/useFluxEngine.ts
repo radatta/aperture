@@ -47,7 +47,9 @@ export interface FluxSetDraft {
   readonly rom: Euler;
   readonly calibrated: boolean;
   readonly delegate: Delegate | null;
-  readonly durationSec: number; // from the set's start (Start, Again, the lead-in or the rest ending; else selection) to done
+  // From the set's start to done: Start, Again, the lead-in or the rest ending; a self-paced first set's
+  // first neutral; else selection or a new worker's ready.
+  readonly durationSec: number;
   readonly completedAt: number; // epoch ms
   readonly stoppedEarly: boolean; // saved from a set ended before its prescription (D55)
   readonly planned: number | null; // plannedCount at set time
@@ -300,7 +302,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           if (live.current?.state.phase === 'active') return;
           // Otherwise a timed kind starts its set now that a neutral is set (D41) — at once if "Start now"
           // was what asked for it. A rest in progress runs on: its end starts the set.
-          if (!READY_KINDS.has(o.kind) || !o.acknowledged) return;
+          // A self-paced set counts from the first neutral, so its clock starts there too.
+          if (!READY_KINDS.has(o.kind)) {
+            if (!wasCalibrated) setStartRef.current = performance.now();
+            return;
+          }
+          if (!o.acknowledged) return;
           if (autoStep.current?.kind === 'rest') return;
           if (startOnCalibrate.current) {
             startOnCalibrate.current = false;
@@ -402,7 +409,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       clearTimeout(cueTimer.current);
       clearAuto();
     };
-  }, [engine, flash, say, arm, clearAuto]);
+  }, [engine, flash, say, arm, clearAuto, startSet]);
 
   // Feed the engine the exercise only once safety is acknowledged; a fresh selection starts a fresh
   // cue history (no cooldowns leaking between exercises).
