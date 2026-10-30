@@ -119,25 +119,46 @@ export function BrushPicker({
 
 export const SearchBox = forwardRef<
   HTMLInputElement,
-  { value: string; onChange: (v: string) => void }
->(function SearchBox({ value, onChange }, ref) {
+  {
+    value: string;
+    onChange: (v: string) => void;
+    label?: string;
+    placeholder?: string;
+    keyshortcut?: string | null; // null: no shortcut focuses it
+    onPanel?: boolean; // inside a modal: the field's own ground, like Field
+  }
+>(function SearchBox(
+  {
+    value,
+    onChange,
+    label = 'Search transactions',
+    placeholder = 'Search merchant, bank text or note  ( / )',
+    keyshortcut = '/',
+    onPanel = false,
+  },
+  ref,
+) {
   return (
     <input
       ref={ref}
       type="search"
       value={value}
-      aria-label="Search transactions"
-      aria-keyshortcuts="/"
-      placeholder="Search merchant, bank text or note  ( / )"
+      aria-label={label}
+      aria-keyshortcuts={keyshortcut ?? undefined}
+      placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={(e) => {
-        // Escape clears first; on an empty box it falls through and disarms the brush.
+        // Escape clears first; on an empty box it falls through (disarms the brush, closes a dialog).
         if (e.key === 'Escape' && value !== '') {
           e.preventDefault();
           onChange('');
         }
       }}
-      className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-teal focus:outline-none"
+      className={cx(
+        // No text-sm: iOS Safari zooms the page into any field under 16px when you tap it.
+        'w-full rounded-lg border border-line px-3 py-2 text-ink placeholder:text-ink-muted focus:border-teal focus:outline-none',
+        onPanel ? 'bg-surface' : 'bg-panel',
+      )}
     />
   );
 });

@@ -35,6 +35,10 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   of what's shown (`netCents`: money in subtracts) — the same total the MCP's `totalUsd` uses. Search covers
   the two loaded periods only. While the brush holds painted rows in place, the count includes them even
   if they no longer match the chip; it agrees again once you stop.
+- **Linked to older charges**: a refund dated in either period but linked to a charge from before them
+  follows the charge out of both lists (`periodOf`), so it's listed in its own section — the only way
+  back to it to unlink. The chip and search narrow it, and it counts in "N rows · $X"; the MCP's list
+  (`page.txns`) leaves it out.
 
 ## 2. Buckets and money
 
@@ -96,6 +100,12 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   overshoots by at most `REFUND_OVER_RATIO` (10%) of it (a rounded-up reimbursement) — bounded so a
   paycheck's "Link as a refund" doesn't list every charge. Ranked same account → closest either way (exact
   first; under beats over) → nearest date → posted before pending → id.
+- **Search** (`searchRefundCharges`), above the suggestions so typing never moves it, for the charge they
+  miss: every charge in the loaded range on shown accounts — any merchant, any age, any size (the cap
+  still applies) — that `refundLinkError` accepts and has something left to refund. A case-insensitive substring of the
+  merchant, bank text, note or dollar amount (`$1,000.50`, `34.99`); newest first, eight shown with
+  "Showing 8 of N". While you type, its results replace the suggestions; Escape clears it first, then
+  closes the detail.
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
   loaded range reads as unlinked. Two refunds on one charge are fine; the cap applies across them.
 
@@ -302,12 +312,10 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   transaction row (fine at one user); cdk-nag acks match by id app-wide. The All tab's "N rows · $X" is
   the raw net of the rows shown, so a capped refund's overshoot shows there (the row's "counts $X"
   explains it) though no bucket total includes it. A refund overshooting a charge by more than 10% isn't
-  suggested; linking it needs "Show other charges" (below). A transfer-tagged deposit is refused as a
+  suggested; linking it takes the link panel's search (§4). A transfer-tagged deposit is refused as a
   refund only when it pairs as a move; its other half dated just before the 120-day lookback can't pair,
   so such a deposit can be linked — a wrong link is one Unlink away.
 - **Deferred (v2):**
-  - "Show other charges" when linking a refund — today a same-merchant match hides other merchants and
-    anything past the top five (prod Aperture task `01M3GR4B48QB2088DNT9NHC5VR`).
   - A fuzzier merchant match ("AMZN Mktp" vs "AMAZON MKTPL").
   - CSV import (`source` is reserved for it).
   - Finance writes over MCP (today read-only).

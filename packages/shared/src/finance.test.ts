@@ -27,6 +27,7 @@ import {
   referencedTxnIds,
   refundLinkError,
   resolveRefundLinks,
+  searchRefundCharges,
   sortableTransactions,
   suggestPeriodStart,
   suggestRefundMatches,
@@ -1190,6 +1191,91 @@ describe('refund links', () => {
     };
     expect(suggestRefundMatches(args)).toEqual([]);
     expect(suggestRefundMatches({ ...args, anyMerchant: true }).map((t) => t.id)).toEqual(['c']);
+  });
+
+  it('searchRefundCharges matches merchant, bank text, note and amount, case-insensitively', () => {
+    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const txns = [
+      refund,
+      tx('m', 'card', '2026-09-20', 1200, amazon),
+      tx('d', 'card', '2026-09-19', 1300, { name: 'SQ *BLUE BOTTLE' }),
+      tx('n', 'card', '2026-09-18', 1400, { note: 'split with Sam' }),
+      tx('big', 'chk', '2026-09-17', 100050),
+    ];
+    const ids = (query: string) =>
+      searchRefundCharges({
+        refund,
+        txns,
+        accounts: [chk, card],
+        moves: new Map(),
+        links: new Map(),
+        query,
+      }).map((t) => t.id);
+    expect(ids('AMAZON')).toEqual(['m']);
+    expect(ids('blue bot')).toEqual(['d']);
+    expect(ids('sam')).toEqual(['n']);
+    expect(ids('1,000.50')).toEqual(['big']);
+    expect(ids('$1000.5')).toEqual(['big']);
+    expect(ids('12.00')).toEqual(['m']);
+    expect(ids('+$12.00')).toEqual(['m']); // pasted from a row's signed amount
+    expect(ids('zzz')).toEqual([]);
+  });
+
+  it('searchRefundCharges reaches what the suggestions drop, and nothing the server refuses', () => {
+    const hiddenCard = acct('hid', 'credit', { hidden: true });
+    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const txns = [
+      refund,
+      tx('old', 'card', '2026-06-01', 3499, amazon), // past the 90-day window
+      tx('small', 'card', '2026-09-20', 1000, amazon), // overshot by far more than 10%
+      tx('other', 'card', '2026-09-20', 3499, { merchantName: 'Target' }),
+      tx('slack', 'card', '2026-09-25', 3499, amazon), // 3 days after: still allowed
+      tx('after', 'card', '2026-09-26', 3499, amazon), // past the slack
+      tx('hidden', 'hid', '2026-09-20', 3499, amazon),
+      tx('payment', 'card', '2026-09-20', 3499, { ...amazon, pfcPrimary: 'LOAN_PAYMENTS' }),
+      tx('marked', 'card', '2026-09-20', 3499, { ...amazon, ...MARK }),
+      tx('gone', 'card', '2026-09-20', 3499, { ...amazon, deletedAt: 1 }),
+      tx('used-up', 'card', '2026-09-19', 3499, amazon),
+      tx('earlier-refund', 'card', '2026-09-20', -3499, { ...amazon, refundOfId: 'used-up' }),
+    ];
+    const accounts = [chk, card, hiddenCard];
+    const found = searchRefundCharges({
+      refund,
+      txns,
+      accounts,
+      moves: new Map(),
+      links: resolveRefundLinks(txns),
+      query: '',
+    });
+    expect(found.map((t) => t.id).sort()).toEqual(['old', 'other', 'slack', 'small']);
+    const byId = new Map(accounts.map((a) => [a.id, a]));
+    for (const charge of found)
+      expect(
+        refundLinkError({
+          refund,
+          refundAccount: card,
+          charge,
+          chargeAccount: byId.get(charge.accountId),
+          moves: new Map(),
+        }),
+      ).toBeNull();
+  });
+
+  it('searchRefundCharges lists newest first, then id; a blank query lists every charge', () => {
+    const refund = tx('r', 'card', '2026-09-22', -3499, amazon);
+    const txns = [
+      refund,
+      tx('a', 'card', '2026-09-01', 500),
+      tx('c', 'card', '2026-09-10', 500),
+      tx('b', 'card', '2026-09-10', 500),
+    ];
+    const args = { refund, txns, accounts: [card], moves: new Map(), links: new Map() };
+    expect(searchRefundCharges({ ...args, query: '' }).map((t) => t.id)).toEqual(['c', 'b', 'a']);
+    expect(searchRefundCharges({ ...args, query: '   ' }).map((t) => t.id)).toEqual([
+      'c',
+      'b',
+      'a',
+    ]);
   });
 
   it('reconcileSyncPage carries the link pending→posted and skips the merchant rule', () => {

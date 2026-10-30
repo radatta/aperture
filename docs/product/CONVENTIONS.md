@@ -112,6 +112,11 @@ behind it and anything below the caret — capture's token chips and preview row
 field), never when pinch-zoomed, and capped to the visible strip, clipping the dock's top (timers)
 in landscape.
 
+**Text fields are 16px or larger.** iOS Safari zooms the page into any `input`, `textarea` or `select`
+under 16px the moment it's focused, and stays zoomed. So no `text-sm`/`text-xs` on a field (`Field`
+inherits the 16px base). Headless Chromium never zooms, so only a real iPhone catches this (seen
+2026-10-29 on the Finances search box).
+
 **Anything that dismisses something returns focus to what opened it.** `components/Menu` and
 `lib/useDisclosure` both hold this: a collapsed form's trigger, and a menu's trigger, are re-focused
 on close — except when the action removed that trigger (a destructive row action), where focus is

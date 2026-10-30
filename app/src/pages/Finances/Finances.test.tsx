@@ -303,7 +303,9 @@ describe('Finances page', () => {
     expect(within(dialog).queryByRole('button', { name: /^Link to/ })).toBeNull();
     await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
     expect(
-      await within(dialog).findByText(/Nothing it could reverse — it stays money in/),
+      await within(dialog).findByText(
+        /No likely charge found — search for it above, or it stays money in/,
+      ),
     ).toBeTruthy();
   });
 
@@ -676,6 +678,127 @@ describe('Finances page', () => {
   });
 });
 
+describe('Refund link search', () => {
+  const searchBox = (dialog: HTMLElement) =>
+    within(dialog).getByRole('searchbox', { name: 'Search charges to link' });
+
+  it('the search box sits above the list, so typing never moves it', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    const box = searchBox(dialog);
+    expect(within(dialog).getByText(/Refund of which Amazon charge/)).toBeTruthy();
+    expect(box.previousElementSibling).toBeNull(); // nothing above it that typing could remove
+    await user.type(box, 'chip');
+    expect(within(dialog).queryByText(/Refund of which Amazon charge/)).toBeNull();
+    expect(box.previousElementSibling).toBeNull();
+  });
+
+  it('a card credit links to a charge the suggestions never offered', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    expect(
+      within(dialog).getAllByRole('button', { name: /Link to Amazon/ }).length,
+    ).toBeGreaterThan(0);
+    await user.type(searchBox(dialog), 'chipotle');
+    // The suggestions give way to the results; a $12.45 charge is far past the 10% the suggestions allow.
+    expect(within(dialog).queryByRole('button', { name: /Link to Amazon/ })).toBeNull();
+    const chipotle = within(dialog).getAllByRole('button', { name: /Link to Chipotle .*\$12\.45/ });
+    expect(within(dialog).getAllByText(/\$22\.54 more than what's left of the charge/).length).toBe(
+      chipotle.length,
+    );
+    await user.click(chipotle[0]!);
+    expect(await within(dialog).findByText(/it follows the charge/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByRole('radiogroup', { name: 'Bucket' })).toBeTruthy();
+  });
+
+  it('a deposit links past the 10% bound and counts only the charge', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.setFinanceBucket({ ids: ['fx-safeway'], bucket: 'budget' });
+    renderApp({ api, path: '/finances/all' });
+    expect(await screen.findByText('$561 left')).toBeTruthy(); // $600 − $38.61
+    await user.click((await findRows(/Family/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    expect(within(dialog).queryByRole('button', { name: /Link to Safeway/ })).toBeNull();
+    await user.type(searchBox(dialog), 'SAFEWAY');
+    await user.click(within(dialog).getByRole('button', { name: /Link to Safeway/ }));
+    expect(await within(dialog).findByText(/Only \$38\.61 of it counts/)).toBeTruthy();
+    expect(await screen.findByText('$600 left')).toBeTruthy();
+  });
+
+  it('Escape clears the search and brings the suggestions back without taking focus from the box', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Family/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    // Opened by hand, so its best Link takes focus — and would again when the suggestions come back.
+    await user.click(within(dialog).getByRole('button', { name: 'Link as a refund' }));
+    const box = searchBox(dialog);
+    await user.type(box, 'zzz');
+    expect(within(dialog).getByText('No charge matches “zzz”.')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^Link to/ })).toBeNull();
+    await user.keyboard('{Escape}');
+    expect((box as HTMLInputElement).value).toBe('');
+    expect(within(dialog).getByRole('button', { name: /Link to Roommate/ })).toBeTruthy();
+    expect(document.activeElement).toBe(box);
+    // That the dialog stays open is a browser check: jsdom never turns Escape into a dialog cancel.
+  });
+
+  it('a charge a linked deposit already paid back in full is not offered', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.linkFinanceRefund('fx-reimburse', 'fx-safeway');
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.type(searchBox(dialog), 'safeway');
+    expect(within(dialog).getByText('No charge matches “safeway”.')).toBeTruthy();
+  });
+
+  it('money in with no likely charge can still search, by name or amount, and Cancel', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Acme Corp/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Acme Corp/ });
+    const trigger = within(dialog).getByRole('button', { name: 'Link as a refund' });
+    await user.click(trigger);
+    expect(within(dialog).getByText(/No likely charge found/)).toBeTruthy();
+    await user.type(searchBox(dialog), 'target');
+    expect(within(dialog).getByText(/^\d+ charges?$/)).toBeTruthy();
+    const targets = within(dialog).getAllByRole('button', { name: /^Link to/ });
+    expect(targets.every((b) => /^Link to Target /.test(b.getAttribute('aria-label')!))).toBe(true);
+    await user.clear(searchBox(dialog));
+    await user.type(searchBox(dialog), '$26.89');
+    expect(
+      within(dialog)
+        .getAllByRole('button', { name: /^Link to/ })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual(targets.map((b) => b.getAttribute('aria-label')));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(dialog).getByRole('button', { name: 'Link as a refund' }),
+      ),
+    );
+  });
+
+  it('a broad search shows eight and says how many more', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: await linked(), path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.type(searchBox(dialog), 'a');
+    expect(within(dialog).getByText(/^Showing 8 of \d+ — add a word to narrow it\.$/)).toBeTruthy();
+    expect(within(dialog).getAllByRole('button', { name: /^Link to/ })).toHaveLength(8);
+  });
+});
+
 describe('All tab: sort into and search', () => {
   const row = (id: string) => document.querySelector<HTMLElement>(`[data-txn-id="${id}"]`);
   const ids = () =>
@@ -819,6 +942,33 @@ describe('All tab: sort into and search', () => {
     await user.type(search, 'sam');
     await waitFor(() => expect(ids()).toEqual(['fx-card-6']));
     expect(screen.getByText(/^1 row · /)).toBeTruthy();
+  });
+
+  it('a refund linked to a charge from before last period stays listed, and can be unlinked', async () => {
+    const user = userEvent.setup();
+    // fx-card-50 is from before last period: the deposit follows it out of both period lists.
+    await openAll((a) => a.linkFinanceRefund('fx-reimburse', 'fx-card-50'));
+    const followed = await screen.findByRole('region', { name: 'Linked to older charges' });
+    expect(within(followed).getByText(/Family/)).toBeTruthy();
+    // Only what was moved out — not every older row.
+    expect(row('fx-card-50')).toBeNull();
+    // The Show chip and the search narrow it like any section, and it counts in the summary.
+    await user.click(showChip('Budget'));
+    await waitFor(() => expect(row('fx-reimburse')).toBeNull());
+    await user.click(showChip('All'));
+    await user.type(screen.getByRole('searchbox', { name: 'Search transactions' }), 'family');
+    await waitFor(() => expect(ids()).toEqual(['fx-reimburse']));
+    expect(screen.getByText(/^1 row · /)).toBeTruthy();
+    await user.click(row('fx-reimburse')!);
+    const dialog = await screen.findByRole('dialog', { name: /^Money in: Family/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await within(dialog).findByRole('button', { name: 'Link as a refund' })).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    // Unlinked, it's back in its own period.
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Linked to older charges' })).toBeNull(),
+    );
+    expect(row('fx-reimburse')).toBeTruthy();
   });
 
   it('changing the search ends the painted rows’ stay, and the detail opens again once stopped', async () => {

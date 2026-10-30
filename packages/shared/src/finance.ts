@@ -610,6 +610,43 @@ export function suggestRefundMatches(input: {
     .map((x) => x.c);
 }
 
+// The search under the suggestions, for the charge they miss: any merchant, any age in the loaded
+// range, any size (the overshoot never counts — capRefunds). Still only what refundLinkError accepts,
+// and only with something left to refund. Matches a case-insensitive substring of the merchant, the
+// bank's text, the note, or the dollar amount ("34.99", "$1,000.50"). Newest first, then id; a blank
+// query lists every such charge.
+export function searchRefundCharges(input: {
+  refund: FinanceTransaction;
+  txns: FinanceTransaction[];
+  accounts: FinanceAccount[];
+  moves: InternalMoves;
+  links: RefundLinks;
+  query: string;
+}): FinanceTransaction[] {
+  const { refund, txns, accounts, moves, links, query } = input;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
+  const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
+  const needle = query.trim().toLowerCase();
+  // "+$34.99" pasted from a row's signed amount still matches.
+  const amountNeedle = needle.replace(/[+\-$,]/g, '');
+  const matches = (c: FinanceTransaction) =>
+    needle === '' ||
+    matchesFinanceText(c, needle, { note: true }) ||
+    // Cents as dollar text here too (app money.ts is the page's): integer cents ÷ 100 is exact at 2dp.
+    (amountNeedle !== '' && (amount(c) / 100).toFixed(2).includes(amountNeedle));
+  return txns
+    .filter(
+      (c) =>
+        c.id !== refund.id &&
+        chargeSideError(c, byId.get(c.accountId), moves) === null &&
+        c.date <= addDays(refund.date, REFUND_DATE_SLACK_DAYS) &&
+        amount(c) - (refunded.get(c.id) ?? 0) > 0 &&
+        matches(c),
+    )
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+}
+
 const shownAccount = (a: FinanceAccount | undefined) =>
   a !== undefined && a.deletedAt === null && !a.hidden;
 const moneyAccount = (a: FinanceAccount | undefined) =>
@@ -655,7 +692,7 @@ export function chargeSideError(
 // Structural checks both ApiClient impls run before linking; the error text, or null when valid: each
 // side's own check, and the charge dated at most REFUND_DATE_SLACK_DAYS after its refund. Any size:
 // a refund larger than what's left of its charge counts only up to it (capRefunds), so the overshoot
-// is inert. Which charges to offer is the suggestion list's job.
+// is inert. Which charges to offer is the suggestions' and the search's job.
 export function refundLinkError(input: {
   refund: FinanceTransaction;
   refundAccount: FinanceAccount | undefined;
