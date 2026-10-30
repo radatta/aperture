@@ -6,19 +6,22 @@ and leases the two shared things that need it. All of it lives in `scripts/board
 `scripts/src/board/` (the tested decisions, TypeScript under plain `node`).
 
 **It must never make a session timid.** Tests and the headless UI pass always run. Below the _measured_
-edge the board only offers advice; a heavy job waits only past the measured hard line, and only once
-`limits.json` says `enforce: true`.
+edge the board only offers advice. A heavy job waits only at a measured edge — past the hard line, or when
+its class's concurrency cap is full (`test`: 4 suites at once, from the CPU edge in _Results_) — and only while
+`limits.json` says `enforce: true` (shipped since the 2026-10-13 quiet window). Every hold is logged, so how
+limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 
 ## Use it
 
-| Want                              | Run                                                                                                                                    |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines      |
-| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see |
-| Hold the dev stage for a dev test | `scripts/board/board.sh lease acquire dev [--wait SEC] [--note "…"]` → `lease release dev` when done                                   |
-| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                    |
-| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                |
-| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                 |
+| Want                              | Run                                                                                                                                                                                            |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                              |
+| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                         |
+| Hold the dev stage for a dev test | `scripts/board/board.sh lease acquire dev [--wait SEC] [--note "…"]` → `lease release dev` when done                                                                                           |
+| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                            |
+| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`) |
+| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                        |
+| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                         |
 
 Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
 pids 315/4096 · dev: flux`) — `scripts/board/statusline-snippet.sh`, sourced at the end of
@@ -92,6 +95,17 @@ anon, pids and cores; measures an idle session directly (RSS, threads); estimate
 from heavy-free ticks; and summarises real jobs per class — load-test runs (`loadTest: true`: `matrix.sh`'s
 guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
 
+**Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
+envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard", cap: {max, running,
+full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?}`.
+`action`: `waited` (ran after the wait; `waitedSec` real), `gaveUp` (exit 75; `waitedSec` = the budget),
+`denied` (the PreToolUse guard refused a raw command; `label: "guard"`), `wouldWait` (enforce off — the
+counterfactual). `holders` and `cap` are the ones at the first block, the cause. `cli.ts barriers` (and the
+report's _Barriers_ section) counts **blocks** = waited + gaveUp + denied, except that a deny followed within
+2 min by the same session's held `heavy.sh` re-run of the same class is **one** block (`merged`); it gives
+blocks/day, total / p50 / p90 / max wait, and counts by reason, class, mix, holder and blocked session. Load
+tests are excluded.
+
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 
 - **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
@@ -135,8 +149,12 @@ GitHub's truth, and dev-e2e's build marker catches an overwrite after the fact. 
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
 (not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
-with a one-line note. Past hard → with `enforce: false` (shipped) run anyway and log `wouldWait`; with
-`enforce: true` wait for room, polling every 2 s, up to `--wait` (90 s — inside the Bash tool's 120 s
+with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 4 `test` slots already
+held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
+over the hard line when both apply (it names the holders), other classes and `test-file` runs are never
+capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — they probe the edge on purpose. Past
+hard or at a full cap → with `enforce: false` run anyway and log `wouldWait`; with
+`enforce: true` (shipped) wait for room or a slot, polling every 2 s, up to `--wait` (90 s — inside the Bash tool's 120 s
 timeout, so the message reaches Claude), then exit **75** naming the jobs that hold the room: tell the user
 rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the background. (Room that frees
 late in the wait still starts the command inside the same call, so with `enforce: true` give long jobs a
@@ -148,15 +166,18 @@ Thresholds are **fractions of the live `pids.max` / `memory.high`**, so a limit 
 `pidsSoftFrac` 0.80 / `pidsHardFrac` 0.92 (3276 / 3768 at 4096), `anonSoftFrac` 0.60 / `anonHardFrac` 0.80
 (10.8 / 14.4 GiB at 18 GiB), `psiFullKill` 15 (load-test stop), `currentGuardMiB` 1536. `classes` hold each
 job class's cost (`pids`, `anonMiB`, `p95Sec`, `source`) — shipped as the 2026-10-06 bench maxima × 1.6 for the
-8-worker fan-out, `measuredAt: null`, `enforce: false`. The quiet window fills them in and sets
-`measuredLimits`; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
+8-worker fan-out, `measuredAt: null`, `enforce: false`; the 2026-10-13 quiet window filled them in, set
+`measuredLimits`, and (the user's call) shipped `enforce: true` with `"concurrency": { "test": 4 }` — a policy
+key, top-level like `tuning`, so a quiet window rewriting `classes` never loses it. The value is the CPU edge:
+a 6th concurrent suite timed out (_Results_). Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
 over its cost.
 
 ## Hooks
 
 Four, all fail-open, documented with their fixtures in `.claude/hooks/README.md` → _Board hooks_:
 SessionStart registers and injects headroom / dev lease / overlaps; UserPromptSubmit and Stop keep the state;
-the Bash PreToolUse guard offers `heavy.sh` and denies only at the measured edge with `enforce: true`;
+the Bash PreToolUse guard offers `heavy.sh` and, with `enforce: true`, denies a raw heavy command only at the
+measured edge or a full cap (recording a `denied` barrier event, pointing at `heavy.sh`, which waits);
 SessionEnd marks the session gone.
 
 ## Overlaps
@@ -249,7 +270,8 @@ What it means:
 - **CPU is the edge, not memory or pids.** One `pnpm test` keeps ~7.9 of 9 cores busy; two saturate them.
   Past ~5 concurrent suites, jsdom tests start timing out — a flaky timeout under parallel load is
   contention, not a bug. Memory and pids never came near their lines, so the anon/pids budget (and
-  `enforce`) can't see this edge; a concurrent-test cap would be the lever (an open product call).
+  `enforce`) can't see this edge — hence the shipped `test` cap of 4 (`concurrency`), tracked by
+  `cli.ts barriers` so it can be loosened with data.
 - **Three sessions' full gate + UI at once is fine** (+6.6 GiB, +776 pids, all green), just CPU-bound.
 - **Test tuning: none** (answer 3's bar is ≥ 30 % peak-anon cut for ≤ 15 % more wall time).
   `VITEST_MAX_WORKERS=3` cuts 24 % at no wall cost; `--workspace-concurrency=1` saves nothing and is 15 %
@@ -280,5 +302,7 @@ carry the same list.
 - The first sampler started wins the lock; after this lands, `board.sh sampler restart` from the main checkout
   so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
   overwriting a file in place under the running sampler has killed it once.
+- The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4
+  wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes most of that.
 - `edge.sh` maps the throttle regime; pids exhaustion is container-wide, so other live sessions can abort —
   hence the quiet-window precondition.
