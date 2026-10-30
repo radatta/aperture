@@ -14,14 +14,13 @@ const CATEGORY = 'a part takes its parent’s category — remove the category';
 const DEADLINE = 'the deadline is the parent’s — remove the date (a part’s end is set on the part)';
 function lineErrors(line: ReturnType<typeof parseBulkTasks>['lines'][number]): string[] {
   const out = new Set<string>();
-  for (const e of line.errors) {
-    const unknown = /^unrecognized token '(.*)' —/.exec(e)?.[1];
-    if (/categor/.test(e)) out.add(CATEGORY);
-    else if (/^(invalid|duplicate) due\b/.test(e)) out.add(DEADLINE);
-    else if (unknown !== undefined)
-      out.add(`“${unknown}” isn’t something a part takes — after “ | ”, only minutes, like ~30`);
-    else out.add(e);
-  }
+  line.errorKinds.forEach((k, i) => {
+    if (k.kind === 'category') out.add(CATEGORY);
+    else if (k.kind === 'due') out.add(DEADLINE);
+    else if (k.kind === 'unknown')
+      out.add(`“${k.token}” isn’t something a part takes — use ~minutes (like ~30) or notes:"…"`);
+    else out.add(line.errors[i]!);
+  });
   if (line.categoryLabel !== null) out.add(CATEGORY);
   if (line.dueDay !== null) out.add(DEADLINE);
   return [...out];
@@ -90,8 +89,9 @@ export function BreakDownForm({
           ))}
         </div>
       )}
+      {/* No count while a line is wrong — it would count a part that can't be added yet. */}
       <Text size="xs" tone="muted">
-        {count === 0
+        {count === 0 || errors.length > 0
           ? 'Each part is a task of its own — planned, worked and measured on its own.'
           : `${count} ${count === 1 ? 'part' : 'parts'}${est > 0 ? ` · est ${fmtDuration(est)}` : ''}${
               !isParent && task.status === 'planned'

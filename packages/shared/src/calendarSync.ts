@@ -33,14 +33,27 @@ export type CalendarSyncAction =
   | { kind: 'patch'; title?: string; startMs?: number; endMs?: number; marker?: boolean };
 
 // What the caller knows from the task list. `parent` = the task has parts (parts.ts) — its one event is
-// the due marker; `wasParent` = its last part just went, so the marker becomes a block again;
-// `parentTitle` = a part's parent, which names its block.
+// the due marker; `parentTitle` = a part's parent, which names its block.
 export interface SyncContext {
   ensure?: boolean;
   parent?: boolean;
-  wasParent?: boolean;
   parentTitle?: string | null;
 }
+
+// Does the event's look need sending? A parent's event shows as its due marker, anything else as a
+// block. Compared with the look Aperture last sent (gcalSeen.marker), so a switch that failed or was
+// skipped (sync off, finished) heals with the next push. A block never sent a look is left alone — its
+// colour may be the user's own.
+const lookOff = (seen: GcalSeen | null | undefined, parent: boolean): boolean =>
+  parent ? seen?.marker !== true : seen?.marker === true;
+
+// The window a known event lacks. A marker's length is ignored (the pull never maps it), so only its
+// end — the deadline — counts.
+const windowOff = (
+  seen: Pick<GcalSeen, 'startMs' | 'endMs'>,
+  w: { startMs: number; endMs: number },
+  parent: boolean,
+): boolean => seen.endMs !== w.endMs || (!parent && seen.startMs !== w.startMs);
 
 type SyncFields = Pick<
   Task,
@@ -79,10 +92,12 @@ export const hasUnsent = (
   ctx: Pick<SyncContext, 'parent' | 'parentTitle'> = {},
 ): boolean => {
   const seen = t.gcalSeen;
+  const parent = !!ctx.parent;
   if (!t.gcalEventId || !seen) return false;
   if (!sameTitle(seen.title, blockTitle(t, ctx.parentTitle))) return true;
-  const w = syncWindow(t, epoch, !!ctx.parent);
-  return !!w && seen.startMs !== null && (seen.startMs !== w.startMs || seen.endMs !== w.endMs);
+  const w = syncWindow(t, epoch, parent);
+  if (w && lookOff(seen, parent)) return true;
+  return !!w && seen.startMs !== null && windowOff(seen, w, parent);
 };
 
 // Titles compare trim-insensitively both ways (an untrimmed title from an older client isn't a change).
@@ -110,6 +125,7 @@ export function seenAfter(
     startMs: action.startMs ?? prev?.startMs ?? null,
     endMs: action.endMs ?? prev?.endMs ?? null,
     updatedMs,
+    ...((action.marker ?? prev?.marker) !== undefined && { marker: action.marker ?? prev?.marker }),
   };
 }
 
@@ -136,8 +152,6 @@ export function calendarSyncPlan(
   if (next.status === 'done' || next.status === 'cancelled') return NONE;
   const ensure = !!opts.ensure;
   const title = blockTitle(next, opts.parentTitle);
-  // A marker ↔ block switch (adopt, release) re-sends how the event shows along with its window.
-  const shows = parent || opts.wasParent ? { marker: parent } : {};
   // `?? null` so an older row's undefined equals null (and an estimate of 0 stays distinct from none).
   const changed = (k: keyof SyncFields) => prev === null || (prev[k] ?? null) !== (next[k] ?? null);
   const whenChanged = changed('dueDay') || changed('dueTime');
@@ -158,6 +172,7 @@ export function calendarSyncPlan(
     const seen = next.gcalSeen;
     let retime: boolean;
     let retitle: boolean;
+    const relook = lookOff(seen, parent);
     if (seen) {
       // Send whatever the event doesn't have yet — a timed task's one block is its auto block, whatever
       // placed it, so a block off the deadline moves there. A window not known (first seen all-day)
@@ -166,7 +181,7 @@ export function calendarSyncPlan(
         ensure ||
         (seen.startMs === null
           ? whenChanged || changed('estimateMin')
-          : seen.startMs !== window.startMs || seen.endMs !== window.endMs);
+          : windowOff(seen, window, parent));
       retitle = ensure || !sameTitle(seen.title, title);
     } else {
       // Not known yet (linked before two-way sync): any change sends everything, once — after which the
@@ -174,8 +189,13 @@ export function calendarSyncPlan(
       retime = retitle =
         ensure || whenChanged || changed('estimateMin') || changed('title') || !wasTimed;
     }
-    if (!retime && !retitle) return NONE;
-    return { kind: 'patch', ...(retitle && { title }), ...(retime && { ...window, ...shows }) };
+    if (!retime && !retitle && !relook) return NONE;
+    return {
+      kind: 'patch',
+      ...(retitle && { title }),
+      ...(retime && window),
+      ...(relook && { marker: parent }),
+    };
   }
 
   // Unlinked: only a timed task gets an event, and only when its time is new or moved (a rename alone

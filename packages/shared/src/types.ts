@@ -185,11 +185,14 @@ export interface CalendarRef {
 }
 // The event's title and window (instants) as Aperture last knew them; times null when not known/all-day.
 // updatedMs: Google's `updated` for that state — an event state older than it predates the base.
+// marker: the look Aperture last sent (a parent's due marker, or false once turned back into a block);
+// absent = never sent one (a plain block keeps whatever colour it has). Never read back from Google.
 export interface GcalSeen {
   title: string | null;
   startMs: number | null;
   endMs: number | null;
   updatedMs: number;
+  marker?: boolean;
 }
 // The "updated from Google" mark: when, and one short line saying what.
 export interface GcalPulled {

@@ -644,6 +644,17 @@ describe('TaskEditor', () => {
       await waitFor(async () => expect((await client.getTask(p.id))!.gcalEventId).toBeTruthy());
     });
 
+    it('an untimed parent says to set a due time for its marker; no picker', async () => {
+      const client = api();
+      const p = await client.createTask({ title: 'P2', dueDay: '2026-10-13' });
+      await client.createTask({ title: 'read', parentId: p.id });
+      renderEditor(client, (await client.getTask(p.id))!);
+      expect(
+        await screen.findByText('Set a due time to put its deadline on your calendar.'),
+      ).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Add to calendar/ })).toBeNull();
+    });
+
     it('a part set to end after its parent is due gets a quiet note, as you type', async () => {
       const client = api();
       const { parts } = await withParts(client, ['open']);
@@ -665,6 +676,8 @@ describe('TaskEditor', () => {
       expect(await screen.findByRole('button', { name: 'P2' })).toBeTruthy();
       expect(screen.getByText(/^Dropped · part of/)).toBeTruthy();
       expect(screen.queryByText(/Part \d of/)).toBeNull();
+      // Nothing to say about the calendar on a dropped part with no event: no bare heading.
+      expect(screen.getByText('Calendar').closest('section')!.className).toMatch(/\bhidden\b/);
     });
 
     it('a part reads its time as Ends, and its header names the parent and its deadline', async () => {
@@ -700,14 +713,26 @@ describe('TaskEditor', () => {
       const t = await client.createTask({ title: 'Lab' });
       const { user } = renderEditor(client, t);
       await user.click(screen.getByRole('button', { name: 'Break down…' }));
-      await user.type(screen.getByLabelText(/Add parts/), 'run it | ~45 due:2026-10-10');
+      const box = screen.getByLabelText(/Add parts/);
+      await user.type(box, 'run it | ~45 due:2026-10-10');
       expect(screen.getByText(/the deadline is the parent’s/)).toBeTruthy();
+      // No part count while a line is wrong.
+      expect(screen.queryByText(/1 part/)).toBeNull();
       // In plain words — never the bulk-add grammar (#, due:) a part has no use for.
-      await user.clear(screen.getByLabelText(/Add parts/));
-      await user.type(screen.getByLabelText(/Add parts/), 'run it | soon');
-      const said = screen.getByText(/“soon” isn’t something a part takes/);
-      expect(said.parentElement!.textContent).not.toMatch(/due:|#/);
+      for (const [line, says] of [
+        ['run it | soon', /“soon” isn’t something a part takes — use ~minutes/],
+        ['run it | #School', /a part takes its parent’s category/],
+        ['run it | due:2026-13-40', /the deadline is the parent’s/],
+      ] as const) {
+        await user.clear(box);
+        await user.type(box, line);
+        const said = screen.getByText(says);
+        expect(said.parentElement!.textContent).not.toMatch(/due:|#/);
+      }
       expect(screen.getByRole('button', { name: 'Add parts' }).hasAttribute('disabled')).toBe(true);
+      await user.clear(box);
+      await user.type(box, 'run it | ~45');
+      expect(screen.getByText(/1 part · est 45m/)).toBeTruthy();
     });
 
     it('a started task offers Split, not Break down (its logged time would have nowhere to go)', async () => {

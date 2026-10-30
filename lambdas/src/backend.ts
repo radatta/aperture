@@ -276,7 +276,7 @@ export class BackendClient implements ApiClient {
     const released = releaseParent(parent, tasks, this.now());
     const plain = released ? await this.repo.putTask(released) : parent;
     if (plain.gcalEventId)
-      await this.syncCalendar(plain, plain, true, undefined, { parent: false, wasParent: true });
+      await this.syncCalendar(plain, plain, true, undefined, { parent: false });
   }
   private async ensureSettings(): Promise<Settings> {
     const def: Settings = {
@@ -315,14 +315,15 @@ export class BackendClient implements ApiClient {
   // task as gcalSyncError (shown with a retry) and is logged, and a failed remove keeps the event linked
   // so the retry can finish it. Returns the task as it now stands.
   //
-  // `ctx` is what the caller already knows: `parent`/`wasParent` (adopt and release know before the list
-  // does), and `tasks`, a list to find a part's parent in (its title names the block).
+  // `ctx` is what the caller already knows: `parent` (adopt and release know before the list does), and
+  // `tasks`, a list to find a part's parent in (its title names the block). The event's look (marker or
+  // block) heals from gcalSeen either way.
   private async syncCalendar(
     prev: Task | null,
     task: Task,
     ensure = false,
     known?: Settings, // a batch reads settings once
-    ctx: Pick<SyncContext, 'parent' | 'wasParent'> & { tasks?: Task[] } = {},
+    ctx: Pick<SyncContext, 'parent'> & { tasks?: Task[] } = {},
   ): Promise<Task> {
     // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
@@ -341,7 +342,6 @@ export class BackendClient implements ApiClient {
     const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, {
       ensure,
       parent,
-      wasParent: ctx.wasParent,
       parentTitle,
     });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
@@ -722,7 +722,7 @@ export class BackendClient implements ApiClient {
     if (parentId === null) {
       const part = await this.repo.putTask({ ...task, parentId: null, updatedAt: this.now() });
       await this.releaseParentState(task.parentId);
-      return part;
+      return this.syncCalendar(task, part, false, undefined, { parent: false }); // loses the prefix
     }
     const parent = await this.mustTask(parentId);
     const all = await this.repo.listTasks();
@@ -733,7 +733,8 @@ export class BackendClient implements ApiClient {
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
     await this.releaseParentState(task.parentId); // moved from another parent
     await this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
-    return part;
+    // Its block is named after its new parent (a part has no parts of its own).
+    return this.syncCalendar(task, part, false, undefined, { parent: false, tasks: [parent] });
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
@@ -753,8 +754,9 @@ export class BackendClient implements ApiClient {
     if (!trimmed) throw new Error('Title is required');
     const prev = await this.mustTask(id);
     const next = await this.repo.putTask({ ...prev, title: trimmed, updatedAt: this.now() });
-    const tasks = await this.repo.listTasks({ consistent: true });
-    const parts = partsOf(tasks, id);
+    // A part has no parts of its own, so only a possible parent pays for the (consistent) list read.
+    const tasks = prev.parentId ? undefined : await this.repo.listTasks({ consistent: true });
+    const parts = tasks ? partsOf(tasks, id) : [];
     const synced = await this.syncCalendar(prev, next, false, undefined, {
       parent: parts.length > 0,
       tasks,
@@ -831,9 +833,10 @@ export class BackendClient implements ApiClient {
     const shaped = splitOriginal(task, input, this.now(), standalone); // validates everything before any write
     // Split always yields parent + parts: a standalone task gets a new parent (its due marker is synced
     // last, once it has parts), a part splits under the parent it has.
-    const parentId = standalone
-      ? (await this.repo.putTask({ ...this.base(), ...newParentFrom(task, input) })).id
-      : task.parentId!;
+    const newParent = standalone
+      ? await this.repo.putTask({ ...this.base(), ...newParentFrom(task, input) })
+      : null;
+    const parentId = newParent?.id ?? task.parentId!;
     const edited = { ...shaped, parentId };
     const done = input.finish === 'done';
     // A TIMED task's event is the block before its deadline. A done part has no future there, so the link
@@ -901,11 +904,16 @@ export class BackendClient implements ApiClient {
       });
     }
     // No freeze here: a standalone split's parent IS the original's lock, and nothing started just now.
-    const followUp = await this.syncCalendar(null, created);
-    const parent = standalone
-      ? await this.syncCalendar(null, await this.mustTask(parentId), false, undefined, {
-          parent: true,
-        })
+    // The new parent in hand names the follow-up's block (a read straight after its write could miss it).
+    const followUp = await this.syncCalendar(
+      null,
+      created,
+      false,
+      undefined,
+      newParent ? { tasks: [newParent] } : {},
+    );
+    const parent = newParent
+      ? await this.syncCalendar(null, newParent, false, undefined, { parent: true })
       : await this.mustTask(parentId);
     return { parent, original, followUp };
   }

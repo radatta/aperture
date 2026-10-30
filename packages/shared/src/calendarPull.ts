@@ -78,7 +78,6 @@ export function calendarPullPlan(
   const timed = !ev.allDay && ev.startMs !== null && ev.endMs !== null;
   const parent = !!opts.parent;
   const window = syncWindow(task, time.epoch, parent);
-  const known = blockTitle(task, opts.parentTitle); // the title the event should have
   // No gcalSeen (linked before two-way sync): on the first sync, remember Google's state — a difference
   // is Aperture's unsent value. Later, it only shows up by changing in Google, so the task as it is
   // stands in for the base — unless it holds a failed push (docs/areas/calendar → First sight).
@@ -92,11 +91,14 @@ export function calendarPullPlan(
     startMs: timed ? ev.startMs : (seen?.startMs ?? null),
     endMs: timed ? ev.endMs : (seen?.endMs ?? null),
     updatedMs: ev.updatedMs,
+    ...(seen?.marker !== undefined && { marker: seen.marker }), // the look is never read back
   };
   if (!seen) return { kind: 'see', seen: now };
   // Stale: predates the base. (`?? 0`: a base from an earlier build of this branch has no version.)
   if (ev.updatedMs < (seen.updatedMs ?? 0)) return NONE;
-  const titleUnsent = !sameTitle(known, seen.title);
+  // In the task's own title space: a part's block title carries its parent's prefix, which isn't the
+  // part's to keep — a prefix-less rename taken from Google isn't an Aperture change waiting to go.
+  const titleUnsent = !sameTitle(task.title, titleFromBlock(seen.title ?? '', opts.parentTitle));
   // Aperture changed the time iff the task no longer maps to the base the way a pull would map it: the
   // deadline (the same instant, or the same wall-clock minute — a fall-back hour's second 1:30, an end
   // with seconds), the length in whole minutes (not on a done task or a marker — their start never

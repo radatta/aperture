@@ -431,17 +431,17 @@ class StubClient implements ApiClient {
     if (!parent || hasParts(alive, parent.id)) return;
     const released = releaseParent(parent, alive, this.now());
     const plain = released ? this.writes.put(this.store.tasks, released) : parent;
-    if (plain.gcalEventId)
-      this.syncCalendar(plain, plain, true, { parent: false, wasParent: true });
+    if (plain.gcalEventId) this.syncCalendar(plain, plain, true, { parent: false });
   }
   // Calendar auto-sync parity with the backend: the same shared planner, executed against a fake event
   // id (no Google here). The browser's clock is the user's, so the local epoch is the right one. `ctx`
-  // overrides what the task list says (adopt and release know before the list does).
+  // overrides what the task list says (adopt and release know before the list does); the event's look
+  // (marker or block) heals from gcalSeen either way.
   private syncCalendar(
     prev: Task | null,
     task: Task,
     ensure = false,
-    ctx: Pick<SyncContext, 'parent' | 'wasParent'> = {},
+    ctx: Pick<SyncContext, 'parent'> = {},
   ): Task {
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task; // nothing to sync
     const settings = this.ensureSettings();
@@ -450,7 +450,6 @@ class StubClient implements ApiClient {
     const action = calendarSyncPlan(prev, task, settings, localEpochFromDayTime, {
       ensure,
       parent,
-      wasParent: ctx.wasParent,
       parentTitle: parentOf(alive, task)?.title ?? null,
     });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
@@ -709,7 +708,7 @@ class StubClient implements ApiClient {
     if (parentId === null) {
       const part = this.writes.patch(this.store.tasks, id, { parentId: null });
       this.releaseParentState(task.parentId);
-      return part;
+      return this.syncCalendar(task, part, false, { parent: false }); // its block loses the prefix
     }
     const parent = this.mustFind(this.store.tasks, parentId);
     const all = this.alive(this.store.tasks);
@@ -720,7 +719,8 @@ class StubClient implements ApiClient {
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
     this.releaseParentState(task.parentId); // moved from another parent
     this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
-    return part;
+    // Its block is named after its new parent (a part has no parts of its own).
+    return this.syncCalendar(task, part, false, { parent: false });
   }
   // Quick add, offline: the same flow as the Lambda (shared runQuickParse) with a heuristic standing in
   // for Haiku. STUB_FAIL_NEXT_PARSE_KEY (stubParse.ts) fails the next one, to see the raw-save path.
@@ -768,9 +768,10 @@ class StubClient implements ApiClient {
       prev,
       this.writes.patch(this.store.tasks, id, { title: trimmed }),
     );
-    // A parent's name is in each of its parts' blocks: each linked one is re-sent (a done one isn't).
+    // A parent's name is in each of its parts' blocks: each linked open one is re-sent.
     for (const part of partsOf(this.alive(this.store.tasks), id))
-      if (part.gcalEventId) this.syncCalendar(part, part);
+      if (part.gcalEventId && part.status !== 'done' && part.status !== 'cancelled')
+        this.syncCalendar(part, part);
     return this.find(this.store.tasks, id) ?? next;
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {

@@ -161,6 +161,13 @@ export function TaskEditor({
     task.completedAt != null ||
     task.cancelledAt != null;
 
+  const showCalendar =
+    !isTerminal ||
+    !!task.gcalEventId ||
+    !!task.gcalSyncError ||
+    syncEvent.isError ||
+    (isPullFresh(task, settings?.dayStartHour ?? 4, now) && !!task.gcalPulled);
+
   const parentLink = parent && (
     <button
       type="button"
@@ -320,7 +327,8 @@ export function TaskEditor({
         <AttachmentsPanel taskId={task.id} />
       </section>
 
-      <section className="flex flex-col gap-2">
+      {/* A finished task with no event and nothing to say has no Calendar section (no bare heading). */}
+      <section className={cx('flex flex-col gap-2', !showCalendar && 'hidden')}>
         <SectionHeading>Calendar</SectionHeading>
         {/* A failed auto-sync never fails the task write — it's said here, with a retry. */}
         {/* The retry/add call itself failing (offline, 5xx) is said too — never a dead button. */}
@@ -390,13 +398,14 @@ export function TaskEditor({
           // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
           // hand or in Google) — one tap creates it, ending at the deadline.
           !task.gcalSyncError && (
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Text size="sm" tone="muted">
+            <div className="flex items-center justify-between gap-3">
+              <Text size="sm" tone="muted" className="min-w-0">
                 {isParent ? 'No due marker on your calendar.' : 'Not on your calendar.'}
               </Text>
               <Button
                 variant="quiet"
                 size="sm"
+                className="shrink-0"
                 disabled={syncEvent.isPending}
                 onClick={() => syncEvent.mutate(task.id)}
               >
@@ -405,8 +414,10 @@ export function TaskEditor({
             </div>
           )
         ) : isParent ? (
-          // No picked time for a parent: its marker goes where its deadline is, with auto-sync on.
-          !isTerminal && (
+          // No picked time for a parent: its marker goes where its deadline is, with auto-sync on. Nothing
+          // until settings load, so a timed parent never flashes "Connect Google Calendar…".
+          !isTerminal &&
+          !!settings && (
             <Text size="sm" tone="muted">
               {!task.dueTime
                 ? 'Set a due time to put its deadline on your calendar.'

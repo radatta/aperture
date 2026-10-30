@@ -206,7 +206,7 @@ describe('calendarSyncPlan', () => {
     const OFF = { autoCalendar: false, calendarWriteDefault: REF };
     const parent = { parent: true };
     const MARK = { startMs: END - 15 * 60_000, endMs: END };
-    const seenMarker = { title: 'pset', ...MARK, updatedMs: 1 };
+    const seenMarker = { title: 'pset', ...MARK, updatedMs: 1, marker: true };
 
     it('a timed parent creates a 15-minute marker ending at its deadline', () => {
       expect(calendarSyncPlan(null, task(), ON, epoch, parent)).toEqual({
@@ -236,7 +236,7 @@ describe('calendarSyncPlan', () => {
     });
     it('release (marker → block) patches back to the estimate window, marker off', () => {
       const p = linked({ gcalSeen: seenMarker });
-      expect(calendarSyncPlan(p, p, ON, epoch, { wasParent: true, ensure: true })).toEqual({
+      expect(calendarSyncPlan(p, p, ON, epoch, { ensure: true })).toEqual({
         kind: 'patch',
         title: 'pset',
         startMs: END - 60 * 60_000,
@@ -250,8 +250,7 @@ describe('calendarSyncPlan', () => {
       expect(moved).toEqual({
         kind: 'patch',
         startMs: END + 45 * 60_000,
-        endMs: END + 60 * 60_000,
-        marker: true,
+        endMs: END + 60 * 60_000, // already shows as a marker: no look sent
       });
       expect(calendarSyncPlan(p, { ...p, title: 'renamed' }, ON, epoch, parent)).toEqual({
         kind: 'patch',
@@ -259,6 +258,40 @@ describe('calendarSyncPlan', () => {
       });
       // Its parts' estimates don't size it: nothing to send when the window is the marker's.
       expect(calendarSyncPlan(p, p, ON, epoch, parent).kind).toBe('none');
+    });
+    it('a marker stretched in Google stays stretched: only its end (the deadline) counts', () => {
+      const stretched = linked({ gcalSeen: { ...seenMarker, startMs: END - 90 * 60_000 } });
+      expect(calendarSyncPlan(stretched, stretched, ON, epoch, parent).kind).toBe('none');
+      expect(
+        calendarSyncPlan(stretched, { ...stretched, title: 'renamed' }, ON, epoch, parent),
+      ).toEqual({ kind: 'patch', title: 'renamed' });
+      expect(hasUnsent(stretched, epoch, { parent: true })).toBe(false);
+    });
+    it('the look heals on the next push when a switch failed or was skipped', () => {
+      // Became a parent while sync was off: still a plain block → the next push makes it the marker.
+      const block = linked({ gcalSeen: { title: 'pset', ...MARK, updatedMs: 1 } });
+      expect(calendarSyncPlan(block, block, ON, epoch, parent)).toEqual({
+        kind: 'patch',
+        marker: true,
+      });
+      expect(hasUnsent(block, epoch, { parent: true })).toBe(true);
+      // Its release failed: a plain task still showing as a marker → any push turns it back.
+      const stale = linked({ gcalSeen: seenMarker });
+      expect(calendarSyncPlan(stale, { ...stale, title: 'x' }, ON, epoch)).toEqual({
+        kind: 'patch',
+        title: 'x',
+        startMs: END - 60 * 60_000,
+        endMs: END,
+        marker: false,
+      });
+      // A plain block that never showed as a marker is never sent a look (its colour may be yours).
+      const plain = linked({
+        gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 },
+      });
+      expect(calendarSyncPlan(plain, { ...plain, title: 'x' }, ON, epoch)).toEqual({
+        kind: 'patch',
+        title: 'x',
+      });
     });
     it('a done parent keeps its marker; sync off leaves it alone', () => {
       const p = linked({ gcalSeen: seenMarker });
@@ -339,7 +372,7 @@ describe('calendarSyncPlan', () => {
       expect(hasUnsent(part, epoch, { parentTitle: 'P2' })).toBe(false);
       expect(hasUnsent(part, epoch)).toBe(true);
       const MARK = { startMs: END - 15 * 60_000, endMs: END };
-      const p = linked({ gcalSeen: { title: 'pset', ...MARK, updatedMs: 1 } });
+      const p = linked({ gcalSeen: { title: 'pset', ...MARK, updatedMs: 1, marker: true } });
       expect(hasUnsent(p, epoch, { parent: true })).toBe(false);
       expect(hasUnsent(p, epoch)).toBe(true);
     });

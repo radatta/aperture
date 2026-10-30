@@ -784,6 +784,39 @@ describe('calendar auto-sync (timed tasks)', () => {
       expect(g.events.get(p.gcalEventId!)!.marker).toBe(false);
     });
 
+    it('moving a part renames its block after the new parent; detaching drops the prefix', async () => {
+      const { g, b } = await connected();
+      const a = await b.createTask({ title: 'A' });
+      const c = await b.createTask({ title: 'C' });
+      const part = await b.createTask({
+        title: 'x',
+        parentId: a.id,
+        dueDay: '2026-10-09',
+        dueTime: '10:00',
+      });
+      expect(g.events.get(part.gcalEventId!)!.title).toBe('A · x');
+      await b.setTaskParent(part.id, c.id);
+      expect(g.events.get(part.gcalEventId!)!.title).toBe('C · x');
+      await b.setTaskParent(part.id, null);
+      expect(g.events.get(part.gcalEventId!)!.title).toBe('x');
+    });
+
+    it('a release that failed heals on the retry: the block stops showing as a marker', async () => {
+      const { g, b } = await connected();
+      const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+      const part = await b.createTask({ title: 'read', parentId: p.id });
+      g.markDead('A');
+      await b.deleteTask(part.id); // the patch back into a block fails
+      expect((await b.getTask(p.id))!.gcalSyncError).toMatch(/^Couldn’t update/);
+      expect(g.events.get(p.gcalEventId!)!.marker).toBe(true);
+      await b.completeGoogleConnect('A');
+      await b.syncCalendarEvent(p.id);
+      expect(g.events.get(p.gcalEventId!)).toMatchObject({
+        marker: false,
+        startMs: at('2026-10-09', '17:00') - DEFAULT_EVENT_MIN * 60_000,
+      });
+    });
+
     it('cancelling a parent removes its open parts’ blocks, then its marker', async () => {
       const { g, b } = await connected();
       const p = await b.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });

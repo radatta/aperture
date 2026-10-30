@@ -18,6 +18,7 @@ export function previewLine(r: Parsed): BulkLine {
     dueTime: i.dueTime ?? null,
     notes: i.notes ?? null,
     errors: [],
+    errorKinds: [],
     warnings: r.dropped,
   };
 }

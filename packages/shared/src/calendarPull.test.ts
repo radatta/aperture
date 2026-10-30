@@ -560,18 +560,59 @@ describe('calendarPullPlan', () => {
       const a = calendarPullPlan(part('P2 · Part 1'), event({ title: 'P2 · Part 1' }), T0, named);
       expect(a.kind).toBe('none');
     });
-    it('a v1 block (seen bare) holds an unsent prefix: a Google rename is kept out', () => {
+    it('a v1 block (seen bare) is renamed from Google like any other — the prefix isn’t the part’s', () => {
       const a = calendarPullPlan(
         part('Part 1'),
         event({ title: 'Something else', updatedMs: 3_000 }),
         T0,
         named,
       );
-      expect(a).toMatchObject({
+      expect(a).toMatchObject({ kind: 'apply', fields: { title: 'Something else' } });
+    });
+    it('after a rename that dropped the prefix, the next Google rename still applies', () => {
+      const after = task({
+        title: 'Reading',
+        gcalSeen: { title: 'Reading', ...WIN, updatedMs: 3_000 },
+      });
+      const a = calendarPullPlan(
+        after,
+        event({ title: 'Reading ch 3', updatedMs: 4_000 }),
+        T0,
+        named,
+      );
+      expect(a).toMatchObject({ kind: 'apply', fields: { title: 'Reading ch 3' } });
+      // An Aperture rename not sent yet is still kept over Google's.
+      const unsent = task({
+        title: 'Mine',
+        gcalSeen: { title: 'P2 · Part 1', ...WIN, updatedMs: 3_000 },
+      });
+      const b = calendarPullPlan(
+        unsent,
+        event({ title: 'P2 · Theirs', updatedMs: 4_000 }),
+        T0,
+        named,
+      );
+      expect(b).toMatchObject({
         kind: 'apply',
         fields: {},
         note: expect.stringMatching(/^Kept your title/),
       });
+    });
+    it('the look Aperture sent rides along in the base (colour is never read back)', () => {
+      const seen = {
+        title: 'P2',
+        startMs: END - 15 * 60_000,
+        endMs: END,
+        updatedMs: 2_000,
+        marker: true,
+      };
+      const a = calendarPullPlan(
+        task({ title: 'P2', estimateMin: null, gcalSeen: seen }),
+        event({ title: 'P2 renamed', startMs: seen.startMs, endMs: END, updatedMs: 3_000 }),
+        T0,
+        { firstSync: false, parent: true },
+      );
+      expect(a).toMatchObject({ kind: 'apply', seen: { marker: true } });
     });
     it('first sight after the first sync bases on the prefixed block title', () => {
       const a = calendarPullPlan(

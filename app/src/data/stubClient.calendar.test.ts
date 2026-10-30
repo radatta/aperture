@@ -331,6 +331,21 @@ describe('stub calendar: parent + parts', () => {
     await expect(pick(api, part.id)).resolves.toMatchObject({ gcalEventId: expect.any(String) });
   });
 
+  it('moving a part renames its block after the new parent; detaching drops the prefix', async () => {
+    const api = stub();
+    const a = await api.createTask({ title: 'A' });
+    const c = await api.createTask({ title: 'C' });
+    const part = await api.createTask({
+      title: 'x',
+      parentId: a.id,
+      dueDay: '2026-10-09',
+      dueTime: '10:00',
+    });
+    expect(part.gcalSeen?.title).toBe('A · x');
+    expect((await api.setTaskParent(part.id, c.id)).gcalSeen?.title).toBe('C · x');
+    expect((await api.setTaskParent(part.id, null)).gcalSeen?.title).toBe('x');
+  });
+
   it('a timed standalone split: the parent gets a marker; keep → each part its own named block', async () => {
     const api = stub();
     const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });

@@ -35,8 +35,12 @@ export interface BulkLine {
   dueTime: string | null; // "HH:MM" from due:<day>@HH:MM
   notes: string | null; // unescaped + trimmed
   errors: string[]; // red — blocking
+  errorKinds: BulkErrorKind[]; // parallel to errors: what each is about, for a surface with its own words
   warnings: string[]; // yellow — non-blocking
 }
+// `unknown` carries the token that wasn't recognized.
+export type BulkErrorKind =
+  { kind: 'category' | 'due' | 'other' } | { kind: 'unknown'; token: string };
 
 export interface BulkParse {
   lines: BulkLine[]; // one per non-blank input line
@@ -100,11 +104,18 @@ function parseLine(
     dueTime: null,
     notes: null,
     errors: [],
+    errorKinds: [],
     warnings: [],
   };
+  const fail = (message: string, kind: BulkErrorKind = { kind: 'other' }) => {
+    out.errors.push(message);
+    out.errorKinds.push(kind);
+  };
+  const CATEGORY: BulkErrorKind = { kind: 'category' };
+  const DUE: BulkErrorKind = { kind: 'due' };
 
   if (LIST_MARKER.test(raw.trim()))
-    out.errors.push('remove the list marker (- / * / 1.) — titles are taken literally');
+    fail('remove the list marker (- / * / 1.) — titles are taken literally');
 
   const idx = raw.indexOf(SEP);
   const titleSeg = idx === -1 ? raw : raw.slice(0, idx);
@@ -112,12 +123,12 @@ function parseLine(
   out.title = titleSeg.trim();
 
   if (out.title.includes('|'))
-    out.errors.push("remove '|' from the title — ' | ' (space pipe space) only separates tokens");
+    fail("remove '|' from the title — ' | ' (space pipe space) only separates tokens");
   else if (idx === -1 && raw.includes('|'))
-    out.errors.push("malformed separator — use ' | ' (space pipe space) with a token after it");
+    fail("malformed separator — use ' | ' (space pipe space) with a token after it");
   if (idx !== -1 && region.trim() === '')
-    out.errors.push("nothing after ' | ' — add a token or drop the separator");
-  if (out.title === '') out.errors.push('empty title');
+    fail("nothing after ' | ' — add a token or drop the separator");
+  if (out.title === '') fail('empty title');
   // Legal (titles are literal), but almost always a notes token that lost its ' | '.
   else if (/notes:"/i.test(out.title))
     out.warnings.push("'notes:\"' is in the title — tokens go after ' | '");
@@ -126,7 +137,10 @@ function parseLine(
   const seen = new Set<Kind>();
   const once = (kind: Kind, label: string): boolean => {
     if (seen.has(kind)) {
-      out.errors.push(`duplicate ${label} token — each is allowed once`);
+      fail(
+        `duplicate ${label} token — each is allowed once`,
+        kind === 'category' ? CATEGORY : kind === 'due' ? DUE : undefined,
+      );
       return false;
     }
     seen.add(kind);
@@ -139,45 +153,44 @@ function parseLine(
       const rest = tok.slice(1);
       const min = Number(rest);
       if (!/^\d+$/.test(rest) || min < 1)
-        out.errors.push(`invalid estimate '${tok}' — use ~<whole minutes>, e.g. ~30`);
+        fail(`invalid estimate '${tok}' — use ~<whole minutes>, e.g. ~30`);
       else out.estimateMin = min;
     } else if (tok.startsWith('#')) {
       if (!once('category', 'category (#)')) continue;
       let label: string | null = null;
       if (tok.startsWith('#"')) {
         if (tok.length < 3 || !tok.endsWith('"'))
-          out.errors.push(`unterminated quote in category '${tok}' — use #"Label"`);
+          fail(`unterminated quote in category '${tok}' — use #"Label"`, CATEGORY);
         else label = tok.slice(2, -1); // may be '' for #"" — caught below, same as bare #
       } else {
         label = tok.slice(1);
       }
       if (label === '') {
-        out.errors.push('empty category label — use #Label or #"Two Words"');
+        fail('empty category label — use #Label or #"Two Words"', CATEGORY);
       } else if (label !== null) {
         out.categoryLabel = label;
         const m = matchCategory(label, categories);
-        if (m.ambiguous)
-          out.errors.push(`ambiguous category '${label}' — it matches more than one`);
+        if (m.ambiguous) fail(`ambiguous category '${label}' — it matches more than one`, CATEGORY);
         else if (m.unknown) out.warnings.push(`no category '${label}' — created without one`);
         else out.categoryId = m.id;
       }
     } else if (/^notes:/i.test(tok)) {
       if (!once('notes', 'notes')) continue;
       if (!tok.startsWith('notes:')) {
-        out.errors.push(`use lowercase 'notes:' — got '${tok.slice(0, 6)}'`);
+        fail(`use lowercase 'notes:' — got '${tok.slice(0, 6)}'`);
         continue;
       }
       if (!tok.startsWith('notes:"')) {
-        out.errors.push('notes need quotes — use notes:"your text"');
+        fail('notes need quotes — use notes:"your text"');
         continue;
       }
       const close = tok.indexOf('"', 7);
       if (close === -1) {
-        out.errors.push('unterminated notes — close the quote: notes:"…"');
+        fail('unterminated notes — close the quote: notes:"…"');
         continue;
       }
       if (close !== tok.length - 1) {
-        out.errors.push(`notes can't contain '"' — reword it, or use ' instead`);
+        fail(`notes can't contain '"' — reword it, or use ' instead`);
         continue;
       }
       // `\n` is a newline and `\\` a literal backslash, so `\\nabla` survives as `\nabla`.
@@ -185,9 +198,9 @@ function parseLine(
         .slice(7, -1)
         .replace(/\\([\\n])/g, (_, c: string) => (c === 'n' ? '\n' : '\\'))
         .trim();
-      if (value === '') out.errors.push('empty notes — drop the token or add text');
+      if (value === '') fail('empty notes — drop the token or add text');
       else if (value.length > TASK_NOTES_MAX)
-        out.errors.push(
+        fail(
           `notes are ${value.length.toLocaleString('en-US')} characters — the limit is ${TASK_NOTES_MAX.toLocaleString('en-US')}`,
         );
       else out.notes = value;
@@ -196,16 +209,17 @@ function parseLine(
       const at = tok.indexOf('@');
       const day = at === -1 ? tok.slice(4) : tok.slice(4, at);
       const time = at === -1 ? null : tok.slice(at + 1);
-      if (!isDayKey(day)) out.errors.push(`invalid due date '${tok}' — use due:YYYY-MM-DD`);
+      if (!isDayKey(day)) fail(`invalid due date '${tok}' — use due:YYYY-MM-DD`, DUE);
       else if (time !== null && !isTimeKey(time))
-        out.errors.push(`invalid due time '${tok}' — use due:YYYY-MM-DD@HH:MM (24h)`);
+        fail(`invalid due time '${tok}' — use due:YYYY-MM-DD@HH:MM (24h)`, DUE);
       else {
         out.dueDay = day;
         out.dueTime = time;
       }
     } else {
-      out.errors.push(
+      fail(
         `unrecognized token '${tok}' — expected ~<min>, #<label>, due:YYYY-MM-DD[@HH:MM], or notes:"…"`,
+        { kind: 'unknown', token: tok },
       );
     }
   }
@@ -284,8 +298,10 @@ export function parseTaskLine(
   categories: readonly Pick<Category, 'id' | 'label'>[],
 ): BulkLine {
   const out = parseLine(raw, 1, categories);
-  if (raw.includes('\n'))
+  if (raw.includes('\n')) {
     out.errors.push('tokens need a single line — remove the line break (Bulk add takes many)');
+    out.errorKinds.push({ kind: 'other' });
+  }
   return out;
 }
 
