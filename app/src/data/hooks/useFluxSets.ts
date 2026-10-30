@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { FluxSetFilter } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
@@ -10,6 +10,7 @@ export function useFluxSets(filter: FluxSetFilter = {}) {
   return useQuery({
     queryKey: qk.fluxSets(filter.from, filter.to, filter.exerciseId),
     queryFn: () => api.listFluxSets(filter),
+    placeholderData: keepPreviousData, // a window change (Show all) keeps the list up, not a spinner
   });
 }
 

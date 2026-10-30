@@ -118,13 +118,15 @@ describe('Flux History tab', () => {
     });
     const { api, user } = await history([keep, gone]);
     await user.click(
-      await screen.findByRole('button', { name: 'Delete Chin Tuck (Cervical Retraction) set' }),
+      await screen.findByRole('button', {
+        name: /^Delete Chin Tuck \(Cervical Retraction\) set from /,
+      }),
     );
     const confirm = screen.getByRole('alertdialog', { name: /Delete this Chin Tuck/ });
     await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
     expect(screen.getByText('Chin Tuck (Cervical Retraction)')).toBeTruthy();
     await user.click(
-      screen.getByRole('button', { name: 'Delete Chin Tuck (Cervical Retraction) set' }),
+      screen.getByRole('button', { name: /^Delete Chin Tuck \(Cervical Retraction\) set from / }),
     );
     await user.click(
       within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
@@ -136,8 +138,10 @@ describe('Flux History tab', () => {
 
   it('Cancel and Escape on the delete confirm hand focus back to the row’s Delete', async () => {
     const { user } = await history([set()]);
-    const trigger = () => screen.getByRole('button', { name: 'Delete Neck Rotation set' });
-    await user.click(await screen.findByRole('button', { name: 'Delete Neck Rotation set' }));
+    const trigger = () => screen.getByRole('button', { name: /^Delete Neck Rotation set from / });
+    await user.click(
+      await screen.findByRole('button', { name: /^Delete Neck Rotation set from / }),
+    );
     await user.click(
       within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }),
     );
@@ -147,6 +151,38 @@ describe('Flux History tab', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(document.activeElement).toBe(trigger());
+  });
+
+  it('a deleted row hands focus to the next row’s Delete, and its chip’s filter goes with it', async () => {
+    const t = Date.now();
+    const a = set({ completedAt: t - 3000 });
+    const b = set({ completedAt: t - 2000 });
+    const tuck = set({
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      count: 10,
+      avgPeakDeg: null,
+      completedAt: t - 1000,
+    });
+    const { user } = await history([a, b, tuck]);
+    const deletes = await screen.findAllByRole('button', { name: /^Delete .* set from / });
+    expect(deletes).toHaveLength(3);
+    await user.click(deletes[1]!); // the newer rotation row
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /^Delete .* set from / })).toHaveLength(2),
+    );
+    expect(document.activeElement).toBe(deletes[2]); // the next row's, still the same node
+    // Filter to chin tuck, delete its only set: the chip goes, and the list is back to everything.
+    await user.click(screen.getByRole('button', { name: 'chin tuck' }));
+    await user.click(screen.getByRole('button', { name: /^Delete Chin Tuck/ }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'chin tuck' })).toBeNull());
+    expect(screen.getAllByText(/20 reps · avg 50°/)).toHaveLength(1);
   });
 
   it('a hold count never trends — only an angle does', async () => {
@@ -207,8 +243,14 @@ describe('Flux History tab', () => {
       }),
     ]);
     expect(await screen.findByText('No sets in the last 90 days.')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Show all' }));
+    const toggle = screen.getByRole('button', { name: 'Show all' });
+    await user.click(toggle);
     expect(await screen.findByText(/20 reps · avg 41°/)).toBeTruthy();
+    // One button that flips back, so focus never falls off it.
+    expect(toggle.textContent).toBe('Last 90 days');
+    expect(document.activeElement).toBe(toggle);
+    await user.click(toggle);
+    expect(await screen.findByText('No sets in the last 90 days.')).toBeTruthy();
   });
 
   it('an empty history points back to the library', async () => {

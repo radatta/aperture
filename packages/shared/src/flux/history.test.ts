@@ -84,6 +84,7 @@ describe('fluxSetError', () => {
       'needs a side',
     ],
     ['an unknown condition', { condition: 'broken' as never }, 'Unknown condition'],
+    ['an inherited key as a condition', { condition: 'toString' as never }, 'Unknown condition'],
     ['a fractional count', { count: 2.5 }, 'whole number'],
     ['a NaN measurement', { avgPeakDeg: Number.NaN }, 'not a number'],
     ['a missing rom axis', { rom: { pitch: 1, yaw: 2 } as never }, 'not a number'],

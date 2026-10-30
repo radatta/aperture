@@ -1288,12 +1288,6 @@ export function runApiContract(
       expect((await api.getSettings()).fluxDisclaimerAckAt).toBeNull();
     });
 
-    // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked
-    // object literal), so this assertion is a runtime backstop rather than the primary guard. It still
-    // earns its place: excess-property checking evaporates the moment an impl returns a variable, a
-    // spread, or an `as` cast, and it can't see a declared-but-actually-undefined value or a key the
-    // HTTP layer's JSON round-trip drops. Listing the collections here is deliberate double-entry —
-    // don't replace it with a constant the implementations also import.
     // --- Flux sets (D47) -----------------------------------------------------
     it('flux: records a set and lists it by range and exercise, newest first', async () => {
       const a = await api.recordFluxSet(fluxSet({ day: '2026-10-19', completedAt: 1_000 }));
@@ -1358,6 +1352,12 @@ export function runApiContract(
       expect((await api.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
     });
 
+    // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked
+    // object literal), so this assertion is a runtime backstop rather than the primary guard. It still
+    // earns its place: excess-property checking evaporates the moment an impl returns a variable, a
+    // spread, or an `as` cast, and it can't see a declared-but-actually-undefined value or a key the
+    // HTTP layer's JSON round-trip drops. Listing the collections here is deliberate double-entry —
+    // don't replace it with a constant the implementations also import.
     it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
       const lc = await api.recordLeetcodeAttempt({

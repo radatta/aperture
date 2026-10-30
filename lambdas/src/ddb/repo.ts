@@ -120,11 +120,13 @@ export class Repo {
 
   // --- Flux sets ---
   // Tombstones included: the backend filters (inRange), and an outbox retry of a deleted set must find it.
-  async listAllFluxSets(): Promise<FluxSet[]> {
-    return (await this.doc.query(this.p(), sk.fluxAllPrefix())).map((i) => toEntity<FluxSet>(i));
+  async listAllFluxSets(opts?: { consistent?: boolean }): Promise<FluxSet[]> {
+    return (await this.doc.query(this.p(), sk.fluxAllPrefix(), opts)).map((i) =>
+      toEntity<FluxSet>(i),
+    );
   }
-  async findFluxSet(id: string): Promise<FluxSet | null> {
-    return (await this.listAllFluxSets()).find((f) => f.id === id) ?? null;
+  async findFluxSet(id: string, opts?: { consistent?: boolean }): Promise<FluxSet | null> {
+    return (await this.listAllFluxSets(opts)).find((f) => f.id === id) ?? null;
   }
   // Write only if absent (D47): a concurrent retry of the same set loses the race instead of overwriting.
   async putFluxSetIfAbsent(f: FluxSet): Promise<boolean> {

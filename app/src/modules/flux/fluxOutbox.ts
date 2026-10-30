@@ -6,8 +6,9 @@ import type { FluxSetDraft } from './useFluxEngine';
 // BEFORE it's sent, and removed only once the server has it — so a dropped connection or a closed app
 // never loses one. Unlike capture's outbox nothing needs the user to put it back: the payload is complete
 // and the save is idempotent on its id, so entries are just retried; a failure stays visible
-// (UnsavedSetsStrip) until it's saved or discarded. Storage can be absent or throw (private mode, cleared
-// site data), so every access is guarded — a failure only loses the guard, never the set being sent.
+// (UnsavedSetsStrip) until it's saved or discarded. Storage can be absent or throw (private mode, a full
+// quota), so every access is guarded, and a refused write keeps the list in memory instead: the set is
+// still retried and still shown — it just won't survive closing the app, and the strip says so.
 
 export const FLUX_OUTBOX_KEY = 'aperture.flux.outbox';
 
@@ -15,11 +16,15 @@ export interface FluxOutboxEntry {
   readonly input: RecordFluxSetInput;
   readonly at: number; // epoch ms first queued
   readonly error: string | null; // the last failed attempt's message
+  readonly refused?: boolean; // the set itself is invalid (fluxSetError) — retrying can't save it
 }
 
 const listeners = new Set<() => void>();
+// The list, when storage refused to hold it (this tab only). Takes over every read until a write sticks.
+let memory: FluxOutboxEntry[] | null = null;
 
 function rawRead(): string {
+  if (memory) return memory.length ? JSON.stringify(memory) : '';
   try {
     return globalThis.localStorage?.getItem(FLUX_OUTBOX_KEY) ?? '';
   } catch {
@@ -38,13 +43,19 @@ function parse(raw: string): FluxOutboxEntry[] {
 }
 function write(list: readonly FluxOutboxEntry[]): void {
   try {
-    if (list.length) globalThis.localStorage?.setItem(FLUX_OUTBOX_KEY, JSON.stringify(list));
-    else globalThis.localStorage?.removeItem(FLUX_OUTBOX_KEY);
+    const ls = globalThis.localStorage;
+    if (!ls) throw new Error('no storage');
+    if (list.length) ls.setItem(FLUX_OUTBOX_KEY, JSON.stringify(list));
+    else ls.removeItem(FLUX_OUTBOX_KEY);
+    memory = null;
   } catch {
-    // no storage — the set still goes out; it just isn't guarded against a closed app
+    memory = [...list];
   }
   listeners.forEach((l) => l());
 }
+
+// True while the queued sets live only in this tab's memory (storage refused them).
+export const outboxInMemoryOnly = (): boolean => (memory?.length ?? 0) > 0;
 
 export const readOutbox = (): FluxOutboxEntry[] => parse(rawRead());
 
@@ -55,8 +66,8 @@ export function outboxAdd(input: RecordFluxSetInput, at: number): void {
 }
 export const outboxRemove = (id: string): void =>
   write(readOutbox().filter((e) => e.input.id !== id));
-export const outboxMarkError = (id: string, error: string): void =>
-  write(readOutbox().map((e) => (e.input.id === id ? { ...e, error } : e)));
+export const outboxMarkError = (id: string, error: string, refused = false): void =>
+  write(readOutbox().map((e) => (e.input.id === id ? { ...e, error, refused } : e)));
 
 // The set as the server takes it: the stage's draft plus its id, its day and the rep it counted toward.
 export function draftToInput(
@@ -99,3 +110,9 @@ function snapshot(): FluxOutboxEntry[] {
   return cache.list;
 }
 export const useOutboxEntries = (): FluxOutboxEntry[] => useSyncExternalStore(subscribe, snapshot);
+
+// Tests share one module graph (app/src/test/setup.ts).
+export function resetFluxOutboxStore(): void {
+  memory = null;
+  cache = { raw: '', list: [] };
+}

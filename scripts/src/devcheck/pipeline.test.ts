@@ -64,6 +64,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     reads: {
       listTasks: async () => [...tasks.values()],
       listBacklog: async () => [],
+      getSettings: async () => ({ dayStartHour: 4 }),
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [],
       listFluxSets: async () => [...fluxSets.values()],

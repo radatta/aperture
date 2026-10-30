@@ -31,10 +31,12 @@ export function FluxHistoryTab() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
   const [all, setAll] = useState(false);
-  const [exerciseId, setExerciseId] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const q = useFluxSets(all ? {} : { from: addDays(today, -(WINDOW_DAYS - 1)), to: today });
   const sets = q.data ?? [];
   const ids = [...new Set(sets.map((s) => s.exerciseId))].filter(isExerciseId);
+  // A chip whose last set was just deleted is gone — so is its filter.
+  const exerciseId = picked && ids.includes(picked as (typeof ids)[number]) ? picked : null;
   const shown = exerciseId ? sets.filter((s) => s.exerciseId === exerciseId) : sets;
   const def = exerciseId && isExerciseId(exerciseId) ? getExercise(exerciseId) : null;
 
@@ -64,12 +66,12 @@ export function FluxHistoryTab() {
               ...ids.map((id) => ({ value: id, label: SHORT_NAMES[id] })),
             ]}
             value={exerciseId}
-            onChange={setExerciseId}
+            onChange={setPicked}
           />
           {def && <Trend def={def} sets={shown} />}
           {groupByDay(shown).map((g) => (
-            <section key={g.day} aria-label={fmtDayHeading(g.day)} className="flex flex-col">
-              <Text as="h2" size="sm" weight="semibold" tone="muted">
+            <section key={g.day} aria-labelledby={`flux-day-${g.day}`} className="flex flex-col">
+              <Text as="h2" id={`flux-day-${g.day}`} size="sm" weight="semibold" tone="muted">
                 {g.day === today ? 'Today' : fmtDayHeading(g.day)}
               </Text>
               <ul className="flex flex-col">
@@ -81,13 +83,14 @@ export function FluxHistoryTab() {
           ))}
         </>
       )}
-      {!all && !q.isPending && (
+      {!q.isPending && (
+        // One button that flips, so focus stays put when the list grows or shrinks under it.
         <div className="flex flex-wrap items-center gap-2">
           <Text size="xs" tone="muted">
-            Showing the last {WINDOW_DAYS} days.
+            {all ? 'Showing every saved set.' : `Showing the last ${WINDOW_DAYS} days.`}
           </Text>
-          <Button variant="quiet" size="sm" onClick={() => setAll(true)}>
-            Show all
+          <Button variant="quiet" size="sm" onClick={() => setAll(!all)}>
+            {all ? `Last ${WINDOW_DAYS} days` : 'Show all'}
           </Button>
         </div>
       )}

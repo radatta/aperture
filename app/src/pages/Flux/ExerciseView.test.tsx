@@ -309,6 +309,17 @@ describe('Flux saved sets (D47, D49)', () => {
     expect(localStorage.getItem(FLUX_OUTBOX_KEY)).toBeNull(); // sent, so nothing waits
   });
 
+  it('files the set under the user’s own day start, not the calendar date', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 21, 5, 0) }); // 5am, before a 6am start
+    const s = await stage('/flux/chin-tuck', (api) =>
+      api.updateSettings({ dayStartHour: 6 }).then(() => undefined),
+    );
+    await running(s);
+    act(() => s.fake().event(done));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]?.day).toBe('2026-10-20');
+  });
+
   it('a failed save stays on the device and on screen until Retry gets it through', async () => {
     const s = await stage('/flux/chin-tuck');
     await running(s);

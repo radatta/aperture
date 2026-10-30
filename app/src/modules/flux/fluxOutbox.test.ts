@@ -5,6 +5,7 @@ import {
   FLUX_OUTBOX_KEY,
   outboxAdd,
   outboxMarkError,
+  outboxInMemoryOnly,
   outboxRemove,
   readOutbox,
 } from './fluxOutbox';
@@ -48,17 +49,29 @@ describe('fluxOutbox (D49)', () => {
     expect(localStorage.getItem(FLUX_OUTBOX_KEY)).toBeNull();
   });
 
-  it('never throws when storage is unavailable, and reads garbage as empty', () => {
+  it('reads garbage as empty', () => {
     localStorage.setItem(FLUX_OUTBOX_KEY, '{not json');
     expect(readOutbox()).toEqual([]);
+  });
+
+  it('keeps the set in memory when storage refuses it — never a silent loss', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota');
     });
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('denied');
     });
-    expect(() => outboxAdd(input(), 1)).not.toThrow();
-    expect(readOutbox()).toEqual([]);
+    const a = input();
+    expect(() => outboxAdd(a, 1)).not.toThrow();
+    expect(readOutbox().map((e) => e.input.id)).toEqual([a.id]);
+    expect(outboxInMemoryOnly()).toBe(true);
+    outboxMarkError(a.id, 'offline');
+    expect(readOutbox()[0]?.error).toBe('offline');
+    // Storage works again: the next write lands there and memory steps aside.
+    vi.restoreAllMocks();
+    outboxAdd(input(), 2);
+    expect(outboxInMemoryOnly()).toBe(false);
+    expect(JSON.parse(localStorage.getItem(FLUX_OUTBOX_KEY) ?? '[]')).toHaveLength(2);
   });
 
   it('builds the server input from the stage draft plus its keys', () => {

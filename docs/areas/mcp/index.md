@@ -173,8 +173,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   recorded by the app's stage only; deleting one is the History tab's. `from`/`to` are both or neither
   (one alone is a param error, like the RPC's `fluxFilterError`). Every label is resolved server-side from
   the shared catalog — the exercise name, `side` as `right`/`left` (`sideLabel`, D48), and `metric`, the one
-  number History judges a set by (`setMetric`) — plus a per-exercise first → latest `summary`, and `today`
-  (the night line's sentence, `summarizeSets`) when the window is one day. Every result carries the
+  number History judges a set by (`setMetric`) — plus a per-exercise first → latest `summary`, and `daySummary`
+  (the night line's sentence, `summarizeSets`) when the window is one day (`from = to`, any day). Every result carries the
   honesty `note`: angles are relative to each session's own neutral, a trend and not a clinical
   measurement. `list_flux_exercises` gives the ids, sides and prescriptions.
 
@@ -371,7 +371,7 @@ the model as the only UI — so:
   writable from here.
 - **Flux by voice is a question too:** "how's my neck rehab going this week?" → `list_flux_sets {from, to}`
   and its `summary`; "did I do my neck exercises today?" → the same with `from = to = today` and its
-  `today` line.
+  `daySummary` line.
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
 timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation

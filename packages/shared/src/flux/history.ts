@@ -62,7 +62,7 @@ export function fluxSetError(input: RecordFluxSetInput): string | null {
     return `${def.name} is a ${def.kind} exercise, not ${String(input.kind)}.`;
   if (hasSide(def) ? input.side !== 'a' && input.side !== 'b' : input.side !== null)
     return hasSide(def) ? `${def.name} needs a side.` : `${def.name} has no side.`;
-  if (input.condition !== null && !(input.condition in CONDITION_LABELS))
+  if (input.condition !== null && !Object.hasOwn(CONDITION_LABELS, input.condition))
     return `Unknown condition "${String(input.condition)}".`;
   if (!Number.isInteger(input.count) || input.count < 0)
     return 'A Flux set count must be a whole number.';

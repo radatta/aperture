@@ -631,7 +631,9 @@ class StubClient implements ApiClient {
     return inRange(this.store.fluxSets, filter);
   }
   async deleteFluxSet(id: string): Promise<void> {
-    this.writes.softDelete(this.store.fluxSets, id);
+    // Like the backend: deleting a deleted set changes nothing (its deletedAt stays the first one).
+    if (this.store.fluxSets.some((f) => f.id === id && f.deletedAt === null))
+      this.writes.softDelete(this.store.fluxSets, id);
   }
 
   // --- Story bank ----------------------------------------------------------

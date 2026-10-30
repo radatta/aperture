@@ -308,11 +308,13 @@ describe('backend flux sets', () => {
     expect((await live.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
   });
 
-  it('a retry that loses the conditional write returns the row that won', async () => {
+  it('a retry that loses the conditional write returns the row that won, read strongly', async () => {
     const { doc, live } = setup();
     const id = ulid();
     const winner = { ...input(id), count: 7 };
-    doc.interceptNextPutIf('u#local', sk.flux('2026-10-20', id), () =>
+    doc.interceptNextPutIf('u#local', sk.flux('2026-10-20', id), () => {
+      // The winner isn't visible to an eventual read yet — only a consistent one finds it.
+      doc.staleNextQueries('u#local', sk.flux('2026-10-20', id), null, 5);
       doc.putNow({
         PK: 'u#local',
         SK: sk.flux('2026-10-20', id),
@@ -323,11 +325,11 @@ describe('backend flux sets', () => {
         createdAt: 1,
         updatedAt: 1,
         deletedAt: null,
-      }),
-    );
+      });
+    });
     const got = await live.recordFluxSet(input(id));
     expect(got.count).toBe(7);
-    expect(await live.listFluxSets()).toHaveLength(1);
+    expect(await live.listFluxSets()).toEqual([]); // an eventual read still misses it — the case above
   });
 });
 

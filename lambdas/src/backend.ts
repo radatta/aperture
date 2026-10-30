@@ -543,7 +543,8 @@ export class BackendClient implements ApiClient {
       repTaskId: input.repTaskId,
     };
     if (await this.repo.putFluxSetIfAbsent(set)) return set;
-    return (await this.repo.findFluxSet(input.id)) ?? set; // a concurrent retry won the write
+    // A concurrent retry won the write — read it back strongly, or an eventual read can miss the row.
+    return (await this.repo.findFluxSet(input.id, { consistent: true })) ?? set;
   }
   async listFluxSets(filter?: FluxSetFilter): Promise<FluxSet[]> {
     const err = fluxFilterError(filter);

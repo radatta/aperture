@@ -56,7 +56,9 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   it as `created` with `via: api:recordFluxSet` _before_ the call — a set the server stored is never unrecorded.
   Cleanup, the sweep and the read-back go by that `via`: a Flux id is read with `listFluxSets` and deleted with
   `deleteFluxSet` (a soft-delete), never through the task methods (`deleteTask` refuses a Flux id), and never
-  through the History tab, which can't tell one set from another.
+  through the History tab, which can't tell one set from another. Its `day` is the app's day (the test user's
+  `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's one
+  non-ledger write: a test user who never opened Flux has the disclaimer accepted (a Settings field, logged).
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't

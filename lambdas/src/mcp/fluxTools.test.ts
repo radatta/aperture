@@ -59,7 +59,7 @@ interface SetsOut {
     countedTowardRollRep: boolean;
   }[];
   summary: { exerciseId: string; sets: number; first?: number; latest?: number }[];
-  today?: string;
+  daySummary?: string;
   note: string;
 }
 
@@ -107,7 +107,7 @@ describe('list_flux_sets', () => {
     });
     const day = (await run('list_flux_sets', { from: '2026-10-20', to: '2026-10-20' })) as SetsOut;
     expect(day.sets).toHaveLength(2);
-    expect(day.today).toBe('1 set rotation, 1 upper trap');
+    expect(day.daySummary).toBe('1 set rotation, 1 upper trap');
     const one = (await run('list_flux_sets', { exerciseId: 'upper-trap-stretch' })) as SetsOut;
     expect(one.sets.map((s) => s.side)).toEqual(['left']);
   });

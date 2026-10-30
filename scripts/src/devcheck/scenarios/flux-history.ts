@@ -3,7 +3,7 @@
 // the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
 // records it before the call) — never through the UI, which can't tell this set from another.
 import { randomInt } from 'node:crypto';
-import type { Scenario } from '../scenario';
+import { laDay, type Scenario } from '../scenario';
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -27,9 +27,12 @@ export const fluxHistory: Scenario = {
       title: 'recordFluxSet as the test user, read back',
       async run(ctx) {
         const setId = devUlid();
+        // The app's day, not the calendar's: before the user's day start (4am) a set belongs to yesterday,
+        // and History and the night line both read the app's today.
+        const { dayStartHour } = await ctx.api.reads.getSettings();
         await ctx.api.writes.recordFluxSet({
           id: setId,
-          day: ctx.dates.today,
+          day: laDay(new Date(Date.now() - dayStartHour * 3_600_000)),
           exerciseId: 'chin-tuck',
           kind: 'holdAtTarget',
           side: null,
@@ -54,7 +57,10 @@ export const fluxHistory: Scenario = {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
         // the app makes (the user's own one-tap gate), logged here.
+        // Settings may still be loading when the shell is up, so wait for one of the two to render first.
         const gate = ctx.page.getByRole('button', { name: /I understand/ });
+        const tabs = ctx.page.getByRole('navigation', { name: 'Flux sections' });
+        await gate.or(tabs).first().waitFor({ timeout: 15_000 });
         if (await gate.isVisible()) {
           ctx.log('accepting the Flux disclaimer for the test user');
           await gate.click();

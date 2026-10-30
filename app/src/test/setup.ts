@@ -7,6 +7,8 @@ import { resetInputModality } from '../lib/useDisclosure';
 import { forgetPlaidScript } from '../modules/finances/usePlaidLink';
 import { forgetAudio } from '../modules/pomodoro/chime';
 import { resetFluxEngineFactory } from '../modules/flux/engine/engine';
+import { resetFluxOutboxStore } from '../modules/flux/fluxOutbox';
+import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
 
 // Files share one jsdom and one module graph (isolate: false), so whatever a test leaves behind is the
 // next file's starting state. One hook, not several: after-hooks run in reverse, and the unmount (RTL
@@ -23,6 +25,8 @@ afterEach(() => {
   forgetPlaidScript();
   forgetAudio();
   resetFluxEngineFactory();
+  resetFluxOutboxStore();
+  resetFluxOutboxSends();
   localStorage.clear();
   sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');

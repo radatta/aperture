@@ -111,7 +111,7 @@ export const FLUX_TOOLS: Tool[] = [
     name: 'list_flux_sets',
     description: [
       'Saved Flux neck-rehab sets (webcam-tracked exercises), newest first — "how\'s my neck rehab going?". Each row has the exercise, side (right/left for the three one-sided stretches), count, and its one number (`metric`: avg peak degrees for ROM reps, holds done, avg error degrees for joint position — lower is better).',
-      '`summary` gives per-exercise first → latest over the window, and `today` a one-line summary when the window is a single day.',
+      '`summary` gives per-exercise first → latest over the window, and `daySummary` a one-line summary when the window is a single day (from = to).',
       'Optional from/to ISO dates (pass BOTH or NEITHER) and exerciseId (see list_flux_exercises).',
       HONESTY,
       'Read-only: sets are recorded by the app; nothing here edits or deletes.',
@@ -145,7 +145,9 @@ export const FLUX_TOOLS: Tool[] = [
       return {
         sets: sets.map(setRow),
         summary: summary(sets),
-        ...(from !== undefined && from === to ? { today: summarizeSets(sets) || 'No sets.' } : {}),
+        ...(from !== undefined && from === to
+          ? { daySummary: summarizeSets(sets) || 'No sets.' }
+          : {}),
         note: HONESTY,
       };
     },

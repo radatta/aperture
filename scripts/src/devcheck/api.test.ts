@@ -39,6 +39,7 @@ describe('createApiClient', () => {
     });
     expect(Object.keys(api.reads).sort()).toEqual([
       'getFluxSet',
+      'getSettings',
       'getTask',
       'listBacklog',
       'listCategories',
