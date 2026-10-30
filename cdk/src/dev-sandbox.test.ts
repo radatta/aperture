@@ -108,6 +108,19 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
     );
   });
 
+  it('lets the deploy and execution roles read the default bootstrap version, and nothing else of it (transitional)', () => {
+    // The dev stacks keep BootstrapVersion's previous value until dev-cutover, resolved with the caller's credentials.
+    const DEFAULT_VERSION = 'parameter/cdk-bootstrap/hnb659fds/version';
+    for (const kind of ['deploy', 'cfn-exec']) {
+      const reading = roleStatements(kind).filter((s) => text(s.Resource).includes(DEFAULT_VERSION));
+      expect(reading.length, kind).toBeGreaterThan(0);
+      for (const s of reading) expect(actionsOf(s).sort()).toEqual(['ssm:GetParameter', 'ssm:GetParameters']);
+    }
+    for (const kind of ['lookup', 'file-publishing'])
+      expect(text(roleStatements(kind))).not.toContain(DEFAULT_VERSION);
+    expect(text(boundaryStatements())).not.toContain(DEFAULT_VERSION);
+  });
+
   it('lets the deploy role touch only the two dev stacks, and change them only with the sandbox execution role', () => {
     const stmts = roleStatements('deploy');
     const cfn = stmts.filter((s) => actionsOf(s).some((a) => a.startsWith('cloudformation:')));
