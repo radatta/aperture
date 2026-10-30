@@ -369,6 +369,38 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(starts(fake().calls)).toBe(1); // self-paced: straight away
   });
 
+  it('set two’s duration is from its own start: the rest before it isn’t counted', async () => {
+    const { fake, onSetCompleted, advance } = await running();
+    advance(20_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 20 }),
+      0,
+    );
+    advance(30_000); // the rest, then set two starts
+    advance(15_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 15 }),
+      1,
+    );
+  });
+
+  it('nor its lead-in, for a timed kind', async () => {
+    const { fake, onSetCompleted, advance } = await running({
+      exerciseId: 'joint-position-sense',
+      kind: 'reposition',
+    });
+    act(() => fake().event(DONE));
+    advance(33_000); // the rest and the lead-in
+    advance(12_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 12 }),
+      1,
+    );
+  });
+
   it('a timed kind gets its lead-in after the rest', async () => {
     const { v, fake, advance } = await running({
       exerciseId: 'joint-position-sense',

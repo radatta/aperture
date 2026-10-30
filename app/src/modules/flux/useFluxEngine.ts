@@ -47,7 +47,7 @@ export interface FluxSetDraft {
   readonly rom: Euler;
   readonly calibrated: boolean;
   readonly delegate: Delegate | null;
-  readonly durationSec: number; // from the set's start (selection, Start/Again, or the last set) to done
+  readonly durationSec: number; // from the set's start (Start, Again, the lead-in or the rest ending; else selection) to done
   readonly completedAt: number; // epoch ms
   readonly stoppedEarly: boolean; // saved from a set ended before its prescription (D55)
   readonly planned: number | null; // plannedCount at set time
@@ -194,6 +194,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     autoStep.current = null;
   }, []);
 
+  // Every set's clock starts with its start, so set two's duration leaves out the rest before it.
+  const startSet = useCallback(() => {
+    setStartRef.current = performance.now();
+    engine.control({ type: 'start' });
+  }, [engine]);
+
   // The rest is over (or Again cut it short) — assigned below, once `arm` exists.
   const nextSetRef = useRef<(index: number, now: boolean) => void>(() => {});
 
@@ -206,13 +212,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       autoTimer.current = setTimeout(
         () => {
           autoStep.current = null;
-          if (step.kind === 'start') engine.control({ type: 'start' });
+          if (step.kind === 'start') startSet();
           else nextSetRef.current(step.index, false);
         },
         step.kind === 'start' ? SET_LEAD_MS : SET_REST_MS,
       );
     },
-    [engine, clearAuto],
+    [startSet, clearAuto],
   );
 
   // Flip a sided stretch, say the set, and start it from a clean slate (stop, then start). Timed kinds get
@@ -224,7 +230,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     say({ type: 'nextSet', number: index + 1, otherSide: o.side !== null });
     engine.control({ type: 'stop' });
     if (READY_KINDS.has(o.kind) && !now) arm({ kind: 'start' });
-    else engine.control({ type: 'start' });
+    else startSet();
   };
 
   const resetFace = () => {
@@ -299,7 +305,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           if (startOnCalibrate.current) {
             startOnCalibrate.current = false;
             clearAuto();
-            return engine.control({ type: 'start' });
+            return startSet();
           }
           say({ type: 'getReady' });
           return arm({ kind: 'start' });
@@ -545,9 +551,10 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         startOnCalibrate.current = true;
         return engine.calibrate();
       }
-      engine.control(c);
+      if (c.type === 'start') startSet();
+      else engine.control(c);
     },
-    [engine, clearAuto],
+    [engine, clearAuto, startSet],
   );
   const setForcedCpu = useCallback(
     (on: boolean) => {
