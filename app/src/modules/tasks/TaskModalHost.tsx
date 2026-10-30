@@ -32,7 +32,9 @@ export function TaskModalHost({
   const { triggerRef, onOpen, onClose } = modal;
   const openTask = useCallback<OpenTask>(
     (task, intent, trigger) => {
-      triggerRef.current = trigger;
+      // A trigger inside the dialog (a parent's name, a part's row) goes when it closes: the row that
+      // first opened the modal keeps the return-focus role.
+      if (!trigger?.closest('dialog')) triggerRef.current = trigger;
       returning.current = false;
       seenLive.current = false;
       setTarget({ task, intent });

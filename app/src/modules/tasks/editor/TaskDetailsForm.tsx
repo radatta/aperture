@@ -27,6 +27,9 @@ import { NotesField } from '../notes/NotesField';
 import { notesValue } from '../notes/parseNotes';
 import { scopeLabel, suggestedBuffer } from '../taskMath';
 
+// Where the form's edits stand, for the modal's exit paths (TaskModal).
+export type EditState = 'clean' | 'dirty' | 'saving';
+
 // The details editor inside the task modal — absorbs ScopePanel (estimate/buffer/category) and the
 // in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
 // Estimate + buffer (the working estimate) edit at any open status — rescoping mid-task is fine, since
@@ -40,13 +43,13 @@ export function TaskDetailsForm({
   task: live,
   parts,
   parent,
-  onDirtyChange,
+  onStateChange,
   estimateRef,
 }: {
   task: Task;
   parts?: { estimateMin: number | null; unscoped: number }; // set when it's a parent
   parent?: Pick<Task, 'title' | 'dueDay' | 'dueTime'>; // set when it's a part
-  onDirtyChange?: (dirty: boolean) => void;
+  onStateChange?: (state: EditState) => void;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
   // What the form compares against: the task the last Save's final write returned, until the refetch
@@ -119,10 +122,11 @@ export function TaskDetailsForm({
   const dirty =
     titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;
 
-  // Bubble dirtiness up so the modal's exit paths (Esc/backdrop/Close) can confirm before discarding.
-  // Not while saving: those edits are already on their way, so "Discard" would be a lie.
-  const reportDirty = dirty && !saving;
-  useEffect(() => onDirtyChange?.(reportDirty), [reportDirty, onDirtyChange]);
+  // What the modal's exit paths (Esc/backdrop/Close, opening another task) act on: 'dirty' confirms
+  // before discarding; 'saving' waits for the write — those edits are on their way, so "Discard" would
+  // be a lie, and leaving would lose them if it fails.
+  const state: EditState = saving ? 'saving' : dirty ? 'dirty' : 'clean';
+  useEffect(() => onStateChange?.(state), [state, onStateChange]);
 
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
   const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes };

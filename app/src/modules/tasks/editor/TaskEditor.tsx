@@ -39,6 +39,7 @@ import { BreakDownForm } from './BreakDownForm';
 import { DeleteConfirm, DropConfirm } from './DeleteConfirm';
 import { SplitForm } from './SplitForm';
 import { TaskDetailsForm } from './TaskDetailsForm';
+import type { EditState } from './TaskDetailsForm';
 
 export type TaskEditorIntent = 'view' | 'finish' | 'scope';
 type Reveal = 'split' | 'parts' | 'calendar' | 'drop' | 'delete' | null;
@@ -71,7 +72,7 @@ export function TaskEditor({
   intent,
   onClose,
   onRequestClose,
-  onDirtyChange,
+  onStateChange,
   estimateRef,
   actualRef,
 }: {
@@ -79,7 +80,7 @@ export function TaskEditor({
   intent: TaskEditorIntent;
   onClose: () => void; // real close — after Mark done / Drop, no guard (Save stays open)
   onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
-  onDirtyChange: (dirty: boolean) => void;
+  onStateChange: (state: EditState) => void;
   estimateRef?: Ref<HTMLInputElement>;
   actualRef?: Ref<HTMLInputElement>;
 }) {
@@ -101,7 +102,18 @@ export function TaskEditor({
   useEffect(() => {
     if (markDone.error) markDoneErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [markDone.error]);
-  const [reveal, setReveal] = useState<Reveal>(null);
+  const [details, setDetails] = useState<EditState>('clean');
+  // Typed but unsent text in the open reveal (part lines, split titles) — cleared with the reveal.
+  const [revealDirty, setRevealDirty] = useState(false);
+  const [reveal, setReveal_] = useState<Reveal>(null);
+  const setReveal = (r: Reveal) => {
+    setReveal_(r);
+    setRevealDirty(false);
+  };
+  // A save in flight outranks a dirty reveal: the exit waits for it, then asks — never leaves mid-write.
+  const state: EditState =
+    details === 'saving' ? 'saving' : details === 'dirty' || revealDirty ? 'dirty' : 'clean';
+  useEffect(() => onStateChange(state), [state, onStateChange]);
   // Parent + parts (parts.ts): a parent's parts, or a part's parent and siblings.
   const parts = partsOf(allTasks, task.id);
   const isParent = parts.length > 0;
@@ -214,7 +226,7 @@ export function TaskEditor({
         task={task}
         parts={isParent ? summary : undefined}
         parent={parent}
-        onDirtyChange={onDirtyChange}
+        onStateChange={setDetails}
         estimateRef={estimateRef}
       />
 
@@ -233,7 +245,13 @@ export function TaskEditor({
             )}
           </div>
           {reveal === 'parts' && (
-            <BreakDownForm task={task} isParent onDone={closeParts} onCancel={closeParts} />
+            <BreakDownForm
+              task={task}
+              isParent
+              onDone={closeParts}
+              onCancel={closeParts}
+              onDirtyChange={setRevealDirty}
+            />
           )}
           <ul className="flex flex-col gap-1">
             {parts.map((p) => (
@@ -491,7 +509,13 @@ export function TaskEditor({
           </Button>
         </div>
         {reveal === 'parts' && !isParent && (
-          <BreakDownForm task={task} isParent={false} onDone={closeParts} onCancel={closeParts} />
+          <BreakDownForm
+            task={task}
+            isParent={false}
+            onDone={closeParts}
+            onCancel={closeParts}
+            onDirtyChange={setRevealDirty}
+          />
         )}
         {reveal === 'split' && (
           <SplitForm
@@ -500,6 +524,7 @@ export function TaskEditor({
             // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
             onDone={(finish) => (finish === 'done' ? onClose() : closeSplit())}
             onCancel={closeSplit}
+            onDirtyChange={setRevealDirty}
           />
         )}
         {reveal === 'drop' && (

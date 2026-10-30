@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, dayKey, hhmmOfEpoch, todayKey } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
@@ -451,7 +451,7 @@ describe('parent + parts', () => {
   });
 
   it('opening another task from inside the editor asks first when there are unsaved edits — never carries them over', async () => {
-    const { api, a, b } = await seeded(false);
+    const { api, b } = await seeded(false);
     renderApp({ api, path: '/tasks?lens=week' });
     const user = userEvent.setup();
     const row = await waitFor(() => rowOf('P2'));
@@ -480,7 +480,97 @@ describe('parent + parts', () => {
     d = within(await screen.findByRole('dialog', { name: 'Task: read' }));
     expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('read');
     expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
-    expect(a.id).toBeTruthy();
+  });
+
+  // A save whose result the test decides: true lands it, false fails it.
+  function gateTitle(api: ReturnType<typeof freshApi>) {
+    let release!: (ok: boolean) => void;
+    const gate = new Promise<boolean>((r) => (release = r));
+    const original = api.setTaskTitle.bind(api);
+    vi.spyOn(api, 'setTaskTitle').mockImplementation(async (id, title) => {
+      if (!(await gate)) throw new Error('offline');
+      return original(id, title);
+    });
+    return (ok: boolean) => act(async () => release(ok));
+  }
+
+  async function editDraftAndSave(user: ReturnType<typeof userEvent.setup>) {
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.clear(d.getByLabelText('Title'));
+    await user.type(d.getByLabelText('Title'), 'draft 2');
+    await user.click(d.getByRole('button', { name: 'Save' }));
+    return d;
+  }
+
+  it('a switch asked for mid-save waits; a failed save keeps the edit, the message and the task', async () => {
+    const { api, b } = await seeded(false);
+    const release = gateTitle(api);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const d = await editDraftAndSave(user);
+
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+
+    await release(false);
+    expect(await d.findByText('Couldn’t save — try again.')).toBeTruthy();
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('draft 2');
+    expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Task: P2' })).toBeNull();
+    expect((await api.getTask(b.id))!.title).toBe('draft');
+  });
+
+  it('a switch asked for mid-save goes once the save lands', async () => {
+    const { api, b } = await seeded(false);
+    const release = gateTitle(api);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const d = await editDraftAndSave(user);
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    await release(true);
+    expect(await screen.findByRole('dialog', { name: 'Task: P2' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+    expect((await api.getTask(b.id))!.title).toBe('draft 2');
+  });
+
+  it('Close mid-save closes once the save lands, and stays (with the failure) if it doesn’t', async () => {
+    for (const ok of [false, true]) {
+      const { api } = await seeded(false);
+      const release = gateTitle(api);
+      const { unmount } = renderApp({ api, path: '/tasks?lens=week' });
+      const user = userEvent.setup();
+      const d = await editDraftAndSave(user);
+      await user.click(d.getByRole('button', { name: 'Close' }));
+      expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+      await release(ok);
+      if (ok)
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: 'Task: draft' })).toBeNull(),
+        );
+      else {
+        expect(await d.findByText('Couldn’t save — try again.')).toBeTruthy();
+        expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+      }
+      unmount();
+    }
+  });
+
+  it('after a switch the new task gets focus, and Close returns it to the row that opened the modal', async () => {
+    const { api } = await seeded(false);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    const opener = within(row).getByRole('button', { name: 'draft' });
+    await user.click(opener);
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    const parent = await screen.findByRole('dialog', { name: 'Task: P2' });
+    expect(document.activeElement).toBe(parent);
+    await user.click(within(parent).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   it('a linked parent’s card reads “due marker”, not “on calendar”', async () => {

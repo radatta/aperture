@@ -5,22 +5,28 @@ import { Modal } from '../../components/Modal';
 import { Text } from '../../components/Text';
 import { TaskEditor } from './editor/TaskEditor';
 import type { TaskEditorIntent } from './editor/TaskEditor';
+import type { EditState } from './editor/TaskDetailsForm';
 import { TaskModalContext, useOpenTask } from './task-modal-context';
 import type { OpenTask } from './task-modal-context';
 
-// Wraps the Modal primitive around the task editor. Owns three things the editor body shouldn't:
+// What the user asked to leave for: another task (opened from inside this one), or out.
+type Exit = Parameters<OpenTask> | 'close';
+
+// Wraps the Modal primitive around the task editor. Owns what the editor body shouldn't:
 //   - initial focus: the dialog itself (initialFocus="dialog"), so a title tap focuses no field and
 //     raises no iPhone keyboard; finish/scope then move it to Actual/Estimate (effect lives HERE, a
 //     parent of Modal, so it runs AFTER Modal's showModal() — child effects fire first, the ordering
 //     BulkAddDialog relies on);
 //   - the unsaved-changes guard: Esc / backdrop / Close all route through `requestClose`, which pops a
-//     confirm dialog when the details form is dirty. Mark done and Drop call `onClose` directly
+//     confirm dialog when the editor is dirty (details, or text typed into Add parts / Split). An exit
+//     asked for mid-save waits for the write, and is dropped if it fails (the failure stays shown).
+//     Mark done and Drop call `onClose` directly
 //     (nothing unsaved), so they never prompt; Delete closes via TaskModalHost once the task leaves
 //     the list; Save keeps the modal open;
 //   - resetting that guard state when the modal closes (the editor also unmounts, reseeding its form);
 //   - the same guard on opening another task from inside this one (a parent's name, a part's row): its
 //     unsaved edits are asked about first, and the editor remounts per task, so one task's edits can
-//     never show on — or be saved onto — another.
+//     never show on — or be saved onto — another. The dialog scrolls back to the top on a switch.
 export function TaskModal({
   task,
   open,
@@ -34,19 +40,32 @@ export function TaskModal({
 }) {
   const estimateRef = useRef<HTMLInputElement>(null);
   const actualRef = useRef<HTMLInputElement>(null);
-  const [dirty, setDirty] = useState(false);
+  const [state, setState] = useState<EditState>('clean');
   const [confirming, setConfirming] = useState(false);
-  // Another task asked for while this one has unsaved edits — opened only once they're discarded.
-  const [pending, setPending] = useState<Parameters<OpenTask> | null>(null);
+  // An exit held back: by the confirm (dirty), or until a save in flight lands (saving).
+  const [pending, setPending] = useState<Exit | null>(null);
   const openTask = useOpenTask();
-  const guardedOpen = useCallback<OpenTask>(
-    (...next) => {
-      if (!dirty) return openTask?.(...next);
-      setPending(next);
-      setConfirming(true);
-    },
-    [dirty, openTask],
+  const run = useCallback(
+    (next: Exit) => (next === 'close' ? onClose() : openTask?.(...next)),
+    [onClose, openTask],
   );
+  const exit = useCallback(
+    (next: Exit) => {
+      if (state === 'clean') return run(next);
+      setPending(next);
+      if (state === 'dirty') setConfirming(true);
+    },
+    [state, run],
+  );
+  const guardedOpen = useCallback<OpenTask>((...next) => exit(next), [exit]);
+
+  // The save landed: clean → go on. Still dirty → it failed (or more was typed): stay, with the
+  // failure showing — the next exit asks as usual.
+  useEffect(() => {
+    if (!pending || confirming || state === 'saving') return;
+    setPending(null);
+    if (state === 'clean') run(pending);
+  }, [state, pending, confirming, run]);
 
   useEffect(() => {
     if (!open) return;
@@ -56,17 +75,13 @@ export function TaskModal({
 
   useEffect(() => {
     if (!open) {
-      setDirty(false);
+      setState('clean');
       setConfirming(false);
       setPending(null);
     }
   }, [open]);
 
-  const requestClose = () => {
-    setPending(null); // a close, not a switch
-    if (dirty) setConfirming(true);
-    else onClose();
-  };
+  const requestClose = () => exit('close');
   const keepEditing = () => {
     setConfirming(false);
     setPending(null);
@@ -80,6 +95,7 @@ export function TaskModal({
         closeOnBackdrop
         initialFocus="dialog"
         label={`Task: ${task.title}`}
+        contentKey={task.id}
       >
         {open && (
           <TaskModalContext value={guardedOpen}>
@@ -89,7 +105,7 @@ export function TaskModal({
               intent={intent}
               onClose={onClose}
               onRequestClose={requestClose}
-              onDirtyChange={setDirty}
+              onStateChange={setState}
               estimateRef={estimateRef}
               actualRef={actualRef}
             />
@@ -114,10 +130,9 @@ export function TaskModal({
               variant="gold"
               onClick={() => {
                 setConfirming(false);
-                if (!pending) return onClose();
-                setDirty(false);
+                setState('clean');
                 setPending(null);
-                openTask?.(...pending);
+                run(pending ?? 'close');
               }}
             >
               Discard

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { canTransitionTask, STANDALONE_PART_TITLE } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
@@ -25,11 +25,13 @@ export function SplitForm({
   parentTitle,
   onDone,
   onCancel,
+  onDirtyChange,
 }: {
   task: Task;
   parentTitle?: string; // set when it's already a part
   onDone: (finish: Finish) => void;
   onCancel: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const standalone = !task.parentId;
   const split = useSplitTask();
@@ -57,6 +59,17 @@ export function SplitForm({
     if (!restTyped) setRestEstimate_(str(splitDefaults(task, next).rest));
     setFinish_(next);
   };
+  // Typed but not split: leaving the modal asks first, as with unsaved details. The mode toggle alone
+  // isn't an edit, and neither is the rest's estimate it re-defaults.
+  const [initial] = useState(() => ({ deliverable, title, actual, estimate, restTitle }));
+  const dirty =
+    deliverable !== initial.deliverable ||
+    title !== initial.title ||
+    actual !== initial.actual ||
+    estimate !== initial.estimate ||
+    restTitle !== initial.restTitle ||
+    (restTyped && restEstimate !== str(splitDefaults(task, finish).rest));
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
 
   const done = finish === 'done';
   // Where the rest lands — the server rule, stated generally: plan rows are loaded per day here, and a

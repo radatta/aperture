@@ -5,6 +5,7 @@ import {
   DEFAULT_EVENT_MIN,
   fmtClock12,
   localEpochFromDayTime,
+  timeKeyOfInput,
 } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
@@ -41,6 +42,8 @@ export function AddToCalendarForm({
       : '09:00');
 
   const [calIdx, setCalIdx] = useState<number>(-1);
+  // A cleared Start or Minutes would send a NaN or zero-length block — said, never sent.
+  const canAdd = !!time && durationMin > 0;
 
   if (!task.dueDay) return null;
   if (calendars.length === 0) {
@@ -73,7 +76,7 @@ export function AddToCalendarForm({
           label="Start"
           type="time"
           value={time}
-          onChange={(e) => setTime(e.target.value)}
+          onChange={(e) => setTime(timeKeyOfInput(e.target.value))}
           className="w-32"
         />
         <Field
@@ -91,11 +94,17 @@ export function AddToCalendarForm({
           Due at {fmtClock12(task.dueTime)} — the block ends there.
         </Text>
       )}
+      {!canAdd && (
+        <Text size="xs" tone="muted">
+          Pick a start time and a length first.
+        </Text>
+      )}
       <div className="flex gap-2">
         <Button
           size="sm"
-          disabled={insert.isPending}
+          disabled={insert.isPending || !canAdd}
           onClick={async () => {
+            if (!canAdd) return;
             const cal = calendars[idx]!;
             const startMs = localEpochFromDayTime(task.dueDay!, time);
             try {

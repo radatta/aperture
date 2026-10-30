@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { parseBulkTasks } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
@@ -34,16 +34,22 @@ export function BreakDownForm({
   isParent,
   onDone,
   onCancel,
+  onDirtyChange,
 }: {
   task: Task;
   isParent: boolean;
   onDone: () => void;
   onCancel: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const create = useCreateTasks();
-  const [text, setText] = useState(() =>
+  const [prefill] = useState(() =>
     !isParent && task.estimateMin != null ? `${task.title} | ~${task.estimateMin}` : '',
   );
+  const [text, setText] = useState(prefill);
+  // Typed lines not yet added: leaving the modal asks first, as with unsaved details.
+  const dirty = text !== prefill;
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   const parsed = parseBulkTasks(text, []);
   const errors = parsed.lines.flatMap((l) => lineErrors(l).map((e) => `Line ${l.line}: ${e}`));
   const count = parsed.lines.length;
