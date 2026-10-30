@@ -104,7 +104,6 @@ export function AddToCalendarForm({
           size="sm"
           disabled={insert.isPending || !canAdd}
           onClick={async () => {
-            if (!canAdd) return;
             const cal = calendars[idx]!;
             const startMs = localEpochFromDayTime(task.dueDay!, time);
             try {

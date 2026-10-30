@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { parseBulkTasks } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
@@ -6,6 +6,8 @@ import { Text } from '../../../components/Text';
 import { Textarea } from '../../../components/Textarea';
 import { useCreateTasks } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
+import { useEditSlot } from './editState';
+import type { EditSlots } from './editState';
 
 // A line's parse errors in this form's terms, plus the tokens a part can't take: its category is its
 // parent's, and the deadline belongs to the parent (a part's own time is set on the part, as when its
@@ -34,22 +36,25 @@ export function BreakDownForm({
   isParent,
   onDone,
   onCancel,
-  onDirtyChange,
+  edits,
 }: {
   task: Task;
   isParent: boolean;
   onDone: () => void;
   onCancel: () => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  edits?: EditSlots;
 }) {
   const create = useCreateTasks();
   const [prefill] = useState(() =>
     !isParent && task.estimateMin != null ? `${task.title} | ~${task.estimateMin}` : '',
   );
   const [text, setText] = useState(prefill);
-  // Typed lines not yet added: leaving the modal asks first, as with unsaved details.
+  // Set here, not read from the mutation: TanStack reports isPending a tick later, and the modal
+  // reads the slot on the very next event.
+  const [sending, setSending] = useState(false);
+  // Typed lines not yet added ask before an exit; lines on their way hold it.
   const dirty = text !== prefill;
-  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  useEditSlot(edits, 'reveal', sending ? 'saving' : dirty ? 'dirty' : 'clean');
   const parsed = parseBulkTasks(text, []);
   const errors = parsed.lines.flatMap((l) => lineErrors(l).map((e) => `Line ${l.line}: ${e}`));
   const count = parsed.lines.length;
@@ -57,7 +62,8 @@ export function BreakDownForm({
   const canSubmit = count > 0 && errors.length === 0;
 
   async function submit() {
-    if (!canSubmit || create.isPending) return;
+    if (!canSubmit || sending) return;
+    setSending(true);
     try {
       await create.mutateAsync(
         parsed.lines.map((l) => ({
@@ -71,6 +77,8 @@ export function BreakDownForm({
       onDone();
     } catch {
       // Said inline below.
+    } finally {
+      setSending(false);
     }
   }
 
@@ -109,7 +117,7 @@ export function BreakDownForm({
         <Button
           size="sm"
           disabled={!canSubmit}
-          aria-disabled={create.isPending}
+          aria-disabled={sending}
           onClick={submit}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >

@@ -6,6 +6,8 @@ import type { ApiClient, Task } from '@aperture/shared';
 import { renderWithProviders } from '../../../test/utils';
 import { createStubClient } from '../../../data/stubClient';
 import { TaskDetailsForm } from './TaskDetailsForm';
+import { editState } from './editState';
+import type { EditSlots } from './editState';
 import { TaskEditor } from './TaskEditor';
 import type { TaskEditorIntent } from './TaskEditor';
 
@@ -13,20 +15,24 @@ function api(): ApiClient {
   return createStubClient({ seed: false, storageKey: `editor-${Math.random()}` });
 }
 
+// What the modal reads: each form's slot, folded.
+const slots = (): EditSlots => ({ details: 'clean', reveal: 'clean', changed: vi.fn() });
+
 function renderEditor(client: ApiClient, task: Task, intent: TaskEditorIntent = 'view') {
-  const onClose = vi.fn();
-  const onStateChange = vi.fn();
+  const onFinished = vi.fn();
+  const edits = slots();
   renderWithProviders(
     <TaskEditor
       task={task}
       intent={intent}
-      onClose={onClose}
+      edits={edits}
+      onFinished={onFinished}
       onRequestClose={vi.fn()}
-      onStateChange={onStateChange}
+      onLeaveReveal={(go) => go()}
     />,
     { api: client },
   );
-  return { onClose, onStateChange, user: userEvent.setup() };
+  return { onFinished, edits, user: userEvent.setup() };
 }
 
 // A synthetic task for pure-render assertions that don't touch the store.
@@ -73,7 +79,7 @@ describe('TaskEditor', () => {
     const client = api();
     const t = await client.createTask({ title: 'Old name' });
     const setTitle = vi.spyOn(client, 'setTaskTitle');
-    const { onClose, user } = renderEditor(client, t);
+    const { onFinished, user } = renderEditor(client, t);
 
     const field = screen.getByLabelText('Title');
     await user.clear(field);
@@ -85,7 +91,7 @@ describe('TaskEditor', () => {
     // Save keeps the modal open and says so.
     expect(await screen.findByText('Saved')).toBeTruthy();
     expect(screen.getByLabelText<HTMLTextAreaElement>('Title').value).toBe('New name');
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onFinished).not.toHaveBeenCalled();
   });
 
   it('disables Save when the title is blank', async () => {
@@ -101,7 +107,7 @@ describe('TaskEditor', () => {
     const t = await client.createTask({ title: 'Edit me', estimateMin: 30 });
     const setDue = vi.spyOn(client, 'setTaskDue');
     const setEst = vi.spyOn(client, 'setTaskEstimate');
-    const { onClose, user } = renderEditor(client, t);
+    const { onFinished, user } = renderEditor(client, t);
 
     fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -112,7 +118,7 @@ describe('TaskEditor', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Due').value).toBe('2026-10-01');
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save.getAttribute('aria-disabled')).toBe('true'); // nothing left to save
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onFinished).not.toHaveBeenCalled();
 
     // The next edit replaces "Saved" with "Unsaved changes".
     fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-02' } });
@@ -130,13 +136,13 @@ describe('TaskEditor', () => {
     vi.spyOn(client, 'setTaskTitle').mockImplementation((id, title) =>
       gate.then(() => original(id, title)),
     );
-    const { onStateChange, user } = renderEditor(client, t);
+    const { edits, user } = renderEditor(client, t);
 
     const field = screen.getByLabelText('Title');
     await user.type(field, ' one');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     // Mid-save the form says so, not "dirty" (a "Discard" now would be a lie)…
-    await waitFor(() => expect(onStateChange).toHaveBeenLastCalledWith('saving'));
+    await waitFor(() => expect(editState(edits)).toBe('saving'));
     await user.type(field, ' two'); // …but typing is still allowed, and must survive the save.
     release();
 
@@ -198,11 +204,11 @@ describe('TaskEditor', () => {
     const client = api();
     const t = await client.createTask({ title: 'Open', dueDay: '2026-10-09', dueTime: '16:00' });
     let push: (next: Task) => void = () => {};
-    const state = vi.fn();
+    const edits = slots();
     function Host() {
       const [live, setLive] = useState(t);
       push = setLive;
-      return <TaskDetailsForm task={live} onStateChange={state} />;
+      return <TaskDetailsForm task={live} edits={edits} />;
     }
     renderWithProviders(<Host />, { api: client });
     const user = userEvent.setup();
@@ -219,7 +225,7 @@ describe('TaskEditor', () => {
     act(() => push({ ...t, title: 'Again', dueTime: '19:00', updatedAt: t.updatedAt + 2 }));
     expect(field('Title').value).toBe('Again');
     expect(field('Due time').value).toBe('19:00');
-    await waitFor(() => expect(state).toHaveBeenLastCalledWith('clean'));
+    await waitFor(() => expect(editState(edits)).toBe('clean'));
   });
 
   it('an open, untouched notes draft follows a change made elsewhere', async () => {
@@ -369,12 +375,21 @@ describe('TaskEditor', () => {
     fireEvent.change(screen.getByLabelText('Start'), { target: { value: '' } });
     expect(add.hasAttribute('disabled')).toBe(true);
     expect(screen.getByText('Pick a start time and a length first.')).toBeTruthy();
-    fireEvent.click(add);
-    expect(insert).not.toHaveBeenCalled();
     // A start with seconds (Safari's time field) is taken as HH:MM.
     fireEvent.change(screen.getByLabelText('Start'), { target: { value: '10:30:00' } });
     expect(screen.getByLabelText<HTMLInputElement>('Start').value).toBe('10:30');
     expect(add.hasAttribute('disabled')).toBe(false);
+    // A cleared length is a zero-length block: the same.
+    fireEvent.change(screen.getByLabelText('Minutes'), { target: { value: '' } });
+    expect(add.hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('Pick a start time and a length first.')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Minutes'), { target: { value: '30' } });
+    expect(screen.queryByText('Pick a start time and a length first.')).toBeNull();
+    await user.click(add);
+    await waitFor(() => expect(insert).toHaveBeenCalledTimes(1));
+    const sent = insert.mock.calls[0]![0];
+    expect(sent.endMs - sent.startMs).toBe(30 * 60_000);
+    expect(Number.isFinite(sent.startMs)).toBe(true);
   });
 
   it('says so when the calendar retry itself fails', async () => {
@@ -393,7 +408,7 @@ describe('TaskEditor', () => {
     const client = api();
     const t = await client.createTask({ title: 'Flaky' });
     vi.spyOn(client, 'setTaskDue').mockRejectedValue(new Error('offline'));
-    const { onClose, user } = renderEditor(client, t);
+    const { onFinished, user } = renderEditor(client, t);
 
     fireEvent.change(screen.getByLabelText('Due'), { target: { value: '2026-10-01' } });
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -401,7 +416,7 @@ describe('TaskEditor', () => {
     expect(await screen.findByText(/Couldn’t save/)).toBeTruthy();
     expect(screen.getByText('Unsaved changes')).toBeTruthy();
     expect(screen.getByLabelText<HTMLInputElement>('Due').value).toBe('2026-10-01');
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onFinished).not.toHaveBeenCalled();
   });
 
   it('keeps the estimate editable once work has started, with the lock copy', async () => {
@@ -433,7 +448,7 @@ describe('TaskEditor', () => {
     const client = api();
     let t = await client.createTask({ title: 'Pset', estimateMin: 45 });
     t = await client.transitionTask(t.id, 'in_progress');
-    const { onClose, user } = renderEditor(client, t);
+    const { onFinished, user } = renderEditor(client, t);
     await user.click(screen.getByRole('button', { name: /^Split/ }));
     expect(
       screen.getByRole('button', { name: 'Done with this part' }).getAttribute('aria-pressed'),
@@ -450,7 +465,7 @@ describe('TaskEditor', () => {
     ).toBeTruthy();
     expect(screen.getByText(/“Pset” keeps the due date/)).toBeTruthy();
     await user.click(submit);
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() => expect(onFinished).toHaveBeenCalled());
     const all = await client.listTasks();
     const parent = all.find((x) => x.title === 'Pset' && x.id !== t.id)!;
     expect(all.find((x) => x.title === 'Part 2')).toMatchObject({
@@ -469,7 +484,7 @@ describe('TaskEditor', () => {
     const client = api();
     let t = await client.createTask({ title: 'Essay', estimateMin: 60 });
     t = await client.transitionTask(t.id, 'in_progress');
-    const { onClose, user } = renderEditor(client, t);
+    const { onFinished, user } = renderEditor(client, t);
     await user.click(screen.getByRole('button', { name: /^Split/ }));
     await user.click(screen.getByRole('button', { name: 'Keep going' }));
     // Keep's defaults never invent scope: what's left is shared between the parts.
@@ -488,7 +503,7 @@ describe('TaskEditor', () => {
     await retitle("Next part's title", 'draft');
     await user.click(screen.getByRole('button', { name: 'Split' }));
     await waitFor(() => expect(document.activeElement?.textContent).toBe('Split…'));
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onFinished).not.toHaveBeenCalled();
     const all = await client.listTasks();
     const parent = all.find((x) => x.title === 'Essay final')!;
     expect(await client.getTask(t.id)).toMatchObject({
@@ -505,15 +520,36 @@ describe('TaskEditor', () => {
     const client = api();
     let t = await client.createTask({ title: 'Essay', estimateMin: 60 });
     t = await client.transitionTask(t.id, 'in_progress');
-    const { onStateChange, user } = renderEditor(client, t);
+    const { edits, user } = renderEditor(client, t);
     await user.click(screen.getByRole('button', { name: /^Split/ }));
     // The mode toggle alone isn't an edit (it re-defaults the rest's estimate).
     await user.click(screen.getByRole('button', { name: 'Keep going' }));
-    expect(onStateChange).toHaveBeenLastCalledWith('clean');
+    expect(editState(edits)).toBe('clean');
     await user.type(screen.getByLabelText("This part's title"), ' 2');
-    expect(onStateChange).toHaveBeenLastCalledWith('dirty');
+    expect(editState(edits)).toBe('dirty');
     await user.click(screen.getAllByRole('button', { name: 'Cancel' }).at(-1)!); // the split's
-    expect(onStateChange).toHaveBeenLastCalledWith('clean');
+    expect(editState(edits)).toBe('clean');
+  });
+
+  it('a split on its way reads as saving, not unsaved — an exit waits for it', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Essay', estimateMin: 60 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const original = client.splitTask.bind(client);
+    vi.spyOn(client, 'splitTask').mockImplementation((id, input) =>
+      gate.then(() => original(id, input)),
+    );
+    const { edits, user } = renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.click(screen.getByRole('button', { name: 'Keep going' }));
+    await user.type(screen.getByLabelText("This part's title"), ' 2');
+    await user.click(screen.getByRole('button', { name: 'Split' }));
+    expect(editState(edits)).toBe('saving');
+    await act(async () => release());
+    await waitFor(() => expect(screen.queryByLabelText("This part's title")).toBeNull());
+    expect(editState(edits)).toBe('clean');
   });
 
   it('rejects negative minutes inline, and Cancel returns focus to Split…', async () => {
@@ -619,7 +655,7 @@ describe('TaskEditor', () => {
     it('Mark done on a parent with an open part is refused inline, naming it; the modal stays', async () => {
       const client = api();
       const { p } = await withParts(client, ['done', 'open']);
-      const { onClose, user } = renderEditor(client, p);
+      const { onFinished, user } = renderEditor(client, p);
       const scrolled = vi.fn();
       Element.prototype.scrollIntoView = scrolled; // jsdom has none
       try {
@@ -634,17 +670,17 @@ describe('TaskEditor', () => {
       } finally {
         delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
       }
-      expect(onClose).not.toHaveBeenCalled();
+      expect(onFinished).not.toHaveBeenCalled();
       expect((await client.getTask(p.id))?.status).toBe('backlog');
     });
 
     it('once every part is done it nudges, and one tap marks it done (no actual to type)', async () => {
       const client = api();
       const { p } = await withParts(client, ['done', 'done']);
-      const { onClose, user } = renderEditor(client, p);
+      const { onFinished, user } = renderEditor(client, p);
       expect(await screen.findByText('All parts done — mark it submitted?')).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'Mark done' }));
-      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      await waitFor(() => expect(onFinished).toHaveBeenCalled());
       expect(await client.getTask(p.id)).toMatchObject({ status: 'done', actualAccruedMin: 70 });
     });
 
@@ -758,14 +794,33 @@ describe('TaskEditor', () => {
     it('typed part lines count as unsaved; the untouched prefill doesn’t, and Cancel clears it', async () => {
       const client = api();
       const t = await client.createTask({ title: 'Lab', estimateMin: 60 });
-      const { onStateChange, user } = renderEditor(client, t);
+      const { edits, user } = renderEditor(client, t);
       await user.click(screen.getByRole('button', { name: 'Break down…' }));
       expect(screen.getByLabelText<HTMLTextAreaElement>(/Add parts/).value).toBe('Lab | ~60');
-      expect(onStateChange).toHaveBeenLastCalledWith('clean');
+      expect(editState(edits)).toBe('clean');
       await user.type(screen.getByLabelText(/Add parts/), '{Enter}write it up | ~30');
-      expect(onStateChange).toHaveBeenLastCalledWith('dirty');
+      expect(editState(edits)).toBe('dirty');
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
-      expect(onStateChange).toHaveBeenLastCalledWith('clean');
+      expect(editState(edits)).toBe('clean');
+    });
+
+    it('part lines on their way read as saving, not unsaved — an exit waits for them', async () => {
+      const client = api();
+      const t = await client.createTask({ title: 'Lab' });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const original = client.createTasks.bind(client);
+      vi.spyOn(client, 'createTasks').mockImplementation((inputs) =>
+        gate.then(() => original(inputs)),
+      );
+      const { edits, user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Break down…' }));
+      await user.type(screen.getByLabelText(/Add parts/), 'run it | ~45');
+      await user.click(screen.getByRole('button', { name: 'Add parts' }));
+      expect(editState(edits)).toBe('saving');
+      await act(async () => release());
+      await waitFor(() => expect(screen.queryByLabelText(/Add parts/)).toBeNull());
+      expect(editState(edits)).toBe('clean');
     });
 
     it('a part line can’t carry a category or a deadline — those are the parent’s', async () => {
@@ -875,13 +930,13 @@ describe('TaskEditor', () => {
   it('drops a scopeable task through a confirm and closes', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Droppable' });
-    const { onClose, user } = renderEditor(client, t);
+    const { onFinished, user } = renderEditor(client, t);
 
     await user.click(screen.getByRole('button', { name: /Drop task/ }));
     await user.click(screen.getByRole('button', { name: 'Drop' }));
 
     await waitFor(async () => expect((await client.getTask(t.id))?.status).toBe('cancelled'));
-    expect(onClose).toHaveBeenCalled();
+    expect(onFinished).toHaveBeenCalled();
   });
 
   it('offers Drop but not Delete on a recurring occurrence', () => {
@@ -948,13 +1003,13 @@ describe('TaskEditor', () => {
       const client = api();
       const t = await client.createTask({ title: 'Plain' });
       const setNotes = vi.spyOn(client, 'setTaskNotes');
-      const { onClose, onStateChange, user } = renderEditor(client, t);
+      const { onFinished, edits, user } = renderEditor(client, t);
 
       await user.click(screen.getByRole('button', { name: 'Add notes…' }));
       const field = screen.getByLabelText('Notes');
       expect(document.activeElement).toBe(field);
       await user.type(field, '  ch. 4 q1-8  ');
-      expect(onStateChange).toHaveBeenLastCalledWith('dirty'); // Close/Esc/backdrop now confirm
+      expect(editState(edits)).toBe('dirty'); // Close/Esc/backdrop now confirm
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
       expect(setNotes).toHaveBeenCalledWith(t.id, 'ch. 4 q1-8');
@@ -964,8 +1019,8 @@ describe('TaskEditor', () => {
       expect(screen.queryByLabelText('Notes')).toBeNull();
       expect(screen.getByText('ch. 4 q1-8')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Edit notes' })).toBeTruthy();
-      expect(onStateChange).toHaveBeenLastCalledWith('clean');
-      expect(onClose).not.toHaveBeenCalled();
+      expect(editState(edits)).toBe('clean');
+      expect(onFinished).not.toHaveBeenCalled();
     });
 
     it('leaves notes alone when only another field changed', async () => {

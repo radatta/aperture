@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { canTransitionTask, STANDALONE_PART_TITLE } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
@@ -8,6 +8,8 @@ import { Text } from '../../../components/Text';
 import { useSplitTask } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 import { SPLIT_TITLE_SUFFIX, splitDefaults } from '../taskMath';
+import { useEditSlot } from './editState';
+import type { EditSlots } from './editState';
 
 type Finish = 'done' | 'keep';
 
@@ -25,13 +27,13 @@ export function SplitForm({
   parentTitle,
   onDone,
   onCancel,
-  onDirtyChange,
+  edits,
 }: {
   task: Task;
   parentTitle?: string; // set when it's already a part
   onDone: (finish: Finish) => void;
   onCancel: () => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  edits?: EditSlots;
 }) {
   const standalone = !task.parentId;
   const split = useSplitTask();
@@ -59,8 +61,11 @@ export function SplitForm({
     if (!restTyped) setRestEstimate_(str(splitDefaults(task, next).rest));
     setFinish_(next);
   };
-  // Typed but not split: leaving the modal asks first, as with unsaved details. The mode toggle alone
-  // isn't an edit, and neither is the rest's estimate it re-defaults.
+  // Set here, not read from the mutation (TanStack's isPending lands a tick later): the modal reads the
+  // slot on the very next event.
+  const [splitting, setSplitting] = useState(false);
+  // Typed but not split asks before an exit; a split on its way holds it. The mode toggle alone isn't
+  // an edit, and neither is the rest's estimate it re-defaults.
   const [initial] = useState(() => ({ deliverable, title, actual, estimate, restTitle }));
   const dirty =
     deliverable !== initial.deliverable ||
@@ -69,7 +74,7 @@ export function SplitForm({
     estimate !== initial.estimate ||
     restTitle !== initial.restTitle ||
     (restTyped && restEstimate !== str(splitDefaults(task, finish).rest));
-  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  useEditSlot(edits, 'reveal', splitting ? 'saving' : dirty ? 'dirty' : 'clean');
 
   const done = finish === 'done';
   // Where the rest lands — the server rule, stated generally: plan rows are loaded per day here, and a
@@ -91,7 +96,8 @@ export function SplitForm({
     numbersOk;
 
   async function submit() {
-    if (!canSubmit || split.isPending) return;
+    if (!canSubmit || splitting) return;
+    setSplitting(true);
     try {
       await split.mutateAsync({
         id: task.id,
@@ -111,6 +117,8 @@ export function SplitForm({
     } catch {
       // Surfaced inline below — swallow so it isn't an unhandled rejection (which leaked the raw error
       // JSON to the page).
+    } finally {
+      setSplitting(false);
     }
   }
 
@@ -229,7 +237,7 @@ export function SplitForm({
         <Button
           size="sm"
           disabled={!canSubmit}
-          aria-disabled={split.isPending}
+          aria-disabled={splitting}
           onClick={submit}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >

@@ -18,11 +18,13 @@ export function DoneForm({
   initialActualMin,
   actualRef,
   onDone,
+  onCancel,
 }: {
   task: Task;
   initialActualMin?: number;
   actualRef?: Ref<HTMLInputElement>;
   onDone: () => void;
+  onCancel?: () => void; // where Cancel isn't just closing (the task modal asks about unsaved edits)
 }) {
   const setActual = useSetActual();
   const transition = useTransitionTask();
@@ -63,7 +65,7 @@ export function DoneForm({
         >
           Mark done
         </Button>
-        <Button variant="ghost" size="sm" onClick={onDone}>
+        <Button variant="ghost" size="sm" onClick={onCancel ?? onDone}>
           Cancel
         </Button>
       </div>

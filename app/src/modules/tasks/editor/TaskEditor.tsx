@@ -39,7 +39,7 @@ import { BreakDownForm } from './BreakDownForm';
 import { DeleteConfirm, DropConfirm } from './DeleteConfirm';
 import { SplitForm } from './SplitForm';
 import { TaskDetailsForm } from './TaskDetailsForm';
-import type { EditState } from './TaskDetailsForm';
+import type { EditSlots } from './editState';
 
 export type TaskEditorIntent = 'view' | 'finish' | 'scope';
 type Reveal = 'split' | 'parts' | 'calendar' | 'drop' | 'delete' | null;
@@ -65,22 +65,24 @@ function SectionHeading({ children }: { children: ReactNode }) {
   );
 }
 
-// The task modal's body. The title (read-only for now) fixes the truncation; every edit and manage
-// action the card used to hold lives here. All gating rules are the card's, moved verbatim.
+// The task modal's body. The full title (editable, in the details form) fixes the truncation; every edit
+// and manage action the card used to hold lives here. All gating rules are the card's, moved verbatim.
 export function TaskEditor({
   task,
   intent,
-  onClose,
+  edits,
+  onFinished,
   onRequestClose,
-  onStateChange,
+  onLeaveReveal,
   estimateRef,
   actualRef,
 }: {
   task: Task;
   intent: TaskEditorIntent;
-  onClose: () => void; // real close — after Mark done / Drop, no guard (Save stays open)
+  edits?: EditSlots; // where each form's edits stand, read by the modal's guard
+  onFinished: () => void; // finished here (Mark done, Drop, a done split): the modal closes, guarded
   onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
-  onStateChange: (state: EditState) => void;
+  onLeaveReveal: (go: () => void) => void; // the guard for the open reveal's text alone
   estimateRef?: Ref<HTMLInputElement>;
   actualRef?: Ref<HTMLInputElement>;
 }) {
@@ -102,18 +104,13 @@ export function TaskEditor({
   useEffect(() => {
     if (markDone.error) markDoneErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [markDone.error]);
-  const [details, setDetails] = useState<EditState>('clean');
-  // Typed but unsent text in the open reveal (part lines, split titles) — cleared with the reveal.
-  const [revealDirty, setRevealDirty] = useState(false);
-  const [reveal, setReveal_] = useState<Reveal>(null);
-  const setReveal = (r: Reveal) => {
-    setReveal_(r);
-    setRevealDirty(false);
+  const [reveal, setReveal] = useState<Reveal>(null);
+  // Another section while the open reveal holds unsent text (part lines, split titles) asks first, via
+  // the modal's confirm; a write in flight is waited for. The details form stays mounted — its edits
+  // never prompt here.
+  const openReveal = (r: Reveal) => {
+    if (r !== reveal) onLeaveReveal(() => setReveal(r));
   };
-  // A save in flight outranks a dirty reveal: the exit waits for it, then asks — never leaves mid-write.
-  const state: EditState =
-    details === 'saving' ? 'saving' : details === 'dirty' || revealDirty ? 'dirty' : 'clean';
-  useEffect(() => onStateChange(state), [state, onStateChange]);
   // Parent + parts (parts.ts): a parent's parts, or a part's parent and siblings.
   const parts = partsOf(allTasks, task.id);
   const isParent = parts.length > 0;
@@ -150,7 +147,7 @@ export function TaskEditor({
     inProgress && !isParent ? (
       <section className="flex flex-col gap-2">
         <SectionHeading>Mark done</SectionHeading>
-        <DoneForm task={task} actualRef={actualRef} onDone={onClose} />
+        <DoneForm task={task} actualRef={actualRef} onDone={onFinished} onCancel={onRequestClose} />
       </section>
     ) : null;
 
@@ -226,7 +223,7 @@ export function TaskEditor({
         task={task}
         parts={isParent ? summary : undefined}
         parent={parent}
-        onStateChange={setDetails}
+        edits={edits}
         estimateRef={estimateRef}
       />
 
@@ -239,7 +236,7 @@ export function TaskEditor({
               Parts · {summary.done}/{summary.total}
             </SectionHeading>
             {!isTerminal && reveal !== 'parts' && (
-              <Button ref={partsRef} variant="quiet" size="sm" onClick={() => setReveal('parts')}>
+              <Button ref={partsRef} variant="quiet" size="sm" onClick={() => openReveal('parts')}>
                 Add parts…
               </Button>
             )}
@@ -250,7 +247,7 @@ export function TaskEditor({
               isParent
               onDone={closeParts}
               onCancel={closeParts}
-              onDirtyChange={setRevealDirty}
+              edits={edits}
             />
           )}
           <ul className="flex flex-col gap-1">
@@ -301,7 +298,7 @@ export function TaskEditor({
                 size="sm"
                 disabled={markDone.isPending}
                 onClick={() =>
-                  markDone.mutate({ id: task.id, to: 'done' }, { onSuccess: () => onClose() })
+                  markDone.mutate({ id: task.id, to: 'done' }, { onSuccess: onFinished })
                 }
               >
                 Mark done
@@ -457,7 +454,7 @@ export function TaskEditor({
               variant="quiet"
               size="sm"
               className="self-start"
-              onClick={() => setReveal('calendar')}
+              onClick={() => openReveal('calendar')}
             >
               Add to calendar…
             </Button>
@@ -475,12 +472,12 @@ export function TaskEditor({
       <section className="flex flex-col gap-2 border-t border-line pt-3">
         <div className="flex flex-wrap items-center gap-2">
           {showSplit && (
-            <Button ref={splitRef} variant="quiet" size="sm" onClick={() => setReveal('split')}>
+            <Button ref={splitRef} variant="quiet" size="sm" onClick={() => openReveal('split')}>
               Split…
             </Button>
           )}
           {canBreakDown && (
-            <Button ref={partsRef} variant="quiet" size="sm" onClick={() => setReveal('parts')}>
+            <Button ref={partsRef} variant="quiet" size="sm" onClick={() => openReveal('parts')}>
               Break down…
             </Button>
           )}
@@ -489,7 +486,7 @@ export function TaskEditor({
               variant="quiet"
               size="sm"
               className="text-danger"
-              onClick={() => setReveal('drop')}
+              onClick={() => openReveal('drop')}
             >
               Drop task…
             </Button>
@@ -499,7 +496,7 @@ export function TaskEditor({
               variant="quiet"
               size="sm"
               className="text-danger"
-              onClick={() => setReveal('delete')}
+              onClick={() => openReveal('delete')}
             >
               Delete task…
             </Button>
@@ -514,7 +511,7 @@ export function TaskEditor({
             isParent={false}
             onDone={closeParts}
             onCancel={closeParts}
-            onDirtyChange={setRevealDirty}
+            edits={edits}
           />
         )}
         {reveal === 'split' && (
@@ -522,9 +519,9 @@ export function TaskEditor({
             task={task}
             parentTitle={parent?.title}
             // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
-            onDone={(finish) => (finish === 'done' ? onClose() : closeSplit())}
+            onDone={(finish) => (finish === 'done' ? onFinished() : closeSplit())}
             onCancel={closeSplit}
-            onDirtyChange={setRevealDirty}
+            edits={edits}
           />
         )}
         {reveal === 'drop' && (
@@ -532,7 +529,7 @@ export function TaskEditor({
             task={task}
             parts={isParent ? summary : undefined}
             onCancel={() => setReveal(null)}
-            onDone={onClose}
+            onDone={onFinished}
           />
         )}
         {reveal === 'delete' && (

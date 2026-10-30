@@ -482,13 +482,18 @@ describe('parent + parts', () => {
     expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
   });
 
-  // A save whose result the test decides: true lands it, false fails it.
+  // A save whose result the test decides: true lands it, false fails it. Only the first title write
+  // is held; a retry goes straight through.
   function gateTitle(api: ReturnType<typeof freshApi>) {
     let release!: (ok: boolean) => void;
     const gate = new Promise<boolean>((r) => (release = r));
     const original = api.setTaskTitle.bind(api);
+    let gated = true;
     vi.spyOn(api, 'setTaskTitle').mockImplementation(async (id, title) => {
-      if (!(await gate)) throw new Error('offline');
+      if (gated) {
+        gated = false;
+        if (!(await gate)) throw new Error('offline');
+      }
       return original(id, title);
     });
     return (ok: boolean) => act(async () => release(ok));
@@ -553,6 +558,10 @@ describe('parent + parts', () => {
       else {
         expect(await d.findByText('Couldn’t save — try again.')).toBeTruthy();
         expect(screen.getByRole('dialog', { name: 'Task: draft' })).toBeTruthy();
+        // The held Close was dropped, not kept: a retry that lands leaves the modal open (Save stays).
+        await user.click(d.getByRole('button', { name: 'Save' }));
+        expect(await d.findByText('Saved')).toBeTruthy();
+        expect(screen.getByRole('dialog', { name: 'Task: draft 2' })).toBeTruthy();
       }
       unmount();
     }
@@ -571,6 +580,199 @@ describe('parent + parts', () => {
     expect(document.activeElement).toBe(parent);
     await user.click(within(parent).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it('after Discard on a switch, the new task is focused only once the confirm has closed', async () => {
+    const { api } = await seeded(false);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const taskDialog = await screen.findByRole('dialog', { name: 'Task: draft' });
+    const d = within(taskDialog);
+    await user.type(d.getByLabelText('Title'), ' 2');
+    await user.click(d.getByRole('button', { name: 'P2' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Discard unsaved changes?' });
+    // jsdom has no top layer or inertness, so what's checkable is the order: focused while the
+    // confirm is still open, the dialog beneath would be inert and the focus lost.
+    const seen: boolean[] = [];
+    taskDialog.addEventListener('focus', () => seen.push((confirm as HTMLDialogElement).open));
+    await user.click(within(confirm).getByRole('button', { name: 'Discard' }));
+    expect(await screen.findByRole('dialog', { name: 'Task: P2' })).toBe(taskDialog);
+    expect(seen).toEqual([false]);
+    expect(document.activeElement).toBe(taskDialog);
+  });
+
+  it('the Mark done box’s Cancel asks about unsaved edits, like Close', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.type(d.getByLabelText('Title'), ' 2');
+    await user.click(d.getByRole('button', { name: 'Cancel' }));
+    const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('draft 2');
+  });
+
+  it('Mark done with an unsaved title asks; Keep editing stays on the done task, and Save still works', async () => {
+    const { api, p } = await seeded(true);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'P2' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    await user.type(d.getByLabelText('Title'), ' final');
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    expect((await api.getTask(p.id))!.status).toBe('done');
+    await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('P2 final');
+    await user.click(d.getByRole('button', { name: 'Save' }));
+    expect(await d.findByText('Saved')).toBeTruthy();
+    expect(await api.getTask(p.id)).toMatchObject({ title: 'P2 final', status: 'done' });
+    expect(screen.getByRole('dialog', { name: 'Task: P2 final' })).toBeTruthy();
+  });
+
+  it('Mark done with only a due change unsaved closes without asking — a done task’s due is locked', async () => {
+    const { api } = await seeded(true);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'P2' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    fireEvent.change(d.getByLabelText('Due'), { target: { value: addDays(todayKey(4), 3) } });
+    expect(d.getByText('Unsaved changes')).toBeTruthy();
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: P2' })).toBeNull());
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+  });
+
+  it('Mark done during a save waits for it; a failed save keeps the edit and the message', async () => {
+    const { api, p } = await seeded(true);
+    const release = gateTitle(api);
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'P2' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    await user.type(d.getByLabelText('Title'), ' final');
+    await user.click(d.getByRole('button', { name: 'Save' }));
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    await waitFor(async () => expect((await api.getTask(p.id))!.status).toBe('done'));
+    expect(screen.getByRole('dialog', { name: 'Task: P2' })).toBeTruthy();
+    await release(false);
+    expect(await d.findByText('Couldn’t save — try again.')).toBeTruthy();
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('P2 final');
+    expect(screen.getByRole('dialog', { name: 'Task: P2' })).toBeTruthy();
+  });
+
+  it('a section button with unsent Add parts text asks first; details edits never do', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Lab', estimateMin: 60 });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Lab' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Lab' }));
+    await user.click(d.getByRole('button', { name: 'Break down…' }));
+    await user.type(d.getByLabelText(/Add parts/), '{Enter}write up | ~30');
+
+    await user.click(d.getByRole('button', { name: 'Delete task…' }));
+    let confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    expect(
+      confirm.getByText('What you typed hasn’t been added yet. Switching sections loses it.'),
+    ).toBeTruthy();
+    await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
+    expect(d.getByLabelText<HTMLTextAreaElement>(/Add parts/).value).toBe(
+      'Lab | ~60\nwrite up | ~30',
+    );
+
+    await user.click(d.getByRole('button', { name: 'Delete task…' }));
+    confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Discard' }));
+    expect(await d.findByRole('alertdialog', { name: 'Delete Lab?' })).toBeTruthy();
+    expect(d.queryByLabelText(/Add parts/)).toBeNull();
+    await user.click(d.getByRole('button', { name: 'Cancel' }));
+
+    // The details form stays mounted across a swap: its edits don't prompt.
+    await user.type(d.getByLabelText('Title'), ' 2');
+    await user.click(d.getByRole('button', { name: 'Break down…' }));
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+    expect(d.getByLabelText(/Add parts/)).toBeTruthy();
+    expect((await api.getTask(t.id))!.title).toBe('Lab');
+  });
+
+  it('an exit right after a keystroke still asks — the guard reads the edit, not a report a frame late', async () => {
+    const api = freshApi();
+    await api.createTask({ title: 'Plain' });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Plain' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Plain' }));
+    const field = d.getByLabelText<HTMLTextAreaElement>('Title');
+    // Outside act(), which would drain every scheduled render and effect — the lag under test.
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const was = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(
+        field,
+        'Changed',
+      );
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      // One microtask: React renders the keystroke (a discrete update) and nothing else runs. With
+      // no await the keystroke itself hasn't rendered, so this is load-bearing.
+      await Promise.resolve();
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = was;
+    }
+    fireEvent.click(d.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' })).toBeTruthy();
+  });
+
+  it('after a switch, Close finds the opener’s row again if it re-rendered', async () => {
+    const api = freshApi();
+    const alpha = await api.upsertCategory({ label: 'Alpha', isWork: true });
+    await api.upsertCategory({ label: 'Beta', isWork: true });
+    const p = await api.createTask({ title: 'P', categoryId: alpha.id });
+    await api.createTask({ title: 'read', parentId: p.id });
+    await api.createTask({ title: 'draft', parentId: p.id });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'draft' }));
+    let d = within(await screen.findByRole('dialog', { name: 'Task: draft' }));
+    await user.click(d.getByRole('button', { name: 'P' }));
+    d = within(await screen.findByRole('dialog', { name: 'Task: P' }));
+    await user.selectOptions(d.getByLabelText('Category'), 'Beta');
+    await user.click(d.getByRole('button', { name: 'Save' }));
+    expect(await d.findByText('Saved')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Beta · 1/ })).toBeTruthy());
+    await user.click(d.getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'draft' })),
+    );
+  });
+
+  it('drops through the guard: unsaved edits are asked about, Discard closes', async () => {
+    const api = freshApi();
+    const t = await api.createTask({ title: 'Droppable' });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Droppable' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: Droppable' }));
+    await user.type(d.getByLabelText('Title'), ' 2');
+    await user.click(d.getByRole('button', { name: /Drop task/ }));
+    await user.click(d.getByRole('button', { name: 'Drop' }));
+    const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    expect((await api.getTask(t.id))!.status).toBe('cancelled');
+    await user.click(confirm.getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Task: Droppable' })).toBeNull(),
+    );
+    expect((await api.getTask(t.id))!.title).toBe('Droppable');
   });
 
   it('a linked parent’s card reads “due marker”, not “on calendar”', async () => {
