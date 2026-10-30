@@ -305,7 +305,7 @@ def check_registration() -> tuple[int, int]:
                     print(f"FAIL  {name} also registered under {event}")
     # settings.json runs each hook by path, so a lost exec bit fails every run silently — and the suites
     # below run hooks via `bash <hook>`, so they'd never notice.
-    for hook_name in [*REGISTERED, *REGISTERED_POST, *REGISTERED_EVENTS]:
+    for hook_name in dict.fromkeys([*REGISTERED, *REGISTERED_POST, *REGISTERED_EVENTS]):
         total += 1
         ok = os.access(HERE.parent / hook_name, os.X_OK)
         failures += not ok
