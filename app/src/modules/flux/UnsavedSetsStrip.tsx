@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useDisclosure } from '../../lib/useDisclosure';
-import { outboxInMemoryOnly, readOutbox } from './fluxOutbox';
+import { outboxInMemoryOnly } from './fluxOutbox';
 import { focusablesAfter, moveFocus } from './focus';
 import { useFluxOutbox, useSending } from './useFluxOutbox';
 
@@ -54,6 +54,15 @@ export function UnsavedSetsStrip() {
       moveFocus(focusablesAfter(stripRef.current), stripRef.current);
     hadFocus.current = false;
   }, [n, confirming, onClose]);
+  // Retry leaves while the strip stays (only refused sets are left to show): Discard is next.
+  const showsRetry = shown.some((e) => !e.refused);
+  const hadRetry = useRef(showsRetry);
+  useEffect(() => {
+    const was = hadRetry.current;
+    hadRetry.current = showsRetry;
+    if (!was || showsRetry || n === 0 || !hadFocus.current || !stripRef.current) return;
+    moveFocus([triggerRef.current, ...focusablesAfter(stripRef.current)], stripRef.current);
+  }, [showsRetry, n, triggerRef]);
   // A set on its way (a Retry, or a background flush on `online`) can't be discarded: it may still land,
   // against "won't be saved anywhere". aria-disabled, so a focused button keeps focus meanwhile.
   const busy = retrying || shown.some((e) => sending(e.input.id));
@@ -83,8 +92,18 @@ export function UnsavedSetsStrip() {
       ref={stripRef}
       onFocusCapture={() => (hadFocus.current = true)}
       onBlurCapture={(e) => {
+        const strip = e.currentTarget;
         const to = e.relatedTarget;
-        if (to instanceof Node && !e.currentTarget.contains(to)) hadFocus.current = false;
+        if (to instanceof Node) {
+          if (!strip.contains(to)) hadFocus.current = false;
+          return;
+        }
+        // Nowhere named (a tap on the page in Safari, the window losing focus — or the button being
+        // removed): look again once it settles. A removed button is gone from the page, and keeps it.
+        const from = e.target;
+        setTimeout(() => {
+          if (from.isConnected && !strip.contains(document.activeElement)) hadFocus.current = false;
+        });
       }}
       className={
         n === 0
@@ -120,8 +139,11 @@ export function UnsavedSetsStrip() {
         >
           <Text size="xs">
             {busy
-              ? 'Still sending — Discard waits until it answers.'
-              : `Discard ${sets}? They won’t be saved anywhere.`}
+              ? 'Still sending — you can discard once it answers.'
+              : shown.some((e) => e.unanswered)
+                ? // A timed-out try is still out there; the client can't know if it landed.
+                  `Discard ${sets}? A try that timed out may still reach the server — otherwise ${n === 1 ? 'it won’t' : 'they won’t'} be saved anywhere.`
+                : `Discard ${sets}? They won’t be saved anywhere.`}
           </Text>
           <div className="flex gap-2">
             <Button
@@ -145,22 +167,15 @@ export function UnsavedSetsStrip() {
         </div>
       ) : (
         <div key="actions" className="flex gap-2">
-          {shown.some((e) => !e.refused) && (
+          {showsRetry && (
             <Button
               size="sm"
               aria-disabled={busy || undefined}
               onClick={async () => {
                 if (busy) return;
-                const to = next();
-                const from = stripRef.current;
                 setRetrying(true);
                 await flush();
                 setRetrying(false);
-                // Only refused sets left: Retry itself is gone, the strip stays — Discard is next. (All
-                // saved: the strip empties, and the effect above moves focus past it.)
-                const left = readOutbox();
-                if (left.length > 0 && left.every((e) => e.refused))
-                  moveFocus([triggerRef.current, ...to], from);
               }}
             >
               {busy ? 'Retrying…' : 'Retry'}

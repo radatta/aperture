@@ -17,6 +17,7 @@ export interface FluxOutboxEntry {
   readonly at: number; // epoch ms first queued
   readonly error: string | null; // the last failed attempt's message
   readonly refused?: boolean; // the set itself is invalid (fluxSetError) — retrying can't save it
+  readonly unanswered?: boolean; // the last try timed out: it may still reach the server late
 }
 
 const listeners = new Set<() => void>();
@@ -87,8 +88,18 @@ export function outboxRemove(id: string): void {
   write(readOutbox().filter((e) => e.input.id !== id));
   if (memory) removedInMemory.add(id); // the removal didn't reach storage
 }
-export const outboxMarkError = (id: string, error: string, refused = false): void =>
-  write(readOutbox().map((e) => (e.input.id === id ? { ...e, error, refused } : e)));
+export const outboxMarkError = (
+  id: string,
+  error: string,
+  flags: { refused?: boolean; unanswered?: boolean } = {},
+): void =>
+  write(
+    readOutbox().map((e) =>
+      e.input.id === id
+        ? { ...e, error, refused: flags.refused ?? false, unanswered: flags.unanswered ?? false }
+        : e,
+    ),
+  );
 
 // The set as the server takes it: the stage's draft plus its id, its day and the rep it counted toward.
 export function draftToInput(

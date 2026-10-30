@@ -164,6 +164,7 @@ describe('useFluxOutbox', () => {
     act(() => screen.getByRole('button', { name: 'save' }).click());
     await act(async () => vi.advanceTimersByTime(20_000));
     expect(screen.getByText(/Last try: No answer from the server/)).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem(FLUX_OUTBOX_KEY) ?? '[]')[0]?.unanswered).toBe(true);
     await act(async () => screen.getByRole('button', { name: 'Retry' }).click());
     expect(record).toHaveBeenCalledTimes(2);
   });
@@ -356,10 +357,37 @@ describe('useFluxOutbox', () => {
     await act(async () => pending[0]!.reject(new Error('Load failed')));
     await user.click(await screen.findByRole('button', { name: 'Retry' }));
     await user.click(screen.getByRole('button', { name: 'flush' })); // the user moved on
-    document.body.focus(); // …and e.g. tapped the page (Safari leaves focus on body)
-    (document.activeElement as HTMLElement | null)?.blur();
     await act(async () => pending[1]!.resolve());
     await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
     expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'after' }));
+  });
+
+  it('focus that went from the strip straight to the page (a Safari tap) stays put', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    renderWithProviders(<Harness set={input()} />, { api });
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    const discard = await screen.findByRole('button', { name: 'Discard' });
+    act(() => discard.focus());
+    act(() => discard.blur()); // to body, no relatedTarget — and the button is still there
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    await user.click(screen.getByRole('button', { name: 'flush' }));
+    act(() => (document.activeElement as HTMLElement).blur());
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('after a try that timed out, Discard says it may still land', async () => {
+    const { api } = server();
+    const raw = JSON.stringify([
+      { input: input(), at: 1, error: 'No answer from the server', unanswered: true },
+    ]);
+    localStorage.setItem(FLUX_OUTBOX_KEY, raw);
+    const user = userEvent.setup();
+    renderWithProviders(<UnsavedSetsStrip />, { api });
+    await user.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByRole('alertdialog').textContent).toMatch(/may still reach the server/);
   });
 });

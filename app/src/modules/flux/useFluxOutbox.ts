@@ -38,10 +38,11 @@ export function useSending(): (id: string) => boolean {
 // `online` and the next save would all skip it. Give up on it after this; a late answer is harmless (the
 // save is idempotent, the next send gets the stored row).
 const SEND_TIMEOUT_MS = 20_000;
+class NoAnswer extends Error {}
 function withTimeout<T>(p: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('No answer from the server')), SEND_TIMEOUT_MS);
+    timer = setTimeout(() => reject(new NoAnswer('No answer from the server')), SEND_TIMEOUT_MS);
   });
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
@@ -62,7 +63,7 @@ export function useFluxOutbox() {
       try {
         const refused = fluxSetError(input);
         if (refused) {
-          outboxMarkError(input.id, refused, true);
+          outboxMarkError(input.id, refused, { refused: true });
           return false;
         }
         await withTimeout(api.recordFluxSet(input));
@@ -70,7 +71,9 @@ export function useFluxOutbox() {
         void qc.invalidateQueries({ queryKey: qk.fluxSetsAll() });
         return true;
       } catch (err) {
-        outboxMarkError(input.id, err instanceof Error ? err.message : String(err));
+        outboxMarkError(input.id, err instanceof Error ? err.message : String(err), {
+          unanswered: err instanceof NoAnswer,
+        });
         return false;
       } finally {
         setSending(input.id, false);
