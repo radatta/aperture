@@ -987,7 +987,9 @@ Full forensics — timelines, log locations, ruled-out hypotheses, exact command
   should not be trusted. If it recurs, capture the **head** of the output (the panic reason is the
   first line, not the tail) before theorising. Practically: reduce peak concurrency — don't run
   `pnpm test`, a dev server, and headless Chromium simultaneously on an 18 GiB / 9 CPU box — and
-  don't chase it as a code defect.
+  don't chase it as a code defect. The session board's history (`localNotes/board/history/`,
+  `docs/ops/SESSION-BOARD.md`) records memory PSI, anon and pids every 30 s and per heavy job, so a
+  recurrence can be lined up against the load at that moment.
 - **Cleanup.** `coi kill <name>` / `coi clean` for stale ephemeral boxes.
 
 ## Deferred / to-do

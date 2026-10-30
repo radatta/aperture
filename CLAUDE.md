@@ -56,13 +56,22 @@ pnpm monorepo (workspaces in `pnpm-workspace.yaml`):
   last. `vite dev`/`vite build` dying with `Cannot find module '../lightningcss.*.node'` is this;
   `pnpm install` fixes it for the current platform (and breaks the other side until they do the same).
   Doesn't affect `tsc` or `vitest`. Mechanism: `docs/ops/COI-INCIDENTS.md` → Incident B → _Related_.
-- **Don't run `pnpm test`, a dev server, and headless Chromium at once** — 18 GiB / 9 CPUs, and
-  **two different ceilings** bite, which is why the crashes read as code bugs when they aren't: the **pids/thread** ceiling (`SIGABRT`/134 — a refused `clone()`,
-  _not_ memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory itself (`SIGKILL`/137). A `tsgo`
-  fatal has also been seen under load with the mechanism never confirmed — capture the **head** of the
-  output, don't assume OOM (`docs/ops/COI-SANDBOX.md` → _Ops notes_ → _Transient `tsc` crashes_).
-  Serialise: screenshot, kill the browser, then test. The feature workflow's gate (_Claude behavior_ →
-  _Feature workflow_) is how it keeps them apart.
+- **Several sessions share one container's limits — check the board, run heavy work through `heavy.sh`.**
+  9 CPUs, `memory.high` 18 GiB, `pids.max` 4096, and **two different ceilings** bite, which is why the
+  crashes read as code bugs when they aren't: the **pids/thread** ceiling (`SIGABRT`/134 — a refused
+  `clone()`, _not_ memory; `docs/ops/COI-INCIDENTS.md` → Incident A) and memory (`SIGKILL`/137 — from the
+  VM or userland, never the container cgroup, which only throttles). A `tsgo` fatal has also been seen
+  under load with the mechanism never confirmed — capture the **head** of the output, don't assume OOM
+  (`docs/ops/COI-SANDBOX.md` → _Ops notes_ → _Transient `tsc` crashes_). `scripts/board/board.sh status`
+  shows who is running what and the headroom; `scripts/board/heavy.sh -- <cmd>` runs a test, typecheck,
+  lint, build, dev server or browser with its peak usage logged and a budget slot others can see. Measured
+  (2026-10-13): **CPU gives out first** — one `pnpm test` keeps ~8 of 9 cores busy, and past ~5 concurrent
+  suites jsdom tests time out at 7.6 GiB / 1140 threads, so a timeout under parallel load is contention,
+  not a bug. So `heavy.sh` caps full test suites at **4 at once** (`limits.json` `concurrency`): a 5th waits up to
+  90 s for a slot, then exits 75 naming the holders — tell the user rather than retry; give a full suite a 600 s
+  timeout or run it in the background. Single-file runs are never capped, and every hold is tracked
+  (`board.sh status`, `cli.ts barriers`). Within one session, still serialise: screenshot, kill the browser, then test. Measured edges and the rest:
+  `docs/ops/SESSION-BOARD.md`.
 
 Runbook: `docs/ops/COI-SANDBOX.md`. Post-mortems (pids/`SIGABRT`, sleep, mounts): `docs/ops/COI-INCIDENTS.md`.
 
@@ -143,6 +152,7 @@ Merges to `main` happen via PR, not a local push.
 - **Version awareness:** always check the registry for the actual latest version before pinning a package — `npm view <pkg> version` (a read-only registry query; fine even though installs are pnpm-only). Never guess versions from memory.
 - **A piped command hides its exit code.** `pnpm typecheck | tail` reports success even when the typecheck never ran — the exit status you see belongs to `tail`. Before reporting any pass/fail, use `set -o pipefail` and echo `${PIPESTATUS[0]}`. This produced a false "it passed" here on 2026-09-07.
 - **Can't reach a resource? Ask the user to run the command — don't guess or give up.** The container has no AWS CLI (and no AWS creds), and the same goes for anything else behind an access boundary: live AWS state (CloudWatch logs, SSM params, DynamoDB rows), a deployed endpoint, a dashboard, a third-party console. Hand the user the exact command(s) to run and read back the output — they are your hands on that resource. Same "verify, don't assert" discipline: reason from real output, not from an assumption about what the resource contains. The deployed dev app and its API are the exception: the dev check reaches them as the test user (`docs/ops/DEV-CHECK.md`).
+- **Share the container through the board — never by doing less.** Before heavy work (the gate, a dev server, the headless UI pass), glance at `scripts/board/board.sh status`; if the board says another session is near the edge, wait or serialise, but never skip tests or the UI pass to fit. How it works: `docs/ops/SESSION-BOARD.md`.
 
 ### Feature workflow
 
@@ -162,7 +172,7 @@ Phases:
 2. **Plan** — the `Plan` agent; collaborative: ask which model; autonomous: `fable` unless named.
 3. **Questions** — collaborative: discuss them. Autonomous: answer and log them.
 4. **Build** — only on the user's "execute" plus a number of review rounds (n). When asking for n, give a rough estimate of how many files the change will touch — a gauge of size, not a commitment. While building, after each section run the touched files' tests (`vitest run <file>`) and a typecheck. Autonomous: n per the sizing rule above, logged.
-5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
+5. **Gate** — full `pnpm typecheck`, `pnpm lint`, `pnpm test`, in sequence, each under `scripts/board/heavy.sh --`, real exit codes (`pipefail`). Nothing goes to a subagent on a red gate.
 6. **Review round** — the read-only `code-reviewer` (no tests, no servers) in parallel with whatever each touched package adds:
 
    | Touched           | Adds                                                                                                                                                                                                                                                  |

@@ -6,7 +6,7 @@ shared helper — never `cd` to `CLAUDE_PROJECT_DIR`.**
 ## Why
 
 `CLAUDE_PROJECT_DIR` points at the **project root (the main checkout)** and stays there for the life of
-the session. In a **git worktree** session (e.g. `.claude/worktrees/<name>`), that's the *wrong tree* —
+the session. In a **git worktree** session (e.g. `.claude/worktrees/<name>`), that's the _wrong tree_ —
 a hook that `cd`s to `CLAUDE_PROJECT_DIR` reads the main checkout's branch, staged diff, and files, not
 the ones the session is actually editing. This shipped a real bug: `precommit-guard` scanned the wrong
 staged diff for secrets; `main-branch-guard` checked the wrong branch.
@@ -53,9 +53,27 @@ its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → *
 
 `python3 .claude/hooks/testdata/run-fixtures.py` runs every guard against its fixture file
 (`reverse-shell-fixtures.jsonl`, `grep-guard-fixtures.jsonl`, `precommit-fixtures.jsonl`,
-`gh-safety-fixtures.jsonl`, `mcp-ledger-fixtures.jsonl`), checks each guard is registered in `settings.json` under its expected
-matchers, and exits non-zero on a mismatch. Run it after
+`gh-safety-fixtures.jsonl`, `mcp-ledger-fixtures.jsonl`, `board-heavy-fixtures.jsonl`), checks each guard is
+registered in `settings.json` under its expected matchers, and exits non-zero on a mismatch. Run it after
 touching a guard. A guard can fail **silently** — `precommit-guard`'s secret scan never worked from the day it was
 added (#4, 2026-08-09) until the fixtures caught it: a hard-wrapped regex made `grep` error out, and the
 `if` read that as "no match" — so a guard change isn't done until a fixture proves both its deny and its
 allow.
+
+## Board hooks
+
+The shared-container session board (`docs/ops/SESSION-BOARD.md`) runs on four hooks. They call
+`scripts/board/` **relative to their own location** (so a worktree's hooks run that worktree's board code),
+exit 0 silently outside the container (no cgroup `memory.stat` — Mac, CI), and never put a command into argv.
+
+| Hook                               | Event                       | Does                                                                                                                                                              |
+| ---------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board-session.sh`                 | SessionStart (every source) | registers the session, starts the sampler if none runs, injects headroom / dev lease / this branch's file overlaps                                                |
+| `board-heartbeat.sh working\|idle` | UserPromptSubmit / Stop     | refreshes the session's state, branch and name (git + tmux, ~5 ms) in one jq write; renews a dev lease it holds, or resumes its branch's gone one (node, once)    |
+| `board-heavy-guard.sh`             | PreToolUse Bash             | heavy command (a segment that starts a runner — not `cat`/`grep`/a heredoc that only mentions one) not under `heavy.sh` → allow + a one-line offer; **deny only** with `limits.json` `enforce:true` and the predicted load past the measured hard line or the class's concurrency cap full (records a `denied` barrier event) |
+| `board-session-end.sh`             | SessionEnd                  | marks the session gone, drops its heavy slots, flags its dev lease `holderGone`                                                                                   |
+
+`board-heavy-fixtures.jsonl` covers the guard (offer / allow / deny / fail-open); a fixture may set `cgroup`
+(fake cgroup files; `null` = absent), `limits` (patched `limits.json`, e.g. `enforce` or `concurrency`) or `limitsRaw` (its literal text),
+`running` + `runningClass` (other sessions' live slots — default class `test`) and `nudged` (classes already offered this session) — the
+runner gives each case a fresh temp board. `"nudge"` in a fixture means allowed with `additionalContext`.

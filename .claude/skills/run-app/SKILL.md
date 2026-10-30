@@ -18,26 +18,46 @@ So you launch with **no env flags** — `pnpm dev` is already in a screenshot-ab
 
 ## Launch Vite
 
+Inside the container, launch it through the session board's heavy wrapper so other sessions see it and its
+peak usage lands in the history (`docs/ops/SESSION-BOARD.md`). Shell variables don't survive between Bash
+tool calls, so its PID and output go to files (`$SCRATCH` is the session scratchpad, _Browser setup_ below):
+
 ```bash
-cd /path/to/aperture && pnpm dev   # root script → @aperture/app (run in background)
+cd /path/to/aperture
+{ HEAVY_CLASS=dev scripts/board/heavy.sh -- pnpm dev >"$SCRATCH/vite.log" 2>&1 & }
+echo $! >"$SCRATCH/dev.pid"   # the wrapper's PID — `cd … && … &` would background the whole list instead
 ```
+
+(On a bare Mac there is no board: plain `pnpm dev`, same redirect.)
 
 **The port depends on where you are, and Vite walks upward if it's taken** — so read it, don't assume
 it. Inside a COI container the base is `6173`; on a bare Mac it's `5173` (`app/vite.config.ts`, and
-`docs/ops/COI-SANDBOX.md` → *Ports*). Resolve it from what's actually listening:
+`docs/ops/COI-SANDBOX.md` → *Ports*). Other sessions may have their own Vite listening, so take the port
+from **this** server's output, not from whatever is listening:
 
 ```bash
-PORT=$(ss -ltn 2>/dev/null | grep -oE ':(5|6)[12][78][0-9]' | tr -d ':' | sort -u | head -1)
-echo "vite on $PORT"
+for _ in $(seq 40); do
+  PORT=$(sed 's/\x1b\[[0-9;]*m//g' "$SCRATCH/vite.log" | grep -oE 'localhost:[0-9]+' | head -1 | cut -d: -f2)
+  [ -n "$PORT" ] && break; sleep 1
+done
+echo "vite on $PORT"   # a later Bash call re-reads it with the same sed line
 ```
 
-Poll for readiness (portable — works on macOS and Linux; don't assume `curl`):
+Poll for readiness (portable — works on macOS and Linux; don't assume `curl`). Keep the probe in a
+`node -` heredoc rather than an inline one-liner — interpreter one-liners carrying a `host:port` are what
+the COI monitor watches for (CLAUDE.md → _Commands_):
 
 ```bash
-timeout 40 bash -c "until node -e \"fetch('http://localhost:$PORT').then(()=>process.exit(0)).catch(()=>process.exit(1))\"; do sleep 1; done"
+for _ in $(seq 40); do
+  PORT=$PORT node - <<'JS' && break
+fetch(`http://localhost:${process.env.PORT}`).then(() => process.exit(0), () => process.exit(1));
+JS
+  sleep 1
+done
 ```
 
-Stop with `pkill -f vite`.
+Stop it by its PID: `kill "$(cat "$SCRATCH/dev.pid")"` (the wrapper stops its whole process tree). Never
+`pkill -f vite` — other sessions' dev servers match too.
 
 ## Browser setup — install OUTSIDE the repo
 
@@ -78,6 +98,9 @@ await page.screenshot({ path: 'page.png', fullPage: true });
 console.log('ERRORS:', errors.length ? errors.join('\n') : 'none');
 await browser.close();
 ```
+
+Save it as `shot.mjs` and, inside the container, run it through the wrapper too, so the browser's
+threads count on the board: `PORT=$PORT HEAVY_CLASS=ui /path/to/aperture/scripts/board/heavy.sh -- node shot.mjs`.
 
 Then **Read the PNGs and actually look at them.** Check the `ERRORS:` line before declaring success — the shell can render fine while data logic throws.
 

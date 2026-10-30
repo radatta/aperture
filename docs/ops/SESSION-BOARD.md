@@ -1,0 +1,318 @@
+# Session board — sharing one container between Claude sessions
+
+Several Claude sessions run in the one COI container. They share its memory, threads and CPU, and two of
+them can hit the same dev stage or the same files. The board shows who is doing what, keeps a usage history,
+and leases the two shared things that need it. All of it lives in `scripts/board/` (bash) and
+`scripts/src/board/` (the tested decisions, TypeScript under plain `node`).
+
+**It must never make a session timid.** Tests and the headless UI pass always run. Below the _measured_
+edge the board only offers advice. A heavy job waits only at a measured edge — past the hard line, or when
+its class's concurrency cap is full (`test`: 4 suites at once, from the CPU edge in _Results_) — and only while
+`limits.json` says `enforce: true` (shipped 2026-10-29, after the 2026-10-13 quiet window found the CPU edge). Every hold is logged, so how
+limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
+
+## Use it
+
+| Want                              | Run                                                                                                                                                                                            |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                              |
+| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                         |
+| Hold the dev stage for a dev test | `scripts/board/board.sh lease acquire dev [--wait SEC] [--note "…"]` → `lease release dev` when done                                                                                           |
+| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                            |
+| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`) |
+| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                        |
+| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                         |
+
+Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
+pids 315/4096 · dev: flux`) — `scripts/board/statusline-snippet.sh`, sourced at the end of
+`~/.claude/statusline-command.sh`.
+
+## The container's real limits
+
+Measured 2026-10-13 at 9 CPUs / `memory.high` 18 GiB / `pids.max` 4096 (`measure/probe.sh` rewrites this
+snapshot to `history/probe-<date>.json`):
+
+- **Memory is a throttle, not a kill.** `memory.high` = 18 GiB: past it the kernel reclaims, then stalls
+  allocators (`memory.pressure` `full` rises). `memory.max` = `max`, and the VM has **no swap**, so anon memory
+  can't be reclaimed — but **the container cgroup never OOM-kills** (`memory.events` `oom_kill 0`). A
+  `SIGKILL`/137 comes from the VM's OOM killer (VM RAM 21.4 GiB, `/proc/meminfo` via lxcfs) or from userland
+  (vitest kills workers that miss its teardown timeout) — never from this cgroup.
+- **pids is the hard ceiling.** `pids.max` 4096 (threads count); `RLIMIT_NPROC` and `pid_max` are no lower. At
+  the ceiling `clone()` is refused → `SIGABRT`/134 (Incident A).
+- **Budget on anon, not `memory.current`.** `memory.current`/`memory.peak` include page cache (a fresh boot
+  showed peak 2.6 GB against 1.9 GB anon; a long-running box shows far more). `memory.stat` `anon` is the
+  pressure number.
+- **The test fan-out grew with the CPUs.** Root `pnpm test` = `pnpm -r test`: up to 4 packages at once
+  (`workspace-concurrency` unset), each vitest with `availableParallelism() − 1` = **8** workers. CI never
+  runs the root script, so container-only tuning can't leak into CI.
+- `cpu.max` is `max 100000` — the 80 % CPU allowance in `.coi/config.toml` doesn't land (Incident A
+  follow-ups).
+
+| File (`/sys/fs/cgroup/`)                      | Meaning                                   | Use                                  |
+| --------------------------------------------- | ----------------------------------------- | ------------------------------------ |
+| `memory.stat` → `anon`                        | real process memory                       | **the number**                       |
+| `memory.current` / `memory.peak`              | anon + cache (+ kernel)                   | context only                         |
+| `memory.high`                                 | throttle line                             | thresholds are fractions of it       |
+| `memory.max`                                  | `max` → no cgroup OOM                     | a 137 is the VM or userland          |
+| `memory.events` `high` / `oom_kill`           | throttle hits / kills since boot          | the delta per job is the verdict     |
+| `memory.pressure` `full avg10`                | stall regime                              | the stop signal                      |
+| `pids.current` / `pids.max` / `pids.peak`     | tasks (threads) / ceiling / high-water    | `paste -d/ pids.{current,max}`       |
+| `cpu.stat` `usage_usec`, `cpu.pressure`       | CPU time, CPU stalls                      | cores busy = Δusage / Δt             |
+| `/proc/meminfo` `MemTotal`                    | VM RAM                                    | the real 137 line                    |
+| `/proc/<pid>/stat` (parse after the last `)`) | ppid, threads, rss, cpu ticks, start time | attribution (`comm` may hold spaces) |
+
+## History — what the sampler records
+
+`scripts/board/sampler.sh` runs once per container (a `flock` singleton, a detached background process,
+stderr → `board/sampler.log`), started by the SessionStart hook and dying with the container. Every 30 s it
+reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `awk` — and appends one line to
+`history/samples-<date>.jsonl` (~3 MB/day):
+
+```
+{"t":"…","v":1,"cg":{"anonMiB":1851,"fileMiB":136,"currentMiB":2091,"highMiB":18432,"pids":255,"pidsMax":4096,
+  "cpuCores":0.3,"psiMemSome10":0,"psiMemFull10":0,"psiCpuSome10":0,"oomKill":0,"highEvents":0},
+ "cats":{"claude":{"n":7,"thr":110,"rssMiB":2675},"vitest":{…},"vite":{…},"chromium":{…},"tsc":{…},
+         "eslint":{…},"pnpm":{…},"system":{…},"other":{…},"unattributed":{"thr":0}},
+ "sessions":[{"pid":2180,"name":"dev-e2e","sid":"…","branch":"dev-e2e","state":"working","stateSrc":"hook",
+              "thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test"}],
+ "mix":{"working":2,"idle":5,"heavy":1},"gapSec":null}
+```
+
+- A **session** is a `claude` process; every other process is attributed to the nearest `claude` ancestor
+  (subagents run in-process, so they count with their session). Its `name` is its tmux window name — the
+  session name, and the `SendMessage` address — when the pane runs that `claude` (a `claude` started inside
+  another session's pane inherits `TMUX_PANE`); otherwise its branch, then its cwd's basename.
+- **state** comes from the session's hooks (`stateSrc: "hook"`: working from a prompt until Stop). A session
+  that hasn't fired a hook since the hooks were installed falls back to CPU (`"cpu"`, ≥ 5 % of a core) —
+  unreliable, because a session waiting on the model uses almost no CPU. `board.sh status` marks those `*`.
+- `unattributed` counts heavy-category threads with no session (drift detector for the attribution).
+- `gapSec` is set when a tick is > 60 s late — the container was frozen or the VM slept.
+- It also rewrites `board/status.line` every tick and, every 5th tick, `board/overlap.json`.
+
+`heavy.sh` adds one **job event** per run to `history/events-<date>.jsonl` (`kind: "job"`, below); lease
+actions are `kind: "lease"`. `cli.ts report` buckets the samples by mix (`2w 5i 1h`) with median / p95 / max
+anon, pids and cores; measures an idle session directly (RSS, threads); estimates each extra session's anon
+from heavy-free ticks; and summarises real jobs per class — load-test runs (`loadTest: true`: `matrix.sh`'s
+guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
+
+**Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
+envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard"|"lock", cap: {max, running,
+full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?}`.
+`action`: `waited` (ran after the wait; `waitedSec` real), `gaveUp` (exit 75; `waitedSec` = the budget),
+`denied` (the PreToolUse guard refused a raw command; `label: "guard"`), `wouldWait` (enforce off — the
+counterfactual). `holders` and `cap` are the ones at the first block, the cause. `cli.ts barriers` (and the
+report's _Barriers_ section) counts **blocks** = waited + gaveUp + denied, except that a deny followed within
+2 min by the same session's held `heavy.sh` re-run of the same class is **one** block (`merged`; each re-run
+absorbs one deny, the earliest). It gives blocks/day over the real window, total / p50 / p90 / max wait, and
+counts by reason, class, mix, holder and blocked session — per block, so reason, class and blocked session add
+up to the headline (a block can have several holders, and older events no mix).
+`lockBusy` (enforcing, the board lock stayed busy for the whole wait before any decision, so the job ran
+unslotted — fail-open; a job already held gives up instead, and with `enforce: false` a busy lock never waits) is reported,
+not counted as a block. Load tests are excluded.
+
+## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
+
+- **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
+  measured, no slot), `typecheck`, `lint`, `build`, `dev`, `ui`, `other` (no slot). `HEAVY_CLASS` overrides;
+  `HEAVY_LABEL` names the run — **never on argv** (a `pkill -f <label>` once killed the wrong process).
+- Takes a **heavy slot** (below), runs the command in the background, and samples at 1 Hz: container
+  pids / anon / current / PSI / cores, and the command's own process subtree (threads, RSS). Renews the slot
+  every 30 s.
+- On exit: releases the slot, appends the event, prints one line —
+  `heavy: test exit 0 · 27.3s · pids +312 (peak 600/4096) · anon +3100 MiB (peak 5000/18432) · subtree 290 thr / 3200 MiB · 4.1 cores · psi 0 · clean`.
+- **verdict**: `pids-ceiling` (134 with peak pids ≥ 95 % of max), `cgroup-oom` (137 with an `oom_kill` delta
+  — should never happen), `outside-cgroup` (137 without one: VM or userland), `throttled` (PSI full past
+  `psiFullKill` or a `high` delta), `guard-stop`, `clean`.
+- stdout/stderr pass straight through; the exit code is the command's (`128+sig` if signalled). A
+  background command's stdin is `/dev/null`.
+- `HEAVY_DURATION=N` stops it after N s (load tests' `dev` cell); `HEAVY_GUARD=1` enforces the stop
+  conditions (load tests only).
+- **Container-only tuning** (`limits.json` `tuning.test`: `workspaceConcurrency`, `maxWorkers`) applies only
+  in a `coi-*` container and only once measured: a setting ships only if it cuts peak anon ≥ 30 % for ≤ 15 %
+  more wall time. Until then `null` — no guessing.
+
+## Leases
+
+State lives on the shared mount (`/workspace/localNotes/board/`, visible from the Mac), written tmp + rename.
+Every lease change runs under `flock /tmp/aperture-board.lock` — on the container's rootfs, because the whole
+population is this one container (virtiofs `flock` semantics aren't worth trusting).
+
+**`dev`** — one branch on the dev stage at a time. Advisory and local; ci-bot's `refs/locks/dev` will be
+GitHub's truth, and dev-e2e's build marker catches an overwrite after the fact. Lease
+`{holderPid, holderStart, holderName, branch, acquiredAt, expiresAt, ttlSec: 2700, note}`:
+
+- free → granted; the holder again → renewed; someone else → exit 3 with who and until when
+  (`--wait SEC` polls, `--force` takes it, logged).
+- **expired** → taken over; holder **dead** (pid gone or reused — `/proc` start time) → taken over at once,
+  with the `SendMessage` text printed for the new holder to send.
+- The holder's **session ending** flags it `holderGone` but keeps it until TTL (45 min) — dev testing and
+  feedback outlive a session restart. The restarted session on that branch takes it back on its first prompt
+  (`takeover`, reason `resumed`, no message; it keeps the original `acquiredAt` and `--note`), and each prompt in the holder's session on that branch renews it.
+- Only the holder releases it (`--force` overrides, logged).
+
+**`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
+The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
+(not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
+with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 4 `test` slots already
+held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
+over the hard line when both apply (it names the holders), other classes and `test-file` runs are never
+capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — and the hard-line wait too: they probe the
+edge on purpose and stop themselves, so a hold would only record a false edge. Past
+hard or at a full cap → with `enforce: false` run anyway and log `wouldWait`; with
+`enforce: true` (shipped) wait for room or a slot, polling every 2 s, up to `--wait` (90 s — inside the Bash tool's 120 s
+timeout, so the message reaches Claude), then exit **75** naming the jobs that hold the room: tell the user
+rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the background. (Room that frees
+late in the wait still starts the command inside the same call, so with `enforce: true` give long jobs a
+longer Bash timeout or run them in the background.) Slots whose wrapper died are dropped on the next acquire and by `gc`.
+
+## `scripts/board/limits.json`
+
+Thresholds are **fractions of the live `pids.max` / `memory.high`**, so a limit change moves nothing:
+`pidsSoftFrac` 0.80 / `pidsHardFrac` 0.92 (3276 / 3768 at 4096), `anonSoftFrac` 0.60 / `anonHardFrac` 0.80
+(10.8 / 14.4 GiB at 18 GiB), `psiFullKill` 15 (load-test stop), `currentGuardMiB` 1536. `classes` hold each
+job class's cost (`pids`, `anonMiB`, `p95Sec`, `source`) — shipped as the 2026-10-06 bench maxima × 1.6 for the
+8-worker fan-out, `measuredAt: null`, `enforce: false`; the 2026-10-13 quiet window filled them in and set
+`measuredLimits`; on 2026-10-29 (the user's call) `enforce: true` shipped with `"concurrency": { "test": 4 }` — a policy
+key, top-level like `tuning`, so a quiet window rewriting `classes` never loses it. The value is the CPU edge:
+a 6th concurrent suite timed out (_Results_). Loosen or tighten it with `cli.ts barriers` data; `cli.ts staleness` then warns when the live limits differ or a class's real p95 runs 20 %
+over its cost.
+
+## Hooks
+
+Four, all fail-open, documented with their fixtures in `.claude/hooks/README.md` → _Board hooks_:
+SessionStart registers and injects headroom / dev lease / overlaps; UserPromptSubmit and Stop keep the state;
+the Bash PreToolUse guard offers `heavy.sh` and, with `enforce: true`, denies a raw heavy command only at the
+measured edge or a full cap (recording a `denied` barrier event, pointing at this board's `heavy.sh` by absolute
+path — other worktrees have none until merge — which waits). Only a command that actually starts a runner counts:
+some `&&` / `;` / `|` segment begins (after env assignments, `env`, `timeout N`) with `pnpm`, `vitest`, `tsc`,
+`node`, … — `cat vitest.config.ts`, `rg -n "vitest|pnpm test"` (quoted spans are text), a heredoc body, or `pnpm add vitest` is
+text, not a run — and the class comes only from the segments that run. It misses some real runs (`bash -c "pnpm
+test"`, `make`), which only costs the offer: the hook fails open;
+SessionEnd marks the session gone.
+
+## Overlaps
+
+Every 5th sampler tick `cli.ts overlap` lists each worktree on a branch (the detached main checkout is
+skipped) with its files — committed since the merge-base with `origin/main` ∪ uncommitted ∪ untracked, minus
+`localNotes/` — and intersects them pairwise into `board/overlap.json`. Files nearly every branch touches
+(`CLAUDE.md`, `docs/index.md`, `package.json`, `pnpm-lock.yaml`, `.claude/settings.json`, the hooks README,
+`run-fixtures.py`) go on a separate "small appends" line so real overlaps stand out. SessionStart injects this
+branch's lines, e.g. "flux also touches 2 of your files: app/src/data/seed.ts, app/src/data/stubClient.ts —
+SendMessage session `flux`; expect a rebase conflict whichever merges second." `origin/main` is whatever was
+last fetched; the merge-base keeps that safe.
+
+## Measurement protocol
+
+Scripts in `scripts/board/measure/`; every job goes through `heavy.sh`, so the load tests are the first
+history. **Singles** run any time — the build's own gates through `heavy.sh` fill them. **Pairs, sessions and
+the edge test need the quiet window.**
+
+1. `probe.sh` — environment snapshot (limits, versions, vitest's default workers, tmux/setsid capability).
+2. `matrix.sh setup` — scratch worktrees `board-matrix-b` / `-c` (detached at this HEAD, installed), so pair
+   cells are real two-tree runs.
+3. `matrix.sh <cell> [reps]` — 3 reps (to 5 when Δanon or Δpids spread > 10 % of the median), 20 s apart, one
+   summary line per rep, a `matrix-<date>.jsonl` row per cell. A 3-rep `test` cell takes ~3 min, past the
+   Bash tool's 120 s default: run cells with `run_in_background` (or a 600 s timeout). Pair and session
+   cells refuse until `setup` has installed their trees. Cells (`matrix.sh list`): `typecheck` and
+   `lint` cold (`tsc -b --force`, `eslint` without cache); `test`; `test-wc1`/`-wc2`
+   (`--workspace-concurrency`); `test-w3`/`-w4` (`VITEST_MAX_WORKERS`); `dev` (90 s); `ui` and `ui-rpl1`
+   (`measure/ui-cell.sh`: dev server + Chromium over 4 routes at phone width, `--renderer-process-limit=1`
+   on/off; `PW_DIR` must hold Playwright); `pair:test+test`, `pair:test+ui`, `pair:test+typecheck`,
+   `pair:dev+ui`; `two-sessions` / `three-sessions` (test → typecheck → ui per tree, trees in parallel).
+4. `edge.sh --detach` — detached (progress in `history/edge-<date>.log`), adds a looping `pnpm test` instance every 30 s until a
+   stop fires, a run fails (any exit but 0 / 143 — the gate was green, so the load caused it), or 12
+   instances; stops them by PID (each wrapper's PID is recorded as it starts), waits for anon to settle,
+   writes `history/edge-<date>-<HHMM>.json` (per step: instances launched and alive, peaks, PSI,
+   `memory.events` deltas, exits; and the **head** of the first failed run's output). Refuses while any
+   other session is live or was working in the last 5 min, or when it can't read the board (`EDGE_FORCE=1`
+   with the user's say-so). `EDGE_CMD` swaps the job for a dry run. Expected at 18 GiB was a PSI stop at ~4–5
+   instances; measured, CPU gives out first (_Results_).
+
+**Stop conditions** (1 Hz in `heavy.sh` under `HEAVY_GUARD=1` and in `edge.sh`, all from `limits.json` ×
+live limits): pids past soft → stop launching; pids past hard, anon past hard, PSI `full avg10` past
+`psiFullKill` twice running, or `memory.current` within `currentGuardMiB` of `memory.high` with PSI rising →
+kill children; in `edge.sh`, a run failing (any exit but 0 / 143) → stop and record.
+
+**Cheap fixes measured before any gating:** `--workspace-concurrency=1|2`, `VITEST_MAX_WORKERS=3|4`, Chromium
+`--renderer-process-limit=1`. More VM RAM only if the window shows VM-side kills.
+
+**The quiet window** (the user schedules it; during this branch's dev-test phase):
+
+1. Other sessions ended properly (`Ctrl+D`, `exit` — COI exports them); worktrees committed.
+2. Playwright installed in the driving session's scratchpad **beforehand** (the install is a rootfs write
+   burst the COI monitor can flag); `matrix.sh setup` done.
+3. In the VM: `journalctl -k -f | grep -iE 'oom|cgroup|killed process'` in a tmux window; `coi unfreeze` at hand.
+4. Run: singles not yet covered → pairs → `two-sessions` / `three-sessions` → `edge.sh --detach`.
+5. After any 137: the user pastes back `free -g`, `cat /sys/fs/cgroup/lxc.payload.<container>/memory.events`,
+   `journalctl -k | grep -i 'killed process'`, and the failed head from the edge file.
+6. Fill `limits.json` (`classes`, `measuredAt`, `measuredLimits`, `tuning` per the 30 % / 15 % rule,
+   `enforce: true` — it bites only past hard), the results table below, and CLAUDE.md's COI bullet.
+
+### Results
+
+Quiet window 2026-10-13 (18:53–19:52 PDT): every other session exited; 9 CPUs, `memory.high` 18 GiB,
+`pids.max` 4096, baseline 527 MiB anon / 162 pids. Rows: matrix `history/matrix-2026-10-14.jsonl` (3 reps,
+5 when the spread passed 10 %); edge `history/edge-2026-10-14-0248.json`. Δ = the job's added peak; peak =
+the container's. No matrix cell saw memory pressure (PSI `full` 0, `high` 0, `oom_kill` 0); the edge peaked at PSI `full` 0.36.
+
+| Cell                                   | Δpids (max) | Δanon MiB (max) | wall s (median) | cores (max) |
+| -------------------------------------- | ----------- | --------------- | --------------- | ----------- |
+| `typecheck` (cold)                     | 30          | 1023            | 13.7            | 3.3         |
+| `lint` (cold)                          | 23          | 828             | 6.3             | 2.7         |
+| `test` (8 workers)                     | 257         | 2476            | 32.9            | 7.9         |
+| `test-wc1` / `-wc2`                    | 105 / 196   | 2393 / 2381     | 37.8 / 31.6     | 8.1 / 8.4   |
+| `test-w3` / `-w4`                      | 193 / 208   | 1839 / 2116     | 32.6 / 30.2     | 6.8 / 7.2   |
+| `dev` (90 s)                           | 66          | 294             | 90.9            | 3.0         |
+| `ui` / `ui-rpl1`                       | 157 / 158   | 677 / 676       | 6.2 / 6.1       | 2.8 / 2.4   |
+| `pair:test+test`                       | 520         | 4735            | 50.5            | 8.9         |
+| `pair:test+typecheck`                  | 279         | 3011            | 34.2            | 8.0         |
+| `pair:test+ui` / `pair:dev+ui`         | 271 / 213   | 2373 / 925      | 33.6 / 90.1     | 8.3 / 4.3   |
+| `two-sessions` (test → typecheck → ui) | 518         | 4806            | 45.6            | 8.9         |
+| `three-sessions`                       | 776         | 6616            | 66.6            | 9.1         |
+
+**Edge** (a looping `pnpm test` added every 30 s): 1 → 3.1 GiB / 427 pids, 2 → 4.5 / 636, 4 → 6.1 / 839,
+5 → 7.3 / 872, then at 6 launched (5 alive) a run **failed**: `Finances.test.tsx` timed out at vitest's 5 s
+under CPU starvation, with the container at 7.6 GiB anon (42 % of `memory.high`), 1140 pids (28 %) and PSI
+`full` 0.36. Anon settled back to 543 MiB.
+
+What it means:
+
+- **CPU is the edge, not memory or pids.** One `pnpm test` keeps ~7.9 of 9 cores busy; two saturate them.
+  Past ~5 concurrent suites, jsdom tests start timing out — a flaky timeout under parallel load is
+  contention, not a bug. Memory and pids never came near their lines, so the anon/pids budget (and
+  `enforce`) can't see this edge — hence the shipped `test` cap of 4 (`concurrency`), tracked by
+  `cli.ts barriers` so it can be loosened with data.
+- **Three sessions' full gate + UI at once is fine** (+6.6 GiB, +776 pids, all green), just CPU-bound.
+- **Test tuning: none** (answer 3's bar is ≥ 30 % peak-anon cut for ≤ 15 % more wall time).
+  `VITEST_MAX_WORKERS=3` cuts 24 % at no wall cost; `--workspace-concurrency=1` saves nothing and is 15 %
+  slower. `tuning.test` stays null.
+- **Class costs** in `limits.json` are these maxima, rounded up; `build` wasn't measured.
+
+## Script-shape rules (COI monitor)
+
+The monitor reads every process's argv (`docs/ops/COI-SANDBOX.md`, `localNotes/code-on-incus/APERTURE-ANALYSIS.md`).
+Everything here: never reads `/proc/*/environ`, never `xargs` over `/proc`, no `python`/`perl`/`ruby`/`node` one-liners (heredocs
+only; `awk`, inline or `-f`, isn't on the monitor's list), no `ps | grep` sweeps (it reads `/proc/<pid>/stat` itself), kills by PID, keeps
+labels off argv, and has no `/curl` or `/wget` on any command line. Subagent prompts that run these scripts
+carry the same list.
+
+## Operator steps
+
+- **Hooks before merge:** `.claude/settings.json` registers them from the main checkout, so until merge they
+  run only from a paste into the main checkout's `.claude/settings.local.json` (read-only in the container)
+  with the worktree's absolute hook paths. Remove the paste after merge, or every hook runs twice.
+- **Status line:** two lines appended to `~/.claude/statusline-command.sh` (container-local) source the
+  snippet from the main checkout, else the worktree.
+
+## Known limitations
+
+- CPU-inferred state (no hooks yet) misreads a session waiting on the model as idle.
+- Session identity relies on `CLAUDE_PID` in the Bash env (observed, undocumented, Claude Code 2.1.296) and
+  falls back to walking `/proc` to the nearest `claude` ancestor; hooks always walk.
+- The first sampler started wins the lock; after this lands, `board.sh sampler restart` from the main checkout
+  so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
+  overwriting a file in place under the running sampler has killed it once.
+- The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4
+  wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes only the case where 4 wrapped suites already run.
+- `edge.sh` maps the throttle regime; pids exhaustion is container-wide, so other live sessions can abort —
+  hence the quiet-window precondition.
