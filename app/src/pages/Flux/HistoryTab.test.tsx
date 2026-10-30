@@ -28,12 +28,12 @@ const set = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
   ...over,
 });
 
-async function history(sets: RecordFluxSetInput[], opts: { ack?: boolean } = {}) {
+async function history(sets: RecordFluxSetInput[], opts: { ack?: boolean; path?: string } = {}) {
   const api = createStubClient({ seed: false, storageKey: `flux-history-${Math.random()}` });
   if (opts.ack !== false) await api.updateSettings({ fluxDisclaimerAckAt: 1 });
   for (const s of sets) await api.recordFluxSet(s);
   const user = userEvent.setup();
-  renderApp({ api, path: '/flux/history' });
+  renderApp({ api, path: opts.path ?? '/flux/history' });
   return { api, user };
 }
 
@@ -134,10 +134,66 @@ describe('Flux History tab', () => {
     expect((await api.exportData()).fluxSets.map((s) => s.id)).toEqual([keep.id]);
   });
 
+  it('Cancel and Escape on the delete confirm hand focus back to the row’s Delete', async () => {
+    const { user } = await history([set()]);
+    const trigger = () => screen.getByRole('button', { name: 'Delete Neck Rotation set' });
+    await user.click(await screen.findByRole('button', { name: 'Delete Neck Rotation set' }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }),
+    );
+    expect(document.activeElement).toBe(trigger());
+    await user.click(trigger());
+    expect(document.activeElement?.textContent).toBe('Delete'); // the confirm's own Delete
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it('a hold count never trends — only an angle does', async () => {
+    const t = Date.now();
+    const hold = (d: number) =>
+      set({
+        day: addDays(today, -d),
+        exerciseId: 'chin-tuck',
+        kind: 'holdAtTarget',
+        count: 10,
+        avgPeakDeg: null,
+        completedAt: t - d * 86_400_000 - 1000,
+      });
+    const { user } = await history([hold(4), hold(2), hold(0)]);
+    await user.click(await screen.findByRole('button', { name: 'chin tuck' }));
+    expect(screen.getAllByText(/10 holds/)).toHaveLength(3);
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
   it('shows sets still waiting in the outbox', async () => {
     localStorage.setItem(STUB_FAIL_FLUX_SAVE_KEY, '1');
     localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: set(), at: 1, error: null }]));
     await history([]);
+    expect(await screen.findByText('1 set not saved yet')).toBeTruthy();
+    localStorage.removeItem(STUB_FAIL_FLUX_SAVE_KEY);
+  });
+
+  it('Discard’s question lands on Keep, and Escape hands focus back to Discard', async () => {
+    localStorage.setItem(STUB_FAIL_FLUX_SAVE_KEY, '1');
+    localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: set(), at: 1, error: null }]));
+    const { user } = await history([]);
+    await screen.findByText('1 set not saved yet');
+    const discard = screen.getByRole('button', { name: 'Discard' });
+    await user.click(discard);
+    const confirm = screen.getByRole('alertdialog', { name: 'Discard 1 set?' });
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Keep' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Discard' }));
+    expect(localStorage.getItem(FLUX_OUTBOX_KEY)).not.toBeNull();
+    localStorage.removeItem(STUB_FAIL_FLUX_SAVE_KEY);
+  });
+
+  it('the Library tab shows unsaved sets too', async () => {
+    localStorage.setItem(STUB_FAIL_FLUX_SAVE_KEY, '1');
+    localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: set(), at: 1, error: null }]));
+    await history([], { path: '/flux' });
     expect(await screen.findByText('1 set not saved yet')).toBeTruthy();
     localStorage.removeItem(STUB_FAIL_FLUX_SAVE_KEY);
   });

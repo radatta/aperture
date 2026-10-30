@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
+import { useDisclosure } from '../../lib/useDisclosure';
 import { useFluxOutbox } from './useFluxOutbox';
 
 // Sets still waiting in the outbox (D49) — never a quiet failure. Retry resends them all; Discard is the
-// only other way out, and it asks first: a discarded set is gone.
+// only other way out, and it asks first: a discarded set is gone. The question lands focus on Keep, so
+// a second Enter can't discard unread; Keep or Escape hands focus back to Discard (useDisclosure).
 export function UnsavedSetsStrip() {
   const { entries, flush, discard } = useFluxOutbox();
-  const [confirming, setConfirming] = useState(false);
+  const { open: confirming, triggerRef, onOpen, onClose } = useDisclosure();
   const [retrying, setRetrying] = useState(false);
   if (entries.length === 0) return null;
   const n = entries.length;
@@ -29,27 +31,35 @@ export function UnsavedSetsStrip() {
       </Text>
       {confirming ? (
         <div
+          key="confirm"
           role="alertdialog"
           aria-label={`Discard ${sets}?`}
           className="flex flex-wrap items-center gap-2"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            onClose();
+          }}
         >
           <Text size="xs">Discard {sets}? They won&apos;t be saved anywhere.</Text>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              entries.forEach((e) => discard(e.input.id));
-              setConfirming(false);
-            }}
-          >
-            Discard
-          </Button>
-          <Button variant="quiet" size="sm" onClick={() => setConfirming(false)}>
-            Keep
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                entries.forEach((e) => discard(e.input.id));
+                onClose(); // a new failure later starts at Retry, not mid-question
+              }}
+            >
+              Discard
+            </Button>
+            <Button autoFocus variant="quiet" size="sm" onClick={onClose}>
+              Keep
+            </Button>
+          </div>
         </div>
       ) : (
-        <div className="flex gap-2">
+        <div key="actions" className="flex gap-2">
           <Button
             size="sm"
             disabled={retrying}
@@ -61,7 +71,7 @@ export function UnsavedSetsStrip() {
           >
             {retrying ? 'Retrying…' : 'Retry'}
           </Button>
-          <Button variant="quiet" size="sm" onClick={() => setConfirming(true)}>
+          <Button ref={triggerRef} variant="quiet" size="sm" onClick={onOpen}>
             Discard
           </Button>
         </div>

@@ -95,17 +95,17 @@ export function FluxHistoryTab() {
   );
 }
 
-const fmtValue = (m: SetMetric) =>
-  m.unit === '°' ? `${m.value.toFixed(m.betterWhen === 'lower' ? 1 : 0)}°` : `${m.value} ${m.unit}`;
+const fmtValue = (m: SetMetric) => `${m.value.toFixed(m.betterWhen === 'lower' ? 1 : 0)}°`;
 
 // One exercise's trend as a stat tile: the latest number, the change since the first set shown, and the
-// line. Fewer than three sets is no trend — the list says enough.
+// line. Fewer than three sets is no trend — the list says enough. Only an angle trends: a hold or rep
+// count is the prescription met (a flat line on its own target), so those exercises keep the list alone.
 function Trend({ def, sets }: { def: ExerciseDefinition; sets: readonly FluxSet[] }) {
   const points = [...sets]
     .sort((a, b) => a.completedAt - b.completedAt)
     .flatMap((s) => {
       const m = setMetric(def, s);
-      return m ? [{ s, m }] : [];
+      return m?.unit === '°' ? [{ s, m }] : [];
     });
   if (points.length < MIN_TREND_POINTS) return null;
   const first = points[0]!;
@@ -119,8 +119,7 @@ function Trend({ def, sets }: { def: ExerciseDefinition; sets: readonly FluxSet[
     <Card className="flex flex-col gap-2 p-4">
       <Text size="xs" tone="muted">
         {label}
-        {last.m.target !== undefined &&
-          ` · target ${last.m.target}${last.m.unit === '°' ? '°' : ''}`}
+        {last.m.target !== undefined && ` · target ${last.m.target}°`}
       </Text>
       <div className="flex items-baseline gap-3">
         <Text size="2xl" weight="semibold">
@@ -139,9 +138,7 @@ function Trend({ def, sets }: { def: ExerciseDefinition; sets: readonly FluxSet[
         label={`${label}, ${points.length} sets: ${deltaText}`}
       />
       <Text size="xs" tone="muted">
-        {def.measurement === 'guided'
-          ? 'Guided — counts only; the angle isn’t measured.'
-          : 'Measured from each session’s own neutral — a trend to watch, not a clinical angle.'}
+        Measured from each session’s own neutral — a trend to watch, not a clinical angle.
       </Text>
     </Card>
   );
