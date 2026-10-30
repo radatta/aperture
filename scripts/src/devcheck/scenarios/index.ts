@@ -2,9 +2,10 @@
 // delta --scenario <id>` runs just that one, `--tier full` runs them all.
 import type { Scenario, Tier } from '../scenario';
 import { captureTask } from './capture-task';
+import { partsV2 } from './parts-v2';
 import { smoke } from './smoke';
 
-export const SCENARIOS: Scenario[] = [smoke, captureTask];
+export const SCENARIOS: Scenario[] = [smoke, captureTask, partsV2];
 
 export type RunTier = Tier | 'delta';
 

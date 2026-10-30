@@ -22,7 +22,10 @@ export interface PwLocator {
   waitFor(opts?: { state?: 'visible' | 'attached' | 'hidden'; timeout?: number }): Promise<void>;
   isVisible(): Promise<boolean>;
   textContent(): Promise<string | null>;
+  inputValue(): Promise<string>;
   count(): Promise<number>;
+  getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
+  getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
 }
 
 export interface PwPage {
@@ -41,6 +44,7 @@ export interface PwPage {
     opts?: { timeout?: number },
   ): Promise<void>;
   evaluate<T>(expression: string): Promise<T>;
+  keyboard: { press(key: string): Promise<void> };
   screenshot(opts: { path: string; fullPage?: boolean }): Promise<unknown>;
   on(event: 'console', fn: (msg: { type(): string; text(): string }) => void): void;
   on(event: 'pageerror', fn: (err: Error) => void): void;
