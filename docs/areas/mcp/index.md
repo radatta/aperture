@@ -76,6 +76,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
 | attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`            |
 | finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`           |
+| flux (read)      | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                    |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -168,6 +169,14 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   travelling. (The finance sync's schedule is the other place Pacific time is fixed — cdk
   `finance-sync.ts`.) The overview omits the Plaid environment (the MCP's gateway is inert, so it would
   always read "sandbox"). Data is as fresh as the last bank sync; voice can't trigger one.
+- **Flux is read-only** (`lambdas/src/mcp/fluxTools.ts`, [flux](../flux/index.md) D52). Sets are
+  recorded by the app's stage only; deleting one is the History tab's. `from`/`to` are both or neither
+  (one alone is a param error, like the RPC's `fluxFilterError`). Every label is resolved server-side from
+  the shared catalog — the exercise name, `side` as `right`/`left` (`sideLabel`, D48), and `metric`, the one
+  number History judges a set by (`setMetric`) — plus a per-exercise first → latest `summary`, and `today`
+  (the night line's sentence, `summarizeSets`) when the window is one day. Every result carries the
+  honesty `note`: angles are relative to each session's own neutral, a trend and not a clinical
+  measurement. `list_flux_exercises` gives the ids, sides and prescriptions.
 
 ## Claude Code's standing approvals and the dev ledger
 
@@ -206,6 +215,8 @@ transport. See `lambdas/src/mcp/protocol.ts`.
 - `lambdas/src/mcp/financeTools.ts` — the read-only finance tools, over `deriveFinanceView` /
   `financeListRange` (`packages/shared/src/finance.ts`, shared with the page) and `dayKeyInZone`
   (`packages/shared/src/dates.ts`).
+- `lambdas/src/mcp/fluxTools.ts` — the read-only Flux tools, over `setMetric` / `sideLabel` /
+  `summarizeSets` (`packages/shared/src/flux/history.ts`, shared with the History tab).
 - `lambdas/src/mcp/types.ts` — `ToolContext`, `Tool`, `RpcParamError` (→ JSON-RPC -32602; execution errors
   become `isError` results the model self-corrects from).
 - `lambdas/src/mcp/index.ts` — the AWS/HTTP + auth edge (origin gate, well-known routes, credential fork,
@@ -358,6 +369,9 @@ the model as the only UI — so:
   no arguments; "what did I spend at Amazon?" → `list_finance_transactions {merchant: "amazon"}` and its
   `totalUsd`. Nothing finance-related is
   writable from here.
+- **Flux by voice is a question too:** "how's my neck rehab going this week?" → `list_flux_sets {from, to}`
+  and its `summary`; "did I do my neck exercises today?" → the same with `from = to = today` and its
+  `today` line.
 
 Known limits: online-only (no capture queue); relative dates resolve in the model's idea of "today" and
 timezone; each capture is a claude.ai conversation; the D13 refresh token isn't sliding (no rotation

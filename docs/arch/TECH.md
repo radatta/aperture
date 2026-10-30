@@ -138,6 +138,7 @@ SK (type-prefixed range keys):
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
   lc#<day>#<ulid>               LeetCode attempts, day-bucketed  (begins_with lc#)
+  flux#<day>#<ulid>             Flux sets, day-bucketed; the client mints the ulid (idempotent put-if-absent; soft-delete tombstones)
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)
   day#<date>                    day singleton (direct get)
   attach#<taskId>#<ulid>        a task's attachments        (begins_with attach#<taskId>)
