@@ -690,6 +690,24 @@ describe('dev stacks on the devsandbox bootstrap (dev-sandbox-stack.ts)', () => 
     for (const r of roles(prod.templates)) expect(r.Properties.PermissionsBoundary).toBeUndefined();
   });
 
+  it('names every dev resource the way the sandbox policy and boundary scope it', () => {
+    const props = dev.templates.flatMap((t) =>
+      Object.values(t.toJSON().Resources as Record<string, { Type: string; Properties?: Record<string, unknown> }>),
+    );
+    const named = (type: string, key: string) =>
+      props.filter((r) => r.Type === type).map((r) => r.Properties?.[key]);
+    // Named functions and log groups must fit `aperture-*-dev`; unnamed ones get the `ApertureApp-dev-…` prefix.
+    for (const n of named('AWS::Lambda::Function', 'FunctionName').filter(Boolean))
+      expect(n).toMatch(/^aperture-[a-z-]+-dev$/);
+    for (const n of named('AWS::Logs::LogGroup', 'LogGroupName')) expect(n).toMatch(/^\/aws\/lambda\/aperture-[a-z-]+-dev$/);
+    expect(named('AWS::DynamoDB::Table', 'TableName')).toEqual(['aperture-dev']);
+    expect(named('AWS::Scheduler::ScheduleGroup', 'Name')).toEqual(['aperture-finance-dev']);
+    // Roles and buckets stay unnamed, so CloudFormation names them after the stack (`ApertureApp-dev-…`,
+    // `apertureapp-dev-…`) — the prefixes the sandbox grants on.
+    for (const n of [...named('AWS::IAM::Role', 'RoleName'), ...named('AWS::S3::Bucket', 'BucketName')])
+      expect(n).toBeUndefined();
+  });
+
   it('uses only resource types the sandbox execution policy covers — a new one means granting it and redeploying the sandbox first', () => {
     const types = new Set(
       dev.templates.flatMap((t) =>

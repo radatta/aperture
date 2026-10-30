@@ -21,10 +21,11 @@ const DEFAULT_QUALIFIER = 'hnb659fds'; // the account's default bootstrap (cdk-h
 // them. Creates the GitHub OIDC provider + two keyless deploy roles + a dev-logs reader, then the pipeline
 // never touches it (re-run by hand when a role changes — INFRA §9).
 // The roles hold almost no direct power: cdk deploy is funneled through a CDK bootstrap's roles (prod: the account
-// default's; dev: its own devsandbox one, dev-sandbox-stack.ts), which carry the real permissions, and the roles get
-// only the handful of direct actions the frontend publish + smoke step take outside CloudFormation. Prod trust is bound to the `prod` GitHub environment,
-// so the prod role is unassumable except from a job that declares `environment: prod` (branch-policy
-// scoped — the prod environment carries no required-reviewer approval today).
+// default's; dev: its own devsandbox one, dev-sandbox-stack.ts), which carry the real permissions, and the roles
+// get only the handful of direct actions the frontend publish + smoke step take outside CloudFormation. Prod
+// trust is bound to the `prod` GitHub environment, so the prod role is unassumable except from a job that
+// declares `environment: prod` (branch-policy scoped — the prod environment carries no required-reviewer
+// approval today).
 export class ApertureCicdStack extends Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
     super(scope, id, props);

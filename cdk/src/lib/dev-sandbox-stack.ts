@@ -36,8 +36,8 @@ const devArns = (partition: string, account: string, region: string) => ({
     const fn = `arn:${partition}:lambda:${region}:${account}:function:${f}`;
     return [fn, `${fn}:*`]; // a function and its versions/aliases
   }),
-  // A trailing `*` also covers the `:*` stream suffix.
-  logGroups: ['aperture-*-dev*', 'ApertureApp-dev-*', 'ApertureData-dev-*'].map(
+  // Groups and their `:*` streams; `aperture-*-dev` is spelled out so no `-dev…` prod name can match.
+  logGroups: ['aperture-*-dev', 'aperture-*-dev:*', 'ApertureApp-dev-*', 'ApertureData-dev-*'].map(
     (g) => `arn:${partition}:logs:${region}:${account}:log-group:/aws/lambda/${g}`,
   ),
   devParams: `arn:${partition}:ssm:${region}:${account}:parameter/aperture/dev/*`,
@@ -99,6 +99,8 @@ export class ApertureDevSandboxStack extends Stack {
     // The trust the stock bootstrap uses: any principal in this account whose own policy allows the assume (the dev
     // GitHub role; the user's admin creds for a stuck stack). The dev boundary allows no sts:, so dev Lambdas can't.
     const accountPrincipal = new iam.SessionTagsPrincipal(new iam.AccountPrincipal(account));
+    // The stock bootstrap's guard against bucket sniping: the sandbox bucket must be in this account.
+    const inAccount = { StringEquals: { 'aws:ResourceAccount': account } };
 
     const assets = new s3.Bucket(this, 'Assets', {
       bucketName: `cdk-${q}-assets-${account}-${region}`,
@@ -172,6 +174,7 @@ export class ApertureDevSandboxStack extends Stack {
         new iam.PolicyStatement({
           actions: ['s3:GetObject', 's3:GetObjectVersion'],
           resources: [assets.arnForObjects('*')],
+          conditions: inAccount,
         }),
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter', 'ssm:GetParameters'],
@@ -183,8 +186,10 @@ export class ApertureDevSandboxStack extends Stack {
         new iam.PolicyStatement({ actions: ['logs:*'], resources: arn.logGroups }),
         new iam.PolicyStatement({ actions: ['logs:DescribeLogGroups'], resources: ['*'] }),
         // IAM: dev-prefixed roles only (CDK leaves them unnamed, so CloudFormation names them `<stack>-…`). A role is
-        // created — or re-bounded — only with the dev boundary; the only managed policy it may attach is basic logging;
-        // it may be passed only to Lambda or Scheduler. The boundary and this policy are out of reach (no policy actions).
+        // created — or re-bounded — only with the dev boundary, and its policies change only while it carries it (a role
+        // left unbounded by an older admin-bootstrap deploy can't be granted `*:*`); the only managed policy it may
+        // attach is basic logging; it may be passed only to Lambda or Scheduler. The boundary and this policy are out
+        // of reach (no managed-policy actions).
         new iam.PolicyStatement({
           actions: [
             'iam:GetRole',
@@ -199,13 +204,16 @@ export class ApertureDevSandboxStack extends Stack {
             'iam:UpdateAssumeRolePolicy',
             'iam:TagRole',
             'iam:UntagRole',
-            'iam:PutRolePolicy',
-            'iam:DeleteRolePolicy',
           ],
           resources: arn.devRoles,
         }),
         new iam.PolicyStatement({
-          actions: ['iam:CreateRole', 'iam:PutRolePermissionsBoundary'],
+          actions: [
+            'iam:CreateRole',
+            'iam:PutRolePermissionsBoundary',
+            'iam:PutRolePolicy',
+            'iam:DeleteRolePolicy',
+          ],
           resources: arn.devRoles,
           conditions: { StringEquals: { 'iam:PermissionsBoundary': arn.boundary } },
         }),
@@ -213,6 +221,7 @@ export class ApertureDevSandboxStack extends Stack {
           actions: ['iam:AttachRolePolicy', 'iam:DetachRolePolicy'],
           resources: arn.devRoles,
           conditions: {
+            StringEquals: { 'iam:PermissionsBoundary': arn.boundary },
             ArnEquals: {
               'iam:PolicyARN': `arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole`,
             },
@@ -250,6 +259,13 @@ export class ApertureDevSandboxStack extends Stack {
           actions: ['cloudfront:*'],
           resources: [`arn:${partition}:cloudfront::${account}:distribution/${devDistributionId}`],
         }),
+        // These move an alternate domain name onto the target distribution — dev's, so prod's hostname could be pulled
+        // onto branch code. CloudFront likely demands DNS proof too (unverified); the deny costs nothing.
+        new iam.PolicyStatement({
+          effect: iam.Effect.DENY,
+          actions: ['cloudfront:AssociateAlias', 'cloudfront:UpdateDomainAssociation'],
+          resources: ['*'],
+        }),
         new iam.PolicyStatement({
           actions: ['OriginAccessControl', 'CachePolicy', 'OriginRequestPolicy'].flatMap((r) =>
             ['Create', 'Get', 'Update', 'Delete']
@@ -271,7 +287,9 @@ export class ApertureDevSandboxStack extends Stack {
     });
 
     // ---- Deploy role (the CLI's): the two dev stacks only, and only with the sandbox execution role named — an
-    // UpdateStack without RoleARN would reuse whatever role the stack last ran with.
+    // UpdateStack without RoleARN would reuse whatever role the stack last ran with. No change sets: `--method=direct`
+    // and `diff --method=template` use none, and executing one left over from a default-bootstrap run would apply it
+    // with that run's admin role.
     const deployRole = new iam.Role(this, 'DeployRole', {
       roleName: roleName('deploy'),
       assumedBy: accountPrincipal,
@@ -281,7 +299,6 @@ export class ApertureDevSandboxStack extends Stack {
         actions: [
           'cloudformation:CreateStack',
           'cloudformation:UpdateStack',
-          'cloudformation:CreateChangeSet',
           'cloudformation:RollbackStack',
           'cloudformation:ContinueUpdateRollback',
         ],
@@ -299,10 +316,6 @@ export class ApertureDevSandboxStack extends Stack {
           'cloudformation:ListStackResources',
           'cloudformation:GetTemplate',
           'cloudformation:GetTemplateSummary',
-          'cloudformation:DescribeChangeSet',
-          'cloudformation:ListChangeSets',
-          'cloudformation:ExecuteChangeSet',
-          'cloudformation:DeleteChangeSet',
         ],
         resources: arn.stacks,
       }),
@@ -315,6 +328,7 @@ export class ApertureDevSandboxStack extends Stack {
       new iam.PolicyStatement({
         actions: ['s3:GetObject*', 's3:GetBucket*', 's3:List*'],
         resources: [assets.bucketArn, assets.arnForObjects('*')],
+        conditions: inAccount,
       }),
     );
     deployRole.addToPolicy(
@@ -364,6 +378,7 @@ export class ApertureDevSandboxStack extends Stack {
           's3:Abort*',
         ],
         resources: [assets.bucketArn, assets.arnForObjects('*')],
+        conditions: inAccount,
       }),
     );
 

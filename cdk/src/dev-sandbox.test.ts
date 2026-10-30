@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { App } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
@@ -16,8 +17,15 @@ const ACCOUNT = '111111111111';
 const POOL = 'us-west-1_TESTPOOL';
 const DIST = 'ETESTDIST';
 
+// cdk.json's feature flags (minimizePolicies merges statements), so the asserted policy shape is the deployed one.
+const CDK_FLAGS = (
+  JSON.parse(readFileSync(new URL('../cdk.json', import.meta.url), 'utf8')) as {
+    context: Record<string, unknown>;
+  }
+).context;
+
 const t = Template.fromStack(
-  new ApertureDevSandboxStack(new App(), 'ApertureDevSandbox', {
+  new ApertureDevSandboxStack(new App({ context: CDK_FLAGS }), 'ApertureDevSandbox', {
     env: { account: ACCOUNT, region: 'us-west-1' },
     devUserPoolId: POOL,
     devDistributionId: DIST,
@@ -26,6 +34,24 @@ const t = Template.fromStack(
 const resources = t.toJSON().Resources as Record<string, Res>;
 const actionsOf = (s: Stmt) => (Array.isArray(s.Action) ? s.Action : [s.Action]);
 const text = (v: unknown) => JSON.stringify(v);
+const resourcesOf = (s: Stmt) => (Array.isArray(s.Resource) ? s.Resource : [s.Resource]);
+const withAny = (stmts: Stmt[], actions: string[]) =>
+  stmts.filter((s) => s.Effect === 'Allow' && actionsOf(s).some((a) => actions.includes(a)));
+
+// A granted ARN as IAM sees it: Fn::Join flattened, the partition and account filled in, other refs kept as `<id>`.
+function resolve(v: unknown): string {
+  if (typeof v === 'string') return v;
+  const o = v as Record<string, unknown>;
+  if (o['Fn::Join']) {
+    const [sep, parts] = o['Fn::Join'] as [string, unknown[]];
+    return parts.map(resolve).join(sep);
+  }
+  if (o.Ref === 'AWS::Partition') return 'aws';
+  if (o.Ref === 'AWS::AccountId') return ACCOUNT;
+  return `<${text(v)}>`;
+}
+const globMatches = (pattern: string, name: string) =>
+  new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`).test(name);
 
 // The role's own statements: its inline policies (CDK's DefaultPolicy, or the named exec policy).
 function roleStatements(kind: string): Stmt[] {
@@ -86,20 +112,25 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
     for (const s of cfn) {
       const res = (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).map(text);
       expect(res).toHaveLength(2);
-      expect(res[0]).toContain('stack/ApertureData-dev/*');
-      expect(res[1]).toContain('stack/ApertureApp-dev/*');
+      for (const st of ['ApertureData-dev', 'ApertureApp-dev'])
+        expect(res.some((r) => r.includes(`stack/${st}/*`))).toBe(true);
     }
-    // Without RoleArn, UpdateStack reuses the stack's stored role — so every mutating call must name ours.
+    // Without RoleArn, UpdateStack reuses the stack's stored role — so every statement granting a mutating call
+    // must name ours.
     const mutating = [
       'cloudformation:CreateStack',
       'cloudformation:UpdateStack',
-      'cloudformation:CreateChangeSet',
+      'cloudformation:RollbackStack',
+      'cloudformation:ContinueUpdateRollback',
     ];
-    for (const a of mutating) {
-      const s = cfn.find((x) => actionsOf(x).includes(a));
-      expect(text(s?.Condition?.StringEquals?.['cloudformation:RoleArn'])).toContain('CfnExecRole');
-    }
-    expect(stmts.flatMap(actionsOf)).not.toContain('cloudformation:DeleteStack');
+    const granting = withAny(stmts, mutating);
+    expect(granting.flatMap(actionsOf)).toEqual(expect.arrayContaining(mutating));
+    for (const s of granting)
+      expect(text(s.Condition?.StringEquals?.['cloudformation:RoleArn'])).toContain('CfnExecRole');
+    // No change sets (one left by a default-bootstrap run would execute with its admin role), no DeleteStack.
+    const all = stmts.flatMap(actionsOf);
+    expect(all.filter((a) => /ChangeSet/.test(a))).toEqual([]);
+    expect(all).not.toContain('cloudformation:DeleteStack');
     const pass = stmts.find((s) => actionsOf(s).includes('iam:PassRole'));
     expect(text(pass?.Resource)).toContain('CfnExecRole');
   });
@@ -150,18 +181,26 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
     }
   });
 
-  it('creates or re-bounds a role only with the dev boundary, and never lifts it', () => {
+  it('creates, re-bounds or re-policies a role only while it carries the dev boundary, and never lifts it', () => {
     const stmts = roleStatements('cfn-exec');
-    for (const a of ['iam:CreateRole', 'iam:PutRolePermissionsBoundary']) {
-      const s = stmts.find((x) => x.Effect === 'Allow' && actionsOf(x).includes(a));
-      expect(text(s?.Condition?.StringEquals?.['iam:PermissionsBoundary'])).toContain(
+    const bounded = [
+      'iam:CreateRole',
+      'iam:PutRolePermissionsBoundary',
+      'iam:PutRolePolicy',
+      'iam:DeleteRolePolicy',
+      'iam:AttachRolePolicy',
+      'iam:DetachRolePolicy',
+    ];
+    const granting = withAny(stmts, bounded);
+    expect(granting.flatMap(actionsOf)).toEqual(expect.arrayContaining(bounded));
+    for (const s of granting)
+      expect(text(s.Condition?.StringEquals?.['iam:PermissionsBoundary'])).toContain(
         `policy/${DEV_BOUNDARY_NAME}`,
       );
-    }
-    const attach = stmts.find((x) => actionsOf(x).includes('iam:AttachRolePolicy'));
-    expect(text(attach?.Condition?.ArnEquals?.['iam:PolicyARN'])).toContain(
-      'AWSLambdaBasicExecutionRole',
-    );
+    for (const s of withAny(stmts, ['iam:AttachRolePolicy', 'iam:DetachRolePolicy']))
+      expect(text(s.Condition?.ArnEquals?.['iam:PolicyARN'])).toContain(
+        'AWSLambdaBasicExecutionRole',
+      );
     const pass = stmts.find((x) => actionsOf(x).includes('iam:PassRole'));
     expect(pass?.Condition?.StringEquals?.['iam:PassedToService']).toEqual([
       'lambda.amazonaws.com',
@@ -172,12 +211,52 @@ describe('ApertureDevSandboxStack (dev-only CDK bootstrap)', () => {
         (x) => x.Effect === 'Deny' && actionsOf(x).includes('iam:DeleteRolePermissionsBoundary'),
       ),
     ).toBe(true);
+    // Moving a domain alias onto dev's distribution could pull prod's hostname onto branch code.
+    for (const a of ['cloudfront:AssociateAlias', 'cloudfront:UpdateDomainAssociation'])
+      expect(stmts.some((x) => x.Effect === 'Deny' && actionsOf(x).includes(a))).toBe(true);
     // No managed-policy actions at all: the boundary and this policy can't be rewritten from here.
     expect(
       stmts
         .flatMap(actionsOf)
         .some((a) => /^iam:.*Policy(Version)?$/.test(a) && !/RolePolicy$/.test(a)),
     ).toBe(false);
+  });
+
+  it('grants no pattern, in any role or the boundary, that matches a prod or default-bootstrap name', () => {
+    const prod = [
+      `arn:aws:lambda:us-west-1:${ACCOUNT}:function:aperture-bff-prod`,
+      `arn:aws:lambda:us-west-1:${ACCOUNT}:function:ApertureApp-prod-LogRetentionX`,
+      `arn:aws:logs:us-west-1:${ACCOUNT}:log-group:/aws/lambda/aperture-bff-prod`,
+      `arn:aws:logs:us-west-1:${ACCOUNT}:log-group:/aws/lambda/aperture-bff-prod:*`,
+      `arn:aws:logs:us-west-1:${ACCOUNT}:log-group:/aws/lambda/aperture-x-device-prod`,
+      `arn:aws:dynamodb:us-west-1:${ACCOUNT}:table/aperture-prod`,
+      `arn:aws:dynamodb:us-west-1:${ACCOUNT}:table/aperture-prod/index/GSI1`,
+      `arn:aws:iam::${ACCOUNT}:role/ApertureApp-prod-BffServiceRoleX`,
+      `arn:aws:iam::${ACCOUNT}:role/cdk-hnb659fds-cfn-exec-role-${ACCOUNT}-us-west-1`,
+      'arn:aws:s3:::apertureapp-prod-sitex',
+      'arn:aws:s3:::aperturedata-prod-filesx/u/a',
+      `arn:aws:s3:::cdk-hnb659fds-assets-${ACCOUNT}-us-west-1/x`,
+      `arn:aws:ssm:us-west-1:${ACCOUNT}:parameter/aperture/prod/plaid/secret`,
+      `arn:aws:cloudformation:us-west-1:${ACCOUNT}:stack/ApertureApp-prod/abc`,
+      `arn:aws:scheduler:us-west-1:${ACCOUNT}:schedule/aperture-finance-prod/x`,
+      `arn:aws:cognito-idp:us-west-1:${ACCOUNT}:userpool/us-west-1_PRODPOOL`,
+      `arn:aws:cloudfront::${ACCOUNT}:distribution/EPRODDIST`,
+    ];
+    const policies = Object.values(resources).filter((r) =>
+      /AWS::IAM::(Managed)?Policy/.test(r.Type),
+    );
+    const allows = policies.flatMap((r) =>
+      (r.Properties.PolicyDocument as { Statement: Stmt[] }).Statement.filter(
+        (x) => x.Effect === 'Allow',
+      ),
+    );
+    expect(allows.length).toBeGreaterThan(20);
+    for (const s of allows)
+      for (const pattern of resourcesOf(s).map(resolve)) {
+        if (pattern === '*') continue; // the allowlisted unscopable actions, checked above
+        for (const name of prod)
+          expect(globMatches(pattern, name), `${pattern} matches ${name}`).toBe(false);
+      }
   });
 
   it('bounds dev roles to dev data, with no sts, iam, Cognito or CloudFront', () => {

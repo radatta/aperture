@@ -23,8 +23,8 @@ jobs:
   check:
     uses: ./.github/workflows/ci.yml
 
-  # Classify the push once (docs / app-only / full). Runs in parallel with `check`; deploy-dev waits on both.
-  # Kept toolchain-free and short.
+  # Classify the push once (docs / app-only / full) and assert dev is current with main. Runs in parallel with
+  # `check`; deploy-dev waits on both. Kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -34,7 +34,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # need history to diff the push against its base
+          fetch-depth: 0 # need history to diff the push and to check ancestry against main
+      # On any non-main push (i.e. dev), require the branch to already contain main: dev should only ever run
+      # code that already has main in it, so what you validate there is what a squash-merge would produce — and,
+      # since dev-bootstrap, so a stale branch can't put dev back on the default (admin) CDK bootstrap. A stale
+      # branch fails here → deploy-dev (needs: changes) is skipped. No-op on main pushes. Goes with the `dev`
+      # trigger in dev-cutover; dispatches check the same in deploy-dev.yml.
+      - name: Branch is up to date with main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor origin/main HEAD || {
+            echo "::error::dev is behind main — merge/rebase main in before pushing"; exit 1
+          }
       # docs-only → none (nothing is built or deployed; the deploy job still runs in its environment, so GitHub
       # records a deployment that deploys nothing — a vestige of the retired required_deployments gate, INFRA §9).
       # app/** only → app. Anything else, or an indeterminate base → full. The rule is a tested module, not an
@@ -123,7 +135,8 @@ jobs:
           body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
           # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
           # dev-branch push; a docs-only job still reports success (steps just no-op). `changes` is watched
-          # too: its failure skips the deploys, which must not read as a success.
+          # too: it holds the up-to-date-with-main gate, so its failure must not slip through as a success just
+          # because the deploy jobs got skipped.
           failed=0
           for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
