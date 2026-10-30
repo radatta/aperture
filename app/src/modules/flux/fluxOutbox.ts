@@ -23,13 +23,16 @@ const listeners = new Set<() => void>();
 // The list, when storage refused to hold it (this tab only). Takes over every read until a write sticks.
 let memory: FluxOutboxEntry[] | null = null;
 
-function rawRead(): string {
-  if (memory) return memory.length ? JSON.stringify(memory) : '';
+function storedRaw(): string {
   try {
     return globalThis.localStorage?.getItem(FLUX_OUTBOX_KEY) ?? '';
   } catch {
     return '';
   }
+}
+function rawRead(): string {
+  if (memory) return memory.length ? JSON.stringify(memory) : '';
+  return storedRaw();
 }
 function parse(raw: string): FluxOutboxEntry[] {
   try {
@@ -45,7 +48,14 @@ function write(list: readonly FluxOutboxEntry[]): void {
   try {
     const ls = globalThis.localStorage;
     if (!ls) throw new Error('no storage');
-    if (list.length) ls.setItem(FLUX_OUTBOX_KEY, JSON.stringify(list));
+    // Back from memory: another tab may have queued sets in storage meanwhile — keep them. (One this tab
+    // removed while in memory can come back too; resending it is harmless, the save is idempotent.)
+    let out = list;
+    if (memory) {
+      const ids = new Set(list.map((e) => e.input.id));
+      out = [...list, ...parse(storedRaw()).filter((e) => !ids.has(e.input.id))];
+    }
+    if (out.length) ls.setItem(FLUX_OUTBOX_KEY, JSON.stringify(out));
     else ls.removeItem(FLUX_OUTBOX_KEY);
     memory = null;
   } catch {
@@ -106,7 +116,10 @@ function subscribe(l: () => void): () => void {
 let cache: { raw: string; list: FluxOutboxEntry[] } = { raw: '', list: [] };
 function snapshot(): FluxOutboxEntry[] {
   const raw = rawRead();
-  if (raw !== cache.raw) cache = { raw, list: parse(raw) };
+  // Where the list lives is part of what the strip says, so a move between memory and storage with the
+  // same contents is still a change.
+  const key = `${memory ? 'm' : 's'}:${raw}`;
+  if (key !== cache.raw) cache = { raw: key, list: parse(raw) };
   return cache.list;
 }
 export const useOutboxEntries = (): FluxOutboxEntry[] => useSyncExternalStore(subscribe, snapshot);

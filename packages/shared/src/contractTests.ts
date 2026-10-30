@@ -1348,7 +1348,12 @@ export function runApiContract(
       await api.deleteFluxSet('01HZZZZZZZZZZZZZZZZZZZZZZZ'); // absent: a no-op
       expect((await api.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
       expect((await api.exportData()).fluxSets.map((s) => s.id)).toEqual([kept.id]);
-      await api.recordFluxSet(input); // an outbox retry of the deleted set doesn't bring it back
+      // An outbox retry of the deleted set doesn't bring it back — and a second delete changes nothing.
+      const first = (await api.recordFluxSet(input)).deletedAt;
+      expect(first).not.toBeNull();
+      advance(1000);
+      await api.deleteFluxSet(gone.id);
+      expect((await api.recordFluxSet(input)).deletedAt).toBe(first);
       expect((await api.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
     });
 

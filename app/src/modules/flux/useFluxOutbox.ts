@@ -15,6 +15,17 @@ import {
 // Sets being sent right now, across every mounted copy of the hook — a flush and a save of the same set
 // (or two triggers at once) send it once.
 const inFlight = new Set<string>();
+// The http client has no timeout, and a send that never answers would hold its id in flight — so Retry,
+// `online` and the next save would all skip it. Give up on it after this; a late answer is harmless (the
+// save is idempotent, the next send gets the stored row).
+const SEND_TIMEOUT_MS = 20_000;
+function withTimeout<T>(p: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('No answer from the server')), SEND_TIMEOUT_MS);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 export const isSending = (id: string): boolean => inFlight.has(id);
 export const resetFluxOutboxSends = (): void => inFlight.clear(); // tests (app/src/test/setup.ts)
 
@@ -35,7 +46,7 @@ export function useFluxOutbox() {
           outboxMarkError(input.id, refused, true);
           return false;
         }
-        await api.recordFluxSet(input);
+        await withTimeout(api.recordFluxSet(input));
         outboxRemove(input.id);
         void qc.invalidateQueries({ queryKey: qk.fluxSetsAll() });
         return true;

@@ -5,12 +5,14 @@ import { qk } from '../queryKeys';
 
 // Saved Flux sets (D47). Saving goes through the Flux outbox (modules/flux/useFluxOutbox), not a
 // mutation here — a set must survive a failed save.
-export function useFluxSets(filter: FluxSetFilter = {}) {
+// `keepPrevious`: a window change shows the last window's rows (as placeholder data) while the new one
+// loads — History's toggle only; the night line must never show yesterday's sets as today's.
+export function useFluxSets(filter: FluxSetFilter = {}, opts: { keepPrevious?: boolean } = {}) {
   const api = useApi();
   return useQuery({
     queryKey: qk.fluxSets(filter.from, filter.to, filter.exerciseId),
     queryFn: () => api.listFluxSets(filter),
-    placeholderData: keepPreviousData, // a window change (Show all) keeps the list up, not a spinner
+    placeholderData: opts.keepPrevious ? keepPreviousData : undefined,
   });
 }
 

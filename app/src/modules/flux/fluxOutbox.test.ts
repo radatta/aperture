@@ -74,6 +74,20 @@ describe('fluxOutbox (D49)', () => {
     expect(JSON.parse(localStorage.getItem(FLUX_OUTBOX_KEY) ?? '[]')).toHaveLength(2);
   });
 
+  it('back from memory, keeps what another tab queued in storage meanwhile', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    const mine = input();
+    outboxAdd(mine, 1); // memory only
+    setItem.mockRestore();
+    const theirs = input();
+    localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: theirs, at: 2, error: null }]));
+    outboxMarkError(mine.id, 'offline'); // this tab's next write sticks
+    expect(outboxInMemoryOnly()).toBe(false);
+    expect(readOutbox().map((e) => e.input.id)).toEqual([mine.id, theirs.id]);
+  });
+
   it('builds the server input from the stage draft plus its keys', () => {
     const draft: FluxSetDraft = {
       exerciseId: 'upper-trap-stretch',

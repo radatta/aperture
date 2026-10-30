@@ -552,7 +552,8 @@ export class BackendClient implements ApiClient {
     return inRange(await this.repo.listAllFluxSets(), filter);
   }
   async deleteFluxSet(id: string): Promise<void> {
-    const existing = await this.repo.findFluxSet(id);
+    // Strongly: a set saved moments ago must be found, or the delete would quietly do nothing.
+    const existing = await this.repo.findFluxSet(id, { consistent: true });
     if (existing && existing.deletedAt === null)
       await this.repo.putFluxSet({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }

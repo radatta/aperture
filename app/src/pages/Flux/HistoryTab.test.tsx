@@ -72,6 +72,13 @@ describe('Flux History tab', () => {
     expect(screen.getAllByText(/20 reps · avg 50°/)).toHaveLength(1);
     expect(screen.getByText(/20 reps · avg 47°/)).toBeTruthy(); // yesterday's row
     expect(screen.getByText(/5 trials · 3\.1° error/)).toBeTruthy();
+    // Delete names carry the day and time, so a list of buttons tells same-exercise rows apart.
+    const names = screen
+      .getAllByRole('button', { name: /^Delete Neck Rotation set from / })
+      .map((b) => b.getAttribute('aria-label'));
+    expect(names).toHaveLength(2);
+    expect(names[0]).toMatch(/from [A-Z][a-z]{2} \d{1,2}, \d/);
+    expect(new Set(names).size).toBe(2);
     // Side A goes right on upper trap, but scalene's Side A tilts left (D48).
     const trap = screen.getByText('Upper Trapezius Stretch').closest('li')!;
     expect(within(trap).getByText('Right')).toBeTruthy();
@@ -183,6 +190,47 @@ describe('Flux History tab', () => {
     );
     await waitFor(() => expect(screen.queryByRole('button', { name: 'chin tuck' })).toBeNull());
     expect(screen.getAllByText(/20 reps · avg 50°/)).toHaveLength(1);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'All' })); // still in view
+  });
+
+  it('a deleted row skips a neighbour whose own confirm is open', async () => {
+    const t = Date.now();
+    await history([
+      set({ completedAt: t - 3000 }),
+      set({ completedAt: t - 2000 }),
+      set({ completedAt: t - 1000 }),
+    ]);
+    const user = userEvent.setup();
+    const [first, second, third] = await screen.findAllByRole('button', {
+      name: /^Delete .* set from /,
+    });
+    await user.click(second!); // its confirm stays open
+    await user.click(first!);
+    const confirms = screen.getAllByRole('alertdialog');
+    await user.click(within(confirms[0]!).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getAllByRole('alertdialog')).toHaveLength(1));
+    expect(document.activeElement).toBe(third); // not the open confirm's Delete
+  });
+
+  it('Show all never claims there are no sets while the wider window loads', async () => {
+    const api = createStubClient({ seed: false, storageKey: `flux-history-${Math.random()}` });
+    await api.updateSettings({ fluxDisclaimerAckAt: 1 });
+    await api.recordFluxSet(
+      set({ day: addDays(today, -120), completedAt: Date.now() - 120 * 86_400_000 }),
+    );
+    let release: () => void = () => undefined;
+    const list = api.listFluxSets.bind(api);
+    api.listFluxSets = async (filter) => {
+      if (!filter?.from) await new Promise<void>((r) => (release = r));
+      return list(filter);
+    };
+    const user = userEvent.setup();
+    renderApp({ api, path: '/flux/history' });
+    await user.click(await screen.findByRole('button', { name: 'Show all' }));
+    expect(screen.queryByText('No saved sets yet.')).toBeNull();
+    expect(screen.queryByText('No sets in the last 90 days.')).toBeNull();
+    release();
+    expect(await screen.findByText(/20 reps · avg 50°/)).toBeTruthy();
   });
 
   it('a hold count never trends — only an angle does', async () => {

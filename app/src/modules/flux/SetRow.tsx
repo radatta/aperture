@@ -1,18 +1,31 @@
 import { useRef } from 'react';
-import { fmtClock12, fmtDuration, hhmmOfEpoch, type FluxSet } from '@aperture/shared';
+import {
+  fmtClock12,
+  fmtDuration,
+  fmtMonthShortDay,
+  hhmmOfEpoch,
+  type FluxSet,
+} from '@aperture/shared';
 import { isExerciseId, getExercise, setMetric, sideLabel } from '@aperture/shared/flux';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useDeleteFluxSet } from '../../data/hooks/useFluxSets';
 import { useDisclosure } from '../../lib/useDisclosure';
-import { focusableAfter, moveFocus } from './focus';
+import { focusablesAfter, moveFocus } from './focus';
 import { MeasurementBadge } from './ExerciseLibrary';
 
 // One saved set in History: time · exercise · side · its one number · duration. Delete is a soft-delete
 // that asks first — the app has no undo — and leaves the Roll rep the set counted toward alone (D53).
 // The confirm replaces its trigger, so useDisclosure hands focus back on Cancel or Escape; a deleted row
-// hands it to the next row's Delete (else the previous one, else whatever follows the list).
-export function SetRow({ set }: { set: FluxSet }) {
+// hands it to the next row's Delete (else the previous one, else `fallbackFocus` — History's All chip
+// when a chip filter is about to vanish — else whatever follows the list).
+export function SetRow({
+  set,
+  fallbackFocus,
+}: {
+  set: FluxSet;
+  fallbackFocus?: () => HTMLElement | null;
+}) {
   const { open: confirming, triggerRef, onOpen, onClose } = useDisclosure();
   const rowRef = useRef<HTMLLIElement>(null);
   const del = useDeleteFluxSet();
@@ -66,7 +79,7 @@ export function SetRow({ set }: { set: FluxSet }) {
             variant="quiet"
             size="sm"
             data-flux-delete=""
-            aria-label={`Delete ${name} set from ${time}`}
+            aria-label={`Delete ${name} set from ${fmtMonthShortDay(set.day)}, ${time}`}
             onClick={onOpen}
           >
             Delete
@@ -95,8 +108,13 @@ export function SetRow({ set }: { set: FluxSet }) {
               size="sm"
               disabled={del.isPending}
               onClick={() => {
-                const target = focusAfterDelete(rowRef.current);
-                del.mutate(set.id, { onSuccess: () => moveFocus(target) });
+                const row = rowRef.current;
+                const targets = focusAfterDelete(row, fallbackFocus);
+                // Awaited, not a per-call onSuccess (TanStack drops those once the row unmounts).
+                del.mutateAsync(set.id).then(
+                  () => moveFocus(targets, row),
+                  () => undefined, // shown below (del.isError)
+                );
               }}
             >
               Delete
@@ -118,10 +136,22 @@ export function SetRow({ set }: { set: FluxSet }) {
   );
 }
 
-function focusAfterDelete(row: HTMLLIElement | null): HTMLElement | null {
-  if (!row) return null;
+function focusAfterDelete(
+  row: HTMLLIElement | null,
+  fallback?: () => HTMLElement | null,
+): (HTMLElement | null)[] {
+  if (!row) return [];
+  // Rows with their own confirm open have no Delete trigger — skip them (their confirm's Delete is one
+  // Enter from a second deletion).
   const rows = [...document.querySelectorAll<HTMLElement>('[data-flux-set]')];
   const i = rows.indexOf(row);
-  const near = rows[i + 1] ?? rows[i - 1];
-  return near?.querySelector<HTMLElement>('[data-flux-delete]') ?? focusableAfter(row);
+  const trigger = (r: HTMLElement | undefined) =>
+    r?.querySelector<HTMLElement>('[data-flux-delete]') ?? null;
+  const after =
+    rows
+      .slice(i + 1)
+      .map(trigger)
+      .find(Boolean) ?? null;
+  const before = rows.slice(0, i).reverse().map(trigger).find(Boolean) ?? null;
+  return [after, before, fallback?.() ?? null, ...focusablesAfter(row)];
 }

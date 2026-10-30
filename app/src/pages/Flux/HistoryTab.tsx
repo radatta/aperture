@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { addDays, fmtDayHeading, fmtMonthShortDay, todayKey, type FluxSet } from '@aperture/shared';
 import {
   getExercise,
@@ -15,6 +15,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { useFluxSets } from '../../data/hooks/useFluxSets';
 import { useSettings } from '../../data/hooks/useSettings';
+import { cx } from '../../lib/cx';
 import { Chips } from '../../modules/flux/ExerciseLibrary';
 import { SetRow } from '../../modules/flux/SetRow';
 import { Sparkline } from '../../modules/flux/Sparkline';
@@ -32,13 +33,20 @@ export function FluxHistoryTab() {
   const today = todayKey(settings?.dayStartHour ?? 4);
   const [all, setAll] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
-  const q = useFluxSets(all ? {} : { from: addDays(today, -(WINDOW_DAYS - 1)), to: today });
+  const q = useFluxSets(all ? {} : { from: addDays(today, -(WINDOW_DAYS - 1)), to: today }, {
+    keepPrevious: true, // the toggle below changes the window; the list stays up meanwhile
+  });
+  const loading = q.isPending || q.isPlaceholderData;
   const sets = q.data ?? [];
   const ids = [...new Set(sets.map((s) => s.exerciseId))].filter(isExerciseId);
   // A chip whose last set was just deleted is gone — so is its filter.
   const exerciseId = picked && ids.includes(picked as (typeof ids)[number]) ? picked : null;
   const shown = exerciseId ? sets.filter((s) => s.exerciseId === exerciseId) : sets;
   const def = exerciseId && isExerciseId(exerciseId) ? getExercise(exerciseId) : null;
+  const chipsRef = useRef<HTMLDivElement>(null);
+  // A chip filter's last set going takes the chip with it: land on All (the first chip) instead.
+  const allChip = () =>
+    exerciseId ? (chipsRef.current?.querySelector<HTMLElement>('button') ?? null) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -46,7 +54,7 @@ export function FluxHistoryTab() {
       <UnsavedSetsStrip />
       {sets.length === 0 ? (
         <EmptyState
-          pending={q.isPending}
+          pending={loading}
           error={q.isError}
           title={all ? 'No saved sets yet.' : `No sets in the last ${WINDOW_DAYS} days.`}
           action={
@@ -58,16 +66,21 @@ export function FluxHistoryTab() {
           Every set you finish is saved here, with its count and range.
         </EmptyState>
       ) : (
-        <>
-          <Chips
-            label="Exercise"
-            options={[
-              { value: null, label: 'All' },
-              ...ids.map((id) => ({ value: id, label: SHORT_NAMES[id] })),
-            ]}
-            value={exerciseId}
-            onChange={setPicked}
-          />
+        <div
+          className={cx('flex flex-col gap-4', q.isPlaceholderData && 'opacity-60')}
+          aria-busy={loading}
+        >
+          <div ref={chipsRef}>
+            <Chips
+              label="Exercise"
+              options={[
+                { value: null, label: 'All' },
+                ...ids.map((id) => ({ value: id, label: SHORT_NAMES[id] })),
+              ]}
+              value={exerciseId}
+              onChange={setPicked}
+            />
+          </div>
           {def && <Trend def={def} sets={shown} />}
           {groupByDay(shown).map((g) => (
             <section key={g.day} aria-labelledby={`flux-day-${g.day}`} className="flex flex-col">
@@ -76,12 +89,12 @@ export function FluxHistoryTab() {
               </Text>
               <ul className="flex flex-col">
                 {g.sets.map((s) => (
-                  <SetRow key={s.id} set={s} />
+                  <SetRow key={s.id} set={s} fallbackFocus={allChip} />
                 ))}
               </ul>
             </section>
           ))}
-        </>
+        </div>
       )}
       {!q.isPending && (
         // One button that flips, so focus stays put when the list grows or shrinks under it.

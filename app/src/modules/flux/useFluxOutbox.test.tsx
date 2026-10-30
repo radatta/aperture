@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { ulid, type RecordFluxSetInput } from '@aperture/shared';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
-import { FLUX_OUTBOX_KEY } from './fluxOutbox';
+import { FLUX_OUTBOX_KEY, outboxAdd, outboxMarkError } from './fluxOutbox';
 import { UnsavedSetsStrip } from './UnsavedSetsStrip';
 import { useFluxOutbox } from './useFluxOutbox';
 
@@ -143,5 +143,84 @@ describe('useFluxOutbox', () => {
     );
     expect(screen.queryByText(/not saved yet/)).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'after' }));
+  });
+
+  it('a send still waiting after the grace shows even if the clock stepped back', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const { api } = server();
+    renderWithProviders(<Harness set={input()} />, { api });
+    act(() => screen.getByRole('button', { name: 'save' }).click());
+    vi.setSystemTime(Date.now() - 2_000); // the timer will fire 2 s inside the grace
+    act(() => vi.advanceTimersByTime(8_000));
+    expect(screen.queryByText(/not saved yet/)).toBeNull();
+    act(() => vi.advanceTimersByTime(2_000)); // re-armed, not given up
+    expect(screen.getByText('1 set not saved yet')).toBeTruthy();
+  });
+
+  it('a send that never answers times out, so Retry can send it again', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const { api, record } = server();
+    renderWithProviders(<Harness set={input()} />, { api });
+    act(() => screen.getByRole('button', { name: 'save' }).click());
+    await act(async () => vi.advanceTimersByTime(20_000));
+    expect(screen.getByText(/Last try: No answer from the server/)).toBeTruthy();
+    await act(async () => screen.getByRole('button', { name: 'Retry' }).click());
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  it('a refused set and a waiting one both say what’s true, and Retry stays for the waiting one', async () => {
+    const { api } = server();
+    const raw = JSON.stringify([
+      { input: input(), at: 1, error: 'A Flux set count must be a whole number.', refused: true },
+      { input: input(), at: 2, error: 'Load failed' },
+    ]);
+    localStorage.setItem(FLUX_OUTBOX_KEY, raw);
+    renderWithProviders(<UnsavedSetsStrip />, { api });
+    expect(screen.getByText('2 sets not saved yet')).toBeTruthy();
+    expect(
+      screen.getByText('1 can’t be saved: A Flux set count must be a whole number.'),
+    ).toBeTruthy();
+    expect(screen.getByText(/retried when you’re back online. Last try: Load failed/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('the storage warning follows where the list lives, even with the same contents', async () => {
+    const { api } = server();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    const a = input();
+    outboxAdd(a, 1);
+    outboxMarkError(a.id, 'Load failed');
+    renderWithProviders(<UnsavedSetsStrip />, { api });
+    expect(screen.getByText(/can’t store it/)).toBeTruthy();
+    setItem.mockRestore();
+    act(() => outboxMarkError(a.id, 'Load failed')); // same contents, now in storage
+    expect(screen.getByText(/Kept on this device and retried/)).toBeTruthy();
+  });
+
+  it('a slow Retry doesn’t pull focus back from where the user moved it', async () => {
+    const { api, pending } = server();
+    const user = userEvent.setup();
+    renderWithProviders(<Harness set={input()} />, { api });
+    await user.click(screen.getByRole('button', { name: 'save' }));
+    await act(async () => pending[0]!.reject(new Error('Load failed')));
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    const elsewhere = screen.getByRole('button', { name: 'flush' });
+    elsewhere.focus();
+    await act(async () => pending[1]!.resolve());
+    await waitFor(() => expect(screen.queryByText(/not saved yet/)).toBeNull());
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it('keeps its live region mounted while empty, so the strip arriving is announced', async () => {
+    const { api } = server();
+    renderWithProviders(<UnsavedSetsStrip />, { api });
+    const region = screen.getByRole('status');
+    expect(region.textContent).toBe('');
+    localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: input(), at: 1, error: 'x' }]));
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: FLUX_OUTBOX_KEY })));
+    expect(screen.getByRole('status')).toBe(region);
+    expect(region.textContent).toMatch(/1 set not saved yet/);
   });
 });
