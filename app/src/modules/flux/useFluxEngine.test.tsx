@@ -681,6 +681,14 @@ describe('useFluxEngine stopped sets (D55)', () => {
     expect(onSetCompleted).not.toHaveBeenCalled();
   });
 
+  it('a Stop right after a fallback, before the new worker posts, saves nothing either', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    act(() => fake().ready('CPU', true));
+    act(() => hook.result.current.stop());
+    expect(onSetCompleted).not.toHaveBeenCalled();
+  });
+
   it('a reload or a closed tab mid-set saves it; a page kept for back/forward doesn’t', async () => {
     const { onSetCompleted, fake } = await running();
     act(() => fake().state(holds(2)));

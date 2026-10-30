@@ -56,7 +56,8 @@ describe('fluxOutbox (D49)', () => {
     delete old.stoppedEarly;
     delete old.planned;
     localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: old, at: 1, error: null }]));
-    expect(readOutbox()[0]?.input).toMatchObject({ stoppedEarly: false, planned: 6 }); // chin tuck
+    // A finished set: it was going for what it counted (10 holds, before D56), not today's 6.
+    expect(readOutbox()[0]?.input).toMatchObject({ stoppedEarly: false, planned: 10 });
   });
 
   it('reads garbage as empty', () => {

@@ -253,6 +253,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           );
           setStartRef.current = performance.now();
           resetFace(); // a new worker restarts the sample clock
+          // The new worker's set starts at 0 (D26): what the old one had is gone, not a stopped set to save.
+          if (e.fallback) live.current = null;
           // A fallback restarts the set (D26) — said, not only shown: a timed set is led in again, a
           // self-paced one says so. A pending lead-in or rest carries on as it was.
           if (e.fallback && latest.current.calibrated && o.acknowledged && !autoStep.current) {
@@ -290,9 +292,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           say({ type: 'neutralSet' });
           // A Re-calibrate mid-set just carries on: the count stands, measured from the new neutral (D55).
           if (live.current?.state.phase === 'active') return;
-          // Otherwise calibrating starts the set afresh, so a timed kind starts itself again (D41) — at
-          // once if "Start now" was what asked for the neutral. A rest in progress runs on: its end starts
-          // the set.
+          // Otherwise a timed kind starts its set now that a neutral is set (D41) — at once if "Start now"
+          // was what asked for it. A rest in progress runs on: its end starts the set.
           if (!READY_KINDS.has(o.kind) || !o.acknowledged) return;
           if (autoStep.current?.kind === 'rest') return;
           if (startOnCalibrate.current) {

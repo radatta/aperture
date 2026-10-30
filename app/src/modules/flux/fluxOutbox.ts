@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { RecordFluxSetInput } from '@aperture/shared';
-import { getExercise, isExerciseId, plannedCount } from '@aperture/shared/flux';
+import { getExercise, isExerciseId } from '@aperture/shared/flux';
 import type { FluxSetDraft } from './useFluxEngine';
 
 // Flux's crash- and offline-safety, per device (docs/areas/flux, D49). A finished set is written here
@@ -49,8 +49,9 @@ function parse(raw: string): FluxOutboxEntry[] {
     return [];
   }
 }
-// An entry queued before sets carried `stoppedEarly` / `planned` (D55) was a finished set going for its
-// prescription — filled in so the shared validation doesn't refuse a set that was fine when it was made.
+// An entry queued before sets carried `stoppedEarly` / `planned` (D55) was a finished set, so it was going
+// for what it counted (the prescription then, before D56 lowered it) — filled in so the shared validation
+// doesn't refuse a set that was fine when it was made.
 function upgrade(e: FluxOutboxEntry): FluxOutboxEntry {
   const input = e.input as Partial<RecordFluxSetInput> &
     Omit<RecordFluxSetInput, 'stoppedEarly' | 'planned'>;
@@ -61,7 +62,12 @@ function upgrade(e: FluxOutboxEntry): FluxOutboxEntry {
     input: {
       ...input,
       stoppedEarly: input.stoppedEarly ?? false,
-      planned: input.planned !== undefined ? input.planned : def ? plannedCount(def) : null,
+      planned:
+        input.planned !== undefined
+          ? input.planned
+          : def?.kind === 'oscillation'
+            ? null
+            : Math.max(1, input.count),
     },
   };
 }

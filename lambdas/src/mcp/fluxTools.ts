@@ -44,9 +44,9 @@ function setRow(s: FluxSet) {
   };
 }
 
-// Per exercise: how many sets, and its number first → latest in the window (oldest first). Only finished
-// sets give first → latest — a set stopped after one hold would read as a collapse (D55); how many were
-// stopped early is counted beside it.
+// Per exercise: how many sets, and its number first → latest in the window (oldest first). A stopped
+// set's angle counts, as in History's trend; its count doesn't — one hold of six would read as a
+// collapse (D55). How many were stopped early is counted beside it.
 function summary(sets: readonly FluxSet[]) {
   const byId = new Map<string, FluxSet[]>();
   for (const s of [...sets].sort((a, b) => a.completedAt - b.completedAt)) {
@@ -56,15 +56,20 @@ function summary(sets: readonly FluxSet[]) {
   }
   return [...byId].map(([id, list]) => {
     const def = isExerciseId(id) ? getExercise(id) : null;
-    const finished = list.filter((s) => !s.stoppedEarly);
-    const metrics = def ? finished.map((s) => setMetric(def, s)).filter((m) => m !== null) : [];
+    const stopped = list.filter((s) => s.stoppedEarly).length;
+    const metrics = def
+      ? list.flatMap((s) => {
+          const m = setMetric(def, s);
+          return m && (!s.stoppedEarly || m.unit === '°') ? [m] : [];
+        })
+      : [];
     const first = metrics[0];
     const latest = metrics.at(-1);
     return {
       exerciseId: id,
       exercise: def?.name ?? id,
       sets: list.length,
-      stoppedEarly: list.length - finished.length,
+      stoppedEarly: stopped,
       ...(first && latest
         ? {
             metric: latest.label,
@@ -117,7 +122,7 @@ export const FLUX_TOOLS: Tool[] = [
     name: 'list_flux_sets',
     description: [
       'Saved Flux neck-rehab sets (webcam-tracked exercises), newest first — "how\'s my neck rehab going?". Each row has the exercise, side (right/left for the three one-sided stretches), count, and its one number (`metric`: avg peak degrees for ROM reps, holds done, avg error degrees for joint position — lower is better). A set stopped before its prescription has `stoppedEarly: true`; `planned` is the count it was going for.',
-      '`summary` gives per-exercise first → latest over the window, and `daySummary` a one-line summary when the window is a single day (from = to).',
+      "`summary` gives per-exercise first → latest over the window (a stopped set's count is left out of it, its angle isn't; `stoppedEarly` counts them), and `daySummary` a one-line summary when the window is a single day (from = to).",
       'Optional from/to ISO dates (pass BOTH or NEITHER) and exerciseId (see list_flux_exercises).',
       HONESTY,
       'Read-only: sets are recorded by the app; nothing here edits or deletes.',

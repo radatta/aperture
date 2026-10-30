@@ -100,15 +100,20 @@ describe('list_flux_sets', () => {
     expect(out.note).toMatch(/not clinical/);
   });
 
-  it('leaves a stopped set out of first → latest, and counts it (D55)', async () => {
+  it('a stopped set’s count stays out of first → latest, its angle doesn’t; both are counted (D55)', async () => {
     await record({ day: '2026-10-19', completedAt: 1_000, avgPeakDeg: 46 });
-    await record({ completedAt: 2_000, avgPeakDeg: 52 });
-    await record({ completedAt: 3_000, avgPeakDeg: 20, count: 1, stoppedEarly: true });
+    await record({ completedAt: 2_000, avgPeakDeg: 52, count: 2, stoppedEarly: true });
+    const tuck = { exerciseId: 'chin-tuck', kind: 'holdAtTarget', avgPeakDeg: null } as const;
+    await record({ ...tuck, completedAt: 3_000, count: 6, planned: 6 });
+    await record({ ...tuck, completedAt: 4_000, count: 1, planned: 6, stoppedEarly: true });
     const out = (await run('list_flux_sets')) as SetsOut;
-    expect(out.sets[0]).toMatchObject({ stoppedEarly: true, planned: 10 });
-    expect(out.summary).toEqual([
-      expect.objectContaining({ sets: 3, stoppedEarly: 1, first: 46, latest: 52 }),
-    ]);
+    expect(out.sets[0]).toMatchObject({ stoppedEarly: true, planned: 6 });
+    expect(out.summary).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ exerciseId: 'cervical-rotation', stoppedEarly: 1, latest: 52 }),
+        expect.objectContaining({ exerciseId: 'chin-tuck', stoppedEarly: 1, first: 6, latest: 6 }),
+      ]),
+    );
   });
 
   it('filters by range and exercise, and says one day in a line', async () => {

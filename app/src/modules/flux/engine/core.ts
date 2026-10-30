@@ -153,7 +153,7 @@ export class FluxCore {
       )
         this.pauseRecal = false;
       if (this.stillSec >= AUTO_CAL_STILL_SEC && !this.pauseRecal) {
-        // A re-set keeps the finished set and the ROM: a correction, not a Calibrate.
+        // A re-set keeps the ROM too (shifted onto the new neutral): a quiet correction, not a Calibrate.
         if (this.neutral) {
           const old = this.neutral;
           this.neutral = { ...this.lastSmoothed };
@@ -203,6 +203,11 @@ export class FluxCore {
     if (!this.faceVisible) return false;
     this.neutral = { ...this.lastSmoothed };
     this.resetRom();
+    // A neutral the user just chose: the between-set re-set (D46) anchors on it from here, and this
+    // pause has had its neutral — no quiet "Neutral reset" overwriting it 2 s later.
+    this.restNeutral = null;
+    this.stillSec = 0;
+    this.pauseRecal = true;
     return true;
   }
 
