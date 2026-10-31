@@ -64,8 +64,9 @@ refuses on its own, and the ruleset is the real one.
 `python3 .claude/hooks/testdata/run-fixtures.py` runs every guard against its fixture file
 (`reverse-shell-fixtures.jsonl`, `grep-guard-fixtures.jsonl`, `precommit-fixtures.jsonl`,
 `gh-safety-fixtures.jsonl`, `mcp-ledger-fixtures.jsonl`, `board-heavy-fixtures.jsonl`,
-`secrets-read-fixtures.jsonl`), checks each guard is
-registered in `settings.json` under its expected matchers, and exits non-zero on a mismatch. Run it after
+`secrets-read-fixtures.jsonl`), the compaction hooks against `compaction-fixtures.jsonl` with `claude` stubbed by
+`stub-claude.sh` (docs/ops/COMPACTION-HANDOFF.md), checks each hook is registered in `settings.json` under its
+expected event and matcher, and exits non-zero on a mismatch. Run it after
 touching a guard. A guard can fail **silently** — `precommit-guard`'s secret scan never worked from the day it was
 added (#4, 2026-08-09) until the fixtures caught it: a hard-wrapped regex made `grep` error out, and the
 `if` read that as "no match" — so a guard change isn't done until a fixture proves both its deny and its

@@ -11,6 +11,8 @@ Suites:
   mcp-dev-ledger.sh           <- mcp-ledger-fixtures.jsonl (aperture-dev delete guard + create/delete recording)
   board-heavy-guard.sh        <- board-heavy-fixtures.jsonl (session board: offer / measured-edge deny)
   secrets-read-guard.sh       <- secrets-read-fixtures.jsonl  (Read/Grep/Glob payloads; "tool" per case)
+  compaction hooks            <- compaction-fixtures.jsonl  (precompact-handoff.sh against stub-claude.sh,
+                                 post-compact-summary.sh, post-compact-context.sh; each case names its "hook")
 
 WHY THIS EXISTS AS A FILE-DRIVEN RUNNER, and not as an inline shell loop:
 COI's monitor matches its reverse-shell patterns against every process's argv.
@@ -39,6 +41,7 @@ after the hook ran) and "ledger_count" (its exact line count after);
 so the literal never sits in the repo for the CI secret scanner to flag.
 """
 
+import fcntl
 import json
 import os
 import pathlib
@@ -46,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 PLACEHOLDERS = {"{FAKE_AWS_KEY}": "AKIA" + "IOSFODNN7EXAMPLE"}
@@ -71,6 +75,13 @@ REGISTERED_POST = {
         "mcp__aperture-dev__update_task",
         "mcp__aperture-dev__delete_task",
     ),
+}
+
+# Non-PreToolUse hooks: script -> (event, matcher or None). "" never matches a real matcher, so None means "no matcher".
+REGISTERED_EVENTS = {
+    "precompact-handoff.sh": ("PreCompact", None),
+    "post-compact-summary.sh": ("PostCompact", None),
+    "post-compact-context.sh": ("SessionStart", "compact"),
 }
 
 # (hook, fixtures, tool, needs_repo[, "board"]) — "board": each case gets a fresh temp board + fake cgroup
@@ -282,6 +293,8 @@ def check_registration() -> tuple[int, int]:
     for event, registered in (("PreToolUse", REGISTERED), ("PostToolUse", REGISTERED_POST)):
         for h in registered:
             homes.setdefault(h, set()).add(event)
+    for h, (event, _) in REGISTERED_EVENTS.items():
+        homes.setdefault(h, set()).add(event)
     for event, entries in settings["hooks"].items():
         for entry in entries:
             for h in entry["hooks"]:
@@ -290,6 +303,142 @@ def check_registration() -> tuple[int, int]:
                     failures += 1
                     total += 1
                     print(f"FAIL  {name} also registered under {event}")
+    # settings.json runs each hook by path, so a lost exec bit fails every run silently — and the suites
+    # below run hooks via `bash <hook>`, so they'd never notice.
+    for hook_name in dict.fromkeys([*REGISTERED, *REGISTERED_POST, *REGISTERED_EVENTS]):
+        total += 1
+        ok = os.access(HERE.parent / hook_name, os.X_OK)
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} is executable")
+    for hook_name, (event, matcher) in REGISTERED_EVENTS.items():
+        total += 1
+        ok = any(
+            entry.get("matcher") == matcher and any(pathlib.PurePath(h["command"]).name == hook_name for h in entry["hooks"])
+            for entry in settings["hooks"].get(event, [])
+        )
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} on {event}{f' ({matcher})' if matcher else ''}")
+    return failures, total
+
+
+# --- Compaction hooks (compaction-fixtures.jsonl) ---
+# Each case runs one hook in a fresh repo with a PreCompact/PostCompact/SessionStart payload, `claude` on
+# PATH replaced by stub-claude.sh, and asserts on exit code, stdout, the hook's log, the stub's recorded argv
+# and the files left in localNotes/handoffs/. The stub never reaches the network.
+SID = "4cee5162-0000-4000-8000-000000000000"
+SILENT = {"precompact-handoff.sh", "post-compact-summary.sh"}  # must never print: compaction reads their stdout
+
+
+def disallowed_unscoped(argv: list[str]) -> list[str]:
+    """--disallowedTools entries without a (scope): a bare tool name removes the tool and misses the prompt cache."""
+    if "--disallowedTools" not in argv:
+        return []
+    rest = argv[argv.index("--disallowedTools") + 1 :]
+    rules = rest[: next((i for i, a in enumerate(rest) if a.startswith("--")), len(rest))]
+    return [r for r in rules if "(" not in r]
+
+
+def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
+    repo = make_repo(root, case.get("branch") or "fixture-branch")
+    git = ["git", "-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.com"]
+    if case.get("branch") == "":
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        subprocess.run([*git, "checkout", "-q", "--detach"], check=True)
+    handoffs = pathlib.Path(repo) / "localNotes" / "handoffs"
+    handoffs.mkdir(parents=True)
+    stamps = {  # log lines carry `date -Is` stamps; freshness is judged from them
+        "{NOW}": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "{OLD}": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() - 7200)),
+    }
+    for f in case.get("setup", []):
+        path = handoffs / f["name"]
+        content = f["content"]
+        for key, value in stamps.items():
+            content = content.replace(key, value)
+        path.write_text(content + "\n", encoding="utf-8")
+        if "age_min" in f:
+            old = time.time() - 60 * f["age_min"]
+            os.utime(path, (old, old))
+
+    stub_dir = tempfile.mkdtemp(dir=root)
+    if not case.get("no_claude"):
+        shutil.copy(HERE / "stub-claude.sh", pathlib.Path(stub_dir) / "claude")
+        os.chmod(pathlib.Path(stub_dir) / "claude", 0o755)
+    gh = pathlib.Path(stub_dir) / "gh"  # post-compact-context.sh calls gh; never let a fixture reach GitHub
+    gh.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    os.chmod(gh, 0o755)
+    argv_file = pathlib.Path(stub_dir) / "argv.txt"
+    transcript = pathlib.Path(stub_dir) / "transcript.jsonl"
+    if case.get("transcript", True):
+        transcript.write_text("{}\n", encoding="utf-8")
+
+    cwd = os.path.join(repo, case["subdir"]) if "subdir" in case else repo
+    os.makedirs(cwd, exist_ok=True)
+    payload = {"session_id": case.get("session_id", SID), "transcript_path": str(transcript), "cwd": cwd}
+    if "trigger" in case:
+        payload["trigger"] = case["trigger"]
+    if "custom" in case:
+        payload["custom_instructions"] = case["custom"]
+    if "summary" in case:
+        payload["compact_summary"] = case["summary"]
+    env = {k: v for k, v in os.environ.items() if k not in ("APERTURE_HANDOFF_FORK", "GH_REPO", "GH_TOKEN")}
+    path = env["PATH"]
+    if case.get("no_claude"):  # drop every PATH dir holding a real claude; HOME hides ~/.local/bin/claude
+        path = ":".join(d for d in path.split(":") if not os.access(os.path.join(d, "claude"), os.X_OK))
+        env["HOME"] = stub_dir
+    env.update(PATH=f"{stub_dir}:{path}", APERTURE_HANDOFF_TIMEOUT="2", STUB_ARGV_FILE=str(argv_file))
+    env.update(case.get("stub", {}), **case.get("env", {}))
+    held = None
+    if case.get("hold_lock"):  # flock(2), the same lock flock(1) takes in the hook
+        held = open(handoffs / f".lock-{SID[:8]}", "w")
+        fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        proc = subprocess.run(["bash", str(hook)], input=json.dumps(payload), capture_output=True, text=True, env=env)
+    finally:
+        if held:
+            held.close()
+
+    problems = []
+    if proc.returncode != 0:
+        problems.append(f"exit {proc.returncode}: {proc.stderr.strip()[:120]}")
+    if (case.get("stdout_empty") or case["hook"] in SILENT) and proc.stdout.strip():
+        problems.append(f"stdout not empty: {proc.stdout.strip()[:80]}")
+    if case.get("stderr_empty") and proc.stderr.strip():
+        problems.append(f"stderr not empty: {proc.stderr.strip()[:80]}")
+    problems += [f"stdout lacks {x!r}" for x in case.get("stdout", []) if x not in proc.stdout]
+    problems += [f"stdout has {x!r}" for x in case.get("stdout_absent", []) if x in proc.stdout]
+    if "called" in case and argv_file.exists() != case["called"]:
+        problems.append(f"stub called={argv_file.exists()}, expected {case['called']}")
+    argv = argv_file.read_text(encoding="utf-8") if argv_file.exists() else ""
+    problems += [f"argv lacks {x!r}" for x in case.get("argv", []) if x not in argv]
+    argv_lines = [line for line in argv.splitlines() if not line.startswith("instructions: ")]
+    argv_only = "\n".join(argv_lines)
+    problems += [f"unscoped deny rule {r!r}" for r in disallowed_unscoped(argv_lines)]
+    problems += [f"argv has {x!r}" for x in case.get("argv_absent", []) if x in argv_only]
+    log_path = handoffs / "precompact.log"
+    log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    problems += [f"log lacks {x!r} (log: {log.strip()[-120:]!r})" for x in case.get("log", []) if x not in log]
+    problems += [f"no file {g}" for g in case.get("exists", []) if not list(handoffs.glob(g))]
+    problems += [f"left behind {g}" for g in case.get("absent", []) if list(handoffs.glob(g))]
+    for g, needles in case.get("contains", {}).items():
+        text = "".join(f.read_text(encoding="utf-8") for f in handoffs.glob(g))
+        problems += [f"{g} lacks {x!r}" for x in needles if x not in text]
+    return problems
+
+
+def run_compaction_suite(root: str) -> tuple[int, int]:
+    print("\n== compaction hooks ==")
+    failures = total = 0
+    for line in (HERE / "compaction-fixtures.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        total += 1
+        case = json.loads(line)
+        problems = compaction_case(HERE.parent / case["hook"], case, root)
+        failures += bool(problems)
+        print(f"{'FAIL' if problems else 'ok  '}  {case['hook']:<24} {case['why'][:64]}")
+        for problem in problems:
+            print(f"          {problem}")
     return failures, total
 
 
@@ -301,6 +450,9 @@ def main() -> int:
             f, t = run_suite(hook_name, fixtures_name, tool, root if needs_repo or board else None, root, board)
             failures += f
             total += t
+        f, t = run_compaction_suite(root)
+        failures += f
+        total += t
     print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 

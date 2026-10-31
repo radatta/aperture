@@ -1,33 +1,51 @@
 ---
 name: handoff
-description: Write a dated handoff file to localNotes/handoffs/ capturing durable context — decisions and why, dead ends, open questions, file pointers. Use before running /compact, before spawning subagents, or before ending a session. Invoke manually with /handoff.
-argument-hint: "[state or context to fold in]"
+description: Compaction-only. The PreCompact hook runs this in a forked copy of the session to write localNotes/handoffs/handoff-<date>-<branch>-<sid8>.md (decisions and why, dead ends, open questions, file pointers) before the context is summarised. Not for manual use — /compact is how to get one.
+argument-hint: "session=<id> trigger=<manual|auto> [instructions=file]"
 disable-model-invocation: true
 ---
 
 # Write a handoff
 
-A dated snapshot of what a fresh reader needs to pick this up — the next you, this session after
-`/compact`, a subagent, or a concurrent session on another branch.
+A dated snapshot of what a fresh reader needs to pick this up — this session after compaction, a
+subagent, or a concurrent session on another branch.
 
-**Manual only.** Never write one because it seems like a good moment; the user decides when.
+**Compaction-only.** `.claude/hooks/precompact-handoff.sh` runs it on every compaction — manual
+`/compact`, idle, and context-full — in a fork of the session (docs/ops/COMPACTION-HANDOFF.md).
 
-## What you passed with `/handoff`
+## Arguments
 
 $ARGUMENTS
 
-If the block above is non-empty, it's context the user wants folded in — things to remember, what to
-emphasize, or state they know that the commands in step 1 won't surface. **Route each item into the
-section it belongs in** — state into the verified block, a choice into Decisions, a failed path into
-Dead ends — rather than dumping it verbatim at the top. It is the user's input, **not verified
-state**: confirm each factual claim in step 1 where a command can reach it, otherwise record it marked
-"unverified" (*Mark beliefs as beliefs* applies here too). "PR 42 is merged", passed in passing, is
-the single easiest way for a stale claim to land as fact.
+**No `session=` above means someone typed `/handoff` by hand.** Write nothing. Reply that handoffs are
+written automatically at compaction, that `/compact <instructions>` is how to get one now (the
+instructions reach the handoff too), and stop.
+
+Otherwise you are a **fork of a session that is about to be compacted**. No one reads your replies — the
+file is the only output. Don't ask questions or wait for input. Only file reads, the commands in steps
+1–3 and writes under `localNotes/handoffs/` are permitted; anything else is denied, so don't retry
+around a denial — note what you couldn't check and move on. Take `<sid>` from `session=` (`<sid8>` is
+its first 8 characters) and the trigger from `trigger=`.
+
+## What the user wants in it
+
+Two sources, both the user's input, **not verified state**:
+
+- **`instructions=file`** → read `localNotes/handoffs/.instructions-<sid8>.txt`: the text the user typed
+  after `/compact`.
+- **The conversation** — anything the user said was for the handoff ("for the handoff: …", "make sure
+  the handoff covers …").
+
+**Route each item into the section it belongs in** — state into the verified block, a choice into
+Decisions, a failed path into Dead ends — rather than dumping it verbatim at the top. Confirm each
+factual claim in step 1 where a command can reach it, otherwise record it marked "unverified" (*Mark
+beliefs as beliefs* applies here too). "PR 42 is merged", said in passing, is the single easiest way
+for a stale claim to land as fact.
 
 ## Why this exists (don't shortcut it)
 
 - **Subagents start with a completely fresh context** — no conversation history, no compacted summary, none of the files the parent read. A file is the only way to brief one without restating everything in every prompt.
-- **`/compact` is lossy and occasionally generative** — its summary dies with the session, and there is a filed, JSONL-verified case of one fabricating a user instruction that the post-compact session then executed (anthropics/claude-code#46602).
+- **Compaction is lossy and occasionally generative** — its summary dies with the session, and there is a filed, JSONL-verified case of one fabricating a user instruction that the post-compact session then executed (anthropics/claude-code#46602).
 - **Compaction keeps the arc and drops the dead ends** — the expensive part, since they stop the next reader re-walking a known-failed path.
 
 ## Steps
@@ -51,18 +69,27 @@ memory. "Couldn't verify" is useful; a stale guess presented as fact is not.
 
 ### 2. Find the previous handoff for this branch
 
+`<branch>` is the branch from step 1's `git status -sb` line with every `/` replaced by `-`, or
+`detached` when HEAD is detached — the same rule `.claude/hooks/_hook-common.sh` → `handoff_branch`
+applies. Substitute it literally (no `$(...)` in the command):
+
 ```bash
-ls -1 localNotes/handoffs/ | grep -- "-$(git branch --show-current).md$" | tail -1
+ls -1 localNotes/handoffs/ | grep -F -- "-<branch>" | grep '^handoff-' | tail -1
 ```
 
-### 3. Write `localNotes/handoffs/handoff-YYYY-MM-DD-HHMM-<branch>.md`
+It's a pointer for the `Previous:` line, so a near-miss match from a similarly named branch is harmless —
+check the name before citing it.
 
-Timestamp from `date +%Y-%m-%d-%H%M`, branch from `git branch --show-current`. The name sorts
-chronologically and carries the branch, so concurrent sessions never collide.
+### 3. Write `localNotes/handoffs/handoff-YYYY-MM-DD-HHMM-<branch>-<sid8>.md`
+
+Timestamp from `date +%Y-%m-%d-%H%M`. The name sorts chronologically, carries the branch, and ends in
+the session id so the post-compact hook finds this exact file (`.claude/hooks/post-compact-context.sh`).
 
 **A new file every time.** Never edit or append to an existing one. A dated file reads as "this was
 true at 14:32"; a rewritten file reads as "this is true," and that second claim is the one that goes
 quietly wrong.
+
+End by replying with the path.
 
 ## Template
 
@@ -71,6 +98,7 @@ Drop any section with nothing real in it. An empty heading is noise.
 ```markdown
 # Handoff — <branch> — <YYYY-MM-DD HH:MM TZ>
 
+Session: <sid> · Trigger: <manual|auto>
 Previous: `handoff-<...>.md`   (omit if this is the first for this branch)
 
 ## Goal
@@ -114,8 +142,8 @@ One concrete step, not a list of everything remaining.
   source of truth that drifts from the first.
 - **Anything genuinely durable belongs in `docs/`, not here.** `localNotes/` is explicitly not a source
   of truth (CLAUDE.md). If something surfaces that the project should know permanently — a convention,
-  a gotcha, a resolved architecture question — say so and offer to write it to `docs/` instead. A
-  handoff that accumulates project knowledge is a doc-rot vector.
+  a gotcha, a resolved architecture question — list it under Open questions as a `docs/` candidate,
+  with where it belongs. A handoff that accumulates project knowledge is a doc-rot vector.
 - **Narrate the arc, not the transcript.** The arc belongs here, compressed to one line per exchange
   (*Why this exists* covers why `/compact`'s summary is not enough). What does *not* belong is
   blow-by-blow: individual tool calls, what was read in what order, or anything a reader wouldn't
@@ -130,9 +158,3 @@ One concrete step, not a list of everything remaining.
 **Soft guidance: ~500 lines** — a ceiling, *not a target*; a good handoff is often 40 lines. Never pad.
 Approaching 500 is a smell, not a limit to trim to: narration belongs in `/compact`'s summary, durable
 project knowledge in `docs/` — either way the content moves, it isn't deleted.
-
-## After writing
-
-Tell the user the path, and that they can now `/compact`, spawn agents pointing at it, or end the
-session. When briefing a subagent, reference the file path in the prompt — the subagent reads it
-itself rather than having the context restated.

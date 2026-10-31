@@ -17,14 +17,15 @@
 # repo); each is guarded so the hook always exits 0. A hook that errors on a plane is worse than one
 # that says less.
 #
-# Wired in .claude/settings.json (SessionStart, matcher "compact").
-# See .claude/skills/handoff/SKILL.md and docs/ops/COI-SANDBOX.md.
+# Wired in .claude/settings.json (SessionStart, matcher "compact"). The handoff itself is written before
+# compaction by precompact-handoff.sh — see docs/ops/COMPACTION-HANDOFF.md.
 
 set -uo pipefail  # deliberately NOT -e: a failing probe must not kill the hook
 
 INPUT=$(cat)
 source "${BASH_SOURCE[0]%/*}/_hook-common.sh"; hook_cd "$INPUT" || exit 0
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+cd "$(git rev-parse --show-toplevel)" || exit 0  # handoffs live at the repo root even if the session cd'd into app/
 
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
@@ -74,13 +75,39 @@ if command -v gh >/dev/null 2>&1; then
   echo
 fi
 
-# Surface the newest handoff for this branch rather than its contents — reading it is a decision for
-# the session, and dumping a few hundred lines into a just-compacted context defeats the compaction.
-if [ -n "$BRANCH" ]; then
-  LATEST=$(ls -1 localNotes/handoffs/ 2>/dev/null | grep -- "-${BRANCH}\.md$" | tail -1)
+# The handoff precompact-handoff.sh wrote for THIS compaction — its log's last line for this session names
+# the file and was written in the last 10 min — is injected: it was written for exactly this moment.
+# Otherwise the newest handoff for this branch is surfaced by path only; reading it is a decision for the
+# session, and dumping a stale file into a just-compacted context defeats compaction.
+H=localNotes/handoffs
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+OWN=""
+if [[ "$SID" =~ $SID_RE ]]; then
+  SID8=${SID:0:8}
+  LAST=$(grep -F -- " sid=$SID8" "$H/precompact.log" 2>/dev/null | tail -1)
+  OWN=$(sed -n 's/.* file=\(handoff-[^ ]*\.md\)$/\1/p' <<<"$LAST")
+  LOGGED=$(date -d "${LAST%% *}" +%s 2>/dev/null || echo 0)
+  [ -n "$OWN" ] && [ -f "$H/$OWN" ] && [ $(($(date +%s) - LOGGED)) -lt 600 ] || OWN=""
+fi
+if [ -n "$OWN" ]; then
+  echo "## Handoff written just before this compaction — $H/$OWN"
+  echo "Written by a fork of this session moments ago. Its decisions, dead ends and open questions are"
+  echo "what the summary may have dropped; its 'State as of' block is superseded by the live state above."
+  echo
+  head -150 "$H/$OWN"
+  LINES=$(wc -l < "$H/$OWN")
+  [ "$LINES" -gt 150 ] && echo "… (first 150 of $LINES lines — read the file for the rest)"
+  echo
+else
+  # Fixed-string match on the dated name (`handoff-<YYYY-MM-DD-HHMM>-<branch>[-<sid8>].md`), so a branch
+  # like `c++` can't break a regex and `main` can't match `…-other-main.md`.
+  B=$(handoff_branch)
+  D='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9]'
+  X='[0-9a-f]'
+  LATEST=$(cd "$H" 2>/dev/null && ls -1d handoff-$D-"$B".md handoff-$D-"$B"-$X$X$X$X$X$X$X$X.md 2>/dev/null | sort | tail -1)
   if [ -n "$LATEST" ]; then
     echo "## Handoff available"
-    echo "localNotes/handoffs/$LATEST"
+    echo "$H/$LATEST"
     echo "Durable context (decisions, dead ends, open questions). Its 'State as of' block is a frozen"
     echo "snapshot — the live state above supersedes it. Read the file if picking up unfamiliar work."
     echo
