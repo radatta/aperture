@@ -123,6 +123,7 @@ describe('dev-account SCPs', () => {
       'dynamodb:UpdateContributorInsights',
       'cloudfront:CreateInvalidation*',
       'cloudfront:AssociateAlias',
+      'cloudfront:*PricingPlan*',
       'iam:CreateUser',
       'iam:CreateAccessKey',
       'iam:*OpenIDConnectProvider*',

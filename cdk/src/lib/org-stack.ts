@@ -162,6 +162,10 @@ export const guardrailsPolicy = () =>
       'cloudfront:CreateAnycastIpList',
       'cloudfront:CreateVpcOrigin',
       'cloudfront:CreateStreamingDistribution*',
+      // Flat-rate pricing plans (2025) are a monthly commitment a disabled distribution doesn't cancel; the action
+      // names weren't confirmed against the Service Authorization Reference, so these match by pattern.
+      'cloudfront:*PricingPlan*',
+      'cloudfront:*Subscription*',
     ]),
     // No long-lived credentials, no new federation, and the OIDC trust GitHub deploys through stays as deployed.
     deny('NoIamIdentities', [

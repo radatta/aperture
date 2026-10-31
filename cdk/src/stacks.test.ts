@@ -732,16 +732,29 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
   it('uses only services the dev allowlist SCP admits — a new one means widening it in ApertureOrg first', () => {
     const allowed = (allowlistPolicy().Statement[0] as { NotAction: string[] }).NotAction;
-    const prefix: Record<string, string> = {
-      Lambda: 'lambda', IAM: 'iam', Logs: 'logs', S3: 's3', CloudFront: 'cloudfront', Cognito: 'cognito-idp',
-      DynamoDB: 'dynamodb', Scheduler: 'scheduler', SSM: 'ssm', KMS: 'kms',
+    // The allowlist entry each resource type's service needs (SSM is admitted for Parameter Store only).
+    const entry: Record<string, string> = {
+      Lambda: 'lambda:*', IAM: 'iam:*', Logs: 'logs:*', S3: 's3:*', CloudFront: 'cloudfront:*', Cognito: 'cognito-idp:*',
+      DynamoDB: 'dynamodb:*', Scheduler: 'scheduler:*', SSM: 'ssm:*Parameter*', KMS: 'kms:*',
     };
     for (const type of new Set(resources(dev.templates).map((r) => r.Type))) {
       if (type.startsWith('Custom::') || type === 'AWS::CDK::Metadata') continue; // CDK providers run as Lambdas
-      const service = prefix[type.split('::')[1] ?? ''];
-      expect(service, `${type}: map its service, then check the allowlist`).toBeDefined();
-      expect(allowed, `${type}: add ${service}:* to the allowlist SCP`).toContain(`${service}:*`);
+      const needed = entry[type.split('::')[1] ?? ''];
+      expect(needed, `${type}: map its service, then check the allowlist`).toBeDefined();
+      expect(allowed, `${type}: add ${needed} to the allowlist SCP`).toContain(needed);
     }
+  });
+
+  // The freeze denies new code in CDK's 15-minute provider functions by the `Aperture…` name CloudFormation gives an
+  // unnamed function (`<stack>-<logicalId>-<suffix>`); the app's own functions must stay outside that pattern.
+  it("names functions so the freeze's provider-code deny catches CDK's providers and none of the app's", () => {
+    const fns = resources(dev.templates).filter((r) => r.Type === 'AWS::Lambda::Function');
+    expect(fns.some((f) => f.Properties?.FunctionName === undefined)).toBe(true); // the providers
+    for (const f of fns) {
+      const name = f.Properties?.FunctionName as string | undefined;
+      if (name !== undefined) expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
+    }
+    for (const a of dev.artifacts) expect(a.stackName).toMatch(/^Aperture/); // so an unnamed function's name does
   });
 });
 
