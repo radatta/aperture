@@ -61,14 +61,38 @@ function PartCategory({ task }: { task: Task }) {
   );
 }
 
+// A row's title, then its tags. On a phone a part's tags ("of P2 · ends 3pm · due Mon 5pm") take a
+// second line, so the title keeps the row; elsewhere it's one line.
+function RowText({ task, title, children }: { task: Task; title: ReactNode; children: ReactNode }) {
+  const part = !!task.parentId;
+  return (
+    <div
+      className={cx(
+        'flex min-w-0 items-center gap-2',
+        part && 'max-sm:flex-col max-sm:items-start max-sm:gap-0.5',
+      )}
+    >
+      {title}
+      <span
+        className={cx(
+          'contents',
+          part && 'max-sm:flex max-sm:max-w-full max-sm:items-center max-sm:gap-2',
+        )}
+      >
+        {children}
+      </span>
+    </div>
+  );
+}
+
 // "of P2" on a part, so the row says what it's working toward.
 function PartOf({ task }: { task: Task }) {
   const { data: tasks = [] } = useAllTasks();
   const parent = parentOf(tasks, task);
   if (!parent) return null;
-  // Capped, so on a phone the part's own title keeps most of the row.
+  // Capped beside the title; on a phone it sits on the line under it (RowText).
   return (
-    <Text size="xs" tone="muted" className="min-w-0 max-w-[35%] truncate">
+    <Text size="xs" tone="muted" className="min-w-0 truncate sm:max-w-[35%]">
       of {parent.title}
     </Text>
   );
@@ -76,7 +100,8 @@ function PartOf({ task }: { task: Task }) {
 
 // The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact, so a
 // phone-width row keeps room for its title: "by 4:30pm" today, else "Sun 6:16pm" (whether that's past
-// is the row's colour, and the screen-reader text).
+// is the row's colour, and the screen-reader text). On a part it's its parent's, so it says "due" —
+// apart from the part's own "ends".
 function DueTime({ task }: { task: Task }) {
   const { data: settings } = useSettings();
   const label = urgencyLabel(useUrgency(task));
@@ -85,8 +110,9 @@ function DueTime({ task }: { task: Task }) {
   const today = todayKey(settings?.dayStartHour ?? 4);
   return (
     <Text size="xs" tone="subtle" className="shrink-0">
+      {task.parentId && 'due '}
       {dueDay === today
-        ? `by ${fmtClock12(dueTime)}`
+        ? `${task.parentId ? '' : 'by '}${fmtClock12(dueTime)}`
         : `${fmtWeekdayShort(dueDay)} ${fmtClock12(dueTime)}`}
       {label && <span className="sr-only">, {label}</span>}
     </Text>
@@ -256,13 +282,20 @@ function FocusRow({
   const u = useUrgency(t);
   return (
     <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <div className="flex min-w-0 items-center gap-2">
-        <Text
-          size="sm"
-          className={cx('min-w-0 truncate', t.status === 'done' && 'text-ink-subtle line-through')}
-        >
-          {t.title}
-        </Text>
+      <RowText
+        task={t}
+        title={
+          <Text
+            size="sm"
+            className={cx(
+              'min-w-0 max-w-full truncate',
+              t.status === 'done' && 'text-ink-subtle line-through',
+            )}
+          >
+            {t.title}
+          </Text>
+        }
+      >
         <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
@@ -273,7 +306,7 @@ function FocusRow({
           </Text>
         )}
         <DueTime task={t} />
-      </div>
+      </RowText>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'done' ? (
           <Text size="xs" tone="subtle">
@@ -308,14 +341,18 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
   const u = useUrgency(t);
   return (
     <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <div className="flex min-w-0 items-center gap-2">
-        <Text
-          size="sm"
-          tone="muted"
-          className={cx('min-w-0 truncate', t.status === 'done' && 'line-through')}
-        >
-          {t.title}
-        </Text>
+      <RowText
+        task={t}
+        title={
+          <Text
+            size="sm"
+            tone="muted"
+            className={cx('min-w-0 max-w-full truncate', t.status === 'done' && 'line-through')}
+          >
+            {t.title}
+          </Text>
+        }
+      >
         <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
@@ -325,7 +362,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
             not planned today
           </Text>
         )}
-      </div>
+      </RowText>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'in_progress' && (
           <Text size="xs" tone="muted" tabular>

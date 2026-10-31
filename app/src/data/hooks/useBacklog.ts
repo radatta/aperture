@@ -5,9 +5,9 @@ import { useApi } from '../api-context';
 import { tasksQuery } from './useTasks';
 
 // What's waiting to be planned, newest first — derived from the one tasks query so it moves with every
-// write (taskCache.ts). The morning "plan today" card counts it, so it's what "+ Add" can pull in: no
-// timed task (its time is its day, lenses.md D13), no parent (its parts are the work). Not the server's
-// listBacklog rule — MCP keeps that.
+// write (taskCache.ts). The morning "plan today" card counts it: the backlog tasks "+ Add" can pull in —
+// no timed task (its time is its day, lenses.md D13), no parent (its parts are the work). Not the
+// server's listBacklog rule — MCP keeps that.
 const waiting = (ts: Task[]) => {
   const parents = new Set(ts.map((t) => t.parentId).filter((id): id is string => !!id));
   return ts

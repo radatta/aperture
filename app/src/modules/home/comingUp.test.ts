@@ -41,6 +41,7 @@ describe('comingUp', () => {
       [mkTask('far', 10), mkTask('overdue', -2), mkTask('today', 0), mkTask('soon', 1), mkTask('mid', 4)],
       TODAY,
       new Set(),
+      4,
     );
     expect(cu.items.map((t) => t.id)).toEqual(['overdue', 'today', 'soon']);
     expect(cu.items.length).toBe(RADAR_CAP);
@@ -51,13 +52,14 @@ describe('comingUp', () => {
       [mkTask('undated', null), mkTask('done', 1, 'done'), mkTask('cancelled', 1, 'cancelled'), mkTask('planned-today', 1), mkTask('keep', 2)],
       TODAY,
       new Set(['planned-today']),
+      4,
     );
     expect(cu.items.map((t) => t.id)).toEqual(['keep']);
   });
 
   it('leaves parts off the radar — the deadline is the parent’s, which is on it', () => {
     const part = { ...mkTask('part', 1), parentId: 'parent' };
-    const cu = comingUp([mkTask('parent', 3), part], TODAY, new Set());
+    const cu = comingUp([mkTask('parent', 3), part], TODAY, new Set(), 4);
     expect(cu.items.map((t) => t.id)).toEqual(['parent']);
   });
 
@@ -66,6 +68,7 @@ describe('comingUp', () => {
       [mkTask('a', 0), mkTask('b', 1), mkTask('c', 2), mkTask('d', 5), mkTask('e', 6), mkTask('f', 20)],
       TODAY,
       new Set(),
+      4,
     );
     expect(cu.items.map((t) => t.id)).toEqual(['a', 'b', 'c']);
     expect(cu.moreThisWeek).toBe(2); // d(+5), e(+6)
@@ -75,7 +78,15 @@ describe('comingUp', () => {
   it('does not mutate its input', () => {
     const input = [mkTask('a', 3), mkTask('b', 1)];
     const before = input.map((t) => t.id);
-    comingUp(input, TODAY, new Set());
+    comingUp(input, TODAY, new Set(), 4);
     expect(input.map((t) => t.id)).toEqual(before);
+  });
+
+  it('a timed task due today+7 at 00:30 is this week’s — its deadline’s app day is today+6', () => {
+    const night = { ...mkTask('night', 7), dueTime: '00:30' };
+    const fill = [mkTask('a', 0), mkTask('b', 1), mkTask('c', 2)];
+    const cu = comingUp([...fill, night], TODAY, new Set(), 4);
+    expect(cu).toMatchObject({ moreThisWeek: 1, moreLater: 0 });
+    expect(comingUp([...fill, night], TODAY, new Set(), 0)).toMatchObject({ moreLater: 1 });
   });
 });

@@ -423,6 +423,39 @@ describe('backend decisions under a lagging task list', () => {
     expect(doc.gets.some((g) => g.key.endsWith(sk.task(t.id)) && g.consistent)).toBe(true);
   });
 
+  it('option 3: the sweep reads plan rows consistently — a row just written keeps its task planned', async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const plan = await backend.upsertPlan({
+      taskId: t.id,
+      day: '2026-08-04',
+      plannedMinutes: 30,
+      order: 0,
+    });
+    await backend.transitionTask(t.id, 'planned');
+    doc.staleNextQueries('u#local', sk.plan('2026-08-04', 0, plan.id), null, 20); // row not visible yet
+    await backend.getDay('2026-08-04');
+    expect((await backend.getTask(t.id))?.status).toBe('planned');
+  });
+
+  it('option 3: a roll pick straight after clearing its rep’s time reuses the rep', async () => {
+    const { backend, lagging } = setup();
+    const roll = await backend.upsertRoll({ name: 'OA', categoryId: null, estimateMin: 30 });
+    const { task: rep } = await backend.pickRollToday(roll.id, '2026-08-04');
+    await backend.setTaskDue(rep.id, { dueDay: '2026-08-06', dueTime: '17:00' });
+    await lagging(rep.id); // the list shows it timed
+    await backend.setTaskDue(rep.id, { dueDay: '2026-08-06', dueTime: null });
+    expect((await backend.pickRollToday(roll.id, '2026-08-05')).task.id).toBe(rep.id);
+  });
+
+  it('a part’s first start returns it started though a plain read still shows it unstarted', async () => {
+    const { backend, doc } = setup();
+    const p = await backend.createTask({ title: 'P2' });
+    const a = await backend.createTask({ title: 'a', estimateMin: 30, parentId: p.id });
+    doc.staleNextGets('u#local', sk.task(a.id), await doc.get('u#local', sk.task(a.id)), 20);
+    expect((await backend.transitionTask(a.id, 'in_progress')).status).toBe('in_progress');
+  });
+
   it('detaching the last part releases the lock though the list still shows it attached', async () => {
     const { backend, lagging } = setup();
     const p = await backend.createTask({ title: 'P2' });

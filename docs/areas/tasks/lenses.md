@@ -114,7 +114,7 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   labels parts "of P2". A part on Today is an ordinary card, tagged "of P2 · due …".
 
 - **D13 — option 3: a time decides the day (2026-10-30, parts v2b).** A timed task (`dueDay` +
-  `dueTime`, not a parent) is on Today on the day its time falls, by clock, and never planned; only an
+  `dueTime`, not a parent) is on Today on the app day its deadline falls on, and never planned; only an
   untimed task is planned. `placeOf` and `todayRows` (`modules/tasks/todayRows.ts`) read it the same
   way: timed rows first ("By time", no Unplan, in deadline order), then the plan.
   - **The day is the deadline instant's app day** (`timedDay`, shared `machines.ts`): the instant

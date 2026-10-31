@@ -54,7 +54,7 @@ export const placedByTime = (
   dayStartHour: number,
 ): boolean => timedDay(t, dayStartHour) === day;
 export const TIMED_NO_PLAN_ERROR =
-  'A timed task is on the day its time falls on — change when it ends instead of planning it.';
+  'A timed task is on the day its time falls on — change its time instead of planning it.';
 
 // Stale-planned sweep (getDay's lazy rollover): a planned task with no alive plan row on `day` or later
 // was left behind. A timed `planned` task is swept whatever its rows — option 3's standing invariant,

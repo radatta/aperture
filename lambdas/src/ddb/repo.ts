@@ -174,9 +174,9 @@ export class Repo {
       (await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)),
     );
   }
-  async listAllPlans(): Promise<TaskPlan[]> {
+  async listAllPlans(opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.planAllPrefix())).map((i) => toEntity<TaskPlan>(i)),
+      (await this.doc.query(this.p(), sk.planAllPrefix(), opts)).map((i) => toEntity<TaskPlan>(i)),
     );
   }
   async findPlan(id: string): Promise<TaskPlan | null> {

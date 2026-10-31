@@ -712,30 +712,21 @@ function Receipt({
       </Text>
     );
   const r = receiptFor(receipt.mode, receipt.dest);
+  // On a phone the row leaves the receipt ~115px, so a long one ("due tomorrow 4pm, by its time",
+  // "backlog (couldn’t plan it)") takes a second line there, never losing the part that says where.
+  const wrap = 'block truncate pr-1 max-sm:line-clamp-2 max-sm:whitespace-normal';
   // Not a failure — the task is saved — but it isn't what you meant, so it reads gold, not teal.
   if (receipt.unparsed)
     return (
-      <Text size="xs" tone="gold" className="block truncate pr-1">
+      <Text size="xs" tone="gold" className={wrap}>
         Saved unparsed → {r.label}
         <span className="sr-only">: couldn&apos;t parse ({receipt.unparsed}), saved as typed</span>
       </Text>
     );
-  if (receipt.parsed)
-    return (
-      <Text size="xs" tone="teal" className="block truncate pr-1">
-        {r.text} → {r.label}
-        <span className="sr-only">: {receipt.parsed}</span>
-      </Text>
-    );
-  // On a phone the row leaves the receipt ~115px, so a long one ("due tomorrow 4pm, by its time",
-  // "backlog (couldn’t plan it)") takes a second line there, never losing the part that says where.
   return (
-    <Text
-      size="xs"
-      tone="teal"
-      className="block truncate pr-1 max-sm:line-clamp-2 max-sm:whitespace-normal"
-    >
+    <Text size="xs" tone="teal" className={wrap}>
       {r.text} → {r.label}
+      {receipt.parsed && <span className="sr-only">: {receipt.parsed}</span>}
     </Text>
   );
 }

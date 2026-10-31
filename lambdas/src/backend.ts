@@ -458,7 +458,8 @@ export class BackendClient implements ApiClient {
       >
     >,
   ): Promise<Task> {
-    const fresh = (await this.repo.getTask(task.id)) ?? task;
+    // Consistent: it follows a write, and what it returns goes straight into the app's list.
+    const fresh = (await this.repo.getTask(task.id, { consistent: true })) ?? task;
     return this.repo.putTask({ ...fresh, ...fields, updatedAt: this.now() });
   }
   private async mustTask(id: string): Promise<Task> {
@@ -841,7 +842,7 @@ export class BackendClient implements ApiClient {
       (to === 'in_progress' || to === 'done');
     if (!task.parentId || !firstStart) return next;
     await this.freezeLock(task.parentId, id);
-    return (await this.repo.getTask(id)) ?? next;
+    return (await this.repo.getTask(id, { consistent: true })) ?? next;
   }
   // A parent is never worked on itself: it's marked done once its parts are dealt with (a hard block
   // otherwise; its due marker stays, as a done task's block does), and dropping it drops its open parts
@@ -1191,7 +1192,7 @@ export class BackendClient implements ApiClient {
   async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
     const roll = await this.repo.getRoll(rollId);
     if (!roll) throw new Error(`Not found: ${rollId}`);
-    const existing = findOpenRollTask(await this.repo.listTasks(), rollId);
+    const existing = findOpenRollTask(await this.repo.listTasks({ consistent: true }), rollId);
     if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR);
     const task = existing
       ? existing.status === 'backlog'
@@ -1292,7 +1293,9 @@ export class BackendClient implements ApiClient {
   private async sweepStalePlanned(day: string): Promise<void> {
     const tasks = await this.repo.listTasks();
     if (!tasks.some((t) => t.status === 'planned')) return;
-    const plans = await this.repo.listAllPlans();
+    // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing.
+    if (stalePlannedMoves(tasks, await this.repo.listAllPlans(), day).length === 0) return;
+    const plans = await this.repo.listAllPlans({ consistent: true });
     for (const { task } of stalePlannedMoves(tasks, plans, day)) {
       const fresh = await this.repo.getTask(task.id, { consistent: true });
       if (!fresh) continue;

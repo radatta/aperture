@@ -118,6 +118,19 @@ describe('Right now card', () => {
     expect(screen.queryByText('Nothing planned today.')).toBeNull();
   });
 
+  it('a timed part in By time says when it ends, and its parent’s deadline as “due”', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'Lab', dueDay: TODAY, dueTime: '23:59' });
+    const [part] = await api.createTasks([{ title: 'analysis', parentId: p.id }]);
+    await api.setTaskDue(part!.id, { dueDay: TODAY, dueTime: '23:57' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('ends 11:57pm')).toBeTruthy();
+    expect(screen.getByText('of Lab')).toBeTruthy();
+    expect(screen.getByText(/^due 11:59pm/)).toBeTruthy();
+  });
+
   it('a day with only a timed task isn’t “nothing planned”', async () => {
     const api = stub();
     await api.createTask({ title: 'OA', dueDay: TODAY, dueTime: '23:58' });

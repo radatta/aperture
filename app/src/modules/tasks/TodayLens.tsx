@@ -21,8 +21,9 @@ import { useTodayPlan } from './useTodayPlan';
 // The Today lens — the morning plan pass (PRODUCT §3 ☀️): set the day's capacity and see planned
 // hours vs available, over today's work: the timed tasks whose time falls today ("By time", by clock —
 // their time put them here, so nothing to unplan; lenses.md D13), then today's plan in its own order.
-// Pulling work in happens from Week and Backlog (or Home's "+ Add"); this lens is the plan itself. Finished work leaves the plan list for a
-// collapsed "Done today" group at the bottom (lenses.md D11); its rows stay, so capacity still counts it.
+// Pulling work in happens from Week and Backlog (or Home's "+ Add"); this lens is the plan itself.
+// Finished work leaves the plan list for a collapsed "Done today" group at the bottom (lenses.md D11);
+// its rows stay, so capacity still counts it.
 export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: () => void }) {
   const { day, dayStartHour, rows, plannedMin, pva, isPending, isError } = useTodayPlan();
   const { data: dayRec } = useDay(day);
