@@ -17,11 +17,29 @@ export interface DevGuardStackProps extends StackProps {
 export const KILL_ALARMS = [
   // Busy environments: the account-wide Duration sum. 600,000 ms a minute is ten environments busy for the whole
   // minute — a pinger or a loop, never a page load.
-  { name: `${KILL_ALARM_PREFIX}duration`, namespace: 'AWS/Lambda', metricName: 'Duration', threshold: 600_000, periods: 2 },
+  {
+    name: `${KILL_ALARM_PREFIX}duration`,
+    namespace: 'AWS/Lambda',
+    metricName: 'Duration',
+    threshold: 600_000,
+    periods: 2,
+  },
   // Call rate: a loop of short calls the Duration alarm would miss.
-  { name: `${KILL_ALARM_PREFIX}invocations`, namespace: 'AWS/Lambda', metricName: 'Invocations', threshold: 3_000, periods: 1 },
+  {
+    name: `${KILL_ALARM_PREFIX}invocations`,
+    namespace: 'AWS/Lambda',
+    metricName: 'Invocations',
+    threshold: 3_000,
+    periods: 1,
+  },
   // Log ingest is $0.50/GB with no cap anywhere in AWS: 100 MB in a minute is far past any real dev log volume.
-  { name: `${KILL_ALARM_PREFIX}log-bytes`, namespace: 'AWS/Logs', metricName: 'IncomingBytes', threshold: 100 * 1024 * 1024, periods: 1 },
+  {
+    name: `${KILL_ALARM_PREFIX}log-bytes`,
+    namespace: 'AWS/Logs',
+    metricName: 'IncomingBytes',
+    threshold: 100 * 1024 * 1024,
+    periods: 1,
+  },
 ] as const;
 
 // The dev account's half of the kill switch (docs/ops/CI-BOT.md → Kill switch): the alarms, and a rule forwarding
@@ -37,7 +55,12 @@ export class ApertureDevGuardStack extends Stack {
     for (const a of KILL_ALARMS)
       new cloudwatch.Alarm(this, a.name, {
         alarmName: a.name,
-        metric: new cloudwatch.Metric({ namespace: a.namespace, metricName: a.metricName, statistic: 'Sum', period: Duration.minutes(1) }),
+        metric: new cloudwatch.Metric({
+          namespace: a.namespace,
+          metricName: a.metricName,
+          statistic: 'Sum',
+          period: Duration.minutes(1),
+        }),
         threshold: a.threshold,
         evaluationPeriods: a.periods,
         datapointsToAlarm: a.periods,
@@ -59,7 +82,11 @@ export class ApertureDevGuardStack extends Stack {
       },
       targets: [
         new targets.EventBus(
-          events.EventBus.fromEventBusArn(this, 'MgmtBus', `arn:aws:events:us-east-1:${props.mgmtAccountId}:event-bus/default`),
+          events.EventBus.fromEventBusArn(
+            this,
+            'MgmtBus',
+            `arn:aws:events:us-east-1:${props.mgmtAccountId}:event-bus/default`,
+          ),
           { role: forwarder },
         ),
       ],

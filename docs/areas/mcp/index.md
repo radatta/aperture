@@ -336,7 +336,9 @@ claude.ai's live client enforces it yet is unconfirmed (cheap forward-compat, no
 
 0. No new GitHub secrets (the client id is not a secret). Re-confirm the connector callback URLs in
    `cdk/src/config/claudeConnector.ts` against Anthropic's docs.
-1. Deploy; read `McpClientId` from the stack outputs (or Cognito → App clients, region us-west-1).
+1. Deploy; read `McpClientId` from the stack outputs (or Cognito → App clients, region us-west-1). Dev's pool
+   moved to the dev account in the dev-account PR (INFRA §2), so a claude.ai dev connector is re-added with
+   the new id; Claude Code's `aperture-dev` (agent token, same URL) is unaffected.
 2. **R7 curl, before any claude.ai UI:** `POST …/mcp` with `Authorization: Bearer x` → expect **401 with
    body `"Unauthorized: invalid token"`** (the verifier ran, so the header reached the Lambda). If it reads
    `"requires a credential"` (CloudWatch `mcp_auth`: `credential:"none"`), the header was dropped → add a CloudFront viewer-request Function that

@@ -259,6 +259,8 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   they recycle). Missing → Connect says "Plaid credentials not configured".
 - **`/aperture/<stage>/plaid/items/<itemId>/access_token`** is written and deleted by the BFF, read by the
   sync. Never delete one by hand — without it the bank can't be removed at Plaid.
+- **Dev lives in its own AWS account** since the dev-account PR (INFRA §2): its `client_id`/`secret` were
+  copied across once; its Sandbox items were not — relink on dev.
 - **The schedule is gated on `DEVICE_USER_ID_<STAGE>`** (the same GitHub var the LeetCode ingest uses):
   unset means no scheduled sync; wrong means it syncs an empty partition. See
   [recruiting/](../recruiting/index.md) → Operator setup.

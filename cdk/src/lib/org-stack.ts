@@ -31,7 +31,13 @@ const breakGlass = `arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`;
 // can use or change them: their trust names a service, and NoGuardTampering denies iam:* (PassRole included) on them.
 const killRoles = `arn:aws:iam::*:role/${KILL_ALARM_PREFIX}*`;
 const exempt = { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, killRoles] } };
-const deny = (Sid: string, Action: string[], Resource: string | string[] = '*') => ({ Sid, Effect: 'Deny', Action, Resource, Condition: exempt });
+const deny = (Sid: string, Action: string[], Resource: string | string[] = '*') => ({
+  Sid,
+  Effect: 'Deny',
+  Action,
+  Resource,
+  Condition: exempt,
+});
 const policy = (Statement: object[]) => ({ Version: '2012-10-17', Statement });
 
 // SCP 1 — everything outside the services the dev stacks, CDK and the CI roles use is denied: EC2, Bedrock,
@@ -205,13 +211,25 @@ export const freezePolicy = () =>
       'dynamodb:DeleteTable',
       'dynamodb:UpdateContinuousBackups',
     ]),
-    deny('FrozenSchedules', ['scheduler:CreateSchedule', 'scheduler:UpdateSchedule', 'scheduler:CreateScheduleGroup']),
+    deny('FrozenSchedules', [
+      'scheduler:CreateSchedule',
+      'scheduler:UpdateSchedule',
+      'scheduler:CreateScheduleGroup',
+    ]),
   ]);
 
 // SCP 4 — the kill: deny-all, attached only by the kill Lambda (or the budget). The break-glass role stays exempt so
 // the unkill and any inspection still work.
 export const killPolicy = () =>
-  policy([{ Sid: 'Killed', Effect: 'Deny', Action: '*', Resource: '*', Condition: { ArnNotLike: { 'aws:PrincipalARN': breakGlass } } }]);
+  policy([
+    {
+      Sid: 'Killed',
+      Effect: 'Deny',
+      Action: '*',
+      Resource: '*',
+      Condition: { ArnNotLike: { 'aws:PrincipalARN': breakGlass } },
+    },
+  ]);
 
 export interface OrgStackProps extends StackProps {
   devAccountId: string;
@@ -227,7 +245,13 @@ export class ApertureOrgStack extends Stack {
     super(scope, id, props);
     const { devAccountId, devOuId } = props;
 
-    const scp = (cid: string, name: string, content: object, description: string, attach: boolean) =>
+    const scp = (
+      cid: string,
+      name: string,
+      content: object,
+      description: string,
+      attach: boolean,
+    ) =>
       new organizations.CfnPolicy(this, cid, {
         name,
         type: 'SERVICE_CONTROL_POLICY',
@@ -235,14 +259,41 @@ export class ApertureOrgStack extends Stack {
         content,
         ...(attach ? { targetIds: [devOuId] } : {}),
       });
-    scp('Allowlist', 'aperture-dev-allowlist', allowlistPolicy(), 'Dev account: only the services the dev stacks use.', true);
-    scp('Guardrails', 'aperture-dev-guardrails', guardrailsPolicy(), 'Dev account: standing denies on cost levers.', true);
-    scp('Freeze', 'aperture-dev-freeze', freezePolicy(), 'Dev account: function shape, table and schedules frozen.', true);
-    const killScp = scp('Kill', 'aperture-dev-kill', killPolicy(), 'Dev account: deny-all, attached by the kill switch.', false);
+    scp(
+      'Allowlist',
+      'aperture-dev-allowlist',
+      allowlistPolicy(),
+      'Dev account: only the services the dev stacks use.',
+      true,
+    );
+    scp(
+      'Guardrails',
+      'aperture-dev-guardrails',
+      guardrailsPolicy(),
+      'Dev account: standing denies on cost levers.',
+      true,
+    );
+    scp(
+      'Freeze',
+      'aperture-dev-freeze',
+      freezePolicy(),
+      'Dev account: function shape, table and schedules frozen.',
+      true,
+    );
+    const killScp = scp(
+      'Kill',
+      'aperture-dev-kill',
+      killPolicy(),
+      'Dev account: deny-all, attached by the kill switch.',
+      false,
+    );
 
     // Email for every trip, independent of the Lambda: the raw alarm event, the budget notice, and the Lambda's own
     // failure (its async-failure destination) — so a broken kill can't fail silently.
-    const alerts = new sns.Topic(this, 'KillAlerts', { topicName: 'aperture-dev-kill-alerts', enforceSSL: true });
+    const alerts = new sns.Topic(this, 'KillAlerts', {
+      topicName: 'aperture-dev-kill-alerts',
+      enforceSSL: true,
+    });
     alerts.addSubscription(new subscriptions.EmailSubscription(ALERT_EMAIL));
 
     const killFn = new NodejsFunction(this, 'KillFn', {
@@ -266,7 +317,10 @@ export class ApertureOrgStack extends Stack {
     killFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['organizations:AttachPolicy'],
-        resources: [killScp.attrArn, `arn:aws:organizations::${this.account}:account/*/${devAccountId}`],
+        resources: [
+          killScp.attrArn,
+          `arn:aws:organizations::${this.account}:account/*/${devAccountId}`,
+        ],
       }),
     );
     killFn.addToRolePolicy(
@@ -300,7 +354,10 @@ export class ApertureOrgStack extends Stack {
 
     // Trigger 2, the slow backstop: the dev account's own spend. Budgets data lags 8–24 h, so this only bounds a kill
     // switch that failed silently to about a day. Email at $1; at $3 the topic below fires the kill Lambda too.
-    const budgetTopic = new sns.Topic(this, 'BudgetKill', { topicName: 'aperture-dev-budget-kill', enforceSSL: true });
+    const budgetTopic = new sns.Topic(this, 'BudgetKill', {
+      topicName: 'aperture-dev-budget-kill',
+      enforceSSL: true,
+    });
     budgetTopic.addToResourcePolicy(
       new iam.PolicyStatement({
         principals: [new iam.ServicePrincipal('budgets.amazonaws.com')],
@@ -325,7 +382,10 @@ export class ApertureOrgStack extends Stack {
         costFilters: { LinkedAccount: [devAccountId] },
       },
       notificationsWithSubscribers: [
-        { notification: actual(DEV_BUDGET_EMAIL_USD), subscribers: [{ subscriptionType: 'EMAIL', address: ALERT_EMAIL }] },
+        {
+          notification: actual(DEV_BUDGET_EMAIL_USD),
+          subscribers: [{ subscriptionType: 'EMAIL', address: ALERT_EMAIL }],
+        },
         {
           notification: actual(DEV_BUDGET_KILL_USD),
           subscribers: [
@@ -344,7 +404,10 @@ export class ApertureOrgStack extends Stack {
       [`AwsSolutions-IAM5[Resource::arn:aws:organizations::${this.account}:account/*/${devAccountId}]`]:
         'The account ARN embeds the organization id, unknown until the org exists; the account id itself is exact.',
     });
-    Validations.of(this).acknowledge({ id: 'AwsSolutions-L1', reason: 'Node 22 is the current LTS target, the same pin as the app functions.' });
+    Validations.of(this).acknowledge({
+      id: 'AwsSolutions-L1',
+      reason: 'Node 22 is the current LTS target, the same pin as the app functions.',
+    });
 
     new CfnOutput(this, 'KillPolicyId', { value: killScp.attrId }); // the unkill detaches this
     new CfnOutput(this, 'KillFunction', { value: killFn.functionName });

@@ -19,11 +19,19 @@ export interface KillGateways {
   lockFunctionUrl(functionName: string): Promise<void>;
 }
 
-export async function kill(cfg: KillConfig, gw: KillGateways, log: (line: string) => void): Promise<void> {
+export async function kill(
+  cfg: KillConfig,
+  gw: KillGateways,
+  log: (line: string) => void,
+): Promise<void> {
   const failures: string[] = [];
   try {
     const r = await gw.attachPolicy(cfg.policyId, cfg.devAccountId);
-    log(r === 'already' ? `kill SCP already on ${cfg.devAccountId}` : `kill SCP attached to ${cfg.devAccountId}`);
+    log(
+      r === 'already'
+        ? `kill SCP already on ${cfg.devAccountId}`
+        : `kill SCP attached to ${cfg.devAccountId}`,
+    );
   } catch (err) {
     failures.push(`attach ${cfg.policyId}: ${message(err)}`);
   }
@@ -45,9 +53,13 @@ export function killConfigFrom(env: Record<string, string | undefined>): KillCon
     if (!v) throw new Error(`kill: ${k} is not set`);
     return v;
   };
-  const urlFunctions = need('URL_FUNCTIONS').split(',').map((s) => s.trim()).filter(Boolean);
+  const urlFunctions = need('URL_FUNCTIONS')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (!urlFunctions.length) throw new Error('kill: URL_FUNCTIONS names no function');
   return { policyId: need('KILL_POLICY_ID'), devAccountId: need('DEV_ACCOUNT_ID'), urlFunctions };
 }
 
-const message = (err: unknown) => (err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+const message = (err: unknown) =>
+  err instanceof Error ? `${err.name}: ${err.message}` : String(err);

@@ -34,7 +34,10 @@ the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`
    `aws cognito-idp admin-create-user` (invite suppressed, email verified) and a permanent random password,
    and writes `/workspace/.secrets/devcheck.dev.env` (mode 600, gitignored) with `DEVCHECK_EMAIL`,
    `DEVCHECK_PASSWORD`, `DEVCHECK_SUB`, `DEVCHECK_COGNITO_HOST`, `DEVCHECK_CLIENT_ID`, `DEVCHECK_POOL_ID`. The
-   password is never shown; the harness reads the file. `docs/arch/INFRA.md` §6 records the user.
+   password is never shown; the harness reads the file. `docs/arch/INFRA.md` §6 records the user. **Since the
+   dev-account PR** dev's pool lives in the dev account (`--profile aperture-dev`), so the user was re-created
+   there, the env file's pool, client, host and sub replaced, `devcheck.dev.state.json` deleted and the old
+   ledgers archived — their ids name rows in a table that no longer exists.
 2. **Playwright, outside the repo** — it is no package's dependency (it would add a browser download to every
    CI install, and no test needs it). `~/pw` is a scratch directory outside the monorepo, so npm there doesn't
    break the pnpm-only rule: `mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx

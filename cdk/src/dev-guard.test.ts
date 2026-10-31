@@ -8,7 +8,10 @@ type Resource = { Type: string; Properties: Record<string, unknown> };
 describe('ApertureDevGuardStack (the dev account half of the kill switch)', () => {
   const app = new App();
   const t = Template.fromStack(
-    new ApertureDevGuardStack(app, 'ApertureDevGuard', { env: { account: '222222222222', region: 'us-west-1' }, mgmtAccountId: '111111111111' }),
+    new ApertureDevGuardStack(app, 'ApertureDevGuard', {
+      env: { account: '222222222222', region: 'us-west-1' },
+      mgmtAccountId: '111111111111',
+    }),
   );
   const res = Object.values(t.toJSON().Resources as Record<string, Resource>);
   const of = (type: string) => res.filter((r) => r.Type === type).map((r) => r.Properties);
@@ -30,7 +33,9 @@ describe('ApertureDevGuardStack (the dev account half of the kill switch)', () =
       source: ['aws.cloudwatch'],
       detail: { alarmName: [{ prefix: 'aperture-kill-' }], state: { value: ['ALARM'] } },
     });
-    expect((rule?.Targets as { Arn: string }[]).map((x) => x.Arn)).toEqual(['arn:aws:events:us-east-1:111111111111:event-bus/default']);
+    expect((rule?.Targets as { Arn: string }[]).map((x) => x.Arn)).toEqual([
+      'arn:aws:events:us-east-1:111111111111:event-bus/default',
+    ]);
   });
 
   it('forwards through a role named for the prefix the SCPs exempt and protect', () => {

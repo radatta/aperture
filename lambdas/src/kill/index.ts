@@ -22,10 +22,15 @@ function liveGateways(devAccountId: string, devRegion: string): KillGateways {
         DurationSeconds: 900,
       }),
     );
-    if (!c?.AccessKeyId || !c.SecretAccessKey) throw new Error('AssumeRole returned no credentials');
+    if (!c?.AccessKeyId || !c.SecretAccessKey)
+      throw new Error('AssumeRole returned no credentials');
     devLambda = new LambdaClient({
       region: devRegion,
-      credentials: { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken },
+      credentials: {
+        accessKeyId: c.AccessKeyId,
+        secretAccessKey: c.SecretAccessKey,
+        sessionToken: c.SessionToken,
+      },
     });
     return devLambda;
   };
@@ -35,12 +40,17 @@ function liveGateways(devAccountId: string, devRegion: string): KillGateways {
         await orgs.send(new AttachPolicyCommand({ PolicyId: policyId, TargetId: targetId }));
         return 'attached';
       } catch (err) {
-        if (err instanceof Error && err.name === 'DuplicatePolicyAttachmentException') return 'already';
+        if (err instanceof Error && err.name === 'DuplicatePolicyAttachmentException')
+          return 'already';
         throw err;
       }
     },
     async lockFunctionUrl(functionName) {
-      await (await lambdaClient()).send(new UpdateFunctionUrlConfigCommand({ FunctionName: functionName, AuthType: 'AWS_IAM' }));
+      await (
+        await lambdaClient()
+      ).send(
+        new UpdateFunctionUrlConfigCommand({ FunctionName: functionName, AuthType: 'AWS_IAM' }),
+      );
     },
   };
 }
@@ -50,5 +60,7 @@ function liveGateways(devAccountId: string, devRegion: string): KillGateways {
 export const handler = async (event: unknown): Promise<void> => {
   const cfg = killConfigFrom(process.env);
   console.log(`kill triggered: ${JSON.stringify(event).slice(0, 2000)}`);
-  await kill(cfg, liveGateways(cfg.devAccountId, process.env.DEV_REGION ?? 'us-west-1'), (l) => console.log(l));
+  await kill(cfg, liveGateways(cfg.devAccountId, process.env.DEV_REGION ?? 'us-west-1'), (l) =>
+    console.log(l),
+  );
 };
