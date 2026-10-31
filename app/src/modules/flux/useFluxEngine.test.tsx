@@ -13,6 +13,7 @@ function voice(): VoiceControl {
     id: null,
     voices: [],
     missing: false,
+    ready: true,
     prime: vi.fn(),
     speak: vi.fn(),
     cancel: vi.fn(),

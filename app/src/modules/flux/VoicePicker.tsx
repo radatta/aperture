@@ -1,5 +1,7 @@
+import { Button } from '../../components/Button';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
+import { cx } from '../../lib/cx';
 import { pickedId, type VoiceControl } from './useVoice';
 
 // The voice picker (D58), on the stage and in Settings: installed voices best first, Auto naming what it
@@ -7,7 +9,7 @@ import { pickedId, type VoiceControl } from './useVoice';
 export function VoicePicker({ voice, compact }: { voice: VoiceControl; compact?: boolean }) {
   const auto = voice.voices[0];
   return (
-    <div className={compact ? 'flex flex-col items-end gap-1' : 'flex flex-col gap-1'}>
+    <div className={cx('flex flex-col items-start gap-1', compact && 'sm:items-end')}>
       <Select
         {...(compact ? { 'aria-label': 'Voice' } : { label: 'Voice' })}
         title="Pick the voice (previews on change)"
@@ -15,12 +17,18 @@ export function VoicePicker({ voice, compact }: { voice: VoiceControl; compact?:
         value={pickedId(voice)}
         onChange={(e) => voice.change(e.target.value || null)}
         options={voice.voices.map((v) => ({ value: v.id, label: v.label }))}
-        className={compact ? 'max-w-[12rem] py-1 text-xs' : undefined}
+        className={compact ? 'max-w-full py-1 text-xs sm:max-w-[16rem]' : undefined}
       />
       {voice.missing && (
-        <Text size="xs" tone="gold">
-          Your saved voice isn’t on this device — using {auto?.label ?? 'the default'}.
-        </Text>
+        <div className="flex flex-wrap items-center gap-x-2">
+          <Text size="xs" tone="gold">
+            Your saved voice isn’t on this device — using {auto?.label ?? 'the default'}.
+          </Text>
+          {/* The select already reads Auto, so choosing it again fires nothing: this clears the saved one. */}
+          <Button variant="ghost" size="sm" onClick={() => voice.change(null)}>
+            Use Auto
+          </Button>
+        </div>
       )}
     </div>
   );

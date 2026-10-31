@@ -737,7 +737,7 @@ function FluxVoiceCard() {
   const voice = useVoice();
   return (
     <Card className="flex flex-col gap-3">
-      {voice.voices.length === 0 ? (
+      {!voice.ready ? null : voice.voices.length === 0 ? (
         <Text size="sm" tone="muted">
           No voices found on this device — Flux&apos;s spoken cues can&apos;t play here.
         </Text>

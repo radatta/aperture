@@ -426,14 +426,39 @@ describe('romReps', () => {
         expect(of(events, 'holdShort')[0]?.heldSec).toBeCloseTo(1, 5);
       });
 
-      it('a face flickering at the limit holds at full speed, with no "Further"', () => {
-        const flicker = Array.from({ length: 100 }, (_, i): [Euler, boolean] => [
-          N(0, 22),
-          i % 2 === 1,
+      it('a face flickering at the limit holds, with no "Further"', () => {
+        const flicker = (n: number) =>
+          Array.from({ length: n }, (_, i): [Euler, boolean] => [N(0, 22), i % 2 === 1]);
+        const at = (n: number) =>
+          foldFace(rom3, [[N(0, 0), true], ...out(22), ...flicker(n)]).events;
+        // 0.3 s blind in all latches it; the seen frames before that aren't credited, after it they are.
+        expect(of(at(90), 'holdReached')).toEqual([]); // 9 blind frames latch it, then 72 more: 2.7 s
+        expect(of(at(100), 'holdReached')).toHaveLength(1); // …82 more: 3.03 s
+        expect(of(at(100), 'stoppedShort')).toEqual([]);
+      });
+
+      it('a dropped frame or two is not the end of the turn: no "Hold" on the way out or back', () => {
+        const glitch = (n: number) => face(N(0, 20), n, false);
+        const outward = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(20),
+          ...glitch(8), // 0.27 s — under the 0.3 s threshold
+          ...face(N(0, 20), 30, true), // a seen pause short of the zone
+        ]).events;
+        expect(outward.map((e) => e.type)).toEqual(['stoppedShort']);
+        const back = Array.from({ length: 10 }, (_, i): [Euler, boolean] => [
+          N(0, 28 - 2 * (i + 1)),
+          true,
         ]);
-        const { events } = foldFace(rom3, [[N(0, 0), true], ...out(22), ...flicker]);
-        expect(of(events, 'holdReached')).toHaveLength(1); // 100 frames ≈ 3.3 s, half of them seen
-        expect(of(events, 'stoppedShort')).toEqual([]);
+        const returning = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(28), // short of the 30° zone
+          ...back.slice(0, 5), // back to 18°, below the peak
+          ...face(N(0, 18), 30, false), // a full second blind, but not at the far end
+          ...back.slice(5),
+          [N(0, 0), true],
+        ]).events;
+        expect(of(returning, 'holdEntered')).toEqual([]);
       });
 
       it('moving back after the dropout is not hold time', () => {
@@ -457,7 +482,12 @@ describe('romReps', () => {
           ...face(N(0, 10), 60, false),
         ]);
         expect(events).toEqual([]);
-        expect(state).toMatchObject({ zone: 'neutral', holdAccumSec: 0, wentBlind: false });
+        expect(state).toMatchObject({
+          zone: 'neutral',
+          holdAccumSec: 0,
+          blindSec: 0,
+          wentBlind: false,
+        });
       });
 
       it('back on the other side of a bilateral swing: the blind side’s rep, then a fresh excursion', () => {

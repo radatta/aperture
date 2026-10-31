@@ -14,6 +14,9 @@ export interface VoiceControl {
   readonly voices: readonly VoiceOption[];
   // A saved voice that isn't on this device: Auto speaks instead, and the picker says so.
   readonly missing: boolean;
+  // The voice list is settled: voices came, or a load (or a second) came back empty. Before it, an empty
+  // list is "not yet" — WebKit can answer [] until voiceschanged.
+  readonly ready: boolean;
   // Inside the Start tap: unlock speech for this visit ("Voice on" the first time).
   prime(): void;
   speak(u: Utterance): void;
@@ -25,6 +28,7 @@ export interface VoiceControl {
 }
 
 const UNLOCK = 'Voice on';
+const VOICES_WAIT_MS = 1000;
 // The cue words the voice will actually say, so it's judged on them.
 export const PREVIEW = 'Hold. One. Two. Set complete.';
 
@@ -34,6 +38,7 @@ export function useVoice(): VoiceControl {
   const [on, setOn] = useState(readVoiceEnabled);
   const [id, setId] = useState(readVoiceId);
   const [voices, setVoices] = useState<VoiceOption[]>(() => listVoices());
+  const [settled, setSettled] = useState(() => !('speechSynthesis' in window));
   const speakerRef = useRef<Speaker | null>(null);
   const onRef = useRef(on);
   onRef.current = on;
@@ -44,9 +49,17 @@ export function useVoice(): VoiceControl {
     if (!('speechSynthesis' in window)) return;
     const synth = window.speechSynthesis;
     const load = () => setVoices(listVoices());
+    const changed = () => {
+      load();
+      setSettled(true);
+    };
     load();
-    synth.addEventListener('voiceschanged', load);
-    return () => synth.removeEventListener('voiceschanged', load);
+    const timer = setTimeout(() => setSettled(true), VOICES_WAIT_MS);
+    synth.addEventListener('voiceschanged', changed);
+    return () => {
+      clearTimeout(timer);
+      synth.removeEventListener('voiceschanged', changed);
+    };
   }, []);
 
   // Silence on leave — a cue mid-utterance shouldn't follow you to another page.
@@ -100,7 +113,8 @@ export function useVoice(): VoiceControl {
 
   // Only once voices have loaded: an empty list is "not yet", not "gone".
   const missing = id !== null && voices.length > 0 && !voices.some((v) => matches(v, id));
-  return { on, id, voices, missing, prime, speak, cancel, toggle, change, preview };
+  const ready = settled || voices.length > 0;
+  return { on, id, voices, missing, ready, prime, speak, cancel, toggle, change, preview };
 }
 
 // The picker's value: the saved voice's option id, or '' for Auto (also when the saved one is missing).

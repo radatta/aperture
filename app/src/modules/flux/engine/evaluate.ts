@@ -36,6 +36,9 @@ const HOLD_BROKEN_MIN_SEC = 1;
 const HOLD_BROKEN_OUT_SEC = 0.3;
 // A ROM hold is timed only this close to the target (D36): 75 % — rotation 37.5° of 50°.
 const HOLD_ZONE_FRACTION = 0.75;
+// The face lost this long, in all, at the far end of an excursion is the end of the turn (D57) — a dropped
+// frame (motion blur, a hand) on the way out or back isn't, and says nothing.
+const BLIND_END_SEC = 0.3;
 // "Further" (D37): still this long short of the zone — once per excursion, literally: a dip below the zone
 // after "Hold" doesn't say it again (the paused clock is the cost; a return says "Hold longer").
 const FURTHER_STILL_SEC = 0.6;
@@ -97,6 +100,7 @@ function buildRom(def: DefOf<'romReps'>): RomRepsState {
     stillShortSec: 0,
     furtherSaid: false,
     excursionSec: 0,
+    blindSec: 0,
     wentBlind: false,
     compensating: false,
     lastPostureWarnAt: Number.NEGATIVE_INFINITY,
@@ -171,13 +175,13 @@ export function initialState(def: ExerciseDefinition): ExerciseState {
   }
 }
 
-// What a set amounts to, from its state: the count and its one measurement. A finished set's
-// `setCompleted` summary is exactly this of its final state (evaluate.test pins it per kind), and a set
-// ended early is saved from this of its last state (D55) — one reading, so the two can't drift.
 // Out in a ROM excursion, mid-set: where a lost face is the end of the turn, not the user gone (D57).
 export const inRomExcursion = (s: ExerciseState | null | undefined): boolean =>
   s?.kind === 'romReps' && s.phase === 'active' && s.zone !== 'neutral';
 
+// What a set amounts to, from its state: the count and its one measurement. A finished set's
+// `setCompleted` summary is exactly this of its final state (evaluate.test pins it per kind), and a set
+// ended early is saved from this of its last state (D55) — one reading, so the two can't drift.
 export function summaryOf(state: ExerciseState): SetSummary {
   switch (state.kind) {
     case 'romReps':
@@ -253,7 +257,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
   const v = input.rel[def.axis];
   const speed = speedOf(input.rel, state.lastRel, dtv);
   let { zone, peakThisRep, repsPos, repsNeg, peakSum, peakCount, holdAccumSec } = state;
-  let { stillShortSec, furtherSaid, excursionSec, wentBlind } = state;
+  let { stillShortSec, furtherSaid, excursionSec, blindSec, wentBlind } = state;
   let inHoldZone = false;
   const allowPos = def.direction === 'positive' || def.direction === 'bilateral';
   const allowNeg = def.direction === 'negative' || def.direction === 'bilateral';
@@ -272,9 +276,15 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
     // The excursion measured on its own side: a jump straight to the other side (a face dropout
     // mid-swing) is a return, never hold time on the wrong side.
     const out = zone === 'positive' ? v : -v;
-    if (!input.faceVisible) wentBlind = true;
     const atFarEnd = out >= def.enterDeg && out >= Math.abs(peakThisRep) - FURTHER_PEAK_DEG;
     const still = speed < STILL_SPEED;
+    // The blind time up to the latch is credited back, so the hold runs from when the face went.
+    let credit = 0;
+    if (!input.faceVisible && atFarEnd) blindSec += dtv;
+    if (!wentBlind && blindSec >= BLIND_END_SEC) {
+      wentBlind = true;
+      if (out < holdDeg) credit = blindSec - dtv;
+    }
     // Once the face has dropped this excursion, the user is at the end of the turn the camera can't
     // follow (D57): a blind frame (the pose frozen at the last one seen) and a still pause at the peak —
     // a face flickering back in at the limit — are hold time, wherever the angle read. That also keeps
@@ -288,7 +298,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       const prev = holdAccumSec;
       if (prev === 0 && !state.inHoldZone)
         events.push({ type: 'holdEntered', count: repsPos + repsNeg + 1 });
-      holdAccumSec += dtv;
+      holdAccumSec += dtv + credit;
       if (prev < holdSec && holdAccumSec >= holdSec)
         events.push({ type: 'holdReached', count: repsPos + repsNeg + 1 });
       stillShortSec = 0;
@@ -297,7 +307,8 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       // Short of the zone: a pause at the far end says "Further" (D37) — once per excursion, so a user
       // straining at their real limit isn't told again and again.
       excursionSec += dtv;
-      stillShortSec = atFarEnd && still ? stillShortSec + dtv : 0;
+      // A frozen pose isn't a pause: only a seen one counts toward "Further".
+      stillShortSec = atFarEnd && still && input.faceVisible ? stillShortSec + dtv : 0;
       if (!furtherSaid && stillShortSec >= FURTHER_STILL_SEC) {
         events.push({ type: 'stoppedShort', shortDeg: holdDeg - out });
         furtherSaid = true;
@@ -340,6 +351,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       stillShortSec = 0;
       furtherSaid = false;
       excursionSec = 0;
+      blindSec = 0;
       wentBlind = false;
     }
   }
@@ -391,6 +403,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       stillShortSec,
       furtherSaid,
       excursionSec,
+      blindSec,
       wentBlind,
       compensating,
       lastPostureWarnAt,

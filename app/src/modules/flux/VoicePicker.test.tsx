@@ -26,6 +26,7 @@ function voice(over: Partial<VoiceControl> = {}): VoiceControl {
     id: null,
     voices: [ZOE, SAM],
     missing: false,
+    ready: true,
     prime: vi.fn(),
     speak: vi.fn(),
     cancel: vi.fn(),
@@ -71,5 +72,12 @@ describe('VoicePicker (D58)', () => {
       screen.getByText('Your saved voice isn’t on this device — using Zoe (Premium).'),
     ).toBeTruthy();
     expect(select().value).toBe('');
+  });
+
+  it('Use Auto clears the missing saved voice — the select already reads Auto, so it can’t', async () => {
+    const v = voice({ id: 'com.apple.voice.premium.en-US.Ava', missing: true });
+    render(<VoicePicker voice={v} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Use Auto' }));
+    expect(v.change).toHaveBeenLastCalledWith(null);
   });
 });
