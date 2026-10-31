@@ -101,6 +101,12 @@ jobs:
             devmain) [ "${{ inputs.stage }}" = dev ] || { echo "::error::lane devmain is dev-only"; exit 1; } ;;
             *) echo "::error::invalid lane '${{ inputs.lane }}'"; exit 1 ;;
           esac
+          # Each lane with its own role, so an unset variable fails here, not as an opaque OIDC trust error.
+          case "${{ inputs.lane }}:${{ inputs.role_arn }}" in
+            devmain:*:role/aperture-github-dev-main) ;;
+            devmain:*) echo "::error::lane devmain needs the dev-main role (is AWS_DEPLOY_ROLE_DEV_MAIN set?)"; exit 1 ;;
+            *:role/aperture-github-dev-main) echo "::error::the dev-main role is for lane devmain only"; exit 1 ;;
+          esac
       # Prod never moves backwards. Re-running an old successful run (Actions: write can, for 30 days — the bot holds
       # it) would otherwise redeploy that commit to prod with no human step; `prod` has no reviewers. So the commit
       # must be at or ahead of prod's last successful deployment (GitHub records one per `environment: prod` job).

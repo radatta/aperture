@@ -34,9 +34,9 @@ const KILL_ENTRY = fileURLToPath(new URL('../../../lambdas/src/kill/index.ts', i
 // hand steps (`--profile aperture-dev`) and the kill Lambda's moves always work — and nothing else can touch it.
 export const BREAK_GLASS_ROLE = 'OrganizationAccountAccessRole';
 const breakGlass = `arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`;
-// The standing SCPs also exempt the kill switch's own roles (ApertureDevGuard's forwarder, which EventBridge assumes to
-// carry an alarm to the management account — the allowlist would otherwise deny its events:PutEvents). Nothing else
-// can use or change them: their trust names a service, and NoGuardTampering denies iam:* (PassRole included) on them.
+// The standing SCPs (bar the lane guardrails) also exempt the kill switch's own roles (ApertureDevGuard's forwarder,
+// which EventBridge assumes to carry an alarm to the management account — the allowlist would otherwise deny its
+// events:PutEvents). Nothing else can use or change them: their trust names a service, and NoGuardTampering denies iam:* (PassRole included) on them.
 const killRoles = `arn:aws:iam::*:role/${KILL_ALARM_PREFIX}*`;
 const exempt = { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, killRoles] } };
 // Main's own dev deploy (docs/ops/CI-BOT.md → Two lanes): CloudFormation runs it as the `devmain` bootstrap's
@@ -46,6 +46,17 @@ const exempt = { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, killRoles] } };
 const devMainExec = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-cfn-exec-role-*`;
 const devMainDeploy = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-deploy-role-*`;
 const devMainRoles = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-*`;
+const devMainPublish = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-file-publishing-role-*`;
+const githubRoles = `arn:aws:iam::*:role/${GITHUB_ROLE_PREFIX}*`;
+// Every CloudFormation call that can run a template, or roll one back, as a stack's role.
+const stackMutations = [
+  'cloudformation:CreateStack',
+  'cloudformation:UpdateStack',
+  'cloudformation:CreateChangeSet',
+  'cloudformation:DeleteStack',
+  'cloudformation:RollbackStack',
+  'cloudformation:ContinueUpdateRollback',
+];
 const freezeExempt = { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, killRoles, devMainExec] } };
 const deny = (
   Sid: string,
@@ -199,8 +210,9 @@ export const guardrailsPolicy = () =>
     // The kill switch's own roles (ApertureDevGuard) and the break-glass role are untouchable from dev.
     deny('NoGuardTampering', ['iam:*'], [breakGlass, killRoles]),
     // The devmain bootstrap's roles trust the whole account, so without this the bot lane's execution role could step
-    // into main's freeze-exempt lane. CloudFormation assuming the exec role is the service, which no SCP binds.
-    deny('OnlyMainAssumesItsLane', ['sts:AssumeRole'], devMainRoles, {
+    // into main's freeze-exempt lane; the GitHub roles are federated (AssumeRoleWithWebIdentity), never assumed.
+    // CloudFormation assuming the exec role is the service, which no SCP binds.
+    deny('OnlyMainAssumesItsLane', ['sts:AssumeRole'], [devMainRoles, githubRoles], {
       ArnNotLike: {
         'aws:PrincipalARN': [breakGlass, `arn:aws:iam::*:role/${DEV_MAIN_GITHUB_ROLE}`],
       },
@@ -208,13 +220,47 @@ export const guardrailsPolicy = () =>
     // Nothing may change, or pass, the devmain roles or a GitHub role — not even the bot lane's admin execution role
     // (a PassRole of the exempt exec role would run any stack freeze-exempt). The devmain deploy role is the one
     // exception: it passes its exec role to CloudFormation on every deploy, and only the dev-main role can become it.
+    // (The deploy role's own policy holds no other iam: action, and NoLaneTampering keeps it that way.)
+    deny('NoLaneTampering', ['iam:*'], [devMainRoles, githubRoles], {
+      ArnNotLike: { 'aws:PrincipalARN': [breakGlass, devMainDeploy] },
+    }),
+    // CloudFormation remembers a stack's last role and reuses it for a call that names none — so after main's deploy,
+    // a bot-lane UpdateStack with no role would run as the freeze-exempt exec role, no PassRole needed. Every stack
+    // call must name its role (the CDK CLI always does); naming the exempt one needs PassRole, which only the devmain
+    // deploy role has.
+    {
+      Sid: 'NameTheStackRole',
+      Effect: 'Deny',
+      Action: stackMutations,
+      Resource: '*',
+      Condition: { ...exempt, Null: { 'cloudformation:RoleArn': 'true' } },
+    },
+    // Main's lane trusts its own bootstrap: its bucket (the templates and code it deploys — cdk-assets skips a key that
+    // already exists, so a planted object would deploy), its version parameter and its stack. Only devmain's publishing
+    // role writes the bucket.
     deny(
-      'NoLaneTampering',
-      ['iam:*'],
-      [devMainRoles, `arn:aws:iam::*:role/${GITHUB_ROLE_PREFIX}*`],
-      {
-        ArnNotLike: { 'aws:PrincipalARN': [breakGlass, devMainDeploy] },
-      },
+      'DevMainBootstrapIntact',
+      [
+        's3:PutObject*',
+        's3:DeleteObject*',
+        's3:PutBucket*',
+        's3:DeleteBucket*',
+        's3:RestoreObject',
+        'ssm:PutParameter',
+        'ssm:DeleteParameter*',
+        'ssm:LabelParameterVersion',
+        ...stackMutations,
+        'cloudformation:ExecuteChangeSet',
+        'cloudformation:SetStackPolicy',
+        'cloudformation:UpdateTerminationProtection',
+      ],
+      [
+        `arn:aws:s3:::cdk-${DEVMAIN_QUALIFIER}-*`,
+        `arn:aws:s3:::cdk-${DEVMAIN_QUALIFIER}-*/*`,
+        `arn:aws:ssm:*:*:parameter/cdk-bootstrap/${DEVMAIN_QUALIFIER}/*`,
+        `arn:aws:cloudformation:*:*:stack/CDKToolkit-${DEVMAIN_QUALIFIER}/*`,
+      ],
+      { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, devMainPublish] } },
     ),
     // Archive storage classes bill 10× Standard per PUT; an upload that sends no class header is Standard and passes.
     {

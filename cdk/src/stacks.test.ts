@@ -96,13 +96,14 @@ describe('ApertureAppStack', () => {
     });
   });
 
-  it('gives the BFF and MCP log groups a two-week retention on dev (Lambda-created, never expired before)', () => {
-    // logRetention → one Custom::LogRetention per function, setting the policy on the existing group.
-    const retention = app.findResources('Custom::LogRetention');
-    expect(Object.values(retention).map((r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays)).toEqual([14, 14]);
-    const groupRefs = Object.values(retention).map((r) => JSON.stringify((r as { Properties: { LogGroupName: unknown } }).Properties.LogGroupName));
-    expect(groupRefs.some((g) => g.includes('Bff'))).toBe(true);
-    expect(groupRefs.some((g) => g.includes('Mcp'))).toBe(true);
+  // Dev, in its own account, owns its groups outright — no LogRetention provider (app-stack.ts, Two lanes).
+  it('gives dev its own BFF and MCP log groups, kept two weeks and deleted with the stack', () => {
+    app.resourceCountIs('Custom::LogRetention', 0);
+    for (const fn of ['bff', 'mcp'])
+      app.hasResource('AWS::Logs::LogGroup', {
+        Properties: { LogGroupName: `/aws/lambda/aperture-${fn}-dev`, RetentionInDays: 14 },
+        DeletionPolicy: 'Delete',
+      });
   });
 
   it('forwards the OAuth callback query params on /api/* (CloudFront strips them by default)', () => {
@@ -764,9 +765,18 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
   // The freeze denies new code in CDK's 15-minute provider functions by the `Aperture…` name CloudFormation gives an
   // unnamed function (`<stack>-<logicalId>-<suffix>`); the app's own functions must stay outside that pattern.
-  it("names functions so the freeze's provider-code deny catches CDK's providers and none of the app's", () => {
-    const fns = resources(dev.templates).filter((r) => r.Type === 'AWS::Lambda::Function');
-    expect(fns.some((f) => f.Properties?.FunctionName === undefined)).toBe(true); // the providers
+  // The two lanes publish to different buckets, so a CDK provider's code location would change on every lane switch,
+  // and the freeze denies the bot lane new code in one (FrozenProviderCode). Dev carries none; prod keeps its two.
+  it('gives dev no CDK provider function, so a lane switch never touches frozen provider code', () => {
+    const unnamed = (ts: Template[]) =>
+      resources(ts).filter((r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.FunctionName === undefined);
+    expect(unnamed(dev.templates)).toEqual([]);
+    expect(resources(dev.templates).filter((r) => r.Type.startsWith('Custom::'))).toEqual([]);
+    expect(unnamed(prod.templates)).toHaveLength(2); // LogRetention and S3 auto-delete
+  });
+
+  it("names functions so the freeze's provider-code deny would catch a CDK provider and none of the app's", () => {
+    const fns = resources([...dev.templates, ...prod.templates]).filter((r) => r.Type === 'AWS::Lambda::Function');
     for (const f of fns) {
       const name = f.Properties?.FunctionName as string | undefined;
       if (name !== undefined) expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
@@ -792,17 +802,19 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       }
     });
 
-    // A Code change on every function at each lane switch would hit the freeze's provider-code deny on the bot lane.
-    it('publishes to the stock bucket, so function code is identical across lanes', () => {
+    // The bot lane can write the stock bucket; main's lane must deploy only what it uploaded itself.
+    it("publishes to devmain's own bucket, never the stock one", () => {
       const buckets = resources(main.templates)
         .filter((r) => r.Type === 'AWS::Lambda::Function')
         .map((r) => JSON.stringify((r.Properties?.Code as { S3Bucket: unknown }).S3Bucket));
-      expect(buckets.length).toBeGreaterThan(0);
-      for (const b of buckets) expect(b).toContain('cdk-hnb659fds-assets-');
+      expect(buckets).toHaveLength(3);
+      for (const b of buckets) expect(b).toContain('cdk-devmain-assets-');
+      for (const a of main.artifacts) expect(JSON.stringify(a.assets)).not.toContain('hnb659fds');
     });
 
-    it("differs from the frozen lane's templates only in the bootstrap version parameter", () => {
-      main.templates.forEach((t, i) => expect(strip(t)).toEqual(strip(dev.templates[i] as Template)));
+    it("differs from the frozen lane's templates only in the bootstrap version parameter and the asset bucket", () => {
+      const same = (t: Template) => JSON.parse(JSON.stringify(strip(t)).replaceAll('cdk-devmain-assets-', 'cdk-hnb659fds-assets-'));
+      main.templates.forEach((t, i) => expect(same(t)).toEqual(strip(dev.templates[i] as Template)));
       expect(JSON.stringify(main.templates[0]?.toJSON().Parameters)).toContain('/cdk-bootstrap/devmain/version');
     });
 

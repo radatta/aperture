@@ -43,8 +43,8 @@ export class ApertureCicdStack extends Stack {
       clientIds: ['sts.amazonaws.com'],
     });
 
-    // lane 'devmain' (dev only): main's own dev deploy, through the second bootstrap (config/lane.ts) — its deploy and
-    // lookup roles plus the stock publishing role, named exactly, and its own version parameter.
+    // lane 'devmain' (dev only): main's own dev deploy, through the second bootstrap (config/lane.ts) — its deploy,
+    // lookup and publishing roles, named exactly, and its own version parameter.
     const makeRole = (id: string, roleName: string, subs: string[], stage: string, lane?: typeof DEVMAIN_QUALIFIER): iam.Role => {
       const role = new iam.Role(this, id, {
         roleName,
@@ -63,7 +63,7 @@ export class ApertureCicdStack extends Stack {
         new iam.PolicyStatement({
           actions: ['sts:AssumeRole'],
           resources: lane
-            ? [bootstrapRole(lane, 'deploy-role'), bootstrapRole(lane, 'lookup-role'), bootstrapRole(BOOTSTRAP_QUALIFIER, 'file-publishing-role')]
+            ? ['deploy-role', 'lookup-role', 'file-publishing-role'].map((kind) => bootstrapRole(lane, kind))
             : [bootstrapRole(BOOTSTRAP_QUALIFIER, '*')],
         }),
       );

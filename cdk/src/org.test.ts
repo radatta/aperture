@@ -31,7 +31,9 @@ const KILL_ROLES = 'arn:aws:iam::*:role/aperture-kill-*';
 const DEVMAIN_EXEC = 'arn:aws:iam::*:role/cdk-devmain-cfn-exec-role-*';
 const DEVMAIN_DEPLOY = 'arn:aws:iam::*:role/cdk-devmain-deploy-role-*';
 const DEV_MAIN_GITHUB = 'arn:aws:iam::*:role/aperture-github-dev-main';
-// IAM's ArnLike: `*` matches any run of characters (a pattern's own `*` included), everything else is literal.
+const DEVMAIN_PUBLISH = 'arn:aws:iam::*:role/cdk-devmain-file-publishing-role-*';
+// IAM's ArnLike, near enough for these patterns: `*` matches any run of characters (a pattern's own `*` included,
+// and across `:`), everything else — `?` too — is literal. Looser than IAM, so only ever used to prove coverage.
 const arnLike = (pattern: string, arn: string) =>
   new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('.*')}$`).test(arn);
 
@@ -58,10 +60,10 @@ describe('dev-account SCPs', () => {
     freeze: freezePolicy(),
   };
 
-  // The SCP limit is 10,240 characters (the Organizations quota page); 6,144 leaves 40% headroom.
+  // The SCP limit is 10,240 characters (the Organizations quota page); 7,680 leaves a quarter of it free.
   it('fit well inside the SCP size limit', () => {
     for (const p of [...Object.values(standing), killPolicy()])
-      expect(JSON.stringify(p).length).toBeLessThan(6_144);
+      expect(JSON.stringify(p).length).toBeLessThan(7_680);
   });
 
   // Exactly these: one pattern too broad (say `role/cdk-*`) would switch an SCP off for the frozen deploy itself.
@@ -69,6 +71,7 @@ describe('dev-account SCPs', () => {
     const lane: Record<string, string[]> = {
       OnlyMainAssumesItsLane: [BREAK_GLASS, DEV_MAIN_GITHUB],
       NoLaneTampering: [BREAK_GLASS, DEVMAIN_DEPLOY],
+      DevMainBootstrapIntact: [BREAK_GLASS, DEVMAIN_PUBLISH],
     };
     for (const [name, p] of Object.entries(standing))
       for (const s of statements(p)) {
@@ -99,8 +102,40 @@ describe('dev-account SCPs', () => {
       expect(freezeExempt(`arn:aws:iam::${DEV}:role/aperture-github-dev-main`)).toBe(false);
     });
 
-    it('lets only the dev-main role and break-glass assume a devmain bootstrap role', () => {
-      expect(g('OnlyMainAssumesItsLane')).toMatchObject({ Action: ['sts:AssumeRole'], Resource: 'arn:aws:iam::*:role/cdk-devmain-*' });
+    it('lets only the dev-main role and break-glass assume a devmain bootstrap role, and nothing assume a GitHub role', () => {
+      expect(g('OnlyMainAssumesItsLane')).toMatchObject({
+        Action: ['sts:AssumeRole'],
+        Resource: ['arn:aws:iam::*:role/cdk-devmain-*', 'arn:aws:iam::*:role/aperture-github-*'],
+      });
+    });
+
+    // CloudFormation reuses a stack's stored role for a call that names none — after main's deploy, the exempt one.
+    it('makes every stack call name its role, so none inherits the freeze-exempt one', () => {
+      const s = g('NameTheStackRole');
+      expect(s.Action).toEqual([
+        'cloudformation:CreateStack',
+        'cloudformation:UpdateStack',
+        'cloudformation:CreateChangeSet',
+        'cloudformation:DeleteStack',
+        'cloudformation:RollbackStack',
+        'cloudformation:ContinueUpdateRollback',
+      ]);
+      expect(s.Resource).toBe('*');
+      expect(s.Condition?.Null).toEqual({ 'cloudformation:RoleArn': 'true' });
+    });
+
+    it("keeps everything but devmain's publishing role off its bucket, and everything but break-glass off its version and stack", () => {
+      const s = g('DevMainBootstrapIntact');
+      for (const a of ['s3:PutObject*', 's3:DeleteObject*', 's3:PutBucket*', 'ssm:PutParameter', 'ssm:DeleteParameter*', 'cloudformation:UpdateStack', 'cloudformation:DeleteStack'])
+        expect(s.Action).toContain(a);
+      expect(s.Resource).toEqual([
+        'arn:aws:s3:::cdk-devmain-*',
+        'arn:aws:s3:::cdk-devmain-*/*',
+        'arn:aws:ssm:*:*:parameter/cdk-bootstrap/devmain/*',
+        'arn:aws:cloudformation:*:*:stack/CDKToolkit-devmain/*',
+      ]);
+      expect(arnLike(DEVMAIN_PUBLISH, `arn:aws:iam::${DEV}:role/cdk-devmain-file-publishing-role-${DEV}-us-west-1`)).toBe(true);
+      expect(arnLike(DEVMAIN_PUBLISH, `arn:aws:iam::${DEV}:role/cdk-hnb659fds-file-publishing-role-${DEV}-us-west-1`)).toBe(false);
     });
 
     it('lets nothing but break-glass change or pass a devmain or GitHub role, bar the deploy role passing its exec role', () => {

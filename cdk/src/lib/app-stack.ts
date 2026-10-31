@@ -170,7 +170,20 @@ export class ApertureAppStack extends Stack {
     // tolerates the existing group; `logGroup` would try to CREATE it and fail (AlreadyExists), and the
     // useCdkManagedLogGroup flag says the same. Moving to `logGroup` needs a `cdk import` — a follow-up.
     // finance-sync owns its group already (30 d, finance-sync.ts).
-    const logRetention = stage === 'prod' ? logs.RetentionDays.THREE_MONTHS : logs.RetentionDays.TWO_WEEKS;
+    // Dev, in its own account since dev-account, has no pre-existing groups, so it owns them outright and carries no
+    // CDK provider function at all: the dev account's two deploy lanes publish to different asset buckets, so a
+    // provider's code location would change on every lane switch, and the freeze denies the bot lane new code on
+    // CDK's providers (org-stack.ts → FrozenProviderCode; docs/ops/CI-BOT.md → Two lanes).
+    const ownGroup = (id: string, fnName: string) =>
+      new logs.LogGroup(this, id, {
+        logGroupName: `/aws/lambda/${fnName}`,
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+    const logging = (id: string, fnName: string) =>
+      stage === 'prod'
+        ? { logRetention: logs.RetentionDays.THREE_MONTHS }
+        : { logGroup: ownGroup(id, fnName) };
     const fn = new NodejsFunction(this, 'Bff', {
       functionName: `aperture-bff-${stage}`,
       entry: LAMBDA_ENTRY,
@@ -178,7 +191,7 @@ export class ApertureAppStack extends Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       timeout: fnTimeout,
       memorySize: 512,
-      logRetention,
+      ...logging('BffLogs', `aperture-bff-${stage}`),
       environment: {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,
@@ -242,7 +255,7 @@ export class ApertureAppStack extends Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       timeout: fnTimeout,
       memorySize: 512,
-      logRetention,
+      ...logging('McpLogs', `aperture-mcp-${stage}`),
       environment: {
         TABLE_NAME: table.tableName,
         FILES_BUCKET: filesBucket.bucketName,
@@ -282,7 +295,9 @@ export class ApertureAppStack extends Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true, // deny non-TLS requests (adds the aws:SecureTransport bucket policy)
       removalPolicy: RemovalPolicy.DESTROY, // just built assets — re-syncable
-      autoDeleteObjects: true,
+      // Prod only: auto-delete is a CDK provider function, which dev carries none of (see the log groups above), so
+      // deleting dev's app stack means emptying this bucket first (`aws s3 rm --recursive`).
+      autoDeleteObjects: stage === 'prod',
     });
 
     // /api/* forwards ONLY the custom auth header + content-type — never Authorization (OAC owns it).

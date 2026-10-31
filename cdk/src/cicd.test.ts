@@ -136,17 +136,17 @@ describe('ApertureCicdStack roles', () => {
     expect(subs).toEqual([['repo:acme/aperture:environment:dev-main']]);
   });
 
-  it('lets the dev-main role assume exactly the devmain deploy and lookup roles and the stock publishing role', () => {
+  it("lets the dev-main role assume exactly the devmain bootstrap's deploy, lookup and publishing roles", () => {
     const assume = statementsOf('aperture-github-dev-main').filter((s) => s.Action === 'sts:AssumeRole');
     expect(assume.map((s) => s.Resource)).toEqual([
       [
         'arn:aws:iam::222222222222:role/cdk-devmain-deploy-role-222222222222-us-west-1',
         'arn:aws:iam::222222222222:role/cdk-devmain-lookup-role-222222222222-us-west-1',
-        'arn:aws:iam::222222222222:role/cdk-hnb659fds-file-publishing-role-222222222222-us-west-1',
+        'arn:aws:iam::222222222222:role/cdk-devmain-file-publishing-role-222222222222-us-west-1',
       ],
     ]);
     expect(bootstrapGrants('aperture-github-dev-main')).toContain('parameter/cdk-bootstrap/devmain/version');
-    expect(bootstrapGrants('aperture-github-dev-main')).not.toContain('hnb659fds-deploy');
+    expect(bootstrapGrants('aperture-github-dev-main')).not.toContain('hnb659fds');
     expect(bootstrapGrants('aperture-github-dev-main')).not.toContain('*');
   });
 
