@@ -5,7 +5,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
-import { KILL_ALARM_PREFIX } from '../config/devAccount';
+import { KILL_ALARM_PREFIX, KILL_FORWARDER_ROLE } from '../config/devAccount';
 
 export interface DevGuardStackProps extends StackProps {
   mgmtAccountId: string; // where ApertureOrg's kill Lambda listens (us-east-1 default bus)
@@ -45,8 +45,9 @@ export const KILL_ALARMS = [
 // The dev account's half of the kill switch (docs/ops/CI-BOT.md → Kill switch): the alarms, and a rule forwarding
 // their ALARM transitions to the management account, where ApertureOrg's Lambda attaches the deny-all SCP. Nothing
 // here acts on dev itself, so nothing here is worth tampering with to dodge a kill — and the SCPs keep CloudWatch and
-// EventBridge writes, and the forwarder role, to the break-glass role anyway. Hand-deployed with the guardrails
-// detached (the allowlist denies CloudWatch and EventBridge writes to the CloudFormation execution role):
+// EventBridge writes, and the forwarder role, to the break-glass role anyway. Hand-deployed before ApertureOrg attaches
+// the SCPs, and after that only with all three standing SCPs detached (the allowlist denies the CloudFormation
+// execution role CloudWatch and EventBridge writes, the guardrails deny it the forwarder role, the freeze CreateRole):
 // `cdk deploy ApertureDevGuard -c devGuard=true -c devAccountId=… -c mgmtAccountId=… --profile aperture-dev`.
 export class ApertureDevGuardStack extends Stack {
   constructor(scope: Construct, id: string, props: DevGuardStackProps) {
@@ -70,7 +71,7 @@ export class ApertureDevGuardStack extends Stack {
       });
 
     const forwarder = new iam.Role(this, 'Forwarder', {
-      roleName: `${KILL_ALARM_PREFIX}forwarder`,
+      roleName: KILL_FORWARDER_ROLE,
       assumedBy: new iam.ServicePrincipal('events.amazonaws.com'),
     });
     new events.Rule(this, 'Forward', {

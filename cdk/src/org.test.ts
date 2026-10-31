@@ -18,6 +18,7 @@ type Statement = {
   Effect: string;
   Action?: string | string[];
   NotAction?: string[];
+  Resource?: string | string[];
   Condition?: Record<string, Record<string, string | string[]>>;
 };
 type Resource = { Type: string; Properties: Record<string, unknown> };
@@ -25,6 +26,8 @@ type Resource = { Type: string; Properties: Record<string, unknown> };
 const DEV = '222222222222';
 const MGMT = '111111111111';
 const OU = 'ou-abcd-12345678';
+const BREAK_GLASS = `arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`;
+const KILL_ROLES = 'arn:aws:iam::*:role/aperture-kill-*';
 
 function orgTemplate() {
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
@@ -49,23 +52,33 @@ describe('dev-account SCPs', () => {
     freeze: freezePolicy(),
   };
 
-  it('fit the SCP size limit (10,240 characters, minified)', () => {
+  // The SCP limit is 10,240 characters; staying under half leaves room and removes any doubt about the figure.
+  it('fit well inside the SCP size limit', () => {
     for (const p of [...Object.values(standing), killPolicy()])
-      expect(JSON.stringify(p).length).toBeLessThan(10_240);
+      expect(JSON.stringify(p).length).toBeLessThan(5_120);
   });
 
-  it('are deny-only, and every standing deny exempts the break-glass role so a hand step can never be locked out', () => {
+  // Exactly these two: a third pattern (say `role/cdk-*`) would switch every SCP off for the deploy itself.
+  it('are deny-only, and every standing deny exempts exactly the break-glass and kill-switch roles', () => {
     for (const p of Object.values(standing))
       for (const s of statements(p)) {
         expect(s.Effect).toBe('Deny');
-        expect(exempted(s)).toContain(`arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`);
+        expect(exempted(s)).toEqual([BREAK_GLASS, KILL_ROLES]);
       }
+  });
+
+  it('put every exempted role out of reach — nothing else in dev may change, create or pass one', () => {
+    const tamper = statements(standing.guardrails).find((x) => x.Sid === 'NoGuardTampering')!;
+    expect(tamper.Action).toEqual(['iam:*']);
+    for (const p of Object.values(standing))
+      for (const s of statements(p))
+        for (const r of exempted(s)) expect(tamper.Resource).toContain(r);
   });
 
   it('exempt only the break-glass role from the kill, so a kill also stops the forwarder and everything else', () => {
     const [s] = statements(killPolicy());
     expect(s).toMatchObject({ Effect: 'Deny', Action: '*', Resource: '*' });
-    expect(exempted(s!)).toEqual([`arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`]);
+    expect(exempted(s!)).toEqual([BREAK_GLASS]);
   });
 
   it('admit only the services the dev stacks and CI use', () => {
@@ -95,13 +108,20 @@ describe('dev-account SCPs', () => {
       'ecr',
       'ses',
       'states',
+      'acm',
     ])
       expect(allowed).not.toContain(`${svc}:*`);
-    // CloudWatch only for reads — alarms cost money and the kill alarms are the break-glass role's.
+    // CloudWatch only for reads — alarms cost money and the kill alarms are the break-glass role's; ACM only for
+    // reads — the cert is requested by the break-glass role, and exportable public certs bill per name.
     expect(allowed.filter((a) => a.startsWith('cloudwatch:'))).toEqual([
       'cloudwatch:Describe*',
       'cloudwatch:Get*',
       'cloudwatch:List*',
+    ]);
+    expect(allowed.filter((a) => a.startsWith('acm:'))).toEqual([
+      'acm:Describe*',
+      'acm:Get*',
+      'acm:List*',
     ]);
   });
 
@@ -125,6 +145,7 @@ describe('dev-account SCPs', () => {
       'lambda:CreateEventSourceMapping',
       'dynamodb:RestoreTable*',
       'dynamodb:PurchaseReservedCapacityOfferings',
+      'dynamodb:UpdateContributorInsights',
       'cloudfront:CreateInvalidation*',
       'cloudfront:AssociateAlias',
       'iam:CreateUser',
@@ -132,22 +153,17 @@ describe('dev-account SCPs', () => {
       'iam:*OpenIDConnectProvider*',
       'kms:CreateKey',
       'logs:PutSubscriptionFilter',
+      'logs:PutMetricFilter',
+      'logs:PutResourcePolicy',
       's3:PutAccountPublicAccessBlock',
       's3:PutReplicationConfiguration',
+      's3:PutMetricsConfiguration',
+      's3:PutBucketObjectLockConfiguration',
     ])
       expect(denied).toContain(a);
   });
 
-  it('keep the break-glass and kill roles out of reach of everything else in dev', () => {
-    const s = statements(standing.guardrails).find((x) => x.Sid === 'NoGuardTampering')!;
-    expect(s.Action).toEqual(['iam:*']);
-    expect(JSON.stringify((s as { Resource?: unknown }).Resource)).toContain(BREAK_GLASS_ROLE);
-    expect(JSON.stringify((s as { Resource?: unknown }).Resource)).toContain(
-      'role/aperture-kill-*',
-    );
-  });
-
-  it("freeze a function's shape, the table and the schedules", () => {
+  it("freeze a function's shape, the table, the schedules, and every grant that would outlive a kill", () => {
     const frozen = actions(standing.freeze);
     for (const a of [
       'lambda:CreateFunction',
@@ -158,8 +174,16 @@ describe('dev-account SCPs', () => {
       'lambda:PutFunctionEventInvokeConfig',
       'dynamodb:CreateTable',
       'dynamodb:UpdateTable',
+      'dynamodb:PutResourcePolicy',
       'scheduler:CreateSchedule',
       'scheduler:UpdateSchedule',
+      's3:CreateBucket',
+      's3:PutBucketPolicy',
+      's3:PutBucketAcl',
+      's3:PutBucketOwnershipControls',
+      'cloudfront:CreateDistribution*',
+      'iam:CreateRole',
+      'iam:UpdateAssumeRolePolicy',
     ])
       expect(frozen).toContain(a);
     // Code updates stay open — they are what a dev deploy is.
@@ -192,12 +216,13 @@ describe('ApertureOrgStack', () => {
     });
   });
 
-  it('gives the kill Lambda the kill SCP, the dev account and the URL functions, and only the grants it needs', () => {
+  it('gives the kill Lambda the kill SCP, the dev account, its break-glass role and the URL functions, and only the grants it needs', () => {
     const [, fn] = only('AWS::Lambda::Function');
     const vars = (fn.Properties.Environment as { Variables: Record<string, unknown> }).Variables;
     expect(vars).toMatchObject({
       DEV_ACCOUNT_ID: DEV,
       DEV_REGION: 'us-west-1',
+      BREAK_GLASS_ROLE_ARN: `arn:aws:iam::${DEV}:role/${BREAK_GLASS_ROLE}`,
       URL_FUNCTIONS: DEV_URL_FUNCTIONS.join(','),
     });
     const [killId] = only('AWS::Organizations::Policy', 'aperture-dev-kill');
@@ -210,9 +235,11 @@ describe('ApertureOrgStack', () => {
     expect(grants).not.toContain('organizations:DetachPolicy'); // only a human unkills
   });
 
-  it('lets only the dev account put events on this bus, and fires the Lambda and the email on a dev kill alarm', () => {
+  it("lets only dev's forwarder role put events on this bus, and fires the Lambda and the email on a dev kill alarm", () => {
     const [, busPolicy] = only('AWS::Events::EventBusPolicy');
-    expect(JSON.stringify(busPolicy.Properties.Statement)).toContain(`arn:aws:iam::${DEV}:root`);
+    expect((busPolicy.Properties.Statement as { Principal: unknown }).Principal).toEqual({
+      AWS: `arn:aws:iam::${DEV}:role/aperture-kill-forwarder`,
+    });
     const [, rule] = only('AWS::Events::Rule');
     expect(rule.Properties.EventPattern).toMatchObject({
       source: ['aws.cloudwatch'],
@@ -236,7 +263,7 @@ describe('ApertureOrgStack', () => {
 
   it('budgets the dev account alone: email at the first threshold, kill at the second', () => {
     const [, b] = only('AWS::Budgets::Budget');
-    const budget = b.Properties.Budget as { CostFilters: unknown; BudgetLimit: { Amount: number } };
+    const budget = b.Properties.Budget as { CostFilters: unknown };
     expect(budget.CostFilters).toEqual({ LinkedAccount: [DEV] });
     const notes = b.Properties.NotificationsWithSubscribers as {
       Notification: { Threshold: number };

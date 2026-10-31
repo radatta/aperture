@@ -5,3 +5,5 @@ export const DEV_REGION = 'us-west-1';
 export const DEV_URL_FUNCTIONS = ['aperture-bff-dev', 'aperture-mcp-dev'];
 // Alarms named with this prefix trip the kill; the SCP keeps everything but the break-glass role away from them.
 export const KILL_ALARM_PREFIX = 'aperture-kill-';
+// The dev-account role EventBridge assumes to carry a kill alarm to the management account's bus.
+export const KILL_FORWARDER_ROLE = `${KILL_ALARM_PREFIX}forwarder`;

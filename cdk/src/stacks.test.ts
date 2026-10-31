@@ -6,7 +6,7 @@ import { ApertureDataStack } from './lib/data-stack';
 import { ApertureAppStack } from './lib/app-stack';
 import { ApertureBillingStack } from './lib/billing-stack';
 import { DEV_MAX_READ_UNITS, DEV_MAX_WRITE_UNITS } from './lib/data-stack';
-import { allowlistPolicy } from './lib/org-stack';
+import { allowlistPolicy, guardrailsPolicy } from './lib/org-stack';
 import { DEV_URL_FUNCTIONS } from './config/devAccount';
 
 // cdk.json's feature flags, so a test synthesizes what `cdk synth` does (e.g. minimizePolicies merges
@@ -707,6 +707,27 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       .filter((r) => r.Type === 'AWS::Lambda::Url')
       .map((r) => fnName(r.Properties.TargetFunctionArn));
     expect(urls.sort()).toEqual([...DEV_URL_FUNCTIONS].sort());
+  });
+
+  // The standing guardrails deny these creates for good; a template that needs one can never deploy into dev.
+  it('creates no resource type the standing guardrails deny', () => {
+    const deniedBy: Record<string, string> = {
+      'AWS::KMS::Key': 'kms:CreateKey',
+      'AWS::Lambda::EventSourceMapping': 'lambda:CreateEventSourceMapping',
+      'AWS::IAM::User': 'iam:CreateUser',
+      'AWS::IAM::AccessKey': 'iam:CreateAccessKey',
+      'AWS::IAM::OIDCProvider': 'iam:*OpenIDConnectProvider*',
+      'AWS::DynamoDB::GlobalTable': 'dynamodb:CreateGlobalTable',
+      'AWS::Logs::SubscriptionFilter': 'logs:PutSubscriptionFilter',
+      'AWS::Logs::MetricFilter': 'logs:PutMetricFilter',
+      'AWS::Logs::ResourcePolicy': 'logs:PutResourcePolicy',
+      'AWS::CloudFront::RealtimeLogConfig': 'cloudfront:CreateRealtimeLogConfig',
+      'AWS::CloudFront::MonitoringSubscription': 'cloudfront:CreateMonitoringSubscription',
+    };
+    const standing = JSON.stringify(guardrailsPolicy());
+    for (const [type, action] of Object.entries(deniedBy)) expect(standing, `${type} → ${action}`).toContain(action);
+    const types = new Set(resources(dev.templates).map((r) => r.Type));
+    for (const type of Object.keys(deniedBy)) expect(types.has(type), `${type}: the guardrails SCP denies it in dev`).toBe(false);
   });
 
   it('uses only services the dev allowlist SCP admits — a new one means widening it in ApertureOrg first', () => {

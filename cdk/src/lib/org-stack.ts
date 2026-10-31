@@ -13,7 +13,12 @@ import * as organizations from 'aws-cdk-lib/aws-organizations';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Construct } from 'constructs';
-import { DEV_REGION, DEV_URL_FUNCTIONS, KILL_ALARM_PREFIX } from '../config/devAccount';
+import {
+  DEV_REGION,
+  DEV_URL_FUNCTIONS,
+  KILL_ALARM_PREFIX,
+  KILL_FORWARDER_ROLE,
+} from '../config/devAccount';
 
 // Where kill-switch and dev-budget alerts land. Personal email by design — this is a personal project.
 const ALERT_EMAIL = 'rahul3datta@gmail.com';
@@ -62,7 +67,9 @@ export const allowlistPolicy = () =>
         'iam:*',
         'sts:*',
         'cloudformation:*',
-        'acm:*',
+        'acm:Describe*', // reads only: the cert is requested by the break-glass role, and exportable public certs bill per name
+        'acm:Get*',
+        'acm:List*',
         'tag:*',
         'cloudwatch:Describe*',
         'cloudwatch:Get*',
@@ -183,6 +190,14 @@ export const guardrailsPolicy = () =>
       's3:PutAnalyticsConfiguration',
       's3:PutStorageLensConfiguration',
       's3:CreateJob',
+      's3:PutMetricsConfiguration', // paid request metrics, billed on CloudFront→S3 traffic even after a kill
+      's3:PutBucketObjectLockConfiguration', // compliance-mode storage nobody can delete for years
+      's3:PutObjectRetention',
+      's3:PutObjectLegalHold',
+      'logs:PutMetricFilter', // custom metrics, a way around the CloudWatch write deny
+      'logs:PutResourcePolicy', // lets another account's principals write (and bill) dev's logs
+      'logs:PutDestination*',
+      'dynamodb:UpdateContributorInsights',
       'ssm:UpdateServiceSetting',
     ]),
   ]);
@@ -210,6 +225,18 @@ export const freezePolicy = () =>
       'dynamodb:UpdateTable',
       'dynamodb:DeleteTable',
       'dynamodb:UpdateContinuousBackups',
+      'dynamodb:PutResourcePolicy', // a resource policy could let another account read (and bill) the table
+    ]),
+    // Grants that outlive a kill: a resource policy, an ACL or a role trust naming another account acts through
+    // that account's principals, which no dev SCP binds; a new distribution or bucket keeps serving as a service.
+    deny('FrozenGrants', [
+      's3:CreateBucket',
+      's3:PutBucketPolicy',
+      's3:PutBucketAcl',
+      's3:PutBucketOwnershipControls',
+      'cloudfront:CreateDistribution*',
+      'iam:CreateRole',
+      'iam:UpdateAssumeRolePolicy',
     ]),
     deny('FrozenSchedules', [
       'scheduler:CreateSchedule',
@@ -301,13 +328,14 @@ export class ApertureOrgStack extends Stack {
       entry: KILL_ENTRY,
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_22_X,
-      timeout: Duration.seconds(60),
+      timeout: Duration.seconds(120), // lists and updates every dev function and distribution
       memorySize: 256,
       logGroup: new logs.LogGroup(this, 'KillLogs', { retention: logs.RetentionDays.ONE_MONTH }),
       environment: {
         KILL_POLICY_ID: killScp.attrId,
         DEV_ACCOUNT_ID: devAccountId,
         DEV_REGION,
+        BREAK_GLASS_ROLE_ARN: `arn:aws:iam::${devAccountId}:role/${BREAK_GLASS_ROLE}`,
         URL_FUNCTIONS: DEV_URL_FUNCTIONS.join(','),
       },
       onFailure: new destinations.SnsDestination(alerts),
@@ -336,7 +364,7 @@ export class ApertureOrgStack extends Stack {
       eventBusName: 'default',
       statement: {
         Effect: 'Allow',
-        Principal: { AWS: `arn:aws:iam::${devAccountId}:root` },
+        Principal: { AWS: `arn:aws:iam::${devAccountId}:role/${KILL_FORWARDER_ROLE}` }, // only the forwarder
         Action: 'events:PutEvents',
         Resource: `arn:aws:events:${this.region}:${this.account}:event-bus/default`,
       },

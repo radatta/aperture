@@ -35,6 +35,13 @@ describe('ApertureCicdStack, per account', () => {
     expect(roleNames(dev)).toEqual(['aperture-github-deploy-dev', 'aperture-github-logs-dev']);
   });
 
+  // Redeploying ApertureCicd must update prod's role and OIDC provider in place, never replace them: a new provider
+  // or role would break every prod deploy until the trust caught up. These logical ids are main's.
+  it("keeps prod's role and OIDC provider at their deployed logical ids", () => {
+    const ids = Object.keys(prod.toJSON().Resources as object);
+    for (const id of ['DeployProd4D593C1D', 'DeployProdDefaultPolicy4A11419E', 'GithubOidc86785739']) expect(ids).toContain(id);
+  });
+
   it('grants neither deploy role any CloudFront action (publish no longer invalidates)', () => {
     for (const t of [prod, dev]) expect(JSON.stringify(t.findResources('AWS::IAM::Policy'))).not.toContain('cloudfront:');
   });
