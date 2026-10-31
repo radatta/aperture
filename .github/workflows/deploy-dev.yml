@@ -1,7 +1,7 @@
 name: Deploy dev (dispatch)
 
-# A feature branch onto the dev stack without the `dev` branch (docs/ops/CI-BOT.md) — OFF until dev's CDK bootstrap is
-# isolated (the DEV_DEPLOY_ISOLATED check below); until then the user pushes `dev`. The bot
+# A feature branch onto the dev stack without the `dev` branch (docs/ops/CI-BOT.md) — OFF until dev runs in its own AWS
+# account under the SCPs (the DEV_DEPLOY_ISOLATED check below); until then the user pushes `dev`. The bot
 # (`pnpm bot deploy-dev`) dispatches this on `ref: main` — main's YAML runs and the feature commit only supplies
 # the tree — or, for a branch that changes `.github/`, on that branch, so its own workflows are what run on dev
 # (only the user can push workflow changes: the bot has no `workflows` permission).
@@ -39,6 +39,7 @@ jobs:
   # main-ref dispatch, by the branch's own on a branch-ref one.
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # a checkout and a few git checks
     permissions:
       contents: read
     outputs:
@@ -53,14 +54,14 @@ jobs:
           SHA: ${{ inputs.sha }}
           KEY: ${{ inputs.key }}
           BASE: ${{ inputs.base }}
-          # Set to `true` by the user once dev's CDK bootstrap is isolated (the dev-bootstrap PR). A repository
-          # variable: the bot can't set it (the App has no Variables permission).
+          # Set to `true` by the user once dev runs in its own account under the SCPs (the dev-account PR, then
+          # dev-cutover). A repository variable: the bot can't set it (the App has no Variables permission).
           DEV_DEPLOY_ISOLATED: ${{ vars.DEV_DEPLOY_ISOLATED }}
         run: |
           fail() { echo "::error::$1"; exit 1; }
-          # Until dev deploys run against a dev-only bootstrap, the dev role reaches the whole account through the
-          # shared CDK bootstrap — a dispatched branch would run with that reach and no human step (CI-BOT.md).
-          [ "$DEV_DEPLOY_ISOLATED" = "true" ] || fail "dispatched dev deploys are off until dev's CDK bootstrap is isolated (docs/ops/CI-BOT.md → Dev deploy blast radius)"
+          # Until dev runs in its own account under the SCPs, a dispatched branch would run with no human step and no
+          # cost cap (CI-BOT.md).
+          [ "$DEV_DEPLOY_ISOLATED" = "true" ] || fail "dispatched dev deploys are off until dev runs in its own AWS account (docs/ops/CI-BOT.md → Dev deploy blast radius)"
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "sha must be 40 lowercase hex"
           [[ "$KEY" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || fail "key must be [A-Za-z0-9._-], at most 100 chars"
           git cat-file -e "$SHA^{commit}" 2>/dev/null || fail "$SHA is not on any branch of this repo"

@@ -8,7 +8,7 @@ name: Deploy stage
 # `mode` gates the work:
 #   none → nothing is built or deployed (the docs-only fast-path). The job still runs in `environment:`, so
 #          GitHub records a deployment that deploys nothing — a vestige of the retired gate (INFRA §9)
-#   app  → frontend only: fetch stack outputs, build, S3 sync, invalidate (not awaited), health check. No CDK.
+#   app  → frontend only: fetch stack outputs, build, S3 sync, health check. No CDK.
 #   full → everything: cdk synth/diff/deploy (writes the outputs file) + smoke, then publish + health.
 on:
   workflow_call:
@@ -52,6 +52,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Bounds how long any one job holds AWS credentials — on dev, the window a rogue branch's code has before GitHub
+    # kills it (docs/ops/CI-BOT.md → Dev deploy blast radius). A full deploy measures 10–15 min; prod gets more
+    # room because a CloudFront change can run long and a killed job leaves CloudFormation mid-update.
+    timeout-minutes: ${{ inputs.stage == 'dev' && 30 || 60 }}
     # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to). Also
     # records a GitHub deployment against the stage, which nothing consumes since main dropped
     # `required_deployments` (INFRA §9).
