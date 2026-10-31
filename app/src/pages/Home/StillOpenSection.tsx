@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
-import { addDays, fmtClock12 } from '@aperture/shared';
+import { addDays, endsAfterParent, fmtClock12, parentOf } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
-import { useSetDue } from '../../data/hooks/useTasks';
+import { useAllTasks, useSetDue } from '../../data/hooks/useTasks';
 import { usePlansForDay } from '../../data/hooks/usePlans';
 import { usePomodoro } from '../../modules/pomodoro/pomodoro-context';
 import { CategoryTag } from '../../modules/tasks/CategoryTag';
@@ -36,7 +36,8 @@ function writeLeft(day: string, ids: Set<string>): void {
 
 // Night: every unfinished thing from today gets a "when?" — Tomorrow, Backlog, or Leave it. A timed
 // one (on today by its time) has no Backlog: its Tomorrow moves the time a day, calendar block with it
-// (lenses.md D8, D13). No count and no red: unfinished is information, not a verdict. Lives inside
+// — and isn't offered when that would end a part after its parent's deadline (lenses.md D8, D13).
+// No count and no red: unfinished is information, not a verdict. Lives inside
 // "Today in review".
 export function StillOpenSection({ today }: { today: string }) {
   const tomorrow = addDays(today, 1);
@@ -45,6 +46,7 @@ export function StillOpenSection({ today }: { today: string }) {
   const toTomorrow = useAddToDay(tomorrow);
   const { unplan } = useAddToDay();
   const setDue = useSetDue();
+  const { data: tasks = [] } = useAllTasks();
   const { timers, stop } = usePomodoro();
   const [left, setLeft] = useState(() => readLeft(today));
   // Once something's been answered, the section closes on a line instead of vanishing — focus needs
@@ -79,12 +81,16 @@ export function StillOpenSection({ today }: { today: string }) {
       if (t.session.kind === 'work' && t.session.taskId === r.task.id) await stop(t.session.id);
     if (r.plan) await unplan(r.plan, r.task, { fromInProgress: true });
   }
-  // Same clock, the next day.
-  const retime = ({ task }: TodayRow) =>
-    setDue.mutateAsync({
-      id: task.id,
-      due: { dueDay: addDays(task.dueDay!, 1), dueTime: task.dueTime },
-    });
+  // Same clock, the next day — unless that ends a part after its parent's deadline.
+  const nextDue = ({ task }: TodayRow) => ({
+    dueDay: addDays(task.dueDay!, 1),
+    dueTime: task.dueTime,
+  });
+  const retime = (r: TodayRow) => setDue.mutateAsync({ id: r.task.id, due: nextDue(r) });
+  const canRetime = (r: TodayRow) => {
+    const parent = parentOf(tasks, r.task);
+    return !parent || !endsAfterParent(nextDue(r), parent);
+  };
 
   const answer = (id: string, fn: () => Promise<unknown>) => {
     setAnswered(true);
@@ -115,9 +121,11 @@ export function StillOpenSection({ today }: { today: string }) {
           row={r}
           busy={action.isBusy(r.task.id)}
           // Tomorrow keeps today's row as history; a started task stays started. A timed task's
-          // Tomorrow is its time, a day on.
-          onTomorrow={() =>
-            answer(r.task.id, () => (r.byTime ? retime(r) : toTomorrow.addToDay(r.task)))
+          // Tomorrow is its time, a day on — Leave only, if that's past its parent's deadline.
+          onTomorrow={
+            r.byTime && !canRetime(r)
+              ? undefined
+              : () => answer(r.task.id, () => (r.byTime ? retime(r) : toTomorrow.addToDay(r.task)))
           }
           // Backlog is a real rollover, started or not — the task keeps its locked estimate + time.
           onBacklog={r.byTime ? undefined : () => answer(r.task.id, () => toBacklog(r))}
@@ -144,7 +152,7 @@ function StillOpenRow({
 }: {
   row: TodayRow;
   busy: boolean;
-  onTomorrow: () => void;
+  onTomorrow?: () => void;
   onBacklog?: () => void;
   onLeave: () => void;
 }) {
@@ -168,9 +176,11 @@ function StillOpenRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onTomorrow}>
-          Tomorrow
-        </Button>
+        {onTomorrow && (
+          <Button variant="ghost" size="sm" disabled={busy} onClick={onTomorrow}>
+            Tomorrow
+          </Button>
+        )}
         {onBacklog && (
           <Button variant="quiet" size="sm" disabled={busy} onClick={onBacklog}>
             Backlog

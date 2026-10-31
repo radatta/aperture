@@ -1128,6 +1128,15 @@ describe('parent + parts', () => {
     expect(within(row).queryByRole('button', { name: 'Unplan' })).toBeNull();
   });
 
+  it('a part ending 00:30 tomorrow is tonight’s with a 4am day start — it reads “today”', async () => {
+    const { api, b } = await seeded(false);
+    await api.setTaskDue(b.id, { dueDay: addDays(todayKey(4), 1), dueTime: '00:30' });
+    renderApp({ api, path: '/tasks?lens=week' });
+    const row = await waitFor(() => rowOf('P2'));
+    expect(await within(row).findByText('today')).toBeTruthy();
+    expect(within(row).queryByText(/ends tomorrow/)).toBeNull();
+  });
+
   it('a part ending tomorrow sits under its parent in Week, reading when it ends — never “+ Today”', async () => {
     const { api, b } = await seeded(false);
     // A row on today from before it had a time is history: it no longer puts the part on Today.

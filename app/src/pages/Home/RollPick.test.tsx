@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { todayKey } from '@aperture/shared';
+import { addDays, todayKey } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
 
@@ -30,7 +30,11 @@ describe('Rolls ↔ daytime home', () => {
 
   it('completing a picked roll fills its contact sheet — the loop closes', async () => {
     const api = freshApi();
-    const roll = await api.upsertRoll({ name: 'LeetCode daily', categoryId: null, estimateMin: 30 });
+    const roll = await api.upsertRoll({
+      name: 'LeetCode daily',
+      categoryId: null,
+      estimateMin: 30,
+    });
     await api.pickRollToday(roll.id, TODAY); // pre-picked; the test drives the loop's tail
     const user = userEvent.setup();
     renderApp({ api });
@@ -44,5 +48,19 @@ describe('Rolls ↔ daytime home', () => {
     // Over on the Rolls page, today's cell is now a rep.
     await user.click(screen.getByRole('link', { name: 'Rolls' }));
     expect(await screen.findByText(/1 rep · last today/)).toBeTruthy();
+  });
+
+  it('a roll whose open rep is timed refuses the pick, saying why', async () => {
+    const api = freshApi();
+    const roll = await api.upsertRoll({ name: 'Mock OA', categoryId: null, estimateMin: 30 });
+    const { task } = await api.pickRollToday(roll.id, addDays(TODAY, -1));
+    await api.setTaskDue(task.id, { dueDay: addDays(TODAY, 2), dueTime: '17:00' });
+    const user = userEvent.setup();
+    renderApp({ api });
+
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    await user.click(await screen.findByRole('button', { name: /Pick Mock OA for today/ }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/change when it ends/);
+    expect(await api.listPlansForDay(TODAY)).toEqual([]);
   });
 });

@@ -184,13 +184,16 @@ describe('the tasks list carries what writes returned', () => {
     expect(byId(hook, made.id)).toBeUndefined();
   });
 
-  it('a write before the list ever loaded paints no one-row list; the first read shows it', async () => {
+  it('a write before the list ever loaded paints no one-row list; a stale first read still shows it', async () => {
     // The first read never answers; the hook mounts against it.
+    let spy!: ReturnType<typeof holdList>;
     const { api, hook } = setup((api) => {
-      vi.spyOn(api, 'listTasks').mockImplementationOnce(() => new Promise(() => {}));
+      spy = vi.spyOn(api, 'listTasks').mockImplementationOnce(() => new Promise(() => {}));
     });
     const t = await api.createTask({ title: 'A' });
-    await api.createTask({ title: 'Z' });
+    const z = await api.createTask({ title: 'Z' });
+    // The write's refetch reads from before the write.
+    spy.mockResolvedValueOnce([z, t]);
     expect(hook.result.current.list.data).toBeUndefined();
     await act(
       async () => void (await hook.result.current.title.mutateAsync({ id: t.id, title: 'B' })),
@@ -198,8 +201,22 @@ describe('the tasks list carries what writes returned', () => {
     // Never the written task alone: nothing yet, or the whole list (the write's refetch).
     const shown = hook.result.current.list.data;
     expect(shown === undefined || shown.length === 2).toBe(true);
-    await waitFor(() => expect(byId(hook, t.id)?.title).toBe('B'));
+    await waitFor(() => expect(hook.result.current.list.isSuccess).toBe(true));
+    await waitFor(() => expect(hook.result.current.list.isFetching).toBe(false));
+    expect(byId(hook, t.id)?.title).toBe('B');
     expect(list(hook)).toHaveLength(2);
+  });
+
+  it('dropping a parent drops its open parts before any refetch lands', async () => {
+    const { api, hook } = setup();
+    const p = await api.createTask({ title: 'P' });
+    const [a] = await api.createTasks([{ title: 'a', parentId: p.id }]);
+    await api.setTaskDue(a!.id, { dueDay: '2026-08-05', dueTime: '15:00' });
+    await reload(hook);
+    await waitFor(() => expect(byId(hook, a!.id)).toBeTruthy());
+    holdList(api);
+    await run(() => hook.result.current.transition.mutateAsync({ id: p.id, to: 'cancelled' }));
+    expect(byId(hook, a!.id)!.status).toBe('cancelled');
   });
 
   it('the backlog derives from the list: it moves with the write, and never reads listBacklog', async () => {
@@ -212,5 +229,19 @@ describe('the tasks list carries what writes returned', () => {
     await run(() => hook.result.current.transition.mutateAsync({ id: t.id, to: 'planned' }));
     expect(hook.result.current.backlog.data).toEqual([]);
     expect(backlogRead).not.toHaveBeenCalled();
+  });
+
+  it('the backlog is what “+ Add” can pull in: no timed task, no parent — its parts instead', async () => {
+    const { api, hook } = setup();
+    const plain = await api.createTask({ title: 'plain' });
+    const timed = await api.createTask({ title: 'timed' });
+    await api.setTaskDue(timed.id, { dueDay: '2026-08-05', dueTime: '15:00' });
+    const p = await api.createTask({ title: 'P' });
+    const [part] = await api.createTasks([{ title: 'part', parentId: p.id }]);
+    await reload(hook);
+    await waitFor(() => expect(byId(hook, part!.id)).toBeTruthy());
+    expect(hook.result.current.backlog.data?.map((x) => x.id).sort()).toEqual(
+      [plain.id, part!.id].sort(),
+    );
   });
 });

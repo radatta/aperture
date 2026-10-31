@@ -7,10 +7,11 @@ export interface TodaySplit {
   done: Task[];
 }
 
-// Today's rows split for the lens: open rows stay in order (by time, then the plan); finished work drops to "Done today".
-// That group is today's done plan rows (plan order) and then anything else completed today, oldest
-// first, so a task finished off-plan doesn't vanish. Dropped rows go nowhere: the Done lens is their
-// home. The rows themselves are untouched; capacity, Big 3 and rolls still read them as history.
+// Today's rows split for the lens: open rows stay in order (by time, then the plan); finished work
+// drops to "Done today". That group is today's done plan rows (plan order) and then anything else
+// completed today, oldest first, so a task finished off-plan doesn't vanish. Dropped rows go nowhere:
+// the Done lens is their home. The rows themselves are untouched; capacity, Big 3 and rolls still read
+// them as history.
 export function doneToday(
   rows: TodayRow[],
   tasks: Task[],

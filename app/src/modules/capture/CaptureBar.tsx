@@ -727,8 +727,14 @@ function Receipt({
         <span className="sr-only">: {receipt.parsed}</span>
       </Text>
     );
+  // On a phone the row leaves the receipt ~115px, so a long one ("due tomorrow 4pm, by its time",
+  // "backlog (couldn’t plan it)") takes a second line there, never losing the part that says where.
   return (
-    <Text size="xs" tone="teal" className="block truncate pr-1">
+    <Text
+      size="xs"
+      tone="teal"
+      className="block truncate pr-1 max-sm:line-clamp-2 max-sm:whitespace-normal"
+    >
       {r.text} → {r.label}
     </Text>
   );

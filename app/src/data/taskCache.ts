@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { partsOf } from '@aperture/shared';
+import { partsOf, taskTransition } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { qk } from './queryKeys';
 
@@ -23,8 +23,10 @@ const recentFor = (qc: QueryClient) => {
 
 const sortList = (ts: Task[]) => [...ts].sort((a, b) => b.createdAt - a.createdAt);
 
-// The server's list merged with recent local writes. An entry the server has caught up on (same or
-// newer copy) is pruned, as is anything past the TTL.
+// The server's list merged with recent local writes. An entry the server has caught up on (a strictly
+// newer copy) is pruned, as is anything past the TTL. A tie keeps ours, and the entry: the Lambda can
+// stamp two states of one row with the same ms inside one request, and the next stale read needs the
+// entry too.
 export function mergeTasks(server: Task[], local: Map<string, Local>, now: number): Task[] {
   const byId = new Map(server.map((t) => [t.id, t]));
   for (const [id, e] of local) {
@@ -35,7 +37,7 @@ export function mergeTasks(server: Task[], local: Map<string, Local>, now: numbe
     const s = byId.get(id);
     if (e.task === null) byId.delete(id);
     else if (!s) byId.set(id, e.task);
-    else if (e.task.updatedAt > s.updatedAt) byId.set(id, e.task);
+    else if (e.task.updatedAt >= s.updatedAt) byId.set(id, e.task);
     else local.delete(id);
   }
   return sortList([...byId.values()]);
@@ -50,13 +52,25 @@ export function applyWrites(
 ): Task[] | undefined {
   if (!list) return list;
   const byId = new Map(list.map((t) => [t.id, t]));
-  for (const t of put) {
+  for (const t of [...put, ...cascade(list, put)]) {
     const cached = byId.get(t.id);
     if (!cached || t.updatedAt >= cached.updatedAt) byId.set(t.id, t);
   }
   for (const id of remove) byId.delete(id);
   return sortList([...byId.values()]);
 }
+
+// A cascade the server does but doesn't return: dropping a parent drops its open parts (parts.ts
+// cancelParent), stamped with the parent's time. Mirrored into the list only — never remembered — so
+// the next real read is the truth (the server may also clear the parts' calendar fields).
+const cascade = (list: Task[], put: Task[]): Task[] =>
+  put.flatMap((t) =>
+    t.status !== 'cancelled'
+      ? []
+      : partsOf(list, t.id)
+          .filter((p) => p.status !== 'done' && p.status !== 'cancelled')
+          .map((p) => taskTransition(p, 'cancelled', t.cancelledAt ?? t.updatedAt)),
+  );
 
 // What a write returned goes into the list now. The caller still invalidates: a write can change rows
 // it doesn't return (a parent's lock, a dropped parent's parts, plan rows, the day's sweep).

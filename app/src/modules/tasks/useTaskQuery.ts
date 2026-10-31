@@ -53,7 +53,8 @@ function isStored(s: Stored | null): s is Stored {
 export function useTaskQuery() {
   const [params, setParams] = useSearchParams();
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const raw = params.get('lens') as LensId | null;
   const lens: LensId = raw && LENSES.includes(raw) ? raw : 'today';
   const place: Place = isPlace(lens) ? lens : 'today';
@@ -94,7 +95,7 @@ export function useTaskQuery() {
     [today, query, setParams],
   );
 
-  return { lens, place, query, setQuery, setLens, today };
+  return { lens, place, query, setQuery, setLens, today, dayStartHour };
 }
 
 // Collapsed groups, remembered per lens:group. A group with no remembered choice takes the caller's

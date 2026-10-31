@@ -367,9 +367,10 @@ describe('backend task notes on a legacy row', () => {
   });
 });
 
-// The parent's lock is decided on the task list read straight after a part's write. DynamoDB's default
-// query is eventually consistent, so it can still show the part as it was — the decision must not.
-describe('backend parent lock under a lagging task list', () => {
+// The parent's lock, the timed-plan refusal and the sweep are decided on the task list read straight
+// after a task write. DynamoDB's default query is eventually consistent, so it can still show the task
+// as it was — the decision must not.
+describe('backend decisions under a lagging task list', () => {
   const setup = () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
@@ -379,7 +380,7 @@ describe('backend parent lock under a lagging task list', () => {
     // Every non-consistent list read for the next while shows `id` as it is now.
     const lagging = async (id: string) =>
       doc.staleNextQueries('u#local', sk.task(id), await doc.get('u#local', sk.task(id)), 20);
-    return { backend, lagging };
+    return { backend, lagging, doc };
   };
 
   it('a first start freezes the lock though the list still shows the part unstarted', async () => {
@@ -389,6 +390,37 @@ describe('backend parent lock under a lagging task list', () => {
     await lagging(a.id);
     await backend.transitionTask(a.id, 'in_progress');
     expect((await backend.getTask(p.id))?.estimateLockedMin).toBe(30);
+  });
+
+  it('option 3: “+ Today” straight after clearing a time is allowed though the list still shows it timed', async () => {
+    const { backend, lagging } = setup();
+    const t = await backend.createTask({ title: 'OA', dueDay: '2026-08-05', dueTime: '17:00' });
+    await lagging(t.id);
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: null });
+    const plan = { taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+    await expect(backend.upsertPlan(plan)).resolves.toMatchObject({ taskId: t.id });
+  });
+
+  it('option 3: “+ Today” straight after adding a time is refused though the list still shows it untimed', async () => {
+    const { backend, lagging } = setup();
+    const t = await backend.createTask({ title: 'OA' });
+    await lagging(t.id);
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: '17:00' });
+    const plan = { taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+    await expect(backend.upsertPlan(plan)).rejects.toThrow(/falls on/);
+  });
+
+  it('option 3: the sweep re-judges the fresh copy — a time cleared since the list read keeps it planned', async () => {
+    const { backend, lagging, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    await backend.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
+    await backend.transitionTask(t.id, 'planned');
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-04', dueTime: '17:00' });
+    await lagging(t.id); // the list shows it planned and timed
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-04', dueTime: null });
+    await backend.getDay('2026-08-04');
+    expect((await backend.getTask(t.id))?.status).toBe('planned');
+    expect(doc.gets.some((g) => g.key.endsWith(sk.task(t.id)) && g.consistent)).toBe(true);
   });
 
   it('detaching the last part releases the lock though the list still shows it attached', async () => {

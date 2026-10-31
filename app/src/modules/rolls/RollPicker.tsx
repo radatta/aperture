@@ -49,6 +49,14 @@ export function RollPicker({ className }: { className?: string }) {
           />
         ))}
       </div>
+      {/* A refused pick (a timed open rep — rolls.md D6) says why: never a silent tap. */}
+      {pick.isError && (
+        <div role="alert">
+          <Text size="xs" tone="danger">
+            {pick.error instanceof Error ? pick.error.message : 'Couldn’t pick it — try again.'}
+          </Text>
+        </div>
+      )}
     </div>
   );
 }
@@ -72,7 +80,11 @@ function RollChip({
       disabled={pending}
       onClick={onPick}
       aria-label={
-        onPlan ? `${roll.name} — on today's plan` : done ? `${roll.name} — done today, pick again` : `Pick ${roll.name} for today`
+        onPlan
+          ? `${roll.name} — on today's plan`
+          : done
+            ? `${roll.name} — done today, pick again`
+            : `Pick ${roll.name} for today`
       }
       className={cx(
         'inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm transition disabled:opacity-50',

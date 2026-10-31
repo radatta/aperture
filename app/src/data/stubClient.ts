@@ -1193,6 +1193,7 @@ class StubClient implements ApiClient {
   async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
     const roll = this.mustFind(this.store.rolls, rollId);
     const existing = findOpenRollTask(this.alive(this.store.tasks), rollId);
+    if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR); // rolls.md D6
     const task = existing
       ? existing.status === 'backlog'
         ? this.writes.put(this.store.tasks, taskTransition(existing, 'planned', this.now()))

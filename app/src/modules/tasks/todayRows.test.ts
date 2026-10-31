@@ -56,6 +56,18 @@ describe('todayRows', () => {
     expect(todayRows([mkPlan('t', 0)], [t], TODAY, START)).toEqual([]);
   });
 
+  it('a deadline before day start is tonight’s — after 23:00, by instant; 04:00 is tomorrow’s', () => {
+    const tomorrow = addDays(TODAY, 1);
+    const late = timedAt('late', '23:00');
+    const night = mkTask('night', 'backlog', { dueDay: tomorrow, dueTime: '00:30' });
+    const next = mkTask('next', 'backlog', { dueDay: tomorrow, dueTime: '04:00' });
+    expect(todayRows([], [night, next, late], TODAY, START).map((r) => r.task.id)).toEqual([
+      'late',
+      'night',
+    ]);
+    expect(todayRows([], [night], TODAY, 0)).toEqual([]);
+  });
+
   it('a timed parent is never a row — its deadline is its marker', () => {
     const p = timedAt('p', '23:59');
     const part = mkTask('a', 'backlog', { parentId: 'p' });

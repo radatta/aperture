@@ -1211,6 +1211,18 @@ export function runApiContract(
       expect((await api.listPlansForDay('2026-08-04')).map((p) => p.taskId)).toEqual([t.id]);
     });
 
+    it('option 3: picking a roll whose open rep is timed is refused — no second rep, no row', async () => {
+      const roll = await api.upsertRoll({ name: 'Mock OA', categoryId: null, estimateMin: 30 });
+      const { task: rep } = await api.pickRollToday(roll.id, '2026-08-04');
+      await api.setTaskDue(rep.id, { dueDay: '2026-08-05', dueTime: '17:00' });
+      const before = (await api.listTasks()).length;
+      await expect(api.pickRollToday(roll.id, '2026-08-05')).rejects.toThrow(/falls on/);
+      expect(await api.listTasks()).toHaveLength(before);
+      expect(await api.listPlansForDay('2026-08-05')).toEqual([]);
+      await api.setTaskDue(rep.id, { dueDay: '2026-08-05', dueTime: null });
+      expect((await api.pickRollToday(roll.id, '2026-08-05')).task.id).toBe(rep.id);
+    });
+
     it('option 3: a planned task that gains a time goes back to backlog on the next getDay; its row stays as history', async () => {
       const t = await api.createTask({ title: 'pset' });
       await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });

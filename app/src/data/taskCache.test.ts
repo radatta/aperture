@@ -11,8 +11,14 @@ describe('mergeTasks', () => {
     const mem = local([['t1', { at: 0, task: t('t1', 20, { title: 'mine' }) }]]);
     expect(mergeTasks([t('t1', 10)], mem, 1)[0]!.title).toBe('mine');
     expect(mem.has('t1')).toBe(true);
-    expect(mergeTasks([t('t1', 20, { title: 'server' })], mem, 2)[0]!.title).toBe('server');
+    expect(mergeTasks([t('t1', 21, { title: 'server' })], mem, 2)[0]!.title).toBe('server');
     expect(mem.has('t1')).toBe(false);
+  });
+
+  it('a tie keeps ours, and keeps remembering it — one request can stamp two states the same ms', () => {
+    const mem = local([['t1', { at: 0, task: t('t1', 20, { title: 'mine' }) }]]);
+    expect(mergeTasks([t('t1', 20, { title: 'server' })], mem, 1)[0]!.title).toBe('mine');
+    expect(mem.has('t1')).toBe(true);
   });
 
   it('another device’s later write wins over ours', () => {
@@ -44,6 +50,16 @@ describe('applyWrites', () => {
     expect(applyWrites(list, [t('t1', 9, { title: 'new' })], [])![1]!.title).toBe('new');
     expect(applyWrites(list, [t('t1', 4, { title: 'old' })], [])![1]!.title).toBe('t1');
     expect(applyWrites(list, [t('t3', 1)], ['t2'])!.map((x) => x.id)).toEqual(['t3', 't1']);
+  });
+
+  it('dropping a parent drops its open parts in the list; done parts stay', () => {
+    const parent = t('t1', 1);
+    const open = t('t2', 1, { parentId: 't1', status: 'planned' });
+    const done = t('t3', 1, { parentId: 't1', status: 'done' });
+    const dropped = { ...parent, status: 'cancelled' as const, cancelledAt: 9, updatedAt: 9 };
+    const byId = new Map(applyWrites([parent, open, done], [dropped], [])!.map((x) => [x.id, x]));
+    expect(byId.get('t2')).toMatchObject({ status: 'cancelled', cancelledAt: 9, updatedAt: 9 });
+    expect(byId.get('t3')!.status).toBe('done');
   });
 
   it('no list loaded stays no list — never a one-row list', () => {

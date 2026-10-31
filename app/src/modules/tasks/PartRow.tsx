@@ -18,7 +18,8 @@ import { useOpenTask } from './task-modal-context';
 // (lenses.md D13): it reads "today" on its day, else when it ends — never "+ Today".
 export function PartsList({ parts }: { parts: Task[] }) {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const { data: plans = [] } = usePlansForDay(today);
   const onToday = new Set(plans.map((p) => p.taskId));
   return (
@@ -27,7 +28,7 @@ export function PartsList({ parts }: { parts: Task[] }) {
         <PartRow
           key={p.id}
           part={p}
-          today={isTimed(p) ? placedByTime(p, today) : onToday.has(p.id)}
+          today={isTimed(p) ? placedByTime(p, today, dayStartHour) : onToday.has(p.id)}
           day={today}
         />
       ))}

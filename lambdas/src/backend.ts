@@ -1002,7 +1002,8 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listPlans(day)).sort((a, b) => a.order - b.order);
   }
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
-    const tasks = await this.repo.listTasks();
+    // Consistent: "+ Today" can follow straight on the editor's save that cleared the time.
+    const tasks = await this.repo.listTasks({ consistent: true });
     if (hasParts(tasks, input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
     const task = tasks.find((t) => t.id === input.taskId);
     if (task && isTimed(task)) throw new Error(TIMED_NO_PLAN_ERROR);
@@ -1185,11 +1186,13 @@ export class BackendClient implements ApiClient {
     return this.repo.putRoll({ ...this.base(), ...fields });
   }
   // Reuse the open rep if one exists (re-planning a rolled-back backlog one), else spawn a fresh planned
-  // rep; then ensure it sits on `day`'s plan, appended like addToDay. Mirrors the stub exactly.
+  // rep; then ensure it sits on `day`'s plan, appended like addToDay. A timed open rep is refused like
+  // any timed plan (one open rep per roll — rolls.md D6). Mirrors the stub exactly.
   async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
     const roll = await this.repo.getRoll(rollId);
     if (!roll) throw new Error(`Not found: ${rollId}`);
     const existing = findOpenRollTask(await this.repo.listTasks(), rollId);
+    if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR);
     const task = existing
       ? existing.status === 'backlog'
         ? await this.repo.putTask(taskTransition(existing, 'planned', this.now()))
@@ -1284,17 +1287,23 @@ export class BackendClient implements ApiClient {
     }
   }
   // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
-  // planned. Each move re-reads the task first: a sweep races the user's own writes (e.g. starting the
-  // task), and writing back the list-time copy would undo them.
+  // planned. Each move re-reads the task first (consistently): a sweep races the user's own writes (e.g.
+  // starting the task, or clearing its time), and writing back the list-time copy would undo them.
   private async sweepStalePlanned(day: string): Promise<void> {
     const tasks = await this.repo.listTasks();
     if (!tasks.some((t) => t.status === 'planned')) return;
-    for (const { task, to } of stalePlannedMoves(tasks, await this.repo.listAllPlans(), day)) {
-      const fresh = await this.repo.getTask(task.id);
-      if (fresh?.status !== 'planned') continue;
+    const plans = await this.repo.listAllPlans();
+    for (const { task } of stalePlannedMoves(tasks, plans, day)) {
+      const fresh = await this.repo.getTask(task.id, { consistent: true });
+      if (!fresh) continue;
+      // The rule again on the fresh copy, among the tasks it was judged with (a superseded occurrence
+      // needs its series' copy in the list): the list-time copy may have lost its time since.
+      const listed = tasks.map((t) => (t.id === fresh.id ? fresh : t));
+      const move = stalePlannedMoves(listed, plans, day).find((m) => m.task.id === fresh.id);
+      if (!move) continue;
       // Gained a calendar event since the list read → backlog, never an orphaned event.
       await this.repo.putTask(
-        taskTransition(fresh, fresh.gcalEventId ? 'backlog' : to, this.now()),
+        taskTransition(fresh, fresh.gcalEventId ? 'backlog' : move.to, this.now()),
       );
     }
   }

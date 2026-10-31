@@ -212,7 +212,7 @@ export function RightNowCard() {
               By time
             </Text>
             {byTimeRest.map((r) => (
-              <FocusRow key={r.task.id} row={r} onStart={start} />
+              <FocusRow key={r.task.id} row={r} onStart={start} byTime />
             ))}
           </div>
         )}
@@ -243,7 +243,15 @@ export function RightNowCard() {
 }
 
 // A Big-3 row that isn't the hero: done (struck), in-progress (elapsed), or ready-to-start.
-function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) => void }) {
+function FocusRow({
+  row,
+  onStart,
+  byTime = false,
+}: {
+  row: RightNowRow;
+  onStart: (id: string) => void;
+  byTime?: boolean;
+}) {
   const t = row.task;
   const u = useUrgency(t);
   return (
@@ -258,6 +266,12 @@ function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) =>
         <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
+        {/* A part's deadline (and colour) is its parent's; in "By time" its own end is why it's here. */}
+        {byTime && t.parentId && t.dueTime && (
+          <Text size="xs" tone="subtle" className="shrink-0">
+            ends {fmtClock12(t.dueTime)}
+          </Text>
+        )}
         <DueTime task={t} />
       </div>
       <div className="flex shrink-0 items-center gap-2">

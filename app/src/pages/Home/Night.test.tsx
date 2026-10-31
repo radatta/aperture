@@ -113,6 +113,26 @@ describe('night: a timed task (on today by its time)', () => {
   });
 });
 
+describe('night: a timed part', () => {
+  it('has no Tomorrow when a day on would end it after its parent — Leave only', async () => {
+    const api = createStubClient({ seed: false, storageKey: `night-part-${Math.random()}` });
+    const p = await api.createTask({ title: 'Lab', dueDay: today(), dueTime: '23:59' });
+    const q = await api.createTask({ title: 'Essay', dueDay: addDays(today(), 3) });
+    const [draft] = await api.createTasks([{ title: 'draft', parentId: p.id }]);
+    const [outline] = await api.createTasks([{ title: 'outline', parentId: q.id }]);
+    await api.setTaskDue(draft!.id, { dueDay: today(), dueTime: '23:57' });
+    await api.setTaskDue(outline!.id, { dueDay: today(), dueTime: '23:56' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    await screen.findByRole('group', { name: 'draft' });
+    expect(row('draft').queryByRole('button', { name: 'Tomorrow' })).toBeNull();
+    expect(row('draft').queryByRole('button', { name: 'Backlog' })).toBeNull();
+    expect(row('draft').getByRole('button', { name: 'Leave' })).toBeTruthy();
+    expect(row('outline').getByRole('button', { name: 'Tomorrow' })).toBeTruthy();
+  });
+});
+
 describe('night: today in review', () => {
   it('bars every measured task — each part, and a parent as its rollup; unestimated is plain', async () => {
     const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });

@@ -11,12 +11,12 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 
 ## 1. Places
 
-`placeOf(task, today, todaysPlan)`:
+`placeOf(task, { today, planOrder, dayStartHour }, parent?, isParent?)`:
 
 | Task | Place |
 | --- | --- |
 | done or dropped | Done |
-| timed (not a parent), its time falls today; or on today's plan (untimed); or in progress | Today |
+| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
 | due today through today+6, or past due | Week |
 | everything else | Backlog |
 
@@ -76,7 +76,8 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   stay; a running focus timer on it is stopped first). **Leave** hides it for the session; the next
   morning's stale sweep handles it. No count, no red. A **timed** row (D13) shows its time and offers
   Tomorrow — the same clock a day on (`setTaskDue`, so its calendar block moves with it) — and Leave;
-  no Backlog, since a timed task isn't planned.
+  no Backlog, since a timed task isn't planned. A timed part whose Tomorrow would end it after its
+  parent's deadline (`endsAfterParent`) offers Leave only.
 - **D9 — the idle Focus control docks in the capture panel.** It used to float above the panel and sit
   over right-aligned content while scrolling.
 - **D10 — Week is flat, soonest due first (2026-10-05).** Week holds only what's due within 7 days plus
@@ -115,19 +116,30 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
 - **D13 — option 3: a time decides the day (2026-10-30, parts v2b).** A timed task (`dueDay` +
   `dueTime`, not a parent) is on Today on the day its time falls, by clock, and never planned; only an
   untimed task is planned. `placeOf` and `todayRows` (`modules/tasks/todayRows.ts`) read it the same
-  way: timed rows first ("By time", no Unplan), then the plan.
+  way: timed rows first ("By time", no Unplan, in deadline order), then the plan.
+  - **The day is the deadline instant's app day** (`timedDay`, shared `machines.ts`): the instant
+    bucketed by `dayKey` like every other one, so with a 4am day start a 00:30 deadline is still
+    tonight's, and after 23:00 in By time. **Placement uses the app day; labels and the due chips
+    (`fmtDueDay`, `inDueBucket`, Right now's due time) print the deadline as written** — a task due
+    today 2am, seen after 4am, sits overdue in Week reading "due today 2am" in the past colour.
   - **Why:** "OA closes Sun 11:59pm" belongs to Sunday; a plan row put it on Wednesday and the deadline
     read twice. Working earlier means a part with its own Ends ([parts.md](parts.md) D14), not
     planning the deadline. The trade-off: a timed task moved in Google moves its day, like a reschedule.
   - **One write rule, one healer:** `upsertPlan` refuses a timed task; a planned task that gains a time
     (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
     back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its
-    rows stay as history. That sweep is also the migration: zero Google writes, status only.
+    rows stay as history. That sweep is also the migration: zero Google writes, status only. The
+    Lambda re-judges each move on a consistent re-read, and `upsertPlan` reads the list consistently
+    (a time cleared a moment ago is honoured). A timed occurrence is never dropped as superseded — it
+    goes to backlog and sits overdue in Week until dealt with; rare, and safer than cancelling an
+    occurrence for having its own row today. A roll pick whose open rep is timed is refused the same
+    way ([rolls.md](../home/rolls.md) D6).
   - **Rows:** a timed task with no row counts its block's length toward capacity (estimate + buffer,
     else 30); a legacy row's minutes still count. A timed task done today stays for capacity; one
     finished before today is gone. "+ Today" is hidden on a timed task everywhere, and the add-to-today
     picker leaves timed tasks out with one line: "Timed tasks land on their day — break one down to
     work on it earlier." A split's follow-up of a timed task, and a timed first part, aren't planned.
+    Home's "N waiting in the backlog" counts what "+ Add" can pull in — no timed task, no parent.
   - **Right now:** the Big 3 stay the chosen plan; timed rows are a "By time" tier above Also today
     ([right-now.md](../home/right-now.md) D11).
 
