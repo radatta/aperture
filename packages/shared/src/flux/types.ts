@@ -147,10 +147,12 @@ export interface RomRepsState extends StateCommon {
   readonly stillShortSec: number;
   readonly furtherSaid: boolean;
   readonly excursionSec: number;
-  // Seconds the face has been lost at this excursion's far end, and whether that has reached the D57
-  // threshold: the far end of a turn is where it drops, so from then on a blind frame, or a still pause at
-  // the excursion's peak, is hold time — never "Further".
+  // Seconds the face has been lost at this excursion's far end, short of the zone, since the peak last
+  // moved out (from blindFromDeg), and whether that has reached the D57 threshold: the far end of a turn is
+  // where it drops, so from then on a blind frame, or a still pause at the excursion's peak, is hold time —
+  // never "Further".
   readonly blindSec: number;
+  readonly blindFromDeg: number;
   readonly wentBlind: boolean;
   // True while the head is tilting/nodding off the exercise's plane.
   readonly compensating: boolean;

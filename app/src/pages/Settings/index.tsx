@@ -742,12 +742,14 @@ function FluxVoiceCard() {
           No voices found on this device — Flux&apos;s spoken cues can&apos;t play here.
         </Text>
       ) : (
-        <div className="flex flex-wrap items-end gap-3">
-          <VoicePicker voice={voice} />
-          <Button variant="ghost" size="sm" onClick={voice.preview}>
-            Test voice
-          </Button>
-        </div>
+        <VoicePicker
+          voice={voice}
+          action={
+            <Button variant="ghost" size="sm" onClick={voice.preview}>
+              Test voice
+            </Button>
+          }
+        />
       )}
       <Text size="xs" tone="muted">
         This device only — voices differ per device. On iPhone, a better one is a download away:

@@ -36,8 +36,9 @@ const HOLD_BROKEN_MIN_SEC = 1;
 const HOLD_BROKEN_OUT_SEC = 0.3;
 // A ROM hold is timed only this close to the target (D36): 75 % — rotation 37.5° of 50°.
 const HOLD_ZONE_FRACTION = 0.75;
-// The face lost this long, in all, at the far end of an excursion is the end of the turn (D57) — a dropped
-// frame (motion blur, a hand) on the way out or back isn't, and says nothing.
+// The face lost this long, in all, at the far end of an excursion — short of the zone, with the peak no
+// longer moving out — is the end of the turn (D57). Dropped frames (motion blur, a hand, low light) on the
+// way out or back aren't.
 const BLIND_END_SEC = 0.3;
 // "Further" (D37): still this long short of the zone — once per excursion, literally: a dip below the zone
 // after "Hold" doesn't say it again (the paused clock is the cost; a return says "Hold longer").
@@ -101,6 +102,7 @@ function buildRom(def: DefOf<'romReps'>): RomRepsState {
     furtherSaid: false,
     excursionSec: 0,
     blindSec: 0,
+    blindFromDeg: 0,
     wentBlind: false,
     compensating: false,
     lastPostureWarnAt: Number.NEGATIVE_INFINITY,
@@ -257,7 +259,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
   const v = input.rel[def.axis];
   const speed = speedOf(input.rel, state.lastRel, dtv);
   let { zone, peakThisRep, repsPos, repsNeg, peakSum, peakCount, holdAccumSec } = state;
-  let { stillShortSec, furtherSaid, excursionSec, blindSec, wentBlind } = state;
+  let { stillShortSec, furtherSaid, excursionSec, blindSec, blindFromDeg, wentBlind } = state;
   let inHoldZone = false;
   const allowPos = def.direction === 'positive' || def.direction === 'bilateral';
   const allowNeg = def.direction === 'negative' || def.direction === 'bilateral';
@@ -278,12 +280,19 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
     const out = zone === 'positive' ? v : -v;
     const atFarEnd = out >= def.enterDeg && out >= Math.abs(peakThisRep) - FURTHER_PEAK_DEG;
     const still = speed < STILL_SPEED;
-    // The blind time up to the latch is credited back, so the hold runs from when the face went.
+    // Blind time toward the latch counts only short of the zone (in it, the hold already runs) and only
+    // while the peak holds: a turn still going out past where it started isn't at its end, however many
+    // frames drop on the way. Up to the latch it's credited back, so the hold runs from the face going.
     let credit = 0;
-    if (!input.faceVisible && atFarEnd) blindSec += dtv;
-    if (!wentBlind && blindSec >= BLIND_END_SEC) {
-      wentBlind = true;
-      if (out < holdDeg) credit = blindSec - dtv;
+    const peakDeg = Math.abs(peakThisRep);
+    if (!wentBlind && blindSec > 0 && peakDeg > blindFromDeg + FURTHER_PEAK_DEG) blindSec = 0;
+    if (!wentBlind && !input.faceVisible && atFarEnd && out < holdDeg) {
+      if (blindSec === 0) blindFromDeg = peakDeg;
+      blindSec += dtv;
+      if (blindSec >= BLIND_END_SEC) {
+        wentBlind = true;
+        credit = blindSec - dtv;
+      }
     }
     // Once the face has dropped this excursion, the user is at the end of the turn the camera can't
     // follow (D57): a blind frame (the pose frozen at the last one seen) and a still pause at the peak —
@@ -307,7 +316,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       // Short of the zone: a pause at the far end says "Further" (D37) — once per excursion, so a user
       // straining at their real limit isn't told again and again.
       excursionSec += dtv;
-      // A frozen pose isn't a pause: only a seen one counts toward "Further".
+      // A frozen pose isn't a pause: a blind frame resets the "Further" count; only a seen pause makes it.
       stillShortSec = atFarEnd && still && input.faceVisible ? stillShortSec + dtv : 0;
       if (!furtherSaid && stillShortSec >= FURTHER_STILL_SEC) {
         events.push({ type: 'stoppedShort', shortDeg: holdDeg - out });
@@ -352,6 +361,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       furtherSaid = false;
       excursionSec = 0;
       blindSec = 0;
+      blindFromDeg = 0;
       wentBlind = false;
     }
   }
@@ -404,6 +414,7 @@ function evalRomReps(def: DefOf<'romReps'>, state: RomRepsState, input: EvalInpu
       furtherSaid,
       excursionSec,
       blindSec,
+      blindFromDeg,
       wentBlind,
       compensating,
       lastPostureWarnAt,

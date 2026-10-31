@@ -54,7 +54,8 @@ export function useVoice(): VoiceControl {
       setSettled(true);
     };
     load();
-    const timer = setTimeout(() => setSettled(true), VOICES_WAIT_MS);
+    // WebKit may fill the list without ever firing voiceschanged: read it again when the wait is up.
+    const timer = setTimeout(changed, VOICES_WAIT_MS);
     synth.addEventListener('voiceschanged', changed);
     return () => {
       clearTimeout(timer);

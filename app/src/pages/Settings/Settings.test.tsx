@@ -221,6 +221,16 @@ describe('flux voice (D58)', () => {
     expect(spoken.at(-1)?.voice).toBe('Zoe');
   });
 
+  it('voices that arrive with no voiceschanged are read when the wait is up', async () => {
+    const full = voices;
+    voices = [];
+    setTimeout(() => (voices = full), 300);
+    const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });
+    renderApp({ api, path: '/settings' });
+    expect(await screen.findByLabelText('Voice', {}, { timeout: 2000 })).toBeTruthy();
+    expect(screen.queryByText(/No voices found on this device/)).toBeNull();
+  });
+
   it('says so when this device has no voices — once the list has had a chance to load', async () => {
     voices = [];
     const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });

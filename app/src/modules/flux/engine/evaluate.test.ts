@@ -432,9 +432,43 @@ describe('romReps', () => {
         const at = (n: number) =>
           foldFace(rom3, [[N(0, 0), true], ...out(22), ...flicker(n)]).events;
         // 0.3 s blind in all latches it; the seen frames before that aren't credited, after it they are.
-        expect(of(at(90), 'holdReached')).toEqual([]); // 9 blind frames latch it, then 72 more: 2.7 s
-        expect(of(at(100), 'holdReached')).toHaveLength(1); // …82 more: 3.03 s
-        expect(of(at(100), 'stoppedShort')).toEqual([]);
+        // About 9 blind frames latch it (0.3 s, credited); every frame after it holds — the seen ones
+        // before it don't. So ≈ 2.7 s of hold at 90 frames, ≈ 3.2 s at 105.
+        expect(of(at(90), 'holdReached')).toEqual([]);
+        expect(of(at(105), 'holdReached')).toHaveLength(1);
+        expect(of(at(105), 'stoppedShort')).toEqual([]);
+      });
+
+      it('frames dropped all through the turn out are not its end: "Further" at a short stop', () => {
+        // 15° → 28° over 1.5 s, every 4th frame dropped (0.37 s blind in all), then a seen stop at 28°.
+        const turn = Array.from({ length: 45 }, (_, i): [Euler, boolean] => {
+          const deg = 15 + (13 * (i + 1)) / 45;
+          return [N(0, deg), i % 4 !== 3];
+        });
+        // A dropped frame keeps the last seen pose.
+        for (let i = 1; i < turn.length; i++) if (!turn[i]![1]) turn[i] = [turn[i - 1]![0], false];
+        const { events } = foldFace(rom3, [[N(0, 0), true], ...turn, ...face(N(0, 28), 30, true)]);
+        expect(events.map((e) => e.type)).toEqual(['stoppedShort']);
+      });
+
+      it('a dropout in the zone runs the hold once — no blind time credited twice', () => {
+        const { state } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(35), // in the 30° zone: the first frame enters, 4 hold
+          ...face(N(0, 35), 30, false),
+        ]);
+        expect(state.kind === 'romReps' && state.holdAccumSec).toBeCloseTo(34 / 30, 5);
+      });
+
+      it('after the latch, a seen pause off the peak is not hold time', () => {
+        const { state } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(22),
+          ...face(N(0, 22), 15, false), // latched: 0.5 s held
+          ...Array.from({ length: 5 }, (_, i): [Euler, boolean] => [N(0, 22 - i - 1), true]),
+          ...face(N(0, 17), 30, true), // still at 17°, 5° back from the peak
+        ]);
+        expect(state.kind === 'romReps' && state.holdAccumSec).toBeCloseTo(15 / 30, 5);
       });
 
       it('a dropped frame or two is not the end of the turn: no "Hold" on the way out or back', () => {
