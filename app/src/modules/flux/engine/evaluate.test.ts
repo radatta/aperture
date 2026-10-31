@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, initialState, romHoldDeg, summaryOf } from './evaluate';
+import { evaluate, initialState, inRomExcursion, romHoldDeg, summaryOf } from './evaluate';
 import { EXERCISES } from '@aperture/shared/flux';
 import type {
   Euler,
@@ -308,7 +308,7 @@ describe('romReps', () => {
         d.kind === 'romReps' && d.holdSec ? [[d.id, romHoldDeg(d)]] : [],
       );
       expect(zones).toEqual([
-        ['cervical-rotation', 45],
+        ['cervical-rotation', 37.5],
         ['cervical-lateral-flexion', 30],
         ['cervical-flexion', 33.75],
         ['cervical-extension', 41.25],
@@ -398,24 +398,103 @@ describe('romReps', () => {
       expect(events.map((e) => e.type)).toEqual(['holdEntered', 'stoppedShort']);
     });
 
-    it('a dropout freezes the rep: no hold time, no "Further" from the frozen pose (D44)', () => {
+    describe('a dropout mid-excursion is the end of the turn (D57)', () => {
       const face = (rel: Euler, n: number, f: boolean) =>
         repeat(rel, n).map((r): [Euler, boolean] => [r, f]);
-      const held = (after: number) =>
-        foldFace(rom3, [
+      const out = (deg: number) => face(N(0, deg), 5, true);
+
+      it('the blind frames are hold time, at the angle last seen: "Hold", the count, the rep', () => {
+        const { state, events } = foldFace(rom3, [
           [N(0, 0), true],
-          ...face(N(0, 35), 45, true), // 44 frames in the zone
-          ...face(N(0, 35), 60, false),
-          ...face(N(0, 35), after, true),
-        ]).events;
-      expect(of(held(40), 'holdReached')).toEqual([]); // 84 frames < 90: the dropout added nothing
-      expect(of(held(50), 'holdReached')).toHaveLength(1);
-      const short = foldFace(rom3, [
-        [N(0, 0), true],
-        ...face(N(0, 20), 5, true),
-        ...face(N(0, 20), 60, false),
-      ]);
-      expect(of(short.events, 'stoppedShort')).toEqual([]);
+          ...out(20), // short of the 30° zone
+          ...face(N(0, 20), 95, false),
+          [N(0, 0), true],
+        ]);
+        expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdReached', 'repCompleted']);
+        expect(of(events, 'repCompleted')[0]).toMatchObject({ peakDeg: 20, reachedTarget: false });
+        expect(summaryOf(state).avgPeakDeg).toBe(20);
+      });
+
+      it('back before the hold is up is "Hold longer", never "Further"', () => {
+        const { events } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(20),
+          ...face(N(0, 20), 30, false),
+          [N(0, 0), true],
+        ]);
+        expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdShort']);
+        expect(of(events, 'holdShort')[0]?.heldSec).toBeCloseTo(1, 5);
+      });
+
+      it('a face flickering at the limit holds at full speed, with no "Further"', () => {
+        const flicker = Array.from({ length: 100 }, (_, i): [Euler, boolean] => [
+          N(0, 22),
+          i % 2 === 1,
+        ]);
+        const { events } = foldFace(rom3, [[N(0, 0), true], ...out(22), ...flicker]);
+        expect(of(events, 'holdReached')).toHaveLength(1); // 100 frames ≈ 3.3 s, half of them seen
+        expect(of(events, 'stoppedShort')).toEqual([]);
+      });
+
+      it('moving back after the dropout is not hold time', () => {
+        const ramp = Array.from({ length: 10 }, (_, i): [Euler, boolean] => [
+          N(0, 22 - (6 * (i + 1)) / 10),
+          true,
+        ]);
+        const { state } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(22),
+          ...face(N(0, 22), 10, false),
+          ...ramp,
+        ]);
+        expect(state.kind === 'romReps' && state.holdAccumSec).toBeCloseTo(10 / 30, 5);
+      });
+
+      it('a face lost before the excursion starts freezes everything, as before', () => {
+        const { state, events } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(10),
+          ...face(N(0, 10), 60, false),
+        ]);
+        expect(events).toEqual([]);
+        expect(state).toMatchObject({ zone: 'neutral', holdAccumSec: 0, wentBlind: false });
+      });
+
+      it('back on the other side of a bilateral swing: the blind side’s rep, then a fresh excursion', () => {
+        const bi = { ...rom3, id: 't-bi', direction: 'bilateral' } satisfies ExerciseDefinition;
+        const { state, events } = foldFace(bi, [
+          [N(0, 0), true],
+          ...out(20),
+          ...face(N(0, 20), 95, false),
+          ...out(-20),
+        ]);
+        expect(of(events, 'repCompleted')).toMatchObject([{ side: 'positive', peakDeg: 20 }]);
+        expect(state).toMatchObject({ zone: 'negative', holdAccumSec: 0, wentBlind: false });
+      });
+
+      it('an exercise without a hold still counts the rep on return, with no "Hold"', () => {
+        const noHold = { ...rom3, id: 't-nohold', holdSec: 0 } satisfies ExerciseDefinition;
+        const { events } = foldFace(noHold, [
+          [N(0, 0), true],
+          ...out(20),
+          ...face(N(0, 20), 30, false),
+          [N(0, 0), true],
+        ]);
+        expect(events.map((e) => e.type)).toEqual(['repCompleted']);
+      });
+
+      it('inRomExcursion: only an active ROM set out of neutral', () => {
+        const rom = initialState(rom3);
+        if (rom.kind !== 'romReps') throw new Error('romReps');
+        expect(inRomExcursion({ ...rom, zone: 'positive' })).toBe(true);
+        expect(inRomExcursion(rom)).toBe(false);
+        expect(inRomExcursion({ ...rom, zone: 'negative', phase: 'complete' })).toBe(false);
+        const stretch = (EXERCISES as readonly ExerciseDefinition[]).find(
+          (d) => d.kind === 'holdAtTarget',
+        );
+        expect(stretch && inRomExcursion(initialState(stretch))).toBe(false);
+        expect(inRomExcursion(null)).toBe(false);
+      });
     });
 
     it('nothing without a hold: no zone, no "Hold", no "Further"', () => {

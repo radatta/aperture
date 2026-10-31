@@ -21,6 +21,8 @@ import {
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import { fmtMoney, parseDollars } from '../../modules/finances/money';
 import { useRolls } from '../../data/hooks/useRolls';
+import { useVoice } from '../../modules/flux/useVoice';
+import { VoicePicker } from '../../modules/flux/VoicePicker';
 import {
   useConnectGoogle,
   useDisconnectGoogleAccount,
@@ -672,8 +674,8 @@ function FinancesSection() {
   );
 }
 
-// Flux (docs/areas/flux): which Roll a Flux session counts toward, and the disclaimer reset. Both are
-// synced Settings fields; Flux's voice and chips are per device and live on the Flux page.
+// Flux (docs/areas/flux): which Roll a Flux session counts toward, and the disclaimer reset — synced
+// Settings fields — plus the coach's voice, which is per device (D58); the chips live on the Flux page.
 function FluxSection() {
   const { data: settings } = useSettings();
   const { data: rolls = [] } = useRolls();
@@ -726,7 +728,32 @@ function FluxSection() {
           </p>
         )}
       </Card>
+      <FluxVoiceCard />
     </section>
+  );
+}
+
+function FluxVoiceCard() {
+  const voice = useVoice();
+  return (
+    <Card className="flex flex-col gap-3">
+      {voice.voices.length === 0 ? (
+        <Text size="sm" tone="muted">
+          No voices found on this device — Flux&apos;s spoken cues can&apos;t play here.
+        </Text>
+      ) : (
+        <div className="flex flex-wrap items-end gap-3">
+          <VoicePicker voice={voice} />
+          <Button variant="ghost" size="sm" onClick={voice.preview}>
+            Test voice
+          </Button>
+        </div>
+      )}
+      <Text size="xs" tone="muted">
+        This device only — voices differ per device. On iPhone, a better one is a download away:
+        Settings → Accessibility → Spoken Content → Voices, then an Enhanced or Premium voice.
+      </Text>
+    </Card>
   );
 }
 

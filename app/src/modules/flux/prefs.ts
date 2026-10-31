@@ -4,7 +4,8 @@ import type { Delegate } from './engine/protocol';
 // Per-device Flux preferences. Voices differ per OS and the delegate is a property of this device's GPU,
 // so these never sync; the linked Roll and the disclaimer acknowledgement live in Settings instead.
 const VOICE = 'aperture.flux.voice';
-const VOICE_NAME = 'aperture.flux.voiceName';
+const VOICE_ID = 'aperture.flux.voiceURI';
+const VOICE_NAME = 'aperture.flux.voiceName'; // before D58: the voice by name, still honoured
 const CONDITION = 'aperture.flux.condition';
 const STAGE = 'aperture.flux.stage';
 const DELEGATE = 'aperture.flux.delegate';
@@ -35,8 +36,11 @@ function set(key: string, value: string | null): void {
 export const readVoiceEnabled = (): boolean => get(VOICE) !== '0';
 export const writeVoiceEnabled = (on: boolean) => set(VOICE, on ? '1' : '0');
 
-export const readVoiceName = (): string | null => get(VOICE_NAME) || null;
-export const writeVoiceName = (name: string | null) => set(VOICE_NAME, name || null);
+export const readVoiceId = (): string | null => get(VOICE_ID) || get(VOICE_NAME) || null;
+export function writeVoiceId(id: string | null): void {
+  set(VOICE_ID, id || null);
+  set(VOICE_NAME, null);
+}
 
 export function readCondition(): Condition | null {
   const v = get(CONDITION);

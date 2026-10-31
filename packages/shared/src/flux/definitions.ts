@@ -29,7 +29,7 @@ export const EXERCISES = [
     direction: 'bilateral',
     enterDeg: 15,
     exitDeg: 8,
-    targetDeg: 60,
+    targetDeg: 50, // within what the camera follows (D57); was 60
     reps: 5,
     holdSec: 4,
     instructions:

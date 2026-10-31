@@ -13,7 +13,6 @@ import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { ArrowLeftIcon } from '../../components/icons';
-import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { CameraStage } from '../../modules/flux/CameraStage';
@@ -25,6 +24,7 @@ import { PrecautionBanner } from '../../modules/flux/PrecautionBanner';
 import { readCondition } from '../../modules/flux/prefs';
 import { RepTieStrip } from '../../modules/flux/RepTie';
 import { SetsStepper } from '../../modules/flux/SetsStepper';
+import { VoicePicker } from '../../modules/flux/VoicePicker';
 import { useRepTie } from '../../modules/flux/useRepTie';
 import { draftToInput } from '../../modules/flux/fluxOutbox';
 import { UnsavedSetsStrip } from '../../modules/flux/UnsavedSetsStrip';
@@ -134,17 +134,7 @@ function Stage({ id }: { id: ExerciseId }) {
           <MeasurementBadge ex={def} />
           {def.provocative && <EndRangeBadge />}
         </div>
-        {voice.on && voice.voices.length > 0 && (
-          <Select
-            aria-label="Voice"
-            title="Pick the voice (previews on change)"
-            placeholder="Auto voice"
-            value={voice.name ?? ''}
-            onChange={(e) => voice.change(e.target.value || null)}
-            options={voice.voices.map((v) => ({ value: v.name, label: v.name }))}
-            className="max-w-[10rem] py-1 text-xs"
-          />
-        )}
+        {voice.on && voice.voices.length > 0 && <VoicePicker voice={voice} compact />}
       </div>
 
       {sided && <SideToggle def={def} side={side} onChange={setSide} />}

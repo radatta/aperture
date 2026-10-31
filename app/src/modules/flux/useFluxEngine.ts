@@ -10,7 +10,7 @@ import {
   type ExerciseState,
   type SetSummary,
 } from '@aperture/shared/flux';
-import { summaryOf } from './engine/evaluate';
+import { inRomExcursion, summaryOf } from './engine/evaluate';
 import {
   createFluxEngine,
   type EngineDebug,
@@ -86,6 +86,8 @@ const SET_LEAD_MS = 3000; // "Get ready" → the set starts
 const SET_REST_MS = 30_000; // between sets (D42)
 const FACE_LOST_SEC = 1; // gone this long → "Can't see you" (D43)
 const FACE_NEVER_SEC = 3; // no face since the stage came up → "Can't see you" too (D43)
+// Mid-turn the camera losing the face is the end of the turn, not the user gone (D57): wait this long.
+const FACE_LOST_END_SEC = 10;
 const FACE_BACK_SEC = 0.5; // back this long → "Tracking"
 const HOLD_STILL_HINT_SEC = 20; // a visible face with no neutral this long → the hint (D40)
 
@@ -364,8 +366,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return setStatus('error');
       }
     };
-    // "Can't see you" after a second gone (3 s if no face was ever seen), "Tracking" once back; the
-    // calibration hint while uncalibrated.
+    // "Can't see you" after a second gone (3 s if no face was ever seen, 10 s mid-turn — D57), "Tracking"
+    // once back; the calibration hint while uncalibrated.
     const watchFace = (smp: Sample) => {
       const f = face.current;
       if (!smp.faceVisible) {
@@ -373,7 +375,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         f.hintSince = null;
         if (f.lostSaid) return;
         f.lostSince ??= smp.tSec;
-        if (smp.tSec - f.lostSince < (f.seen ? FACE_LOST_SEC : FACE_NEVER_SEC)) return;
+        const limit = !f.seen
+          ? FACE_NEVER_SEC
+          : inRomExcursion(live.current?.state)
+            ? FACE_LOST_END_SEC
+            : FACE_LOST_SEC;
+        if (smp.tSec - f.lostSince < limit) return;
         // Latched only once said: inside its 5 s cooldown it's retried each frame until it is.
         f.lostSaid = say({ type: 'faceLost' });
         return;

@@ -147,6 +147,9 @@ export interface RomRepsState extends StateCommon {
   readonly stillShortSec: number;
   readonly furtherSaid: boolean;
   readonly excursionSec: number;
+  // The camera lost the face during this excursion (D57): the far end of a turn is where it drops, so
+  // from then on a blind frame, or a still pause at the excursion's peak, is hold time — never "Further".
+  readonly wentBlind: boolean;
   // True while the head is tilting/nodding off the exercise's plane.
   readonly compensating: boolean;
   readonly lastPostureWarnAt: number;

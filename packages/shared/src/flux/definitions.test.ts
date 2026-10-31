@@ -128,3 +128,19 @@ describe('rep counts', () => {
     });
   });
 });
+
+// ROM targets, pinned (D57): rotation's came down to 50° — the camera loses a face turned much past it.
+describe('ROM targets', () => {
+  it('match the tuned values', () => {
+    const targets = Object.fromEntries(
+      all.flatMap((d) => (d.kind === 'romReps' ? [[d.id, d.targetDeg]] : [])),
+    );
+    expect(targets).toEqual({
+      'cervical-rotation': 50,
+      'cervical-lateral-flexion': 40,
+      'cervical-flexion': 45,
+      'cervical-extension': 55,
+      'eye-head-coordination': 40,
+    });
+  });
+});

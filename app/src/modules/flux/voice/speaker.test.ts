@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSpeaker, listLocalVoices } from './speaker';
+import { createSpeaker, listVoices, pickVoice, rankVoices, voiceQuality } from './speaker';
 
 // jsdom has no speechSynthesis; install a recording stub per test.
-type FakeVoice = Pick<SpeechSynthesisVoice, 'name' | 'lang' | 'localService'>;
+type FakeVoice = Pick<SpeechSynthesisVoice, 'name' | 'lang' | 'localService'> & {
+  voiceURI?: string;
+  default?: boolean;
+};
 
 let spoken: { text: string; voice: string | undefined }[];
 let voices: FakeVoice[];
@@ -39,8 +42,9 @@ afterEach(() => {
 });
 
 describe('speaker', () => {
-  it('lists only local voices', () => {
-    expect(listLocalVoices().map((v) => v.name)).toEqual(['Thomas', 'Samantha']);
+  it('lists the local voices in the language', () => {
+    expect(listVoices('en-US').map((v) => v.name)).toEqual(['Samantha']);
+    expect(listVoices('fr-FR').map((v) => v.name)).toEqual(['Thomas']);
   });
 
   it('prime speaks the unlock phrase once, inside the gesture', () => {
@@ -50,14 +54,15 @@ describe('speaker', () => {
     expect(spoken.map((u) => u.text)).toEqual(['Voice on']);
   });
 
-  it('prefers the named voice, then a local voice in the language, then the first local', () => {
-    const voiceFor = (opts: { lang: string; voiceName?: string }) => {
+  it('speaks with the saved voice, else the best local voice in the language, else the first local', () => {
+    voices.push({ name: 'Ava', lang: 'en-US', localService: true });
+    const voiceFor = (opts: { lang: string; voiceId?: string }) => {
       createSpeaker(opts).speak({ text: 'x', priority: 'normal' });
       return spoken.at(-1)?.voice;
     };
-    expect(voiceFor({ lang: 'en-US', voiceName: 'Thomas' })).toBe('Thomas');
-    expect(voiceFor({ lang: 'en-US' })).toBe('Samantha');
-    expect(voiceFor({ lang: 'de-DE' })).toBe('Thomas');
+    expect(voiceFor({ lang: 'en-US', voiceId: 'Samantha' })).toBe('Samantha'); // saved by name, pre-D58
+    expect(voiceFor({ lang: 'en-US' })).toBe('Ava'); // alphabetical among equals
+    expect(voiceFor({ lang: 'de-DE' })).toBe('Ava');
   });
 
   it('high priority cancels in-flight speech first', () => {
@@ -86,6 +91,23 @@ describe('speaker', () => {
     expect(spoken.at(-1)?.voice).toBe('Samantha');
   });
 
+  it('picks again when a better voice is installed after the first cue (iOS loads them late)', () => {
+    const s = createSpeaker({ lang: 'en-US' });
+    s.speak({ text: 'early', priority: 'normal' });
+    expect(spoken.at(-1)?.voice).toBe('Samantha');
+    voices = [
+      ...voices,
+      {
+        name: 'Zoe',
+        voiceURI: 'com.apple.voice.premium.en-US.Zoe',
+        lang: 'en-US',
+        localService: true,
+      },
+    ];
+    s.speak({ text: 'late', priority: 'normal' });
+    expect(spoken.at(-1)?.voice).toBe('Zoe');
+  });
+
   it('is a no-op where speech is unsupported', () => {
     Reflect.deleteProperty(window, 'speechSynthesis');
     const s = createSpeaker();
@@ -94,6 +116,64 @@ describe('speaker', () => {
       s.speak({ text: 'x', priority: 'high' });
       s.cancel();
     }).not.toThrow();
-    expect(listLocalVoices()).toEqual([]);
+    expect(listVoices()).toEqual([]);
+  });
+});
+
+describe('voice quality (D58)', () => {
+  const v = (name: string, voiceURI: string, extra: Partial<FakeVoice> = {}): FakeVoice => ({
+    name,
+    voiceURI,
+    lang: 'en-US',
+    localService: true,
+    ...extra,
+  });
+
+  it('reads the tier off the URI or the name', () => {
+    expect(voiceQuality(v('Zoe', 'com.apple.voice.premium.en-US.Zoe'))).toBe('premium');
+    expect(voiceQuality(v('Samantha (Enhanced)', 'Samantha'))).toBe('enhanced');
+    expect(voiceQuality(v('Samantha', 'com.apple.voice.compact.en-US.Samantha'))).toBe('standard');
+    expect(voiceQuality(v('Eddy', 'com.apple.eloquence.en-US.Eddy'))).toBe('novelty');
+    expect(voiceQuality(v('Zarvox', 'com.apple.speech.synthesis.voice.Zarvox'))).toBe('novelty');
+  });
+
+  it('ranks premium over enhanced over standard over novelty; local, then the language, first', () => {
+    const ranked = rankVoices(
+      [
+        v('Zarvox', 'com.apple.speech.synthesis.voice.Zarvox'),
+        v('Samantha', 'com.apple.voice.compact.en-US.Samantha'),
+        v('Ava', 'com.apple.voice.enhanced.en-US.Ava'),
+        v('Zoe', 'com.apple.voice.premium.en-US.Zoe'),
+        v('Remote', 'remote', { localService: false }),
+        v('Thomas', 'com.apple.voice.premium.fr-FR.Thomas', { lang: 'fr-FR' }),
+      ],
+      'en-US',
+    );
+    expect(ranked.map((x) => x.name)).toEqual(['Zoe', 'Ava', 'Samantha', 'Zarvox']);
+  });
+
+  it('labels a tier only the URI carries, and lists best first', () => {
+    voices = [
+      v('Samantha', 'com.apple.voice.compact.en-US.Samantha'),
+      v('Samantha', 'com.apple.voice.enhanced.en-US.Samantha'),
+    ];
+    expect(listVoices('en-US').map((o) => [o.id, o.label])).toEqual([
+      ['com.apple.voice.enhanced.en-US.Samantha', 'Samantha (Enhanced)'],
+      ['com.apple.voice.compact.en-US.Samantha', 'Samantha'],
+    ]);
+  });
+
+  it('a saved voice is found by URI — two Samanthas are told apart — and a missing one falls back', () => {
+    const list = [
+      v('Samantha', 'com.apple.voice.compact.en-US.Samantha'),
+      v('Samantha', 'com.apple.voice.enhanced.en-US.Samantha'),
+    ];
+    const compact = 'com.apple.voice.compact.en-US.Samantha';
+    expect(pickVoice(list, 'en-US', compact)).toEqual({ voice: list[0], fallback: false });
+    expect(pickVoice(list, 'en-US', 'com.apple.voice.premium.en-US.Zoe')).toEqual({
+      voice: list[1],
+      fallback: true,
+    });
+    expect(pickVoice(list, 'en-US', null)).toEqual({ voice: list[1], fallback: false });
   });
 });

@@ -153,7 +153,7 @@ describe('setMetric', () => {
     expect(m('cervical-rotation', { avgPeakDeg: 52 })).toMatchObject({
       value: 52,
       unit: '°',
-      target: 60,
+      target: 50,
       betterWhen: 'higher',
     });
     expect(m('cervical-rotation', {})).toBeNull();

@@ -10,13 +10,15 @@ import type { VoiceControl } from './useVoice';
 function voice(): VoiceControl {
   return {
     on: true,
-    name: null,
+    id: null,
     voices: [],
+    missing: false,
     prime: vi.fn(),
     speak: vi.fn(),
     cancel: vi.fn(),
     toggle: vi.fn(),
     change: vi.fn(),
+    preview: vi.fn(),
   };
 }
 
@@ -342,6 +344,28 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     act(() => fake().sample({ faceVisible: true, tSec: 7 }));
     expect(spoken(v).at(-1)).toBe('Tracking');
     expect(spoken(v).filter((t) => t === 'Tracking')).toHaveLength(1);
+  });
+
+  it("mid-turn, a lost face is the end of the turn: Can't see you only after 10 s (D57)", async () => {
+    const rotation = initialState(getExercise('cervical-rotation'));
+    const turned = async (zone: 'positive' | 'neutral') => {
+      const t = await running({ exerciseId: 'cervical-rotation', kind: 'romReps' });
+      act(() => t.fake().calibrated(true));
+      act(() => t.fake().sample({ faceVisible: true, tSec: 0 }));
+      act(() => t.fake().state({ ...rotation, zone } as ExerciseState));
+      return t;
+    };
+    const out = await turned('positive');
+    for (const tSec of [0.1, 2, 9.9]) act(() => out.fake().sample({ faceVisible: false, tSec }));
+    expect(spoken(out.v)).toEqual(['Neutral set']);
+    act(() => out.fake().sample({ faceVisible: false, tSec: 10.2 }));
+    expect(spoken(out.v)).toEqual(['Neutral set', "Can't see you"]);
+    out.hook.unmount();
+
+    const centred = await turned('neutral');
+    act(() => centred.fake().sample({ faceVisible: false, tSec: 0.1 }));
+    act(() => centred.fake().sample({ faceVisible: false, tSec: 1.2 }));
+    expect(spoken(centred.v)).toEqual(['Neutral set', "Can't see you"]);
   });
 
   it('hints Face the camera and hold still after 20 s of a face with no neutral', async () => {
