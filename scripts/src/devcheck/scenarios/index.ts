@@ -4,9 +4,10 @@ import type { Scenario, Tier } from '../scenario';
 import { captureTask } from './capture-task';
 import { fluxHistory } from './flux-history';
 import { partsV2 } from './parts-v2';
+import { partsV2b } from './parts-v2b';
 import { smoke } from './smoke';
 
-export const SCENARIOS: Scenario[] = [smoke, captureTask, partsV2, fluxHistory];
+export const SCENARIOS: Scenario[] = [smoke, captureTask, partsV2, partsV2b, fluxHistory];
 
 export type RunTier = Tier | 'delta';
 

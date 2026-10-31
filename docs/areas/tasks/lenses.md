@@ -16,13 +16,13 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 | Task | Place |
 | --- | --- |
 | done or dropped | Done |
-| on today's plan, or in progress | Today |
+| timed (not a parent), its time falls today; or on today's plan (untimed); or in progress | Today |
 | due today through today+6, or past due | Week |
 | everything else | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
 shows under Week or Backlog by its due day. That is deliberate and transient: tomorrow's `getDay` makes
-it a Today task.
+it a Today task. A **timed** task's day is its time (D13): a plan row on it places nothing.
 
 ## 2. Decisions
 
@@ -35,8 +35,8 @@ it a Today task.
   a search can never be clipped by a lens's window. Backlog groups by category (Settings order,
   retired-with-tasks after, "No category" last); Week is flat (D10). Both sort soonest-due first; Done
   is ungrouped, newest finished first, 50 at a time.
-- **D3 — Today is the plan, not a query.** Capacity + planned-vs-available on top, open plan rows in
-  plan order, then "In progress · not planned today", then a collapsed "Done today · N" (D11). Only
+- **D3 — Today is the plan, not a query.** Capacity + planned-vs-available on top, then "By time" (the
+  timed tasks due today, by clock, D13), then the open plan rows in plan order, then "In progress · not planned today", then a collapsed "Done today · N" (D11). Only
   search applies there; no sort/group/filter.
 - **D4 — state.** The lens is in the URL (`?lens=week`, so Home links straight to Week). Search +
   filters are in sessionStorage (`aperture.tasks.query`), stamped with the day — sticky for a session,
@@ -62,6 +62,9 @@ it a Today task.
     to the list (not `<body>`) when the row leaves it.
   - `createToday` = create + add, not atomic: on a planning failure the task stays in the backlog and
     the caller says so.
+  - A timed task is never added (D13): `addToDay` returns `'timed'` and writes nothing, and the server's
+    `upsertPlan` refuses it (`TIMED_NO_PLAN_ERROR`, both impls). `createToday` of a timed input says
+    so (`timed`), and the capture receipt reads "due Fri 4pm, by its time".
 - **D6 — status filters only split history.** The Done lens offers Done · Dropped (accessible names
   "Status: …"). Off Today, every open task is backlog or planned-for-another-day, so a status filter
   there could never narrow anything and isn't offered.
@@ -71,7 +74,9 @@ it a Today task.
   with no row tomorrow. **Tomorrow** adds a row for tomorrow (today's stays as history; a started task
   stays started). **Backlog** takes it off today, started or not (the locked estimate and logged time
   stay; a running focus timer on it is stopped first). **Leave** hides it for the session; the next
-  morning's stale sweep handles it. No count, no red.
+  morning's stale sweep handles it. No count, no red. A **timed** row (D13) shows its time and offers
+  Tomorrow — the same clock a day on (`setTaskDue`, so its calendar block moves with it) — and Leave;
+  no Backlog, since a timed task isn't planned.
 - **D9 — the idle Focus control docks in the capture panel.** It used to float above the panel and sit
   over right-aligned content while scrolling.
 - **D10 — Week is flat, soonest due first (2026-10-05).** Week holds only what's due within 7 days plus
@@ -106,6 +111,25 @@ it a Today task.
   row with "+ Today", "today", "in progress" or done struck (`PartsList`), and the lens pills count cards. Search
   and the Done lens stay flat. A parent never goes on Today, and the add-to-today picker skips parents and
   labels parts "of P2". A part on Today is an ordinary card, tagged "of P2 · due …".
+
+- **D13 — option 3: a time decides the day (2026-10-30, parts v2b).** A timed task (`dueDay` +
+  `dueTime`, not a parent) is on Today on the day its time falls, by clock, and never planned; only an
+  untimed task is planned. `placeOf` and `todayRows` (`modules/tasks/todayRows.ts`) read it the same
+  way: timed rows first ("By time", no Unplan), then the plan.
+  - **Why:** "OA closes Sun 11:59pm" belongs to Sunday; a plan row put it on Wednesday and the deadline
+    read twice. Working earlier means a part with its own Ends ([parts.md](parts.md) D14), not
+    planning the deadline. The trade-off: a timed task moved in Google moves its day, like a reschedule.
+  - **One write rule, one healer:** `upsertPlan` refuses a timed task; a planned task that gains a time
+    (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
+    back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its
+    rows stay as history. That sweep is also the migration: zero Google writes, status only.
+  - **Rows:** a timed task with no row counts its block's length toward capacity (estimate + buffer,
+    else 30); a legacy row's minutes still count. A timed task done today stays for capacity; one
+    finished before today is gone. "+ Today" is hidden on a timed task everywhere, and the add-to-today
+    picker leaves timed tasks out with one line: "Timed tasks land on their day — break one down to
+    work on it earlier." A split's follow-up of a timed task, and a timed first part, aren't planned.
+  - **Right now:** the Big 3 stay the chosen plan; timed rows are a "By time" tier above Also today
+    ([right-now.md](../home/right-now.md) D11).
 
 ## 3. Deferred
 

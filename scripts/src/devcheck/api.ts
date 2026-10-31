@@ -20,6 +20,7 @@ export interface CreateTaskInput {
   title: string;
   estimateMin?: number | null;
   dueDay?: string | null;
+  dueTime?: string | null; // HH:MM on dueDay (the option-3 scenario; the test user has no Google account)
   notes?: string | null;
   parentId?: string | null; // a part of that task (the parts scenario)
 }
