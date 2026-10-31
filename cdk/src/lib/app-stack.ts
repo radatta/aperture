@@ -15,7 +15,6 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
-import { applyDevBoundary, synthesizerFor } from './dev-stage';
 import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
 
 export interface AppStackProps extends StackProps {
@@ -106,8 +105,7 @@ function grantBackendData(
 // without it. Defense-in-depth only — the Cognito JWT the handler validates is the real auth gate.
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
-    super(scope, id, { ...props, ...synthesizerFor(props.stage) }); // dev → the devsandbox bootstrap (dev-stage.ts)
-    applyDevBoundary(this, props.stage); // every role here, CDK's provider roles included
+    super(scope, id, props);
     const { stage, table, userPool, filesBucket, cognitoDomain, originSecret, domainName, certificateArn, deviceToken, deviceUserId, agentToken } =
       props;
     // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,

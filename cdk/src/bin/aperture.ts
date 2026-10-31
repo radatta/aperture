@@ -8,7 +8,8 @@ import { ApertureDataStack } from '../lib/data-stack';
 import { ApertureAppStack } from '../lib/app-stack';
 import { ApertureCicdStack } from '../lib/cicd-stack';
 import { ApertureBillingStack } from '../lib/billing-stack';
-import { ApertureDevSandboxStack } from '../lib/dev-sandbox-stack';
+import { ApertureDevGuardStack } from '../lib/dev-guard-stack';
+import { ApertureOrgStack } from '../lib/org-stack';
 import { domainConfigFor } from '../config/domains';
 
 // CloudFront→Lambda origin-lockdown secret, one per stage. In CI it comes from a GitHub secret via
@@ -103,29 +104,48 @@ const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   agentToken: agentTokenFor(stage),
 });
 
-// CI/CD roles — a one-off, account-wide stack (not per-stage). Only built when a repo is supplied, so
-// normal `cdk deploy ApertureApp-<stage>` runs don't need it: deploy it once with
-// `cdk deploy ApertureCicd -c githubRepo=owner/repo`.
+// The dev account's id, for the hand-deployed stacks that live in or point at it (INFRA §2). Context, never
+// committed. Pinning a stack to it makes CDK refuse credentials for any other account.
+const devAccountId = app.node.tryGetContext('devAccountId') as string | undefined;
+const mgmtAccountId = app.node.tryGetContext('mgmtAccountId') as string | undefined;
+const need = (value: string | undefined, flag: string, stack: string): string => {
+  if (!value) throw new Error(`${stack} needs -c ${flag}=…`);
+  return value;
+};
+
+// CI/CD roles — one-off, per-account stacks (not per-stage), only built when a repo is supplied, so normal
+// `cdk deploy ApertureApp-<stage>` runs don't need them. ApertureCicd is prod's (the management account):
+// `cdk deploy ApertureCicd -c githubRepo=owner/repo`; ApertureCicdDev is the dev account's deploy + dev-logs roles,
+// pinned to it: `cdk deploy ApertureCicdDev -c githubRepo=owner/repo -c devAccountId=… --profile aperture-dev`.
 const githubRepo = app.node.tryGetContext('githubRepo') as string | undefined;
 if (githubRepo) {
   // Override the OIDC subject segment when an org/enterprise enforces an ID-embedded sub claim.
   const githubSubject = app.node.tryGetContext('githubSubject') as string | undefined;
-  new ApertureCicdStack(app, 'ApertureCicd', { env, githubRepo, githubSubject });
+  new ApertureCicdStack(app, 'ApertureCicd', { env, githubRepo, githubSubject, roles: 'prod' });
+  if (devAccountId)
+    new ApertureCicdStack(app, 'ApertureCicdDev', {
+      env: { ...env, account: devAccountId },
+      githubRepo,
+      githubSubject,
+      roles: 'dev',
+    });
 }
 
-// dev's own CDK bootstrap (qualifier devsandbox) — a one-off hand-deploy like ApertureCicd, re-run when a dev stack
-// gains a resource type. Pinned to dev's Cognito pool and CloudFront distribution, whose ids are account-specific
-// and so passed at deploy time, never committed (INFRA §3):
-// `cdk deploy ApertureDevSandbox -c devSandbox=true -c devUserPoolId=… -c devDistributionId=…`.
-if (app.node.tryGetContext('devSandbox')) {
-  const devUserPoolId = app.node.tryGetContext('devUserPoolId') as string | undefined;
-  const devDistributionId = app.node.tryGetContext('devDistributionId') as string | undefined;
-  if (!devUserPoolId || !devDistributionId)
-    throw new Error('ApertureDevSandbox needs -c devUserPoolId=… and -c devDistributionId=… (the dev stacks\' outputs)');
-  const sandbox = new ApertureDevSandboxStack(app, 'ApertureDevSandbox', { env, devUserPoolId, devDistributionId });
-  Validations.of(sandbox).acknowledge({
-    id: 'AwsSolutions-S1',
-    reason: 'CDK asset staging bucket (the stock bootstrap bucket has no access logs either); a log bucket adds cost for no value.',
+// The dev account's guardrails (INFRA §3, docs/ops/CI-BOT.md → Kill switch) — two hand-deploys, one per side:
+// ApertureOrg in the management account (the SCPs, the kill Lambda, the dev budget; us-east-1), ApertureDevGuard in
+// the dev account (the kill alarms and their forwarding rule).
+if (app.node.tryGetContext('org')) {
+  const mgmt = need(mgmtAccountId, 'mgmtAccountId', 'ApertureOrg');
+  new ApertureOrgStack(app, 'ApertureOrg', {
+    env: { region: 'us-east-1', account: mgmt },
+    devAccountId: need(devAccountId, 'devAccountId', 'ApertureOrg'),
+    devOuId: need(app.node.tryGetContext('devOuId') as string | undefined, 'devOuId', 'ApertureOrg'),
+  });
+}
+if (app.node.tryGetContext('devGuard')) {
+  new ApertureDevGuardStack(app, 'ApertureDevGuard', {
+    env: { ...env, account: need(devAccountId, 'devAccountId', 'ApertureDevGuard') },
+    mgmtAccountId: need(mgmtAccountId, 'mgmtAccountId', 'ApertureDevGuard'),
   });
 }
 

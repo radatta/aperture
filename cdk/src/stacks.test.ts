@@ -5,8 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { ApertureDataStack } from './lib/data-stack';
 import { ApertureAppStack } from './lib/app-stack';
 import { ApertureBillingStack } from './lib/billing-stack';
-import { DEV_STACK_RESOURCE_TYPES } from './lib/dev-sandbox-stack';
-import { DEV_BOUNDARY_NAME, DEV_QUALIFIER } from './lib/dev-stage';
+import { DEV_MAX_READ_UNITS, DEV_MAX_WRITE_UNITS } from './lib/data-stack';
+import { allowlistPolicy } from './lib/org-stack';
+import { DEV_URL_FUNCTIONS } from './config/devAccount';
 
 // cdk.json's feature flags, so a test synthesizes what `cdk synth` does (e.g. minimizePolicies merges
 // IAM statements — a test app without it asserts a policy shape that never deploys).
@@ -631,7 +632,7 @@ describe('ApertureAppStack finance sync by stage', () => {
   });
 });
 
-describe('dev stacks on the devsandbox bootstrap (dev-sandbox-stack.ts)', () => {
+describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   const build = (stage: string) => {
     const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
@@ -662,63 +663,64 @@ describe('dev stacks on the devsandbox bootstrap (dev-sandbox-stack.ts)', () => 
   };
   const dev = build('dev');
   const prod = build('prod');
+  const resources = (ts: Template[]) =>
+    ts.flatMap((t) =>
+      Object.values(t.toJSON().Resources as Record<string, { Type: string; Properties?: Record<string, unknown> }>),
+    );
 
-  it('deploys dev through the devsandbox roles and version parameter, prod through the default bootstrap', () => {
-    for (const a of dev.artifacts) {
-      expect(a.assumeRoleArn).toContain(`role/cdk-${DEV_QUALIFIER}-deploy-role-`);
-      expect(a.cloudFormationExecutionRoleArn).toContain(
-        `role/cdk-${DEV_QUALIFIER}-cfn-exec-role-`,
-      );
-      expect(a.lookupRole?.arn).toContain(`role/cdk-${DEV_QUALIFIER}-lookup-role-`);
-      expect(a.bootstrapStackVersionSsmParameter).toBe(`/cdk-bootstrap/${DEV_QUALIFIER}/version`);
-    }
-    for (const a of prod.artifacts) {
+  it("deploys both stages through their own account's stock bootstrap", () => {
+    for (const a of [...dev.artifacts, ...prod.artifacts]) {
       expect(a.assumeRoleArn).toContain('role/cdk-hnb659fds-deploy-role-');
       expect(a.bootstrapStackVersionSsmParameter).toBe('/cdk-bootstrap/hnb659fds/version');
     }
   });
 
-  it('puts the dev boundary on every dev role, CDK provider roles included, and none on prod', () => {
-    const roles = (ts: Template[]) =>
-      ts.flatMap((t) => Object.values(t.findResources('AWS::IAM::Role')));
-    const devRoles = roles(dev.templates);
-    expect(devRoles.length).toBeGreaterThanOrEqual(6); // BFF, MCP, finance sync, its schedule, logRetention, auto-delete
-    for (const r of devRoles)
-      expect(JSON.stringify(r.Properties.PermissionsBoundary)).toContain(
-        `:policy/${DEV_BOUNDARY_NAME}`,
-      );
-    for (const r of roles(prod.templates)) expect(r.Properties.PermissionsBoundary).toBeUndefined();
+  it("caps dev's table and GSI1 on-demand throughput, and leaves prod uncapped", () => {
+    const cap = { MaxReadRequestUnits: DEV_MAX_READ_UNITS, MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS };
+    const [devTable] = resources(dev.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
+    expect(devTable?.Properties?.OnDemandThroughput).toEqual(cap);
+    expect((devTable?.Properties?.GlobalSecondaryIndexes as { OnDemandThroughput?: unknown }[])[0]?.OnDemandThroughput).toEqual(cap);
+    expect(JSON.stringify(resources(prod.templates))).not.toContain('OnDemandThroughput');
   });
 
-  it('names every dev resource the way the sandbox policy and boundary scope it', () => {
-    const props = dev.templates.flatMap((t) =>
-      Object.values(t.toJSON().Resources as Record<string, { Type: string; Properties?: Record<string, unknown> }>),
-    );
-    const named = (type: string, key: string) =>
-      props.filter((r) => r.Type === type).map((r) => r.Properties?.[key]);
-    // Named functions and log groups must fit `aperture-*-dev`; unnamed ones get the `ApertureApp-dev-…` prefix.
-    for (const n of named('AWS::Lambda::Function', 'FunctionName').filter(Boolean))
-      expect(n).toMatch(/^aperture-[a-z-]+-dev$/);
-    for (const n of named('AWS::Logs::LogGroup', 'LogGroupName')) expect(n).toMatch(/^\/aws\/lambda\/aperture-[a-z-]+-dev$/);
-    expect(named('AWS::DynamoDB::Table', 'TableName')).toEqual(['aperture-dev']);
-    expect(named('AWS::Scheduler::ScheduleGroup', 'Name')).toEqual(['aperture-finance-dev']);
-    // Roles and buckets stay unnamed, so CloudFormation names them after the stack (`ApertureApp-dev-…`,
-    // `apertureapp-dev-…`) — the prefixes the sandbox grants on.
-    for (const n of [...named('AWS::IAM::Role', 'RoleName'), ...named('AWS::S3::Bucket', 'BucketName')])
-      expect(n).toBeUndefined();
+  // The guardrails SCP denies reserved/provisioned concurrency, event-source mappings and destinations to the dev
+  // account; a template that sets one fails to deploy there.
+  it('asks for nothing the dev SCPs deny', () => {
+    const all = resources(dev.templates);
+    for (const r of all.filter((x) => x.Type === 'AWS::Lambda::Function'))
+      expect(r.Properties?.ReservedConcurrentExecutions).toBeUndefined();
+    const types = all.map((r) => r.Type);
+    for (const t of ['AWS::Lambda::EventSourceMapping', 'AWS::Lambda::Alias', 'AWS::Lambda::Version'])
+      expect(types).not.toContain(t);
+    for (const r of all.filter((x) => x.Type === 'AWS::Lambda::EventInvokeConfig'))
+      expect(r.Properties?.DestinationConfig).toBeUndefined();
   });
 
-  it('uses only resource types the sandbox execution policy covers — a new one means granting it and redeploying the sandbox first', () => {
-    const types = new Set(
-      dev.templates.flatMap((t) =>
-        Object.values(t.toJSON().Resources as Record<string, { Type: string }>).map((r) => r.Type),
-      ),
-    );
-    for (const type of types)
-      expect(
-        DEV_STACK_RESOURCE_TYPES,
-        `${type}: extend ApertureDevSandbox, redeploy it, then ship`,
-      ).toContain(type);
+  // The kill switch locks DEV_URL_FUNCTIONS' URLs; a URL on any other function would stay open through a kill.
+  it('gives a public Function URL only to the functions the kill switch locks', () => {
+    const t = dev.templates[1]!.toJSON().Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+    const fnName = (ref: unknown) => {
+      const id = (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ?? (ref as { Ref?: string }).Ref ?? '';
+      return t[id]?.Properties.FunctionName;
+    };
+    const urls = Object.values(t)
+      .filter((r) => r.Type === 'AWS::Lambda::Url')
+      .map((r) => fnName(r.Properties.TargetFunctionArn));
+    expect(urls.sort()).toEqual([...DEV_URL_FUNCTIONS].sort());
+  });
+
+  it('uses only services the dev allowlist SCP admits — a new one means widening it in ApertureOrg first', () => {
+    const allowed = (allowlistPolicy().Statement[0] as { NotAction: string[] }).NotAction;
+    const prefix: Record<string, string> = {
+      Lambda: 'lambda', IAM: 'iam', Logs: 'logs', S3: 's3', CloudFront: 'cloudfront', Cognito: 'cognito-idp',
+      DynamoDB: 'dynamodb', Scheduler: 'scheduler', SSM: 'ssm', KMS: 'kms',
+    };
+    for (const type of new Set(resources(dev.templates).map((r) => r.Type))) {
+      if (type.startsWith('Custom::') || type === 'AWS::CDK::Metadata') continue; // CDK providers run as Lambdas
+      const service = prefix[type.split('::')[1] ?? ''];
+      expect(service, `${type}: map its service, then check the allowlist`).toBeDefined();
+      expect(allowed, `${type}: add ${service}:* to the allowlist SCP`).toContain(`${service}:*`);
+    }
   });
 });
 

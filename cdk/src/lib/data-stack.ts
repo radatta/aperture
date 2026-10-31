@@ -4,7 +4,9 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
-import { applyDevBoundary, synthesizerFor } from './dev-stage';
+
+export const DEV_MAX_READ_UNITS = 500;
+export const DEV_MAX_WRITE_UNITS = 200;
 
 export interface DataStackProps extends StackProps {
   stage: string;
@@ -28,10 +30,13 @@ export class ApertureDataStack extends Stack {
   readonly cognitoDomain: string;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
-    super(scope, id, { ...props, ...synthesizerFor(props.stage) }); // dev → the devsandbox bootstrap (dev-stage.ts)
+    super(scope, id, props);
     const { stage, allowedOrigins } = props;
-    applyDevBoundary(this, stage); // no roles today; any future one needs the boundary to deploy on dev
 
+    // dev's on-demand ceiling (INFRA §11): caps what branch code in the dev account can spend on the table, and
+    // the dev account's SCP denies UpdateTable, so it can't lift the cap. Prod stays uncapped — no agent reaches
+    // it, and a cap there would only throttle a large finance sync.
+    const devThroughput = stage === 'dev' ? { maxReadRequestUnits: DEV_MAX_READ_UNITS, maxWriteRequestUnits: DEV_MAX_WRITE_UNITS } : {};
     // Single table (TECH §2.4): PK/SK strings, on-demand, PITR (35-day backup), RETAIN.
     this.table = new dynamodb.Table(this, 'Table', {
       tableName: `aperture-${stage}`,
@@ -40,6 +45,7 @@ export class ApertureDataStack extends Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
+      ...devThroughput,
     });
     // GSI1 — done tasks by completion time (calibration window read). GSI1SK is numeric epoch-ms.
     this.table.addGlobalSecondaryIndex({
@@ -47,6 +53,7 @@ export class ApertureDataStack extends Stack {
       partitionKey: { name: 'GSI1PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'GSI1SK', type: dynamodb.AttributeType.NUMBER },
       projectionType: dynamodb.ProjectionType.ALL,
+      ...devThroughput,
     });
 
     // Cognito pool (INFRA §6): invite-only (self-signup OFF — you admin-create your user), email login.

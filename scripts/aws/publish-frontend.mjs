@@ -1,7 +1,6 @@
-// Publish the dashboard to a deployed env: build with that env's CDK outputs baked in, sync to S3,
-// invalidate CloudFront. Reads cdk/cdk-outputs.<stage>.json (written by `cdk deploy`). Needs AWS creds
-// + the `aws` CLI (only for the sync/invalidate). Creates the invalidation and returns without waiting —
-// health-check.mjs polls the edge for the new shell instead.
+// Publish the dashboard to a deployed env: build with that env's CDK outputs baked in, sync to S3. Reads
+// cdk/cdk-outputs.<stage>.json (written by `cdk deploy`). Needs AWS creds + the `aws` CLI (only for the sync).
+// No CloudFront invalidation (below); health-check.mjs polls the edge for the new shell instead.
 // Usage: node scripts/aws/publish-frontend.mjs [dev|prod] [--profile <name>]
 // If your creds live in a named profile (no default), pass --profile — it's applied ONLY to the aws
 // commands (vite has its own --profile CPU-profiling flag, so never let it leak into the build). You can
@@ -67,17 +66,9 @@ run(
   `aws s3 cp app/dist/sw.js "s3://${bucket}/sw.js" --content-type "text/javascript" --cache-control "no-cache,no-store,must-revalidate"${profileFlag}`,
 );
 
-console.log(`\n▶ Invalidating CloudFront ${app.DistributionId}`);
-// Fire and forget. The shell is uploaded no-store, the default behaviour's min TTL is 1s and the SPA
-// error-fallback responses have ttl 0, so the edge serves the new build within ~1s regardless. Waiting
-// cost a flat 20–22s per stage (the CLI waiter polls every 20s) and proved nothing the health check's
-// shell poll doesn't prove directly. The id is logged for `aws cloudfront get-invalidation`.
-const invJson = execSync(
-  `aws cloudfront create-invalidation --distribution-id ${app.DistributionId} --paths "/*" --output json${profileFlag}`,
-  { cwd: root, encoding: 'utf8' },
-);
-console.log(
-  `  invalidation ${JSON.parse(invJson).Invalidation.Id} created — not waiting; health-check polls the edge`,
-);
+// No CloudFront invalidation. Every file outside assets/ is uploaded no-store, the default behaviour's min TTL is
+// 1s and the SPA error-fallback responses have ttl 0, so the edge serves the new build within ~1s; assets/ names
+// are content-hashed, so a new build never reuses one. An invalidation proved nothing the health check's shell
+// poll doesn't, and paths past the free 1,000 a month bill per path — neither GitHub role may create one (INFRA §9).
 
 console.log(`\n✓ Published ${stage} → ${app.AppUrl}\n`);
