@@ -116,6 +116,8 @@ So when a branch can't fast-forward onto `dev`, **do not propose merging `origin
 2. `git worktree add --no-track -b <name> .claude/worktrees/<name> origin/main` — a plain branch name (`EnterWorktree` would add a `worktree-` prefix) and no upstream, so a bare `git push` can't target `main`.
 3. `CI=true pnpm install` inside the worktree, so it has its own real `node_modules` — never a symlink to the main checkout's (running pnpm through one rewires the main checkout).
 
+Worktrees are created with **relative paths** (repo config `worktree.useRelativePaths` + `extensions.relativeWorktrees`; needs git ≥ 2.48 on both the container and the Mac — an older git refuses the repo outright), so one checkout works from both sides. Check the new worktree's `.git` reads `gitdir: ../../../.git/worktrees/<name>`. If the container is ever rebuilt with an older git, upgrade it (git-core PPA) before touching worktrees.
+
 The worktree's `localNotes/` holds that feature's PR body, screenshots, and decision log, and the push / `gh pr create` commands handed to the user run from the worktree path. Worktrees live under the workspace mount, so the user can reach them from the Mac. **Every command handed to the user is one `&&`-chained line that starts with `cd` to the Mac path** — `/workspace` is `/Users/rahuldatta/Coding/Personal/aperture` there, so a worktree is `/Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/<branch>` — never a `/workspace/...` path, never separate lines. **Removing a worktree deletes its gitignored `localNotes/`, so it happens only at _Feature workflow_ → _Cleanup_.**
 
 ### Claude drives git — guarded

@@ -28,11 +28,18 @@ export function TaskModalHost({
   const [target, setTarget] = useState<{ task: Task; intent: TaskEditorIntent } | null>(null);
   const returning = useRef(false);
   const seenLive = useRef(false);
+  // The opener row's task id, to find that row again if it re-rendered (beside triggerRef, its node).
+  const opener = useRef<string | null>(null);
 
   const { triggerRef, onOpen, onClose } = modal;
   const openTask = useCallback<OpenTask>(
     (task, intent, trigger) => {
-      triggerRef.current = trigger;
+      // A trigger inside the dialog (a parent's name, a part's row) goes when it closes: the row that
+      // first opened the modal keeps the return-focus role.
+      if (!trigger?.closest('dialog')) {
+        triggerRef.current = trigger;
+        opener.current = task.id;
+      }
       returning.current = false;
       seenLive.current = false;
       setTarget({ task, intent });
@@ -65,13 +72,13 @@ export function TaskModalHost({
   // coming. Then focus would sit on <body>: find the row's title again by task id, else the list area.
   // Keyed off data and DOM changes rather than frames, and never overrides focus the user has since
   // moved.
-  const targetId = target?.task.id;
   useEffect(() => {
     if (modal.open || !returning.current) return;
     const root = fallbackRef.current;
     const recover = () => {
-      const again = targetId
-        ? root?.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(targetId)}"]`)
+      const id = opener.current;
+      const again = id
+        ? root?.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(id)}"]`)
         : null;
       if (again) returnFocus(again);
       else root?.focus({ preventScroll: true });
@@ -105,7 +112,7 @@ export function TaskModalHost({
     returning.current = false;
     if (trigger?.isConnected || document.activeElement !== document.body) return;
     recover();
-  }, [modal.open, tasks, triggerRef, targetId]);
+  }, [modal.open, tasks, triggerRef]);
 
   return (
     <TaskModalContext value={openTask}>

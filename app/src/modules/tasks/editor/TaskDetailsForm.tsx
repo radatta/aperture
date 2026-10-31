@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Ref } from 'react';
-import { canEditEstimate, fmtClock12, fmtMonthDayYear, TASK_NOTES_MAX } from '@aperture/shared';
+import {
+  canEditEstimate,
+  endsAfterParent,
+  fmtClock12,
+  fmtMonthDayYear,
+  TASK_NOTES_MAX,
+  timeKeyOfInput,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -19,6 +26,8 @@ import { fmtDuration } from '../../../lib/format';
 import { NotesField } from '../notes/NotesField';
 import { notesValue } from '../notes/parseNotes';
 import { scopeLabel, suggestedBuffer } from '../taskMath';
+import { useEditSlot } from './editState';
+import type { EditSlots } from './editState';
 
 // The details editor inside the task modal — absorbs ScopePanel (estimate/buffer/category) and the
 // in_progress DueDayForm (due). Title is editable at any status (display text, never the lock).
@@ -27,18 +36,19 @@ import { scopeLabel, suggestedBuffer } from '../taskMath';
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
 // due locks once finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
 // (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
-// (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts).
+// (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts),
+// with a quiet note when that's after its parent's deadline.
 export function TaskDetailsForm({
   task: live,
   parts,
-  isPart = false,
-  onDirtyChange,
+  parent,
+  edits,
   estimateRef,
 }: {
   task: Task;
   parts?: { estimateMin: number | null; unscoped: number }; // set when it's a parent
-  isPart?: boolean;
-  onDirtyChange?: (dirty: boolean) => void;
+  parent?: Pick<Task, 'title' | 'dueDay' | 'dueTime'>; // set when it's a part
+  edits?: EditSlots;
   estimateRef?: Ref<HTMLInputElement>;
 }) {
   // What the form compares against: the task the last Save's final write returned, until the refetch
@@ -53,6 +63,7 @@ export function TaskDetailsForm({
   const setDue = useSetDue();
   const setNotes = useSetTaskNotes();
 
+  const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
   // A finished task is history: its due date is locked (re-dating it is meaningless). Category and
   // title stay editable at every status — recategorizing a done task matters (calibration aggregates
@@ -110,10 +121,10 @@ export function TaskDetailsForm({
   const dirty =
     titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;
 
-  // Bubble dirtiness up so the modal's exit paths (Esc/backdrop/Close) can confirm before discarding.
-  // Not while saving: those edits are already on their way, so "Discard" would be a lie.
-  const reportDirty = dirty && !saving;
-  useEffect(() => onDirtyChange?.(reportDirty), [reportDirty, onDirtyChange]);
+  // What the modal's exit paths (Esc/backdrop/Close, opening another task) act on: 'dirty' confirms
+  // before discarding; 'saving' waits for the write — those edits are on their way, so "Discard" would
+  // be a lie, and leaving would lose them if it fails.
+  useEditSlot(edits, 'details', saving ? 'saving' : dirty ? 'dirty' : 'clean');
 
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
   const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes };
@@ -299,12 +310,21 @@ export function TaskDetailsForm({
               step={60}
               value={dueTime}
               disabled={!dueDay}
-              onChange={(e) => setDueTime(e.target.value)}
+              onChange={(e) => setDueTime(timeKeyOfInput(e.target.value))}
               className="w-32"
             />
           </>
         )}
       </div>
+      {parent &&
+        endsAfterParent(
+          isTerminal ? task : { dueDay: dueDay || null, dueTime: dueTime || null },
+          parent,
+        ) && (
+          <Text size="sm" tone="subtle">
+            Ends after {parent.title} is due.
+          </Text>
+        )}
       <NotesField
         saved={task.notes}
         value={notes}

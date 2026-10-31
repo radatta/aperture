@@ -71,6 +71,26 @@ describe('Modal initial focus', () => {
       HTMLDialogElement.prototype.showModal = stub;
     }
   });
+
+  it('a new contentKey in the open dialog goes back to the top, focused as on open', () => {
+    const ui = (key: string) => (
+      <Modal open onClose={() => {}} label="Task" initialFocus="dialog" contentKey={key}>
+        <textarea aria-label="Title" />
+      </Modal>
+    );
+    const { rerender } = render(ui('a'));
+    const dialog = screen.getByRole('dialog', { name: 'Task' });
+    // jsdom lays nothing out, so its scrollTop never holds a value: give this one a writable one.
+    Object.defineProperty(dialog, 'scrollTop', { value: 40, writable: true });
+    const field = screen.getByLabelText('Title');
+    field.focus();
+    rerender(ui('a')); // same content: focus and scroll untouched
+    expect(document.activeElement).toBe(field);
+    expect(dialog.scrollTop).toBe(40);
+    rerender(ui('b'));
+    expect(document.activeElement).toBe(dialog);
+    expect(dialog.scrollTop).toBe(0);
+  });
 });
 
 describe('Modal backdrop close', () => {

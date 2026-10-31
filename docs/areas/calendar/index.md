@@ -75,9 +75,14 @@ non-primary picker later, add `calendar.calendarlist.readonly` and restore the g
   event; all three are needed to patch or delete it via the owning account. `gcalSyncError` (null-default)
   holds the last auto-sync failure (§ Auto-sync).
 - `Settings.autoCalendar` (default `true`) — the auto-sync toggle (both directions).
+- The gateway's insert/patch inputs carry an optional `marker` — a parent's due marker (§ Auto-sync →
+  Parent + parts): `true` sends `transparency: transparent` + `colorId "8"` (graphite), `false` turns it
+  back into a block (`opaque`, `colorId: null` — null deletes the override in a patch; verify once on dev).
+  Absent leaves how the event shows alone. Never read back.
 - Two-way bookkeeping on `Task`, all **optional** (sync state, not task data; old rows lack them):
   `gcalSeen` (the event's title + window as Aperture last knew it, plus Google's `updated` for that
-  state — the merge base and the stale line) and `gcalPulled` (`{at, note}` — the "updated from Google"
+  state — the merge base and the stale line — and `marker`, the look Aperture last sent: set by every
+  create, absent on a block linked by the picker or before looks were recorded) and `gcalPulled` (`{at, note}` — the "updated from Google"
   mark).
 - `GcalSyncState` (`gcal#sync#<sub>`, one per account): the `events.list` `syncToken`, `lastPulledAt`
   (attempt — the throttle), `lastSyncedAt` (success; Settings' "Checked …"), `lastPullError`. Exported like `financeSyncStates`; tombstoned on disconnect.
@@ -129,6 +134,7 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
 | untimed task with a block, renamed | title patched; a day move leaves it (gcal owns that clock) |
 | time or day cleared | deleted, pointers cleared |
 | done | left alone · cancel → delete-on-cancel (above) |
+| a **parent** (has parts) with a time | its **due marker**: 15 min ending at the deadline, free, graphite — moved by a due change (Parent + parts, below) |
 
 - **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
   creates one (so an event you removed by hand isn't resurrected).
@@ -178,16 +184,22 @@ gateway, the stub against a fake id — so app, bulk add and MCP all get the sam
   SSM read and a few DynamoDB writes. The
   tasks are already saved, so a Lambda timeout here would report a failed paste and invite a duplicating
   resubmit. Untimed rows skip it.
-- **Parent + parts** ([tasks/parts.md](../tasks/parts.md) D8): a task with parts **never owns an event**.
-  `calendarSyncPlan` takes `opts.parent` (the impls compute it from the task list on every sync but a fresh create, Add/Retry/
-  Send included): a linked parent's event is deleted whatever the toggle says (after the owed-removal check), and
-  otherwise nothing happens — so a timed task that takes its first part loses its block. `insertCalendarEvent`
-  refuses a parent (`PARENT_NO_EVENT_ERROR`) before its other checks. A part's own time (`dueDay`/`dueTime`) is
-  when its block ends, so its block is an ordinary auto block. v2's due marker replaces the delete.
+- **Parent + parts** ([tasks/parts.md](../tasks/parts.md) D8, D12, D13): a parent's one event is its **due
+  marker** — `MARKER_MIN` (15) ending at its deadline (`syncWindow(…, parent)`), free and graphite, titled
+  with its plain title. `calendarSyncPlan` takes `opts.parent` (the impls compute it from the task list on
+  every sync but a fresh create, Add/Retry/Send included). Every create carries `marker` (`true` for a
+  parent), and a patch carries it only when the event's recorded look (`gcalSeen.marker`) differs from
+  the task's — never on a plain block that was never a marker. A timed task that takes its first part has its block patched into
+  the marker; its last part going patches it back, and a failed switch heals on the next push. An untimed parent has no marker, and an event it had goes
+  whatever the toggle says. `insertCalendarEvent` refuses a parent (`PARENT_NO_EVENT_ERROR`) before its
+  other checks. Lazy: nothing is backfilled — a marker appears on a due change, a split or Break down, or
+  **Add due marker**. A part's own time (`dueDay`/`dueTime`) is when its block ends, so its block is an
+  ordinary auto block, named after its parent (`P2 · Part 1`, `blockTitle`; `opts.parentTitle`). A parent
+  rename re-sends each linked open part's block.
 - **Split** ([tasks/split.md](../tasks/split.md) — a split never cancels, and always yields parent + parts). The
-  new parent never gets an event; Part 1 keeps the original's id, time and event. **Done** with this part: a
-  **timed** task's event (the block before its deadline, whatever placed it) moves to the follow-up (a part,
-  never the parent) — the
+  new parent of a timed task gets its due marker, synced once it has its parts; Part 1 keeps the original's
+  id, time and event, renamed `Parent · Part 1`. **Done** with this part: a **timed** task's event (the block
+  before its deadline, whatever placed it) moves to the follow-up (a part, never the parent) — the
   link carries what Aperture knows about the event (`gcalSeen`; the follow-up's new title and window are
   unsent, so they win a conflict) — which renames/re-times it: no
   delete + re-create, no duplicate block. **Kept going**: each part owns a block — the original keeps
@@ -227,10 +239,11 @@ the task now matches its event, except where a pull kept Aperture's value — th
 | --- | --- |
 | end moved | `dueDay` / `dueTime` (wall clock in `USER_TIME_ZONE`) — the plan day never moves |
 | start moved (length changed) | `estimateMin` = the new length, rounded to the minute — never `estimateLockedMin` |
-| renamed | `title` (trimmed; a blank title is ignored) |
+| renamed | `title` (trimmed; a blank title is ignored). A part's block: a leading `Parent · ` is stripped first; without it the whole title is taken |
 | deleted, or moved to another calendar | unlinked (pointers cleared), never resurrected |
 | made all-day | time ignored, link kept, title still syncs; the next Aperture time change re-times it |
 | made recurring | ignored |
+| a parent's **due marker**: end moved / start moved | `dueDay` / `dueTime` / nothing — its length maps to no field (a parent has no estimate) |
 
 - **Status.** Done: the end and title apply, a start drag is ignored (the estimate is history — revisit
   task in prod). Cancelled: nothing (its event went with the cancel). In-progress: the start sets the

@@ -364,3 +364,20 @@ describe('tokenAtCaret', () => {
     expect(at(marked)).toEqual(want);
   });
 });
+
+describe('errorKinds', () => {
+  const kinds = (raw: string) => parseTaskLine(raw, CATS).errorKinds;
+  it('runs parallel to errors, saying what each is about', () => {
+    const l = parseTaskLine('x | soon #"open ~0', CATS);
+    expect(l.errorKinds).toHaveLength(l.errors.length);
+    expect(kinds('x | soon')).toEqual([{ kind: 'unknown', token: 'soon' }]);
+    expect(kinds('x | #')).toEqual([{ kind: 'category' }]);
+    expect(kinds('x | #"open')).toEqual([{ kind: 'category' }]);
+    expect(kinds('x | #a #b')).toEqual([{ kind: 'category' }]);
+    expect(kinds('x | due:2026-13-01')).toEqual([{ kind: 'due' }]);
+    expect(kinds('x | due:2026-10-01@25:00')).toEqual([{ kind: 'due' }]);
+    expect(kinds('x | due:2026-10-01 due:2026-10-02')).toEqual([{ kind: 'due' }]);
+    expect(kinds('x | ~0')).toEqual([{ kind: 'other' }]);
+    expect(kinds('x | category')).toEqual([{ kind: 'unknown', token: 'category' }]);
+  });
+});

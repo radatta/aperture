@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EVENT_MIN, dueUrgency, eventWindow, normalizeDue } from './due';
+import {
+  DEFAULT_EVENT_MIN,
+  dueUrgency,
+  eventWindow,
+  MARKER_MIN,
+  normalizeDue,
+  syncWindow,
+} from './due';
 import type { DueEpoch } from './due';
 
 // A fixed epoch so the tests are timezone-free: day D at HH:MM = D*day + minutes.
@@ -46,6 +53,16 @@ describe('eventWindow', () => {
   });
   it('is null for an untimed task', () => {
     expect(eventWindow({ dueDay: '2026-10-05', dueTime: null, estimateMin: 30 }, epoch)).toBeNull();
+  });
+});
+
+describe('syncWindow', () => {
+  it('a parent’s marker is MARKER_MIN ending at the deadline, whatever the estimate', () => {
+    const end = epoch('2026-10-05', '16:00');
+    const t = { dueDay: '2026-10-05', dueTime: '16:00', estimateMin: 120 };
+    expect(syncWindow(t, epoch, true)).toEqual({ startMs: end - MARKER_MIN * 60_000, endMs: end });
+    expect(syncWindow(t, epoch)).toEqual(eventWindow(t, epoch));
+    expect(syncWindow({ ...t, dueTime: null }, epoch, true)).toBeNull();
   });
 });
 

@@ -78,6 +78,11 @@ export function isTimeKey(s: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 }
 
+// A browser time field's value as "HH:MM": Safari can report seconds ("15:00:00") even with step=60,
+// which the save would refuse. Anything else passes through unchanged for the save to judge.
+export const timeKeyOfInput = (v: string): string =>
+  /^\d\d:\d\d:\d\d(\.\d+)?$/.test(v) ? v.slice(0, 5) : v;
+
 // "16:00" → "4pm", "09:30" → "9:30am", "00:00" → "12am", "23:59" → "11:59pm".
 export function fmtClock12(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number) as [number, number];

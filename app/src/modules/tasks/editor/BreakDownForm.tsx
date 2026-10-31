@@ -6,14 +6,26 @@ import { Text } from '../../../components/Text';
 import { Textarea } from '../../../components/Textarea';
 import { useCreateTasks } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
+import { useEditSlot } from './editState';
+import type { EditSlots } from './editState';
 
-// A line's parse errors, plus the tokens a part can't take: its category is its parent's, and the
-// deadline belongs to the parent (a part's own time is set on the part, as when its block ends).
+// A line's parse errors in this form's terms, plus the tokens a part can't take: its category is its
+// parent's, and the deadline belongs to the parent (a part's own time is set on the part, as when its
+// block ends). The bulk-add grammar for those (#, due:) never shows here — a part has no use for it.
+const CATEGORY = 'a part takes its parent’s category — remove the category';
+const DEADLINE = 'the deadline is the parent’s — remove the date (a part’s end is set on the part)';
 function lineErrors(line: ReturnType<typeof parseBulkTasks>['lines'][number]): string[] {
-  const out = [...line.errors];
-  if (line.categoryLabel !== null) out.push('a part takes its parent’s category — drop the #');
-  if (line.dueDay !== null) out.push('the deadline is the parent’s — drop the due:');
-  return out;
+  const out = new Set<string>();
+  line.errorKinds.forEach((k, i) => {
+    if (k.kind === 'category') out.add(CATEGORY);
+    else if (k.kind === 'due') out.add(DEADLINE);
+    else if (k.kind === 'unknown')
+      out.add(`“${k.token}” isn’t something a part takes — use ~minutes (like ~30) or notes:"…"`);
+    else out.add(line.errors[i]!);
+  });
+  if (line.categoryLabel !== null) out.add(CATEGORY);
+  if (line.dueDay !== null) out.add(DEADLINE);
+  return [...out];
 }
 
 // Add parts to a task, one per line: `title | ~minutes` (the bulk-add grammar, minutes only). On a task
@@ -24,16 +36,25 @@ export function BreakDownForm({
   isParent,
   onDone,
   onCancel,
+  edits,
 }: {
   task: Task;
   isParent: boolean;
   onDone: () => void;
   onCancel: () => void;
+  edits?: EditSlots;
 }) {
   const create = useCreateTasks();
-  const [text, setText] = useState(() =>
+  const [prefill] = useState(() =>
     !isParent && task.estimateMin != null ? `${task.title} | ~${task.estimateMin}` : '',
   );
+  const [text, setText] = useState(prefill);
+  // Set here, not read from the mutation: TanStack reports isPending a tick later, and the modal
+  // reads the slot on the very next event.
+  const [sending, setSending] = useState(false);
+  // Typed lines not yet added ask before an exit; lines on their way hold it.
+  const dirty = text !== prefill;
+  useEditSlot(edits, 'reveal', sending ? 'saving' : dirty ? 'dirty' : 'clean');
   const parsed = parseBulkTasks(text, []);
   const errors = parsed.lines.flatMap((l) => lineErrors(l).map((e) => `Line ${l.line}: ${e}`));
   const count = parsed.lines.length;
@@ -41,7 +62,8 @@ export function BreakDownForm({
   const canSubmit = count > 0 && errors.length === 0;
 
   async function submit() {
-    if (!canSubmit || create.isPending) return;
+    if (!canSubmit || sending) return;
+    setSending(true);
     try {
       await create.mutateAsync(
         parsed.lines.map((l) => ({
@@ -55,6 +77,8 @@ export function BreakDownForm({
       onDone();
     } catch {
       // Said inline below.
+    } finally {
+      setSending(false);
     }
   }
 
@@ -79,8 +103,9 @@ export function BreakDownForm({
           ))}
         </div>
       )}
+      {/* No count while a line is wrong — it would count a part that can't be added yet. */}
       <Text size="xs" tone="muted">
-        {count === 0
+        {count === 0 || errors.length > 0
           ? 'Each part is a task of its own — planned, worked and measured on its own.'
           : `${count} ${count === 1 ? 'part' : 'parts'}${est > 0 ? ` · est ${fmtDuration(est)}` : ''}${
               !isParent && task.status === 'planned'
@@ -92,7 +117,7 @@ export function BreakDownForm({
         <Button
           size="sm"
           disabled={!canSubmit}
-          aria-disabled={create.isPending}
+          aria-disabled={sending}
           onClick={submit}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >

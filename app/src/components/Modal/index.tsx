@@ -26,6 +26,9 @@ export interface ModalProps {
   // `data-autofocus` child. 'dialog': the dialog itself, for a surface opened to read — a focused
   // field raises the on-screen keyboard on iOS.
   initialFocus?: 'content' | 'dialog';
+  // Names what the open dialog shows. A change (the task modal switching task) is a new thing in the
+  // same dialog: back to the top, and focus placed as on open.
+  contentKey?: string;
   children: ReactNode;
 }
 
@@ -35,6 +38,7 @@ export function Modal({
   label,
   closeOnBackdrop = false,
   initialFocus = 'content',
+  contentKey,
   children,
 }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -66,6 +70,15 @@ export function Modal({
       else start?.focus();
     } else if (!open && el.open) el.close();
   }, [open, initialFocus]);
+
+  // Declared after the open effect, so on first open it repeats that focus harmlessly.
+  useEffect(() => {
+    const el = ref.current;
+    if (contentKey === undefined || !el?.open) return;
+    el.scrollTop = 0;
+    if (initialFocus === 'dialog') el.focus();
+    else el.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+  }, [contentKey, initialFocus]);
 
   return (
     <dialog

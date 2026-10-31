@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode, Ref } from 'react';
+import type { ReactNode, Ref, RefObject } from 'react';
 import {
   autoSyncOn,
   canBecomeParent,
@@ -39,6 +39,7 @@ import { BreakDownForm } from './BreakDownForm';
 import { DeleteConfirm, DropConfirm } from './DeleteConfirm';
 import { SplitForm } from './SplitForm';
 import { TaskDetailsForm } from './TaskDetailsForm';
+import type { EditSlots } from './editState';
 
 export type TaskEditorIntent = 'view' | 'finish' | 'scope';
 type Reveal = 'split' | 'parts' | 'calendar' | 'drop' | 'delete' | null;
@@ -64,22 +65,26 @@ function SectionHeading({ children }: { children: ReactNode }) {
   );
 }
 
-// The task modal's body. The title (read-only for now) fixes the truncation; every edit and manage
-// action the card used to hold lives here. All gating rules are the card's, moved verbatim.
+// The task modal's body. The full title (editable, in the details form) fixes the truncation; every edit
+// and manage action the card used to hold lives here. All gating rules are the card's, moved verbatim.
 export function TaskEditor({
   task,
   intent,
-  onClose,
+  edits,
+  onFinished,
   onRequestClose,
-  onDirtyChange,
+  onLeaveReveal,
   estimateRef,
   actualRef,
 }: {
   task: Task;
   intent: TaskEditorIntent;
-  onClose: () => void; // real close — after Mark done / Drop, no guard (Save stays open)
+  edits?: EditSlots; // where each form's edits stand, read by the modal's guard
+  // Finished here (Mark done, Drop, a done split), as the write returned it: the modal closes, guarded.
+  // `here` is false when this editor has gone by the time the write lands (closed or switched away).
+  onFinished: (task: Task, here: boolean) => void;
   onRequestClose: () => void; // guarded close — Esc/backdrop/Close button; confirms if dirty
-  onDirtyChange: (dirty: boolean) => void;
+  onLeaveReveal: (go: () => void) => void; // the guard for the open reveal's text alone
   estimateRef?: Ref<HTMLInputElement>;
   actualRef?: Ref<HTMLInputElement>;
 }) {
@@ -101,27 +106,66 @@ export function TaskEditor({
   useEffect(() => {
     if (markDone.error) markDoneErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [markDone.error]);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const finished = (done: Task) => onFinished(done, mounted.current);
+  // The parent's Mark done: one per tap, set before the await (isPending arrives a tick late), and its
+  // close from the write's answer, not a per-call onSuccess a second tap would drop.
+  const [marking, setMarking] = useState(false);
+  async function markParentDone() {
+    if (marking) return;
+    setMarking(true);
+    try {
+      finished(await markDone.mutateAsync({ id: task.id, to: 'done' }));
+    } catch {
+      // Said below.
+    } finally {
+      setMarking(false);
+    }
+  }
   const [reveal, setReveal] = useState<Reveal>(null);
+  // Another section while the open reveal holds unsent text (part lines, split titles) asks first, via
+  // the modal's confirm; a write in flight is waited for. The details form stays mounted — its edits
+  // never prompt here.
+  const openReveal = (r: Reveal) => {
+    if (r !== reveal) onLeaveReveal(() => setReveal(r));
+  };
   // Parent + parts (parts.ts): a parent's parts, or a part's parent and siblings.
   const parts = partsOf(allTasks, task.id);
   const isParent = parts.length > 0;
   const summary = partsSummary(parts);
   const parent = parentOf(allTasks, task);
-  // "Part 2 of 3" counts the parts not dropped (as the parent's own "1 of 3 parts" does) — and itself.
+  // "Part 2 of 3" counts the parts not dropped (as the parent’s own "1 of 3 parts" does).
   const siblings = parent
-    ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled' || p.id === task.id)
+    ? partsOf(allTasks, parent.id).filter((p) => p.status !== 'cancelled')
     : [];
-  // Closing Break down / Add parts puts focus back on its opener (whichever shows by then), never <body>.
+  // Closing Break down / Add parts, or the split reveal (Cancel, or a kept-going split), puts focus back
+  // on its opener (whichever shows by then), never <body> — from an effect, once the form has left: a
+  // frame callback can run before React's commit on an async close (after the send's await), find focus
+  // still inside the form, and let the unmount drop it to <body>. Never overrides focus that already
+  // went somewhere: a swap held for the send opens another section, whose own field takes it next.
+  const [refocus, setRefocus] = useState<RefObject<HTMLButtonElement | null> | null>(null);
+  useEffect(() => {
+    if (!refocus) return;
+    setRefocus(null);
+    const at = document.activeElement;
+    if (refocus.current && (!at || at === document.body || at.tagName === 'DIALOG'))
+      returnFocus(refocus.current);
+  }, [refocus]);
   const partsRef = useRef<HTMLButtonElement>(null);
   const closeParts = () => {
     setReveal(null);
-    requestAnimationFrame(() => partsRef.current && returnFocus(partsRef.current));
+    setRefocus(partsRef);
   };
-  // Closing the split reveal (Cancel, or a kept-going split) puts focus back on its opener, never <body>.
   const splitRef = useRef<HTMLButtonElement>(null);
   const closeSplit = () => {
     setReveal(null);
-    requestAnimationFrame(() => splitRef.current && returnFocus(splitRef.current));
+    setRefocus(splitRef);
   };
 
   const inProgress = task.status === 'in_progress';
@@ -138,7 +182,7 @@ export function TaskEditor({
     inProgress && !isParent ? (
       <section className="flex flex-col gap-2">
         <SectionHeading>Mark done</SectionHeading>
-        <DoneForm task={task} actualRef={actualRef} onDone={onClose} />
+        <DoneForm task={task} actualRef={actualRef} onDone={finished} onCancel={onRequestClose} />
       </section>
     ) : null;
 
@@ -161,6 +205,23 @@ export function TaskEditor({
     task.completedAt != null ||
     task.cancelledAt != null;
 
+  const showCalendar =
+    !isTerminal ||
+    !!task.gcalEventId ||
+    !!task.gcalSyncError ||
+    syncEvent.isError ||
+    (isPullFresh(task, settings?.dayStartHour ?? 4, now) && !!task.gcalPulled);
+
+  const parentLink = parent && (
+    <button
+      type="button"
+      className="underline decoration-line underline-offset-2 hover:text-ink"
+      onClick={(e) => openTask?.(parent, 'view', e.currentTarget)}
+    >
+      {parent.title}
+    </button>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {/* Header — the status line. The full title is the editable Title field in the details form
@@ -170,18 +231,13 @@ export function TaskEditor({
           {isParent && task.status === 'backlog' ? 'Open' : statusLabel(task.status)}
           {isParent &&
             ` · ${summary.done} of ${summary.total} ${summary.total === 1 ? 'part' : 'parts'}`}
+          {/* A dropped part no longer counts among its parent's parts, so it has no "Part 2 of 2". */}
+          {parentLink && task.status === 'cancelled' && <> · part of {parentLink}</>}
         </Text>
         <CategoryTag categoryId={task.categoryId} />
-        {parent && (
+        {parentLink && task.status !== 'cancelled' && (
           <Text size="sm" tone="muted">
-            Part {partIndex(task, siblings)} of {siblings.length} of{' '}
-            <button
-              type="button"
-              className="underline decoration-line underline-offset-2 hover:text-ink"
-              onClick={(e) => openTask?.(parent, 'view', e.currentTarget)}
-            >
-              {parent.title}
-            </button>
+            Part {partIndex(task, siblings)} of {siblings.length} of {parentLink}
           </Text>
         )}
         {parent?.dueDay && (
@@ -201,8 +257,8 @@ export function TaskEditor({
       <TaskDetailsForm
         task={task}
         parts={isParent ? summary : undefined}
-        isPart={!!task.parentId}
-        onDirtyChange={onDirtyChange}
+        parent={parent}
+        edits={edits}
         estimateRef={estimateRef}
       />
 
@@ -215,13 +271,19 @@ export function TaskEditor({
               Parts · {summary.done}/{summary.total}
             </SectionHeading>
             {!isTerminal && reveal !== 'parts' && (
-              <Button ref={partsRef} variant="quiet" size="sm" onClick={() => setReveal('parts')}>
+              <Button ref={partsRef} variant="quiet" size="sm" onClick={() => openReveal('parts')}>
                 Add parts…
               </Button>
             )}
           </div>
-          {reveal === 'parts' && (
-            <BreakDownForm task={task} isParent onDone={closeParts} onCancel={closeParts} />
+          {reveal === 'parts' && !isTerminal && (
+            <BreakDownForm
+              task={task}
+              isParent
+              onDone={closeParts}
+              onCancel={closeParts}
+              edits={edits}
+            />
           )}
           <ul className="flex flex-col gap-1">
             {parts.map((p) => (
@@ -269,10 +331,9 @@ export function TaskEditor({
               <Button
                 variant={summary.allDone ? 'primary' : 'quiet'}
                 size="sm"
-                disabled={markDone.isPending}
-                onClick={() =>
-                  markDone.mutate({ id: task.id, to: 'done' }, { onSuccess: () => onClose() })
-                }
+                onClick={markParentDone}
+                aria-disabled={marking}
+                className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
               >
                 Mark done
               </Button>
@@ -315,7 +376,8 @@ export function TaskEditor({
         <AttachmentsPanel taskId={task.id} />
       </section>
 
-      <section className="flex flex-col gap-2">
+      {/* A finished task with no event and nothing to say has no Calendar section (no bare heading). */}
+      <section className={cx('flex flex-col gap-2', !showCalendar && 'hidden')}>
         <SectionHeading>Calendar</SectionHeading>
         {/* A failed auto-sync never fails the task write — it's said here, with a retry. */}
         {/* The retry/add call itself failing (offline, 5xx) is said too — never a dead button. */}
@@ -341,102 +403,115 @@ export function TaskEditor({
             </Button>
           </div>
         )}
-        {isParent ? (
-          // A parent never owns an event (parts.ts) — the work is on the calendar as its parts' blocks.
-          <Text size="sm" tone="muted">
-            Its parts carry their own calendar blocks.
-          </Text>
-        ) : (
-          <>
-            {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
-            Aperture kept its value over Google's, Google still shows its own until the next push: one
-            tap sends it (a done task never pushes). */}
-            {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div role="status">
-                  <Text size="sm" tone="gold">
-                    {task.gcalPulled.note}
-                  </Text>
-                </div>
-                {hasKeptPart(task.gcalPulled.note) &&
-                  !isTerminal &&
-                  !!settings &&
-                  settings.autoCalendar !== false &&
-                  !task.gcalSyncError && // Retry shows instead
-                  hasUnsent(task, localEpochFromDayTime) && (
-                    <Button
-                      variant="quiet"
-                      size="sm"
-                      disabled={syncEvent.isPending}
-                      onClick={() => syncEvent.mutate(task.id)}
-                    >
-                      Send to Google
-                    </Button>
-                  )}
-              </div>
-            )}
-            {task.gcalEventId ? (
-              <div className="flex items-center justify-between gap-3">
-                <Text size="sm" tone="teal">
-                  On Google Calendar
-                </Text>
-                <Button variant="quiet" size="sm" onClick={() => deleteEvent.mutate(task.id)}>
-                  Remove
-                </Button>
-              </div>
-            ) : task.dueDay && task.dueTime && autoCalendar && !isTerminal ? (
-              // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
-              // hand or in Google) — one tap creates it, ending at the deadline.
-              !task.gcalSyncError && (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <Text size="sm" tone="muted">
-                    Not on your calendar.
-                  </Text>
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    disabled={syncEvent.isPending}
-                    onClick={() => syncEvent.mutate(task.id)}
-                  >
-                    Add to calendar
-                  </Button>
-                </div>
-              )
-            ) : task.dueDay && !isTerminal ? (
-              // A timed task gets the picker only once settings say auto-sync can't place its block.
-              task.dueTime && !settings ? null : reveal === 'calendar' ? (
-                <AddToCalendarForm task={task} onDone={() => setReveal(null)} />
-              ) : (
+        {/* What an edit made in Google changed — until the day rolls over (the row shows a mark). When
+        Aperture kept its value over Google's, Google still shows its own until the next push: one
+        tap sends it (a done task never pushes). */}
+        {isPullFresh(task, settings?.dayStartHour ?? 4, now) && task.gcalPulled && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div role="status">
+              <Text size="sm" tone="gold">
+                {task.gcalPulled.note}
+              </Text>
+            </div>
+            {hasKeptPart(task.gcalPulled.note) &&
+              !isTerminal &&
+              !!settings &&
+              settings.autoCalendar !== false &&
+              !task.gcalSyncError && // Retry shows instead
+              hasUnsent(task, localEpochFromDayTime, {
+                parent: isParent,
+                parentTitle: parent?.title,
+              }) && (
                 <Button
                   variant="quiet"
                   size="sm"
-                  className="self-start"
-                  onClick={() => setReveal('calendar')}
+                  disabled={syncEvent.isPending}
+                  onClick={() => syncEvent.mutate(task.id)}
                 >
-                  Add to calendar…
+                  Send to Google
                 </Button>
-              )
-            ) : !isTerminal ? (
-              <Text size="sm" tone="muted">
-                {task.parentId
-                  ? 'Set when this part ends to add it to your calendar.'
-                  : 'Set a due day to add this to your calendar.'}
-              </Text>
-            ) : null}
-          </>
+              )}
+          </div>
         )}
+        {task.gcalEventId ? (
+          // A parent's one event is its due marker (parts.ts): 15 minutes, free, ending at its deadline.
+          <div className="flex items-center justify-between gap-3">
+            <Text size="sm" tone="teal">
+              {isParent ? 'Due marker on Google Calendar' : 'On Google Calendar'}
+            </Text>
+            <Button variant="quiet" size="sm" onClick={() => deleteEvent.mutate(task.id)}>
+              Remove
+            </Button>
+          </div>
+        ) : task.dueDay && task.dueTime && autoCalendar && !isTerminal ? (
+          // Timed + auto-sync but no event: timed while sync was off, or its event was removed (by
+          // hand or in Google) — one tap creates it, ending at the deadline.
+          !task.gcalSyncError && (
+            <div className="flex items-center justify-between gap-3">
+              <Text size="sm" tone="muted" className="min-w-0">
+                {isParent ? 'No due marker on your calendar.' : 'Not on your calendar.'}
+              </Text>
+              <Button
+                variant="quiet"
+                size="sm"
+                className="shrink-0"
+                disabled={syncEvent.isPending}
+                onClick={() => syncEvent.mutate(task.id)}
+              >
+                {isParent ? 'Add due marker' : 'Add to calendar'}
+              </Button>
+            </div>
+          )
+        ) : isParent ? (
+          // No picked time for a parent: its marker goes where its deadline is, with auto-sync on. Nothing
+          // until settings load, so a timed parent never flashes "Connect Google Calendar…".
+          !isTerminal &&
+          !!settings && (
+            <Text size="sm" tone="muted">
+              {!task.dueTime
+                ? 'Set a due time to put its deadline on your calendar.'
+                : settings?.calendarWriteDefault
+                  ? 'Its due marker goes on your calendar while auto-sync is on.'
+                  : 'Connect Google Calendar in Settings to put its deadline there.'}
+            </Text>
+          )
+        ) : task.dueDay && !isTerminal ? (
+          // A timed task gets the picker only once settings say auto-sync can't place its block.
+          task.dueTime && !settings ? null : reveal === 'calendar' ? (
+            <AddToCalendarForm
+              task={task}
+              parentTitle={parent?.title}
+              onDone={() => setReveal(null)}
+            />
+          ) : (
+            <Button
+              variant="quiet"
+              size="sm"
+              className="self-start"
+              onClick={() => openReveal('calendar')}
+            >
+              Add to calendar…
+            </Button>
+          )
+        ) : !isTerminal ? (
+          <Text size="sm" tone="muted">
+            {task.parentId
+              ? 'Set when this part ends to add it to your calendar.'
+              : 'Set a due day to add this to your calendar.'}
+          </Text>
+        ) : null}
       </section>
 
       {/* Manage — the lower-frequency, mostly destructive actions. */}
       <section className="flex flex-col gap-2 border-t border-line pt-3">
         <div className="flex flex-wrap items-center gap-2">
           {showSplit && (
-            <Button ref={splitRef} variant="quiet" size="sm" onClick={() => setReveal('split')}>
+            <Button ref={splitRef} variant="quiet" size="sm" onClick={() => openReveal('split')}>
               Split…
             </Button>
           )}
           {canBreakDown && (
-            <Button ref={partsRef} variant="quiet" size="sm" onClick={() => setReveal('parts')}>
+            <Button ref={partsRef} variant="quiet" size="sm" onClick={() => openReveal('parts')}>
               Break down…
             </Button>
           )}
@@ -445,7 +520,7 @@ export function TaskEditor({
               variant="quiet"
               size="sm"
               className="text-danger"
-              onClick={() => setReveal('drop')}
+              onClick={() => openReveal('drop')}
             >
               Drop task…
             </Button>
@@ -455,7 +530,7 @@ export function TaskEditor({
               variant="quiet"
               size="sm"
               className="text-danger"
-              onClick={() => setReveal('delete')}
+              onClick={() => openReveal('delete')}
             >
               Delete task…
             </Button>
@@ -464,27 +539,34 @@ export function TaskEditor({
             Close
           </Button>
         </div>
-        {reveal === 'parts' && !isParent && (
-          <BreakDownForm task={task} isParent={false} onDone={closeParts} onCancel={closeParts} />
+        {reveal === 'parts' && canBreakDown && (
+          <BreakDownForm
+            task={task}
+            isParent={false}
+            onDone={closeParts}
+            onCancel={closeParts}
+            edits={edits}
+          />
         )}
-        {reveal === 'split' && (
+        {reveal === 'split' && showSplit && (
           <SplitForm
             task={task}
             parentTitle={parent?.title}
             // Done finishes this task, so the modal closes (like Mark done); kept going, it stays open.
-            onDone={(finish) => (finish === 'done' ? onClose() : closeSplit())}
+            onDone={(finish, original) => (finish === 'done' ? finished(original) : closeSplit())}
             onCancel={closeSplit}
+            edits={edits}
           />
         )}
-        {reveal === 'drop' && (
+        {reveal === 'drop' && canScope && (
           <DropConfirm
             task={task}
             parts={isParent ? summary : undefined}
             onCancel={() => setReveal(null)}
-            onDone={onClose}
+            onDone={finished}
           />
         )}
-        {reveal === 'delete' && (
+        {reveal === 'delete' && task.seriesId === null && (
           <DeleteConfirm
             task={task}
             parts={isParent ? summary : undefined}

@@ -37,6 +37,7 @@ describe('calendarSyncPlan', () => {
       title: 'pset',
       startMs: END - 60 * 60_000,
       endMs: END,
+      marker: false,
     });
   });
   it('untimed tasks never create (no all-day events)', () => {
@@ -173,6 +174,24 @@ describe('calendarSyncPlan', () => {
       updatedMs: 30,
     });
   });
+  it('seenAfter records the look sent: a patch without one keeps it, false overrides true', () => {
+    const marker = { title: 'p', startMs: 1, endMs: 2, updatedMs: 10, marker: true };
+    expect(seenAfter({ kind: 'patch', title: 'q' }, marker, 20).marker).toBe(true);
+    expect(seenAfter({ kind: 'patch', marker: false }, marker, 20).marker).toBe(false);
+    const create = { kind: 'create' as const, target: REF, title: 'p', startMs: 1, endMs: 2 };
+    expect(seenAfter({ ...create, marker: false }, null, 5).marker).toBe(false);
+    expect('marker' in seenAfter({ kind: 'patch', title: 'q' }, null, 5)).toBe(false);
+  });
+  it('a look to send on an event with no base sends everything, so the base it leaves is whole', () => {
+    const unknown = linked({ gcalSeen: null });
+    expect(calendarSyncPlan(unknown, unknown, ON, epoch, { parent: true })).toEqual({
+      kind: 'patch',
+      title: 'pset',
+      startMs: END - 15 * 60_000,
+      endMs: END,
+      marker: true,
+    });
+  });
   it('a manual event on an untimed task moves when the task gains a time', () => {
     const a = calendarSyncPlan(linked({ dueTime: null }), linked(), ON, epoch);
     expect(a).toMatchObject({ kind: 'patch', endMs: END });
@@ -201,18 +220,180 @@ describe('calendarSyncPlan', () => {
     );
     expect(calendarSyncPlan(null, owedOff, OFF, epoch, { ensure: true }).kind).toBe('delete');
   });
-  it('a task with parts never owns an event: a linked one deletes (sync on or off), else nothing', () => {
+  describe('a parent: its one event is the due marker', () => {
     const OFF = { autoCalendar: false, calendarWriteDefault: REF };
     const parent = { parent: true };
-    expect(calendarSyncPlan(null, task(), ON, epoch, parent)).toEqual({ kind: 'none' });
-    expect(calendarSyncPlan(null, task(), ON, epoch, { ...parent, ensure: true }).kind).toBe(
-      'none',
-    );
-    expect(calendarSyncPlan(linked(), linked(), ON, epoch, parent).kind).toBe('delete');
-    expect(calendarSyncPlan(linked(), linked(), OFF, epoch, parent).kind).toBe('delete');
-    expect(calendarSyncPlan(null, linked(), ON, epoch, { ...parent, ensure: true }).kind).toBe(
-      'delete',
-    );
+    const MARK = { startMs: END - 15 * 60_000, endMs: END };
+    const seenMarker = { title: 'pset', ...MARK, updatedMs: 1, marker: true };
+
+    it('a timed parent creates a 15-minute marker ending at its deadline', () => {
+      expect(calendarSyncPlan(null, task(), ON, epoch, parent)).toEqual({
+        kind: 'create',
+        target: REF,
+        title: 'pset',
+        ...MARK,
+        marker: true,
+      });
+      // A due change on an unlinked parent creates it; nothing else does (lazy, like any block).
+      expect(calendarSyncPlan(task(), task({ dueTime: '17:00' }), ON, epoch, parent).kind).toBe(
+        'create',
+      );
+      expect(calendarSyncPlan(task(), task({ title: 'x' }), ON, epoch, parent).kind).toBe('none');
+    });
+    it('adopt (block → marker) re-sends window and marker even when the windows coincide', () => {
+      const block = linked({
+        estimateMin: 15,
+        gcalSeen: { title: 'pset', ...MARK, updatedMs: 1 },
+      });
+      expect(calendarSyncPlan(block, block, ON, epoch, { ...parent, ensure: true })).toEqual({
+        kind: 'patch',
+        title: 'pset',
+        ...MARK,
+        marker: true,
+      });
+    });
+    it('release (marker → block) patches back to the estimate window, marker off', () => {
+      const p = linked({ gcalSeen: seenMarker });
+      expect(calendarSyncPlan(p, p, ON, epoch, { ensure: true })).toEqual({
+        kind: 'patch',
+        title: 'pset',
+        startMs: END - 60 * 60_000,
+        endMs: END,
+        marker: false,
+      });
+    });
+    it('a due change moves the marker; a rename alone patches the title only', () => {
+      const p = linked({ gcalSeen: seenMarker });
+      const moved = calendarSyncPlan(p, { ...p, dueTime: '17:00' }, ON, epoch, parent);
+      expect(moved).toEqual({
+        kind: 'patch',
+        startMs: END + 45 * 60_000,
+        endMs: END + 60 * 60_000, // already shows as a marker: no look sent
+      });
+      expect(calendarSyncPlan(p, { ...p, title: 'renamed' }, ON, epoch, parent)).toEqual({
+        kind: 'patch',
+        title: 'renamed',
+      });
+      // Its parts' estimates don't size it: nothing to send when the window is the marker's.
+      expect(calendarSyncPlan(p, p, ON, epoch, parent).kind).toBe('none');
+    });
+    it('a marker stretched in Google stays stretched: only its end (the deadline) counts', () => {
+      const stretched = linked({ gcalSeen: { ...seenMarker, startMs: END - 90 * 60_000 } });
+      expect(calendarSyncPlan(stretched, stretched, ON, epoch, parent).kind).toBe('none');
+      expect(
+        calendarSyncPlan(stretched, { ...stretched, title: 'renamed' }, ON, epoch, parent),
+      ).toEqual({ kind: 'patch', title: 'renamed' });
+      expect(hasUnsent(stretched, epoch, { parent: true })).toBe(false);
+    });
+    it('the look heals on the next push when a switch failed or was skipped', () => {
+      // Became a parent while sync was off: still a plain block → the next push makes it the marker.
+      const block = linked({ gcalSeen: { title: 'pset', ...MARK, updatedMs: 1 } });
+      expect(calendarSyncPlan(block, block, ON, epoch, parent)).toEqual({
+        kind: 'patch',
+        marker: true,
+      });
+      expect(hasUnsent(block, epoch, { parent: true })).toBe(true);
+      // Its release failed: a plain task still showing as a marker → any push turns it back.
+      const stale = linked({ gcalSeen: seenMarker });
+      expect(calendarSyncPlan(stale, { ...stale, title: 'x' }, ON, epoch)).toEqual({
+        kind: 'patch',
+        title: 'x',
+        startMs: END - 60 * 60_000,
+        endMs: END,
+        marker: false,
+      });
+      // A plain block that never showed as a marker is never sent a look (its colour may be yours).
+      const plain = linked({
+        gcalSeen: { title: 'pset', startMs: END - 60 * 60_000, endMs: END, updatedMs: 1 },
+      });
+      expect(calendarSyncPlan(plain, { ...plain, title: 'x' }, ON, epoch)).toEqual({
+        kind: 'patch',
+        title: 'x',
+      });
+    });
+    it('a done parent keeps its marker; sync off leaves it alone', () => {
+      const p = linked({ gcalSeen: seenMarker });
+      expect(calendarSyncPlan(p, { ...p, status: 'done' }, ON, epoch, parent).kind).toBe('none');
+      expect(calendarSyncPlan(p, { ...p, dueTime: '17:00' }, OFF, epoch, parent).kind).toBe('none');
+    });
+    it('an untimed parent has no marker: none, and an event it had goes (sync on or off)', () => {
+      const untimed = task({ dueTime: null });
+      expect(calendarSyncPlan(null, untimed, ON, epoch, { ...parent, ensure: true }).kind).toBe(
+        'none',
+      );
+      const manual = linked({ dueTime: null });
+      expect(calendarSyncPlan(manual, manual, ON, epoch, parent).kind).toBe('delete');
+      expect(calendarSyncPlan(manual, manual, OFF, epoch, parent).kind).toBe('delete');
+      // Losing its time takes the marker with it.
+      const p = linked({ gcalSeen: seenMarker });
+      expect(calendarSyncPlan(p, { ...p, dueTime: null }, ON, epoch, parent).kind).toBe('delete');
+    });
+    it('an owed removal still wins', () => {
+      const owed = linked({ dueTime: null, gcalSyncError: gcalSyncMessage('delete', 'x') });
+      expect(calendarSyncPlan(owed, owed, OFF, epoch, parent).kind).toBe('delete');
+    });
+  });
+
+  describe('a part: its block is named after its parent', () => {
+    const named = { parentTitle: 'P2' };
+    const WIN = { startMs: END - 60 * 60_000, endMs: END };
+    it('creates as "P2 · Part 1"', () => {
+      expect(calendarSyncPlan(null, task({ title: 'Part 1' }), ON, epoch, named)).toMatchObject({
+        kind: 'create',
+        title: 'P2 · Part 1',
+        marker: false,
+      });
+    });
+    it('a parent rename patches a known block’s title only; no marker field on a plain block', () => {
+      const part = linked({
+        title: 'Part 1',
+        gcalSeen: { title: 'P2 · Part 1', ...WIN, updatedMs: 1 },
+      });
+      expect(calendarSyncPlan(part, part, ON, epoch, named).kind).toBe('none');
+      expect(calendarSyncPlan(part, part, ON, epoch, { parentTitle: 'P3' })).toEqual({
+        kind: 'patch',
+        title: 'P3 · Part 1',
+      });
+      expect(calendarSyncPlan(part, { ...part, dueTime: '17:00' }, ON, epoch, named)).toEqual({
+        kind: 'patch',
+        startMs: END,
+        endMs: END + 60 * 60_000,
+      });
+    });
+    it('a v1 block (bare "Part 1") gets the prefix with its next push', () => {
+      const v1 = linked({ title: 'Part 1', gcalSeen: { title: 'Part 1', ...WIN, updatedMs: 1 } });
+      expect(calendarSyncPlan(v1, v1, ON, epoch, named)).toEqual({
+        kind: 'patch',
+        title: 'P2 · Part 1',
+      });
+    });
+    it('an untimed part’s manual event renames with the prefix', () => {
+      const manual = linked({
+        title: 'Part 1',
+        dueTime: null,
+        gcalSeen: { title: 'P2 · Part 1', startMs: null, endMs: null, updatedMs: 1 },
+      });
+      expect(calendarSyncPlan(manual, manual, ON, epoch, { parentTitle: 'P3' })).toEqual({
+        kind: 'patch',
+        title: 'P3 · Part 1',
+      });
+    });
+  });
+
+  describe('hasUnsent with a context', () => {
+    it('reads a part’s block title and a parent’s marker window', () => {
+      const WIN = { startMs: END - 60 * 60_000, endMs: END };
+      const part = linked({
+        title: 'Part 1',
+        gcalSeen: { title: 'P2 · Part 1', ...WIN, updatedMs: 1 },
+      });
+      expect(hasUnsent(part, epoch, { parentTitle: 'P2' })).toBe(false);
+      expect(hasUnsent(part, epoch)).toBe(true);
+      const MARK = { startMs: END - 15 * 60_000, endMs: END };
+      const p = linked({ gcalSeen: { title: 'pset', ...MARK, updatedMs: 1, marker: true } });
+      expect(hasUnsent(p, epoch, { parent: true })).toBe(false);
+      expect(hasUnsent(p, epoch)).toBe(true);
+    });
   });
 
   it('a finished task still honours an owed removal', () => {

@@ -57,6 +57,7 @@ export interface InsertEventInput {
   startMs: number;
   endMs: number;
   taskId?: string; // tagged on the event (extendedProperties.private) — provenance only, never matched on
+  marker?: boolean; // a parent's due marker: shown free (transparent), graphite
 }
 export interface EventChangesInput {
   sub: string;
@@ -77,6 +78,7 @@ export interface PatchEventInput {
   title?: string;
   startMs?: number;
   endMs?: number;
+  marker?: boolean; // true → show as a due marker; false → back to a plain busy block; absent → as is
 }
 
 // A pull that ran out of its time budget mid-pagination — nothing to store; the old token replays.
@@ -131,6 +133,7 @@ interface FakeEvent {
   startMs: number;
   endMs: number;
   taskId?: string;
+  marker?: boolean; // shown free + graphite (a parent's due marker)
   cancelled?: boolean; // deleted (or moved away) in Google — kept, as Google keeps it, for the delta
   allDay?: boolean;
   recurring?: boolean;
@@ -288,6 +291,7 @@ export class InMemoryGoogle implements GoogleGateway {
     if (input.title !== undefined) evt.title = input.title;
     if (input.startMs !== undefined) evt.startMs = input.startMs;
     if (input.endMs !== undefined) evt.endMs = input.endMs;
+    if (input.marker !== undefined) evt.marker = input.marker;
     if (input.startMs !== undefined) evt.allDay = false; // a timed window replaces an all-day one
     this.touch(evt);
     return { updatedMs: evt.updatedMs! };

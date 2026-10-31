@@ -14,6 +14,7 @@ import {
   dayKeyForOffset,
   discardSession,
   eventWindow,
+  syncWindow,
   gcalSyncMessage,
   isPendingRemoval,
   FINANCE_DEFAULT_BUDGET_CENTS,
@@ -97,6 +98,7 @@ import type {
   SetFinanceBucketInput,
   SetTaskDueInput,
   SplitTaskInput,
+  SyncContext,
   UpsertFinanceRuleInput,
   Habit,
   HabitCheck,
@@ -244,14 +246,14 @@ export class BackendClient implements ApiClient {
     };
   }
   // A task taking its first part (parts.ts becomeParent): its estimate goes, it leaves its plan (rows
-  // tombstoned) and any calendar block. Pass the task as it was; call AFTER the first part is written,
-  // so the calendar sync sees it has parts.
+  // tombstoned), and its block becomes its due marker (a timed one with none gets one — one Google call
+  // either way). Pass the task as it was; call AFTER the first part is written.
   private async adoptAsParent(parent: Task): Promise<Task> {
     const now = this.now();
     for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === parent.id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
     const became = await this.repo.putTask(becomeParent(parent, now));
-    return this.syncCalendar(parent, became);
+    return this.syncCalendar(parent, became, true, undefined, { parent: true });
   }
   // The rollup's baseline, frozen when `starting` — the first part to leave planning — does
   // (parts.ts freezeParentLock). Freeze and release decide on the list straight after a task write, so
@@ -264,13 +266,17 @@ export class BackendClient implements ApiClient {
     const frozen = freezeParentLock(parent, partsOf(tasks, parentId), starting, this.now());
     if (frozen) await this.repo.putTask(frozen);
   }
-  // A task whose last part just went is plain again, its parts' lock with them (parts.ts releaseParent).
-  private async releaseLock(parentId: string | null): Promise<void> {
+  // A task whose last part just went is plain again: its parts' lock goes (parts.ts releaseParent) and
+  // its due marker turns back into a block.
+  private async releaseParentState(parentId: string | null): Promise<void> {
     if (!parentId) return;
     const tasks = await this.repo.listTasks({ consistent: true });
     const parent = tasks.find((t) => t.id === parentId);
-    const released = parent ? releaseParent(parent, tasks, this.now()) : null;
-    if (released) await this.repo.putTask(released);
+    if (!parent || hasParts(tasks, parentId)) return;
+    const released = releaseParent(parent, tasks, this.now());
+    const plain = released ? await this.repo.putTask(released) : parent;
+    if (plain.gcalEventId)
+      await this.syncCalendar(plain, plain, true, undefined, { parent: false });
   }
   private async ensureSettings(): Promise<Settings> {
     const def: Settings = {
@@ -308,24 +314,36 @@ export class BackendClient implements ApiClient {
   // Auto-sync). The task is already saved: a Google failure never fails the write — it lands on the
   // task as gcalSyncError (shown with a retry) and is logged, and a failed remove keeps the event linked
   // so the retry can finish it. Returns the task as it now stands.
+  //
+  // `ctx` is what the caller already knows: `parent` (adopt and release know before the list does), and
+  // `tasks`, a list to find a part's parent in (its title names the block). The event's look (marker or
+  // block) heals from gcalSeen either way.
   private async syncCalendar(
     prev: Task | null,
     task: Task,
     ensure = false,
     known?: Settings, // a batch reads settings once
+    ctx: Pick<SyncContext, 'parent'> & { tasks?: Task[] } = {},
   ): Promise<Task> {
     // Most writes are on untimed, unlinked tasks — nothing to sync, so don't even read settings.
     if (!task.dueTime && !task.gcalEventId && !task.gcalSyncError) return task;
     const settings = known ?? (await this.ensureSettings());
-    // A parent never owns an event (parts.ts) — the planner needs to know, and only the list says. A
-    // brand-new task can't be one (its parts would have to exist first), so a create skips the scan —
-    // a timed bulk paste pays for none of them inside its sync budget. The retry (ensure) always looks.
-    // Strongly consistent: adoptAsParent syncs straight after writing the first part.
-    const parent =
-      prev === null && !ensure
-        ? false
-        : hasParts(await this.repo.listTasks({ consistent: true }), task.id);
-    const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, { ensure, parent });
+    // A parent's one event is its due marker (parts.ts) — the planner needs to know, and only the list
+    // says. A brand-new task can't be one (its parts would have to exist first), so a create skips the
+    // scan — a timed bulk paste pays for none of them inside its sync budget. The retry (ensure) always
+    // looks. Strongly consistent: a part write comes straight before.
+    const scan = ctx.parent === undefined && (prev !== null || ensure);
+    const tasks = ctx.tasks ?? (scan ? await this.repo.listTasks({ consistent: true }) : undefined);
+    const parent = ctx.parent ?? (scan ? hasParts(tasks!, task.id) : false);
+    const parentTitle = task.parentId
+      ? ((tasks?.find((t) => t.id === task.parentId) ?? (await this.repo.getTask(task.parentId)))
+          ?.title ?? null)
+      : null;
+    const action = calendarSyncPlan(prev, task, settings, this.dueEpoch, {
+      ensure,
+      parent,
+      parentTitle,
+    });
     // A linked task's title/time/estimate edit — pushed, failed or not pushed at all (done, sync off) —
     // retires an "updated from Google" note it has just superseded.
     const edited =
@@ -336,7 +354,7 @@ export class BackendClient implements ApiClient {
       // or the task finished — otherwise it'd sit there with a Retry that can't do anything.
       const moot =
         task.gcalSyncError &&
-        ((!task.gcalEventId && (parent || !eventWindow(task, this.dueEpoch))) ||
+        ((!task.gcalEventId && !syncWindow(task, this.dueEpoch, parent)) ||
           settings.autoCalendar === false ||
           task.status === 'done' ||
           task.status === 'cancelled');
@@ -361,6 +379,7 @@ export class BackendClient implements ApiClient {
           startMs: action.startMs,
           endMs: action.endMs,
           taskId: task.id,
+          marker: action.marker,
         });
         return this.putGcal(task, {
           gcalAccountId: action.target.accountSub,
@@ -392,6 +411,7 @@ export class BackendClient implements ApiClient {
           title: action.title,
           startMs: action.startMs,
           endMs: action.endMs,
+          marker: action.marker,
         }));
       } catch (e) {
         if (!(e instanceof EventGoneError)) throw e;
@@ -674,7 +694,7 @@ export class BackendClient implements ApiClient {
           skipped.push(i);
           continue;
         }
-        out[i] = await this.syncCalendar(null, task, false, settings);
+        out[i] = await this.syncCalendar(null, task, false, settings, { tasks: all });
         if (out[i]!.gcalSyncError) tripped = true;
       }
     };
@@ -700,9 +720,10 @@ export class BackendClient implements ApiClient {
   async setTaskParent(id: string, parentId: string | null): Promise<Task> {
     const task = await this.mustTask(id);
     if (parentId === null) {
+      if (!task.parentId) return task; // not a part: nothing to detach (a parent keeps its marker)
       const part = await this.repo.putTask({ ...task, parentId: null, updatedAt: this.now() });
-      await this.releaseLock(task.parentId);
-      return part;
+      await this.releaseParentState(task.parentId);
+      return this.syncCalendar(task, part, false, undefined, { parent: false }); // loses the prefix
     }
     const parent = await this.mustTask(parentId);
     const all = await this.repo.listTasks();
@@ -711,9 +732,10 @@ export class BackendClient implements ApiClient {
     const part = await this.repo.putTask({ ...task, parentId, updatedAt: this.now() });
     if (first) await this.adoptAsParent(parent);
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
-    await this.releaseLock(task.parentId); // moved from another parent
+    await this.releaseParentState(task.parentId); // moved from another parent
     await this.freezeLock(parentId, id); // attaching a started task can be its parent's first start
-    return part;
+    // Its block is named after its new parent (a part has no parts of its own).
+    return this.syncCalendar(task, part, false, undefined, { parent: false, tasks: [parent] });
   }
   async setTaskCategory(id: string, categoryId: string | null): Promise<Task> {
     const t = await this.mustTask(id);
@@ -733,7 +755,20 @@ export class BackendClient implements ApiClient {
     if (!trimmed) throw new Error('Title is required');
     const prev = await this.mustTask(id);
     const next = await this.repo.putTask({ ...prev, title: trimmed, updatedAt: this.now() });
-    return this.syncCalendar(prev, next);
+    // A part has no parts of its own, so only a possible parent pays for the (consistent) list read.
+    const tasks = prev.parentId ? undefined : await this.repo.listTasks({ consistent: true });
+    const parts = tasks ? partsOf(tasks, id) : [];
+    const synced = await this.syncCalendar(prev, next, false, undefined, {
+      parent: parts.length > 0,
+      tasks,
+    });
+    // A parent's name is in each of its parts' blocks: each linked open one is re-sent — one Google
+    // call each, a failure landing on that part (Retry), never on the rename.
+    const settings = parts.some((p) => p.gcalEventId) ? await this.ensureSettings() : undefined;
+    for (const part of parts)
+      if (part.gcalEventId && part.status !== 'done' && part.status !== 'cancelled')
+        await this.syncCalendar(part, part, false, settings, { parent: false, tasks: [next] });
+    return synced;
   }
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
     const normalized = setNotesArg(notes); // throws (missing, over the cap) before any read or write
@@ -755,14 +790,16 @@ export class BackendClient implements ApiClient {
     return (await this.repo.getTask(id)) ?? next;
   }
   // A parent is never worked on itself: it's marked done once its parts are dealt with (a hard block
-  // otherwise), and dropping it drops its open parts first — each through the normal cancel path, so
-  // their calendar blocks go too — then the parent last.
+  // otherwise; its due marker stays, as a done task's block does), and dropping it drops its open parts
+  // first — each through the normal cancel path, so their calendar blocks go too — then the parent and
+  // its marker last.
   private async transitionParent(task: Task, parts: Task[], to: TaskStatus): Promise<Task> {
     if (to === 'done') return this.repo.putTask(completeParent(task, parts, this.now()));
     if (to === 'cancelled') {
       const { parent, parts: dropped } = cancelParent(task, parts, this.now());
       for (const p of dropped) await this.transitionOne(await this.mustTask(p.id), to);
-      return this.repo.putTask(parent);
+      const saved = await this.repo.putTask(parent);
+      return task.gcalEventId ? this.deleteCalendarEvent(task.id) : saved;
     }
     throw new Error(to === 'in_progress' ? PARENT_NO_START_ERROR : PARENT_NO_PLAN_ERROR);
   }
@@ -795,11 +832,12 @@ export class BackendClient implements ApiClient {
     if (hasParts(await this.repo.listTasks(), id)) throw new Error(PARENT_NO_SPLIT_ERROR);
     const standalone = !task.parentId;
     const shaped = splitOriginal(task, input, this.now(), standalone); // validates everything before any write
-    // Split always yields parent + parts: a standalone task gets a new parent (no event — it never owns
-    // one), a part splits under the parent it has.
-    const parentId = standalone
-      ? (await this.repo.putTask({ ...this.base(), ...newParentFrom(task, input) })).id
-      : task.parentId!;
+    // Split always yields parent + parts: a standalone task gets a new parent (its due marker is synced
+    // last, once it has parts), a part splits under the parent it has.
+    const newParent = standalone
+      ? await this.repo.putTask({ ...this.base(), ...newParentFrom(task, input) })
+      : null;
+    const parentId = newParent?.id ?? task.parentId!;
     const edited = { ...shaped, parentId };
     const done = input.finish === 'done';
     // A TIMED task's event is the block before its deadline. A done part has no future there, so the link
@@ -867,14 +905,30 @@ export class BackendClient implements ApiClient {
       });
     }
     // No freeze here: a standalone split's parent IS the original's lock, and nothing started just now.
-    const followUp = await this.syncCalendar(null, created);
-    return { parent: await this.mustTask(parentId), original, followUp };
+    // The new parent in hand names the follow-up's block (a read straight after its write could miss it).
+    const followUp = await this.syncCalendar(
+      null,
+      created,
+      false,
+      undefined,
+      newParent ? { tasks: [newParent] } : {},
+    );
+    const parent = newParent
+      ? await this.syncCalendar(null, newParent, false, undefined, { parent: true })
+      : await this.mustTask(parentId);
+    return { parent, original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
+    return this.deleteOne(id, true);
+  }
+  // `release`: a part's parent is left plain if this was its last part — not when the parent is going
+  // too (its marker is deleted with it, not first patched back into a block: no wasted Google call).
+  private async deleteOne(id: string, release: boolean): Promise<void> {
     const task = await this.repo.getTask(id);
     if (!task) return; // idempotent — already tombstoned or never existed
     // A parent goes with every part — each through this same path (event, plans, attachments), first.
-    for (const part of partsOf(await this.repo.listTasks(), id)) await this.deleteTask(part.id);
+    for (const part of partsOf(await this.repo.listTasks(), id))
+      await this.deleteOne(part.id, false);
     // Calendar event FIRST (deleteCalendarEvent uses mustTask, so it must run before the tombstone).
     // Build the tombstone from the RETURNED task: it has the gcal pointers nulled, so we don't re-put
     // stale pointers onto the tombstone.
@@ -885,7 +939,7 @@ export class BackendClient implements ApiClient {
     for (const a of await this.repo.listAttachmentsForTask(id))
       await this.repo.putAttachment({ ...a, deletedAt: now, updatedAt: now });
     await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
-    await this.releaseLock(task.parentId);
+    if (release) await this.releaseParentState(task.parentId);
   }
 
   // --- Plans ---
@@ -1377,8 +1431,8 @@ export class BackendClient implements ApiClient {
 
   async insertCalendarEvent(input: InsertCalendarEventInput): Promise<Task> {
     const task = await this.mustTask(input.taskId);
-    // A parent never owns an event — its parts carry the blocks (parts.ts). Before the other checks, so
-    // MCP gets the reason that applies.
+    // A parent's one event is its due marker, placed by its deadline (parts.ts). Before the other checks,
+    // so MCP gets the reason that applies.
     if (hasParts(await this.repo.listTasks(), task.id)) throw new Error(PARENT_NO_EVENT_ERROR);
     // A timed task's block is its auto block, placed at its deadline — no picked time while sync is on.
     if (eventWindow(task, this.dueEpoch) && autoSyncOn(await this.ensureSettings()))
@@ -1466,7 +1520,8 @@ export class BackendClient implements ApiClient {
     );
     if (due.length === 0) return idle;
     const linked = new Map<string, Task>();
-    for (const t of await this.repo.listTasks())
+    const all = await this.repo.listTasks();
+    for (const t of all)
       if (t.gcalAccountId && t.gcalCalendarId && t.gcalEventId)
         linked.set(`${t.gcalAccountId}|${t.gcalCalendarId}|${t.gcalEventId}`, t);
     const changed: string[] = [];
@@ -1485,7 +1540,7 @@ export class BackendClient implements ApiClient {
             if (!task) continue;
             // The writes spend the budget too; stopping keeps the old token, and a replay is idempotent.
             if (Date.now() > deadlineMs) throw new PullIncompleteError();
-            const kind = await this.putPull(task.id, st, ev, !st.syncToken);
+            const kind = await this.putPull(task.id, st, ev, !st.syncToken, all);
             if (kind === 'apply' || kind === 'unlink') changed.push(task.id);
           }
           await this.repo.putGcalSyncState({
@@ -1523,6 +1578,7 @@ export class BackendClient implements ApiClient {
     st: GcalSyncState,
     ev: PulledEvent,
     firstSync: boolean, // the account's first sync (no token yet) — calendarPullPlan's first sight
+    all: Task[], // the scan: whether it's a parent (its marker), and a part's parent's title
   ): Promise<PullAction['kind']> {
     const fresh = await this.repo.getTask(taskId);
     if (
@@ -1532,7 +1588,11 @@ export class BackendClient implements ApiClient {
       fresh.gcalEventId !== ev.eventId
     )
       return 'none';
-    const action = calendarPullPlan(fresh, ev, this.pullTime, { firstSync });
+    const parent = hasParts(all, fresh.id);
+    const parentTitle = fresh.parentId
+      ? (all.find((t) => t.id === fresh.parentId)?.title ?? null)
+      : null;
+    const action = calendarPullPlan(fresh, ev, this.pullTime, { firstSync, parent, parentTitle });
     if (action.kind === 'none') return 'none';
     const now = this.now();
     const write: Partial<Task> =

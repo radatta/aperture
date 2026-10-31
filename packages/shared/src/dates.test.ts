@@ -11,6 +11,7 @@ import {
   fmtDueDay,
   hhmmOfEpoch,
   isTimeKey,
+  timeKeyOfInput,
   localEpochFromDayTime,
   zonedEpoch,
   zonedDayTime,
@@ -79,6 +80,16 @@ describe('iso week & formatting', () => {
     expect(fmtMonthShortDay('2026-08-31')).toBe('Aug 31');
     expect(fmtMonthShortDay('2026-12-28')).toBe('Dec 28');
     expect(fmtMonthShortDay('2027-01-04')).toBe('Jan 4');
+  });
+});
+
+describe('timeKeyOfInput', () => {
+  it('drops the seconds a browser time field (Safari) can report; anything else is left alone', () => {
+    expect(timeKeyOfInput('15:00:00')).toBe('15:00');
+    expect(timeKeyOfInput('03:00:00.000')).toBe('03:00');
+    expect(timeKeyOfInput('15:00')).toBe('15:00');
+    expect(timeKeyOfInput('')).toBe('');
+    expect(timeKeyOfInput('3pm')).toBe('3pm'); // still refused on save, not silently "fixed"
   });
 });
 

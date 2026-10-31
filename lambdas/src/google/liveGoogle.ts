@@ -316,6 +316,8 @@ export class LiveGoogle implements GoogleGateway {
     }
   }
 
+  // A parent's due marker (docs/areas/tasks/parts.md D13): free, so it never reads as busy, and graphite
+  // (event colour "8"), so it reads apart from the work blocks around it. The colour is never read back.
   async insertEvent(input: InsertEventInput): Promise<{ eventId: string; updatedMs: number }> {
     const res = await this.api(
       input.sub,
@@ -327,6 +329,7 @@ export class LiveGoogle implements GoogleGateway {
           summary: input.title,
           start: { dateTime: new Date(input.startMs).toISOString() },
           end: { dateTime: new Date(input.endMs).toISOString() },
+          ...(input.marker && markerLook(true)),
           ...(input.taskId && {
             extendedProperties: { private: { apertureTaskId: input.taskId } },
           }),
@@ -359,6 +362,7 @@ export class LiveGoogle implements GoogleGateway {
       body.start = { date: null, dateTime: new Date(input.startMs).toISOString() };
     if (input.endMs !== undefined)
       body.end = { date: null, dateTime: new Date(input.endMs).toISOString() };
+    if (input.marker !== undefined) Object.assign(body, markerLook(input.marker));
     const res = await this.api(
       input.sub,
       `/calendars/${encodeURIComponent(input.calendarId)}/events/${encodeURIComponent(input.eventId)}`,
@@ -399,3 +403,11 @@ function decodeIdToken(idToken: string): { sub: string; email: string } {
 export function createLiveGoogle(cfg: LiveGoogleConfig): LiveGoogle {
   return new LiveGoogle(new SSMClient({}), cfg);
 }
+
+export const MARKER_COLOR_ID = '8'; // graphite
+// How an event shows: a marker is free + graphite; back to a block is busy with the calendar's own
+// colour (`colorId: null` deletes the override in a patch).
+const markerLook = (marker: boolean) =>
+  marker
+    ? { transparency: 'transparent', colorId: MARKER_COLOR_ID }
+    : { transparency: 'opaque', colorId: null };

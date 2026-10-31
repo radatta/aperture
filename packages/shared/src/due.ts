@@ -36,16 +36,26 @@ export const DEFAULT_EVENT_MIN = 30;
 export const eventLengthMin = (task: Pick<Task, 'estimateMin'>): number =>
   task.estimateMin || DEFAULT_EVENT_MIN;
 
-// The calendar block for a timed task: it ENDS at the deadline and is as long as the estimate (the work
-// before it). null when the task has no time.
-export function eventWindow(
+// A parent's due marker: a short "free" event ending at its deadline (docs/areas/tasks/parts.md D13).
+export const MARKER_MIN = 15;
+
+// The window a task's one event covers: it ENDS at the deadline — a block as long as the estimate (the
+// work before it), a parent's due marker MARKER_MIN. null when the task has no time.
+export function syncWindow(
   task: Pick<Task, 'dueDay' | 'dueTime' | 'estimateMin'>,
   epoch: DueEpoch,
+  parent = false,
 ): { startMs: number; endMs: number } | null {
   if (!task.dueDay || !task.dueTime) return null;
   const endMs = epoch(task.dueDay, task.dueTime);
-  return { startMs: endMs - eventLengthMin(task) * 60_000, endMs };
+  return { startMs: endMs - (parent ? MARKER_MIN : eventLengthMin(task)) * 60_000, endMs };
 }
+
+// The calendar block for a timed task that isn't a parent.
+export const eventWindow = (
+  task: Pick<Task, 'dueDay' | 'dueTime' | 'estimateMin'>,
+  epoch: DueEpoch,
+): { startMs: number; endMs: number } | null => syncWindow(task, epoch, false);
 
 // The manual add-to-calendar prefill (browser-local): the "HH:MM" a block of `durationMin` starts at to
 // END at the deadline — clamped to midnight rather than starting the day before (a 00:15 deadline).

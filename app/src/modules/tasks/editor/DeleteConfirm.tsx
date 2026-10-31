@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { PartsSummary, Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Text } from '../../../components/Text';
@@ -45,9 +46,27 @@ export function DeleteConfirm({
       >
         Delete
       </Button>
-      <Button variant="quiet" size="sm" onClick={onCancel}>
-        Cancel
-      </Button>
+      {/* Gone already: nothing left to cancel back to. */}
+      {!del.isSuccess && (
+        <Button variant="quiet" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      )}
+      {/* Closes once the task leaves the list; until that refetch lands, say it went. */}
+      {del.isSuccess && (
+        <span role="status">
+          <Text size="sm" tone="muted">
+            Deleted.
+          </Text>
+        </span>
+      )}
+      {del.isError && (
+        <div role="alert" className="w-full">
+          <Text size="sm" tone="danger">
+            Couldn’t delete it — try again.
+          </Text>
+        </div>
+      )}
     </div>
   );
 }
@@ -64,9 +83,23 @@ export function DropConfirm({
   task: Task;
   parts?: PartsSummary; // set when it's a parent: its open parts are dropped with it
   onCancel: () => void;
-  onDone: () => void;
+  onDone: (task: Task) => void; // the task as the drop returned it
 }) {
   const transition = useTransitionTask();
+  // mutateAsync, not a per-call onSuccess: TanStack skips that if this unmounts first (a refetch showing
+  // the task cancelled takes Drop away), and the modal would stay open on a dropped task. One per tap.
+  const [dropping, setDropping] = useState(false);
+  async function drop() {
+    if (dropping) return;
+    setDropping(true);
+    try {
+      onDone(await transition.mutateAsync({ id: task.id, to: 'cancelled' }));
+    } catch {
+      // Said below.
+    } finally {
+      setDropping(false);
+    }
+  }
   const open = parts?.open.length ?? 0;
   const done = parts?.done ?? 0;
   return (
@@ -90,14 +123,22 @@ export function DropConfirm({
         autoFocus
         variant="gold"
         size="sm"
-        disabled={transition.isPending}
-        onClick={() => transition.mutate({ id: task.id, to: 'cancelled' }, { onSuccess: onDone })}
+        onClick={drop}
+        aria-disabled={dropping}
+        className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
       >
         Drop
       </Button>
       <Button variant="quiet" size="sm" onClick={onCancel}>
         Cancel
       </Button>
+      {transition.isError && (
+        <div role="alert" className="w-full">
+          <Text size="sm" tone="danger">
+            Couldn’t drop it — try again.
+          </Text>
+        </div>
+      )}
     </div>
   );
 }

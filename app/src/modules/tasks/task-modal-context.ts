@@ -3,7 +3,8 @@ import type { Task } from '@aperture/shared';
 import type { TaskEditorIntent } from './editor/TaskEditor';
 
 // Opens the task modal the page hosts (TaskModalHost). `trigger` is the row's title button — where
-// focus returns on close, while that row still exists.
+// focus returns on close, while that row still exists. Opened from inside the modal, the trigger is in
+// the dialog itself, so the row that first opened it keeps that role (TaskModalHost).
 export type OpenTask = (
   task: Task,
   intent: TaskEditorIntent,

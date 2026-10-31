@@ -21,6 +21,7 @@ export interface CreateTaskInput {
   estimateMin?: number | null;
   dueDay?: string | null;
   notes?: string | null;
+  parentId?: string | null; // a part of that task (the parts scenario)
 }
 
 export type FetchLike = (

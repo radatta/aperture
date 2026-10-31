@@ -201,7 +201,7 @@ function TaskMeta({
       )}
       {task.gcalEventId && (
         <Text size="xs" tone="teal">
-          on calendar
+          {summary ? 'due marker' : 'on calendar'}
         </Text>
       )}
       {task.gcalSyncError && (

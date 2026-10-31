@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_EVENT_MIN, localEpochFromDayTime, MARKER_MIN } from '@aperture/shared';
 import { createStubClient, STUB_GCAL_EDITS_KEY, type StubGcalEdit } from './stubClient';
 
 // Parity for the gated calendar methods. These can't live in the shared ApiClient contract suite: their
@@ -260,38 +261,132 @@ describe('stub calendar: parent + parts', () => {
       endMs: 2000,
     });
 
-  it('a timed task that takes its first part loses its block; a retry on it never makes one', async () => {
+  // The marker: MARKER_MIN, ending at the deadline (the Lambda also sends it free + graphite).
+  const markerOf = (dueDay: string, dueTime: string) => {
+    const endMs = localEpochFromDayTime(dueDay, dueTime);
+    return { startMs: endMs - MARKER_MIN * 60_000, endMs };
+  };
+
+  it('a timed task that takes its first part: its block becomes its due marker', async () => {
     const api = stub();
-    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '23:59' });
+    const p = await api.createTask({
+      title: 'P2',
+      dueDay: '2026-10-09',
+      dueTime: '23:59',
+      estimateMin: 90,
+    });
     expect(p.gcalEventId).toBeTruthy();
     await api.createTask({ title: 'read', parentId: p.id });
-    expect((await api.getTask(p.id))?.gcalEventId).toBeNull();
-    expect((await api.syncCalendarEvent(p.id)).gcalEventId).toBeNull();
-    expect((await api.setTaskTitle(p.id, 'P2 final')).gcalEventId).toBeNull();
+    const parent = (await api.getTask(p.id))!;
+    expect(parent.gcalEventId).toBe(p.gcalEventId); // patched, not replaced
+    expect(parent.gcalSeen).toMatchObject({
+      title: 'P2',
+      ...markerOf('2026-10-09', '23:59'),
+      marker: true, // the look sent is recorded
+    });
+  });
+
+  it('“detaching” a task that isn’t a part changes nothing — a parent keeps its marker', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    await api.createTask({ title: 'read', parentId: p.id });
+    const before = (await api.getTask(p.id))!;
+    expect(await api.setTaskParent(p.id, null)).toEqual(before);
+  });
+
+  it('attaching a timed, linked task as a first part: the parent’s block → marker, the part renamed', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    const t = await api.createTask({ title: 'read', dueDay: '2026-10-08', dueTime: '10:00' });
+    const part = await api.setTaskParent(t.id, p.id);
+    expect(part.gcalSeen?.title).toBe('P2 · read');
+    expect((await api.getTask(p.id))!.gcalSeen).toMatchObject({
+      ...markerOf('2026-10-09', '17:00'),
+      marker: true,
+    });
+  });
+
+  it('an unlinked timed parent gets its marker from Add due marker (the retry); untimed never', async () => {
+    const api = stub();
+    await api.updateSettings({ autoCalendar: false });
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    await api.createTask({ title: 'read', parentId: p.id });
+    await api.updateSettings({ autoCalendar: true });
+    expect((await api.getTask(p.id))!.gcalEventId).toBeNull();
+    expect((await api.syncCalendarEvent(p.id)).gcalSeen).toMatchObject(
+      markerOf('2026-10-09', '17:00'),
+    );
+    const u = await api.createTask({ title: 'U', dueDay: '2026-10-09' });
+    await api.createTask({ title: 'read', parentId: u.id });
+    expect((await api.syncCalendarEvent(u.id)).gcalEventId).toBeNull();
+  });
+
+  it('a parent’s due change moves its marker; marking it done leaves it', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    const part = await api.createTask({ title: 'read', parentId: p.id, estimateMin: 30 });
+    const moved = await api.setTaskDue(p.id, { dueDay: '2026-10-10', dueTime: '12:00' });
+    expect(moved.gcalSeen).toMatchObject(markerOf('2026-10-10', '12:00'));
+    await api.transitionTask(part.id, 'in_progress');
+    await api.transitionTask(part.id, 'done');
+    const done = await api.transitionTask(p.id, 'done');
+    expect(done.gcalEventId).toBe(p.gcalEventId);
+  });
+
+  it('a part’s block is named after its parent; a parent rename renames its open parts’ blocks', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'P2' });
+    const at = { dueDay: '2026-10-09', dueTime: '10:00' };
+    const a = await api.createTask({ title: 'Part 1', parentId: p.id, ...at });
+    const b = await api.createTask({ title: 'Part 2', parentId: p.id, ...at });
+    expect(a.gcalSeen?.title).toBe('P2 · Part 1');
+    await api.transitionTask(b.id, 'in_progress');
+    await api.transitionTask(b.id, 'done');
+    await api.setTaskTitle(p.id, 'P2 final');
+    expect((await api.getTask(a.id))!.gcalSeen?.title).toBe('P2 final · Part 1');
+    expect((await api.getTask(b.id))!.gcalSeen?.title).toBe('P2 · Part 2'); // done: never pushes
   });
 
   it('the picker refuses a parent; an untimed part can still take a manual block', async () => {
     const api = stub();
     const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09' });
     const part = await api.createTask({ title: 'read', parentId: p.id });
-    await expect(pick(api, p.id)).rejects.toThrow(/its parts do/);
+    await expect(pick(api, p.id)).rejects.toThrow(/due marker/);
     await expect(pick(api, part.id)).resolves.toMatchObject({ gcalEventId: expect.any(String) });
   });
 
-  it('a timed standalone split: the parent gets no event; keep → each part its own block', async () => {
+  it('moving a part renames its block after the new parent; detaching drops the prefix', async () => {
+    const api = stub();
+    const a = await api.createTask({ title: 'A' });
+    const c = await api.createTask({ title: 'C' });
+    const part = await api.createTask({
+      title: 'x',
+      parentId: a.id,
+      dueDay: '2026-10-09',
+      dueTime: '10:00',
+    });
+    expect(part.gcalSeen?.title).toBe('A · x');
+    expect((await api.setTaskParent(part.id, c.id)).gcalSeen?.title).toBe('C · x');
+    expect((await api.setTaskParent(part.id, null)).gcalSeen?.title).toBe('x');
+  });
+
+  it('a timed standalone split: the parent gets a marker; keep → each part its own named block', async () => {
     const api = stub();
     const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });
     const { parent, original, followUp } = await api.splitTask(t.id, {
       finish: 'keep',
       followUp: { title: 'a, part 2', estimateMin: 30 },
     });
-    expect(parent.gcalEventId).toBeNull();
+    expect(parent.gcalEventId).toBeTruthy();
+    expect(parent.gcalSeen).toMatchObject({ title: 'a', ...markerOf('2026-10-09', '10:00') });
     expect(original.gcalEventId).toBe(t.gcalEventId); // Part 1 keeps its time and its block
+    expect(original.gcalSeen?.title).toBe(`a · ${original.title}`);
     expect(followUp.gcalEventId).toBeTruthy();
     expect(followUp.gcalEventId).not.toBe(t.gcalEventId);
+    expect(new Set([parent.gcalEventId, original.gcalEventId, followUp.gcalEventId]).size).toBe(3);
   });
 
-  it('a timed standalone done split moves the event (with its base) to Part 2, never the parent', async () => {
+  it('a timed standalone done split moves the event (with its base) to Part 2; the parent its own', async () => {
     const api = stub();
     const t = await api.createTask({ title: 'a', dueDay: '2026-10-09', dueTime: '10:00' });
     await api.transitionTask(t.id, 'in_progress');
@@ -299,16 +394,17 @@ describe('stub calendar: parent + parts', () => {
       finish: 'done',
       followUp: { title: 'a, part 2', estimateMin: null },
     });
-    expect(parent.gcalEventId).toBeNull();
+    expect(parent.gcalEventId).toBeTruthy();
+    expect(parent.gcalEventId).not.toBe(t.gcalEventId);
     expect(original.gcalEventId).toBeNull();
     expect(followUp.gcalEventId).toBe(t.gcalEventId);
     // The base came with the link, and Part 2's first push renamed the event (so it's not read as new).
-    expect(followUp.gcalSeen?.title).toBe('a, part 2');
+    expect(followUp.gcalSeen?.title).toBe('a · a, part 2');
   });
 
-  it('cancelling a parent removes its open parts’ blocks', async () => {
+  it('cancelling a parent removes its open parts’ blocks, then its marker', async () => {
     const api = stub();
-    const p = await api.createTask({ title: 'P2' });
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
     const part = await api.createTask({
       title: 'read',
       parentId: p.id,
@@ -316,8 +412,33 @@ describe('stub calendar: parent + parts', () => {
       dueTime: '10:00',
     });
     expect(part.gcalEventId).toBeTruthy();
-    await api.transitionTask(p.id, 'cancelled');
+    expect((await api.getTask(p.id))!.gcalEventId).toBeTruthy();
+    const dropped = await api.transitionTask(p.id, 'cancelled');
+    expect(dropped).toMatchObject({ status: 'cancelled', gcalEventId: null });
     expect(await api.getTask(part.id)).toMatchObject({ status: 'cancelled', gcalEventId: null });
+  });
+
+  it('its last part going turns the marker back into a block; deleting the parent takes it', async () => {
+    const api = stub();
+    const p = await api.createTask({
+      title: 'P2',
+      dueDay: '2026-10-09',
+      dueTime: '17:00',
+      estimateMin: 60,
+    });
+    const part = await api.createTask({ title: 'read', parentId: p.id });
+    await api.deleteTask(part.id);
+    const plain = (await api.getTask(p.id))!;
+    const endMs = localEpochFromDayTime('2026-10-09', '17:00');
+    // becomeParent dropped its estimate, so the block is the default length again.
+    expect(plain.gcalSeen).toMatchObject({ startMs: endMs - DEFAULT_EVENT_MIN * 60_000, endMs });
+
+    const q = await api.createTask({ title: 'Q', dueDay: '2026-10-09', dueTime: '17:00' });
+    await api.createTask({ title: 'read', parentId: q.id });
+    expect((await api.getTask(q.id))!.gcalSeen).toMatchObject(markerOf('2026-10-09', '17:00'));
+    await api.deleteTask(q.id);
+    expect(await api.getTask(q.id)).toBeNull();
+    // (The Lambda's twin asserts no block patch goes out first — the stub has no Google to count.)
   });
 });
 
@@ -451,5 +572,54 @@ describe('stub calendar pull (two-way sync)', () => {
       dueTime: '18:00',
       gcalPulled: { note: 'Kept your time — moved in Google Calendar too' },
     });
+  });
+});
+
+describe('stub calendar pull: markers and named blocks', () => {
+  function setup() {
+    let clock = 1_700_000_000_000;
+    const api = createStubClient({
+      seed: true,
+      storageKey: `pm-${Math.random()}`,
+      now: () => clock,
+    });
+    const queue = (edits: StubGcalEdit[]) => {
+      clock += 61_000;
+      localStorage.setItem(STUB_GCAL_EDITS_KEY, JSON.stringify(edits));
+    };
+    return { api, queue };
+  }
+
+  it('dragging the marker’s end moves the deadline; stretching it maps to nothing', async () => {
+    const { api, queue } = setup();
+    const p = await api.createTask({ title: 'P2', dueDay: '2026-10-09', dueTime: '17:00' });
+    await api.createTask({ title: 'read', parentId: p.id, estimateMin: 30 });
+    queue([{ taskId: p.id, end: '2026-10-10 12:00' }]);
+    expect((await api.pullCalendar()).changedTaskIds).toEqual([p.id]);
+    expect(await api.getTask(p.id)).toMatchObject({
+      dueDay: '2026-10-10',
+      dueTime: '12:00',
+      estimateMin: null,
+    });
+    queue([{ taskId: p.id, durationMin: 90 }]);
+    expect((await api.pullCalendar()).changedTaskIds).toEqual([]);
+    expect((await api.getTask(p.id))!.estimateMin).toBeNull();
+  });
+
+  it('a part block renamed in Google loses the parent prefix', async () => {
+    const { api, queue } = setup();
+    const p = await api.createTask({ title: 'P2' });
+    const part = await api.createTask({
+      title: 'Part 1',
+      parentId: p.id,
+      dueDay: '2026-10-09',
+      dueTime: '10:00',
+    });
+    queue([{ taskId: part.id, title: 'P2 · Part 1 reading' }]);
+    await api.pullCalendar();
+    expect((await api.getTask(part.id))!.title).toBe('Part 1 reading');
+    queue([{ taskId: part.id, title: 'Reading' }]);
+    await api.pullCalendar();
+    expect((await api.getTask(part.id))!.title).toBe('Reading');
   });
 });
