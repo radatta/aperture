@@ -109,18 +109,22 @@ of that session, so it appears not to use the cumulative figure — `subtype` wi
 
 Measured, Claude Code 2.1.302–2.1.303, Opus, from a ~120–140k-token session:
 
-| Run (date)                               | Turns | Time | Cache read | Cache write  | Notes                                                                                       |
-| ---------------------------------------- | ----- | ---- | ---------- | ------------ | ------------------------------------------------------------------------------------------- |
-| bare fork, "ok" (2026-10-18)             | 1     | —    | 141,862    | 1,771        | before the flag set existed                                                                 |
-| full flag set, "ok" (2026-10-19)         | 1     | 4 s  | 107,891    | 14,176 (1 h) | no transcript left                                                                          |
-| permission probe (2026-10-19)            | 8     | 17 s | 737,331    | 17,242       | denied: `git stash` (deny rule), `touch` (unlisted), Write outside handoffs                 |
-| `--output` / redirect probe (2026-10-19) | 6     | 20 s | 435,639    | 23,330       | denied: `git log`/`git diff --output=`, `head … > file`; plain `git log`/`git diff` allowed |
-| real handoff via the hook (2026-10-19)   | 9     | 40 s | 732,007    | 25,240       | 3,891 output tokens, 0 denials, `/compact` instructions honoured                            |
+| Run (date)                                  | Turns | Time | Cache read | Cache write  | Notes                                                                                       |
+| ------------------------------------------- | ----- | ---- | ---------- | ------------ | ------------------------------------------------------------------------------------------- |
+| bare fork, "ok" (2026-10-18)                | 1     | —    | 141,862    | 1,771        | before the flag set existed                                                                 |
+| full flag set, "ok" (2026-10-19)            | 1     | 4 s  | 107,891    | 14,176 (1 h) | no transcript left                                                                          |
+| permission probe (2026-10-19)               | 8     | 17 s | 737,331    | 17,242       | denied: `git stash` (deny rule), `touch` (unlisted), Write outside handoffs                 |
+| `--output` / redirect probe (2026-10-19)    | 6     | 20 s | 435,639    | 23,330       | denied: `git log`/`git diff --output=`, `head … > file`; plain `git log`/`git diff` allowed |
+| real handoff via the hook (2026-10-19)      | 9     | 40 s | 732,007    | 25,240       | 3,891 output tokens, 0 denials, `/compact` instructions honoured                            |
+| real `/compact`, fresh session (2026-10-30) | 4     | 25 s | 207,087    | 8,033        | 1,908 output tokens, 0 denials; chat note and `/compact` instructions both landed           |
 
-Inferred from those tokens, not billed: a handoff is roughly **$0.20–0.50** at list price, mostly cache
-reads at 0.05× plus any cache write. **Unexplained:** the ~14k-token write on 2026-10-19 against ~1.8k
-the day before — the fork's prefix diverges from the parent's somewhere near the end of the transcript.
-The `cache_new` field in the log will show whether it's typical. On idle compaction the cache may have
+Inferred from those tokens: a handoff is roughly **$0.20–0.50** at API list price, mostly cache reads
+at 0.05× plus any cache write. Not billed as such — the fork uses the session's own login (claude.ai
+subscription here), so it draws subscription usage; an `ANTHROPIC_API_KEY` in the environment would
+bill that key instead, since the fork inherits it. **Unexplained:** the 14–29k-token writes on
+2026-10-19 (a long, many-times-compacted session) against ~1.8k on 2026-10-18 and 8k on 2026-10-30 —
+the fork's prefix diverges from the parent's somewhere near the end of the transcript. The `cache_new`
+field in the log will show what's typical. On idle compaction the cache may have
 expired; the fork then pays the write compaction would have paid anyway, and compaction reads it.
 
 ## Testing
@@ -130,4 +134,7 @@ expired; the fork then pays the write compaction would have paid anyway, and com
 - Live: a session must be **started from the directory whose `.claude/settings.json` has the hooks** —
   `${CLAUDE_PROJECT_DIR}` is the launch directory, so a session started at `/workspace` doesn't see a
   worktree's unmerged hooks. Run `/compact`, then check the log line (`rc=0`, `denials=0`, `file=`), the
-  handoff, the `compact-*` file, and that the compacted context shows the handoff.
+  handoff, the `compact-*` file, and that the compacted context shows the handoff. Done 2026-10-30 in a
+  session started in the worktree: a "for the handoff" chat word and a `/compact` instruction word both
+  reached the handoff, `PostCompact` carried `compact_summary` (until then docs-only), and the compacted
+  session's context opened with "Handoff written just before this compaction".
