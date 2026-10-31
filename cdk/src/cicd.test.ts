@@ -58,6 +58,48 @@ describe('ApertureCicdStack', () => {
     });
   });
 
+  // The deploy roles' own policies, by role name.
+  const statementsOf = (roleName: string) => {
+    const [logicalId = ''] = Object.keys(
+      t.findResources('AWS::IAM::Role', { Properties: { RoleName: roleName } }),
+    );
+    expect(logicalId).not.toBe('');
+    return Object.values(t.findResources('AWS::IAM::Policy'))
+      .filter((p) =>
+        JSON.stringify((p as { Properties: { Roles: unknown } }).Properties.Roles).includes(
+          logicalId,
+        ),
+      )
+      .flatMap(
+        (p) =>
+          (
+            p as {
+              Properties: {
+                PolicyDocument: { Statement: { Action: unknown; Resource: unknown }[] };
+              };
+            }
+          ).Properties.PolicyDocument.Statement,
+      );
+  };
+  const bootstrapGrants = (roleName: string) =>
+    statementsOf(roleName)
+      .filter((s) => s.Action === 'sts:AssumeRole' || s.Action === 'ssm:GetParameter')
+      .map((s) => JSON.stringify(s.Resource))
+      .join(' ');
+
+  it('lets the dev role assume the devsandbox bootstrap and, until the dev-cutover PR, the default one', () => {
+    const grants = bootstrapGrants('aperture-github-deploy-dev');
+    expect(grants).toContain(':role/cdk-devsandbox-*-');
+    expect(grants).toContain('parameter/cdk-bootstrap/devsandbox/version');
+    expect(grants).toContain(':role/cdk-hnb659fds-*-'); // transitional — main's dev deploys still use it
+  });
+
+  it('keeps the prod role on the default bootstrap only', () => {
+    const grants = bootstrapGrants('aperture-github-deploy-prod');
+    expect(grants).toContain(':role/cdk-hnb659fds-*-');
+    expect(grants).not.toContain('devsandbox');
+  });
+
   it('grants deploy power only by assuming the CDK bootstrap roles', () => {
     t.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({

@@ -4,6 +4,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { applyDevBoundary, synthesizerFor } from './dev-stage';
 
 export interface DataStackProps extends StackProps {
   stage: string;
@@ -27,8 +28,9 @@ export class ApertureDataStack extends Stack {
   readonly cognitoDomain: string;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
-    super(scope, id, props);
+    super(scope, id, { ...props, ...synthesizerFor(props.stage) }); // dev → the devsandbox bootstrap (dev-stage.ts)
     const { stage, allowedOrigins } = props;
+    applyDevBoundary(this, stage); // no roles today; any future one needs the boundary to deploy on dev
 
     // Single table (TECH §2.4): PK/SK strings, on-demand, PITR (35-day backup), RETAIN.
     this.table = new dynamodb.Table(this, 'Table', {

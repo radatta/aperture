@@ -6,8 +6,7 @@ name: Deploy
 # CDK bootstrap is isolated — docs/ops/CI-BOT.md). Never add workflow_dispatch here: this is the prod path.
 # Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
-# changes → deploy each stage at the resulting tier. Exception: an app-only push to dev deploys straight
-# off the classification, in parallel with check (deploy-dev-fast).
+# changes → deploy each stage at the resulting tier.
 on:
   push:
     branches: [main, dev]
@@ -24,9 +23,8 @@ jobs:
   check:
     uses: ./.github/workflows/ci.yml
 
-  # Classify the push once (docs / app-only / full) and assert dev is current with main. Runs in
-  # parallel with `check`; deploy-dev waits on both, while the dev fast path (deploy-dev-fast) waits on
-  # this job alone — so it's kept toolchain-free and short.
+  # Classify the push once (docs / app-only / full) and assert dev is current with main. Runs in parallel with
+  # `check`; deploy-dev waits on both. Kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -38,10 +36,10 @@ jobs:
         with:
           fetch-depth: 0 # need history to diff the push and to check ancestry against main
       # On any non-main push (i.e. dev), require the branch to already contain main: dev should only ever run
-      # code that already has main in it, so what you validate there is what a squash-merge would produce. A
-      # stale branch fails here → deploy-dev (needs: changes) is skipped. No-op on main pushes (HEAD already
-      # is main). (Until 2026-09-10 this also kept the since-retired `required_deployments:[dev]` merge gate
-      # closed — INFRA §9.)
+      # code that already has main in it, so what you validate there is what a squash-merge would produce — and,
+      # since dev-bootstrap, so a stale branch can't put dev back on the default (admin) CDK bootstrap. A stale
+      # branch fails here → deploy-dev (needs: changes) is skipped. No-op on main pushes. Goes with the `dev`
+      # trigger in dev-cutover; dispatches check the same in deploy-dev.yml.
       - name: Branch is up to date with main
         if: github.ref != 'refs/heads/main'
         run: |
@@ -75,9 +73,6 @@ jobs:
 
   deploy-dev:
     needs: [check, changes]
-    # A dev push classified `app` takes deploy-dev-fast instead. Everything else — infra/docs pushes to
-    # dev, and every main push — keeps the strict order check → deploy-dev → deploy-prod.
-    if: github.ref != 'refs/heads/dev' || needs.changes.outputs.mode != 'app'
     permissions:
       id-token: write
       contents: read
@@ -95,35 +90,8 @@ jobs:
       device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
 
-  # Dev fast path: an app-only push to `dev` publishes the frontend without waiting for `check`. dev is
-  # scratch — the user force-pushes it to see a branch on real infrastructure — so a build that later
-  # fails lint/tests gets a loud notification (see notify), not a rollback. Only `app` qualifies: it's an
-  # S3 sync + invalidation, and a vite build failure still fails this job. main never takes this path
-  # (ref check), and deploy-prod doesn't list this job in `needs`, so prod is unaffected.
-  deploy-dev-fast:
-    needs: [changes]
-    if: github.ref == 'refs/heads/dev' && needs.changes.outputs.mode == 'app'
-    permissions:
-      id-token: write
-      contents: read
-      deployments: read # deploy-stage's job declares it; a caller granting less fails the whole run at startup
-    uses: ./.github/workflows/deploy-stage.yml
-    with:
-      stage: dev
-      mode: app
-      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
-      aws_region: ${{ vars.AWS_REGION }}
-      cert_arn: ${{ vars.CERT_ARN_DEV }}
-      device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}
-    secrets:
-      origin_secret: ${{ secrets.ORIGIN_SECRET_DEV }}
-      device_token: ${{ secrets.DEVICE_TOKEN_DEV }}
-      agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
-
   deploy-prod:
-    # `changes` listed so this job can read its `mode` output. Never list deploy-dev-fast here — it's
-    # always skipped on main, and a skipped need skips this job.
-    needs: [deploy-dev, changes]
+    needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode` output
     if: github.ref == 'refs/heads/main' # dev-branch pushes stop at dev
     permissions:
       id-token: write
@@ -148,7 +116,7 @@ jobs:
   # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
   # until the secret is set, so it's safe to land before the topic exists.
   notify:
-    needs: [check, changes, deploy-dev, deploy-dev-fast, deploy-prod]
+    needs: [check, changes, deploy-dev, deploy-prod]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -158,29 +126,19 @@ jobs:
           CHECK_RESULT: ${{ needs.check.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           DEV_RESULT: ${{ needs.deploy-dev.result }}
-          DEV_FAST_RESULT: ${{ needs.deploy-dev-fast.result }}
           PROD_RESULT: ${{ needs.deploy-prod.result }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT fast=$DEV_FAST_RESULT prod=$PROD_RESULT  $SHA"
-          # Fast path landed on dev but the quality gate didn't pass (failure or cancelled): dev is serving
-          # an unvetted build. No rollback by design — make it impossible to miss instead. This job needs
-          # `check`, so the verdict here is final, never provisional.
-          if [ "$DEV_FAST_RESULT" = "success" ] && [ "$CHECK_RESULT" != "success" ]; then
-            curl -s -H "Title: 🚨 dev DEPLOYED but CI FAILED ($REF)" -H "Priority: urgent" -H "Tags: rotating_light" \
-              -d "$body  $RUN_URL" "https://ntfy.sh/$NTFY_TOPIC" || echo "ntfy post failed (non-fatal)"
-            exit 0
-          fi
+          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
           # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
-          # dev-branch push, the fast job on every main push and non-app dev push, deploy-dev on an
-          # app-only dev push; a docs-only job still reports success (steps just no-op).
-          # `changes` is watched too: it holds the up-to-date-with-main gate, so its failure must not
-          # slip through as a success just because the deploy jobs got skipped.
+          # dev-branch push; a docs-only job still reports success (steps just no-op). `changes` is watched
+          # too: it holds the up-to-date-with-main gate, so its failure must not slip through as a success just
+          # because the deploy jobs got skipped.
           failed=0
-          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$DEV_FAST_RESULT" "$PROD_RESULT"; do
+          for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi
           done
           if [ "$failed" = "1" ]; then

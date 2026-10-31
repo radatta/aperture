@@ -8,6 +8,7 @@ import { ApertureDataStack } from '../lib/data-stack';
 import { ApertureAppStack } from '../lib/app-stack';
 import { ApertureCicdStack } from '../lib/cicd-stack';
 import { ApertureBillingStack } from '../lib/billing-stack';
+import { ApertureDevSandboxStack } from '../lib/dev-sandbox-stack';
 import { domainConfigFor } from '../config/domains';
 
 // CloudFront→Lambda origin-lockdown secret, one per stage. In CI it comes from a GitHub secret via
@@ -110,6 +111,22 @@ if (githubRepo) {
   // Override the OIDC subject segment when an org/enterprise enforces an ID-embedded sub claim.
   const githubSubject = app.node.tryGetContext('githubSubject') as string | undefined;
   new ApertureCicdStack(app, 'ApertureCicd', { env, githubRepo, githubSubject });
+}
+
+// dev's own CDK bootstrap (qualifier devsandbox) — a one-off hand-deploy like ApertureCicd, re-run when a dev stack
+// gains a resource type. Pinned to dev's Cognito pool and CloudFront distribution, whose ids are account-specific
+// and so passed at deploy time, never committed (INFRA §3):
+// `cdk deploy ApertureDevSandbox -c devSandbox=true -c devUserPoolId=… -c devDistributionId=…`.
+if (app.node.tryGetContext('devSandbox')) {
+  const devUserPoolId = app.node.tryGetContext('devUserPoolId') as string | undefined;
+  const devDistributionId = app.node.tryGetContext('devDistributionId') as string | undefined;
+  if (!devUserPoolId || !devDistributionId)
+    throw new Error('ApertureDevSandbox needs -c devUserPoolId=… and -c devDistributionId=… (the dev stacks\' outputs)');
+  const sandbox = new ApertureDevSandboxStack(app, 'ApertureDevSandbox', { env, devUserPoolId, devDistributionId });
+  Validations.of(sandbox).acknowledge({
+    id: 'AwsSolutions-S1',
+    reason: 'CDK asset staging bucket (the stock bootstrap bucket has no access logs either); a log bucket adds cost for no value.',
+  });
 }
 
 // Cost guardrails — another one-off hand-deploy (needs the account-root billing-access toggle; the
