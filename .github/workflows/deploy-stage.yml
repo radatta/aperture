@@ -101,6 +101,11 @@ jobs:
             devmain) [ "${{ inputs.stage }}" = dev ] || { echo "::error::lane devmain is dev-only"; exit 1; } ;;
             *) echo "::error::invalid lane '${{ inputs.lane }}'"; exit 1 ;;
           esac
+          # The exempt lane is for merged code only: a `main` push deploying its own commit — never a dispatch, which can
+          # also run on ref main and check out a branch's commit (deploy-dev.yml's `ref`).
+          if [ "${{ inputs.lane }}" = devmain ] && { [ "${{ github.event_name }}" != push ] || [ "${{ github.ref }}" != refs/heads/main ] || [ -n "${{ inputs.ref }}" ]; }; then
+            echo "::error::lane devmain is only for a main push of its own commit"; exit 1
+          fi
           # Each lane with its own role, so an unset variable fails here, not as an opaque OIDC trust error.
           case "${{ inputs.lane }}:${{ inputs.role_arn }}" in
             devmain:*:role/aperture-github-dev-main) ;;

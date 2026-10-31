@@ -300,6 +300,10 @@ export const guardrailsPolicy = () =>
       'logs:PutDestination*',
       'dynamodb:UpdateContributorInsights',
       'ssm:UpdateServiceSetting',
+      // An access point is a second address for a bucket that a bucket-ARN deny may not cover (DevMainBootstrapIntact);
+      // nothing in dev uses one.
+      's3:CreateAccessPoint*',
+      's3:CreateMultiRegionAccessPoint*',
     ]),
   ]);
 

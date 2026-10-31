@@ -124,6 +124,12 @@ describe('dev-account SCPs', () => {
       expect(s.Condition?.Null).toEqual({ 'cloudformation:RoleArn': 'true' });
     });
 
+    // An access point is a second address for a bucket that the bucket-ARN deny may not cover.
+    it('denies creating an S3 access point anywhere in dev', () => {
+      const sinks = statements(standing.guardrails).find((x) => x.Sid === 'NoCostSinks')!;
+      expect(sinks.Action).toEqual(expect.arrayContaining(['s3:CreateAccessPoint*', 's3:CreateMultiRegionAccessPoint*']));
+    });
+
     it("keeps everything but devmain's publishing role off its bucket, and everything but break-glass off its version and stack", () => {
       const s = g('DevMainBootstrapIntact');
       for (const a of ['s3:PutObject*', 's3:DeleteObject*', 's3:PutBucket*', 'ssm:PutParameter', 'ssm:DeleteParameter*', 'cloudformation:UpdateStack', 'cloudformation:DeleteStack'])
