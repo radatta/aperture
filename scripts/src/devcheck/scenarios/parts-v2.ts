@@ -105,15 +105,16 @@ export const partsV2: Scenario = {
       id: 'server-copy',
       title: 'Nothing discarded reached the server',
       async run(ctx) {
-        const parts = (await ctx.api.reads.listTasks()).filter((t) =>
-          t.title.startsWith(`devcheck ${ctx.nonce}`),
-        );
-        const titles = parts.map((t) => t.title).sort();
+        // Exact titles: the run's other scenarios share the nonce (capture-task's "devcheck <nonce>").
         const want = [
           `devcheck ${ctx.nonce} P2`,
           `devcheck ${ctx.nonce} draft`,
           `devcheck ${ctx.nonce} read`,
         ];
+        const titles = (await ctx.api.reads.listTasks())
+          .map((t) => t.title)
+          .filter((t) => t.startsWith(`devcheck ${ctx.nonce} `))
+          .sort();
         if (JSON.stringify(titles) !== JSON.stringify(want))
           throw new Error(`server has ${JSON.stringify(titles)}`);
         const errors = ctx.consoleErrors();
