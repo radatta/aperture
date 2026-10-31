@@ -86,7 +86,7 @@ Plus, once a bank is connected, a single **finance line** (budget left · N to s
 3. Habits check — mark today's
 4. One reflection prompt — single rotating question, non-cringe, fully skippable
 
-Plus the **finance line** only while charges wait to be sorted ("N charges to sort", see 4b).
+Plus the **finance line** only while charges wait to be sorted ("N charges to sort", see 4b), and a **Flux line** only on a day with neck-rehab sets ("Flux · 2 sets rotation, 1 upper trap", linking to its History — [flux](../areas/flux/index.md) D51). Lines, not elements.
 
 ### Deliberately kept off the daily home
 - **Balance / non-work life** lives on a **weekly cadence, not the daily home.** A gentle weekly look ("this week ran 90% work — worth a nudge?"), never a daily checkbox — that would be the guilt-nag the identity forbids.

@@ -18,6 +18,10 @@ export const sk = {
   lcPrefix: (day: string) => `lc#${day}#`,
   lcAllPrefix: () => `lc#`,
 
+  // Flux sets (D47), day-bucketed like lc. A few rows a day: reads and the by-id lookup scan `flux#`.
+  flux: (day: string, id: string) => `flux#${day}#${id}`,
+  fluxAllPrefix: () => `flux#`,
+
   task: (id: string) => `task#${id}`,
   taskPrefix: () => `task#`,
 

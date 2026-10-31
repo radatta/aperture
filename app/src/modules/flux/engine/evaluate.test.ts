@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, initialState, romHoldDeg } from './evaluate';
+import { evaluate, initialState, inRomExcursion, romHoldDeg, summaryOf } from './evaluate';
 import { EXERCISES } from '@aperture/shared/flux';
 import type {
   Euler,
@@ -308,7 +308,7 @@ describe('romReps', () => {
         d.kind === 'romReps' && d.holdSec ? [[d.id, romHoldDeg(d)]] : [],
       );
       expect(zones).toEqual([
-        ['cervical-rotation', 45],
+        ['cervical-rotation', 37.5],
         ['cervical-lateral-flexion', 30],
         ['cervical-flexion', 33.75],
         ['cervical-extension', 41.25],
@@ -398,24 +398,167 @@ describe('romReps', () => {
       expect(events.map((e) => e.type)).toEqual(['holdEntered', 'stoppedShort']);
     });
 
-    it('a dropout freezes the rep: no hold time, no "Further" from the frozen pose (D44)', () => {
+    describe('a dropout mid-excursion is the end of the turn (D57)', () => {
       const face = (rel: Euler, n: number, f: boolean) =>
         repeat(rel, n).map((r): [Euler, boolean] => [r, f]);
-      const held = (after: number) =>
-        foldFace(rom3, [
+      const out = (deg: number) => face(N(0, deg), 5, true);
+
+      it('the blind frames are hold time, at the angle last seen: "Hold", the count, the rep', () => {
+        const { state, events } = foldFace(rom3, [
           [N(0, 0), true],
-          ...face(N(0, 35), 45, true), // 44 frames in the zone
-          ...face(N(0, 35), 60, false),
-          ...face(N(0, 35), after, true),
+          ...out(20), // short of the 30° zone
+          ...face(N(0, 20), 95, false),
+          [N(0, 0), true],
+        ]);
+        expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdReached', 'repCompleted']);
+        expect(of(events, 'repCompleted')[0]).toMatchObject({ peakDeg: 20, reachedTarget: false });
+        expect(summaryOf(state).avgPeakDeg).toBe(20);
+      });
+
+      it('back before the hold is up is "Hold longer", never "Further"', () => {
+        const { events } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(20),
+          ...face(N(0, 20), 30, false),
+          [N(0, 0), true],
+        ]);
+        expect(events.map((e) => e.type)).toEqual(['holdEntered', 'holdShort']);
+        expect(of(events, 'holdShort')[0]?.heldSec).toBeCloseTo(1, 5);
+      });
+
+      it('a face flickering at the limit holds, with no "Further"', () => {
+        const flicker = (n: number) =>
+          Array.from({ length: n }, (_, i): [Euler, boolean] => [N(0, 22), i % 2 === 1]);
+        const at = (n: number) =>
+          foldFace(rom3, [[N(0, 0), true], ...out(22), ...flicker(n)]).events;
+        // 0.3 s blind in all latches it; the seen frames before that aren't credited, after it they are.
+        // About 9 blind frames latch it (0.3 s, credited); every frame after it holds — the seen ones
+        // before it don't. So ≈ 2.7 s of hold at 90 frames, ≈ 3.2 s at 105.
+        expect(of(at(90), 'holdReached')).toEqual([]);
+        expect(of(at(105), 'holdReached')).toHaveLength(1);
+        expect(of(at(105), 'stoppedShort')).toEqual([]);
+      });
+
+      it('frames dropped all through the turn out are not its end: "Further" at a short stop', () => {
+        // 15° → 28° over 1.5 s, every 4th frame dropped (0.37 s blind in all), then a seen stop at 28°.
+        const turn = Array.from({ length: 45 }, (_, i): [Euler, boolean] => {
+          const deg = 15 + (13 * (i + 1)) / 45;
+          return [N(0, deg), i % 4 !== 3];
+        });
+        // A dropped frame keeps the last seen pose.
+        for (let i = 1; i < turn.length; i++) if (!turn[i]![1]) turn[i] = [turn[i - 1]![0], false];
+        const { events } = foldFace(rom3, [[N(0, 0), true], ...turn, ...face(N(0, 28), 30, true)]);
+        expect(events.map((e) => e.type)).toEqual(['stoppedShort']);
+      });
+
+      it('a dropout in the zone runs the hold once — no blind time credited twice', () => {
+        const { state } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(35), // in the 30° zone: the first frame enters, 4 hold
+          ...face(N(0, 35), 30, false),
+        ]);
+        expect(state.kind === 'romReps' && state.holdAccumSec).toBeCloseTo(34 / 30, 5);
+      });
+
+      it('after the latch, a seen pause off the peak is not hold time', () => {
+        const { state } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(22),
+          ...face(N(0, 22), 15, false), // latched: 0.5 s held
+          ...Array.from({ length: 5 }, (_, i): [Euler, boolean] => [N(0, 22 - i - 1), true]),
+          ...face(N(0, 17), 30, true), // still at 17°, 5° back from the peak
+        ]);
+        expect(state.kind === 'romReps' && state.holdAccumSec).toBeCloseTo(15 / 30, 5);
+      });
+
+      it('a dropped frame or two is not the end of the turn: no "Hold" on the way out or back', () => {
+        const glitch = (n: number) => face(N(0, 20), n, false);
+        const outward = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(20),
+          ...glitch(8), // 0.27 s — under the 0.3 s threshold
+          ...face(N(0, 20), 30, true), // a seen pause short of the zone
         ]).events;
-      expect(of(held(40), 'holdReached')).toEqual([]); // 84 frames < 90: the dropout added nothing
-      expect(of(held(50), 'holdReached')).toHaveLength(1);
-      const short = foldFace(rom3, [
-        [N(0, 0), true],
-        ...face(N(0, 20), 5, true),
-        ...face(N(0, 20), 60, false),
-      ]);
-      expect(of(short.events, 'stoppedShort')).toEqual([]);
+        expect(outward.map((e) => e.type)).toEqual(['stoppedShort']);
+        const back = Array.from({ length: 10 }, (_, i): [Euler, boolean] => [
+          N(0, 28 - 2 * (i + 1)),
+          true,
+        ]);
+        const returning = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(28), // short of the 30° zone
+          ...back.slice(0, 5), // back to 18°, below the peak
+          ...face(N(0, 18), 30, false), // a full second blind, but not at the far end
+          ...back.slice(5),
+          [N(0, 0), true],
+        ]).events;
+        expect(of(returning, 'holdEntered')).toEqual([]);
+      });
+
+      it('moving back after the dropout is not hold time', () => {
+        const ramp = Array.from({ length: 10 }, (_, i): [Euler, boolean] => [
+          N(0, 22 - (6 * (i + 1)) / 10),
+          true,
+        ]);
+        const { state } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(22),
+          ...face(N(0, 22), 10, false),
+          ...ramp,
+        ]);
+        expect(state.kind === 'romReps' && state.holdAccumSec).toBeCloseTo(10 / 30, 5);
+      });
+
+      it('a face lost before the excursion starts freezes everything, as before', () => {
+        const { state, events } = foldFace(rom3, [
+          [N(0, 0), true],
+          ...out(10),
+          ...face(N(0, 10), 60, false),
+        ]);
+        expect(events).toEqual([]);
+        expect(state).toMatchObject({
+          zone: 'neutral',
+          holdAccumSec: 0,
+          blindSec: 0,
+          wentBlind: false,
+        });
+      });
+
+      it('back on the other side of a bilateral swing: the blind side’s rep, then a fresh excursion', () => {
+        const bi = { ...rom3, id: 't-bi', direction: 'bilateral' } satisfies ExerciseDefinition;
+        const { state, events } = foldFace(bi, [
+          [N(0, 0), true],
+          ...out(20),
+          ...face(N(0, 20), 95, false),
+          ...out(-20),
+        ]);
+        expect(of(events, 'repCompleted')).toMatchObject([{ side: 'positive', peakDeg: 20 }]);
+        expect(state).toMatchObject({ zone: 'negative', holdAccumSec: 0, wentBlind: false });
+      });
+
+      it('an exercise without a hold still counts the rep on return, with no "Hold"', () => {
+        const noHold = { ...rom3, id: 't-nohold', holdSec: 0 } satisfies ExerciseDefinition;
+        const { events } = foldFace(noHold, [
+          [N(0, 0), true],
+          ...out(20),
+          ...face(N(0, 20), 30, false),
+          [N(0, 0), true],
+        ]);
+        expect(events.map((e) => e.type)).toEqual(['repCompleted']);
+      });
+
+      it('inRomExcursion: only an active ROM set out of neutral', () => {
+        const rom = initialState(rom3);
+        if (rom.kind !== 'romReps') throw new Error('romReps');
+        expect(inRomExcursion({ ...rom, zone: 'positive' })).toBe(true);
+        expect(inRomExcursion(rom)).toBe(false);
+        expect(inRomExcursion({ ...rom, zone: 'negative', phase: 'complete' })).toBe(false);
+        const stretch = (EXERCISES as readonly ExerciseDefinition[]).find(
+          (d) => d.kind === 'holdAtTarget',
+        );
+        expect(stretch && inRomExcursion(initialState(stretch))).toBe(false);
+        expect(inRomExcursion(null)).toBe(false);
+      });
     });
 
     it('nothing without a hold: no zone, no "Hold", no "Further"', () => {
@@ -527,7 +670,15 @@ describe('romReps', () => {
     const done = of(events, 'setCompleted');
     expect(done).toHaveLength(1);
     expect(done[0]?.summary.count).toBe(2);
+    expect(done[0]?.summary).toEqual(summaryOf(state)); // one reading of a set (D55)
     expect(state.phase).toBe('complete');
+  });
+
+  it('a set ended after two reps reads as two reps and their average peak (D55)', () => {
+    const fiveReps = { ...flexion, id: 't-5', reps: 5 } satisfies ExerciseDefinition;
+    const { state } = fold(fiveReps, [N(0), N(-40), N(0), N(-50), N(0), N(-30)]);
+    expect(state.phase).not.toBe('complete');
+    expect(summaryOf(state)).toEqual({ count: 2, avgPeakDeg: 45 });
   });
 });
 
@@ -551,6 +702,7 @@ describe('holdAtTarget', () => {
     expect(of(events, 'positionReached')).toHaveLength(1);
     expect(of(events, 'holdCompleted')).toHaveLength(1);
     expect(of(events, 'setCompleted')).toHaveLength(1);
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
     expect(state.phase).toBe('complete');
   });
 
@@ -791,6 +943,7 @@ describe('guidedHold', () => {
     expect(of(events, 'holdStarted').length).toBeGreaterThanOrEqual(2);
     expect(of(events, 'holdCompleted')).toHaveLength(2);
     expect(of(events, 'setCompleted')).toHaveLength(1);
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
     expect(state.phase).toBe('complete');
   });
 
@@ -863,7 +1016,11 @@ describe('reposition', () => {
       ...ramp(32, 2, 20), // back
       ...repeat(N(0, 2, 0), 40), // still near neutral → "Hold still", then the trial
     ];
-    const { events } = fold(two, [N(0), ...trial, ...trial], { startAt: 0 });
+    const { state, events } = fold(two, [N(0), ...trial, ...trial], { startAt: 0 });
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
+    const one = fold(two, [N(0), ...trial], { startAt: 0 }).state; // ended after one trial
+    expect(summaryOf(one)).toMatchObject({ count: 1 });
+    expect(summaryOf(one).avgErrorDeg).toBeCloseTo(2, 0);
     expect(events.map((e) => (e.type === 'repositionPrompt' ? e.sub : e.type))).toEqual([
       'away',
       'returning',
@@ -914,7 +1071,15 @@ describe('oscillation', () => {
     expect(amp).toBeGreaterThan(30);
     expect(amp).toBeLessThan(45);
     expect(of(events, 'setCompleted')).toHaveLength(1);
+    expect(of(events, 'setCompleted')[0]?.summary).toEqual(summaryOf(state));
     expect(state.phase).toBe('complete');
+    // Ended part-way: the whole cycles so far.
+    const half = fold(gaze, rels.slice(0, fps), { startAt: 0, fps }).state;
+    expect(summaryOf(half).count).toBe(Math.floor((half as { cycles: number }).cycles));
+  });
+
+  it('every kind starts at a count of 0 — the "stopped before the first rep" line (D55)', () => {
+    for (const def of EXERCISES) expect(summaryOf(initialState(def)).count).toBe(0);
   });
 });
 

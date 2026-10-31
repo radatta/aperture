@@ -4,14 +4,15 @@ import {
   contraindicationFor,
   getExercise,
   isExerciseId,
+  sideLabel,
   type ExerciseDefinition,
   type ExerciseId,
 } from '@aperture/shared/flux';
+import { dayKey, ulid } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { ArrowLeftIcon } from '../../components/icons';
-import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { CameraStage } from '../../modules/flux/CameraStage';
@@ -23,7 +24,11 @@ import { PrecautionBanner } from '../../modules/flux/PrecautionBanner';
 import { readCondition } from '../../modules/flux/prefs';
 import { RepTieStrip } from '../../modules/flux/RepTie';
 import { SetsStepper } from '../../modules/flux/SetsStepper';
+import { VoicePicker } from '../../modules/flux/VoicePicker';
 import { useRepTie } from '../../modules/flux/useRepTie';
+import { draftToInput } from '../../modules/flux/fluxOutbox';
+import { UnsavedSetsStrip } from '../../modules/flux/UnsavedSetsStrip';
+import { useFluxOutbox } from '../../modules/flux/useFluxOutbox';
 import { DEFAULT_SETS, useFluxEngine, type SessionSummary } from '../../modules/flux/useFluxEngine';
 import { useVoice } from '../../modules/flux/useVoice';
 
@@ -57,10 +62,11 @@ function Stage({ id }: { id: ExerciseId }) {
   const [side, setSide] = useState<Side>('a');
   const shown = mirrorForSide(def, side);
   const [sets, setSets] = useState(DEFAULT_SETS);
-  const sessionSide = useRef<Side>('a');
+  const lastSide = useRef<Side>('a'); // the side the last finished set was done on
 
   const voice = useVoice();
   const rep = useRepTie();
+  const outbox = useFluxOutbox();
   // A finished session — by Stop, or by itself after the last set (D42) — offers the Roll tie.
   const finish = (session: SessionSummary) => {
     if (session.sets > 0) void rep.onStop(session.activeMs);
@@ -73,10 +79,17 @@ function Stage({ id }: { id: ExerciseId }) {
     acknowledged,
     voice,
     sets,
-    onSetCompleted: rep.onSetCompleted,
-    // A sided stretch alternates sides set by set from the side the session started on, so a manual
-    // toggle during a rest doesn't knock it out of step.
-    onNextSet: (i) => sided && setSide(i % 2 ? other(sessionSide.current) : sessionSide.current),
+    // Every set with anything in it is saved — finished (D47) or ended early (D55) — through the outbox
+    // so a dropped connection can't lose it (D49).
+    onSetCompleted: (set) => {
+      if (!set.stoppedEarly && set.side) lastSide.current = set.side;
+      const repTaskId = rep.onSetCompleted();
+      const keys = { id: ulid(), day: dayKey(set.completedAt, rep.dayStartHour), repTaskId };
+      void outbox.save(draftToInput(set, keys));
+    },
+    // A sided stretch alternates: the next set is the other side from the last *finished* set, so neither
+    // a toggle during the rest nor a side switched mid-set (D55) does the same side twice.
+    onNextSet: () => sided && setSide(other(lastSide.current)),
     onSessionEnd: finish,
   });
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -85,7 +98,6 @@ function Stage({ id }: { id: ExerciseId }) {
   const start = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    sessionSide.current = side;
     if (video && canvas) void engine.start({ video, canvas });
   };
 
@@ -122,20 +134,10 @@ function Stage({ id }: { id: ExerciseId }) {
           <MeasurementBadge ex={def} />
           {def.provocative && <EndRangeBadge />}
         </div>
-        {voice.on && voice.voices.length > 0 && (
-          <Select
-            aria-label="Voice"
-            title="Pick the voice (previews on change)"
-            placeholder="Auto voice"
-            value={voice.name ?? ''}
-            onChange={(e) => voice.change(e.target.value || null)}
-            options={voice.voices.map((v) => ({ value: v.name, label: v.name }))}
-            className="max-w-[10rem] py-1 text-xs"
-          />
-        )}
+        {voice.on && voice.voices.length > 0 && <VoicePicker voice={voice} compact />}
       </div>
 
-      {sided && <SideToggle side={side} onChange={setSide} />}
+      {sided && <SideToggle def={def} side={side} onChange={setSide} />}
 
       <PrecautionBanner
         precautions={def.precautions}
@@ -185,6 +187,7 @@ function Stage({ id }: { id: ExerciseId }) {
       )}
 
       <SessionLine engine={engine} def={def} sets={sets} />
+      <UnsavedSetsStrip />
       <RepTieStrip handle={rep} activeMs={engine.activeMs()} />
       <DebugReadout engine={engine} />
     </div>
@@ -193,7 +196,19 @@ function Stage({ id }: { id: ExerciseId }) {
 
 const other = (s: Side): Side => (s === 'a' ? 'b' : 'a');
 
-function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => void }) {
+// Right / Left by where the head mainly goes (D48) — Right first, whichever stored side it is.
+function SideToggle({
+  def,
+  side,
+  onChange,
+}: {
+  def: ExerciseDefinition;
+  side: Side;
+  onChange: (s: Side) => void;
+}) {
+  const sides = (['a', 'b'] as const)
+    .map((s) => ({ s, label: sideLabel(def, s) }))
+    .sort((x, y) => (x.label === 'Right' ? -1 : y.label === 'Right' ? 1 : 0));
   return (
     <div className="flex flex-col gap-1">
       <div
@@ -201,7 +216,7 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => voi
         aria-label="Side"
         className="inline-flex gap-0.5 self-start rounded-xl border border-line bg-surface p-0.5"
       >
-        {(['a', 'b'] as const).map((s) => (
+        {sides.map(({ s, label }) => (
           <button
             key={s}
             type="button"
@@ -212,12 +227,12 @@ function SideToggle({ side, onChange }: { side: Side; onChange: (s: Side) => voi
               side === s ? 'bg-teal-soft font-medium text-ink' : 'text-ink-muted hover:text-ink',
             )}
           >
-            Side {s.toUpperCase()}
+            {label}
           </button>
         ))}
       </div>
       <Text size="xs" tone="muted">
-        Side B is the mirror of Side A — the next set switches sides on its own.
+        Each side is named for where your head goes — the next set switches sides on its own.
       </Text>
     </div>
   );
@@ -232,15 +247,18 @@ function SessionLine({
   def: ExerciseDefinition;
   sets: number;
 }) {
-  const n = engine.sessionSets.length;
+  // Of the plan, only finished sets count (as the session's own count does); stopped ones are said apart.
+  const stopped = engine.sessionSets.filter((s) => s.stoppedEarly).length;
+  const n = engine.sessionSets.length - stopped;
   const rom = engine.sample.rom;
   const showRom = engine.status === 'running' && engine.calibrated && def.measurement !== 'guided';
-  if (n === 0 && !showRom) return null;
+  if (n + stopped === 0 && !showRom) return null;
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1">
-      {n > 0 && (
+      {n + stopped > 0 && (
         <Text size="sm" tone="muted" tabular>
           Sets this session · {n} of {sets}
+          {stopped > 0 && ` · ${stopped} stopped early`}
         </Text>
       )}
       {showRom && (

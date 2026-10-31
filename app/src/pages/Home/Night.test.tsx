@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { addDays, todayKey } from '@aperture/shared';
+import { addDays, todayKey, ulid } from '@aperture/shared';
 import type { ApiClient, TaskStatus } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
@@ -120,5 +120,55 @@ describe('night: today in review', () => {
     expect(screen.getByText('big essay · 2 parts')).toBeTruthy();
     expect(screen.getByText('quick errand')).toBeTruthy();
     expect(screen.getByText('no estimate')).toBeTruthy();
+  });
+});
+
+describe('night: the Flux line (D51)', () => {
+  const fluxSet = (
+    api: ApiClient,
+    exerciseId: string,
+    day: string,
+    completedAt: number,
+    stoppedEarly = false,
+  ) =>
+    api.recordFluxSet({
+      id: ulid(),
+      day,
+      exerciseId,
+      kind: exerciseId === 'cervical-rotation' ? 'romReps' : 'holdAtTarget',
+      side: exerciseId === 'upper-trap-stretch' ? 'a' : null,
+      condition: null,
+      count: 10,
+      avgPeakDeg: null,
+      avgErrorDeg: null,
+      rom: { pitch: 1, yaw: 1, roll: 1 },
+      calibrated: true,
+      delegate: 'GPU',
+      durationSec: 100,
+      completedAt,
+      repTaskId: null,
+      stoppedEarly,
+      planned: 10,
+    });
+
+  it('says what Flux did today, links to History, and stays off Morning', async () => {
+    const api = createStubClient({ seed: false, storageKey: `night-flux-${Math.random()}` });
+    const t = Date.now();
+    await fluxSet(api, 'cervical-rotation', today(), t - 3000);
+    await fluxSet(api, 'cervical-rotation', today(), t - 2000, true); // a stopped set is a set (D55)
+    await fluxSet(api, 'upper-trap-stretch', today(), t - 1000);
+    await fluxSet(api, 'chin-tuck', addDays(today(), -1), t - 86_400_000); // yesterday's doesn't count
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    const line = await screen.findByText('Flux · 2 sets rotation, 1 upper trap');
+    expect(line.closest('a')?.getAttribute('href')).toBe('/flux/history');
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    await waitFor(() => expect(screen.queryByText(/^Flux ·/)).toBeNull());
+  });
+
+  it('is absent on a day with no sets', async () => {
+    await night();
+    expect(screen.queryByText(/^Flux ·/)).toBeNull();
   });
 });

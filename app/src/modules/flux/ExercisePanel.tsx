@@ -1,4 +1,10 @@
-import type { Axis, EvalControl, ExerciseDefinition, ExerciseState } from '@aperture/shared/flux';
+import {
+  BILATERAL_LABELS,
+  type Axis,
+  type EvalControl,
+  type ExerciseDefinition,
+  type ExerciseState,
+} from '@aperture/shared/flux';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { CheckCircleIcon, PlayIcon, RotateIcon, WarningIcon } from '../../components/icons';
@@ -147,8 +153,8 @@ function Feedback({
         )}
         {def.direction === 'bilateral' && (
           <div className="mt-3 flex gap-3 text-center text-xs text-ink-muted">
-            <SideStat label="Side A" n={state.repsPos} target={def.reps} />
-            <SideStat label="Side B" n={state.repsNeg} target={def.reps} />
+            <SideStat label={BILATERAL_LABELS.positive} n={state.repsPos} target={def.reps} />
+            <SideStat label={BILATERAL_LABELS.negative} n={state.repsNeg} target={def.reps} />
           </div>
         )}
         {state.compensating && !complete && (

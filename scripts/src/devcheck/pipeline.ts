@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import type { ApiClient } from './api';
+import { FLUX_SET_VIA, type ApiClient } from './api';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, type ReasonCode } from './errors';
@@ -91,8 +91,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
 
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
     for (const id of pendingIds(d.ledger.read())) {
-      if ((await api.reads.getTask(id)) === null) d.ledger.append({ run: d.runId, op: 'gone', id });
-      else if (await safeDelete(api, id)) {
+      if (!(await exists(api, id))) d.ledger.append({ run: d.runId, op: 'gone', id });
+      else if (await removeRecorded(api, id)) {
         d.ledger.append({ run: d.runId, op: 'swept', id });
         r.swept.push(id);
       }
@@ -224,6 +224,22 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     return true;
   }
 
+  // A ledger id is a task unless the ledger says it came from recordFluxSet — each kind is read back and
+  // deleted through its own method, so a Flux set is never "verified gone" by a task lookup.
+  function isFluxSet(id: string): boolean {
+    return d.ledger.read().some((e) => e.op === 'created' && e.id === id && e.via === FLUX_SET_VIA);
+  }
+  async function exists(client: ApiClient, id: string): Promise<boolean> {
+    return isFluxSet(id)
+      ? (await client.reads.getFluxSet(id)) !== null
+      : (await client.reads.getTask(id)) !== null;
+  }
+  async function removeRecorded(client: ApiClient, id: string): Promise<boolean> {
+    if (!isFluxSet(id)) return safeDelete(client, id);
+    await client.writes.deleteFluxSet(id);
+    return true;
+  }
+
   async function cleanup(): Promise<void> {
     const entries = d.ledger.read();
     r.orphanIntents.push(
@@ -256,21 +272,20 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       const rec: CreatedRecord = { id, via: e.via ?? '?', title: e.title, final: 'left' };
       r.created.unshift(rec);
       if (!pending.has(id)) continue;
-      if ((await api.reads.getTask(id)) === null) {
+      if (!(await exists(api, id))) {
         d.ledger.append({ run: d.runId, op: 'gone', id });
         continue;
       }
-      if (await safeDelete(api, id)) d.ledger.append({ run: d.runId, op: 'deleted', id });
+      if (await removeRecorded(api, id)) d.ledger.append({ run: d.runId, op: 'deleted', id });
     }
     // Verify by reading back, not by trusting the deletes.
     const after = d.ledger.read();
     for (const rec of r.created) {
-      if ((await api.reads.getTask(rec.id)) !== null) continue; // stays 'left'
+      if (await exists(api, rec.id)) continue; // stays 'left'
       rec.final = after.some((e) => e.id === rec.id && e.op === 'gone') ? 'gone' : 'deleted';
     }
     for (const id of r.swept)
-      if ((await api.reads.getTask(id)) !== null)
-        r.created.push({ id, via: 'swept', final: 'left' });
+      if (await exists(api, id)) r.created.push({ id, via: 'swept', final: 'left' });
     if (r.created.some((c) => c.final === 'left')) fail('LEFTOVERS');
 
     // A task the ledger doesn't know is never deleted. One that was there before the run is reported; one

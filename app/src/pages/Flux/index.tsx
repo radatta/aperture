@@ -5,6 +5,7 @@ import { Text } from '../../components/Text';
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import { useFocusRescue } from '../../lib/useFocusRescue';
 import { Disclaimer, DisclaimerFooter } from '../../modules/flux/Disclaimer';
+import { useFluxOutboxFlush } from '../../modules/flux/useFluxOutbox';
 
 // Flux (docs/areas/flux): flux-track-2's webcam neck rehab, as an Aperture page. The layout holds the
 // disclaimer gate (accepted once, synced via Settings) and the shared footer; the library and each
@@ -12,6 +13,7 @@ import { Disclaimer, DisclaimerFooter } from '../../modules/flux/Disclaimer';
 export function FluxPage() {
   const { data: settings, isPending, isError } = useSettings();
   const update = useUpdateSettings();
+  useFluxOutboxFlush(); // sets a closed app or a dropped connection left queued (D49)
   const pageRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLElement>(null);
   useFocusRescue(
@@ -26,6 +28,7 @@ export function FluxPage() {
           as="h1"
           ref={headingRef}
           tabIndex={-1}
+          data-focus-rescue
           size="2xl"
           weight="semibold"
           className="outline-none"

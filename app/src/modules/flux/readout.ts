@@ -1,4 +1,9 @@
-import type { ExerciseDefinition, ExerciseState, RepositionState } from '@aperture/shared/flux';
+import {
+  plannedCount,
+  type ExerciseDefinition,
+  type ExerciseState,
+  type RepositionState,
+} from '@aperture/shared/flux';
 import { magnitude } from './engine/headPose';
 
 // The live numbers a set shows — rep count and the hold/countdown ring — derived once from definition
@@ -51,7 +56,7 @@ export function liveReadout(def: ExerciseDefinition, state: ExerciseState | null
     return {
       count: {
         n: state.repsPos + state.repsNeg,
-        of: def.direction === 'bilateral' ? def.reps * 2 : def.reps,
+        of: plannedCount(def) ?? def.reps, // both sides for a bilateral drill — what a set saves as `planned`
         unit: 'reps',
       },
       ring:

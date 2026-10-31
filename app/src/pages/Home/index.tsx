@@ -25,6 +25,7 @@ import { RightNowCard } from './RightNowCard';
 import { ComingUpCard } from './ComingUpCard';
 import { StillOpenSection } from './StillOpenSection';
 import { FinanceGlance } from './FinanceGlance';
+import { FluxGlance } from './FluxGlance';
 
 // The glanceable home. Auto morning/day/night (HomeModeProvider), ≤5 elements per mode — the global
 // capture bar is element 1 everywhere, so each mode adds ~3 cards. Phase 5 lit up the plan / tasks /
@@ -70,6 +71,7 @@ function NightHome({ today }: { today: string }) {
     <div className="flex flex-col gap-4">
       <ReviewCard today={today} />
       <FinanceGlance mode="night" />
+      <FluxGlance today={today} />
       <HomeCard title="Habits check">
         <HabitCheckList />
       </HomeCard>

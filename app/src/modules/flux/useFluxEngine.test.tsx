@@ -2,19 +2,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { setFluxEngineFactory } from './engine/engine';
 import { createFakeEngine, type FakeControls } from './engine/fakeEngine';
+import { initialState } from './engine/evaluate';
+import { getExercise, type ExerciseState } from '@aperture/shared/flux';
 import { useFluxEngine, type FluxEngineOptions } from './useFluxEngine';
 import type { VoiceControl } from './useVoice';
 
 function voice(): VoiceControl {
   return {
     on: true,
-    name: null,
+    id: null,
     voices: [],
+    missing: false,
+    ready: true,
     prime: vi.fn(),
     speak: vi.fn(),
     cancel: vi.fn(),
     toggle: vi.fn(),
     change: vi.fn(),
+    preview: vi.fn(),
   };
 }
 
@@ -29,21 +34,28 @@ function setup(over: Partial<FluxEngineOptions> = {}) {
   const onSetCompleted = vi.fn();
   const onNextSet = vi.fn();
   const onSessionEnd = vi.fn();
-  const hook = renderHook((p: FluxEngineOptions) => useFluxEngine(p), {
-    initialProps: {
-      exerciseId: 'chin-tuck',
-      kind: 'holdAtTarget',
-      side: null,
-      condition: null,
-      acknowledged: true,
-      voice: v,
-      onSetCompleted,
-      onNextSet,
-      onSessionEnd,
-      ...over,
-    },
-  });
-  return { hook, v, onSetCompleted, onNextSet, onSessionEnd, fake: () => fake as FakeControls };
+  const props: FluxEngineOptions = {
+    exerciseId: 'chin-tuck',
+    kind: 'holdAtTarget',
+    side: null,
+    condition: null,
+    acknowledged: true,
+    voice: v,
+    onSetCompleted,
+    onNextSet,
+    onSessionEnd,
+    ...over,
+  };
+  const hook = renderHook((p: FluxEngineOptions) => useFluxEngine(p), { initialProps: props });
+  return {
+    hook,
+    props,
+    v,
+    onSetCompleted,
+    onNextSet,
+    onSessionEnd,
+    fake: () => fake as FakeControls,
+  };
 }
 
 // Every phrase spoken so far, in order.
@@ -335,6 +347,28 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(spoken(v).filter((t) => t === 'Tracking')).toHaveLength(1);
   });
 
+  it("mid-turn, a lost face is the end of the turn: Can't see you only after 10 s (D57)", async () => {
+    const rotation = initialState(getExercise('cervical-rotation'));
+    const turned = async (zone: 'positive' | 'neutral') => {
+      const t = await running({ exerciseId: 'cervical-rotation', kind: 'romReps' });
+      act(() => t.fake().calibrated(true));
+      act(() => t.fake().sample({ faceVisible: true, tSec: 0 }));
+      act(() => t.fake().state({ ...rotation, zone } as ExerciseState));
+      return t;
+    };
+    const out = await turned('positive');
+    for (const tSec of [0.1, 2, 9.9]) act(() => out.fake().sample({ faceVisible: false, tSec }));
+    expect(spoken(out.v)).toEqual(['Neutral set']);
+    act(() => out.fake().sample({ faceVisible: false, tSec: 10.2 }));
+    expect(spoken(out.v)).toEqual(['Neutral set', "Can't see you"]);
+    out.hook.unmount();
+
+    const centred = await turned('neutral');
+    act(() => centred.fake().sample({ faceVisible: false, tSec: 0.1 }));
+    act(() => centred.fake().sample({ faceVisible: false, tSec: 1.2 }));
+    expect(spoken(centred.v)).toEqual(['Neutral set', "Can't see you"]);
+  });
+
   it('hints Face the camera and hold still after 20 s of a face with no neutral', async () => {
     const { v, fake } = await running();
     act(() => fake().sample({ faceVisible: true, tSec: 0 }));
@@ -358,6 +392,77 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(onNextSet).toHaveBeenCalledWith(1);
     expect(spoken(v).at(-1)).toBe('Set two');
     expect(starts(fake().calls)).toBe(1); // self-paced: straight away
+  });
+
+  it('set two’s duration is from its own start: the rest before it isn’t counted', async () => {
+    const { fake, onSetCompleted, advance } = await running();
+    advance(20_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 20 }),
+      0,
+    );
+    advance(30_000); // the rest, then set two starts
+    advance(15_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 15 }),
+      1,
+    );
+  });
+
+  it('nor its lead-in, for a timed kind', async () => {
+    const { fake, onSetCompleted, advance } = await running({
+      exerciseId: 'joint-position-sense',
+      kind: 'reposition',
+    });
+    act(() => fake().event(DONE));
+    advance(33_000); // the rest and the lead-in
+    advance(12_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 12 }),
+      1,
+    );
+  });
+
+  it('set one leaves out the wait before it: a Start tap, or Start now once the neutral is set', async () => {
+    const timed = { exerciseId: 'joint-position-sense', kind: 'reposition' } as const;
+    const tap = await running(timed);
+    act(() => tap.fake().calibrated(true, true));
+    tap.advance(3_000); // the lead-in starts the set…
+    tap.advance(7_000); // …and Start is tapped later (a restart once the set is done, say)
+    act(() => tap.hook.result.current.control({ type: 'start' }));
+    tap.advance(12_000);
+    act(() => tap.fake().event(DONE));
+    expect(tap.onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 12 }),
+      0,
+    );
+    tap.hook.unmount();
+
+    const now = await running(timed);
+    act(() => now.hook.result.current.control({ type: 'start' })); // no neutral yet
+    now.advance(10_000);
+    act(() => now.fake().calibrated(true, true));
+    now.advance(12_000);
+    act(() => now.fake().event(DONE));
+    expect(now.onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 12 }),
+      0,
+    );
+  });
+
+  it('a self-paced set one counts from the first neutral, not from getting into position', async () => {
+    const { fake, onSetCompleted, advance } = await running();
+    advance(60_000);
+    act(() => fake().calibrated(true, true));
+    advance(20_000);
+    act(() => fake().event(DONE));
+    expect(onSetCompleted).toHaveBeenLastCalledWith(
+      expect.objectContaining({ durationSec: 20 }),
+      0,
+    );
   });
 
   it('a timed kind gets its lead-in after the rest', async () => {
@@ -547,5 +652,184 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(hook.result.current.notice).toBe('Neutral reset');
     advance(10_000);
     expect(starts(fake().calls)).toBe(1); // the rest runs on
+  });
+});
+
+// A set ended before its prescription is saved if it has anything in it (docs/areas/flux D55).
+describe('useFluxEngine stopped sets (D55)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  const tuck = initialState(getExercise('chin-tuck'));
+  const holds = (n: number, phase: ExerciseState['phase'] = 'active') =>
+    ({ ...tuck, phase, holdsDone: n }) as ExerciseState;
+
+  async function running(over: Parameters<typeof setup>[0] = {}) {
+    const s = setup(over);
+    await act(() => s.hook.result.current.start(els));
+    act(() => s.fake().ready('GPU'));
+    return s;
+  }
+
+  it('Stop after three holds saves them, marked, with the planned count; nothing is said', async () => {
+    const { hook, v, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(3)));
+    const before = spoken(v).length;
+    let summary;
+    act(() => {
+      summary = hook.result.current.stop();
+    });
+    expect(onSetCompleted).toHaveBeenCalledTimes(1);
+    expect(onSetCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        exerciseId: 'chin-tuck',
+        count: 3,
+        stoppedEarly: true,
+        planned: 6,
+      }),
+      0,
+    );
+    expect(summary).toMatchObject({ sets: 1 });
+    expect(spoken(v)).toHaveLength(before);
+    expect(v.cancel).toHaveBeenCalled();
+  });
+
+  it('Stop before the first hold saves nothing', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(0)));
+    let summary;
+    act(() => {
+      summary = hook.result.current.stop();
+    });
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ sets: 0 });
+  });
+
+  it('a finished set is saved once — not again by a Stop during the rest', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(5)));
+    act(() => fake().event({ type: 'setCompleted', summary: { count: 6 } }));
+    act(() => hook.result.current.stop()); // before the worker's next (complete) state post
+    expect(onSetCompleted).toHaveBeenCalledTimes(1);
+    expect(onSetCompleted.mock.calls[0]?.[0]).toMatchObject({ count: 6, stoppedEarly: false });
+  });
+
+  it('nor by a Stop once the finished state has been posted', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().event({ type: 'setCompleted', summary: { count: 6 } }));
+    act(() => fake().state(holds(6, 'complete')));
+    act(() => hook.result.current.stop());
+    expect(onSetCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stop then leaving the page saves the set once', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    act(() => hook.result.current.stop());
+    hook.unmount();
+    expect(onSetCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaving the page mid-set saves it', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    hook.unmount();
+    expect(onSetCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 2, stoppedEarly: true }),
+      0,
+    );
+  });
+
+  it('a tracker error mid-set saves it, then says tracking stopped', async () => {
+    const { v, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(4)));
+    act(() => fake().fail('detect', 'boom'));
+    expect(onSetCompleted).toHaveBeenCalledWith(expect.objectContaining({ count: 4 }), 0);
+    expect(spoken(v).at(-1)).toMatch(/[Tt]racking/);
+  });
+
+  it('a set saved by an error isn’t saved again when the page is left', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(4)));
+    act(() => fake().fail('detect', 'boom'));
+    hook.unmount();
+    expect(onSetCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('a camera pause is not an end; a pause then Stop saves once', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    act(() => fake().pause());
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    act(() => hook.result.current.stop());
+    expect(onSetCompleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('a GPU→CPU fallback restarts the set (D26): the new worker’s fresh state is what Stop sees', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    act(() => fake().ready('CPU', true));
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    act(() => fake().state(holds(0))); // the new worker's first post
+    act(() => hook.result.current.stop());
+    expect(onSetCompleted).not.toHaveBeenCalled();
+  });
+
+  it('a Stop right after a fallback, before the new worker posts, saves nothing either', async () => {
+    const { hook, onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    act(() => fake().ready('CPU', true));
+    act(() => hook.result.current.stop());
+    expect(onSetCompleted).not.toHaveBeenCalled();
+  });
+
+  it('a reload or a closed tab mid-set saves it; a page kept for back/forward doesn’t', async () => {
+    const { onSetCompleted, fake } = await running();
+    act(() => fake().state(holds(2)));
+    const hide = (persisted: boolean) =>
+      act(() => {
+        const e = new Event('pagehide') as PageTransitionEvent;
+        Object.defineProperty(e, 'persisted', { value: persisted });
+        window.dispatchEvent(e);
+      });
+    hide(true);
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    hide(false);
+    expect(onSetCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 2, stoppedEarly: true }),
+      0,
+    );
+  });
+
+  it('a Re-calibrate mid-set carries on — nothing saved, the set not restarted', async () => {
+    const { v, onSetCompleted, fake } = await running({
+      exerciseId: 'deep-neck-flexor',
+      kind: 'guidedHold',
+    });
+    const dnf = initialState(getExercise('deep-neck-flexor'));
+    act(() => fake().calibrated(true));
+    act(() => fake().state({ ...dnf, phase: 'active', holdsDone: 2 } as ExerciseState));
+    const said = spoken(v).length;
+    act(() => fake().calibrated(true));
+    expect(onSetCompleted).not.toHaveBeenCalled();
+    // "Neutral set", and no "Get ready" — the set isn't being started again.
+    expect(spoken(v).slice(said).join(' ')).not.toMatch(/Get ready/i);
+  });
+
+  it('switching sides mid-set saves what was done as the old side’s set', async () => {
+    const { hook, props, onSetCompleted, fake } = await running({
+      exerciseId: 'upper-trap-stretch',
+      kind: 'holdAtTarget',
+      side: 'a',
+    });
+    const trap = initialState(getExercise('upper-trap-stretch'));
+    act(() => fake().state({ ...trap, phase: 'active', holdsDone: 1 } as ExerciseState));
+    hook.rerender({ ...props, side: 'b' });
+    expect(onSetCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ side: 'a', count: 1, stoppedEarly: true, planned: 2 }),
+      0,
+    );
   });
 });

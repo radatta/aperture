@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
-import { createStubClient } from '../../data/stubClient';
+import { createStubClient, STUB_FAIL_FLUX_SAVE_KEY } from '../../data/stubClient';
+import { FLUX_OUTBOX_KEY } from '../../modules/flux/fluxOutbox';
 import { setFluxEngineFactory } from '../../modules/flux/engine/engine';
 import { createFakeEngine, type FakeControls } from '../../modules/flux/engine/fakeEngine';
 import { initialState } from '../../modules/flux/engine/evaluate';
@@ -120,16 +121,29 @@ describe('Flux exercise stage', () => {
     expect(screen.queryByText('Acknowledge the caution above to begin this exercise.')).toBeNull();
   });
 
-  it('one-sided stretches get a Side A / Side B toggle that re-selects mirrored', async () => {
+  it('one-sided stretches get a Right / Left toggle that re-selects mirrored', async () => {
     const s = await stage('/flux/upper-trap-stretch');
-    await s.user.click(screen.getByRole('button', { name: 'Side B' }));
+    await s.user.click(screen.getByRole('button', { name: 'Left' }));
     expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'b' });
-    expect(screen.getByRole('button', { name: 'Side B', pressed: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Left', pressed: true })).toBeTruthy();
+  });
+
+  it('scalene names its sides by the tilt: its Right is the mirrored side (D48)', async () => {
+    const s = await stage('/flux/scalene-stretch');
+    const group = screen.getByRole('group', { name: 'Side' });
+    expect(
+      within(group)
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(['Right', 'Left']);
+    expect(screen.getByRole('button', { name: 'Left', pressed: true })).toBeTruthy(); // Side A tilts left
+    await s.user.click(screen.getByRole('button', { name: 'Right' }));
+    expect(s.fake().lastSelect).toEqual({ id: 'scalene-stretch', side: 'b' });
   });
 
   it('exercises without a side have no toggle', async () => {
     await stage('/flux/chin-tuck');
-    expect(screen.queryByRole('button', { name: 'Side B' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Left' })).toBeNull();
   });
 
   it('Back stops the engine before leaving for the library', async () => {
@@ -187,7 +201,7 @@ describe('Flux exercise stage', () => {
     act(() => s.fake().state({ ...initialState(def), repsPos: 3, repsNeg: 2 } as ExerciseState));
     const overlay = screen.getByLabelText('Live readout');
     expect(within(overlay).getByText('5')).toBeTruthy();
-    expect(within(overlay).getByText(/\/ 20 reps/)).toBeTruthy();
+    expect(within(overlay).getByText(/\/ 10 reps/)).toBeTruthy();
   });
 
   it.each<[ExerciseId, Record<string, unknown>, RegExp | string]>([
@@ -261,9 +275,9 @@ describe('Flux session, hands free (D40–D42)', () => {
     await running(s);
     const done = { type: 'setCompleted', summary: { count: 3 } } as const;
     act(() => s.fake().event(done));
-    expect(screen.getByRole('button', { name: 'Side A', pressed: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Right', pressed: true })).toBeTruthy();
     act(() => vi.advanceTimersByTime(30_000));
-    expect(screen.getByRole('button', { name: 'Side B', pressed: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Left', pressed: true })).toBeTruthy();
     expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'b' });
     expect(screen.getByText('Other side')).toBeTruthy();
     act(() => s.fake().event(done));
@@ -271,6 +285,132 @@ describe('Flux session, hands free (D40–D42)', () => {
     expect(await screen.findByRole('button', { name: 'Start camera' })).toBeTruthy();
     // The spoken end has a visual mirror on the idle stage, for a muted phone.
     expect(screen.getByText('Session complete.')).toBeTruthy();
+  });
+});
+
+describe('Flux saved sets (D47, D49)', () => {
+  const done = { type: 'setCompleted', summary: { count: 5 } } as const;
+
+  it('a side switched mid-set saves the old side’s holds, and the next set is the other side again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = await stage('/flux/upper-trap-stretch');
+    await running(s);
+    const trap = initialState(getExercise('upper-trap-stretch'));
+    act(() => s.fake().state({ ...trap, phase: 'active', holdsDone: 1 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Left' })); // mid-set
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]).toMatchObject({ side: 'a', stoppedEarly: true });
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 2 } })); // Left, finished
+    expect(screen.getByText('Sets this session · 1 of 2 · 1 stopped early')).toBeTruthy();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByRole('button', { name: 'Right', pressed: true })).toBeTruthy();
+    expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'a' });
+  });
+
+  it('a toggle during the rest doesn’t make the next set repeat a side', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = await stage('/flux/upper-trap-stretch');
+    await running(s);
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 2 } })); // Right, finished
+    await s.user.click(screen.getByRole('button', { name: 'Left' })); // during the rest
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByRole('button', { name: 'Left', pressed: true })).toBeTruthy();
+    expect(s.fake().lastSelect).toEqual({ id: 'upper-trap-stretch', side: 'b' });
+  });
+
+  it('a finished set is saved with its exercise, side, count and day', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    act(() => s.fake().event(done));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    const [set] = await s.api.listFluxSets();
+    const { todayKey } = await import('@aperture/shared');
+    expect(set).toMatchObject({
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      side: null,
+      count: 5,
+      day: todayKey(4),
+      repTaskId: null,
+    });
+    expect(localStorage.getItem(FLUX_OUTBOX_KEY)).toBeNull(); // sent, so nothing waits
+  });
+
+  it('Stop part-way saves the set, marked stopped early; Stop before the first hold saves nothing (D55)', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    const tuck = initialState(getExercise('chin-tuck'));
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 0 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(await s.api.listFluxSets()).toEqual([]);
+
+    await running(s);
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 3 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]).toMatchObject({
+      exerciseId: 'chin-tuck',
+      count: 3,
+      stoppedEarly: true,
+      planned: 6,
+    });
+    expect(screen.getByText('Sets this session · 0 of 2 · 1 stopped early')).toBeTruthy();
+  });
+
+  it('leaving the stage mid-set saves the set too', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    const tuck = initialState(getExercise('chin-tuck'));
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 2 } as ExerciseState));
+    await s.user.click(screen.getByRole('link', { name: 'Tasks' }));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]).toMatchObject({ count: 2, stoppedEarly: true });
+  });
+
+  it('files the set under the user’s own day start, not the calendar date', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 21, 5, 0) }); // 5am, before a 6am start
+    const s = await stage('/flux/chin-tuck', (api) =>
+      api.updateSettings({ dayStartHour: 6 }).then(() => undefined),
+    );
+    await running(s);
+    act(() => s.fake().event(done));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]?.day).toBe('2026-10-20');
+  });
+
+  it('a failed save stays on the device and on screen until Retry gets it through', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    localStorage.setItem(STUB_FAIL_FLUX_SAVE_KEY, '1');
+    act(() => s.fake().event(done));
+    expect(await screen.findByText('1 set not saved yet')).toBeTruthy();
+    expect(await screen.findByText(/Last try: Network unavailable/)).toBeTruthy();
+    expect(screen.getByText('Sets this session · 1 of 2')).toBeTruthy(); // the session still counts it
+    expect(JSON.parse(localStorage.getItem(FLUX_OUTBOX_KEY) ?? '[]')).toHaveLength(1);
+    expect(await s.api.listFluxSets()).toEqual([]);
+
+    localStorage.removeItem(STUB_FAIL_FLUX_SAVE_KEY);
+    await s.user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText('1 set not saved yet')).toBeNull());
+    expect(await s.api.listFluxSets()).toHaveLength(1);
+  });
+
+  it('Discard asks first, then drops the unsaved set', async () => {
+    const s = await stage('/flux/chin-tuck');
+    await running(s);
+    localStorage.setItem(STUB_FAIL_FLUX_SAVE_KEY, '1');
+    act(() => s.fake().event(done));
+    await screen.findByText('1 set not saved yet');
+    await s.user.click(screen.getByRole('button', { name: 'Discard' }));
+    const confirm = screen.getByRole('alertdialog', { name: 'Discard 1 set?' });
+    await s.user.click(within(confirm).getByRole('button', { name: 'Keep' }));
+    expect(screen.getByText('1 set not saved yet')).toBeTruthy();
+    await s.user.click(screen.getByRole('button', { name: 'Discard' }));
+    await s.user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard' }),
+    );
+    expect(screen.queryByText('1 set not saved yet')).toBeNull();
+    expect(localStorage.getItem(FLUX_OUTBOX_KEY)).toBeNull();
   });
 });
 
@@ -291,12 +431,12 @@ describe('Flux Roll tie', () => {
     const s = await linked(false);
     await s.user.click(await screen.findByRole('button', { name: 'Pick Neck for today' }));
     await waitFor(async () => expect((await s.rep())?.status).toBe('planned'));
-    expect(await screen.findByText(/your first finished set starts it/)).toBeTruthy();
+    expect(await screen.findByText(/your first set starts it/)).toBeTruthy();
   });
 
   it('first set starts the rep; Stop offers the DoneForm; Mark done finishes it', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
     await waitFor(async () => expect((await s.rep())?.status).toBe('in_progress'));
@@ -314,9 +454,34 @@ describe('Flux Roll tie', () => {
     expect(await screen.findByText(/Neck rep done today/)).toBeTruthy();
   });
 
+  it('a set stopped part-way starts the rep and offers the DoneForm, like a finished one (D55)', async () => {
+    const s = await linked(true);
+    await screen.findByText(/your first set starts it/);
+    await running(s);
+    const tuck = initialState(getExercise('chin-tuck'));
+    act(() => s.fake().state({ ...tuck, phase: 'active', holdsDone: 2 } as ExerciseState));
+    await s.user.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(async () => expect((await s.rep())?.status).toBe('in_progress'));
+    expect(await screen.findByText("Log today's Neck rep")).toBeTruthy();
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
+    expect((await s.api.listFluxSets())[0]?.repTaskId).toBe((await s.rep())?.id);
+  });
+
+  it('every saved set links to the rep it counted toward — the first, and the next with it running', async () => {
+    const s = await linked(true);
+    await screen.findByText(/your first set starts it/);
+    await running(s);
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
+    await waitFor(async () => expect((await s.rep())?.status).toBe('in_progress'));
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 6 } }));
+    await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(2));
+    const repId = (await s.rep())?.id;
+    expect((await s.api.listFluxSets()).map((x) => x.repTaskId)).toEqual([repId, repId]);
+  });
+
   it('a session that ends itself offers the DoneForm with no Stop tap', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await s.user.click(screen.getByRole('button', { name: 'Fewer sets' }));
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
@@ -326,7 +491,7 @@ describe('Flux Roll tie', () => {
 
   it('a later session with no set offers nothing, even after an earlier session logged sets', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
     await screen.findByText(/Neck rep in progress/);
@@ -343,7 +508,7 @@ describe('Flux Roll tie', () => {
 
   it('Stop before any set offers nothing', async () => {
     const s = await linked(true);
-    await screen.findByText(/your first finished set starts it/);
+    await screen.findByText(/your first set starts it/);
     await running(s);
     await s.user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(screen.queryByText("Log today's Neck rep")).toBeNull();

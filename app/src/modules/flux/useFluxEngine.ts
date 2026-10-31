@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  Condition,
-  Euler,
-  EvalControl,
-  ExerciseId,
-  ExerciseKind,
-  ExerciseState,
+import {
+  getExercise,
+  plannedCount,
+  type Condition,
+  type Euler,
+  type EvalControl,
+  type ExerciseId,
+  type ExerciseKind,
+  type ExerciseState,
+  type SetSummary,
 } from '@aperture/shared/flux';
+import { inRomExcursion, summaryOf } from './engine/evaluate';
 import {
   createFluxEngine,
   type EngineDebug,
@@ -30,7 +34,8 @@ import { initialCueState, isMirrored, reduceCue, type CueEvent, type CueState } 
 
 export type FluxStatus = 'idle' | 'loading' | 'running' | 'paused' | 'error';
 
-// One finished set, as the session holds it — the shape Flux history (the next PR) persists.
+// One set — finished, or ended early with something in it (D55) — as the session holds it; saved as a
+// FluxSet through the outbox (D47, D49).
 export interface FluxSetDraft {
   readonly exerciseId: ExerciseId;
   readonly kind: ExerciseKind;
@@ -42,9 +47,15 @@ export interface FluxSetDraft {
   readonly rom: Euler;
   readonly calibrated: boolean;
   readonly delegate: Delegate | null;
-  readonly durationSec: number; // from the set's start (selection, Start/Again, or the last set) to done
+  // From the set's start to done: Start, Again, the lead-in or the rest ending; a self-paced first set's
+  // first neutral; else selection or a new worker's ready.
+  readonly durationSec: number;
   readonly completedAt: number; // epoch ms
+  readonly stoppedEarly: boolean; // saved from a set ended before its prescription (D55)
+  readonly planned: number | null; // plannedCount at set time
 }
+
+type SetContext = Pick<FluxSetDraft, 'exerciseId' | 'kind' | 'side' | 'condition'>;
 
 // What Stop hands back: the session's active minutes (paused time excluded) and how many sets it held.
 export interface SessionSummary {
@@ -75,6 +86,8 @@ const SET_LEAD_MS = 3000; // "Get ready" → the set starts
 const SET_REST_MS = 30_000; // between sets (D42)
 const FACE_LOST_SEC = 1; // gone this long → "Can't see you" (D43)
 const FACE_NEVER_SEC = 3; // no face since the stage came up → "Can't see you" too (D43)
+// Mid-turn the camera losing the face is the end of the turn, not the user gone (D57): wait this long.
+const FACE_LOST_END_SEC = 10;
 const FACE_BACK_SEC = 0.5; // back this long → "Tracking"
 const HOLD_STILL_HINT_SEC = 20; // a visible face with no neutral this long → the hint (D40)
 
@@ -134,6 +147,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     delegate: null as Delegate | null,
   });
   const setsRef = useRef(0);
+  // The set in progress as of the worker's last state post, and what it's a set of (D55).
+  const live = useRef<{ state: ExerciseState; ctx: SetContext } | null>(null);
   const readyRef = useRef(false); // the engine is ready — apart from whether the camera is live
   const pausedRef = useRef(false); // the camera is paused — apart from whether the engine is ready
   // Active session time: accumulated across pauses, so a backgrounded phone doesn't inflate the
@@ -183,6 +198,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     autoStep.current = null;
   }, []);
 
+  // Every set's clock starts with its start, so set two's duration leaves out the rest before it.
+  const startSet = useCallback(() => {
+    setStartRef.current = performance.now();
+    engine.control({ type: 'start' });
+  }, [engine]);
+
   // The rest is over (or Again cut it short) — assigned below, once `arm` exists.
   const nextSetRef = useRef<(index: number, now: boolean) => void>(() => {});
 
@@ -195,17 +216,17 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       autoTimer.current = setTimeout(
         () => {
           autoStep.current = null;
-          if (step.kind === 'start') engine.control({ type: 'start' });
+          if (step.kind === 'start') startSet();
           else nextSetRef.current(step.index, false);
         },
         step.kind === 'start' ? SET_LEAD_MS : SET_REST_MS,
       );
     },
-    [engine, clearAuto],
+    [startSet, clearAuto],
   );
 
-  // Flip a sided stretch, say the set, and start it from a clean slate (a Re-calibrate during the rest may
-  // have reopened the finished set). Timed kinds get the lead-in unless a tap asked for now.
+  // Flip a sided stretch, say the set, and start it from a clean slate (stop, then start). Timed kinds get
+  // the lead-in unless a tap asked for now.
   nextSetRef.current = (index, now) => {
     clearAuto();
     const o = optsRef.current;
@@ -213,7 +234,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     say({ type: 'nextSet', number: index + 1, otherSide: o.side !== null });
     engine.control({ type: 'stop' });
     if (READY_KINDS.has(o.kind) && !now) arm({ kind: 'start' });
-    else engine.control({ type: 'start' });
+    else startSet();
   };
 
   const resetFace = () => {
@@ -242,6 +263,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           );
           setStartRef.current = performance.now();
           resetFace(); // a new worker restarts the sample clock
+          // The new worker's set starts at 0 (D26): what the old one had is gone, not a stopped set to save.
+          if (e.fallback) live.current = null;
           // A fallback restarts the set (D26) — said, not only shown: a timed set is led in again, a
           // self-paced one says so. A pending lead-in or rest carries on as it was.
           if (e.fallback && latest.current.calibrated && o.acknowledged && !autoStep.current) {
@@ -277,19 +300,30 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           // re-set (exact, where the rest timer could race the worker at the rest's end).
           if (e.auto && wasCalibrated) return flash('Neutral reset');
           say({ type: 'neutralSet' });
-          // Calibrating resets the set, so a timed kind starts itself again (D41) — at once if
-          // "Start now" was what asked for the neutral. A rest in progress runs on: its end starts the set.
-          if (!READY_KINDS.has(o.kind) || !o.acknowledged) return;
+          // A Re-calibrate mid-set just carries on: the count stands, measured from the new neutral (D55).
+          if (live.current?.state.phase === 'active') return;
+          // Otherwise a timed kind starts its set now that a neutral is set (D41) — at once if "Start now"
+          // was what asked for it. A rest in progress runs on: its end starts the set.
+          // A self-paced set counts from the first neutral, so its clock starts there too.
+          if (!READY_KINDS.has(o.kind)) {
+            if (!wasCalibrated) setStartRef.current = performance.now();
+            return;
+          }
+          if (!o.acknowledged) return;
           if (autoStep.current?.kind === 'rest') return;
           if (startOnCalibrate.current) {
             startOnCalibrate.current = false;
             clearAuto();
-            return engine.control({ type: 'start' });
+            return startSet();
           }
           say({ type: 'getReady' });
           return arm({ kind: 'start' });
         }
         case 'exerciseState':
+          live.current = {
+            state: e.state,
+            ctx: { exerciseId: o.exerciseId, kind: o.kind, side: o.side, condition: o.condition },
+          };
           return setExState(e.state);
         case 'exerciseEvent': {
           const sets = Math.max(1, o.sets ?? DEFAULT_SETS);
@@ -297,26 +331,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           // The last set says "Session complete." in place of "Set complete" (D42).
           say(last ? { type: 'sessionComplete' } : e.event);
           if (e.event.type !== 'setCompleted') return;
-          const { summary } = e.event;
-          const now = performance.now();
-          const set: FluxSetDraft = {
+          live.current = null; // recorded here — a Stop before the next state post mustn't save it again
+          recordRef.current(e.event.summary, false, {
             exerciseId: o.exerciseId,
             kind: o.kind,
             side: o.side,
             condition: o.condition,
-            count: summary.count,
-            ...(summary.avgPeakDeg !== undefined && { avgPeakDeg: summary.avgPeakDeg }),
-            ...(summary.avgErrorDeg !== undefined && { avgErrorDeg: summary.avgErrorDeg }),
-            rom: latest.current.sample.rom,
-            calibrated: latest.current.calibrated,
-            delegate: latest.current.delegate,
-            durationSec: Math.round((now - setStartRef.current) / 1000),
-            completedAt: Date.now(),
-          };
-          setStartRef.current = now;
-          const index = setsRef.current++;
-          setSessionSets((s) => [...s, set]);
-          o.onSetCompleted?.(set, index);
+          });
           const done = ++planDoneRef.current;
           if (!last) return arm({ kind: 'rest', index: done });
           // Ends itself: the camera goes off with no tap, and the queued "Session complete." still plays.
@@ -335,6 +356,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return setStatus('paused');
         }
         case 'error':
+          takeRef.current(); // the reps were real, and "Try again" is a new session (D55)
           pauseClock(clock.current);
           readyRef.current = false;
           clearAuto();
@@ -344,8 +366,8 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           return setStatus('error');
       }
     };
-    // "Can't see you" after a second gone (3 s if no face was ever seen), "Tracking" once back; the
-    // calibration hint while uncalibrated.
+    // "Can't see you" after a second gone (3 s if no face was ever seen, 10 s mid-turn — D57), "Tracking"
+    // once back; the calibration hint while uncalibrated.
     const watchFace = (smp: Sample) => {
       const f = face.current;
       if (!smp.faceVisible) {
@@ -353,7 +375,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         f.hintSince = null;
         if (f.lostSaid) return;
         f.lostSince ??= smp.tSec;
-        if (smp.tSec - f.lostSince < (f.seen ? FACE_LOST_SEC : FACE_NEVER_SEC)) return;
+        const limit = !f.seen
+          ? FACE_NEVER_SEC
+          : inRomExcursion(live.current?.state)
+            ? FACE_LOST_END_SEC
+            : FACE_LOST_SEC;
+        if (smp.tSec - f.lostSince < limit) return;
         // Latched only once said: inside its 5 s cooldown it's retried each frame until it is.
         f.lostSaid = say({ type: 'faceLost' });
         return;
@@ -374,20 +401,29 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       if (smp.tSec - f.hintSince >= HOLD_STILL_HINT_SEC) say({ type: 'holdStillHint' });
     };
     const off = engine.subscribe(onEvent);
+    // A reload or a closed tab never unmounts: pagehide is the last word. A page kept for back/forward
+    // (`persisted`) may come back running, so only a real unload saves (the outbox writes synchronously).
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (!e.persisted) takeRef.current();
+    };
+    globalThis.addEventListener?.('pagehide', onPageHide);
     return () => {
       off();
+      globalThis.removeEventListener?.('pagehide', onPageHide);
+      takeRef.current(); // leaving the page mid-set ends it (D55)
       engine.stop();
       clearTimeout(noticeTimer.current);
       clearTimeout(cueTimer.current);
       clearAuto();
     };
-  }, [engine, flash, say, arm, clearAuto]);
+  }, [engine, flash, say, arm, clearAuto, startSet]);
 
   // Feed the engine the exercise only once safety is acknowledged; a fresh selection starts a fresh
   // cue history (no cooldowns leaking between exercises).
   const selected = opts.acknowledged ? opts.exerciseId : null;
   const side = opts.side ?? 'a';
   useEffect(() => {
+    takeRef.current(); // a side switched mid-set: what was done is that side's set (D55)
     cueRef.current = initialCueState;
     setStartRef.current = performance.now();
     setExState(null);
@@ -405,6 +441,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   }, [selected, clearAuto, say, arm]);
 
   const reset = useCallback(() => {
+    live.current = null;
     setCalibrated(false);
     latest.current.calibrated = false;
     setExState(null);
@@ -438,8 +475,45 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     [engine, reset, clearAuto],
   );
 
+  // A set's draft, recorded and handed to the page — finished (setCompleted) or ended early (D55).
+  function recordSet(summary: SetSummary, stoppedEarly: boolean, ctx: SetContext): void {
+    const now = performance.now();
+    const set: FluxSetDraft = {
+      ...ctx,
+      count: summary.count,
+      ...(summary.avgPeakDeg !== undefined && { avgPeakDeg: summary.avgPeakDeg }),
+      ...(summary.avgErrorDeg !== undefined && { avgErrorDeg: summary.avgErrorDeg }),
+      rom: latest.current.sample.rom,
+      calibrated: latest.current.calibrated,
+      delegate: latest.current.delegate,
+      durationSec: Math.round((now - setStartRef.current) / 1000),
+      completedAt: Date.now(),
+      stoppedEarly,
+      planned: plannedCount(getExercise(ctx.exerciseId)),
+    };
+    setStartRef.current = now;
+    const index = setsRef.current++;
+    setSessionSets((s) => [...s, set]);
+    optsRef.current.onSetCompleted?.(set, index);
+  }
+  const recordRef = useRef(recordSet);
+  recordRef.current = recordSet;
+  // A set ended before its prescription — Stop, Back, leaving the page, a tracker error, a side switched
+  // mid-set — is saved if it has anything in it (D55), from the last state the worker posted (≤ one
+  // throttle old; the worker can't answer once it's stopped). Taken once: the ref is cleared.
+  function takePartialSet(): void {
+    const l = live.current;
+    live.current = null;
+    if (!l || l.state.phase === 'complete') return;
+    const summary = summaryOf(l.state);
+    if (summary.count >= 1) recordSet(summary, true, l.ctx);
+  }
+  const takeRef = useRef(takePartialSet);
+  takeRef.current = takePartialSet;
+
   // `cancelVoice` false only when the session ends itself, so its last words aren't cut off.
   function endSession(cancelVoice: boolean): SessionSummary {
+    takePartialSet();
     pauseClock(clock.current);
     const summary = { activeMs: clock.current.activeMs, sets: setsRef.current };
     clearAuto();
@@ -491,9 +565,10 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         startOnCalibrate.current = true;
         return engine.calibrate();
       }
-      engine.control(c);
+      if (c.type === 'start') startSet();
+      else engine.control(c);
     },
-    [engine, clearAuto],
+    [engine, clearAuto, startSet],
   );
   const setForcedCpu = useCallback(
     (on: boolean) => {

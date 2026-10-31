@@ -136,6 +136,9 @@ import type {
   Idea,
   IdeaStatus,
   LeetcodeAttempt,
+  FluxSet,
+  FluxSetFilter,
+  RecordFluxSetInput,
   LogEntry,
   PomodoroSession,
   RecordLeetcodeAttemptInput,
@@ -156,6 +159,7 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
+import { fluxFilterError, fluxSetError, inRange } from '@aperture/shared/flux';
 import { heuristicParse, takeStubParseFailure } from './stubParse';
 import { seedStore } from './seed';
 
@@ -182,6 +186,7 @@ export interface Store {
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[];
+  fluxSets: FluxSet[];
   financeItems: FinanceItem[];
   financeSyncStates: FinanceSyncState[];
   financeAccounts: FinanceAccount[];
@@ -207,6 +212,7 @@ export function emptyStore(): Store {
     leetcodeAttempts: [],
     stories: [],
     attachments: [],
+    fluxSets: [],
     financeItems: [],
     financeSyncStates: [],
     financeAccounts: [],
@@ -234,6 +240,17 @@ function takeStubSyncFailure(): string | null {
     return code || null;
   } catch {
     return null;
+  }
+}
+
+// Dev/test hook: while this localStorage key is set, the stub refuses every recordFluxSet as if the
+// network were down — how the Flux outbox (D49) is exercised without a real network. Stub-only.
+export const STUB_FAIL_FLUX_SAVE_KEY = 'aperture:stub:failFluxSave';
+function stubFluxSaveFails(): boolean {
+  try {
+    return Boolean(globalThis.localStorage?.getItem(STUB_FAIL_FLUX_SAVE_KEY));
+  } catch {
+    return false;
   }
 }
 
@@ -575,6 +592,50 @@ class StubClient implements ApiClient {
     return this.alive(this.store.leetcodeAttempts)
       .filter((a) => !range || (a.day >= range.from && a.day <= range.to))
       .sort((a, b) => b.submittedAt - a.submittedAt);
+  }
+
+  // --- Flux sets -------------------------------------------------------------
+  async recordFluxSet(input: RecordFluxSetInput): Promise<FluxSet> {
+    if (stubFluxSaveFails()) throw new Error('Network unavailable (stub)');
+    const err = fluxSetError(input);
+    if (err) throw new Error(err);
+    // Idempotent on the client's id (D47) — an outbox retry gets the stored row back, unchanged.
+    const dup = this.store.fluxSets.find((f) => f.id === input.id);
+    if (dup) return dup;
+    const t = this.now();
+    return this.writes.insert(this.store.fluxSets, {
+      id: input.id,
+      userId: USER_ID,
+      createdAt: t,
+      updatedAt: t,
+      deletedAt: null,
+      day: input.day,
+      exerciseId: input.exerciseId,
+      kind: input.kind,
+      side: input.side,
+      condition: input.condition,
+      count: input.count,
+      avgPeakDeg: input.avgPeakDeg ?? null,
+      avgErrorDeg: input.avgErrorDeg ?? null,
+      rom: { pitch: input.rom.pitch, yaw: input.rom.yaw, roll: input.rom.roll },
+      calibrated: input.calibrated,
+      delegate: input.delegate,
+      durationSec: input.durationSec,
+      completedAt: input.completedAt,
+      repTaskId: input.repTaskId,
+      stoppedEarly: input.stoppedEarly,
+      planned: input.planned,
+    });
+  }
+  async listFluxSets(filter?: FluxSetFilter): Promise<FluxSet[]> {
+    const err = fluxFilterError(filter);
+    if (err) throw new Error(err);
+    return inRange(this.store.fluxSets, filter);
+  }
+  async deleteFluxSet(id: string): Promise<void> {
+    // Like the backend: deleting a deleted set changes nothing (its deletedAt stays the first one).
+    if (this.store.fluxSets.some((f) => f.id === id && f.deletedAt === null))
+      this.writes.softDelete(this.store.fluxSets, id);
   }
 
   // --- Story bank ----------------------------------------------------------
@@ -1902,6 +1963,7 @@ class StubClient implements ApiClient {
       categories: this.alive(this.store.categories),
       leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
       stories: this.alive(this.store.stories),
+      fluxSets: this.alive(this.store.fluxSets),
       attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
       financeItems: this.alive(this.store.financeItems),
       financeSyncStates: this.alive(this.store.financeSyncStates),

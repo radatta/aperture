@@ -6,12 +6,12 @@ import {
   readCondition,
   readStage,
   readVoiceEnabled,
-  readVoiceName,
+  readVoiceId,
   writeCondition,
   writeForcedCpu,
   writeStage,
   writeVoiceEnabled,
-  writeVoiceName,
+  writeVoiceId,
 } from './prefs';
 
 describe('flux prefs', () => {
@@ -23,11 +23,19 @@ describe('flux prefs', () => {
     expect(readVoiceEnabled()).toBe(true);
   });
 
-  it('voice name round-trips and clears on empty', () => {
-    writeVoiceName('Samantha');
-    expect(readVoiceName()).toBe('Samantha');
-    writeVoiceName('');
-    expect(readVoiceName()).toBeNull();
+  it('the voice id round-trips and clears on empty', () => {
+    writeVoiceId('com.apple.voice.enhanced.en-US.Samantha');
+    expect(readVoiceId()).toBe('com.apple.voice.enhanced.en-US.Samantha');
+    writeVoiceId('');
+    expect(readVoiceId()).toBeNull();
+  });
+
+  it('a voice saved by name before D58 is still read, and the next pick replaces it', () => {
+    localStorage.setItem('aperture.flux.voiceName', 'Samantha');
+    expect(readVoiceId()).toBe('Samantha');
+    writeVoiceId('com.apple.voice.premium.en-US.Zoe');
+    expect(localStorage.getItem('aperture.flux.voiceName')).toBeNull();
+    expect(readVoiceId()).toBe('com.apple.voice.premium.en-US.Zoe');
   });
 
   it('condition and stage reject values outside the catalog', () => {

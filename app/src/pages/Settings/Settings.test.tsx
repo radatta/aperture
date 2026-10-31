@@ -134,3 +134,113 @@ describe('flux section', () => {
     await waitFor(() => expect(scrolled.map((el) => el.id)).toContain('flux'));
   });
 });
+
+describe('flux voice (D58)', () => {
+  type FakeVoice = { name: string; voiceURI: string; lang: string; localService: boolean };
+  let voices: FakeVoice[];
+  let spoken: { text: string; voice: string | undefined }[];
+
+  beforeEach(() => {
+    spoken = [];
+    voices = [
+      {
+        name: 'Samantha',
+        voiceURI: 'com.apple.voice.compact.en-US.Samantha',
+        lang: 'en-US',
+        localService: true,
+      },
+      {
+        name: 'Zoe',
+        voiceURI: 'com.apple.voice.premium.en-US.Zoe',
+        lang: 'en-US',
+        localService: true,
+      },
+    ];
+    Object.defineProperty(window, 'speechSynthesis', {
+      configurable: true,
+      value: {
+        getVoices: () => voices,
+        speak: (u: { text: string; voice?: FakeVoice }) =>
+          spoken.push({ text: u.text, voice: u.voice?.name }),
+        cancel: vi.fn(),
+        resume: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    vi.stubGlobal(
+      'SpeechSynthesisUtterance',
+      class {
+        voice: FakeVoice | undefined;
+        rate = 1;
+        lang = '';
+        constructor(public text: string) {}
+      },
+    );
+    vi.stubGlobal('navigator', { ...navigator, language: 'en-US' });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'speechSynthesis');
+    vi.unstubAllGlobals();
+  });
+
+  const settings = async () => {
+    const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });
+    renderApp({ api, path: '/settings' });
+    return (await screen.findByLabelText('Voice')) as HTMLSelectElement;
+  };
+
+  it('lists the voices best first, saves a pick for this device, and previews it', async () => {
+    const select = await settings();
+    expect([...select.options].map((o) => o.textContent)).toEqual([
+      'Auto — Zoe (Premium)',
+      'Zoe (Premium)',
+      'Samantha',
+    ]);
+    await userEvent.selectOptions(select, 'com.apple.voice.compact.en-US.Samantha');
+    expect(localStorage.getItem('aperture.flux.voiceURI')).toBe(
+      'com.apple.voice.compact.en-US.Samantha',
+    );
+    expect(spoken.at(-1)).toEqual({ text: 'Hold. One. Two. Set complete.', voice: 'Samantha' });
+  });
+
+  it('Test voice speaks the preview in the current voice', async () => {
+    await settings();
+    await userEvent.click(screen.getByRole('button', { name: 'Test voice' }));
+    expect(spoken.at(-1)).toEqual({ text: 'Hold. One. Two. Set complete.', voice: 'Zoe' });
+  });
+
+  it('a saved voice not on this device says so, and Auto speaks instead', async () => {
+    localStorage.setItem('aperture.flux.voiceURI', 'com.apple.voice.premium.en-US.Ava');
+    const select = await settings();
+    expect(select.value).toBe('');
+    expect(
+      screen.getByText('Your saved voice isn’t on this device — using Zoe (Premium).'),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Test voice' }));
+    expect(spoken.at(-1)?.voice).toBe('Zoe');
+  });
+
+  it('voices that arrive with no voiceschanged are read when the wait is up', async () => {
+    const full = voices;
+    voices = [];
+    setTimeout(() => (voices = full), 300);
+    const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });
+    renderApp({ api, path: '/settings' });
+    expect(await screen.findByLabelText('Voice', {}, { timeout: 2000 })).toBeTruthy();
+    expect(screen.queryByText(/No voices found on this device/)).toBeNull();
+  });
+
+  it('says so when this device has no voices — once the list has had a chance to load', async () => {
+    voices = [];
+    const api = createStubClient({ seed: false, storageKey: `settings-${Math.random()}` });
+    renderApp({ api, path: '/settings' });
+    await screen.findByLabelText('Count sessions as reps of');
+    // WebKit can answer [] until voiceschanged: not yet a claim that there are none.
+    expect(screen.queryByText(/No voices found on this device/)).toBeNull();
+    expect(
+      await screen.findByText(/No voices found on this device/, {}, { timeout: 2000 }),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Voice')).toBeNull();
+  });
+});

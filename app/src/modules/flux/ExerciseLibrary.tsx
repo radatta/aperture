@@ -101,7 +101,7 @@ export function ExerciseLibrary({
   );
 }
 
-function Chips<T extends string>({
+export function Chips<T extends string>({
   label,
   options,
   value,

@@ -39,6 +39,7 @@ export interface TextProps {
   tabIndex?: number;
   'aria-live'?: 'polite';
   'aria-hidden'?: boolean;
+  'data-focus-rescue'?: true; // the page's last-resort focus target (modules/flux/focus.ts tells it apart)
   className?: string;
   children: ReactNode;
 }

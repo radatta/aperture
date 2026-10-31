@@ -15,10 +15,10 @@ describe('liveReadout', () => {
   });
 
   it('romReps: both sides count toward one total; the ring times the end-range hold', () => {
-    const def = getExercise('cervical-rotation'); // bilateral, 10 reps a side, 4 s hold
+    const def = getExercise('cervical-rotation'); // bilateral, 5 reps a side, 4 s hold
     const s = initialState(def);
     expect(liveReadout(def, with_(s, { repsPos: 3, repsNeg: 2 }))).toEqual({
-      count: { n: 5, of: 20, unit: 'reps' },
+      count: { n: 5, of: 10, unit: 'reps' },
       ring: { progress: 0, label: 'hold', tone: 'teal' },
       note: null,
       done: false,
@@ -51,15 +51,15 @@ describe('liveReadout', () => {
 
   it('romReps complete: done, no ring', () => {
     const def = getExercise('cervical-flexion');
-    const r = liveReadout(def, with_(initialState(def), { phase: 'complete', repsPos: 10 }));
-    expect(r).toMatchObject({ count: { n: 10, of: 10 }, ring: null, done: true });
+    const r = liveReadout(def, with_(initialState(def), { phase: 'complete', repsPos: 6 }));
+    expect(r).toMatchObject({ count: { n: 6, of: 6 }, ring: null, done: true });
   });
 
   it('holdAtTarget: holds done, and a countdown only while in position', () => {
-    const def = getExercise('chin-tuck'); // 10 holds of 4 s
+    const def = getExercise('chin-tuck'); // 6 holds of 4 s
     const s = initialState(def);
     expect(liveReadout(def, with_(s, { holdsDone: 2 }))).toMatchObject({
-      count: { n: 2, of: 10, unit: 'holds' },
+      count: { n: 2, of: 6, unit: 'holds' },
       ring: { progress: 0, label: '—', tone: 'teal' },
     });
     expect(liveReadout(def, with_(s, { inPosition: true, holdElapsedSec: 1 }))?.ring).toEqual({
@@ -67,7 +67,7 @@ describe('liveReadout', () => {
       label: '3',
       tone: 'gold',
     });
-    expect(liveReadout(def, with_(s, { phase: 'complete', holdsDone: 10 }))).toMatchObject({
+    expect(liveReadout(def, with_(s, { phase: 'complete', holdsDone: 6 }))).toMatchObject({
       ring: null,
       done: true,
     });
@@ -83,7 +83,7 @@ describe('liveReadout', () => {
         with_(s, { phase: 'active', segment: 'hold', segmentElapsedSec: 4, holdsDone: 1 }),
       ),
     ).toMatchObject({
-      count: { n: 2, of: 10 },
+      count: { n: 2, of: 6 },
       ring: { progress: 0.4, label: '6', sublabel: 'HOLD', tone: 'gold' },
     });
     expect(
@@ -104,7 +104,7 @@ describe('liveReadout', () => {
     expect(
       liveReadout(def, with_(s, { phase: 'active', sub: 'returning', trialsDone: 3 })),
     ).toEqual({
-      count: { n: 3, of: 10, unit: 'trials' },
+      count: { n: 3, of: 6, unit: 'trials' },
       ring: null,
       note: 'Back to neutral',
       done: false,
@@ -117,8 +117,8 @@ describe('liveReadout', () => {
       )?.note;
     expect(settling(3)).toBe('Hold still…');
     expect(settling(32)).toBe('Back to neutral');
-    expect(liveReadout(def, with_(s, { phase: 'complete', trialsDone: 10 }))).toEqual({
-      count: { n: 10, of: 10, unit: 'trials' },
+    expect(liveReadout(def, with_(s, { phase: 'complete', trialsDone: 6 }))).toEqual({
+      count: { n: 6, of: 6, unit: 'trials' },
       ring: null,
       note: null,
       done: true,

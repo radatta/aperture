@@ -11,7 +11,7 @@ import { DoneForm } from '../tasks/DoneForm';
 import { prefillMinutes } from './repState';
 import type { RepTieHandle } from './useRepTie';
 
-// The Roll tie on the exercise stage. The first finished set of a session starts today's rep
+// The Roll tie on the exercise stage. The first set a session saves (finished or stopped early — D55) starts today’s rep
 // (planned|backlog → in_progress — there's no planned → done); Stop offers the DoneForm prefilled
 // with the session's minutes. Nothing auto-completes, and every write failure shows inline.
 
@@ -67,7 +67,7 @@ export function RepTieStrip({ handle, activeMs }: { handle: RepTieHandle; active
           Today&apos;s {roll.name} rep
           <Text size="sm" tone="muted">
             {' '}
-            · your first finished set starts it
+            · your first set starts it
           </Text>
         </Text>
       )}

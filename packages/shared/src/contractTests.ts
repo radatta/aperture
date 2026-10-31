@@ -11,6 +11,30 @@ import {
   resolveRefundLinks,
 } from './finance';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS } from './financeFixtures';
+import type { RecordFluxSetInput } from './api';
+import { ulid } from './ulid';
+
+// A finished Flux set as the stage hands it over; override what a test is about.
+const fluxSet = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
+  id: ulid(),
+  day: '2026-10-20',
+  exerciseId: 'cervical-rotation',
+  kind: 'romReps',
+  side: null,
+  condition: null,
+  count: 20,
+  avgPeakDeg: 52.5,
+  avgErrorDeg: null,
+  rom: { pitch: 4, yaw: 110, roll: 6 },
+  calibrated: true,
+  delegate: 'GPU',
+  durationSec: 240,
+  completedAt: 1_700_000_000_000,
+  repTaskId: null,
+  stoppedEarly: false,
+  planned: 10,
+  ...over,
+});
 
 // ONE behavior suite, run against every ApiClient implementation — the in-memory stub, the in-process
 // Lambda (BackendClient over an in-memory table), and any future transport. If the swap is faithful,
@@ -1266,6 +1290,89 @@ export function runApiContract(
       expect((await api.getSettings()).fluxDisclaimerAckAt).toBeNull();
     });
 
+    // --- Flux sets (D47) -----------------------------------------------------
+    it('flux: records a set and lists it by range and exercise, newest first', async () => {
+      const a = await api.recordFluxSet(fluxSet({ day: '2026-10-19', completedAt: 1_000 }));
+      const b = await api.recordFluxSet(
+        fluxSet({
+          day: '2026-10-20',
+          completedAt: 2_000,
+          exerciseId: 'chin-tuck',
+          kind: 'holdAtTarget',
+          count: 10,
+          avgPeakDeg: null,
+        }),
+      );
+      expect(a).toMatchObject({
+        day: '2026-10-19',
+        exerciseId: 'cervical-rotation',
+        avgPeakDeg: 52.5,
+        deletedAt: null,
+      });
+      expect((await api.listFluxSets()).map((s) => s.id)).toEqual([b.id, a.id]);
+      expect(
+        (await api.listFluxSets({ from: '2026-10-19', to: '2026-10-19' })).map((s) => s.id),
+      ).toEqual([a.id]);
+      expect((await api.listFluxSets({ exerciseId: 'chin-tuck' })).map((s) => s.id)).toEqual([
+        b.id,
+      ]);
+      await expect(api.listFluxSets({ from: '2026-10-19' })).rejects.toThrow('both from and to');
+    });
+
+    it('flux: is idempotent on the client id — a retry keeps the first row', async () => {
+      const input = fluxSet();
+      const first = await api.recordFluxSet(input);
+      advance(60_000);
+      const again = await api.recordFluxSet({ ...input, count: 99 });
+      expect(again).toEqual(first);
+      expect(await api.listFluxSets()).toHaveLength(1);
+    });
+
+    it('flux: refuses an unknown exercise, a wrong kind, and a side the exercise lacks or needs', async () => {
+      await expect(api.recordFluxSet(fluxSet({ exerciseId: 'nope' }))).rejects.toThrow(
+        'Unknown Flux exercise',
+      );
+      await expect(api.recordFluxSet(fluxSet({ kind: 'guidedHold' }))).rejects.toThrow('romReps');
+      await expect(api.recordFluxSet(fluxSet({ side: 'a' }))).rejects.toThrow('has no side');
+      await expect(
+        api.recordFluxSet(
+          fluxSet({ exerciseId: 'upper-trap-stretch', kind: 'holdAtTarget', side: null }),
+        ),
+      ).rejects.toThrow('needs a side');
+      expect(await api.listFluxSets()).toEqual([]);
+    });
+
+    it('flux: a stopped-early set round-trips its flag and planned count; an empty one is refused', async () => {
+      const stopped = await api.recordFluxSet(
+        fluxSet({ count: 2, stoppedEarly: true, planned: 10 }),
+      );
+      expect(stopped).toMatchObject({ count: 2, stoppedEarly: true, planned: 10 });
+      expect((await api.listFluxSets()).find((s) => s.id === stopped.id)).toMatchObject({
+        stoppedEarly: true,
+        planned: 10,
+      });
+      await expect(
+        api.recordFluxSet(fluxSet({ count: 0, stoppedEarly: true, planned: 10 })),
+      ).rejects.toThrow('first rep');
+    });
+
+    it('flux: delete is a soft-delete — gone from list and export, and a retry of it stays gone', async () => {
+      const input = fluxSet();
+      const kept = await api.recordFluxSet(fluxSet());
+      const gone = await api.recordFluxSet(input);
+      await api.deleteFluxSet(gone.id);
+      await api.deleteFluxSet('01HZZZZZZZZZZZZZZZZZZZZZZZ'); // absent: a no-op
+      expect((await api.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
+      expect((await api.exportData()).fluxSets.map((s) => s.id)).toEqual([kept.id]);
+      // An outbox retry of the deleted set doesn't bring it back — and a second delete changes nothing.
+      const first = (await api.recordFluxSet(input)).deletedAt;
+      expect(first).not.toBeNull();
+      advance(1000);
+      await api.deleteFluxSet(gone.id);
+      expect((await api.recordFluxSet(input)).deletedAt).toBe(first);
+      expect((await api.listFluxSets()).map((s) => s.id)).toEqual([kept.id]);
+    });
+
     // ExportBundle now catches a missing OR stray key at compile time (both impls return a checked
     // object literal), so this assertion is a runtime backstop rather than the primary guard. It still
     // earns its place: excess-property checking evaporates the moment an impl returns a variable, a
@@ -1284,6 +1391,7 @@ export function runApiContract(
         lang: 'python3',
       });
       const story = await api.createStory({ title: 'exportable story' });
+      const flux = await api.recordFluxSet(fluxSet());
       const { attachment } = await api.createAttachmentUploadUrl({
         taskId: t.id,
         filename: 'e.png',
@@ -1303,6 +1411,7 @@ export function runApiContract(
           'financeRules',
           'financeSyncStates',
           'financeTransactions',
+          'fluxSets',
           'gcalSyncStates',
           'habitChecks',
           'habits',
@@ -1322,6 +1431,7 @@ export function runApiContract(
       expect(data.tasks.map((x) => x.id)).toContain(t.id);
       expect(data.leetcodeAttempts.map((x) => x.id)).toContain(lc.id);
       expect(data.stories.map((x) => x.id)).toContain(story.id);
+      expect(data.fluxSets.map((x) => x.id)).toContain(flux.id);
       expect(data.attachments.map((x) => x.id)).toContain(attachment.id); // ready rows only
       // Materialised, never the stub's nullable storage state — nothing in this test triggers
       // ensureSettings() beforehand, so a stub that exported store.settings raw would fail here.

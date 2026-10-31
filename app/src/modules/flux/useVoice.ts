@@ -1,48 +1,73 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { readVoiceEnabled, readVoiceName, writeVoiceEnabled, writeVoiceName } from './prefs';
+import { readVoiceEnabled, readVoiceId, writeVoiceEnabled, writeVoiceId } from './prefs';
 import type { Utterance } from './voice/cues';
-import { createSpeaker, listLocalVoices, type Speaker, type VoiceOption } from './voice/speaker';
+import { createSpeaker, listVoices, type Speaker, type VoiceOption } from './voice/speaker';
 
 // Voice cues for the Flux stage: on/off and the chosen voice are per device (voices differ per OS).
 // Every method that can unlock speech must be called from a click handler — iOS only speaks after a
 // gesture.
 export interface VoiceControl {
   readonly on: boolean;
-  readonly name: string | null;
+  // The saved voice's id (voiceURI), or null for Auto — the best installed (D58).
+  readonly id: string | null;
+  // Installed voices in the language, best first; voices[0] is what Auto speaks with.
   readonly voices: readonly VoiceOption[];
+  // A saved voice that isn't on this device: Auto speaks instead, and the picker says so.
+  readonly missing: boolean;
+  // The voice list is settled: voices came, or a load (or a second) came back empty. Before it, an empty
+  // list is "not yet" — WebKit can answer [] until voiceschanged.
+  readonly ready: boolean;
   // Inside the Start tap: unlock speech for this visit ("Voice on" the first time).
   prime(): void;
   speak(u: Utterance): void;
   cancel(): void;
   toggle(): void;
-  change(name: string | null): void;
+  change(id: string | null): void;
+  // A tap: say the preview phrase in the current voice.
+  preview(): void;
 }
 
 const UNLOCK = 'Voice on';
+const VOICES_WAIT_MS = 1000;
+// The cue words the voice will actually say, so it's judged on them.
+export const PREVIEW = 'Hold. One. Two. Set complete.';
+
+const matches = (v: VoiceOption, id: string) => v.id === id || v.name === id;
 
 export function useVoice(): VoiceControl {
   const [on, setOn] = useState(readVoiceEnabled);
-  const [name, setName] = useState(readVoiceName);
-  const [voices, setVoices] = useState<VoiceOption[]>(listLocalVoices);
+  const [id, setId] = useState(readVoiceId);
+  const [voices, setVoices] = useState<VoiceOption[]>(() => listVoices());
+  const [settled, setSettled] = useState(() => !('speechSynthesis' in window));
   const speakerRef = useRef<Speaker | null>(null);
   const onRef = useRef(on);
   onRef.current = on;
-  const nameRef = useRef(name);
-  nameRef.current = name;
+  const idRef = useRef(id);
+  idRef.current = id;
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
-    const load = () => setVoices(listLocalVoices());
+    const synth = window.speechSynthesis;
+    const load = () => setVoices(listVoices());
+    const changed = () => {
+      load();
+      setSettled(true);
+    };
     load();
-    window.speechSynthesis.addEventListener('voiceschanged', load);
-    return () => window.speechSynthesis.removeEventListener('voiceschanged', load);
+    // WebKit may fill the list without ever firing voiceschanged: read it again when the wait is up.
+    const timer = setTimeout(changed, VOICES_WAIT_MS);
+    synth.addEventListener('voiceschanged', changed);
+    return () => {
+      clearTimeout(timer);
+      synth.removeEventListener('voiceschanged', changed);
+    };
   }, []);
 
   // Silence on leave — a cue mid-utterance shouldn't follow you to another page.
   useEffect(() => () => speakerRef.current?.cancel(), []);
 
   const speaker = useCallback(() => {
-    speakerRef.current ??= createSpeaker({ voiceName: nameRef.current });
+    speakerRef.current ??= createSpeaker({ voiceId: idRef.current });
     return speakerRef.current;
   }, []);
 
@@ -69,18 +94,30 @@ export function useVoice(): VoiceControl {
     else speakerRef.current?.cancel();
   }, [speaker]);
 
+  const preview = useCallback(() => {
+    const s = speaker();
+    s.prime();
+    s.speak({ text: PREVIEW, priority: 'high' });
+  }, [speaker]);
+
   const change = useCallback(
     (next: string | null) => {
-      setName(next);
-      writeVoiceName(next);
-      // This change is a gesture — prime and preview the new voice.
-      const s = speaker();
-      s.setVoice(next);
-      s.prime();
-      s.speak({ text: 'Hold it there', priority: 'high' });
+      idRef.current = next;
+      setId(next);
+      writeVoiceId(next);
+      // This change is a gesture — preview the new voice.
+      speaker().setVoice(next);
+      preview();
     },
-    [speaker],
+    [speaker, preview],
   );
 
-  return { on, name, voices, prime, speak, cancel, toggle, change };
+  // Only once voices have loaded: an empty list is "not yet", not "gone".
+  const missing = id !== null && voices.length > 0 && !voices.some((v) => matches(v, id));
+  const ready = settled || voices.length > 0;
+  return { on, id, voices, missing, ready, prime, speak, cancel, toggle, change, preview };
 }
+
+// The picker's value: the saved voice's option id, or '' for Auto (also when the saved one is missing).
+export const pickedId = (voice: Pick<VoiceControl, 'id' | 'voices'>): string =>
+  (voice.id !== null && voice.voices.find((v) => matches(v, voice.id as string))?.id) || '';

@@ -3,3 +3,4 @@
 export * from './types';
 export * from './definitions';
 export * from './catalog';
+export * from './history';

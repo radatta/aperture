@@ -92,6 +92,40 @@ describe('FluxCore', () => {
     expect(core.control({ type: 'start' })).toBeNull();
   });
 
+  it('a Re-calibrate mid-set keeps the count, and one during the rest keeps the set finished (D55)', () => {
+    const core = new FluxCore();
+    let t = feed(core, yaw(0), 10, 0);
+    core.calibrate();
+    core.selectExercise('cervical-rotation', 'a');
+    const reps = (dir = 1) => {
+      let last = null as null | { repsPos: number; repsNeg: number; phase: string };
+      for (let i = 0; i < 2; i++) {
+        for (let k = 0; k < 150; k++) {
+          const r = core.frame(yaw(55 * dir), (t += 1000 / 30));
+          if (r?.state?.kind === 'romReps') last = r.state;
+        }
+        for (let k = 0; k < 40; k++) {
+          const r = core.frame(yaw(0), (t += 1000 / 30));
+          if (r?.state?.kind === 'romReps') last = r.state;
+        }
+      }
+      return last;
+    };
+    const two = reps();
+    expect((two?.repsPos ?? 0) + (two?.repsNeg ?? 0)).toBe(2);
+    expect(core.calibrate()).toBe(true);
+    const after = reps();
+    expect((after?.repsPos ?? 0) + (after?.repsNeg ?? 0)).toBe(4);
+    // On to the end of the set (5 a side, so 10), then a Re-calibrate during the rest: still complete —
+    // turning during the rest counts nothing.
+    let done = after;
+    for (let i = 0; i < 4 && done?.phase !== 'complete'; i++) done = reps(i < 1 ? 1 : -1);
+    expect(done?.phase).toBe('complete');
+    expect(core.calibrate()).toBe(true);
+    const rest = reps();
+    expect(rest?.phase).toBe('complete');
+  });
+
   it('applies side B by mirroring the stretch target', () => {
     // upper-trap-stretch targets roll +28; side B is roll −28.
     const reached = (side: 'a' | 'b') => {
@@ -211,6 +245,15 @@ describe('FluxCore', () => {
       }
       return { core, t };
     }
+
+    it('a manual Re-calibrate in the rest isn’t overwritten by a quiet re-set in the same pause (D55)', () => {
+      const { core, t } = finishedSet();
+      const t2 = run(core, hold(yaw(6), 10), t).t;
+      expect(core.calibrate()).toBe(true); // the user's own neutral, at 6°
+      const { out } = run(core, hold(yaw(6), 120), t2); // 4 s still, right there
+      expect(autos(out)).toEqual([]);
+      expect(out.at(-1)?.sample.rel.yaw).toBeCloseTo(0, 0);
+    });
 
     it('between sets, a still head near the neutral re-sets it once per pause, keeping the set', () => {
       const { core, t } = finishedSet();

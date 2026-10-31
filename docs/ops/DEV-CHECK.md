@@ -51,6 +51,14 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   responses (a split's follow-up, and its parent only when the split task was already recorded and the parent
   didn't exist before the run — deleting a parent deletes its parts). Cleanup deletes ledger ids and nothing else; the delete
   wrapper refuses any other id (`LEDGER_GUARD`). Never by title or marker word — the model rewrites titles.
+- **Flux sets are the one other kind written** (`scenarios/flux-history.ts` writes two a run: a finished set and one stopped early). Their id is minted by the
+  harness (the client mints it in the app too — [flux](../areas/flux/index.md) D47), so `recordFluxSet` records
+  it as `created` with `via: api:recordFluxSet` _before_ the call — a set the server stored is never unrecorded.
+  Cleanup, the sweep and the read-back go by that `via`: a Flux id is read with `listFluxSets` and deleted with
+  `deleteFluxSet` (a soft-delete), never through the task methods (`deleteTask` refuses a Flux id), and never
+  through the History tab, which can't tell one set from another. Its `day` is the app's day (the test user's
+  `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's one
+  non-ledger write: a test user who never opened Flux has the disclaimer accepted (a Settings field, logged).
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't

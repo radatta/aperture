@@ -21,6 +21,7 @@ export interface PwLocator {
   press(key: string, opts?: { timeout?: number }): Promise<void>;
   waitFor(opts?: { state?: 'visible' | 'attached' | 'hidden'; timeout?: number }): Promise<void>;
   isVisible(): Promise<boolean>;
+  or(other: PwLocator): PwLocator;
   textContent(): Promise<string | null>;
   inputValue(): Promise<string>;
   count(): Promise<number>;

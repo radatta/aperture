@@ -14,6 +14,7 @@ import { FinancesAllTab, FinancesPage, FinancesRulesTab, FinancesSortTab } from 
 import { FluxPage } from './pages/Flux';
 import { FluxExerciseView } from './pages/Flux/ExerciseView';
 import { FluxLibraryTab } from './pages/Flux/LibraryTab';
+import { FluxHistoryTab } from './pages/Flux/HistoryTab';
 import type { RouteHandle } from './lib/routeHandle';
 
 // Route table, shared by the browser router (App) and the memory router used in tests. AppShell is
@@ -41,6 +42,7 @@ export const routes: RouteObject[] = [
         element: <FluxPage />,
         children: [
           { index: true, element: <FluxLibraryTab /> },
+          { path: 'history', element: <FluxHistoryTab /> },
           {
             path: ':exerciseId',
             element: <FluxExerciseView />,

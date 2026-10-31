@@ -153,7 +153,7 @@ export class FluxCore {
       )
         this.pauseRecal = false;
       if (this.stillSec >= AUTO_CAL_STILL_SEC && !this.pauseRecal) {
-        // A re-set keeps the finished set and the ROM: a correction, not a Calibrate.
+        // A re-set keeps the ROM too (shifted onto the new neutral): a quiet correction, not a Calibrate.
         if (this.neutral) {
           const old = this.neutral;
           this.neutral = { ...this.lastSmoothed };
@@ -167,7 +167,7 @@ export class FluxCore {
       }
     } else this.stillSec = 0;
 
-    // No face holds the last pose (flux parity) — only hold/guided kinds check faceVisible.
+    // No face holds the last pose (flux parity); each kind's evaluator decides what a dropout means (D44, D57).
     const rel = relativeTo(this.lastSmoothed, this.neutral);
     // ~1 s EWMA instead of flux's per-frame 1/dt, so the badge doesn't flicker.
     if (dt > 0) this.fps += (1 / dt - this.fps) * Math.min(1, dt);
@@ -195,12 +195,19 @@ export class FluxCore {
     return { sample, events: r.events, state: r.state, ...auto };
   }
 
-  // Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks.
+  // Neutral = the current smoothed pose. Refused without a face, so a stale/zero pose never sticks. The
+  // set is left as it is (D55): one under way carries on with its count, measured from the new neutral;
+  // a finished one stays finished through the rest (the next set starts clean — stop, then start); and
+  // before the first set the evaluator hasn't run (it waits for a neutral, D40), so it's still initial.
   calibrate(): boolean {
     if (!this.faceVisible) return false;
     this.neutral = { ...this.lastSmoothed };
     this.resetRom();
-    if (this.def) this.exerciseState = initialState(this.def);
+    // A neutral the user just chose: the between-set re-set (D46) anchors on it from here, and this
+    // pause has had its neutral — no quiet "Neutral reset" overwriting it 2 s later.
+    this.restNeutral = null;
+    this.stillSec = 0;
+    this.pauseRecal = true;
     return true;
   }
 

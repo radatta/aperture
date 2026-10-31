@@ -38,12 +38,55 @@ describe('createApiClient', () => {
       run: 'r1',
     });
     expect(Object.keys(api.reads).sort()).toEqual([
+      'getFluxSet',
+      'getSettings',
       'getTask',
       'listBacklog',
       'listCategories',
+      'listFluxSets',
       'listTasks',
     ]);
-    expect(Object.keys(api.writes).sort()).toEqual(['createTask', 'deleteTask']);
+    expect(Object.keys(api.writes).sort()).toEqual([
+      'createTask',
+      'deleteFluxSet',
+      'deleteTask',
+      'recordFluxSet',
+    ]);
+  });
+
+  it('records a Flux set as created before the call, and deletes only a recorded Flux set', async () => {
+    const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'F1' }));
+    const ledger = memLedger();
+    const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+    await api.writes.recordFluxSet({
+      id: 'F1',
+      day: '2026-10-21',
+      exerciseId: 'chin-tuck',
+      kind: 'holdAtTarget',
+      side: null,
+      condition: null,
+      count: 10,
+      avgPeakDeg: null,
+      avgErrorDeg: null,
+      rom: { pitch: 1, yaw: 1, roll: 1 },
+      calibrated: true,
+      delegate: 'CPU',
+      durationSec: 60,
+      completedAt: 1,
+      repTaskId: null,
+      stoppedEarly: false,
+      planned: 10,
+    });
+    expect(ledger.entries).toEqual([
+      { run: 'r1', op: 'created', id: 'F1', via: 'api:recordFluxSet', title: 'flux chin-tuck' },
+    ]);
+    await expect(api.writes.deleteFluxSet('not-mine')).rejects.toThrow(/LEDGER_GUARD/);
+    await expect(api.writes.deleteTask('F1')).rejects.toThrow(/LEDGER_GUARD/); // a set isn't a task
+    await api.writes.deleteFluxSet('F1');
+    expect(fetch).toHaveBeenLastCalledWith(
+      `${DEV_ORIGIN}/api/deleteFluxSet`,
+      expect.objectContaining({ body: '{"args":["F1"]}' }),
+    );
   });
 
   it('records intent before the create and created after, with the server id', async () => {
