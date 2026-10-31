@@ -16,9 +16,11 @@ describe('ApertureDevGuardStack (the dev account half of the kill switch)', () =
   const res = Object.values(t.toJSON().Resources as Record<string, Resource>);
   const of = (type: string) => res.filter((r) => r.Type === type).map((r) => r.Properties);
 
-  // Prod has six alarms; CloudWatch's free tier is ten (shared across the org's consolidated bill).
-  it('has three account-wide kill alarms, all named for the prefix the SCPs and the rule match', () => {
+  // Prod has six alarms; CloudWatch's free tier is ten (shared across the org's consolidated bill), so four is the most.
+  it('has four account-wide kill alarms, all named for the prefix the SCPs and the rule match', () => {
     const alarms = of('AWS::CloudWatch::Alarm');
+    expect(alarms).toHaveLength(4);
+    expect(alarms.map((a) => a.Period)).toEqual([60, 3600, 60, 60]);
     expect(alarms.map((a) => a.AlarmName)).toEqual(KILL_ALARMS.map((a) => a.name));
     for (const a of alarms) {
       expect(a.AlarmName).toMatch(/^aperture-kill-/);

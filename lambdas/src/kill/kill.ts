@@ -3,8 +3,8 @@
 // is harmless, and each runs even if another fails:
 //   1. attach the deny-all SCP to the dev account — every API call by a dev principal stops (the break-glass role
 //      is exempt, so the moves below and the unkill still work);
-//   2. throttle every dev function to reserved concurrency 0 — an SCP never sees Lambda's own async queue, a
-//      schedule's or a URL's invokes; a function at 0 runs nothing, whoever calls it;
+//   2. throttle every dev function to reserved concurrency 0 — an SCP never sees Lambda's own async queue (events
+//      queued before the kill retry for hours) or a public URL's invokes; a function at 0 runs nothing, whoever calls;
 //   3. switch the public Function URLs to AWS_IAM — the URL path is resource-based, so this closes it even if 2
 //      fails, and CloudFront's origin requests carry no SigV4, so the app goes dark too;
 //   4. disable dev's CloudFront distributions — CloudFront serves its cache and reads S3 as a service principal,
@@ -136,3 +136,40 @@ export function killConfigFrom(env: Record<string, string | undefined>): KillCon
 
 const message = (err: unknown) =>
   err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+
+// Every dev distribution to `enabled`, as the kill's move 4 and its restore. Each one is tried even if another fails;
+// a distribution whose config can't be read is a failure, never a silent skip.
+export interface CloudFrontLike {
+  list(marker?: string): Promise<{ items: { id: string; enabled: boolean }[]; next?: string }>;
+  getConfig(
+    id: string,
+  ): Promise<{ config?: { Enabled?: boolean } & Record<string, unknown>; etag?: string }>;
+  update(id: string, etag: string | undefined, config: Record<string, unknown>): Promise<void>;
+}
+
+export async function setDistributionsEnabled(
+  cf: CloudFrontLike,
+  enabled: boolean,
+): Promise<string[]> {
+  const changed: string[] = [];
+  const failures: string[] = [];
+  let marker: string | undefined;
+  do {
+    const page = await cf.list(marker);
+    for (const d of page.items) {
+      if (d.enabled === enabled) continue;
+      await each(failures, d.id, async () => {
+        const { config, etag } = await cf.getConfig(d.id);
+        if (!config) throw new Error('no distribution config returned');
+        await cf.update(d.id, etag, { ...config, Enabled: enabled });
+        changed.push(d.id);
+      });
+    }
+    marker = page.next;
+  } while (marker);
+  if (failures.length)
+    throw new Error(
+      `distributions not ${enabled ? 'enabled' : 'disabled'} — ${failures.join('; ')}`,
+    );
+  return changed;
+}

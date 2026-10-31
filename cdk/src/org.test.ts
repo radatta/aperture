@@ -83,45 +83,20 @@ describe('dev-account SCPs', () => {
 
   it('admit only the services the dev stacks and CI use', () => {
     const allowed = statements(standing.allowlist)[0]!.NotAction!;
-    for (const svc of [
-      'lambda',
-      'dynamodb',
-      's3',
-      'cloudfront',
-      'cognito-idp',
-      'logs',
-      'scheduler',
-      'ssm',
-      'kms',
-      'iam',
-      'sts',
-      'cloudformation',
-    ])
+    for (const svc of ['lambda', 'dynamodb', 's3', 'cloudfront', 'cognito-idp', 'logs', 'scheduler', 'kms', 'iam', 'sts', 'cloudformation'])
       expect(allowed).toContain(`${svc}:*`);
-    for (const svc of [
-      'ec2',
-      'bedrock',
-      'sagemaker',
-      'sns',
-      'events',
-      'cloudwatch',
-      'ecr',
-      'ses',
-      'states',
-      'acm',
-    ])
+    for (const svc of ['ec2', 'bedrock', 'sagemaker', 'sns', 'events', 'cloudwatch', 'ecr', 'ses', 'states', 'acm', 'ssm'])
       expect(allowed).not.toContain(`${svc}:*`);
     // CloudWatch only for reads — alarms cost money and the kill alarms are the break-glass role's; ACM only for
-    // reads — the cert is requested by the break-glass role, and exportable public certs bill per name.
-    expect(allowed.filter((a) => a.startsWith('cloudwatch:'))).toEqual([
-      'cloudwatch:Describe*',
-      'cloudwatch:Get*',
-      'cloudwatch:List*',
-    ]);
-    expect(allowed.filter((a) => a.startsWith('acm:'))).toEqual([
-      'acm:Describe*',
-      'acm:Get*',
-      'acm:List*',
+    // reads — the cert is requested by the break-glass role, and exportable public certs bill per name; SSM only
+    // Parameter Store — OpsCenter and Automation bill per item or step.
+    expect(allowed.filter((a) => a.startsWith('cloudwatch:'))).toEqual(['cloudwatch:Describe*', 'cloudwatch:Get*', 'cloudwatch:List*']);
+    expect(allowed.filter((a) => a.startsWith('acm:'))).toEqual(['acm:Describe*', 'acm:Get*', 'acm:List*']);
+    expect(allowed.filter((a) => a.startsWith('ssm:'))).toEqual([
+      'ssm:*Parameter*',
+      'ssm:AddTagsToResource',
+      'ssm:RemoveTagsFromResource',
+      'ssm:ListTagsForResource',
     ]);
   });
 
@@ -186,8 +161,19 @@ describe('dev-account SCPs', () => {
       'iam:UpdateAssumeRolePolicy',
     ])
       expect(frozen).toContain(a);
-    // Code updates stay open — they are what a dev deploy is.
-    expect(frozen).not.toContain('lambda:UpdateFunctionCode');
+    for (const a of ['s3:PutLifecycleConfiguration', 'cloudfront:CopyDistribution', 'cognito-idp:UpdateUserPool*', 'cognito-idp:CreateUserPool*', 'cognito-idp:AdminCreateUser'])
+      expect(frozen).toContain(a);
+    // Code updates stay open for the app's own functions — they are what a dev deploy is — and closed only for CDK's
+    // 15-minute provider functions, which CloudFormation names `Aperture…` (the app's are `aperture-…`).
+    const code = statements(standing.freeze).filter((x) => [x.Action].flat().includes('lambda:UpdateFunctionCode'));
+    expect(code.map((x) => x.Resource)).toEqual(['arn:aws:lambda:*:*:function:Aperture*']);
+  });
+
+  it('let only Standard-class uploads through — an upload with no class header is Standard', () => {
+    const s = statements(standing.guardrails).find((x) => x.Sid === 'StandardStorageOnly')!;
+    expect(s.Action).toEqual(['s3:PutObject']);
+    expect(s.Condition?.StringNotEquals).toEqual({ 's3:x-amz-storage-class': 'STANDARD' });
+    expect(s.Condition?.Null).toEqual({ 's3:x-amz-storage-class': 'false' }); // only when the header is present
   });
 });
 

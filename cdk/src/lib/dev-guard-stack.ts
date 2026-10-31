@@ -13,7 +13,7 @@ export interface DevGuardStackProps extends StackProps {
 
 // One alarm per lever the SCPs can't cap, account-wide (no function dimension), so a function the freeze let through
 // is still counted. Thresholds sit well above a full devcheck; re-tune from a measured run (docs/ops/CI-BOT.md →
-// Kill switch). Three alarms keep the account inside CloudWatch's free 10 together with prod's six.
+// Kill switch). Four alarms keep the account inside CloudWatch's free 10 together with prod's six.
 export const KILL_ALARMS = [
   // Busy environments: the account-wide Duration sum. 600,000 ms a minute is ten environments busy for the whole
   // minute — a pinger or a loop, never a page load.
@@ -22,14 +22,26 @@ export const KILL_ALARMS = [
     namespace: 'AWS/Lambda',
     metricName: 'Duration',
     threshold: 600_000,
+    minutes: 1,
     periods: 2,
   },
-  // Call rate: a loop of short calls the Duration alarm would miss.
+  // The slow drain the per-minute alarm misses: one environment kept busy, or a sparse loop holding the table at its
+  // cap. 600,000 ms an hour is ten minutes of compute — far past a dev session's.
+  {
+    name: `${KILL_ALARM_PREFIX}duration-hour`,
+    namespace: 'AWS/Lambda',
+    metricName: 'Duration',
+    threshold: 600_000,
+    minutes: 60,
+    periods: 1,
+  },
+  // Call rate: a loop of short calls the Duration alarms would miss.
   {
     name: `${KILL_ALARM_PREFIX}invocations`,
     namespace: 'AWS/Lambda',
     metricName: 'Invocations',
     threshold: 3_000,
+    minutes: 1,
     periods: 1,
   },
   // Log ingest is $0.50/GB with no cap anywhere in AWS: 100 MB in a minute is far past any real dev log volume.
@@ -38,6 +50,7 @@ export const KILL_ALARMS = [
     namespace: 'AWS/Logs',
     metricName: 'IncomingBytes',
     threshold: 100 * 1024 * 1024,
+    minutes: 1,
     periods: 1,
   },
 ] as const;
@@ -60,7 +73,7 @@ export class ApertureDevGuardStack extends Stack {
           namespace: a.namespace,
           metricName: a.metricName,
           statistic: 'Sum',
-          period: Duration.minutes(1),
+          period: Duration.minutes(a.minutes),
         }),
         threshold: a.threshold,
         evaluationPeriods: a.periods,

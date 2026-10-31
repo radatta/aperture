@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isAlreadyAttached, isRestore, kill, killConfigFrom, restore } from './kill';
-import type { KillGateways } from './kill';
+import {
+  isAlreadyAttached,
+  isRestore,
+  kill,
+  killConfigFrom,
+  restore,
+  setDistributionsEnabled,
+} from './kill';
+import type { CloudFrontLike, KillGateways } from './kill';
 
 const cfg = {
   policyId: 'p-kill',
@@ -190,5 +197,67 @@ describe('killConfigFrom', () => {
     for (const k of Object.keys(env))
       expect(() => killConfigFrom({ ...env, [k]: ' ' })).toThrow(new RegExp(k));
     expect(() => killConfigFrom({ ...env, URL_FUNCTIONS: ',' })).toThrow(/URL_FUNCTIONS/);
+  });
+});
+
+describe('setDistributionsEnabled', () => {
+  function fakeCloudFront(
+    pages: { id: string; enabled: boolean }[][],
+    fail: Record<string, 'get' | 'none' | 'update'> = {},
+  ) {
+    const updates: { id: string; etag?: string; config: Record<string, unknown> }[] = [];
+    const cf: CloudFrontLike = {
+      async list(marker) {
+        const i = marker ? Number(marker) : 0;
+        return { items: pages[i] ?? [], ...(i + 1 < pages.length ? { next: String(i + 1) } : {}) };
+      },
+      async getConfig(id) {
+        if (fail[id] === 'get') throw new Error('get failed');
+        if (fail[id] === 'none') return { etag: 'e' };
+        return { config: { Enabled: !updates.length, Comment: id }, etag: `etag-${id}` };
+      },
+      async update(id, etag, config) {
+        if (fail[id] === 'update') throw new Error('PreconditionFailed');
+        updates.push({ id, etag, config });
+      },
+    };
+    return { cf, updates };
+  }
+
+  it('flips every distribution on every page that differs, with its own ETag and the rest of its config kept', async () => {
+    const { cf, updates } = fakeCloudFront([
+      [
+        { id: 'A', enabled: true },
+        { id: 'B', enabled: false },
+      ],
+      [{ id: 'C', enabled: true }],
+    ]);
+    expect(await setDistributionsEnabled(cf, false)).toEqual(['A', 'C']);
+    expect(updates).toEqual([
+      { id: 'A', etag: 'etag-A', config: { Enabled: false, Comment: 'A' } },
+      { id: 'C', etag: 'etag-C', config: { Enabled: false, Comment: 'C' } },
+    ]);
+  });
+
+  it('tries every distribution, then names each failure — a missing config is a failure, not a skip', async () => {
+    const { cf, updates } = fakeCloudFront(
+      [
+        [
+          { id: 'A', enabled: true },
+          { id: 'B', enabled: true },
+          { id: 'C', enabled: true },
+          { id: 'D', enabled: true },
+        ],
+      ],
+      {
+        A: 'get',
+        B: 'none',
+        C: 'update',
+      },
+    );
+    await expect(setDistributionsEnabled(cf, false)).rejects.toThrow(
+      /A: Error: get failed; B: Error: no distribution config returned; C: Error: PreconditionFailed/,
+    );
+    expect(updates.map((u) => u.id)).toEqual(['D']);
   });
 });

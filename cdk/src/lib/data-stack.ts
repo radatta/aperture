@@ -5,8 +5,8 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 
-export const DEV_MAX_READ_UNITS = 500;
-export const DEV_MAX_WRITE_UNITS = 200;
+export const DEV_MAX_READ_UNITS = 100;
+export const DEV_MAX_WRITE_UNITS = 50;
 
 export interface DataStackProps extends StackProps {
   stage: string;

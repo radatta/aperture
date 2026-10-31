@@ -28,7 +28,7 @@ export const DEV_BUDGET_KILL_USD = 3;
 const KILL_ENTRY = fileURLToPath(new URL('../../../lambdas/src/kill/index.ts', import.meta.url));
 
 // The break-glass role Organizations creates in every member account. Every deny below exempts it, so the user's
-// hand steps (`--profile aperture-dev`) and the kill Lambda's URL lock always work — and nothing else can touch it.
+// hand steps (`--profile aperture-dev`) and the kill Lambda's moves always work — and nothing else can touch it.
 export const BREAK_GLASS_ROLE = 'OrganizationAccountAccessRole';
 const breakGlass = `arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`;
 // The standing SCPs also exempt the kill switch's own roles (ApertureDevGuard's forwarder, which EventBridge assumes to
@@ -62,7 +62,10 @@ export const allowlistPolicy = () =>
         'cognito-idp:*',
         'logs:*',
         'scheduler:*',
-        'ssm:*',
+        'ssm:*Parameter*', // Parameter Store only — not OpsCenter or Automation, which bill per item or step
+        'ssm:AddTagsToResource',
+        'ssm:RemoveTagsFromResource',
+        'ssm:ListTagsForResource',
         'kms:*',
         'iam:*',
         'sts:*',
@@ -173,6 +176,18 @@ export const guardrailsPolicy = () =>
     ]),
     // The kill switch's own roles (ApertureDevGuard) and the break-glass role are untouchable from dev.
     deny('NoGuardTampering', ['iam:*'], [breakGlass, killRoles]),
+    // Archive storage classes bill 10× Standard per PUT; an upload that sends no class header is Standard and passes.
+    {
+      Sid: 'StandardStorageOnly',
+      Effect: 'Deny',
+      Action: ['s3:PutObject'],
+      Resource: '*',
+      Condition: {
+        ...exempt,
+        StringNotEquals: { 's3:x-amz-storage-class': 'STANDARD' },
+        Null: { 's3:x-amz-storage-class': 'false' },
+      },
+    },
     deny('NoCostSinks', [
       'kms:CreateKey',
       'kms:CreateCustomKeyStore',
@@ -209,6 +224,13 @@ export const guardrailsPolicy = () =>
 // reattach (docs/ops/CI-BOT.md → Kill switch).
 export const freezePolicy = () =>
   policy([
+    // CDK's own provider functions (LogRetention, S3 auto-delete, the OIDC provider) run for up to 15 min, so new code
+    // there would outlast a kill's tail; CloudFormation names them `Aperture…` (the app functions are `aperture-…`).
+    deny(
+      'FrozenProviderCode',
+      ['lambda:UpdateFunctionCode'],
+      'arn:aws:lambda:*:*:function:Aperture*',
+    ),
     deny('FrozenFunctionShape', [
       'lambda:CreateFunction',
       'lambda:UpdateFunctionConfiguration',
@@ -234,9 +256,24 @@ export const freezePolicy = () =>
       's3:PutBucketPolicy',
       's3:PutBucketAcl',
       's3:PutBucketOwnershipControls',
+      's3:PutLifecycleConfiguration', // S3 runs a rule itself, so a transition to an archive class bills after a kill
+      's3:PutIntelligentTieringConfiguration',
       'cloudfront:CreateDistribution*',
+      'cloudfront:CopyDistribution',
+      'cloudfront:CreateContinuousDeploymentPolicy',
       'iam:CreateRole',
       'iam:UpdateAssumeRolePolicy',
+    ]),
+    // The user pool: opening self-sign-up (UpdateUserPool), a new client or resource server, or created users would let
+    // unauthenticated callers run up monthly active users — no SCP binds them. The two dev users are created by the
+    // break-glass role.
+    deny('FrozenUserPool', [
+      'cognito-idp:CreateUserPool*',
+      'cognito-idp:UpdateUserPool*',
+      'cognito-idp:CreateResourceServer',
+      'cognito-idp:UpdateResourceServer',
+      'cognito-idp:AdminCreateUser',
+      'cognito-idp:*UserImportJob',
     ]),
     deny('FrozenSchedules', [
       'scheduler:CreateSchedule',

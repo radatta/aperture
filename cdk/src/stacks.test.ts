@@ -685,7 +685,7 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
   // The guardrails SCP denies reserved/provisioned concurrency, event-source mappings and destinations to the dev
   // account; a template that sets one fails to deploy there.
-  it('asks for nothing the dev SCPs deny', () => {
+  it('asks for no concurrency, event-source mapping or destination — the guardrails SCP denies them', () => {
     const all = resources(dev.templates);
     for (const r of all.filter((x) => x.Type === 'AWS::Lambda::Function'))
       expect(r.Properties?.ReservedConcurrentExecutions).toBeUndefined();
