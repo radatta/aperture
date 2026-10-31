@@ -14,8 +14,11 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Construct } from 'constructs';
 import {
+  DEV_MAIN_GITHUB_ROLE,
   DEV_REGION,
   DEV_URL_FUNCTIONS,
+  DEVMAIN_QUALIFIER,
+  GITHUB_ROLE_PREFIX,
   KILL_ALARM_PREFIX,
   KILL_FORWARDER_ROLE,
 } from '../config/devAccount';
@@ -36,13 +39,28 @@ const breakGlass = `arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`;
 // can use or change them: their trust names a service, and NoGuardTampering denies iam:* (PassRole included) on them.
 const killRoles = `arn:aws:iam::*:role/${KILL_ALARM_PREFIX}*`;
 const exempt = { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, killRoles] } };
-const deny = (Sid: string, Action: string[], Resource: string | string[] = '*') => ({
+// Main's own dev deploy (docs/ops/CI-BOT.md → Two lanes): CloudFormation runs it as the `devmain` bootstrap's
+// execution role, which the freeze alone exempts — merged code has had the user's review, so it may change a
+// function's shape. Only the dev-main GitHub role can reach that role, and nothing but break-glass can change either
+// (OnlyMainAssumesItsLane, NoLaneTampering).
+const devMainExec = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-cfn-exec-role-*`;
+const devMainDeploy = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-deploy-role-*`;
+const devMainRoles = `arn:aws:iam::*:role/cdk-${DEVMAIN_QUALIFIER}-*`;
+const freezeExempt = { ArnNotLike: { 'aws:PrincipalARN': [breakGlass, killRoles, devMainExec] } };
+const deny = (
+  Sid: string,
+  Action: string[],
+  Resource: string | string[] = '*',
+  Condition: object = exempt,
+) => ({
   Sid,
   Effect: 'Deny',
   Action,
   Resource,
-  Condition: exempt,
+  Condition,
 });
+const freeze = (Sid: string, Action: string[], Resource: string | string[] = '*') =>
+  deny(Sid, Action, Resource, freezeExempt);
 const policy = (Statement: object[]) => ({ Version: '2012-10-17', Statement });
 
 // SCP 1 — everything outside the services the dev stacks, CDK and the CI roles use is denied: EC2, Bedrock,
@@ -180,6 +198,24 @@ export const guardrailsPolicy = () =>
     ]),
     // The kill switch's own roles (ApertureDevGuard) and the break-glass role are untouchable from dev.
     deny('NoGuardTampering', ['iam:*'], [breakGlass, killRoles]),
+    // The devmain bootstrap's roles trust the whole account, so without this the bot lane's execution role could step
+    // into main's freeze-exempt lane. CloudFormation assuming the exec role is the service, which no SCP binds.
+    deny('OnlyMainAssumesItsLane', ['sts:AssumeRole'], devMainRoles, {
+      ArnNotLike: {
+        'aws:PrincipalARN': [breakGlass, `arn:aws:iam::*:role/${DEV_MAIN_GITHUB_ROLE}`],
+      },
+    }),
+    // Nothing may change, or pass, the devmain roles or a GitHub role — not even the bot lane's admin execution role
+    // (a PassRole of the exempt exec role would run any stack freeze-exempt). The devmain deploy role is the one
+    // exception: it passes its exec role to CloudFormation on every deploy, and only the dev-main role can become it.
+    deny(
+      'NoLaneTampering',
+      ['iam:*'],
+      [devMainRoles, `arn:aws:iam::*:role/${GITHUB_ROLE_PREFIX}*`],
+      {
+        ArnNotLike: { 'aws:PrincipalARN': [breakGlass, devMainDeploy] },
+      },
+    ),
     // Archive storage classes bill 10× Standard per PUT; an upload that sends no class header is Standard and passes.
     {
       Sid: 'StandardStorageOnly',
@@ -224,18 +260,18 @@ export const guardrailsPolicy = () =>
 // SCP 3 — the freeze: what a dev deploy needs only the first time, or when it changes a function's shape. Without
 // it, branch code could raise memory 20× and the timeout to 15 min (in-flight calls run to their timeout even after
 // a kill), add Function URLs or self-invoking destinations, or switch the table to provisioned capacity. Attached
-// after the first deploy into the account; a branch that changes any of these is a hand step: detach, deploy,
-// reattach (docs/ops/CI-BOT.md → Kill switch).
+// after the first deploy into the account. Main's own dev deploy is exempt (devMainExec above); a bot dispatch or
+// `dev` push that changes any of these is a hand step: detach, deploy, reattach (docs/ops/CI-BOT.md → Kill switch).
 export const freezePolicy = () =>
   policy([
     // CDK's own provider functions (LogRetention, S3 auto-delete, the OIDC provider) run for up to 15 min, so new code
     // there would outlast a kill's tail; CloudFormation names them `Aperture…` (the app functions are `aperture-…`).
-    deny(
+    freeze(
       'FrozenProviderCode',
       ['lambda:UpdateFunctionCode'],
       'arn:aws:lambda:*:*:function:Aperture*',
     ),
-    deny('FrozenFunctionShape', [
+    freeze('FrozenFunctionShape', [
       'lambda:CreateFunction',
       'lambda:UpdateFunctionConfiguration',
       'lambda:CreateFunctionUrlConfig',
@@ -246,7 +282,7 @@ export const freezePolicy = () =>
       'lambda:PutFunctionEventInvokeConfig',
       'lambda:UpdateFunctionEventInvokeConfig',
     ]),
-    deny('FrozenTable', [
+    freeze('FrozenTable', [
       'dynamodb:CreateTable',
       'dynamodb:UpdateTable',
       'dynamodb:DeleteTable',
@@ -255,7 +291,7 @@ export const freezePolicy = () =>
     ]),
     // Grants that outlive a kill: a resource policy, an ACL or a role trust naming another account acts through
     // that account's principals, which no dev SCP binds; a new distribution or bucket keeps serving as a service.
-    deny('FrozenGrants', [
+    freeze('FrozenGrants', [
       's3:CreateBucket',
       's3:PutBucketPolicy',
       's3:PutBucketAcl',
@@ -271,7 +307,7 @@ export const freezePolicy = () =>
     // The user pool: opening self-sign-up (UpdateUserPool), a new client or resource server, or created users would let
     // unauthenticated callers run up monthly active users — no SCP binds them. The two dev users are created by the
     // break-glass role.
-    deny('FrozenUserPool', [
+    freeze('FrozenUserPool', [
       'cognito-idp:CreateUserPool*',
       'cognito-idp:UpdateUserPool*',
       'cognito-idp:CreateResourceServer',
@@ -279,7 +315,7 @@ export const freezePolicy = () =>
       'cognito-idp:AdminCreateUser',
       'cognito-idp:*UserImportJob',
     ]),
-    deny('FrozenSchedules', [
+    freeze('FrozenSchedules', [
       'scheduler:CreateSchedule',
       'scheduler:UpdateSchedule',
       'scheduler:CreateScheduleGroup',

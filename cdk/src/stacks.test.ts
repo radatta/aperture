@@ -8,6 +8,8 @@ import { ApertureBillingStack } from './lib/billing-stack';
 import { DEV_MAX_READ_UNITS, DEV_MAX_WRITE_UNITS } from './lib/data-stack';
 import { allowlistPolicy, guardrailsPolicy } from './lib/org-stack';
 import { DEV_URL_FUNCTIONS } from './config/devAccount';
+import { laneFor, synthesizerFor } from './config/lane';
+import type { Lane } from './config/lane';
 
 // cdk.json's feature flags, so a test synthesizes what `cdk synth` does (e.g. minimizePolicies merges
 // IAM statements — a test app without it asserts a policy shape that never deploys).
@@ -413,9 +415,9 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     return Template.fromStack(appStack);
   };
 
-  it('adds three alarms per Lambda (BFF + finance sync) on one SNS email topic in prod', () => {
+  it('adds two alarms per Lambda (BFF + finance sync) and one account-wide throttle alarm on one SNS email topic in prod', () => {
     const t = build('prod');
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 6);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 5);
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       Threshold: 295000,
       Statistic: 'Maximum',
@@ -423,6 +425,18 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     });
     t.resourceCountIs('AWS::SNS::Topic', 1);
     t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
+  });
+
+  // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org.
+  it('throttle-alarms the whole account once, at the BFF alarm\'s old id so it updates in place', () => {
+    const throttles = Object.entries(build('prod').findResources('AWS::CloudWatch::Alarm')).filter(
+      ([, r]) => (r as { Properties: { MetricName: string } }).Properties.MetricName === 'Throttles',
+    );
+    expect(throttles).toHaveLength(1);
+    const [[id = '', r] = []] = throttles;
+    expect(id).toMatch(/^MonitoringThrottles/);
+    expect((r as { Properties: Record<string, unknown> }).Properties).toMatchObject({ Namespace: 'AWS/Lambda', Statistic: 'Sum' });
+    expect((r as { Properties: Record<string, unknown> }).Properties.Dimensions).toBeUndefined();
   });
 
   it('adds no alarms or SNS topic in dev (prod-only)', () => {
@@ -633,17 +647,20 @@ describe('ApertureAppStack finance sync by stage', () => {
 });
 
 describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
-  const build = (stage: string) => {
+  const build = (stage: string, lane: Lane = '') => {
     const app = new App({ context: { ...CDK_FLAGS, 'aws:cdk:bundling-stacks': [] } });
     const env = { account: '111111111111', region: 'us-west-1' };
+    const synth = () => (lane ? { synthesizer: synthesizerFor(lane) } : {});
     const data = new ApertureDataStack(app, `ApertureData-${stage}`, {
       stage,
       env,
       allowedOrigins: ['*'],
+      ...synth(),
     });
     const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
       stage,
       env,
+      ...synth(),
       table: data.table,
       userPool: data.userPool,
       filesBucket: data.filesBucket,
@@ -755,6 +772,47 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       if (name !== undefined) expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
     }
     for (const a of dev.artifacts) expect(a.stackName).toMatch(/^Aperture/); // so an unnamed function's name does
+  });
+
+  // Main's own dev deploy (config/lane.ts, docs/ops/CI-BOT.md → Two lanes).
+  describe('deploy lanes', () => {
+    const main = build('dev', 'devmain');
+    const strip = (t: Template) => {
+      const j = structuredClone(t.toJSON()) as { Parameters?: Record<string, unknown> };
+      delete j.Parameters?.BootstrapVersion;
+      return j;
+    };
+
+    it("deploys main's lane through the devmain bootstrap's deploy and exec roles, checking its version", () => {
+      for (const a of main.artifacts) {
+        expect(a.assumeRoleArn).toContain('cdk-devmain-deploy-role-');
+        expect(a.cloudFormationExecutionRoleArn).toContain('cdk-devmain-cfn-exec-role-');
+        expect(a.lookupRole?.arn).toContain('cdk-devmain-lookup-role-');
+        expect(a.bootstrapStackVersionSsmParameter).toBe('/cdk-bootstrap/devmain/version');
+      }
+    });
+
+    // A Code change on every function at each lane switch would hit the freeze's provider-code deny on the bot lane.
+    it('publishes to the stock bucket, so function code is identical across lanes', () => {
+      const buckets = resources(main.templates)
+        .filter((r) => r.Type === 'AWS::Lambda::Function')
+        .map((r) => JSON.stringify((r.Properties?.Code as { S3Bucket: unknown }).S3Bucket));
+      expect(buckets.length).toBeGreaterThan(0);
+      for (const b of buckets) expect(b).toContain('cdk-hnb659fds-assets-');
+    });
+
+    it("differs from the frozen lane's templates only in the bootstrap version parameter", () => {
+      main.templates.forEach((t, i) => expect(strip(t)).toEqual(strip(dev.templates[i] as Template)));
+      expect(JSON.stringify(main.templates[0]?.toJSON().Parameters)).toContain('/cdk-bootstrap/devmain/version');
+    });
+
+    it('takes a lane only for dev, and only a known one', () => {
+      expect(laneFor('dev', '')).toBe('');
+      expect(laneFor('dev', ' devmain ')).toBe('devmain');
+      expect(laneFor('prod', '')).toBe('');
+      expect(() => laneFor('dev', 'bogus')).toThrow(/APERTURE_DEPLOY_LANE/);
+      expect(() => laneFor('prod', 'devmain')).toThrow(/dev-only/);
+    });
   });
 });
 

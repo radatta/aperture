@@ -36,6 +36,10 @@ on:
         required: false
         type: string
         default: '' # commit to check out and deploy; empty → the triggering commit (github.sha)
+      lane:
+        required: false
+        type: string
+        default: '' # dev only: '' → the frozen stock bootstrap; devmain → main's freeze-exempt lane (CI-BOT.md → Two lanes)
     secrets:
       origin_secret:
         required: true
@@ -57,11 +61,11 @@ jobs:
     # own STS lifetime (an hour at most). A full deploy measures 10–15 min; prod gets more room because a CloudFront
     # change can run long and a killed job leaves CloudFormation mid-update.
     timeout-minutes: ${{ inputs.stage == 'dev' && 30 || 60 }}
-    # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to). Also
-    # records a GitHub deployment against the stage, which nothing consumes since main dropped
-    # `required_deployments` (INFRA §9).
-    environment: ${{ inputs.stage }}
-    # One deploy per STAGE at a time, across workflows. A main push (which deploys dev first) and a dev deploy
+    # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to) — or, on main's
+    # dev lane, `…:environment:dev-main`, an environment GitHub admits only from `main`. Also records a GitHub
+    # deployment against it, which nothing consumes since main dropped `required_deployments` (INFRA §9).
+    environment: ${{ inputs.lane == 'devmain' && 'dev-main' || inputs.stage }}
+    # One deploy per STAGE at a time, across workflows (both dev lanes share the group, so they serialize). A main push (which deploys dev first) and a dev deploy
     # — a `dev` push, or a bot dispatch (deploy-dev.yml) — could otherwise hit the dev stack at once. Queue, never
     # cancel — a half-applied stack is worse than a wait. At most two jobs contend: one main run plus one dev
     # run (dispatches stay off while the `dev` push path exists, and deploy-dev.yml's own group plus the bot's
@@ -82,12 +86,20 @@ jobs:
       # The commit this deploy serves. A dispatched run's GITHUB_SHA is main's (the workflow ran from main), so
       # the build marker reads this first and falls back to GITHUB_SHA (contract with dev-e2e — CI-BOT.md).
       APERTURE_BUILD_SHA: ${{ inputs.ref || github.sha }}
+      # Which CDK bootstrap the dev stacks synthesize against (cdk/src/config/lane.ts); empty everywhere but main's
+      # dev deploy.
+      APERTURE_DEPLOY_LANE: ${{ inputs.lane }}
     steps:
       - name: Validate mode
         run: |
           case "${{ inputs.mode }}" in
-            none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }}" ;;
+            none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }} lane=${{ inputs.lane }}" ;;
             *) echo "::error::invalid mode '${{ inputs.mode }}'"; exit 1 ;;
+          esac
+          case "${{ inputs.lane }}" in
+            '') ;;
+            devmain) [ "${{ inputs.stage }}" = dev ] || { echo "::error::lane devmain is dev-only"; exit 1; } ;;
+            *) echo "::error::invalid lane '${{ inputs.lane }}'"; exit 1 ;;
           esac
       # Prod never moves backwards. Re-running an old successful run (Actions: write can, for 30 days — the bot holds
       # it) would otherwise redeploy that commit to prod with no human step; `prod` has no reviewers. So the commit

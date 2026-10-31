@@ -13,7 +13,7 @@ export interface DevGuardStackProps extends StackProps {
 
 // One alarm per lever the SCPs can't cap, account-wide (no function dimension), so a function the freeze let through
 // is still counted. Thresholds sit well above a full devcheck; re-tune from a measured run (docs/ops/CI-BOT.md →
-// Kill switch). Four alarms keep the account inside CloudWatch's free 10 together with prod's six.
+// Kill switch). Five alarms keep the org inside CloudWatch's free 10 together with prod's five.
 export const KILL_ALARMS = [
   // Busy environments: the account-wide Duration sum. 600,000 ms a minute is ten environments busy for the whole
   // minute — a pinger or a loop, never a page load.
@@ -33,6 +33,18 @@ export const KILL_ALARMS = [
     metricName: 'Duration',
     threshold: 600_000,
     minutes: 60,
+    periods: 1,
+  },
+  // A slower drain still: a rolling three-hour sum, compared every minute (a period under a day evaluates per minute
+  // over a sliding window), so a drain that rests between bursts can't dodge it the way it could three hourly checks.
+  // 900,000 ms in three hours is five environment-minutes an hour — half the hourly alarm's rate. Provisional: re-tune
+  // from a measured devcheck so a normal session sits well under it.
+  {
+    name: `${KILL_ALARM_PREFIX}duration-3h`,
+    namespace: 'AWS/Lambda',
+    metricName: 'Duration',
+    threshold: 900_000,
+    minutes: 180,
     periods: 1,
   },
   // Call rate: a loop of short calls the Duration alarms would miss.

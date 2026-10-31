@@ -11,6 +11,7 @@ import { ApertureBillingStack } from '../lib/billing-stack';
 import { ApertureDevGuardStack } from '../lib/dev-guard-stack';
 import { ApertureOrgStack } from '../lib/org-stack';
 import { domainConfigFor } from '../config/domains';
+import { laneFor, synthesizerFor } from '../config/lane';
 
 // CloudFront→Lambda origin-lockdown secret, one per stage. In CI it comes from a GitHub secret via
 // APERTURE_ORIGIN_SECRET (stable across runs); locally it's generated once into a gitignored file and
@@ -89,10 +90,19 @@ const domain = domainConfigFor(stage);
 // is the real credential anyway).
 const allowedOrigins = domain ? [`https://${domain.domainName}`] : ['*'];
 
-const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env, allowedOrigins });
+// Main's own dev deploy goes through the freeze-exempt `devmain` bootstrap, everything else through the stock one
+// (config/lane.ts). The synthesizer is spread in only for that lane, so every other stack's props stay as they were.
+const lane = laneFor(stage);
+const laneProps = () => {
+  const synthesizer = synthesizerFor(lane);
+  return synthesizer ? { synthesizer } : {};
+};
+
+const data = new ApertureDataStack(app, `ApertureData-${stage}`, { stage, env, allowedOrigins, ...laneProps() });
 const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   stage,
   env,
+  ...laneProps(),
   table: data.table,
   userPool: data.userPool,
   filesBucket: data.filesBucket,

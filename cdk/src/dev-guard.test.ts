@@ -16,17 +16,23 @@ describe('ApertureDevGuardStack (the dev account half of the kill switch)', () =
   const res = Object.values(t.toJSON().Resources as Record<string, Resource>);
   const of = (type: string) => res.filter((r) => r.Type === type).map((r) => r.Properties);
 
-  // Prod has six alarms; CloudWatch's free tier is ten (shared across the org's consolidated bill), so four is the most.
-  it('has four account-wide kill alarms, all named for the prefix the SCPs and the rule match', () => {
+  // Prod has five alarms; CloudWatch's free tier is ten (shared across the org's consolidated bill), so five is the most.
+  it('has five account-wide kill alarms, all named for the prefix the SCPs and the rule match', () => {
     const alarms = of('AWS::CloudWatch::Alarm');
-    expect(alarms).toHaveLength(4);
-    expect(alarms.map((a) => a.Period)).toEqual([60, 3600, 60, 60]);
+    expect(alarms).toHaveLength(5);
+    expect(alarms.map((a) => a.Period)).toEqual([60, 3600, 10800, 60, 60]);
     expect(alarms.map((a) => a.AlarmName)).toEqual(KILL_ALARMS.map((a) => a.name));
     for (const a of alarms) {
       expect(a.AlarmName).toMatch(/^aperture-kill-/);
       expect(a.Dimensions).toBeUndefined(); // across all functions/groups, so nothing escapes by name
       expect(a.AlarmActions).toBeUndefined(); // the state change itself is the signal (EventBridge)
     }
+  });
+
+  // A window over a day switches CloudWatch to hourly evaluation; at or under it, every alarm is checked each minute.
+  it('keeps every alarm evaluated each minute (window of a day at most)', () => {
+    for (const a of of('AWS::CloudWatch::Alarm'))
+      expect((a.Period as number) * (a.EvaluationPeriods as number)).toBeLessThanOrEqual(86_400);
   });
 
   it("forwards only kill-alarm ALARM transitions, to the management account's us-east-1 default bus", () => {

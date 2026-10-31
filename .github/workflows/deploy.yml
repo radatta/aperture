@@ -4,7 +4,8 @@ name: Deploy
 # the PR's required checks are the only gate before main — INFRA §9). Push to dev → one-off dev deploy (the
 # user's, by hand — a ruleset keeps the bot off `dev`; the bot's own path is deploy-dev.yml, off until dev runs
 # in its own AWS account — docs/ops/CI-BOT.md). Never add workflow_dispatch here: this is the prod path.
-# Keyless via OIDC (prod's role from ApertureCicd, dev's from ApertureCicdDev in the dev account). Origin secret
+# Keyless via OIDC (prod's role from ApertureCicd; dev's two from ApertureCicdDev in the dev account, one per lane —
+# a `main` push uses dev-main's, a `dev` push dev's). Origin secret
 # injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
 # changes → deploy each stage at the resulting tier.
@@ -82,7 +83,11 @@ jobs:
     with:
       stage: dev
       mode: ${{ needs.changes.outputs.mode }}
-      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+      # Two lanes into the dev account (docs/ops/CI-BOT.md → Two lanes): a `main` push is merged, reviewed code, so it
+      # deploys through the freeze-exempt devmain lane and its main-only `dev-main` environment; a `dev` push stays
+      # in the frozen lane, like a bot dispatch.
+      lane: ${{ github.ref == 'refs/heads/main' && 'devmain' || '' }}
+      role_arn: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_DEV_MAIN || vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEV }}
       device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}

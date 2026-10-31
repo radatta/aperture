@@ -28,6 +28,12 @@ const MGMT = '111111111111';
 const OU = 'ou-abcd-12345678';
 const BREAK_GLASS = `arn:aws:iam::*:role/${BREAK_GLASS_ROLE}`;
 const KILL_ROLES = 'arn:aws:iam::*:role/aperture-kill-*';
+const DEVMAIN_EXEC = 'arn:aws:iam::*:role/cdk-devmain-cfn-exec-role-*';
+const DEVMAIN_DEPLOY = 'arn:aws:iam::*:role/cdk-devmain-deploy-role-*';
+const DEV_MAIN_GITHUB = 'arn:aws:iam::*:role/aperture-github-dev-main';
+// IAM's ArnLike: `*` matches any run of characters (a pattern's own `*` included), everything else is literal.
+const arnLike = (pattern: string, arn: string) =>
+  new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('.*')}$`).test(arn);
 
 function orgTemplate() {
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
@@ -52,27 +58,63 @@ describe('dev-account SCPs', () => {
     freeze: freezePolicy(),
   };
 
-  // The SCP limit is 10,240 characters; staying under half leaves room and removes any doubt about the figure.
+  // The SCP limit is 10,240 characters (the Organizations quota page); 6,144 leaves 40% headroom.
   it('fit well inside the SCP size limit', () => {
     for (const p of [...Object.values(standing), killPolicy()])
-      expect(JSON.stringify(p).length).toBeLessThan(5_120);
+      expect(JSON.stringify(p).length).toBeLessThan(6_144);
   });
 
-  // Exactly these two: a third pattern (say `role/cdk-*`) would switch every SCP off for the deploy itself.
-  it('are deny-only, and every standing deny exempts exactly the break-glass and kill-switch roles', () => {
-    for (const p of Object.values(standing))
+  // Exactly these: one pattern too broad (say `role/cdk-*`) would switch an SCP off for the frozen deploy itself.
+  it('are deny-only, and every standing deny exempts exactly its intended roles', () => {
+    const lane: Record<string, string[]> = {
+      OnlyMainAssumesItsLane: [BREAK_GLASS, DEV_MAIN_GITHUB],
+      NoLaneTampering: [BREAK_GLASS, DEVMAIN_DEPLOY],
+    };
+    for (const [name, p] of Object.entries(standing))
       for (const s of statements(p)) {
         expect(s.Effect).toBe('Deny');
-        expect(exempted(s)).toEqual([BREAK_GLASS, KILL_ROLES]);
+        const want = lane[s.Sid] ?? (name === 'freeze' ? [BREAK_GLASS, KILL_ROLES, DEVMAIN_EXEC] : [BREAK_GLASS, KILL_ROLES]);
+        expect(exempted(s), s.Sid).toEqual(want);
       }
   });
 
   it('put every exempted role out of reach — nothing else in dev may change, create or pass one', () => {
-    const tamper = statements(standing.guardrails).find((x) => x.Sid === 'NoGuardTampering')!;
-    expect(tamper.Action).toEqual(['iam:*']);
+    const guards = statements(standing.guardrails).filter((x) => ['NoGuardTampering', 'NoLaneTampering'].includes(x.Sid));
+    expect(guards.map((g) => g.Action)).toEqual([['iam:*'], ['iam:*']]);
+    const covered = (arn: string) => guards.some((g) => [g.Resource].flat().some((r) => r !== undefined && arnLike(r, arn)));
     for (const p of Object.values(standing))
-      for (const s of statements(p))
-        for (const r of exempted(s)) expect(tamper.Resource).toContain(r);
+      for (const s of statements(p)) for (const r of exempted(s)) expect(covered(r), r).toBe(true);
+  });
+
+  // Main's own dev deploy (docs/ops/CI-BOT.md → Two lanes).
+  describe("main's freeze-exempt lane", () => {
+    const g = (sid: string) => statements(standing.guardrails).find((x) => x.Sid === sid)!;
+    const freezeExempt = (arn: string) =>
+      statements(standing.freeze).every((s) => exempted(s).some((e) => arnLike(e, arn)));
+
+    it("exempts the devmain exec role from the freeze, and neither the stock exec role nor devmain's deploy role", () => {
+      expect(freezeExempt(`arn:aws:iam::${DEV}:role/cdk-devmain-cfn-exec-role-${DEV}-us-west-1`)).toBe(true);
+      expect(freezeExempt(`arn:aws:iam::${DEV}:role/cdk-hnb659fds-cfn-exec-role-${DEV}-us-west-1`)).toBe(false);
+      expect(freezeExempt(`arn:aws:iam::${DEV}:role/cdk-devmain-deploy-role-${DEV}-us-west-1`)).toBe(false);
+      expect(freezeExempt(`arn:aws:iam::${DEV}:role/aperture-github-dev-main`)).toBe(false);
+    });
+
+    it('lets only the dev-main role and break-glass assume a devmain bootstrap role', () => {
+      expect(g('OnlyMainAssumesItsLane')).toMatchObject({ Action: ['sts:AssumeRole'], Resource: 'arn:aws:iam::*:role/cdk-devmain-*' });
+    });
+
+    it('lets nothing but break-glass change or pass a devmain or GitHub role, bar the deploy role passing its exec role', () => {
+      expect(g('NoLaneTampering')).toMatchObject({
+        Action: ['iam:*'],
+        Resource: ['arn:aws:iam::*:role/cdk-devmain-*', 'arn:aws:iam::*:role/aperture-github-*'],
+      });
+      for (const r of ['aperture-github-deploy-dev', 'aperture-github-dev-main', 'aperture-github-logs-dev', `cdk-devmain-cfn-exec-role-${DEV}-us-west-1`])
+        expect([g('NoLaneTampering').Resource].flat().some((p) => arnLike(p!, `arn:aws:iam::${DEV}:role/${r}`)), r).toBe(true);
+    });
+
+    it('still stops the lane on a kill: only break-glass is exempt', () => {
+      expect(exempted(statements(killPolicy())[0]!)).toEqual([BREAK_GLASS]);
+    });
   });
 
   it('exempt only the break-glass role from the kill, so a kill also stops the forwarder and everything else', () => {

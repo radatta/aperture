@@ -2,6 +2,7 @@ import { CfnOutput, Duration, Stack, Token, Validations } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
+import { DEV_MAIN_GITHUB_ROLE, DEVMAIN_QUALIFIER, STOCK_QUALIFIER } from '../config/devAccount';
 
 export interface CicdStackProps extends StackProps {
   // Which account this copy is for (INFRA §2): 'prod' → the management account's prod deploy role (ApertureCicd);
@@ -17,7 +18,7 @@ export interface CicdStackProps extends StackProps {
 
 const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com';
 const GITHUB_OIDC_URL = `https://${GITHUB_OIDC_HOST}`;
-const BOOTSTRAP_QUALIFIER = 'hnb659fds'; // each account's stock CDK bootstrap (cdk-hnb659fds-*-role)
+const BOOTSTRAP_QUALIFIER = STOCK_QUALIFIER; // each account's stock CDK bootstrap (cdk-hnb659fds-*-role)
 
 // Deployed ONCE per account, by hand, before CI can run — chicken-and-egg: the roles must exist for GitHub to
 // assume them. Creates the account's GitHub OIDC provider plus its keyless roles, then the pipeline never touches
@@ -42,7 +43,9 @@ export class ApertureCicdStack extends Stack {
       clientIds: ['sts.amazonaws.com'],
     });
 
-    const makeRole = (id: string, roleName: string, subs: string[], stage: string): iam.Role => {
+    // lane 'devmain' (dev only): main's own dev deploy, through the second bootstrap (config/lane.ts) — its deploy and
+    // lookup roles plus the stock publishing role, named exactly, and its own version parameter.
+    const makeRole = (id: string, roleName: string, subs: string[], stage: string, lane?: typeof DEVMAIN_QUALIFIER): iam.Role => {
       const role = new iam.Role(this, id, {
         roleName,
         maxSessionDuration: Duration.hours(1),
@@ -55,16 +58,19 @@ export class ApertureCicdStack extends Stack {
 
       // cdk deploy: assume the account's bootstrap roles (which hold the real deploy power) + read the bootstrap
       // version parameter the CLI checks first.
+      const bootstrapRole = (q: string, kind: string) => `arn:aws:iam::${account}:role/cdk-${q}-${kind}-${account}-${region}`;
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['sts:AssumeRole'],
-          resources: [`arn:aws:iam::${account}:role/cdk-${BOOTSTRAP_QUALIFIER}-*-${account}-${region}`],
+          resources: lane
+            ? [bootstrapRole(lane, 'deploy-role'), bootstrapRole(lane, 'lookup-role'), bootstrapRole(BOOTSTRAP_QUALIFIER, 'file-publishing-role')]
+            : [bootstrapRole(BOOTSTRAP_QUALIFIER, '*')],
         }),
       );
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter'],
-          resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${BOOTSTRAP_QUALIFIER}/version`],
+          resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${lane ?? BOOTSTRAP_QUALIFIER}/version`],
         }),
       );
       // Frontend publish (S3 sync) + smoke (direct Lambda invoke) — outside CFN, scoped to this stage's
@@ -103,8 +109,12 @@ export class ApertureCicdStack extends Stack {
       // ids must match synth's "Acknowledge with '...'" hint verbatim; region is literal (us-west-1) and the
       // account is `nagAccount`, both as they appear in the finding.
       role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
-        [`AwsSolutions-IAM5[Resource::arn:aws:iam::${nagAccount}:role/cdk-${BOOTSTRAP_QUALIFIER}-*-${nagAccount}-${region}]`]:
-          'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
+        ...(lane
+          ? {}
+          : {
+              [`AwsSolutions-IAM5[Resource::arn:aws:iam::${nagAccount}:role/cdk-${BOOTSTRAP_QUALIFIER}-*-${nagAccount}-${region}]`]:
+                'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
+            }),
         [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]: `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
         [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]: `Object-level access to the same ${stage} site bucket.`,
         [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureApp-${stage}/*]`]:
@@ -123,11 +133,20 @@ export class ApertureCicdStack extends Stack {
       return;
     }
 
-    // dev: every dev deploy runs in the `dev` GitHub environment — deploy.yml's deploy-dev on a `main` or `dev`
-    // push, and deploy-dev.yml on a bot dispatch — so its OIDC sub is always `…:environment:dev` and the trust is
-    // scoped to the environment alone. The `dev` environment must allow the `dev` AND `main` branches, since
-    // deploy-dev runs from both.
+    // dev: the frozen lane — deploy.yml's deploy-dev on a `dev` push, and deploy-dev.yml on a bot dispatch — runs in
+    // the `dev` GitHub environment, so its OIDC sub is `…:environment:dev` and the trust is scoped to the environment
+    // alone. A `main` push deploys dev through the dev-main role below instead.
     const devRole = makeRole('DeployDev', 'aperture-github-deploy-dev', [`repo:${githubSubject}:environment:dev`], 'dev');
+    // dev-main: main's own dev deploy (deploy.yml on a `main` push), in the main-only `dev-main` environment, through
+    // the `devmain` bootstrap the freeze exempts (docs/ops/CI-BOT.md → Two lanes). The guardrails SCP lets only this
+    // role assume that bootstrap's roles, and lets nothing but break-glass change it.
+    const devMainRole = makeRole(
+      'DeployDevMain',
+      DEV_MAIN_GITHUB_ROLE,
+      [`repo:${githubSubject}:environment:dev-main`],
+      'dev',
+      DEVMAIN_QUALIFIER,
+    );
 
     // dev logs: read-only CloudWatch Logs for fetch-dev-logs.yml (the bot's `pnpm bot logs`). Built apart from
     // makeRole — it gets none of the deploy power (no bootstrap assume, S3, CFN). Trusted only from
@@ -174,6 +193,7 @@ export class ApertureCicdStack extends Stack {
     });
 
     new CfnOutput(this, 'DevRoleArn', { value: devRole.roleArn });
+    new CfnOutput(this, 'DevMainRoleArn', { value: devMainRole.roleArn });
     new CfnOutput(this, 'LogsRoleArn', { value: logsRole.roleArn });
   }
 }
