@@ -92,7 +92,8 @@ export function TaskEditor({
   const { data: settings } = useSettings();
   const { data: seriesList = [] } = useSeries();
   const now = useNow();
-  const today = todayKey(settings?.dayStartHour ?? 4, now);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour, now);
   const { data: plans = [] } = usePlansForDay(today);
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
@@ -246,7 +247,7 @@ export function TaskEditor({
         )}
         {parent?.dueDay && (
           <Text size="sm" tone="muted">
-            {fmtDueDay(parent.dueDay, today, parent.dueTime)}
+            {fmtDueDay(parent.dueDay, today, parent.dueTime, { dayStartHour })}
           </Text>
         )}
         {series && (

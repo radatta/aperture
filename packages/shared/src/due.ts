@@ -1,7 +1,14 @@
 // A task's deadline as a day plus an optional clock time (docs/areas/tasks/due-dates.md). Pure helpers
 // shared by the app, the stub and the Lambda, so the invariant and the urgency tiers live in one place.
 
-import { hhmmOfEpoch, isDayKey, isTimeKey, localEpochFromDayTime } from './dates';
+import {
+  addDays,
+  beforeDayStart,
+  hhmmOfEpoch,
+  isDayKey,
+  isTimeKey,
+  localEpochFromDayTime,
+} from './dates';
 import type { Task } from './types';
 
 // Epoch of a wall-clock day+time. The browser passes localEpochFromDayTime; the (UTC) Lambda passes a
@@ -82,3 +89,16 @@ export function dueUrgency(
   if (delta <= 6 * HOUR_MS) return 'soon';
   return 'none';
 }
+
+// Capture after midnight (quick-add.md, 2026-10-31): a parse landing on the app's today with a clock
+// before the day start names the coming night — "tonight 2:30am" typed at 00:22 (app day still
+// yesterday), or "2:30am" typed at 3pm; on today's date it would already be past. It moves to the next
+// calendar date, which timedDay keeps on today. Any other day stays as parsed: "tomorrow 1am" is
+// ambiguous.
+export const nightDueDay = (
+  dueDay: string,
+  dueTime: string,
+  today: string,
+  dayStartHour: number,
+): string =>
+  dueDay === today && beforeDayStart(dueTime, dayStartHour) ? addDays(today, 1) : dueDay;

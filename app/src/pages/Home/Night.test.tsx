@@ -113,6 +113,18 @@ describe('night: a timed task (on today by its time)', () => {
   });
 });
 
+describe('night: tonight’s small hours', () => {
+  it('a deadline after midnight reads “due tonight”, not a bare clock', async () => {
+    const api = createStubClient({ seed: false, storageKey: `night-small-${Math.random()}` });
+    await api.createTask({ title: 'OA', dueDay: addDays(today(), 1), dueTime: '00:30' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    await screen.findByRole('group', { name: 'OA' });
+    expect(row('OA').getByText(/due\s+tonight\s+12:30am/)).toBeTruthy();
+  });
+});
+
 describe('night: a timed part', () => {
   it('has no Tomorrow when a day on would end it after its parent — Leave only', async () => {
     const api = createStubClient({ seed: false, storageKey: `night-part-${Math.random()}` });

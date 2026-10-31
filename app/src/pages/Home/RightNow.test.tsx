@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { todayKey } from '@aperture/shared';
+import { addDays, todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
@@ -129,6 +129,16 @@ describe('Right now card', () => {
     expect(await screen.findByText('ends 11:57pm')).toBeTruthy();
     expect(screen.getByText('of Lab')).toBeTruthy();
     expect(screen.getByText(/^due 11:59pm/)).toBeTruthy();
+  });
+
+  it('a deadline in tomorrow’s small hours is tonight’s: “by 12:30am”', async () => {
+    const api = stub();
+    await api.createTask({ title: 'OA', dueDay: addDays(TODAY, 1), dueTime: '00:30' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.getByText('by 12:30am')).toBeTruthy();
   });
 
   it('a day with only a timed task isn’t “nothing planned”', async () => {

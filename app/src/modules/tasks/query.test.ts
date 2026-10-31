@@ -316,13 +316,21 @@ describe('applyQuery', () => {
 describe('due buckets', () => {
   it('d1 today / week / dated / undated', () => {
     const due = (d: string | null) => task({ dueDay: d });
-    expect(inDueBucket(due(TODAY), 'today', TODAY)).toBe(true);
-    expect(inDueBucket(due('2026-09-24'), 'today', TODAY)).toBe(false);
-    expect(inDueBucket(due('2026-09-01'), 'week', TODAY)).toBe(true); // past-due counts
-    expect(inDueBucket(due('2026-09-30'), 'week', TODAY)).toBe(false);
-    expect(inDueBucket(due('2027-01-01'), 'dated', TODAY)).toBe(true);
-    expect(inDueBucket(due(null), 'undated', TODAY)).toBe(true);
-    expect(inDueBucket(due(null), 'dated', TODAY)).toBe(false);
+    expect(inDueBucket(due(TODAY), 'today', TODAY, 4)).toBe(true);
+    expect(inDueBucket(due('2026-09-24'), 'today', TODAY, 4)).toBe(false);
+    expect(inDueBucket(due('2026-09-01'), 'week', TODAY, 4)).toBe(true); // past-due counts
+    expect(inDueBucket(due('2026-09-30'), 'week', TODAY, 4)).toBe(false);
+    expect(inDueBucket(due('2027-01-01'), 'dated', TODAY, 4)).toBe(true);
+    expect(inDueBucket(due(null), 'undated', TODAY, 4)).toBe(true);
+    expect(inDueBucket(due(null), 'dated', TODAY, 4)).toBe(false);
+  });
+
+  it('d2 a timed task counts by its deadline’s app day — tonight’s small hours are today', () => {
+    const at = (d: string, t: string) => task({ dueDay: d, dueTime: t });
+    expect(inDueBucket(at('2026-09-24', '00:30'), 'today', TODAY, 4)).toBe(true);
+    expect(inDueBucket(at('2026-09-24', '09:00'), 'today', TODAY, 4)).toBe(false);
+    expect(inDueBucket(at('2026-09-30', '00:30'), 'week', TODAY, 4)).toBe(true);
+    expect(inDueBucket(at('2026-09-30', '00:30'), 'week', TODAY, 0)).toBe(false);
   });
 });
 

@@ -150,7 +150,8 @@ function TaskMeta({
   const { data: settings } = useSettings();
   const { data: attachments = [] } = useAttachments();
   const now = useNow();
-  const today = todayKey(settings?.dayStartHour ?? 4, now);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour, now);
   const fileCount = attachments.filter((a) => a.taskId === task.id).length;
   const canScope = !summary && (task.status === 'backlog' || task.status === 'planned');
   const bits: string[] = [];
@@ -188,14 +189,18 @@ function TaskMeta({
       {/* A part's own time is when its block ends; the deadline it answers to is its parent's. */}
       {task.dueDay && (
         <Text size="xs" tone="subtle">
-          {fmtDueDay(task.dueDay, today, task.dueTime, parent ? 'ends' : 'due')}
+          {fmtDueDay(task.dueDay, today, task.dueTime, {
+            verb: parent ? 'ends' : 'due',
+            dayStartHour,
+          })}
           {!parent && urgency && <span className="sr-only">, {urgency}</span>}
         </Text>
       )}
       {parent && (
         <Text size="xs" tone="muted" className="min-w-0 truncate">
           of {parent.title}
-          {parent.dueDay && ` · ${fmtDueDay(parent.dueDay, today, parent.dueTime)}`}
+          {parent.dueDay &&
+            ` · ${fmtDueDay(parent.dueDay, today, parent.dueTime, { dayStartHour })}`}
           {urgency && <span className="sr-only">, {urgency}</span>}
         </Text>
       )}

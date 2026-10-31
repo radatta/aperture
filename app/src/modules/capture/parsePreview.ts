@@ -24,17 +24,19 @@ export function previewLine(r: Parsed): BulkLine {
 }
 
 // The one-line readback of what a quick add saved — "fix login bug · Aperture · due Fri · 30m · +notes".
-// `today` is the server's (the day "tmw" was resolved against), so the phrasing matches the parse.
+// `today` is the server's (the day "tmw" was resolved against), so the phrasing matches the parse;
+// `dayStartHour` reads tomorrow's small hours as tonight's.
 export function savedSummary(
   input: CreateTaskInput,
   categoryLabel: string | null,
   today: string,
   dropped: readonly string[] = [],
+  dayStartHour?: number,
 ): string {
   return [
     input.title,
     categoryLabel ?? 'no category',
-    input.dueDay ? fmtDueDay(input.dueDay, today, input.dueTime) : null,
+    input.dueDay ? fmtDueDay(input.dueDay, today, input.dueTime, { dayStartHour }) : null,
     input.estimateMin ? fmtDuration(input.estimateMin) : null,
     input.notes ? '+notes' : null,
     ...dropped,

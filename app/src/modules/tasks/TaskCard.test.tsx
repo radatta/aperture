@@ -1137,6 +1137,17 @@ describe('parent + parts', () => {
     expect(within(row).queryByText(/ends tomorrow/)).toBeNull();
   });
 
+  it('a part ending in tomorrow’s small hours reads “ends tonight”, its parent “due tonight”', async () => {
+    const { api, p, b } = await seeded(false);
+    const night = addDays(todayKey(4), 1);
+    await api.setTaskDue(p.id, { dueDay: night, dueTime: '01:00' });
+    await api.setTaskDue(b.id, { dueDay: night, dueTime: '00:30' });
+    renderApp({ api, path: '/tasks' });
+    const row = await waitFor(() => rowOf('draft'));
+    expect(within(row).getByText(/ends tonight 12:30am/)).toBeTruthy();
+    expect(within(row).getByText(/of P2 · due tonight 1am/)).toBeTruthy();
+  });
+
   it('a part ending tomorrow sits under its parent in Week, reading when it ends — never “+ Today”', async () => {
     const { api, b } = await seeded(false);
     // A row on today from before it had a time is history: it no longer puts the part on Today.

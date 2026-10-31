@@ -795,7 +795,8 @@ class StubClient implements ApiClient {
       .filter((c) => c.active)
       .map(({ id, label }) => ({ id, label }));
     const today = todayKey(this.dayStartHour(), this.now());
-    return runQuickParse(text, { categories, today }, async (line) =>
+    const ctx = { categories, today, dayStartHour: this.dayStartHour() };
+    return runQuickParse(text, ctx, async (line) =>
       takeStubParseFailure()
         ? { ok: false, reason: 'unavailable', detail: 'stub failNextParse' }
         : { ok: true, fields: heuristicParse(line, categories, today) },

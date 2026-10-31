@@ -81,6 +81,21 @@ describe('stub parseTask', () => {
 
   beforeEach(() => localStorage.removeItem(STUB_FAIL_NEXT_PARSE_KEY));
 
+  it('after midnight, “tonight 2:30am” is the coming night; “tomorrow 1am” and “today 9am” stay', async () => {
+    const api = createStubClient({
+      seed: false,
+      storageKey: `parse-${Math.random()}`,
+      now: () => new Date(2026, 9, 31, 0, 22).getTime(), // app day still Oct 30
+    });
+    const day = async (line: string) => {
+      const r = await api.parseTask(line);
+      return r.ok ? [r.input.dueDay, r.input.dueTime, r.today] : null;
+    };
+    expect(await day('essay due tonight 2:30am')).toEqual(['2026-10-31', '02:30', '2026-10-30']);
+    expect(await day('essay due tomorrow 1am')).toEqual(['2026-10-31', '01:00', '2026-10-30']);
+    expect(await day('essay due today 9am')).toEqual(['2026-10-30', '09:00', '2026-10-30']);
+  });
+
   it('parses against the active categories and the stub day', async () => {
     const api = stub();
     const ap = await api.upsertCategory({ label: 'Aperture', isWork: true });

@@ -119,9 +119,15 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   way: timed rows first ("By time", no Unplan, in deadline order), then the plan.
   - **The day is the deadline instant's app day** (`timedDay`, shared `machines.ts`): the instant
     bucketed by `dayKey` like every other one, so with a 4am day start a 00:30 deadline is still
-    tonight's, and after 23:00 in By time. **Placement uses the app day; labels and the due chips
-    (`fmtDueDay`, `inDueBucket`, Right now's due time) print the deadline as written** — a task due
-    today 2am, seen after 4am, sits overdue in Week reading "due today 2am" in the past colour.
+    tonight's, and after 23:00 in By time. **Placement, the "Due today"/"Due this week" chips
+    (`inDueBucket`) and the labels all read the app day:** a deadline after midnight but before the day
+    start reads **tonight** — `due tonight 12:30am` (Tasks, Coming up, Add to today, the capture
+    receipt and chips; `fmtDueDay` given `{ dayStartHour }`), `ends tonight 12:30am` on a part,
+    `by 12:30am` in Right now (its compact form), `due tonight 12:30am` at night. One already past
+    stays as written: a task due today 2am, seen after 4am, sits overdue in Week reading
+    `due today 2am` in the past colour, and is out of "Due today" (its app day was yesterday); no
+    "last night" tier. Capture rolls a small-hours clock typed for today onto the next date
+    ([quick-add.md](quick-add.md), 2026-10-31).
   - **Why:** "OA closes Sun 11:59pm" belongs to Sunday; a plan row put it on Wednesday and the deadline
     read twice. Working earlier means a part with its own Ends ([parts.md](parts.md) D14), not
     planning the deadline. The trade-off: a timed task moved in Google moves its day, like a reschedule.

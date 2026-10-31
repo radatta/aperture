@@ -30,13 +30,24 @@ export function PartsList({ parts }: { parts: Task[] }) {
           part={p}
           today={isTimed(p) ? placedByTime(p, today, dayStartHour) : onToday.has(p.id)}
           day={today}
+          dayStartHour={dayStartHour}
         />
       ))}
     </ul>
   );
 }
 
-function PartRow({ part, today, day }: { part: Task; today: boolean; day: string }) {
+function PartRow({
+  part,
+  today,
+  day,
+  dayStartHour,
+}: {
+  part: Task;
+  today: boolean;
+  day: string;
+  dayStartHour: number;
+}) {
   const openTask = useOpenTask();
   const { addToDay } = useAddToDay();
   const [busy, setBusy] = useState(false);
@@ -53,7 +64,7 @@ function PartRow({ part, today, day }: { part: Task; today: boolean; day: string
           : today
             ? 'today'
             : isTimed(part)
-              ? fmtDueDay(part.dueDay!, day, part.dueTime, 'ends')
+              ? fmtDueDay(part.dueDay!, day, part.dueTime, { verb: 'ends', dayStartHour })
               : part.status === 'planned'
                 ? 'planned'
                 : null;

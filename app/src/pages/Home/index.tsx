@@ -285,7 +285,7 @@ function ReviewCard({ today }: { today: string }) {
             )}
           </div>
         )}
-        <StillOpenSection today={today} />
+        <StillOpenSection today={today} dayStartHour={start} />
       </div>
     </HomeCard>
   );

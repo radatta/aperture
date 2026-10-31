@@ -57,8 +57,8 @@ export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).inc
 // A part not on today answers to its parent's deadline (its own time is when its block ends), so it
 // lives where its open parent does — and folds under that parent's card there (parts.ts). A timed task
 // is on Today on the app day its deadline falls on, and a plan row on it places nothing (option 3,
-// lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day; labels
-// print the deadline as written.
+// lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day, as the
+// due chips and labels do ("due tonight 12:30am").
 export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = false): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
   if (task.status === 'in_progress') return 'today';
@@ -152,8 +152,14 @@ function matchesStatus(task: Task, statuses: StatusChip[]): boolean {
   return statuses.includes(chip);
 }
 
-export function inDueBucket(task: Task, due: DueBucket, today: string): boolean {
-  const d = task.dueDay || null;
+// A timed task's day here is its deadline's app day, as placeOf reads it (lenses.md D13).
+export function inDueBucket(
+  task: Task,
+  due: DueBucket,
+  today: string,
+  dayStartHour: number,
+): boolean {
+  const d = timedDay(task, dayStartHour) ?? (task.dueDay || null);
   switch (due) {
     case 'any':
       return true;
@@ -269,7 +275,7 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
       (q.categories.length === 0 || q.categories.includes(catOf(t))) &&
       matchesStatus(t, q.statuses) &&
-      inDueBucket(deadline(t), q.due, ctx.today) &&
+      inDueBucket(deadline(t), q.due, ctx.today, ctx.dayStartHour) &&
       matchesText(t, q.text, labelOf),
   );
   // Search stays flat (every match is a card); the Done lens is flat history.

@@ -82,7 +82,8 @@ export function CaptureBar({
   hidden?: boolean;
 }) {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const [mode, setMode] = useState<CaptureMode>('log');
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -294,7 +295,7 @@ export function CaptureBar({
         .then((r) =>
           r.ok
             ? saveTask(r.input, goesToday, restore, settled, {
-                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped),
+                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped, dayStartHour),
               })
             : saveTask({ title: value }, goesToday, restore, settled, {
                 unparsed: parseFailText(r),
@@ -331,7 +332,7 @@ export function CaptureBar({
                 today: true,
                 planned: r.planned,
                 ...(r.timed && r.task.dueDay
-                  ? { timedOn: fmtDueDay(r.task.dueDay, today, r.task.dueTime) }
+                  ? { timedOn: fmtDueDay(r.task.dueDay, today, r.task.dueTime, { dayStartHour }) }
                   : {}),
               },
               ...note,
@@ -559,7 +560,11 @@ export function CaptureBar({
                     no category
                   </Text>
                 )}
-                <TaskTokenChips line={previewLine(preview.result)} today={preview.result.today} />
+                <TaskTokenChips
+                  line={previewLine(preview.result)}
+                  today={preview.result.today}
+                  dayStartHour={dayStartHour}
+                />
               </div>
               {preview.result.input.notes && (
                 <Text size="xs" tone="muted" className="line-clamp-2 break-words">

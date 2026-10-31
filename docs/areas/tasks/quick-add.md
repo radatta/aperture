@@ -122,3 +122,12 @@ autonomous build:
   when the line has no duration (`30m`, `2h`, `90 min`, `an hour`).
 - **Not built:** an editable preview (edit the text, Review again); a scoped Raycast token
   (`parse_task` + `create_task` — [mcp → Deferred](../mcp/index.md#deferred)).
+
+## Decision log (2026-10-31)
+
+- **A small-hours clock on today is tonight's.** A parse that lands on the app's today with a clock
+  before the day start moves to the next calendar date (`nightDueDay`, shared `due.ts`): "essay due
+  tonight 2:30am" typed at 00:22 (app day still yesterday), or "2:30am" typed at 3pm, would otherwise be
+  already past. Both parsers go through the one validator (`validateParsedTask`), which now needs
+  `ParseContext.dayStartHour`. Any other day stays as parsed — "tomorrow 1am" is ambiguous — and the
+  2026-10-09 rule stands: "call 9am" at 3pm still lands today.

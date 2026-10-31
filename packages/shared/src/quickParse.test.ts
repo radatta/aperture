@@ -15,6 +15,7 @@ const ctx = {
     { id: 'c-lc', label: 'LeetCode' },
   ],
   today: '2026-10-12',
+  dayStartHour: 4,
 };
 const fields = (over: Record<string, unknown> = {}) => ({
   title: 'fix login bug',
@@ -50,6 +51,15 @@ describe('validateParsedTask', () => {
       categoryLabel: 'Aperture',
       dropped: [],
     });
+  });
+
+  it('a small-hours clock on today is tonight’s — the next date; other days stay', () => {
+    const due = (over: Record<string, unknown>, line?: string) =>
+      validateParsedTask(fields(over), line ? { ...ctx, line } : ctx)?.input.dueDay;
+    expect(due({ dueDay: '2026-10-12', dueTime: '02:30' })).toBe('2026-10-13');
+    expect(due({ dueTime: '02:30' }, 'essay 2:30am')).toBe('2026-10-13');
+    expect(due({ dueDay: '2026-10-13', dueTime: '01:00' })).toBe('2026-10-13');
+    expect(due({ dueDay: '2026-10-12', dueTime: '09:00' })).toBe('2026-10-12');
   });
 
   it('returns null for a blank, missing or non-string title, or a non-object', () => {

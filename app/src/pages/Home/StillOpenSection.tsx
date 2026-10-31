@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { addDays, endsAfterParent, fmtClock12, parentOf } from '@aperture/shared';
+import { addDays, beforeDayStart, endsAfterParent, fmtClock12, parentOf } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useRowAction } from '../../lib/useRowAction';
@@ -39,7 +39,7 @@ function writeLeft(day: string, ids: Set<string>): void {
 // — and isn't offered when that would end a part after its parent's deadline (lenses.md D8, D13).
 // No count and no red: unfinished is information, not a verdict. Lives inside
 // "Today in review".
-export function StillOpenSection({ today }: { today: string }) {
+export function StillOpenSection({ today, dayStartHour }: { today: string; dayStartHour: number }) {
   const tomorrow = addDays(today, 1);
   const { rows, isError: todayError, totalCount } = useTodayPlan();
   const tomorrowQ = usePlansForDay(tomorrow);
@@ -119,6 +119,7 @@ export function StillOpenSection({ today }: { today: string }) {
         <StillOpenRow
           key={r.plan?.id ?? r.task.id}
           row={r}
+          dayStartHour={dayStartHour}
           busy={action.isBusy(r.task.id)}
           // Tomorrow keeps today's row as history; a started task stays started. A timed task's
           // Tomorrow is its time, a day on — Leave only, if that's past its parent's deadline.
@@ -145,12 +146,14 @@ export function StillOpenSection({ today }: { today: string }) {
 
 function StillOpenRow({
   row,
+  dayStartHour,
   busy,
   onTomorrow,
   onBacklog,
   onLeave,
 }: {
   row: TodayRow;
+  dayStartHour: number;
   busy: boolean;
   onTomorrow?: () => void;
   onBacklog?: () => void;
@@ -171,7 +174,10 @@ function StillOpenRow({
         <CategoryTag categoryId={task.categoryId} />
         {row.byTime && task.dueTime && (
           <Text size="xs" tone="muted" className="shrink-0">
-            {task.parentId ? 'ends' : 'due'} {fmtClock12(task.dueTime)}
+            {/* The clock alone would read as this morning; tonight's small hours say so. */}
+            {task.parentId ? 'ends' : 'due'}{' '}
+            {beforeDayStart(task.dueTime, dayStartHour) && 'tonight '}
+            {fmtClock12(task.dueTime)}
           </Text>
         )}
       </div>

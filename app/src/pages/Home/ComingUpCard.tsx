@@ -80,7 +80,7 @@ export function ComingUpCard() {
                   )}
                 </div>
                 <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay!, today, t.dueTime)}
+                  {fmtDueDay(t.dueDay!, today, t.dueTime, { dayStartHour })}
                   {label && <span className="sr-only">, {label}</span>}
                 </Text>
               </div>

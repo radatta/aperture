@@ -3,11 +3,12 @@ import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
 import { sk } from './ddb/keys';
+import { toEntity } from './ddb/mapping';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
 import type { Presigner } from './s3/presigner';
-import { ulid, type RecordFluxSetInput } from '@aperture/shared';
+import { ulid, type RecordFluxSetInput, type Task } from '@aperture/shared';
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -364,6 +365,67 @@ describe('backend task notes on a legacy row', () => {
     expect((await backend.getTask(task.id))?.notes).toBeUndefined();
     expect((await backend.setTaskNotes(task.id, 'added later')).notes).toBe('added later');
     expect((await backend.getTask(task.id))?.notes).toBe('added later');
+  });
+});
+
+// Every read whose copy is written back is strongly consistent: two quick RPCs on one task (a title,
+// then its due) must never write the first one's older copy back over it.
+describe('backend read-then-write under lagging reads', () => {
+  const setup = () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+    });
+    // Plain gets (and list queries) of `id` keep showing the copy from before the next write.
+    const snapshot = async (id: string) => {
+      const before = await doc.get('u#local', sk.task(id));
+      return () => {
+        doc.staleNextGets('u#local', sk.task(id), before, 20);
+        doc.staleNextQueries('u#local', sk.task(id), before, 20);
+      };
+    };
+    const stored = async (id: string) =>
+      toEntity<Task>((await doc.get('u#local', sk.task(id), { consistent: true }))!);
+    return { backend, snapshot, stored };
+  };
+
+  it('a due set straight after a rename keeps the new title', async () => {
+    const { backend, snapshot } = setup();
+    const t = await backend.createTask({ title: 'old' });
+    const lag = await snapshot(t.id);
+    await backend.setTaskTitle(t.id, 'new');
+    lag();
+    const saved = await backend.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: null });
+    expect(saved).toMatchObject({ title: 'new', dueDay: '2026-08-05' });
+  });
+
+  it('a focus session stopped straight after a rename keeps the title', async () => {
+    const { backend, snapshot, stored } = setup();
+    const t = await backend.createTask({ title: 'old' });
+    const s = await backend.startSession({
+      taskId: t.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    const lag = await snapshot(t.id);
+    await backend.setTaskTitle(t.id, 'new');
+    lag();
+    await backend.stopSession(s.id, 'completed');
+    expect((await stored(t.id)).title).toBe('new');
+  });
+
+  it('deleting a category straight after a rename keeps the title', async () => {
+    const { backend, snapshot, stored } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: true });
+    const to = await backend.upsertCategory({ label: 'New', isWork: true });
+    const t = await backend.createTask({ title: 'old', categoryId: cat.id });
+    const lag = await snapshot(t.id);
+    await backend.setTaskTitle(t.id, 'new');
+    lag();
+    await backend.deleteCategory(cat.id, to.id);
+    expect(await stored(t.id)).toMatchObject({ title: 'new', categoryId: to.id });
   });
 });
 

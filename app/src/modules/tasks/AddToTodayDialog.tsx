@@ -111,7 +111,8 @@ function DialogBody({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const { data: tasks = [] } = useAllTasks();
   const { data: plans = [] } = usePlansForDay(today);
   const { data: categories = [] } = useCategories();
@@ -212,7 +213,10 @@ function DialogBody({
               )}
               {t.dueDay && (
                 <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay, today, t.dueTime, t.parentId ? 'ends' : 'due')}
+                  {fmtDueDay(t.dueDay, today, t.dueTime, {
+                    verb: t.parentId ? 'ends' : 'due',
+                    dayStartHour,
+                  })}
                 </Text>
               )}
             </div>

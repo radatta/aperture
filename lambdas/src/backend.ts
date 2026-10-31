@@ -462,8 +462,10 @@ export class BackendClient implements ApiClient {
     const fresh = (await this.repo.getTask(task.id, { consistent: true })) ?? task;
     return this.repo.putTask({ ...fresh, ...fields, updatedAt: this.now() });
   }
+  // Consistent: every caller spreads what it reads into a put — a lagging read would write an older copy
+  // over an edit a moment before (a title, then its due). One strongly consistent get per RPC.
   private async mustTask(id: string): Promise<Task> {
-    const t = await this.repo.getTask(id);
+    const t = await this.repo.getTask(id, { consistent: true });
     if (!t) throw new Error(`Not found: ${id}`);
     return t;
   }
@@ -685,7 +687,8 @@ export class BackendClient implements ApiClient {
     const [settings, all] = await Promise.all([this.ensureSettings(), this.repo.listCategories()]);
     const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
     const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
-    return runQuickParse(text, { categories, today }, (line) =>
+    const ctx = { categories, today, dayStartHour: settings.dayStartHour };
+    return runQuickParse(text, ctx, (line) =>
       this.anthropic.parseTask({ text: line, today, categories, timeoutMs: parseBudgetMs(line) }),
     );
   }
@@ -832,7 +835,8 @@ export class BackendClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
-    const parts = partsOf(await this.repo.listTasks(), id);
+    // Consistent: completeParent writes the sum of the parts' actuals, often a tap after the last part's.
+    const parts = partsOf(await this.repo.listTasks({ consistent: true }), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
     // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
@@ -980,10 +984,11 @@ export class BackendClient implements ApiClient {
   // `release`: a part's parent is left plain if this was its last part — not when the parent is going
   // too (its marker is deleted with it, not first patched back into a block: no wasted Google call).
   private async deleteOne(id: string, release: boolean): Promise<void> {
-    const task = await this.repo.getTask(id);
+    // Consistent reads: the tombstone is built from this copy, and a part made a moment ago must go too.
+    const task = await this.repo.getTask(id, { consistent: true });
     if (!task) return; // idempotent — already tombstoned or never existed
     // A parent goes with every part — each through this same path (event, plans, attachments), first.
-    for (const part of partsOf(await this.repo.listTasks(), id))
+    for (const part of partsOf(await this.repo.listTasks({ consistent: true }), id))
       await this.deleteOne(part.id, false);
     // Calendar event FIRST (deleteCalendarEvent uses mustTask, so it must run before the tombstone).
     // Build the tombstone from the RETURNED task: it has the gcal pointers nulled, so we don't re-put
@@ -1128,7 +1133,7 @@ export class BackendClient implements ApiClient {
   }
   private async accrueToTask(session: PomodoroSession): Promise<void> {
     if (session.kind !== 'work' || !session.taskId) return;
-    const task = await this.repo.getTask(session.taskId);
+    const task = await this.repo.getTask(session.taskId, { consistent: true }); // written back below
     if (!task) return;
     await this.repo.putTask({
       ...task,
@@ -1371,7 +1376,10 @@ export class BackendClient implements ApiClient {
     return { category, backfilled };
   }
   async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
-    const tasks = (await this.repo.listTasks()).filter((t) => t.categoryId === id);
+    // Consistent: every matching task is written back.
+    const tasks = (await this.repo.listTasks({ consistent: true })).filter(
+      (t) => t.categoryId === id,
+    );
     const habits = (await this.repo.listHabits()).filter((h) => h.categoryId === id);
     const series = (await this.repo.listSeries()).filter((s) => s.categoryId === id);
     const rolls = (await this.repo.listRolls()).filter((r) => r.categoryId === id);
@@ -1650,7 +1658,7 @@ export class BackendClient implements ApiClient {
     firstSync: boolean, // the account's first sync (no token yet) — calendarPullPlan's first sight
     all: Task[], // the scan: whether it's a parent (its marker), and a part's parent's title
   ): Promise<PullAction['kind']> {
-    const fresh = await this.repo.getTask(taskId);
+    const fresh = await this.repo.getTask(taskId, { consistent: true }); // written back, like putGcal's
     if (
       !fresh ||
       fresh.gcalAccountId !== st.sub ||

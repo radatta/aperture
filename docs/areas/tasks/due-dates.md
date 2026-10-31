@@ -204,6 +204,7 @@ in an object an omitted key stays omitted. A due write then runs calendar auto-s
   | --- | --- |
   | 0 | `due today` |
   | +1 | `due tomorrow` |
+  | +1, a clock before the day start | `due tonight 12:30am` |
   | +2 … +6 | `due Fri` (weekday) |
   | ≥ +7 | `due Sep 22` (month + day) |
   | −1 | `was due yesterday` |
@@ -211,7 +212,9 @@ in an object an omitted key stays omitted. A due write then runs calendar auto-s
   | ≤ −7 | `was due Jun 8` (month + day) |
 
   (Why this shape: D8.) A timed task appends the clock on every branch — `due Fri 4pm`,
-  `due today 11:59pm`, `was due Tue 9:30am` (`fmtClock12`). The time is set in the editor's **Due time**
+  `due today 11:59pm`, `was due Tue 9:30am` (`fmtClock12`). The "tonight" row needs the day start:
+  `fmtDueDay(dueDay, today, dueTime, { dayStartHour })` — its app day is today ([lenses.md](lenses.md)
+  D13); without it, the deadline reads as written. The time is set in the editor's **Due time**
   field (disabled without a date), via `due:YYYY-MM-DD@HH:MM` in bulk add / capture
   ([bulk-add.md](bulk-add.md)), or `dueTime` over MCP.
 - **Shown in:** `TaskCard`'s meta line, the Home "+ Add" dialog's rows, Coming up, and (timed only)

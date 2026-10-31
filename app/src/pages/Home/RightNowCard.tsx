@@ -6,6 +6,7 @@ import {
   fmtClock12,
   fmtWeekdayShort,
   parentOf,
+  placedByTime,
   todayKey,
 } from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
@@ -100,18 +101,19 @@ function PartOf({ task }: { task: Task }) {
 
 // The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact, so a
 // phone-width row keeps room for its title: "by 4:30pm" today, else "Sun 6:16pm" (whether that's past
-// is the row's colour, and the screen-reader text). On a part it's its parent's, so it says "due" —
-// apart from the part's own "ends".
+// is the row's colour, and the screen-reader text). "by 12:30am" for tonight's post-midnight deadline
+// too — its app day is today. On a part it's its parent's, so it says "due" — apart from the part's own
+// "ends".
 function DueTime({ task }: { task: Task }) {
   const { data: settings } = useSettings();
   const label = urgencyLabel(useUrgency(task));
   const { dueDay, dueTime } = useDeadline(task);
   if (!dueDay || !dueTime) return null;
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
   return (
     <Text size="xs" tone="subtle" className="shrink-0">
       {task.parentId && 'due '}
-      {dueDay === today
+      {placedByTime({ dueDay, dueTime }, todayKey(dayStartHour), dayStartHour)
         ? `${task.parentId ? '' : 'by '}${fmtClock12(dueTime)}`
         : `${fmtWeekdayShort(dueDay)} ${fmtClock12(dueTime)}`}
       {label && <span className="sr-only">, {label}</span>}
