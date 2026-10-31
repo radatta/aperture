@@ -103,11 +103,12 @@ The card keeps only the actions you press without thinking. No overflow menu.
     that form stays. Mark done's actual and Add to calendar's picks don't count.
   - **Saving waits**: an exit asked for during a save or send runs once it lands clean, and is dropped
     if it fails — the failure stays shown with the text.
-  - **After a finish** the editor shows the task as the write returned it (not the list, whose refetch
-    is eventually consistent and not retried), so fields locked by then (due, estimate) no longer count
-    while a title or note still asks; Keep editing leaves you on the finished task, where Save works.
-  - Delete closes via `TaskModalHost` once the task leaves the list; Save never closes. A failed Mark
-    done, Drop or Delete is said inline and the modal stays.
+  - **After a finish** the editor shows the task as the write returned it, in the same render the guard
+    reads (the list gets it a render later, [TECH §State](../../arch/TECH.md)), so fields locked by then
+    (due, estimate) no longer count while a title or note still asks; Keep editing leaves you on the
+    finished task, where Save works.
+  - Delete removes the task from the list, which closes the modal (`TaskModalHost`); Save never closes.
+    A failed Mark done, Drop or Delete is said inline and the modal stays.
 
 - **Notes live in the details form** ([notes.md](notes.md)): rendered, with Edit / "Add notes…";
   once editing, a textarea until Save (which shows the rendered note again) or Close. Editable at any status, like the title.

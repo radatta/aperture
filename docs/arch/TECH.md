@@ -163,7 +163,7 @@ SK (type-prefixed range keys):
 - **Capture bar is global** — always present, not a route.
 
 **State — three layers:**
-- **Server/data → React Query.** One query per access pattern; **optimistic mutations** for instant feel.
+- **Server/data → React Query.** One query per access pattern. Task writes are **written through**: what a write returns goes straight into the one tasks list (`app/src/data/taskCache.ts`), newer `updatedAt` wins, and the app remembers its own writes for 60 s so the BFF's eventually consistent `listTasks` (not retried) never undoes one; the invalidate still runs for rows a write changes without returning (a parent's lock, plan rows, the day's sweep). The backlog derives from that list.
 - **UI/session → React Context.** Current home mode, running timer, capture-bar state.
 - **Auth → Cognito session** in a context provider. Frontend lib: **`react-oidc-context` + Cognito Hosted UI** (PKCE auth-code grant, no client secret).
 

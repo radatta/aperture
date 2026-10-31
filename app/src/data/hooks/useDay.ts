@@ -18,8 +18,7 @@ export function useDay(day: string) {
     enabled: settingsLoaded,
     queryFn: async () => {
       const d = await api.getDay(day);
-      for (const key of [qk.tasks(), qk.backlog(), qk.plans(day)])
-        qc.invalidateQueries({ queryKey: key });
+      for (const key of [qk.tasks(), qk.plans(day)]) qc.invalidateQueries({ queryKey: key });
       return d;
     },
   });

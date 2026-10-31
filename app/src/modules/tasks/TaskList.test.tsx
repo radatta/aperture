@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey } from '@aperture/shared';
@@ -336,6 +336,22 @@ describe('focus after a row leaves', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'finish me' })).toBeNull());
     // The collapsed group hides the row's title, so the list area takes focus.
     await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
+  });
+
+  it('a row marked done moves at once — from the write, not a refetch of the list', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-write-${Math.random()}` });
+    const t = await api.createTask({ title: 'finish me', estimateMin: 20 });
+    await api.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 20, order: 0 });
+    await api.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const row = (await screen.findByRole('button', { name: 'finish me' })).closest('.rounded-2xl');
+    vi.spyOn(api, 'listTasks').mockImplementation(() => new Promise(() => {})); // never answers
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '18');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    expect(await screen.findByRole('button', { name: 'Done today · 1' })).toBeTruthy();
   });
 
   it('after a plain close, the next tap ends the watch: a later lens switch never pulls focus back', async () => {

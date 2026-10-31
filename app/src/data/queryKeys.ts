@@ -2,7 +2,6 @@
 export const qk = {
   settings: () => ['settings'] as const,
   log: (day: string) => ['log', day] as const,
-  backlog: () => ['backlog'] as const,
   tasks: () => ['tasks'] as const,
   plans: (day: string) => ['plans', day] as const,
   categories: () => ['categories'] as const,

@@ -7,8 +7,8 @@ import { createStubClient } from '../../data/stubClient';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
-function freshApi() {
-  return createStubClient({ seed: false, storageKey: `taskcard-${Math.random()}` });
+function freshApi(now?: () => number) {
+  return createStubClient({ seed: false, storageKey: `taskcard-${Math.random()}`, now });
 }
 
 // Open a task's editor modal by clicking its title. `tab` switches lens first (Backlog tasks) — the
@@ -909,7 +909,7 @@ describe('parent + parts', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Task:/ })).toBeNull());
   });
 
-  it('a Delete says it went while the list catches up', async () => {
+  it('a Delete closes the modal and drops the row at once — from the write, not a refetch', async () => {
     const api = freshApi();
     await api.createTask({ title: 'Gone' });
     renderApp({ api, path: '/tasks?lens=backlog' });
@@ -919,8 +919,33 @@ describe('parent + parts', () => {
     holdList(api);
     await user.click(d.getByRole('button', { name: /Delete task/ }));
     await user.click(d.getByRole('button', { name: 'Delete' }));
-    expect(await d.findByText('Deleted.')).toBeTruthy();
-    expect(d.queryByRole('button', { name: 'Cancel' })).toBeNull(); // nothing to cancel back to
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: Gone' })).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Gone' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+  });
+
+  it('a title saved on a just-finished task shows in the modal at once, with the list never refreshing', async () => {
+    let clock = Date.now();
+    const api = freshApi(() => (clock += 1000));
+    const p = await api.createTask({ title: 'P2' });
+    for (const title of ['read', 'draft']) {
+      const part = await api.createTask({ title, parentId: p.id, estimateMin: 10 });
+      await api.transitionTask(part.id, 'in_progress');
+      await api.transitionTask(part.id, 'done');
+    }
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'P2' }));
+    const d = within(await screen.findByRole('dialog', { name: 'Task: P2' }));
+    await user.type(d.getByLabelText('Title'), ' final');
+    holdList(api);
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
+    await user.click(d.getByRole('button', { name: 'Save' }));
+    expect(await d.findByText('Saved')).toBeTruthy();
+    expect(await screen.findByRole('dialog', { name: 'Task: P2 final' })).toBeTruthy();
+    expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('P2 final');
   });
 
   it('a section button with unsent Add parts text asks first; details edits never do', async () => {
