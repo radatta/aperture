@@ -84,7 +84,8 @@ export const timeKeyOfInput = (v: string): string =>
   /^\d\d:\d\d:\d\d(\.\d+)?$/.test(v) ? v.slice(0, 5) : v;
 
 // A clock before the day start (00:00–03:59 with a 4am start): on its calendar date, the small hours
-// the app counts as the night before — timedDay's dayKey split, as a clock test.
+// the app counts as the night before. A clock test, so it matches timedDay's dayKey (which counts real
+// hours back) except for one hour on a DST night — lenses.md D13.
 export const beforeDayStart = (hhmm: string, dayStartHour: number): boolean =>
   Number(hhmm.slice(0, 2)) < dayStartHour;
 

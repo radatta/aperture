@@ -62,10 +62,11 @@ function PartCategory({ task }: { task: Task }) {
   );
 }
 
-// A row's title, then its tags. On a phone a part's tags ("of P2 · ends 3pm · due Mon 5pm") take a
-// second line, so the title keeps the row; elsewhere it's one line.
+// A row's title, then its tags. On a phone a tag-heavy row's tags — a part's "of P2 · ends 3pm · due
+// Mon 5pm", a roll rep's category, roll and time — take a second line, so the title keeps the row;
+// elsewhere it's one line.
 function RowText({ task, title, children }: { task: Task; title: ReactNode; children: ReactNode }) {
-  const part = !!task.parentId;
+  const part = !!task.parentId || !!task.rollId;
   return (
     <div
       className={cx(

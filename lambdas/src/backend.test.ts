@@ -400,6 +400,16 @@ describe('backend read-then-write under lagging reads', () => {
     expect(saved).toMatchObject({ title: 'new', dueDay: '2026-08-05' });
   });
 
+  it('a part added straight after renaming its parent keeps the new title', async () => {
+    const { backend, snapshot, stored } = setup();
+    const p = await backend.createTask({ title: 'old' });
+    const lag = await snapshot(p.id);
+    await backend.setTaskTitle(p.id, 'new');
+    lag();
+    await backend.createTask({ title: 'part', parentId: p.id });
+    expect((await stored(p.id)).title).toBe('new');
+  });
+
   it('a focus session stopped straight after a rename keeps the title', async () => {
     const { backend, snapshot, stored } = setup();
     const t = await backend.createTask({ title: 'old' });

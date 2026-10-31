@@ -255,6 +255,15 @@ describe('CaptureBar', () => {
       expect(t).toMatchObject({ title: 'submit form', dueDay: day, dueTime: '16:00' });
     });
 
+    it('a timed line without “→ today” says when it lands — never “backlog”', async () => {
+      const { user, box } = await taskBar();
+      const day = addDays(todayKey(4), 1);
+      await user.type(box(), `submit form | due:${day}@00:30`);
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/due tonight 12:30am, by its time/)).toBeTruthy();
+      expect(screen.queryByText(/→ backlog/)).toBeNull();
+    });
+
     it('waits for categories before a #label line can save', async () => {
       const { api, user, box } = await taskBar({ hangCategories: true });
       await user.type(box(), 'x | #Admin');

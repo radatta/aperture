@@ -126,8 +126,12 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
     `by 12:30am` in Right now (its compact form), `due tonight 12:30am` at night. One already past
     stays as written: a task due today 2am, seen after 4am, sits overdue in Week reading
     `due today 2am` in the past colour, and is out of "Due today" (its app day was yesterday); no
-    "last night" tier. Capture rolls a small-hours clock typed for today onto the next date
-    ([quick-add.md](quick-add.md), 2026-10-31).
+    "last night" tier; nor does a passed one tonight (at 2am, `due tonight 12:30am` in the past
+    colour). Capture rolls a small-hours clock typed for today onto the next date
+    ([quick-add.md](quick-add.md), 2026-10-31). Known gap: "tonight" is a clock test
+    (`beforeDayStart`) while the day is `dayKey`'s real hours, so they disagree for one hour on a DST
+    night (fall-back: a 03:00–03:59 deadline reads "tonight" but sits in Week). The fix is a wall-clock
+    rollover in `dayKey` itself — a follow-up.
   - **Why:** "OA closes Sun 11:59pm" belongs to Sunday; a plan row put it on Wednesday and the deadline
     read twice. Working earlier means a part with its own Ends ([parts.md](parts.md) D14), not
     planning the deadline. The trade-off: a timed task moved in Google moves its day, like a reschedule.

@@ -6,6 +6,7 @@ import {
   parseTaskLine,
   toCreateInput,
   fmtDueDay,
+  isTimed,
   todayKey,
   tokenAtCaret,
 } from '@aperture/shared';
@@ -340,9 +341,23 @@ export function CaptureBar({
             }),
           restore,
         )
-      : createTask
-          .mutateAsync(input)
-          .then(() => setReceipt({ mode: 'task', ...note, at: Date.now() }), restore);
+      : createTask.mutateAsync(input).then(
+          // A timed task isn't backlog: its time is its place, so the receipt says when.
+          (t) =>
+            setReceipt({
+              mode: 'task',
+              ...(isTimed(t) && {
+                dest: {
+                  today: false,
+                  planned: false,
+                  timedOn: fmtDueDay(t.dueDay!, today, t.dueTime, { dayStartHour }),
+                },
+              }),
+              ...note,
+              at: Date.now(),
+            }),
+          restore,
+        );
     if (settled) void saved.finally(settled);
   }
 

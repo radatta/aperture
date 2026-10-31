@@ -69,11 +69,13 @@ describe('Rolls ↔ daytime home', () => {
     const roll = await api.upsertRoll({ name: 'Mock OA', categoryId: null, estimateMin: 30 });
     const { task } = await api.pickRollToday(roll.id, addDays(TODAY, -1));
     await api.setTaskDue(task.id, { dueDay: TODAY, dueTime: '23:58' });
+    const pick = vi.spyOn(api, 'pickRollToday');
     const user = userEvent.setup();
     renderApp({ api });
 
     await user.click(screen.getByRole('button', { name: 'Morning' }));
     await user.click(await screen.findByRole('button', { name: /Mock OA — on today's plan/ }));
+    expect(pick).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

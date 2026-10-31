@@ -256,7 +256,9 @@ export class BackendClient implements ApiClient {
   // either way). Pass the task as it was; call AFTER the first part is written.
   private async adoptAsParent(parent: Task): Promise<Task> {
     const now = this.now();
-    for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === parent.id))
+    // Consistent: a row "+ Today" just wrote must go too.
+    const plans = await this.repo.listAllPlans({ consistent: true });
+    for (const p of plans.filter((p) => p.taskId === parent.id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
     const became = await this.repo.putTask(becomeParent(parent, now));
     return this.syncCalendar(parent, became, true, undefined, { parent: true });
@@ -700,11 +702,13 @@ export class BackendClient implements ApiClient {
     // Parts (parts.ts): every parent is checked before any write. A planned task taking its first part
     // hands its spot on the plan to that part (the batch's first for it) — an untimed one: a timed part
     // is on its own day by its time (option 3).
+    // Consistent: a parent is written back from this copy (adoptAsParent), and a part made a moment
+    // ago must count — else a rename just saved is lost, or the parent is adopted twice.
     const parentIds = [...new Set(tasks.map((x) => x.parentId).filter((x): x is string => !!x))];
-    const all = parentIds.length ? await this.repo.listTasks() : [];
+    const all = parentIds.length ? await this.repo.listTasks({ consistent: true }) : [];
     const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
     if (parentIds.length) {
-      const plans = await this.repo.listAllPlans();
+      const plans = await this.repo.listAllPlans({ consistent: true });
       for (const id of parentIds) {
         const parent = all.find((x) => x.id === id);
         if (!parent) throw new Error(`Not found: ${id}`);
