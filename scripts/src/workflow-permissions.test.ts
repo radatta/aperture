@@ -41,8 +41,8 @@ describe('workflow-permissions', () => {
   it("passes on this repo's workflows", () => {
     const report = checkCallers(repoWorkflows());
     expect(report.problems).toEqual([]);
-    // pr.yml declares no permissions, so it runs with the repo default — new entries here need a look
-    expect(report.unchecked).toEqual(['pr.yml › ci']);
+    // a caller with no permissions anywhere runs with the repo default — a new entry here needs a look
+    expect(report.unchecked).toEqual([]);
   });
 
   it('catches a caller granting less than the called job declares (PR 69)', () => {
