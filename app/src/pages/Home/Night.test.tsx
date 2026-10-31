@@ -90,6 +90,29 @@ describe('night: still open — when?', () => {
   });
 });
 
+describe('night: a timed task (on today by its time)', () => {
+  it('offers Tomorrow — its time a day on — and Leave, no Backlog; an untimed one keeps all three', async () => {
+    const api = createStubClient({ seed: false, storageKey: `night-timed-${Math.random()}` });
+    const t = await api.createTask({ title: 'OA', dueDay: today(), dueTime: '23:58' });
+    await onToday(api, 'essay draft', 'planned', 0);
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    await screen.findByRole('group', { name: 'OA' });
+    expect(row('OA').getByText('due 11:58pm')).toBeTruthy();
+    expect(row('OA').queryByRole('button', { name: 'Backlog' })).toBeNull();
+    expect(row('essay draft').getByRole('button', { name: 'Backlog' })).toBeTruthy();
+
+    await user.click(row('OA').getByRole('button', { name: 'Tomorrow' }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'OA' })).toBeNull());
+    expect(await api.getTask(t.id)).toMatchObject({
+      dueDay: addDays(today(), 1),
+      dueTime: '23:58',
+    });
+    expect(await api.listPlansForDay(addDays(today(), 1))).toEqual([]); // re-timed, not planned
+  });
+});
+
 describe('night: today in review', () => {
   it('bars every measured task — each part, and a parent as its rollup; unestimated is plain', async () => {
     const api = createStubClient({ seed: false, storageKey: `review-${Math.random()}` });

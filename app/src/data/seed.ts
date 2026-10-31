@@ -368,8 +368,9 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     completedAt: null,
     ...over,
   });
+  // Ends today: Today shows it "By time" (option 3), tagged with its parent.
   const analysis = openPart('Run the analysis', 60, {
-    dueDay: addDays(today, 1),
+    dueDay: today,
     dueTime: '15:00',
     gcalAccountId: 'seed-personal', // on the calendar, as auto-sync would have left it
     gcalCalendarId: 'you@gmail.com',

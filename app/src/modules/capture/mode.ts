@@ -22,15 +22,17 @@ export function placeholderFor(mode: CaptureMode, toToday = false): string {
 
 // The receipt shown after a submit. Capture is a trust exercise — you hand the app a thought and
 // it vanishes from the field — so every submit says where the thought went. A "→ today" task that
-// was created but couldn't be planned says so: it's in the backlog, not on today.
+// was created but couldn't be planned says so: it's in the backlog, not on today. A timed one isn't
+// planned at all — its day is its time (lenses.md D13) — so it says when (`timedOn`, "due Fri 4pm").
 export function receiptFor(
   mode: CaptureMode,
-  dest?: { today: boolean; planned: boolean },
+  dest?: { today: boolean; planned: boolean; timedOn?: string },
 ): { text: string; label: string } {
   switch (mode) {
     case 'log':
       return { text: 'Logged', label: 'today' };
     case 'task':
+      if (dest?.timedOn) return { text: 'Task added', label: `${dest.timedOn}, by its time` };
       if (dest?.today)
         return { text: 'Task added', label: dest.planned ? 'today' : 'backlog (couldn’t plan it)' };
       return { text: 'Task added', label: 'backlog' };

@@ -111,13 +111,14 @@ export function RightNowCard() {
     : undefined;
 
   const focusRest = rn.focus.filter((r) => r.task.id !== hero?.id);
+  const byTimeRest = rn.byTime.filter((r) => r.task.id !== hero?.id);
   const alsoRest = rn.alsoToday.filter((r) => r.task.id !== hero?.id);
   const noTimers = timers.length === 0;
   const start = (id: string) => transition.mutate({ id, to: 'in_progress' });
 
   // Nothing planned and nothing running — the honest empty state, then the cold-start pair the old
   // FocusCard owned (the timer dock only appears while something runs, so its entry lives here).
-  if (!hero && rn.focus.length === 0 && rn.alsoToday.length === 0) {
+  if (!hero && rn.focus.length === 0 && rn.byTime.length === 0 && rn.alsoToday.length === 0) {
     return (
       <HomeCard title="Right now" aside={<Asides />}>
         <div className="flex flex-col gap-3">
@@ -199,6 +200,18 @@ export function RightNowCard() {
         {focusRest.length > 0 && (
           <div className="flex flex-col gap-1.5 border-t border-line pt-3">
             {focusRest.map((r) => (
+              <FocusRow key={r.task.id} row={r} onStart={start} />
+            ))}
+          </div>
+        )}
+
+        {/* Due today at a time: here by its time, not chosen — so no "Make it a focus" (D11). */}
+        {byTimeRest.length > 0 && (
+          <div className="flex flex-col gap-1.5 border-t border-line pt-3">
+            <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+              By time
+            </Text>
+            {byTimeRest.map((r) => (
               <FocusRow key={r.task.id} row={r} onStart={start} />
             ))}
           </div>

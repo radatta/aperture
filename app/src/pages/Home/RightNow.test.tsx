@@ -63,7 +63,13 @@ describe('Right now card', () => {
       storageKey: `rn-live-${Math.random()}`,
     });
     const task = await plan(api, 'Deep work', { est: 30, order: 0, start: true });
-    await api.startSession({ taskId: task.id, categoryId: null, kind: 'work', label: null, day: TODAY });
+    await api.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: TODAY,
+    });
     const user = userEvent.setup();
     renderApp({ api });
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
@@ -97,6 +103,29 @@ describe('Right now card', () => {
     expect(await screen.findByText(/nice/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
+  });
+
+  it('a timed task due today is its own “By time” tier — not a Big-3 slot, no “Make it a focus”', async () => {
+    const api = stub();
+    await plan(api, 'Task 0', { order: 0 });
+    await api.createTask({ title: 'OA', dueDay: TODAY, dueTime: '23:58' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.getByText('OA')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Make OA a focus/ })).toBeNull();
+    expect(screen.queryByText('Nothing planned today.')).toBeNull();
+  });
+
+  it('a day with only a timed task isn’t “nothing planned”', async () => {
+    const api = stub();
+    await api.createTask({ title: 'OA', dueDay: TODAY, dueTime: '23:58' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.queryByText('Nothing planned today.')).toBeNull();
   });
 
   it('shows the empty state and cold-start when nothing is planned', async () => {

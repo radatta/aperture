@@ -46,6 +46,8 @@ import {
   PARENT_NO_ESTIMATE_ERROR,
   PARENT_NO_EVENT_ERROR,
   PARENT_NO_PLAN_ERROR,
+  isTimed,
+  TIMED_NO_PLAN_ERROR,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
@@ -692,7 +694,8 @@ export class BackendClient implements ApiClient {
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     // Parts (parts.ts): every parent is checked before any write. A planned task taking its first part
-    // hands its spot on the plan to that part (the batch's first for it).
+    // hands its spot on the plan to that part (the batch's first for it) — an untimed one: a timed part
+    // is on its own day by its time (option 3).
     const parentIds = [...new Set(tasks.map((x) => x.parentId).filter((x): x is string => !!x))];
     const all = parentIds.length ? await this.repo.listTasks() : [];
     const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
@@ -706,7 +709,7 @@ export class BackendClient implements ApiClient {
         const day = followUpPlanDay(plans, id);
         const row = plans.find((p) => p.taskId === id && p.day === day);
         const first = tasks.find((x) => x.parentId === id)!;
-        if (row) landing.set(first.id, row);
+        if (row && !first.dueTime) landing.set(first.id, row);
       }
     }
     const saved = await this.repo.putTasks(
@@ -920,10 +923,11 @@ export class BackendClient implements ApiClient {
     } else {
       original = await this.syncCalendar(task, await this.repo.putTask(edited));
     }
-    // The follow-up lands on the original's plan day (planned), else in the backlog. Task before row: a
-    // planned task whose row never landed is what getDay's stale sweep moves back to backlog.
+    // The follow-up lands on the original's plan day (planned), else in the backlog — and a timed
+    // original's is on its day by its time (option 3). Task before row: a planned task whose row never
+    // landed is what getDay's stale sweep moves back to backlog.
     const day =
-      task.status === 'planned' || task.status === 'in_progress'
+      !task.dueTime && (task.status === 'planned' || task.status === 'in_progress')
         ? followUpPlanDay(await this.repo.listAllPlans(), id)
         : null;
     const fields = splitFollowUp(task, input.followUp, day !== null, parentId);
@@ -998,7 +1002,10 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listPlans(day)).sort((a, b) => a.order - b.order);
   }
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
-    if (hasParts(await this.repo.listTasks(), input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
+    const tasks = await this.repo.listTasks();
+    if (hasParts(tasks, input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
+    const task = tasks.find((t) => t.id === input.taskId);
+    if (task && isTimed(task)) throw new Error(TIMED_NO_PLAN_ERROR);
     const fields = {
       taskId: input.taskId,
       day: input.day,

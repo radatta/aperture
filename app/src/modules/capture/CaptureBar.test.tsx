@@ -242,6 +242,19 @@ describe('CaptureBar', () => {
       );
     });
 
+    it('"→ today" with a timed line plans nothing and says when it lands — by its time', async () => {
+      const { api, user, box } = await taskBar();
+      const day = addDays(todayKey(4), 1);
+      await user.click(screen.getByRole('button', { name: 'today' }));
+      await user.type(box(), `submit form | due:${day}@16:00`);
+      await user.keyboard('{Enter}');
+
+      expect(await screen.findByText(/due tomorrow 4pm, by its time/)).toBeTruthy();
+      expect(await api.listPlansForDay(todayKey(4))).toEqual([]);
+      const [t] = await api.listTasks();
+      expect(t).toMatchObject({ title: 'submit form', dueDay: day, dueTime: '16:00' });
+    });
+
     it('waits for categories before a #label line can save', async () => {
       const { api, user, box } = await taskBar({ hangCategories: true });
       await user.type(box(), 'x | #Admin');

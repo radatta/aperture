@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isTimed } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -18,7 +19,8 @@ import { useCollapsedGroups } from './useTaskQuery';
 import { useTodayPlan } from './useTodayPlan';
 
 // The Today lens — the morning plan pass (PRODUCT §3 ☀️): set the day's capacity and see planned
-// hours vs available, over today's plan in its own order. Pulling work in happens from Week and
+// hours vs available, over today's work: the timed tasks whose time falls today ("By time", by clock —
+// their time put them here, so nothing to unplan; lenses.md D13), then today's plan in its own order. Pulling work in happens from Week and
 // Backlog (or Home's "+ Add"); this lens is the plan itself. Finished work leaves the plan list for a
 // collapsed "Done today" group at the bottom (lenses.md D11); its rows stay, so capacity still counts it.
 export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: () => void }) {
@@ -36,6 +38,8 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
   const onPlan = new Set(rows.map((r) => r.task.id));
   // Started but not on today's plan — still today's business, one tier down.
   const offPlan = tasks.filter((t) => t.status === 'in_progress' && !onPlan.has(t.id));
+  const byTime = open.filter((r) => r.byTime);
+  const planned = open.filter((r) => !r.byTime);
 
   return (
     <div className="flex flex-col gap-4">
@@ -64,9 +68,12 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
       </Card>
 
       <div ref={listRef} tabIndex={-1} className="flex flex-col gap-2 outline-none">
-        <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
-          Planned today
-        </Text>
+        {/* With timed rows, "By time" leads and "Planned today" heads the plan below it. */}
+        {byTime.length === 0 && (
+          <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+            Planned today
+          </Text>
+        )}
         <div role="status">
           {action.failed && (
             <Text size="sm" tone="danger">
@@ -99,22 +106,42 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
             Pull something in from Week or the backlog.
           </EmptyState>
         ) : (
-          open.map(({ plan, task }) => (
-            <TaskCard
-              key={plan.id}
-              task={task}
-              actions={
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  disabled={action.isBusy(task.id)}
-                  onClick={() => action.run(task.id, () => unplan(plan, task))}
-                >
-                  Unplan
-                </Button>
-              }
-            />
-          ))
+          <>
+            {byTime.length > 0 && (
+              <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+                By time
+              </Text>
+            )}
+            {byTime.map(({ task }) => (
+              <TaskCard key={task.id} task={task} />
+            ))}
+            {byTime.length > 0 && planned.length > 0 && (
+              <Text
+                size="xs"
+                tone="muted"
+                weight="medium"
+                className="mt-2 uppercase tracking-wider"
+              >
+                Planned today
+              </Text>
+            )}
+            {planned.map(({ plan, task }) => (
+              <TaskCard
+                key={plan!.id}
+                task={task}
+                actions={
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={action.isBusy(task.id)}
+                    onClick={() => action.run(task.id, () => unplan(plan!, task))}
+                  >
+                    Unplan
+                  </Button>
+                }
+              />
+            ))}
+          </>
         )}
       </div>
 
@@ -128,18 +155,21 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
               key={task.id}
               task={task}
               actions={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1"
-                  disabled={action.isBusy(task.id)}
-                  aria-label={`Add ${task.title} to today`}
-                  onClick={() => action.run(task.id, () => addToDay(task))}
-                >
-                  <PlusIcon size={13} />
-                  {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
-                  <span className="max-sm:hidden">Today</span>
-                </Button>
+                // A timed task's day is its time: nothing to add (lenses.md D13).
+                !isTimed(task) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1"
+                    disabled={action.isBusy(task.id)}
+                    aria-label={`Add ${task.title} to today`}
+                    onClick={() => action.run(task.id, () => addToDay(task))}
+                  >
+                    <PlusIcon size={13} />
+                    {/* Icon-only on phones: the title needs the room; the aria-label names it. */}
+                    <span className="max-sm:hidden">Today</span>
+                  </Button>
+                )
               }
             />
           ))}

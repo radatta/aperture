@@ -53,7 +53,8 @@ function mkPlan(taskId: string, order: number): TaskPlan {
   };
 }
 
-const rows = (...tasks: Task[]) => tasks.map((task, i) => ({ plan: mkPlan(task.id, i), task }));
+const rows = (...tasks: Task[]) =>
+  tasks.map((task, i) => ({ plan: mkPlan(task.id, i), task, byTime: false }));
 const ids = (ts: { id: string }[]) => ts.map((t) => t.id);
 
 describe('doneToday', () => {
@@ -113,9 +114,17 @@ describe('doneToday', () => {
   it('a task with two rows today is listed once', () => {
     const t = mkTask('twice', 'done');
     const plan = [
-      { plan: mkPlan('twice', 0), task: t },
-      { plan: mkPlan('twice', 1), task: t },
+      { plan: mkPlan('twice', 0), task: t, byTime: false },
+      { plan: mkPlan('twice', 1), task: t, byTime: false },
     ];
     expect(ids(doneToday(plan, [t], TODAY, START).done)).toEqual(['twice']);
+  });
+});
+
+describe('doneToday — a timed task finished today', () => {
+  it('lands in Done today once, even with a legacy row today', () => {
+    const t = mkTask('timed', 'done', { dueDay: TODAY, dueTime: '09:00' });
+    const r = [{ task: t, plan: mkPlan('timed', 0), byTime: true }];
+    expect(doneToday(r, [t], TODAY, START).done.map((x) => x.id)).toEqual(['timed']);
   });
 });

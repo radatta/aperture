@@ -109,6 +109,19 @@ describe('placeOf', () => {
     expect(placeOf(part, TODAY, none, { ...parent, status: 'done' })).toBe('backlog'); // its own
     expect(placer([parent, part], { today: TODAY, planOrder: none })(part)).toBe('week');
   });
+
+  it('option 3: a timed task is on Today on its day, by its time — a plan row never places it', () => {
+    const at = (dueDay: string) => task({ status: 'planned', dueDay, dueTime: '15:00' });
+    expect(placeOf(at(TODAY), TODAY, none)).toBe('today');
+    expect(placeOf(at('2026-09-24'), TODAY, new Map([['x', 0]]))).toBe('week'); // a row today: history
+    expect(placeOf(at('2026-09-22'), TODAY, none)).toBe('week'); // overdue
+  });
+
+  it('option 3: a timed parent due today is not on Today — its deadline is its marker', () => {
+    const parent = task({ id: 'p', dueDay: TODAY, dueTime: '23:59' });
+    const part = task({ id: 'a', parentId: 'p' });
+    expect(placer([parent, part], { today: TODAY, planOrder: none })(parent)).toBe('week');
+  });
 });
 
 describe('text search', () => {
@@ -221,18 +234,19 @@ describe('applyQuery', () => {
     const week = [
       task({ id: 'd29', dueDay: '2026-09-29', categoryId: 'c1' }),
       task({ id: 'untimed', dueDay: TODAY }),
-      task({ id: 'at14', dueDay: TODAY, dueTime: '14:00', categoryId: 'c1' }),
+      // Timed tomorrow (timed today is on Today — option 3): by clock, before that day's untimed.
+      task({ id: 'at14', dueDay: '2026-09-24', dueTime: '14:00', categoryId: 'c1' }),
       task({ id: 'd24', dueDay: '2026-09-24', categoryId: 'c2' }),
-      task({ id: 'at09', dueDay: TODAY, dueTime: '09:00', categoryId: 'c2' }),
+      task({ id: 'at09', dueDay: '2026-09-24', dueTime: '09:00', categoryId: 'c2' }),
       task({ id: 'overdue', dueDay: '2026-09-01', categoryId: 'c2' }),
     ];
     const r = applyQuery(week, 'week', q({}, 'week'), ctx());
     expect(r.groups.map((g) => [g.key, g.label])).toEqual([['all', '']]);
     expect(r.groups[0]!.tasks.map((t) => t.id)).toEqual([
       'overdue',
+      'untimed',
       'at09',
       'at14',
-      'untimed',
       'd24',
       'd29',
     ]);

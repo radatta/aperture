@@ -5,6 +5,7 @@ import {
   parseFailText,
   parseTaskLine,
   toCreateInput,
+  fmtDueDay,
   todayKey,
   tokenAtCaret,
 } from '@aperture/shared';
@@ -97,7 +98,7 @@ export function CaptureBar({
   // confirmation would vanish after the FIRST timer's remainder.
   const [receipt, setReceipt] = useState<{
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean };
+    dest?: { today: boolean; planned: boolean; timedOn?: string };
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
@@ -326,7 +327,13 @@ export function CaptureBar({
           (r) =>
             setReceipt({
               mode: 'task',
-              dest: { today: true, planned: r.planned },
+              dest: {
+                today: true,
+                planned: r.planned,
+                ...(r.timed && r.task.dueDay
+                  ? { timedOn: fmtDueDay(r.task.dueDay, today, r.task.dueTime) }
+                  : {}),
+              },
               ...note,
               at: Date.now(),
             }),
@@ -671,7 +678,7 @@ function Receipt({
   reason: string;
   receipt: {
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean };
+    dest?: { today: boolean; planned: boolean; timedOn?: string };
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean;

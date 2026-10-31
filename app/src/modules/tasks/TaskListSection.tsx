@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { isTimed } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -149,7 +150,8 @@ export function TaskListSection({
     const busy = action.isBusy(task.id);
     const parts = partsOf(tasks, task.id);
     // A parent is never planned (parts.ts): its one action is Mark done, once every part is dealt with.
-    // A finished task's row is history (capacity, Big 3): never offer to unplan it.
+    // A finished task's row is history (capacity, Big 3): never offer to unplan it. A timed task's day
+    // is its time (lenses.md D13): nothing to add or unplan — its card already says when.
     const actions = parts.length ? (
       open && partsSummary(parts).allDone ? (
         <Button
@@ -163,7 +165,7 @@ export function TaskListSection({
           Mark done
         </Button>
       ) : undefined
-    ) : plan && open ? (
+    ) : isTimed(task) ? undefined : plan && open ? (
       <Button
         variant="quiet"
         size="sm"

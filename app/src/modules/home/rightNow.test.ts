@@ -49,7 +49,7 @@ function mkPlan(taskId: string, order: number): TaskPlan {
 }
 
 function rows(...tasks: Task[]) {
-  return tasks.map((task, i) => ({ plan: mkPlan(task.id, i), task }));
+  return tasks.map((task, i) => ({ plan: mkPlan(task.id, i), task, byTime: false }));
 }
 
 function mkTimer(taskId: string | null, kind: 'work' | 'break', activeSec: number): RunningTimer {
@@ -60,7 +60,13 @@ function mkTimer(taskId: string | null, kind: 'work' | 'break', activeSec: numbe
 describe('rightNow', () => {
   it('splits the plan into Big 3 + Also-today by order', () => {
     const rn = rightNow(
-      rows(mkTask('a', 'planned'), mkTask('b', 'planned'), mkTask('c', 'planned'), mkTask('d', 'planned'), mkTask('e', 'planned')),
+      rows(
+        mkTask('a', 'planned'),
+        mkTask('b', 'planned'),
+        mkTask('c', 'planned'),
+        mkTask('d', 'planned'),
+        mkTask('e', 'planned'),
+      ),
       [],
     );
     expect(rn.focus.map((r) => r.task.id)).toEqual(['a', 'b', 'c']);
@@ -70,7 +76,12 @@ describe('rightNow', () => {
 
   it('keeps a done task in its Focus slot — no promotion of #4', () => {
     const rn = rightNow(
-      rows(mkTask('a', 'done'), mkTask('b', 'planned'), mkTask('c', 'planned'), mkTask('d', 'planned')),
+      rows(
+        mkTask('a', 'done'),
+        mkTask('b', 'planned'),
+        mkTask('c', 'planned'),
+        mkTask('d', 'planned'),
+      ),
       [],
     );
     expect(rn.focus.map((r) => r.task.id)).toEqual(['a', 'b', 'c']);
@@ -80,7 +91,12 @@ describe('rightNow', () => {
 
   it('drops cancelled tasks from the plane', () => {
     const rn = rightNow(
-      rows(mkTask('a', 'cancelled'), mkTask('b', 'planned'), mkTask('c', 'planned'), mkTask('d', 'planned')),
+      rows(
+        mkTask('a', 'cancelled'),
+        mkTask('b', 'planned'),
+        mkTask('c', 'planned'),
+        mkTask('d', 'planned'),
+      ),
       [],
     );
     expect(rn.focus.map((r) => r.task.id)).toEqual(['b', 'c', 'd']);
@@ -148,7 +164,13 @@ describe('liveElapsedMin', () => {
 
 describe('promote', () => {
   it('moves an Also-today row into the last Focus slot and renumbers', () => {
-    const r = rows(mkTask('a', 'planned'), mkTask('b', 'planned'), mkTask('c', 'planned'), mkTask('d', 'planned'), mkTask('e', 'planned'));
+    const r = rows(
+      mkTask('a', 'planned'),
+      mkTask('b', 'planned'),
+      mkTask('c', 'planned'),
+      mkTask('d', 'planned'),
+      mkTask('e', 'planned'),
+    );
     const ups = promote(r, 'e'); // e is at index 4 → goes to index 2
     // c (2→3), d (3→4), e (4→2) change; a,b keep 0,1.
     const byTask = Object.fromEntries(ups.map((u) => [u.taskId, u.order]));
@@ -156,8 +178,40 @@ describe('promote', () => {
   });
 
   it('returns nothing when the task is already in Focus or missing', () => {
-    const r = rows(mkTask('a', 'planned'), mkTask('b', 'planned'), mkTask('c', 'planned'), mkTask('d', 'planned'));
+    const r = rows(
+      mkTask('a', 'planned'),
+      mkTask('b', 'planned'),
+      mkTask('c', 'planned'),
+      mkTask('d', 'planned'),
+    );
     expect(promote(r, 'b')).toEqual([]); // already focus
     expect(promote(r, 'zzz')).toEqual([]); // missing
+  });
+});
+
+describe('rightNow — option 3 (a time decides the day)', () => {
+  const byTime = (task: Task) => ({ task, plan: null, byTime: true });
+
+  it('the Big 3 are the chosen plan; timed rows are their own tier, by clock, never a focus', () => {
+    const t = mkTask('timed', 'backlog', { dueTime: '09:00' });
+    const a = mkTask('a', 'planned');
+    const rn = rightNow([byTime(t), ...rows(a)], [t, a]);
+    expect(rn.focus.map((r) => r.task.id)).toEqual(['a']);
+    expect(rn.byTime.map((r) => r.task.id)).toEqual(['timed']);
+    expect(rn.alsoToday).toEqual([]);
+  });
+
+  it('promote moves only plan rows — a timed row has no slot to take', () => {
+    const [p0, p1, p2, p3] = ['0', '1', '2', '3'].map((id) => mkTask(id, 'planned'));
+    const t = mkTask('t', 'backlog', { dueTime: '09:00' });
+    const r = [byTime(t), ...rows(p0!, p1!, p2!, p3!)];
+    expect(promote(r, 't')).toEqual([]);
+    expect(promote(r, '3').map((u) => u.taskId)).toEqual(['3', '2']);
+  });
+
+  it('a started timed task is the hero when no focus is running', () => {
+    const t = mkTask('t', 'in_progress', { dueTime: '09:00' });
+    const a = mkTask('a', 'planned');
+    expect(rightNow([byTime(t), ...rows(a)], [t, a]).hero?.id).toBe('t');
   });
 });

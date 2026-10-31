@@ -1,15 +1,15 @@
 import { todayKey } from '@aperture/shared';
-import type { Task, TaskPlan } from '@aperture/shared';
 import { useDay } from '../../data/hooks/useDay';
 import { usePlansForDay } from '../../data/hooks/usePlans';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { plannedVsAvailable, type PlannedVsAvailable } from '../calibration/calibration';
+import { rowMinutes, todayRows, type TodayRow } from './todayRows';
 
 export interface TodayPlan {
   day: string;
   dayStartHour: number; // the one `day` was keyed with, for bucketing other instants into it
-  rows: { plan: TaskPlan; task: Task }[];
+  rows: TodayRow[]; // timed-today first (by clock), then the plan in order (todayRows.ts)
   plannedMin: number;
   spentMin: number;
   doneCount: number;
@@ -22,8 +22,8 @@ export interface TodayPlan {
   isError: boolean;
 }
 
-// The day's plan joined to its tasks — shared by the morning plan card, the daytime tasks + budget
-// cards, so they agree and don't each re-derive the join.
+// Today's work — the timed tasks whose time falls today, then the day's plan — shared by the morning
+// plan card, the daytime tasks + budget cards, so they agree and don't each re-derive it.
 export function useTodayPlan(): TodayPlan {
   const { data: settings } = useSettings();
   const dayStartHour = settings?.dayStartHour ?? 4;
@@ -32,14 +32,11 @@ export function useTodayPlan(): TodayPlan {
   const { data: plans = [], isPending: plansPending, isError: plansError } = usePlansForDay(day);
   const { data: tasks = [], isPending: tasksPending, isError: tasksError } = useAllTasks();
 
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const rows = plans
-    .map((plan) => ({ plan, task: byId.get(plan.taskId) }))
-    .filter((r): r is { plan: TaskPlan; task: Task } => !!r.task);
+  const rows = todayRows(plans, tasks, day, dayStartHour);
 
   // A dropped task leaves the day's load (lenses.md D11): its row stays as history but stops counting.
-  const kept = plans.filter((p) => byId.get(p.taskId)?.status !== 'cancelled');
-  const plannedMin = kept.reduce((s, p) => s + p.plannedMinutes, 0);
+  const kept = rows.filter((r) => r.task.status !== 'cancelled');
+  const plannedMin = kept.reduce((s, r) => s + rowMinutes(r), 0);
   const spentMin = rows.reduce((s, r) => s + r.task.actualAccruedMin, 0);
   const doneCount = rows.filter((r) => r.task.status === 'done').length;
 

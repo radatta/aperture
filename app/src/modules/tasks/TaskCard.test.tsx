@@ -356,18 +356,31 @@ describe('due-time urgency', () => {
     await api.createTask({ title: 'Untimed', dueDay: todayKey(4) });
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
-    await user.click(await screen.findByRole('button', { name: 'Week' })); // all due within the week
-    await screen.findByRole('button', { name: 'Past' });
-
-    expect(rowOf('Later').className).not.toMatch(/border-(gold|danger)/);
-    expect(rowOf('Untimed').className).not.toMatch(/border-(gold|danger)/);
-    expect(rowOf('Soon').className).toMatch(/border-gold!/);
-    expect(rowOf('Soon').className).not.toMatch(/fill/);
-    expect(rowOf('Imminent').className).toMatch(/border-gold!.*due-imminent-fill/);
-    expect(rowOf('Past').className).toMatch(/border-danger!.*due-past-fill/);
+    // Timed today is on Today by its time (option 3); the rest of the week is on Week. Read each row
+    // where it lives: its class, and its screen-reader text.
+    const seen = new Map<string, { cls: string; text: string }>();
+    const titles = ['Later', 'Soon', 'Imminent', 'Past', 'Untimed'];
+    for (const lens of ['Today', 'Week']) {
+      await user.click(await screen.findByRole('button', { name: new RegExp(`^${lens}( ·|$)`) }));
+      await screen
+        .findByRole('button', { name: titles.find((t) => !seen.has(t))! }, { timeout: 2000 })
+        .catch(() => null);
+      for (const t of titles) {
+        const b = screen.queryByRole('button', { name: t });
+        const row = b?.closest('.rounded-2xl') as HTMLElement | null;
+        if (row && !seen.has(t)) seen.set(t, { cls: row.className, text: row.textContent ?? '' });
+      }
+    }
+    expect([...seen.keys()].sort()).toEqual([...titles].sort());
+    expect(seen.get('Later')!.cls).not.toMatch(/border-(gold|danger)/);
+    expect(seen.get('Untimed')!.cls).not.toMatch(/border-(gold|danger)/);
+    expect(seen.get('Soon')!.cls).toMatch(/border-gold!/);
+    expect(seen.get('Soon')!.cls).not.toMatch(/fill/);
+    expect(seen.get('Imminent')!.cls).toMatch(/border-gold!.*due-imminent-fill/);
+    expect(seen.get('Past')!.cls).toMatch(/border-danger!.*due-past-fill/);
     // The same signal for a screen reader, beside the time label.
-    expect(within(rowOf('Imminent')).getByText(/due within the hour/)).toBeTruthy();
-    expect(within(rowOf('Past')).getByText(/past due/)).toBeTruthy();
+    expect(seen.get('Imminent')!.text).toMatch(/due within the hour/);
+    expect(seen.get('Past')!.text).toMatch(/past due/);
   });
 
   it('a finished task is never coloured, even past its time', async () => {
@@ -1104,14 +1117,25 @@ describe('parent + parts', () => {
     );
   });
 
-  it('a part on Today says what it’s part of and answers to the parent’s deadline', async () => {
+  it('a part ending today is on Today by its time, saying what it’s part of', async () => {
     const { api, b } = await seeded(false);
-    await api.upsertPlan({ taskId: b.id, day: todayKey(4), plannedMinutes: 60, order: 0 });
-    await api.transitionTask(b.id, 'planned');
-    await api.setTaskDue(b.id, { dueDay: addDays(todayKey(4), 1), dueTime: '15:00' });
+    await api.setTaskDue(b.id, { dueDay: todayKey(4), dueTime: '23:58' });
     renderApp({ api, path: '/tasks' });
+    expect(await screen.findByText('By time')).toBeTruthy();
     const row = await waitFor(() => rowOf('draft'));
     expect(within(row).getByText(/of P2 · due/)).toBeTruthy();
-    expect(within(row).getByText(/ends tomorrow 3pm/)).toBeTruthy();
+    expect(within(row).getByText(/ends today 11:58pm/)).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Unplan' })).toBeNull();
+  });
+
+  it('a part ending tomorrow sits under its parent in Week, reading when it ends — never “+ Today”', async () => {
+    const { api, b } = await seeded(false);
+    // A row on today from before it had a time is history: it no longer puts the part on Today.
+    await api.upsertPlan({ taskId: b.id, day: todayKey(4), plannedMinutes: 60, order: 0 });
+    await api.setTaskDue(b.id, { dueDay: addDays(todayKey(4), 1), dueTime: '15:00' });
+    renderApp({ api, path: '/tasks?lens=week' });
+    const card = await waitFor(() => rowOf('P2'));
+    expect(within(card).getByText('ends tomorrow 3pm')).toBeTruthy();
+    expect(within(card).queryByRole('button', { name: 'Add draft to today' })).toBeNull();
   });
 });
