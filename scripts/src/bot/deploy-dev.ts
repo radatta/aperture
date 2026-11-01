@@ -92,15 +92,17 @@ export async function deployDev(
       'HEAD is behind origin/main — rebase (read the merged PRs first), `pnpm bot push --after-rebase`, then deploy',
     );
   }
-  // A branch that changes .github/ deploys on its own ref, so its workflows are what run on dev (the `dev`
-  // environment admits feature branches from CI-BOT.md setup step 8; only the user can push workflow changes).
-  // Everything else runs main's YAML.
+  // A branch that changes .github/ deploys on its own ref, so its workflows are what run on dev. The `dev` environment
+  // admits only `main` and branches the user named (CI-BOT.md → Commands → workflow changes), so say so. Everything
+  // else runs main's YAML.
   let ref = 'main';
   try {
     sh('git', ['diff', '--quiet', 'origin/main', 'HEAD', '--', '.github']);
   } catch {
     ref = branch;
-    log(`${branch} changes .github/ — dispatching on ${branch}, so its own workflows run on dev`);
+    log(
+      `${branch} changes .github/ — dispatching on ${branch}, so its own workflows run on dev. The \`dev\` environment must admit ${branch} by name first (docs/ops/CI-BOT.md → Commands → workflow changes), else its deploy job is refused.`,
+    );
   }
   let holder = await acquire(api, branch, sha, clock.now());
   log(`dev lock: ${branch} until ${holder.expiresAt}`);

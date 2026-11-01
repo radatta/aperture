@@ -30,8 +30,10 @@ rather than polling `gh` by hand. Exit 0 PASS, 1 FAIL, 2 CRASH.
 
 1. Read `localNotes/devcheck/<run>/report.md`. The first line is the status.
 2. **Read the screenshots** — both themes. A PASS with a broken-looking screen is not tested; say what you see.
-3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do. `DEV_CHANGED_MID_RUN` means
-   main won: read the merged PRs, rebase, gate, ask for the push again, rerun.
+3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do — but while its _Known 429s_ section
+   exists, check its conditions first: a run that meets them counts as green. `DEV_CHANGED_MID_RUN` means main won:
+   read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's push),
+   `pnpm bot deploy-dev`, rerun.
 4. Leftovers must be 0. Never delete anything the report lists as "not in the ledger" — report it.
 
 ## A feature's own scenario

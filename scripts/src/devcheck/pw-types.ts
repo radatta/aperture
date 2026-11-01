@@ -50,6 +50,7 @@ export interface PwPage {
   on(event: 'console', fn: (msg: { type(): string; text(): string }) => void): void;
   on(event: 'pageerror', fn: (err: Error) => void): void;
   on(event: 'request', fn: (req: PwRequest) => void): void;
+  on(event: 'response', fn: (res: PwResponse) => void): void;
   close(): Promise<void>;
 }
 

@@ -3,7 +3,7 @@ import { FLUX_SET_VIA, type ApiClient, type DevFluxSet, type DevTask } from './a
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
-import type { PwPage, PwRequest } from './pw-types';
+import type { PwPage, PwRequest, PwResponse } from './pw-types';
 import type { Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
@@ -29,10 +29,14 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const fluxSets = new Map<string, DevFluxSet>();
   const fluxDeleted: string[] = [];
   const listeners: ((r: PwRequest) => void)[] = [];
+  const responseListeners: ((r: PwResponse) => void)[] = [];
   const inPage = [...(opts.inPage ?? [SHA])];
   let n = 0;
   const page = {
-    on: (ev: string, fn: (r: PwRequest) => void) => void (ev === 'request' && listeners.push(fn)),
+    on: (ev: string, fn: (r: never) => void) =>
+      void (ev === 'request'
+        ? listeners.push(fn as (r: PwRequest) => void)
+        : ev === 'response' && responseListeners.push(fn as (r: PwResponse) => void)),
     evaluate: async (expr: string) =>
       expr.includes('aperture-build') ? (inPage.length > 1 ? inPage.shift() : inPage[0]) : null,
     reload: async () => undefined,
@@ -59,6 +63,16 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     };
     for (const l of listeners) l(req);
     return id;
+  };
+  // A response the page got with `status` (a throttled call: 429).
+  const respond = (path: string, status: number) => {
+    const res = {
+      url: () => `https://dev.aperture.rahuldatta.dev${path}`,
+      status: () => status,
+      request: () => ({ method: () => 'POST' }),
+      json: async () => ({}),
+    };
+    for (const l of responseListeners) l(res);
   };
   const api: ApiClient = {
     reads: {
@@ -100,6 +114,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     fluxSets,
     fluxDeleted,
     uiCreate,
+    respond,
     api,
     browser,
     fetchShell: async () => (shells.length > 1 ? shells.shift()! : shells[0]!),
@@ -150,6 +165,18 @@ describe('runPipeline', () => {
     expect(w.tasks.size).toBe(0);
     expect(ledger.entries.map((e) => e.op)).toEqual(['run-start', 'created', 'deleted', 'run-end']);
     expect(exitCode(r)).toBe(0);
+  });
+
+  it('records every 429 by method (or path), and nothing else', async () => {
+    const w = world();
+    const sc = scenario(async (x) => {
+      x.respond('/api/listTasks', 429);
+      x.respond('/api/getDay', 200);
+      x.respond('/assets/index.js', 429);
+      x.respond('/api/getDay', 429);
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.throttled).toEqual(['/api/listTasks', '/assets/index.js', '/api/getDay']);
   });
 
   it('a failed step skips the rest of its scenario, and cleanup still runs', async () => {

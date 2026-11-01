@@ -13,7 +13,14 @@ interface Trigger {
 }
 
 // The `on:` block, parsed fail-closed: any shape this can't read for certain — `on: push`, a flow list, a quoted key,
-// CRLF, a push with no inline `branches: [...]` filter, `branches-ignore` — throws, so a test can never pass vacuously.
+// CRLF, an inline mapping, a push with anything but one inline `branches: [...]` of literal names (plus inline `paths`
+// filters) — throws, so a test can never pass vacuously. `tags`, `branches-ignore` and globs are refused outright.
+const branchList = (line: string) =>
+  /^branches: \[([^\]]*)\]$/
+    .exec(line)![1]!
+    .split(',')
+    .map((b) => b.trim().replace(/^['"]|['"]$/g, ''));
+
 function parseTriggers(file: string, yml: string): Trigger[] {
   if (yml.includes('\r')) throw new Error(`${file}: CRLF line endings`);
   const lines = yml.split('\n').map((l) => l.replace(/\s+#.*$/, ''));
@@ -33,10 +40,17 @@ function parseTriggers(file: string, yml: string): Trigger[] {
     else throw new Error(`${file}: unreadable trigger line ${JSON.stringify(l)}`);
   }
   for (const t of out.filter((x) => x.event === 'push')) {
-    if (t.lines.some((l) => l.startsWith('branches-ignore')))
-      throw new Error(`${file}: push uses branches-ignore`);
-    if (!t.lines.some((l) => /^branches: \[[^\]]*\]$/.test(l)))
-      throw new Error(`${file}: push needs an inline branches: [...] filter`);
+    for (const l of t.lines)
+      if (!/^(branches|paths|paths-ignore): \[[^\]]*\]$/.test(l))
+        throw new Error(
+          `${file}: push line ${JSON.stringify(l)} — only inline branches/paths filters`,
+        );
+    const branches = t.lines.filter((l) => l.startsWith('branches:'));
+    if (branches.length !== 1)
+      throw new Error(`${file}: push needs exactly one inline branches: [...] filter`);
+    for (const b of branchList(branches[0]!))
+      if (!/^[\w./-]+$/.test(b))
+        throw new Error(`${file}: push branch ${JSON.stringify(b)} is not a literal name`);
   }
   return out;
 }
@@ -44,17 +58,28 @@ const triggers = (file: string) => parseTriggers(file, read(file));
 const pushBranches = (file: string) =>
   triggers(file)
     .filter((t) => t.event === 'push')
-    .flatMap((t) =>
-      /^branches: \[([^\]]*)\]$/
-        .exec(t.lines.find((l) => l.startsWith('branches:'))!)![1]!
-        .split(','),
-    )
-    .map((b) => b.trim().replace(/^['"]|['"]$/g, ''));
+    .flatMap((t) => branchList(t.lines.find((l) => l.startsWith('branches:'))!));
+
+// Every workflow's exact events: a new trigger — `repository_dispatch` (Contents: write can fire it), `workflow_run`,
+// `pull_request_target`, a dispatch — needs a deliberate edit here.
+const EVENTS: Record<string, string[]> = {
+  'ci.yml': ['workflow_call'],
+  'deploy-dev.yml': ['workflow_dispatch'],
+  'deploy-stage.yml': ['workflow_call'],
+  'deploy.yml': ['push'],
+  'fetch-dev-logs.yml': ['workflow_dispatch'],
+  'gitleaks.yml': ['pull_request', 'push'],
+  'pr.yml': ['pull_request'],
+};
 
 describe('workflow triggers', () => {
-  it('every workflow has a trigger block this test can read', () => {
-    expect(workflows.length).toBeGreaterThan(0);
-    for (const f of workflows) expect(triggers(f).length, f).toBeGreaterThan(0);
+  it('every workflow has exactly its pinned events', () => {
+    expect(workflows.sort()).toEqual(Object.keys(EVENTS).sort());
+    for (const f of workflows)
+      expect(
+        triggers(f).map((t) => t.event),
+        f,
+      ).toEqual(EVENTS[f]);
   });
 
   it('deploy.yml runs only on a push to main', () => {
@@ -65,15 +90,13 @@ describe('workflow triggers', () => {
   it('no workflow runs on a push to `dev`', () => {
     for (const f of workflows) {
       const branches = pushBranches(f);
-      expect(branches, f).not.toContain('dev');
-      // A wildcard would match dev too.
-      for (const b of branches) expect(b, f).not.toMatch(/\*/);
+      expect(branches, f).not.toContain('dev'); // the parser already refuses a glob, which could match it
     }
   });
 
   it('only the bot dispatch and the dev-logs fetch can be dispatched', () => {
-    const dispatchable = workflows.filter((f) =>
-      triggers(f).some((t) => t.event === 'workflow_dispatch'),
+    const dispatchable = Object.keys(EVENTS).filter((f) =>
+      EVENTS[f]!.includes('workflow_dispatch'),
     );
     expect(dispatchable.sort()).toEqual(['deploy-dev.yml', 'fetch-dev-logs.yml']);
   });
@@ -94,6 +117,10 @@ describe('workflow triggers', () => {
       'push with no branch filter': 'on:\n  push:\njobs:\n',
       'block-list branches': 'on:\n  push:\n    branches:\n      - dev\njobs:\n',
       'branches-ignore': 'on:\n  push:\n    branches-ignore: [main]\njobs:\n',
+      tags: "on:\n  push:\n    branches: [main]\n    tags: ['*']\njobs:\n",
+      'duplicate branches': 'on:\n  push:\n    branches: [main]\n    branches: [dev]\njobs:\n',
+      'inline mapping': 'on:\n  push: {branches: [dev]}\njobs:\n',
+      'branch glob': "on:\n  push:\n    branches: ['**']\njobs:\n",
     };
     for (const [why, yml] of Object.entries(bad))
       expect(() => parseTriggers(why, yml), why).toThrow();

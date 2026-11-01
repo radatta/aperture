@@ -39,6 +39,7 @@ export interface RunResult {
   orphanIntents: string[]; // API creates that may have landed without their id — check by hand
   blockedDeletes: string[]; // ledger ids NOT deleted because the server showed parts the ledger doesn't know
   consoleErrors: string[];
+  throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
   shots: string[];
   durationMs: number;
   crash?: string;
@@ -97,6 +98,14 @@ export function renderReport(r: RunResult): string {
     '## Console errors',
     '',
     ...(r.consoleErrors.length ? r.consoleErrors.map((e) => `- ${cell(e)}`) : ['None.']),
+  );
+  // A 429 is Lambda refusing to start the function, so the call never ran (docs/ops/DEV-CHECK.md → Known 429s). Chromium's
+  // console line for it carries no URL; this names each one.
+  lines.push(
+    '',
+    '## Throttled (429)',
+    '',
+    ...(r.throttled.length ? r.throttled.map((t) => `- \`${cell(t)}\``) : ['None.']),
   );
   lines.push(
     '',

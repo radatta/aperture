@@ -80,26 +80,29 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 ## Known 429s
 
-**A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency is 10 (AWS's reduced new-account
-quota; Support case 179351213900245 asks for 30; [CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a
-deploy, so the BFF is cold, and Home mounts about 10 RPCs at once — the burst exceeds 10 and some get HTTP 429. The
-harness's own API calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console
-errors: in the smoke scenario's _No console errors on the way_ row, and again in every later row that re-reads the
-run's cumulative console list (`pipeline.ts`). The run still reports FAIL — the test is not weakened. Only the
-workflow's verdict changes: **a full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these
-hold in its `report.md`:**
+**A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency quota is low for now
+([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
+cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
+calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console errors: in the
+smoke scenario's _No console errors on the way_ row, and again in every later row that re-reads the run's cumulative
+console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
+console line doesn't. The run still reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
+full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold in its `report.md`:**
 
 - the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
 - no row is `skipped`;
 - every `fail` row is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
-  or a later row reading `console errors: …` with exactly N `|`-separated entries — nothing new after the burst;
-- the _Console errors_ section lists exactly N lines, every one a 429 (`…status of 429 ()` or `<method> failed (429)`),
-  and N ≤ 16 (login's and Home's mount RPCs; a refetch loop or request storm, also all 429s, would exceed it).
+  or a later row reading `console errors: …` with exactly N `\|`-separated entries — nothing new after the burst;
+- the _Console errors_ section lists exactly N lines, each containing `status of 429` or `failed (429)`, and N ≤ 16
+  (one throttled call can log two lines — the resource's and the app's own `Error: … failed (429)`; a refetch loop or
+  request storm, also all 429s, would exceed it);
+- the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
+  function, so that call was never tested; if it names one, rerun until it doesn't.
 
 Anything else is a bug, as always. The burst is one too — a known defect with a dated fix (the in-flight cap below);
-this rule records it, it does not excuse it. Log each such run in the feature's `decisions.md` and its PR body. **The rule
-expires** when the quota reaches 30, or when the client in-flight cap ships (its own PR, due if no raise by 2026-11-08)
-— then remove this section.
+this rule records it, it does not excuse it. Log each such run in the feature's `decisions.md` and its PR body. **The
+rule expires** when the quota reaches 30, or when the client in-flight cap ships (its own PR, due if no raise by
+2026-11-08) — then remove this section.
 
 ## Ledgers
 

@@ -53,6 +53,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     orphanIntents: [],
     blockedDeletes: [],
     consoleErrors: [],
+    throttled: [],
     shots: [],
     durationMs: 0,
   };
@@ -76,6 +77,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const page = browser.page;
     page.on('console', (m) => m.type() === 'error' && r.consoleErrors.push(m.text()));
     page.on('pageerror', (e) => r.consoleErrors.push(String(e)));
+    page.on('response', (res) => {
+      if (res.status() !== 429) return;
+      const method = methodOf(res.url());
+      r.throttled.push(method ? `/api/${method}` : new URL(res.url()).pathname);
+    });
     // Track creates from the request, not the response: one still in flight when a step times out must be
     // waited for (and its id recorded) before cleanup, not lost.
     page.on('request', (req) => {
