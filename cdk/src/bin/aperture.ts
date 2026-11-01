@@ -76,7 +76,7 @@ function deviceUserIdFor(stage: string): string | undefined {
 }
 
 // Two stacks per stage. Region pinned to us-west-1; account comes from the deploying credentials
-// (CDK_DEFAULT_ACCOUNT), so nothing account-specific is committed. `-c stage=prod` for prod.
+// (CDK_DEFAULT_ACCOUNT; for dev, the dev account), so nothing account-specific is committed. `-c stage=prod` for prod.
 const app = new App();
 const stage = (app.node.tryGetContext('stage') as string | undefined) ?? 'dev';
 const env = { region: 'us-west-1' };
