@@ -37,13 +37,14 @@ export const KILL_ALARMS = [
   },
   // A slower drain still: a rolling three-hour sum, compared every minute (a period under a day evaluates per minute
   // over a sliding window), so a drain that rests between bursts can't dodge it the way it could three hourly checks.
-  // 900,000 ms in three hours is five environment-minutes an hour — half the hourly alarm's rate. Provisional: re-tune
-  // from a measured devcheck so a normal session sits well under it.
+  // 300,000 ms in three hours is about 1.7 environment-minutes an hour. Measured 2026-11-01: the whole dev-account window
+  // (deploys, two full devchecks, a phone test) used 17,707 ms in three hours, so a busy session sits ~17× under it.
+  // Re-tune if real agent sessions come near it.
   {
     name: `${KILL_ALARM_PREFIX}duration-3h`,
     namespace: 'AWS/Lambda',
     metricName: 'Duration',
-    threshold: 900_000,
+    threshold: 300_000,
     minutes: 180,
     periods: 1,
   },
