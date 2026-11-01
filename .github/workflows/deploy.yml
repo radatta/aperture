@@ -1,17 +1,16 @@
 name: Deploy
 
 # GitHub Flow: push to main → dev then prod (both auto — no approval pause, and no merge-time deploy gate:
-# the PR's required checks are the only gate before main — INFRA §9). Push to dev → one-off dev deploy (the
-# user's, by hand — a ruleset keeps the bot off `dev`; the bot's own path is deploy-dev.yml, off until dev runs
-# in its own AWS account — docs/ops/CI-BOT.md). Never add workflow_dispatch here: this is the prod path.
-# Keyless via OIDC (prod's role from ApertureCicd; dev's two from ApertureCicdDev in the dev account, one per lane —
-# a `main` push uses dev-main's, a `dev` push dev's). Origin secret
-# injected from GitHub secrets per stage.
+# the PR's required checks are the only gate before main — INFRA §9). A branch reaches dev only through the bot's
+# dispatch, deploy-dev.yml; the `dev` branch push path was retired at dev-cutover (docs/ops/CI-BOT.md → Setup step 8).
+# Never add workflow_dispatch or another push branch here: this is the prod path.
+# Keyless via OIDC (prod's role from ApertureCicd; dev's from ApertureCicdDev in the dev account — a `main` push
+# deploys dev as dev-main's, in the freeze-exempt lane). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
 # changes → deploy each stage at the resulting tier.
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
 
 # Serialize deploys per ref — never cancel a deploy mid-flight (a half-applied stack is worse than a queue).
 concurrency:
@@ -25,8 +24,8 @@ jobs:
   check:
     uses: ./.github/workflows/ci.yml
 
-  # Classify the push once (docs / app-only / full) and assert dev is current with main. Runs in parallel with
-  # `check`; deploy-dev waits on both. Kept toolchain-free and short.
+  # Classify the push once (docs / app-only / full). Runs in parallel with `check`; deploy-dev waits on both. Kept
+  # toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -36,19 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # need history to diff the push and to check ancestry against main
-      # On any non-main push (i.e. dev), require the branch to already contain main: dev should only ever run
-      # code that already has main in it, so what you validate there is what a squash-merge would produce — and a
-      # stale branch can't redeploy an older cdk app into the dev account. A stale branch fails here → deploy-dev
-      # (needs: changes) is skipped. No-op on main pushes. Goes with the `dev` trigger in dev-cutover; dispatches
-      # check the same in deploy-dev.yml.
-      - name: Branch is up to date with main
-        if: github.ref != 'refs/heads/main'
-        run: |
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor origin/main HEAD || {
-            echo "::error::dev is behind main — merge/rebase main in before pushing"; exit 1
-          }
+          fetch-depth: 0 # need history to diff the push
       # docs-only → none (nothing is built or deployed; the deploy job still runs in its environment, so GitHub
       # records a deployment that deploys nothing — a vestige of the retired required_deployments gate, INFRA §9).
       # app/** only → app. Anything else, or an indeterminate base → full. The rule is a tested module, not an
@@ -84,8 +71,8 @@ jobs:
       stage: dev
       mode: ${{ needs.changes.outputs.mode }}
       # Two lanes into the dev account (docs/ops/CI-BOT.md → Two lanes): a `main` push is merged, reviewed code, so it
-      # deploys through the freeze-exempt devmain lane and its main-only `dev-main` environment; a `dev` push stays
-      # in the frozen lane, like a bot dispatch.
+      # deploys through the freeze-exempt devmain lane and its main-only `dev-main` environment. Main is this file's
+      # only trigger; the conditionals stay so a trigger ever added here lands in the frozen lane, never the exempt one.
       lane: ${{ github.ref == 'refs/heads/main' && 'devmain' || '' }}
       role_arn: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_DEV_MAIN || vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
@@ -98,7 +85,7 @@ jobs:
 
   deploy-prod:
     needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode` output
-    if: github.ref == 'refs/heads/main' # dev-branch pushes stop at dev
+    if: github.ref == 'refs/heads/main' # main is the only trigger; kept so a trigger ever added here stops at dev
     permissions:
       id-token: write
       contents: read
@@ -117,7 +104,7 @@ jobs:
       agent_token: ${{ secrets.AGENT_TOKEN_PROD }}
 
   # Push a deploy result to ntfy (subscribed in a desktop browser) so a solo operator gets an out-of-band
-  # signal without watching the Actions tab. Runs for both main and dev pushes. Failure = high priority
+  # signal without watching the Actions tab. Runs for every main push. Failure = high priority
   # (breaks through), success = min priority (quiet). NTFY_TOPIC is the only access control on the public
   # ntfy instance → a secret, not a var; not an AWS cred, so this job stays keyless. No-ops (doesn't fail)
   # until the secret is set, so it's safe to land before the topic exists.
@@ -139,10 +126,9 @@ jobs:
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
           body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
-          # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod is skipped on a
-          # dev-branch push; a docs-only job still reports success (steps just no-op). `changes` is watched
-          # too: it holds the up-to-date-with-main gate, so its failure must not slip through as a success just
-          # because the deploy jobs got skipped.
+          # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod's `if:` can skip it; a
+          # docs-only job still reports success (steps just no-op). `changes` is watched too: its failure (the
+          # classifier) must not slip through as a success just because the deploy jobs got skipped.
           failed=0
           for r in "$CHECK_RESULT" "$CHANGES_RESULT" "$DEV_RESULT" "$PROD_RESULT"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then failed=1; fi

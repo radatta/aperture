@@ -462,7 +462,7 @@ dev + prod deployed. Prod trust bound to the `prod` GitHub environment (scopes t
 `environment:prod` jobs). Account/GitHub setup done: `ApertureCicd` deployed, repo vars (role ARNs,
 region) + secrets (`ORIGIN_SECRET_DEV/PROD`) set, `prod` environment created.
 **⚠️ No approval pause on this repo** — deploy-prod runs automatically after deploy-dev on a `main`
-push; use the **`dev` branch** as the practical gate (dev-only deploy → validate → then push `main`).
+push; use the **`dev` branch** as the practical gate (dev-only deploy → validate → then push `main`; since `dev-cutover`, `pnpm bot deploy-dev`).
 The premise first recorded here (that a required reviewer needs a public repo or a paid plan) was wrong —
 the account is on Pro; the current state and the untested option are in INFRA §9 "Approval-gate caveat."
 

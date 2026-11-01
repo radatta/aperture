@@ -4,7 +4,7 @@ import { DEVMAIN_QUALIFIER } from './devAccount';
 export type Lane = '' | typeof DEVMAIN_QUALIFIER;
 
 // Which CDK bootstrap a dev deploy goes through (INFRA §2, docs/ops/CI-BOT.md → Two lanes). '' is the stock bootstrap
-// the freeze binds (bot dispatches, `dev` pushes); 'devmain' is main's own dev deploy, through the second bootstrap
+// the freeze binds (bot dispatches); 'devmain' is main's own dev deploy, through the second bootstrap
 // whose execution role the freeze exempts. deploy-stage.yml sets APERTURE_DEPLOY_LANE; prod never has one.
 export function laneFor(stage: string, raw = process.env.APERTURE_DEPLOY_LANE ?? ''): Lane {
   const lane = raw.trim();

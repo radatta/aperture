@@ -17,7 +17,7 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                              |
 | Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                         |
-| Hold the dev stage for a dev test | `scripts/board/board.sh lease acquire dev [--wait SEC] [--note "…"]` → `lease release dev` when done                                                                                           |
+| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_); the board's `dev` lease below is retired                                                                     |
 | What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                            |
 | How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`) |
 | Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                        |
@@ -137,9 +137,11 @@ State lives on the shared mount (`/workspace/localNotes/board/`, visible from th
 Every lease change runs under `flock /tmp/aperture-board.lock` — on the container's rootfs, because the whole
 population is this one container (virtiofs `flock` semantics aren't worth trusting).
 
-**`dev`** — one branch on the dev stage at a time. Advisory and local; the feature workflow takes it before
-asking the user for the `dev` push (phase 8) and releases it at the PR (phase 10). Once bot dev deploys are on,
-ci-bot's `refs/locks/dev` is GitHub's truth (`docs/ops/CI-BOT.md` → _Dev lock_), and dev-e2e's build marker catches an overwrite after the fact. Lease
+**`dev`** — **retired from the feature workflow at `dev-cutover`** (2026-11): it guarded the user's `dev` push, which
+that PR retired; bot dev deploys take ci-bot's `refs/locks/dev`, GitHub's truth across machines (`docs/ops/CI-BOT.md`
+→ _Dev lock_), and dev-e2e's build marker catches an overwrite after the fact. The code below stays until a cleanup
+PR removes it (with its hooks' dev-lease line). It was one branch on the dev stage at a time, advisory and local:
+the workflow took it before asking the user for the `dev` push (phase 8) and released it at the PR (phase 10). Lease
 `{holderPid, holderStart, holderName, branch, acquiredAt, expiresAt, ttlSec: 2700, note}`:
 
 - free → granted; the holder again → renewed; someone else → exit 3 with who and until when

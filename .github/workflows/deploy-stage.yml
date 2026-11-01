@@ -65,11 +65,11 @@ jobs:
     # dev lane, `…:environment:dev-main`, an environment GitHub admits only from `main`. Also records a GitHub
     # deployment against it, which nothing consumes since main dropped `required_deployments` (INFRA §9).
     environment: ${{ inputs.lane == 'devmain' && 'dev-main' || inputs.stage }}
-    # One deploy per STAGE at a time, across workflows (both dev lanes share the group, so they serialize). A main push (which deploys dev first) and a dev deploy
-    # — a `dev` push, or a bot dispatch (deploy-dev.yml) — could otherwise hit the dev stack at once. Queue, never
-    # cancel — a half-applied stack is worse than a wait. At most two jobs contend: one main run plus one dev
-    # run (dispatches stay off while the `dev` push path exists, and deploy-dev.yml's own group plus the bot's
-    # refs/locks/dev lock cap them at one), so GitHub's one-pending-per-group cancellation can't trigger.
+    # One deploy per STAGE at a time, across workflows (both dev lanes share the group, so they serialize). A main push
+    # (which deploys dev first) and a bot dispatch (deploy-dev.yml) could otherwise hit the dev stack at once. Queue,
+    # never cancel — a half-applied stack is worse than a wait. At most two jobs contend: one main run plus one
+    # dispatch (deploy-dev.yml's own group plus the bot's refs/locks/dev lock cap dispatches at one; the `dev` push
+    # path was retired at dev-cutover), so GitHub's one-pending-per-group cancellation can't trigger.
     concurrency:
       group: deploy-stage-${{ inputs.stage }}
       cancel-in-progress: false

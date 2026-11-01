@@ -1,6 +1,6 @@
 ---
 name: devcheck
-description: Test the deployed dev stage as the dev test user — headless Chromium, screenshots, cleanup by recorded id. Use at the Feature workflow's dev test (phase 8) after the branch is pushed to dev, or when asked to check something on dev.
+description: Test the deployed dev stage as the dev test user — headless Chromium, screenshots, cleanup by recorded id. Use at the Feature workflow's dev test (phase 8) after `pnpm bot deploy-dev` dispatched the branch, or when asked to check something on dev.
 ---
 
 # Run the dev check
@@ -9,7 +9,7 @@ The reference is `docs/ops/DEV-CHECK.md`. This is the procedure.
 
 ## Before
 
-- The branch's commit is pushed to `dev` (the user's push, or ci-bot's dispatch). `git rev-parse HEAD` is what
+- The branch's commit is on dev through `pnpm bot deploy-dev` (a `deploy-dev <sha> <key>` run). `git rev-parse HEAD` is what
   the check expects unless you pass `--sha`.
 - Nothing heavy is running in the container — no `pnpm test`, no dev server, no other headless browser. A
   second dev check refuses to start (`run.lock`).

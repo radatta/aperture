@@ -7,7 +7,7 @@ name: Secret scan
 on:
   pull_request:
   push:
-    branches: [main, dev]
+    branches: [main] # the `dev` branch was retired at dev-cutover; feature branches are scanned on their PR
 
 # Cancel superseded runs on the same ref — a new push makes the in-flight scan moot.
 concurrency:

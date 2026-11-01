@@ -7,7 +7,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 ## Decisions (locked)
 
 - **Alarms (#5) + budget (#7) channel:** email via SNS, to the operator's **GitHub-account email** (`<FILL: personal email>`). Simplest, zero new infra; these fire rarely so inbox delivery is fine.
-- **Deploy notifications (#1):** ntfy.sh, on **both `main` and `dev`** pushes. Success = quiet (min priority), failure = prominent (high priority). Subscribed from a **desktop browser** (no phone).
+- **Deploy notifications (#1):** ntfy.sh, on **both `main` and `dev`** pushes (`main` only since `dev-cutover` retired the `dev` branch). Success = quiet (min priority), failure = prominent (high priority). Subscribed from a **desktop browser** (no phone).
 - **Budget (#7):** `$1` actual warn / `$5` forecast hard.
 
 ## Status
@@ -40,7 +40,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 3. **The Lambda Function URL is not a `CfnOutput`.** `app-stack.ts` outputs `AppUrl`, `CloudFrontDomain`, `SiteBucket`, `DistributionId`, `UserPoolClientId` — not `fnUrl.url`. Item 6's negative-gate test must hit the Function URL **directly** (through CloudFront the viewer can't set `x-aperture-origin-secret` — the origin policy forwards only the auth + content-type headers and CloudFront injects the secret), so a `FunctionUrl` output must be added.
 4. **The invalidation ID isn't surfaced.** `scripts/aws/publish-frontend.mjs` runs `create-invalidation` with `stdio: 'inherit'` — the ID is printed, not captured. `aws cloudfront wait invalidation-completed` needs it. Item 6 modifies the script to emit it.
 5. **All seven are greenfield** — no existing monitoring/SNS/budget/nag/gitleaks/Dependabot/ntfy wiring anywhere.
-6. **`deploy.yml` triggers on `push` only** (not `pull_request`), so Dependabot's restricted-secret context is a non-issue (#4). Prod is `if: github.ref == 'refs/heads/main'`, so it is **skipped** on dev-branch pushes — item 1's notify job must treat `skipped` as not-a-failure.
+6. **`deploy.yml` triggers on `push` only** (not `pull_request`), so Dependabot's restricted-secret context is a non-issue (#4). Prod is `if: github.ref == 'refs/heads/main'`, so it is **skipped** on dev-branch pushes (retired at `dev-cutover`; the `if:` stays) — item 1's notify job must treat `skipped` as not-a-failure.
 7. **Versions:** `cdk-nag` latest is **3.0.2** (confirmed via `npm show`) — the v3 **validation-plugin** API, not the classic `Aspects.of(app).add(...)`; confirm the exact call in the current README before writing. `gitleaks/gitleaks-action` current tag confirmed **`v3`** (v3.0.0, Node 24) via the GitHub releases API — pinned.
 
 ## Manual prerequisites (operator, by hand — all done 2026-08-10, see Open items)
@@ -70,7 +70,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 **File:** `.github/workflows/deploy.yml` (modify).
 
 - New `notify` job: `needs: [deploy-dev, deploy-prod]`, `if: always()`, default permissions only (ntfy topic ≠ AWS cred → keyless).
-- Outcome logic from `needs.deploy-dev.result` / `needs.deploy-prod.result`: **failure** if either is `failure`; `skipped` (prod on a dev push) and `cancelled` are **not** failures.
+- Outcome logic from `needs.deploy-dev.result` / `needs.deploy-prod.result`: **failure** if either is `failure`; `skipped` (prod on a dev push, before `dev-cutover`) and `cancelled` are **not** failures.
 - Success → `curl -H "Priority: min" -H "Title: Aperture deploy ok" -d "<ref> <sha>" https://ntfy.sh/${{ secrets.NTFY_TOPIC }}`
 - Failure → `curl -H "Priority: high" -H "Tags: warning" -H "Title: Aperture deploy FAILED" -d "<ref> <sha> — <run url>" ...`
 - Body uses `${{ github.ref_name }}` + `${{ github.sha }}` so one topic serves both branches.

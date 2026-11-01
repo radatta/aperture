@@ -133,7 +133,7 @@ export class ApertureCicdStack extends Stack {
       return;
     }
 
-    // dev: the frozen lane — deploy.yml's deploy-dev on a `dev` push, and deploy-dev.yml on a bot dispatch — runs in
+    // dev: the frozen lane — deploy-dev.yml on a bot dispatch (and deploy.yml's on a `dev` push, until dev-cutover) — runs in
     // the `dev` GitHub environment, so its OIDC sub is `…:environment:dev` and the trust is scoped to the environment
     // alone. A `main` push deploys dev through the dev-main role below instead.
     const devRole = makeRole('DeployDev', 'aperture-github-deploy-dev', [`repo:${githubSubject}:environment:dev`], 'dev');
