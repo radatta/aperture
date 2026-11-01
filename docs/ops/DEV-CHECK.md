@@ -81,18 +81,23 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 ## Known 429s
 
 **A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency is 10 (AWS's reduced new-account
-quota; Support case 179351213900245 asks for 30; [CI-BOT.md](CI-BOT.md) → _Worst case_). A devcheck runs right after a
+quota; Support case 179351213900245 asks for 30; [CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a
 deploy, so the BFF is cold, and Home mounts about 10 RPCs at once — the burst exceeds 10 and some get HTTP 429. The
 harness's own API calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console
 errors: in the smoke scenario's _No console errors on the way_ row, and again in every later row that re-reads the
 run's cumulative console list (`pipeline.ts`). The run still reports FAIL — the test is not weakened. Only the
-workflow's verdict changes: **a full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold:**
+workflow's verdict changes: **a full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these
+hold in its `report.md`:**
 
-- the status is `STEP_FAILED` and cleanup left zero leftovers;
-- every failing row's error is console errors only, each a 429 (`status of 429`, or `<method> failed (429)`);
-- no failing row lists an error the smoke row's list doesn't — the 429s all fell in that page-load burst.
+- the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
+- no row is `skipped`;
+- every `fail` row is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
+  or a later row reading `console errors: …` with exactly N `|`-separated entries — nothing new after the burst;
+- the _Console errors_ section lists exactly N lines, every one a 429 (`…status of 429 ()` or `<method> failed (429)`),
+  and N ≤ 16 (login's and Home's mount RPCs; a refetch loop or request storm, also all 429s, would exceed it).
 
-Anything else is a bug, as always. Log each such run in the feature's `decisions.md` and its PR body. **The rule
+Anything else is a bug, as always. The burst is one too — a known defect with a dated fix (the in-flight cap below);
+this rule records it, it does not excuse it. Log each such run in the feature's `decisions.md` and its PR body. **The rule
 expires** when the quota reaches 30, or when the client in-flight cap ships (its own PR, due if no raise by 2026-11-08)
 — then remove this section.
 
@@ -114,22 +119,22 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
 
-| Code                       | Means                                                                                                                                    | Do                                                                   |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                         |
-| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                         |
-| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                     | did `pnpm bot deploy-dev` run for it?                                |
-| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `verify` job means it is behind main — rebase |
-| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                     |
-| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                            |
-| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately               |
-| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                         |
-| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                     |
-| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                               |
-| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                               |
-| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                         |
-| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                              |
-| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, `deploy-dev`, rerun               |
+| Code                       | Means                                                                                                                                    | Do                                                                    |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                          |
+| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                          |
+| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                     | did `pnpm bot deploy-dev` run for it?                                 |
+| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `verify` job names why in its `::error::` line |
+| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                      |
+| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                             |
+| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately                |
+| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                          |
+| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                      |
+| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                                |
+| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                                |
+| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                          |
+| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                               |
+| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun          |
 
 ## Writing a scenario
 
