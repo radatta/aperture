@@ -25,7 +25,7 @@ Seven additions to the pipeline + runtime ops, chosen from a wider research pass
 | 2   | cdk-nag                     | $0   | Build-time only, no AWS calls                                                     |
 | 3   | gitleaks                    | $0   | Free for personal repos; CI minutes                                               |
 | 4   | Dependabot                  | $0   | GitHub-native, runs off GitHub infra (not your Actions minutes)                   |
-| 5   | CloudWatch alarms           | $0   | ≤10 alarms/month free (we use 6); SNS email 1,000/month free                      |
+| 5   | CloudWatch alarms           | $0   | ≤10 alarms free org-wide (prod 5 + dev account 5); SNS email 1,000/month free     |
 | 6   | Post-deploy synthetic check | $0   | `curl` in CI; extra Lambda/CloudFront hits are free-tier / fractions of a cent    |
 | 7   | Budget                      | $0   | Notification-only budgets free & unlimited (anomaly monitor dropped — see item 7) |
 
@@ -116,7 +116,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
   - `fn.metricThrottles()` ≥ 1
   - `fn.metricDuration({ statistic: 'p99' })` ≥ ~12000ms (80% of the 15s timeout at `app-stack.ts:46`)
   - each `.addAlarmAction(new cw_actions.SnsAction(topic))`
-  - **Since 2026-09 (finances):** `Monitoring` takes a list of functions — three alarms each, one topic, one email confirmation. The finance sync adds `FinanceSyncErrors`, `FinanceSyncThrottles` and `FinanceSyncDurationOverBudget` (`Maximum` ≥ 295 s, not p99 — a legitimate refresh poll runs for minutes); the BFF's alarm ids are unchanged. 6 alarms in prod.
+  - **Since 2026-09 (finances):** `Monitoring` takes a list of functions — three alarms each, one topic, one email confirmation. The finance sync adds `FinanceSyncErrors`, `FinanceSyncThrottles` and `FinanceSyncDurationOverBudget` (`Maximum` ≥ 295 s, not p99 — a legitimate refresh poll runs for minutes); the BFF's alarm ids are unchanged. 6 alarms in prod. **Since dev-account (2026-10-31):** the two per-function Throttles alarms are one account-wide `AWS/Lambda` Throttles alarm (at the BFF's old id) — nothing else shares prod's concurrency once dev has its own account, and the freed slot keeps the org inside the free ten. 5 alarms in prod.
 - **Skip DynamoDB throttle alarms** (on-demand + a known CDK math-expression limitation make them not worth it).
 
 ### DECISION — CloudFront 5xx alarm: **Option B chosen** (skip it), 2026-08-10.

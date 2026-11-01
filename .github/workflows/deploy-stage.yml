@@ -8,7 +8,7 @@ name: Deploy stage
 # `mode` gates the work:
 #   none → nothing is built or deployed (the docs-only fast-path). The job still runs in `environment:`, so
 #          GitHub records a deployment that deploys nothing — a vestige of the retired gate (INFRA §9)
-#   app  → frontend only: fetch stack outputs, build, S3 sync, invalidate (not awaited), health check. No CDK.
+#   app  → frontend only: fetch stack outputs, build, S3 sync, health check. No CDK.
 #   full → everything: cdk synth/diff/deploy (writes the outputs file) + smoke, then publish + health.
 on:
   workflow_call:
@@ -36,6 +36,10 @@ on:
         required: false
         type: string
         default: '' # commit to check out and deploy; empty → the triggering commit (github.sha)
+      lane:
+        required: false
+        type: string
+        default: '' # dev only: '' → the frozen stock bootstrap; devmain → main's freeze-exempt lane (CI-BOT.md → Two lanes)
     secrets:
       origin_secret:
         required: true
@@ -52,11 +56,16 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to). Also
-    # records a GitHub deployment against the stage, which nothing consumes since main dropped
-    # `required_deployments` (INFRA §9).
-    environment: ${{ inputs.stage }}
-    # One deploy per STAGE at a time, across workflows. A main push (which deploys dev first) and a dev deploy
+    # Bounds how long a rogue branch's code runs on the runner before GitHub kills it (docs/ops/CI-BOT.md → Dev deploy
+    # blast radius); the dev OIDC session below matches it, though credentials the job already minted live out their
+    # own STS lifetime (an hour at most). A full deploy measures 10–15 min; prod gets more room because a CloudFront
+    # change can run long and a killed job leaves CloudFormation mid-update.
+    timeout-minutes: ${{ inputs.stage == 'dev' && 30 || 60 }}
+    # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to) — or, on main's
+    # dev lane, `…:environment:dev-main`, an environment GitHub admits only from `main`. Also records a GitHub
+    # deployment against it, which nothing consumes since main dropped `required_deployments` (INFRA §9).
+    environment: ${{ inputs.lane == 'devmain' && 'dev-main' || inputs.stage }}
+    # One deploy per STAGE at a time, across workflows (both dev lanes share the group, so they serialize). A main push (which deploys dev first) and a dev deploy
     # — a `dev` push, or a bot dispatch (deploy-dev.yml) — could otherwise hit the dev stack at once. Queue, never
     # cancel — a half-applied stack is worse than a wait. At most two jobs contend: one main run plus one dev
     # run (dispatches stay off while the `dev` push path exists, and deploy-dev.yml's own group plus the bot's
@@ -77,12 +86,31 @@ jobs:
       # The commit this deploy serves. A dispatched run's GITHUB_SHA is main's (the workflow ran from main), so
       # the build marker reads this first and falls back to GITHUB_SHA (contract with dev-e2e — CI-BOT.md).
       APERTURE_BUILD_SHA: ${{ inputs.ref || github.sha }}
+      # Which CDK bootstrap the dev stacks synthesize against (cdk/src/config/lane.ts); empty everywhere but main's
+      # dev deploy.
+      APERTURE_DEPLOY_LANE: ${{ inputs.lane }}
     steps:
       - name: Validate mode
         run: |
           case "${{ inputs.mode }}" in
-            none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }}" ;;
+            none|app|full) echo "mode=${{ inputs.mode }} stage=${{ inputs.stage }} lane=${{ inputs.lane }}" ;;
             *) echo "::error::invalid mode '${{ inputs.mode }}'"; exit 1 ;;
+          esac
+          case "${{ inputs.lane }}" in
+            '') ;;
+            devmain) [ "${{ inputs.stage }}" = dev ] || { echo "::error::lane devmain is dev-only"; exit 1; } ;;
+            *) echo "::error::invalid lane '${{ inputs.lane }}'"; exit 1 ;;
+          esac
+          # The exempt lane is for merged code only: a `main` push deploying its own commit — never a dispatch, which can
+          # also run on ref main and check out a branch's commit (deploy-dev.yml's `ref`).
+          if [ "${{ inputs.lane }}" = devmain ] && { [ "${{ github.event_name }}" != push ] || [ "${{ github.ref }}" != refs/heads/main ] || [ -n "${{ inputs.ref }}" ]; }; then
+            echo "::error::lane devmain is only for a main push of its own commit"; exit 1
+          fi
+          # Each lane with its own role, so an unset variable fails here, not as an opaque OIDC trust error.
+          case "${{ inputs.lane }}:${{ inputs.role_arn }}" in
+            devmain:*:role/aperture-github-dev-main) ;;
+            devmain:*) echo "::error::lane devmain needs the dev-main role (is AWS_DEPLOY_ROLE_DEV_MAIN set?)"; exit 1 ;;
+            *:role/aperture-github-dev-main) echo "::error::the dev-main role is for lane devmain only"; exit 1 ;;
           esac
       # Prod never moves backwards. Re-running an old successful run (Actions: write can, for 30 days — the bot holds
       # it) would otherwise redeploy that commit to prod with no human step; `prod` has no reviewers. So the commit
@@ -124,6 +152,7 @@ jobs:
         with:
           role-to-assume: ${{ inputs.role_arn }}
           aws-region: ${{ inputs.aws_region }}
+          role-duration-seconds: ${{ inputs.stage == 'dev' && 1800 || 3600 }}
       # --- full only: infra path ---
       # One synth → diff + deploy consume the same cdk.out: no double esbuild bundle, and the diff you
       # read is byte-identical to what deploys. --no-lookups fails loudly on any (unexpected) lookup.
@@ -140,8 +169,28 @@ jobs:
       # --method=direct: UpdateStack without a change set. Same rollback-on-failure from CloudFormation, less
       # per-resource progress in the log; unchanged stacks still no-op.
       - name: Deploy stacks # --outputs-file is what publish/health-check read downstream
+        id: deploy
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/cdk exec cdk deploy --app cdk.out ApertureData-${{ inputs.stage }} ApertureApp-${{ inputs.stage }} --method=direct --require-approval never --outputs-file cdk-outputs.${{ inputs.stage }}.json
+      # A dev deploy the freeze refused doesn't roll back by itself: CloudFormation's rollback re-applies the function's
+      # configuration as the same frozen role, which the freeze refuses too, so the stack sticks in
+      # UPDATE_ROLLBACK_FAILED — and a stuck stack blocks both lanes, main's included (seen in the dev-account freeze
+      # probe, 2026-10-31; the unstick itself, probe F2). Continue the rollback through the same lane, skipping what can't
+      # roll back. Frozen lane only: there a failed rollback is the freeze refusing a change it also refused going
+      # forward, so the skipped resource never changed; in main's exempt lane a failed rollback is a real fault, left for
+      # the user. The job has already failed; this only leaves dev deployable for the next run. Never on prod.
+      - name: Unstick a refused dev deploy
+        if: failure() && steps.deploy.outcome == 'failure' && inputs.stage == 'dev' && inputs.lane == ''
+        run: |
+          if out=$(pnpm --filter @aperture/cdk exec cdk rollback --app cdk.out ApertureData-dev ApertureApp-dev --force 2>&1); then
+            echo "$out"; echo "::notice::rolled the refused dev deploy back; dev is deployable again"; exit 0
+          fi
+          echo "$out"
+          if grep -q 'No stacks were in a state that could be rolled back' <<<"$out"; then
+            echo "::warning::nothing to roll back — the deploy failed some other way"
+          else
+            echo "::error::a dev stack may still be stuck in UPDATE_ROLLBACK_FAILED, blocking both lanes — break-glass (docs/ops/CI-BOT.md → Kill switch)"
+          fi
       - name: Smoke
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts ${{ inputs.stage }}

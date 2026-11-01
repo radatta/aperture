@@ -2,9 +2,11 @@ name: Deploy
 
 # GitHub Flow: push to main → dev then prod (both auto — no approval pause, and no merge-time deploy gate:
 # the PR's required checks are the only gate before main — INFRA §9). Push to dev → one-off dev deploy (the
-# user's, by hand — a ruleset keeps the bot off `dev`; the bot's own path is deploy-dev.yml, off until dev's
-# CDK bootstrap is isolated — docs/ops/CI-BOT.md). Never add workflow_dispatch here: this is the prod path.
-# Keyless via OIDC (roles from ApertureCicd). Origin secret injected from GitHub secrets per stage.
+# user's, by hand — a ruleset keeps the bot off `dev`; the bot's own path is deploy-dev.yml, off until dev runs
+# in its own AWS account — docs/ops/CI-BOT.md). Never add workflow_dispatch here: this is the prod path.
+# Keyless via OIDC (prod's role from ApertureCicd; dev's two from ApertureCicdDev in the dev account, one per lane —
+# a `main` push uses dev-main's, a `dev` push dev's). Origin secret
+# injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
 # changes → deploy each stage at the resulting tier.
 on:
@@ -36,10 +38,10 @@ jobs:
         with:
           fetch-depth: 0 # need history to diff the push and to check ancestry against main
       # On any non-main push (i.e. dev), require the branch to already contain main: dev should only ever run
-      # code that already has main in it, so what you validate there is what a squash-merge would produce — and,
-      # since dev-bootstrap, so a stale branch can't put dev back on the default (admin) CDK bootstrap. A stale
-      # branch fails here → deploy-dev (needs: changes) is skipped. No-op on main pushes. Goes with the `dev`
-      # trigger in dev-cutover; dispatches check the same in deploy-dev.yml.
+      # code that already has main in it, so what you validate there is what a squash-merge would produce — and a
+      # stale branch can't redeploy an older cdk app into the dev account. A stale branch fails here → deploy-dev
+      # (needs: changes) is skipped. No-op on main pushes. Goes with the `dev` trigger in dev-cutover; dispatches
+      # check the same in deploy-dev.yml.
       - name: Branch is up to date with main
         if: github.ref != 'refs/heads/main'
         run: |
@@ -81,7 +83,11 @@ jobs:
     with:
       stage: dev
       mode: ${{ needs.changes.outputs.mode }}
-      role_arn: ${{ vars.AWS_DEPLOY_ROLE_DEV }}
+      # Two lanes into the dev account (docs/ops/CI-BOT.md → Two lanes): a `main` push is merged, reviewed code, so it
+      # deploys through the freeze-exempt devmain lane and its main-only `dev-main` environment; a `dev` push stays
+      # in the frozen lane, like a bot dispatch.
+      lane: ${{ github.ref == 'refs/heads/main' && 'devmain' || '' }}
+      role_arn: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_DEV_MAIN || vars.AWS_DEPLOY_ROLE_DEV }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_DEV }}
       device_user_id: ${{ vars.DEVICE_USER_ID_DEV }}

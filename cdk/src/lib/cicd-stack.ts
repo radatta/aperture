@@ -1,10 +1,13 @@
-import { CfnOutput, Duration, Stack, Validations } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, Token, Validations } from 'aws-cdk-lib';
 import type { StackProps } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
-import { DEV_QUALIFIER } from './dev-stage';
+import { DEV_MAIN_GITHUB_ROLE, DEVMAIN_QUALIFIER, STOCK_QUALIFIER } from '../config/devAccount';
 
 export interface CicdStackProps extends StackProps {
+  // Which account this copy is for (INFRA §2): 'prod' → the management account's prod deploy role (ApertureCicd);
+  // 'dev' → the dev account's deploy + dev-logs roles (ApertureCicdDev). Each account has its own OIDC provider.
+  roles: 'prod' | 'dev';
   githubRepo: string; // 'owner/repo' — human-facing slug; also the default OIDC subject segment
   // The owner/repo segment as it actually appears in the token's `sub` claim. Defaults to githubRepo.
   // Some enterprises/orgs enforce a custom OIDC subject that embeds the immutable owner/repo IDs
@@ -15,29 +18,34 @@ export interface CicdStackProps extends StackProps {
 
 const GITHUB_OIDC_HOST = 'token.actions.githubusercontent.com';
 const GITHUB_OIDC_URL = `https://${GITHUB_OIDC_HOST}`;
-const DEFAULT_QUALIFIER = 'hnb659fds'; // the account's default bootstrap (cdk-hnb659fds-*-role); prod deploys through it
+const BOOTSTRAP_QUALIFIER = STOCK_QUALIFIER; // each account's stock CDK bootstrap (cdk-hnb659fds-*-role)
 
-// Deployed ONCE, by hand, before CI can run — chicken-and-egg: the roles must exist for GitHub to assume
-// them. Creates the GitHub OIDC provider + two keyless deploy roles + a dev-logs reader, then the pipeline
-// never touches it (re-run by hand when a role changes — INFRA §9).
-// The roles hold almost no direct power: cdk deploy is funneled through a CDK bootstrap's roles (prod: the account
-// default's; dev: its own devsandbox one, dev-sandbox-stack.ts), which carry the real permissions, and the roles
-// get only the handful of direct actions the frontend publish + smoke step take outside CloudFormation. Prod
-// trust is bound to the `prod` GitHub environment, so the prod role is unassumable except from a job that
-// declares `environment: prod` (branch-policy scoped — the prod environment carries no required-reviewer
-// approval today).
+// Deployed ONCE per account, by hand, before CI can run — chicken-and-egg: the roles must exist for GitHub to
+// assume them. Creates the account's GitHub OIDC provider plus its keyless roles, then the pipeline never touches
+// it (re-run by hand when a role changes — INFRA §9). The roles hold almost no direct power: cdk deploy is
+// funneled through the account's CDK bootstrap roles, which carry the real permissions, and the roles get only
+// the handful of direct actions the frontend publish + smoke step take outside CloudFormation. Each stage's
+// role lives in its own account (dev's in the dev account, under its SCPs — org-stack.ts), so a dev credential
+// can never touch prod. Prod trust is bound to the `prod` GitHub environment, so the prod role is unassumable
+// except from a job that declares `environment: prod` (branch-policy scoped — the prod environment carries no
+// required-reviewer approval today).
 export class ApertureCicdStack extends Stack {
   constructor(scope: Construct, id: string, props: CicdStackProps) {
     super(scope, id, props);
     const { githubRepo, githubSubject = githubRepo } = props;
     const { account, region } = this;
+    // cdk-nag prints a pinned account literally and an unpinned one as the <AWS::AccountId> token; the ack ids below
+    // must match either form.
+    const nagAccount = Token.isUnresolved(account) ? '<AWS::AccountId>' : account;
 
     const provider = new iam.OpenIdConnectProvider(this, 'GithubOidc', {
       url: GITHUB_OIDC_URL,
       clientIds: ['sts.amazonaws.com'],
     });
 
-    const makeRole = (id: string, roleName: string, subs: string[], stage: string, qualifiers: string[]): iam.Role => {
+    // lane 'devmain' (dev only): main's own dev deploy, through the second bootstrap (config/lane.ts) — its deploy,
+    // lookup and publishing roles, named exactly, and its own version parameter.
+    const makeRole = (id: string, roleName: string, subs: string[], stage: string, lane?: typeof DEVMAIN_QUALIFIER): iam.Role => {
       const role = new iam.Role(this, id, {
         roleName,
         maxSessionDuration: Duration.hours(1),
@@ -48,22 +56,26 @@ export class ApertureCicdStack extends Stack {
         }),
       });
 
-      // cdk deploy: assume the stage's bootstrap roles (which hold the real deploy power) + read the bootstrap
+      // cdk deploy: assume the account's bootstrap roles (which hold the real deploy power) + read the bootstrap
       // version parameter the CLI checks first.
+      const bootstrapRole = (q: string, kind: string) => `arn:aws:iam::${account}:role/cdk-${q}-${kind}-${account}-${region}`;
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['sts:AssumeRole'],
-          resources: qualifiers.map((q) => `arn:aws:iam::${account}:role/cdk-${q}-*-${account}-${region}`),
+          resources: lane
+            ? ['deploy-role', 'lookup-role', 'file-publishing-role'].map((kind) => bootstrapRole(lane, kind))
+            : [bootstrapRole(BOOTSTRAP_QUALIFIER, '*')],
         }),
       );
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['ssm:GetParameter'],
-          resources: qualifiers.map((q) => `arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${q}/version`),
+          resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${lane ?? BOOTSTRAP_QUALIFIER}/version`],
         }),
       );
-      // Frontend publish (S3 sync + CloudFront invalidate) + smoke (direct Lambda invoke) — outside CFN,
-      // scoped to this stage's resources.
+      // Frontend publish (S3 sync) + smoke (direct Lambda invoke) — outside CFN, scoped to this stage's
+      // resources. No CloudFront invalidation: every un-hashed file is uploaded no-store, so the edge serves a new
+      // build without one (publish-frontend.mjs), and paths past the free 1,000 a month are billed per path.
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['s3:PutObject', 's3:DeleteObject', 's3:GetObject', 's3:ListBucket'],
@@ -71,12 +83,6 @@ export class ApertureCicdStack extends Stack {
             `arn:aws:s3:::apertureapp-${stage}-*`,
             `arn:aws:s3:::apertureapp-${stage}-*/*`,
           ],
-        }),
-      );
-      role.addToPolicy(
-        new iam.PolicyStatement({
-          actions: ['cloudfront:CreateInvalidation', 'cloudfront:GetInvalidation'],
-          resources: [`arn:aws:cloudfront::${account}:distribution/*`],
         }),
       );
       role.addToPolicy(
@@ -98,57 +104,52 @@ export class ApertureCicdStack extends Stack {
       );
 
       // cdk-nag IAM5: every wildcard in this deploy role is deliberate — assuming the account bootstrap
-      // roles, the stage's hash-suffixed site bucket, CloudFront invalidation (the distribution id isn't
-      // known until the app stack deploys), and the app-tier DescribeStacks. Acknowledge each with
+      // roles, the stage's hash-suffixed site bucket, and the app-tier DescribeStacks. Acknowledge each with
       // evidence, as raw acknowledgment metadata — the same cdk-nag#2359 workaround as app-stack.ts. The
-      // ids must match synth's "Acknowledge with '...'" hint verbatim; region is literal (us-west-1) and
-      // account stays the `<AWS::AccountId>` token, both as they appear in the finding.
+      // ids must match synth's "Acknowledge with '...'" hint verbatim; region is literal (us-west-1) and the
+      // account is `nagAccount`, both as they appear in the finding.
       role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
-        ...Object.fromEntries(
-          qualifiers.map((q) => [
-            `AwsSolutions-IAM5[Resource::arn:aws:iam::<AWS::AccountId>:role/cdk-${q}-*-<AWS::AccountId>-${region}]`,
-            'cdk deploy assumes the stage CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
-          ]),
-        ),
+        ...(lane
+          ? {}
+          : {
+              [`AwsSolutions-IAM5[Resource::arn:aws:iam::${nagAccount}:role/cdk-${BOOTSTRAP_QUALIFIER}-*-${nagAccount}-${region}]`]:
+                'cdk deploy assumes the account CDK bootstrap roles; their names carry the qualifier + a role-type wildcard by design.',
+            }),
         [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*]`]: `Frontend publish syncs to the ${stage} site bucket, whose name CDK suffixes with a hash → wildcard.`,
         [`AwsSolutions-IAM5[Resource::arn:aws:s3:::apertureapp-${stage}-*/*]`]: `Object-level access to the same ${stage} site bucket.`,
-        [`AwsSolutions-IAM5[Resource::arn:aws:cloudfront::<AWS::AccountId>:distribution/*]`]:
-          'CloudFront invalidation; the distribution id is not known until the app stack deploys.',
-        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:<AWS::AccountId>:stack/ApertureApp-${stage}/*]`]:
+        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureApp-${stage}/*]`]:
           'app-tier deploy reads stack outputs via DescribeStacks; CFN stack ARNs carry a wildcard suffix.',
-        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:<AWS::AccountId>:stack/ApertureData-${stage}/*]`]:
+        [`AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:${nagAccount}:stack/ApertureData-${stage}/*]`]:
           'Same, for the data stack outputs.',
       });
       return role;
     };
 
-    // dev: every dev deploy runs in the `dev` GitHub environment — deploy.yml's deploy-dev on a `main` or `dev`
-    // push, and deploy-dev.yml on a bot dispatch (off until dev's bootstrap is isolated — docs/ops/CI-BOT.md) — so
-    // its OIDC sub is always `…:environment:dev` and the trust is scoped to the environment alone. (The old
-    // `ref:refs/heads/{dev,main}` subs were a cutover superset, pruned 2026-08.) The `dev` environment must allow
-    // the `dev` AND `main` branches, since deploy-dev runs from both.
-    // Bootstrap: dev's own (devsandbox, dev-sandbox-stack.ts). The default qualifier stays TRANSITIONALLY — until the
-    // dev-bootstrap PR is on main, main's dev deploys still synthesize against it, and deploy-prod needs deploy-dev.
-    // The dev-cutover PR drops it; until then dev keeps the default bootstrap's account-wide reach (dispatch is off).
-    const devRole = makeRole(
-      'DeployDev',
-      'aperture-github-deploy-dev',
-      [`repo:${githubSubject}:environment:dev`],
+    if (props.roles === 'prod') {
+      // prod: environment-based — only a job running in the `prod` environment gets this sub (no
+      // required reviewers are configured on it today — INFRA §9 caveat).
+      const prodRole = makeRole('DeployProd', 'aperture-github-deploy-prod', [`repo:${githubSubject}:environment:prod`], 'prod');
+      new CfnOutput(this, 'ProdRoleArn', { value: prodRole.roleArn });
+      return;
+    }
+
+    // dev: the frozen lane — deploy.yml's deploy-dev on a `dev` push, and deploy-dev.yml on a bot dispatch — runs in
+    // the `dev` GitHub environment, so its OIDC sub is `…:environment:dev` and the trust is scoped to the environment
+    // alone. A `main` push deploys dev through the dev-main role below instead.
+    const devRole = makeRole('DeployDev', 'aperture-github-deploy-dev', [`repo:${githubSubject}:environment:dev`], 'dev');
+    // dev-main: main's own dev deploy (deploy.yml on a `main` push), in the main-only `dev-main` environment, through
+    // the `devmain` bootstrap the freeze exempts (docs/ops/CI-BOT.md → Two lanes). The guardrails SCP lets only this
+    // role assume that bootstrap's roles, and lets nothing but break-glass change it.
+    const devMainRole = makeRole(
+      'DeployDevMain',
+      DEV_MAIN_GITHUB_ROLE,
+      [`repo:${githubSubject}:environment:dev-main`],
       'dev',
-      [DEV_QUALIFIER, DEFAULT_QUALIFIER],
-    );
-    // prod: environment-based — only a job running in the `prod` environment gets this sub (no
-    // required reviewers are configured on it today — INFRA §9 caveat).
-    const prodRole = makeRole(
-      'DeployProd',
-      'aperture-github-deploy-prod',
-      [`repo:${githubSubject}:environment:prod`],
-      'prod',
-      [DEFAULT_QUALIFIER],
+      DEVMAIN_QUALIFIER,
     );
 
     // dev logs: read-only CloudWatch Logs for fetch-dev-logs.yml (the bot's `pnpm bot logs`). Built apart from
-    // makeRole — it gets none of the deploy power (no bootstrap assume, S3, CloudFront, CFN). Trusted only from
+    // makeRole — it gets none of the deploy power (no bootstrap assume, S3, CFN). Trusted only from
     // the `dev-logs` environment (main-only branch policy), and reads only the three dev Lambda groups: prod
     // logs hold the user's real activity and stay unreachable by construction.
     const logsRole = new iam.Role(this, 'LogsDev', {
@@ -183,7 +184,7 @@ export class ApertureCicdStack extends Stack {
     logsRole.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
       ...Object.fromEntries(
         ['bff', 'mcp', 'finance-sync'].map((fn) => [
-          `AwsSolutions-IAM5[Resource::arn:aws:logs:${region}:<AWS::AccountId>:log-group:/aws/lambda/aperture-${fn}-dev:*]`,
+          `AwsSolutions-IAM5[Resource::arn:aws:logs:${region}:${nagAccount}:log-group:/aws/lambda/aperture-${fn}-dev:*]`,
           'Log events live under the group ARN with a `:*` stream suffix; the group itself is named exactly.',
         ]),
       ),
@@ -192,7 +193,7 @@ export class ApertureCicdStack extends Stack {
     });
 
     new CfnOutput(this, 'DevRoleArn', { value: devRole.roleArn });
-    new CfnOutput(this, 'ProdRoleArn', { value: prodRole.roleArn });
+    new CfnOutput(this, 'DevMainRoleArn', { value: devMainRole.roleArn });
     new CfnOutput(this, 'LogsRoleArn', { value: logsRole.roleArn });
   }
 }

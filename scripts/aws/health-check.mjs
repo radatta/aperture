@@ -3,8 +3,8 @@
 // `aws lambda invoke` smoke test can't see, since it bypasses CloudFront entirely. Reads AppUrl +
 // FunctionUrl from cdk-outputs.<stage>.json (written by `cdk deploy`). Exits non-zero on any failed check.
 // Uses Node's global fetch (Node 22) — no curl/jq. The first check polls `/` until the edge serves the
-// shell publish just built (asset refs from app/dist/index.html), bounded at ~60s — publish doesn't wait
-// for its invalidation — so every later check runs against a settled edge.
+// shell publish just built (asset refs from app/dist/index.html), bounded at ~60s — the shell is no-store, so
+// the edge refetches it within its 1s min TTL — so every later check runs against a settled edge.
 // Usage: node scripts/aws/health-check.mjs [dev|prod]
 // Run it right after publish-frontend.mjs, in the same checkout: the shell check compares the edge against
 // that build's app/dist/index.html. A missing, stale or other-stage build fails it as "edge still stale".
@@ -77,7 +77,7 @@ await check(`edge serves the new shell (${expectedRefs.length} asset refs)`, asy
       throw new Error(
         `edge still stale after ${attempt} attempts / ${Math.round((Date.now() - start) / 1000)}s — ` +
           `status ${status}, x-cache "${xCache}", missing ${missing.join(', ')}; ` +
-          `saw ${seen.join(', ') || 'no /assets/ refs'}. Check the invalidation id in the publish step.`,
+          `saw ${seen.join(', ') || 'no /assets/ refs'}. Check the publish step's no-store upload of index.html.`,
       );
     }
     await new Promise((res) => setTimeout(res, delay));

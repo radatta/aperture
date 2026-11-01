@@ -41,7 +41,7 @@ describe('handler edge', () => {
       headers: { 'x-aperture-origin-secret': 's3cr3t' },
     });
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ ok: true });
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, service: 'bff' });
   });
 
   it('gates /api/health behind the origin secret too (no header → 403)', async () => {
