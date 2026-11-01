@@ -309,6 +309,23 @@ describe('backend task delete', () => {
     expect(objects.deleted).toEqual([attachment.s3Key]);
   });
 
+  it('reads the attachments strongly, so a just-deleted file isn’t deleted twice', async () => {
+    const { doc, backend, objects } = setup();
+    const task = await backend.createTask({ title: 'fresh file' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.txt',
+      contentType: 'text/plain',
+      size: 5,
+    });
+    const key = sk.attach(task.id, attachment.id);
+    const live = await doc.get('u#local', key);
+    doc.staleNextQueries('u#local', key, live, 20); // an eventual read keeps seeing the live copy
+    await backend.deleteTask(task.id);
+    expect(objects.deleted).toEqual([attachment.s3Key]);
+    expect((await doc.get('u#local', key))!.deletedAt).not.toBeNull();
+  });
+
   it('a failed S3 delete on a part leaves the parent and every part alive', async () => {
     const { backend, objects } = setup();
     const parent = await backend.createTask({ title: 'parent' });

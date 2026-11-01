@@ -986,6 +986,7 @@ class StubClient implements ApiClient {
     for (const part of partsOf(this.alive(this.store.tasks), id))
       await this.deleteOne(part.id, false);
     // Calendar event before the tombstone: deleteCalendarEvent uses mustFind and clears the pointers.
+    // (The backend deletes the files' bytes before all of this, because S3 can fail; a blob drop can't.)
     if (task.gcalEventId) await this.deleteCalendarEvent(id);
     for (const p of this.alive(this.store.plans).filter((p) => p.taskId === id))
       this.writes.softDelete(this.store.plans, p.id);

@@ -2,9 +2,10 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { DOWNLOAD_URL_TTL_MS, UPLOAD_URL_TTL_MS } from '@aperture/shared';
 
-// The S3 presigning seam. Signing makes no S3 API call — it only SIGNS URLs the browser then uses to
-// PUT/GET bytes directly (the Lambda's one real S3 call, the delete, is objects.ts). The S3Client
-// here exists purely as a signer; the IAM grant is what a signed URL acts as. Kept behind an interface so tests (and the contract suite) inject a fake.
+// The S3 presigning seam. Signing makes no S3 API call — it only SIGNS URLs the browser then
+// uses to PUT/GET bytes directly (the Lambda's one real S3 call, the delete, is objects.ts).
+// The S3Client here exists purely as a signer; the IAM grant is what a signed URL acts as.
+// Kept behind an interface so tests (and the contract suite) inject a fake.
 export interface Presigner {
   // Signs content-length into the PUT, so S3 rejects any upload whose byte size differs from what the
   // server declared — the size cap is enforced cryptographically, not by trusting the client. The

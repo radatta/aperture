@@ -1002,11 +1002,11 @@ export class BackendClient implements ApiClient {
   async deleteTask(id: string): Promise<void> {
     // Bytes FIRST, for the task and every part, before any other cascade step: an S3 failure then
     // throws with the task, its parts, plans and calendar event untouched — only the files already
-    // removed are gone, and a retry finishes.
+    // removed are gone, and a retry finishes. Consistent reads, so a file attached a moment ago goes too.
     if (!(await this.repo.getTask(id, { consistent: true }))) return;
     const parts = partsOf(await this.repo.listTasks({ consistent: true }), id);
     for (const taskId of [id, ...parts.map((p) => p.id)])
-      for (const a of await this.repo.listAttachmentsForTask(taskId))
+      for (const a of await this.repo.listAttachmentsForTask(taskId, { consistent: true }))
         await this.removeAttachment(a, this.now());
     return this.deleteOne(id, true);
   }
@@ -1027,8 +1027,9 @@ export class BackendClient implements ApiClient {
     for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
     // Every status, so a never-confirmed pending upload's bytes go too. deleteTask already removed them
-    // up front; this catches one that landed since.
-    for (const a of await this.repo.listAttachmentsForTask(id)) await this.removeAttachment(a, now);
+    // up front; this catches one that landed since. Consistent, so a just-tombstoned row isn't re-deleted.
+    for (const a of await this.repo.listAttachmentsForTask(id, { consistent: true }))
+      await this.removeAttachment(a, now);
     await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
     if (release) await this.releaseParentState(task.parentId);
   }
