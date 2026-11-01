@@ -60,8 +60,7 @@ function requireMcpVerifier(): Verifier {
   const clientId = process.env.MCP_CLIENT_ID;
   // No 'local' fallback (unlike resolveAgentUserId): a public OAuth endpoint must never treat
   // "unconfigured" as "anyone is the local user". Unconfigured → the bearer is simply rejected.
-  if (!poolId || !clientId)
-    throw new Error('Unauthorized: bearer auth not configured on this stage');
+  if (!poolId || !clientId) throw new Error('Unauthorized: bearer auth not configured on this stage');
   if (!cachedMcpVerifier) cachedMcpVerifier = createCognitoVerifier(poolId, clientId);
   return cachedMcpVerifier;
 }
@@ -73,9 +72,7 @@ function requireMcpVerifier(): Verifier {
 function wwwAuthenticate(): Record<string, string> {
   const appUrl = process.env.APP_URL;
   if (!appUrl) return {};
-  return {
-    'www-authenticate': `Bearer resource_metadata="${appUrl}/.well-known/oauth-protected-resource/mcp"`,
-  };
+  return { 'www-authenticate': `Bearer resource_metadata="${appUrl}/.well-known/oauth-protected-resource/mcp"` };
 }
 
 // PUT bytes to a presigned URL — the only place the MCP server itself moves bytes (attach_file's small
@@ -110,21 +107,13 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   const wk = matchWellKnown(path);
   if (wk) {
     if (httpMethod && httpMethod !== 'GET' && httpMethod !== 'HEAD') {
-      return {
-        statusCode: 405,
-        headers: { ...HEADERS, allow: 'GET' },
-        body: JSON.stringify({ error: 'Method Not Allowed' }),
-      };
+      return { statusCode: 405, headers: { ...HEADERS, allow: 'GET' }, body: JSON.stringify({ error: 'Method Not Allowed' }) };
     }
     const appUrl = process.env.APP_URL;
     const cognitoDomain = process.env.COGNITO_DOMAIN;
     const userPoolId = process.env.USER_POOL_ID;
     if (!appUrl || !cognitoDomain || !userPoolId) {
-      return {
-        statusCode: 404,
-        headers: HEADERS,
-        body: JSON.stringify({ error: 'OAuth metadata not configured on this stage' }),
-      };
+      return { statusCode: 404, headers: HEADERS, body: JSON.stringify({ error: 'OAuth metadata not configured on this stage' }) };
     }
     const wkEnv = { appUrl, cognitoDomain, userPoolId };
     const metadata = wk === 'prm' ? protectedResource(wkEnv) : authorizationServer(wkEnv);
@@ -132,19 +121,14 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   }
 
   if (httpMethod && httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers: { ...HEADERS, allow: 'POST' },
-      body: JSON.stringify({ error: 'Method Not Allowed' }),
-    };
+    return { statusCode: 405, headers: { ...HEADERS, allow: 'POST' }, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
   // Credential fork — disambiguate by CREDENTIAL, not method. The agent token (Claude Code, a raw custom
   // header, unscoped) is checked first and never falls through. A Cognito bearer (claude.ai, phase 2) is
   // verified against the client-bound MCP verifier. Neither present → 401 with the discovery pointer.
   const agentHeader = event.headers?.[AGENT_TOKEN_HEADER];
-  const bearer =
-    event.headers?.authorization ?? event.headers?.Authorization ?? event.headers?.[AUTH_HEADER];
+  const bearer = event.headers?.authorization ?? event.headers?.Authorization ?? event.headers?.[AUTH_HEADER];
   const credential = agentHeader !== undefined ? 'agent' : bearer ? 'bearer' : 'none';
   let userId: string;
   try {
@@ -160,30 +144,15 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
     console.log(JSON.stringify({ event: 'mcp_auth', credential, ok: true }));
   } catch (err) {
     console.log(JSON.stringify({ event: 'mcp_auth', credential, ok: false }));
-    return {
-      statusCode: 401,
-      headers: { ...HEADERS, ...wwwAuthenticate() },
-      body: JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }),
-    };
+    return { statusCode: 401, headers: { ...HEADERS, ...wwwAuthenticate() }, body: JSON.stringify({ error: err instanceof Error ? err.message : 'Unauthorized' }) };
   }
 
   let message: unknown;
   try {
-    const raw =
-      event.isBase64Encoded && event.body
-        ? Buffer.from(event.body, 'base64').toString('utf8')
-        : event.body;
+    const raw = event.isBase64Encoded && event.body ? Buffer.from(event.body, 'base64').toString('utf8') : event.body;
     message = raw ? JSON.parse(raw) : null;
   } catch {
-    return {
-      statusCode: 200,
-      headers: HEADERS,
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32700, message: 'Parse error' },
-      }),
-    };
+    return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }) };
   }
 
   const ctx: ToolContext = {

@@ -286,9 +286,10 @@ describe('backend task delete', () => {
     expect(await backend.getTask(part.id)).toBeNull();
   });
 
-  it('a failed S3 delete leaves the task alive; the retry completes the cascade', async () => {
+  it('a failed S3 delete touches nothing else — task, plans intact; the retry completes the cascade', async () => {
     const { backend, objects } = setup();
     const task = await backend.createTask({ title: 'retry me' });
+    await backend.upsertPlan({ taskId: task.id, day: '2026-08-04', plannedMinutes: 30, order: 1 });
     const { attachment } = await backend.createAttachmentUploadUrl({
       taskId: task.id,
       filename: 'a.txt',
@@ -299,10 +300,32 @@ describe('backend task delete', () => {
     objects.failNext = new Error('SlowDown');
     await expect(backend.deleteTask(task.id)).rejects.toThrow('SlowDown');
     expect(await backend.getTask(task.id)).not.toBeNull();
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(1); // bytes go before the plans
     expect(await backend.listAttachments(task.id)).toHaveLength(1);
 
     await backend.deleteTask(task.id);
     expect(await backend.getTask(task.id)).toBeNull();
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
+    expect(objects.deleted).toEqual([attachment.s3Key]);
+  });
+
+  it('a failed S3 delete on a part leaves the parent and every part alive', async () => {
+    const { backend, objects } = setup();
+    const parent = await backend.createTask({ title: 'parent' });
+    const a = await backend.createTask({ title: 'a', parentId: parent.id });
+    const b = await backend.createTask({ title: 'b', parentId: parent.id });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: b.id,
+      filename: 'b.txt',
+      contentType: 'text/plain',
+      size: 5,
+    });
+    objects.failNext = new Error('AccessDenied');
+    await expect(backend.deleteTask(parent.id)).rejects.toThrow('AccessDenied');
+    for (const t of [parent, a, b]) expect(await backend.getTask(t.id)).not.toBeNull();
+
+    await backend.deleteTask(parent.id);
+    for (const t of [parent, a, b]) expect(await backend.getTask(t.id)).toBeNull();
     expect(objects.deleted).toEqual([attachment.s3Key]);
   });
 

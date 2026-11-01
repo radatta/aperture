@@ -69,7 +69,12 @@ export const FLUX_SET_VIA = 'api:recordFluxSet';
 
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body?: string | Uint8Array },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: string | Uint8Array;
+    redirect?: 'error'; // presigned requests: a 3xx must never reach a host the guard didn't check
+  },
 ) => Promise<{
   status: number;
   text(): Promise<string>;
@@ -143,7 +148,7 @@ export function createApiClient({
     // GET a BFF-minted presigned URL and return only its status (200 while the bytes exist, 403/404 after).
     async probePresigned(url: string): Promise<number> {
       assertPresignedDevUrl(url);
-      const res = await fetch(url, { method: 'GET', headers: {} });
+      const res = await fetch(url, { method: 'GET', headers: {}, redirect: 'error' });
       await res.text(); // drain
       return res.status;
     },
@@ -198,6 +203,7 @@ export function createApiClient({
         method: 'PUT',
         headers: { 'content-type': attachment.contentType }, // the server-normalised type
         body: bytes,
+        redirect: 'error',
       });
       if (res.status !== 200) throw new Error(`attachment PUT → HTTP ${res.status}`);
       if (file.confirm === false) return attachment;

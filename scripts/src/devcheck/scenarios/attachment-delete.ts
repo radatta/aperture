@@ -1,7 +1,8 @@
 // Deleting an attachment, or its task, deletes the bytes in S3 — not just the metadata row. Files are
 // uploaded through the API exactly as the app does (mint → PUT to the presigned URL → confirm), on
-// ledger-recorded tasks. The proof is a presigned GET: 200 before the delete, 403/404 after (403 when the
-// role has no ListBucket — it hasn't). Each URL is minted right before its probe (5-minute TTL).
+// ledger-recorded tasks. The proof is a presigned GET: 200 before the delete, 403 or 404 after (with a
+// delete marker as the current version, 404 is likelier; which one isn't verified, so both count). Each
+// URL is minted right before its probe (5-minute TTL).
 import type { DevAttachment } from '../api';
 import type { Ctx, Scenario } from '../scenario';
 
@@ -52,7 +53,7 @@ export const attachmentDelete: Scenario = {
     },
     {
       id: 'backlog',
-      title: 'Task A shows its file count in the Backlog',
+      title: 'Task A is in the Backlog (the shot shows its file count)',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=backlog');
         await ctx.ui.expectText(name(ctx, 'A'), 15_000);

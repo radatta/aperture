@@ -675,7 +675,8 @@ export class BackendClient implements ApiClient {
   }
   // Bytes FIRST, then the tombstone. A failed S3 delete throws with the row still live and pointing at
   // real bytes, so a retry works; tombstone-first would strand the bytes where nothing can reach them.
-  // If the put fails after the delete, the retry's DeleteObject is a no-op (204) and the tombstone lands.
+  // If the put fails after the delete, the retry's DeleteObject is idempotent in effect (204, one more
+  // free delete marker) and the tombstone lands.
   private async removeAttachment(a: Attachment, now: number): Promise<void> {
     await this.objects.deleteObject(a.s3Key);
     await this.repo.putAttachment({ ...a, deletedAt: now, updatedAt: now });
@@ -999,6 +1000,14 @@ export class BackendClient implements ApiClient {
     return { parent, original, followUp };
   }
   async deleteTask(id: string): Promise<void> {
+    // Bytes FIRST, for the task and every part, before any other cascade step: an S3 failure then
+    // throws with the task, its parts, plans and calendar event untouched — only the files already
+    // removed are gone, and a retry finishes.
+    if (!(await this.repo.getTask(id, { consistent: true }))) return;
+    const parts = partsOf(await this.repo.listTasks({ consistent: true }), id);
+    for (const taskId of [id, ...parts.map((p) => p.id)])
+      for (const a of await this.repo.listAttachmentsForTask(taskId))
+        await this.removeAttachment(a, this.now());
     return this.deleteOne(id, true);
   }
   // `release`: a part's parent is left plain if this was its last part — not when the parent is going
@@ -1017,8 +1026,8 @@ export class BackendClient implements ApiClient {
     const now = this.now();
     for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
-    // Every status, so a never-confirmed pending upload's bytes go too. A mid-loop failure throws with
-    // the task still alive: deleteTask is retryable, and the attachments already removed stay removed.
+    // Every status, so a never-confirmed pending upload's bytes go too. deleteTask already removed them
+    // up front; this catches one that landed since.
     for (const a of await this.repo.listAttachmentsForTask(id)) await this.removeAttachment(a, now);
     await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
     if (release) await this.releaseParentState(task.parentId);

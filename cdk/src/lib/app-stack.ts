@@ -42,12 +42,7 @@ const MCP_ENTRY = fileURLToPath(new URL('../../../lambdas/src/mcp/index.ts', imp
 // ids (the id embeds the resource, not the function), so one helper serves both; only the token-WRITE ack
 // differs — the BFF connects/disconnects Google accounts, the MCP function never writes SSM. Reason text
 // is free; only the id (the key) must match.
-function ackLambdaIam(
-  fn: NodejsFunction,
-  stage: string,
-  region: string,
-  opts: { ssmWrite: boolean; plaid?: boolean },
-): void {
+function ackLambdaIam(fn: NodejsFunction, stage: string, region: string, opts: { ssmWrite: boolean; plaid?: boolean }): void {
   const acks: Record<string, string> = {
     'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
       'AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
@@ -86,9 +81,7 @@ function grantBackendData(
   opts: { ssmWrite: boolean },
 ): void {
   table.grantReadWriteData(fn);
-  fn.addToRolePolicy(
-    new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${ssmBase}/*`] }),
-  );
+  fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${ssmBase}/*`] }));
   if (opts.ssmWrite) {
     fn.addToRolePolicy(
       new iam.PolicyStatement({
@@ -115,19 +108,8 @@ function grantBackendData(
 export class ApertureAppStack extends Stack {
   constructor(scope: Construct, id: string, props: AppStackProps) {
     super(scope, id, props);
-    const {
-      stage,
-      table,
-      userPool,
-      filesBucket,
-      cognitoDomain,
-      originSecret,
-      domainName,
-      certificateArn,
-      deviceToken,
-      deviceUserId,
-      agentToken,
-    } = props;
+    const { stage, table, userPool, filesBucket, cognitoDomain, originSecret, domainName, certificateArn, deviceToken, deviceUserId, agentToken } =
+      props;
     // Custom domain (Phase 14): reference an EXISTING us-east-1 ACM cert by ARN — CDK never creates it,
     // so deploys never touch DNS/certs. Absent until the domain step is done → CloudFront default domain.
     const certificate =
@@ -140,13 +122,8 @@ export class ApertureAppStack extends Stack {
     // It has NO CloudFront dependency: callbacks are committed constants and the resource identifier is
     // gated on domainName (a literal), not the distribution domain (a token) — so a Lambda referencing the
     // client id forms no deploy cycle. The identifier matches what the /mcp façade computes from APP_URL.
-    const mcpResourceIdentifier = domainName
-      ? `https://${domainName}/mcp`
-      : `aperture-mcp-${stage}`;
-    const mcpScope = new cognito.ResourceServerScope({
-      scopeName: 'access',
-      scopeDescription: 'Full MCP access (act as the user)',
-    });
+    const mcpResourceIdentifier = domainName ? `https://${domainName}/mcp` : `aperture-mcp-${stage}`;
+    const mcpScope = new cognito.ResourceServerScope({ scopeName: 'access', scopeDescription: 'Full MCP access (act as the user)' });
     const mcpResourceServer = new cognito.UserPoolResourceServer(this, 'McpResourceServer', {
       userPool,
       // Explicit name: CDK defaults Name to the identifier, but Name must match [\w\s+=,.@-]+ (no `:` or
@@ -166,11 +143,7 @@ export class ApertureAppStack extends Stack {
       refreshTokenValidity: Duration.days(30),
       oAuth: {
         flows: { authorizationCodeGrant: true },
-        scopes: [
-          cognito.OAuthScope.OPENID,
-          cognito.OAuthScope.EMAIL,
-          cognito.OAuthScope.resourceServer(mcpResourceServer, mcpScope),
-        ],
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.resourceServer(mcpResourceServer, mcpScope)],
         callbackUrls: CLAUDE_CONNECTOR_CALLBACK_URLS,
       },
     });
@@ -310,17 +283,13 @@ export class ApertureAppStack extends Stack {
     // The logRetention custom resource's singleton provider (one per stack, shared by both functions): its role
     // carries the basic-execution managed policy + Put/DeleteRetentionPolicy on `*` (CDK's own grant). The
     // construct id is CDK's fixed singleton id; ack ids copied from synth's hint, like ackLambdaIam.
-    const retentionProvider = Stack.of(this).node.tryFindChild(
-      'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a',
-    );
-    retentionProvider?.node
-      .tryFindChild('ServiceRole')
-      ?.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
-        'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
-          'CDK-managed logRetention provider; AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
-        'AwsSolutions-IAM5[Resource::*]':
-          'CDK-managed logRetention provider: PutRetentionPolicy/DeleteRetentionPolicy are granted on * by CDK itself.',
-      });
+    const retentionProvider = Stack.of(this).node.tryFindChild('LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8a');
+    retentionProvider?.node.tryFindChild('ServiceRole')?.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+      'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]':
+        'CDK-managed logRetention provider; AWSLambdaBasicExecutionRole is the standard CloudWatch Logs managed policy.',
+      'AwsSolutions-IAM5[Resource::*]':
+        'CDK-managed logRetention provider: PutRetentionPolicy/DeleteRetentionPolicy are granted on * by CDK itself.',
+    });
 
     // Private site bucket — assets are synced post-build (not by CDK), so infra ≠ app deploy.
     const bucket = new s3.Bucket(this, 'Site', {
@@ -338,11 +307,7 @@ export class ApertureAppStack extends Stack {
       headerBehavior: cloudfront.OriginRequestHeaderBehavior.allowList(AUTH_HEADER, 'content-type'),
       // Forward the OAuth callback params — without this CloudFront strips the query string on /api/*,
       // and /api/google/callback arrives with no code/state (invisible locally, breaks connect on deploy).
-      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.allowList(
-        'code',
-        'state',
-        'error',
-      ),
+      queryStringBehavior: cloudfront.OriginRequestQueryStringBehavior.allowList('code', 'state', 'error'),
       cookieBehavior: cloudfront.OriginRequestCookieBehavior.none(),
     });
 

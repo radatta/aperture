@@ -166,7 +166,11 @@ describe('createApiClient', () => {
         size: 5,
       });
       expect(put![0]).toBe(PUT_URL);
-      expect(put![1]).toMatchObject({ method: 'PUT', headers: { 'content-type': 'text/plain' } });
+      expect(put![1]).toMatchObject({
+        method: 'PUT',
+        headers: { 'content-type': 'text/plain' },
+        redirect: 'error',
+      });
       expect(new TextDecoder().decode(put![1].body as Uint8Array)).toBe('hello');
       expect(confirm![0]).toBe(`${DEV_ORIGIN}/api/confirmAttachment`);
     });
@@ -217,7 +221,11 @@ describe('createApiClient', () => {
       const fetch = vi.fn<FetchLike>(async () => reply(404, 'NoSuchKey'));
       const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
       expect(await api.reads.probePresigned(PUT_URL)).toBe(404);
-      expect(fetch).toHaveBeenCalledWith(PUT_URL, { method: 'GET', headers: {} });
+      expect(fetch).toHaveBeenCalledWith(PUT_URL, {
+        method: 'GET',
+        headers: {},
+        redirect: 'error',
+      });
       await expect(api.reads.probePresigned(`${DEV_ORIGIN}/u/x`)).rejects.toThrow(/refusing/);
       expect(fetch).toHaveBeenCalledTimes(1);
     });

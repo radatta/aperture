@@ -3,8 +3,9 @@ import { DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3';
 // The S3 object seam: the one S3 API call the Lambda makes itself (signing aside, presigner.ts). A gated
 // gateway like Google/Plaid — handleRpc pins the noop in testMode, so a smoke run deletes nothing.
 export interface ObjectStore {
-  // Idempotent: S3 answers 204 for a key that's already gone. On the versioned Files bucket a plain
-  // delete writes a delete marker; the bytes stay as a noncurrent version for 30 days (data-stack.ts).
+  // Idempotent in effect: S3 answers 204 for a key that's already gone. On the versioned Files bucket a
+  // plain delete writes a delete marker (a repeat adds another, free); the bytes stay as a noncurrent
+  // version for 30 days (data-stack.ts).
   deleteObject(key: string): Promise<void>;
 }
 
