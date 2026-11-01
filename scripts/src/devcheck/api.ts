@@ -1,8 +1,9 @@
 // The dev check's own BFF client — signed in as the test user, so it sees exactly the partition the browser
 // wrote to (the MCP agent token is pinned to the user's partition and can't). Same discipline as the BFF:
 // every write is declared in the one `writes` object below and nowhere else, and the only reads are the
-// `reads` object. Every request asserts the dev origin; a delete must name a ledger id.
-import { AUTH_HEADER, DEV_ORIGIN, assertDevOrigin } from './config';
+// `reads` object. Every request asserts the dev origin; a delete must name a ledger id. The one exception to
+// the origin is a presigned URL the dev BFF minted for an attachment, under assertPresignedDevUrl.
+import { AUTH_HEADER, DEV_ORIGIN, assertDevOrigin, assertPresignedDevUrl } from './config';
 import { DevcheckError } from './errors';
 import type { Ledger } from './ledger';
 
@@ -53,12 +54,22 @@ export interface DevFluxSet {
   count: number;
 }
 
+// The slice of an attachment the check reads. Attachments are never ledgered: each lives on a ledgered
+// task, and that task's delete cascade removes it (and its bytes).
+export interface DevAttachment {
+  id: string;
+  taskId: string;
+  s3Key: string;
+  contentType: string;
+  status: string;
+}
+
 // The ledger's `via` for a Flux set — cleanup reads it to delete the right kind of row.
 export const FLUX_SET_VIA = 'api:recordFluxSet';
 
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers: Record<string, string>; body?: string | Uint8Array },
 ) => Promise<{
   status: number;
   text(): Promise<string>;
@@ -104,6 +115,18 @@ export function createApiClient({
     return JSON.parse(text) as T;
   }
 
+  // A write may only touch a task this harness created (and not a Flux set's id).
+  function assertLedgerTask(id: string): void {
+    const isFlux = ledger.read().some((e) => e.id === id && e.via === FLUX_SET_VIA);
+    if (!ledger.has(id) || isFlux)
+      throw new DevcheckError(
+        'LEDGER_GUARD',
+        `refusing to touch ${id} — the ledger never recorded it`,
+      );
+  }
+  // Attachments this client created; deleteAttachment refuses any other id.
+  const attachmentIds = new Set<string>();
+
   const reads = {
     listTasks: () => call<DevTask[]>('listTasks', []),
     listBacklog: () => call<DevTask[]>('listBacklog', []),
@@ -115,6 +138,15 @@ export function createApiClient({
     // Alive only — a deleted set reads as gone, like getTask.
     getFluxSet: async (id: string) =>
       (await call<DevFluxSet[]>('listFluxSets', [{}])).find((f) => f.id === id) ?? null,
+    listAttachments: (taskId: string) => call<DevAttachment[]>('listAttachments', [taskId]),
+    getAttachmentDownloadUrl: (id: string) => call<string>('getAttachmentDownloadUrl', [id]),
+    // GET a BFF-minted presigned URL and return only its status (200 while the bytes exist, 403/404 after).
+    async probePresigned(url: string): Promise<number> {
+      assertPresignedDevUrl(url);
+      const res = await fetch(url, { method: 'GET', headers: {} });
+      await res.text(); // drain
+      return res.status;
+    },
   };
 
   const writes = {
@@ -143,13 +175,42 @@ export function createApiClient({
       await call<null>('deleteFluxSet', [id]);
     },
     async deleteTask(id: string): Promise<void> {
-      const isFlux = ledger.read().some((e) => e.id === id && e.via === FLUX_SET_VIA);
-      if (!ledger.has(id) || isFlux)
+      assertLedgerTask(id);
+      await call<null>('deleteTask', [id]);
+    },
+    // Mint an upload URL, PUT the bytes to S3 as the app does, then confirm — or leave it pending
+    // (confirm: false), as an abandoned upload would.
+    async createAttachment(
+      taskId: string,
+      file: { filename: string; contentType: string; text: string; confirm?: boolean },
+    ): Promise<DevAttachment> {
+      assertLedgerTask(taskId);
+      const bytes = new TextEncoder().encode(file.text);
+      const { attachment, uploadUrl } = await call<{
+        attachment: DevAttachment;
+        uploadUrl: string;
+      }>('createAttachmentUploadUrl', [
+        { taskId, filename: file.filename, contentType: file.contentType, size: bytes.byteLength },
+      ]);
+      attachmentIds.add(attachment.id);
+      assertPresignedDevUrl(uploadUrl);
+      const res = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'content-type': attachment.contentType }, // the server-normalised type
+        body: bytes,
+      });
+      if (res.status !== 200) throw new Error(`attachment PUT → HTTP ${res.status}`);
+      if (file.confirm === false) return attachment;
+      return call<DevAttachment>('confirmAttachment', [attachment.id]);
+    },
+    async deleteAttachment(taskId: string, id: string): Promise<void> {
+      assertLedgerTask(taskId);
+      if (!attachmentIds.has(id))
         throw new DevcheckError(
           'LEDGER_GUARD',
-          `refusing to delete ${id} — the ledger never recorded it`,
+          `refusing to delete attachment ${id} — not this run's`,
         );
-      await call<null>('deleteTask', [id]);
+      await call<null>('deleteAttachment', [id]);
     },
   };
 

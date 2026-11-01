@@ -146,6 +146,7 @@ import { EventGoneError, noopGoogle, PullIncompleteError } from './google/gatewa
 import type { GoogleGateway } from './google/gateway';
 import { signState } from './google/state';
 import type { Presigner } from './s3/presigner';
+import type { ObjectStore } from './s3/objects';
 import { noopAnthropic } from './anthropic/gateway';
 import type { AnthropicGateway } from './anthropic/gateway';
 
@@ -155,6 +156,7 @@ export interface BackendOptions {
   google?: GoogleGateway; // gated external calendar seam; defaults to the inert noop
   stateSecret?: string; // HMAC key for the OAuth state (derived from ORIGIN_SECRET in prod)
   presigner?: Presigner;
+  objects?: ObjectStore; // gated S3 delete seam (attachment bytes); unconfigured → throws on use
   plaid?: PlaidGateway; // gated Plaid seam; defaults to the inert noop
   financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
   anthropic?: AnthropicGateway; // gated Claude API seam (quick add's parse); defaults to the inert noop
@@ -168,6 +170,12 @@ const unconfiguredPresigner: Presigner = {
   },
   getUrl: () => {
     throw new Error('Attachments unavailable: no presigner configured.');
+  },
+};
+// Same idea for deletes: a handler that forgot the store fails the delete loudly, never skips the bytes.
+const unconfiguredObjects: ObjectStore = {
+  deleteObject: () => {
+    throw new Error('Attachments unavailable: no object store configured.');
   },
 };
 
@@ -194,6 +202,7 @@ export class BackendClient implements ApiClient {
   private readonly google: GoogleGateway;
   private readonly stateSecret: string;
   private readonly presigner: Presigner;
+  private readonly objects: ObjectStore;
   private readonly finance: FinanceService;
   private readonly anthropic: AnthropicGateway;
 
@@ -207,6 +216,7 @@ export class BackendClient implements ApiClient {
     this.google = opts.google ?? noopGoogle();
     this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
     this.presigner = opts.presigner ?? unconfiguredPresigner;
+    this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
     this.finance = new FinanceService({
       repo,
@@ -661,8 +671,14 @@ export class BackendClient implements ApiClient {
   }
   async deleteAttachment(id: string): Promise<void> {
     const a = await this.repo.findAttachment(id);
-    if (a) await this.repo.putAttachment({ ...a, deletedAt: this.now(), updatedAt: this.now() });
-    // The S3 object is intentionally orphaned (no bytes-cleanup path in v1).
+    if (a) await this.removeAttachment(a, this.now());
+  }
+  // Bytes FIRST, then the tombstone. A failed S3 delete throws with the row still live and pointing at
+  // real bytes, so a retry works; tombstone-first would strand the bytes where nothing can reach them.
+  // If the put fails after the delete, the retry's DeleteObject is a no-op (204) and the tombstone lands.
+  private async removeAttachment(a: Attachment, now: number): Promise<void> {
+    await this.objects.deleteObject(a.s3Key);
+    await this.repo.putAttachment({ ...a, deletedAt: now, updatedAt: now });
   }
 
   // --- Tasks ---
@@ -1001,8 +1017,9 @@ export class BackendClient implements ApiClient {
     const now = this.now();
     for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
-    for (const a of await this.repo.listAttachmentsForTask(id))
-      await this.repo.putAttachment({ ...a, deletedAt: now, updatedAt: now });
+    // Every status, so a never-confirmed pending upload's bytes go too. A mid-loop failure throws with
+    // the task still alive: deleteTask is retryable, and the attachments already removed stay removed.
+    for (const a of await this.repo.listAttachmentsForTask(id)) await this.removeAttachment(a, now);
     await this.repo.putTask({ ...cleared, deletedAt: now, updatedAt: now }); // task LAST
     if (release) await this.releaseParentState(task.parentId);
   }

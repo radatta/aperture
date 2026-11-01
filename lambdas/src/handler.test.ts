@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Task } from '@aperture/shared';
+import type { Attachment, Task } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
 import { handleRpc } from './handler';
 import { FakeAnthropic } from './anthropic/gateway';
+import { fakePresigner } from './s3/presigner';
+import { fakeObjectStore } from './s3/objects';
 
 describe('handleRpc dispatch', () => {
   it('routes a known method with its args', async () => {
@@ -42,6 +44,24 @@ describe('handleRpc dispatch', () => {
       { anthropic },
     );
     expect(anthropic.calls).toHaveLength(1);
+  });
+
+  it('testMode never deletes an S3 object, even with a live store injected', async () => {
+    const doc = new InMemoryDoc();
+    const objects = fakeObjectStore();
+    const deps = { presigner: fakePresigner(), objects };
+    const call = (method: string, args: unknown[], testMode = false) =>
+      handleRpc(doc, { userId: 'local', method, args, testMode }, deps);
+    const task = (await call('createTask', [{ title: 'has a file' }])) as Task;
+    const { attachment } = (await call('createAttachmentUploadUrl', [
+      { taskId: task.id, filename: 'a.txt', contentType: 'text/plain', size: 5 },
+    ])) as { attachment: Attachment };
+    await call('deleteAttachment', [attachment.id], true);
+    await call('deleteTask', [task.id], true);
+    expect(objects.deleted).toHaveLength(0);
+    // ...and outside testMode the same deps do reach it.
+    await call('deleteAttachment', [attachment.id]);
+    expect(objects.deleted).toEqual([attachment.s3Key]);
   });
 
   it('testMode runs the logic but persists nothing (the smoke guarantee)', async () => {

@@ -84,12 +84,25 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listCategories: async () => [],
       listFluxSets: async () => [...fluxSets.values()],
       getFluxSet: async (id) => fluxSets.get(id) ?? null,
+      listAttachments: async () => [],
+      getAttachmentDownloadUrl: async () => {
+        throw new Error('unused');
+      },
+      probePresigned: async () => {
+        throw new Error('unused');
+      },
     },
     writes: {
       createTask: async () => {
         throw new Error('unused');
       },
       recordFluxSet: async () => {
+        throw new Error('unused');
+      },
+      createAttachment: async () => {
+        throw new Error('unused');
+      },
+      deleteAttachment: async () => {
         throw new Error('unused');
       },
       deleteFluxSet: async (id) => {

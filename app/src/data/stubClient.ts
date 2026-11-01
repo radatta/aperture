@@ -163,6 +163,7 @@ import type {
 } from '@aperture/shared';
 import { fluxFilterError, fluxSetError, inRange } from '@aperture/shared/flux';
 import { heuristicParse, takeStubParseFailure } from './stubParse';
+import { forgetStubBlob } from './attachmentTransport';
 import { seedStore } from './seed';
 
 const USER_ID = 'local';
@@ -664,9 +665,10 @@ class StubClient implements ApiClient {
   }
 
   // --- Task attachments ----------------------------------------------------
-  // The stub never touches bytes: uploadUrl/downloadUrl are `stub:<id>` sentinels the transport module
-  // resolves against an in-memory Blob map. Everything else — caps, pending→ready, tombstones — mirrors
-  // the backend exactly so the page-first build validates the real behavior.
+  // The stub never handles bytes itself: uploadUrl/downloadUrl are `stub:<id>` sentinels the transport
+  // module resolves against an in-memory Blob map, and a delete drops the blob (the backend's S3 delete).
+  // Everything else — caps, pending→ready, tombstones — mirrors the backend exactly so the page-first
+  // build validates the real behavior.
   async createAttachmentUploadUrl(
     input: CreateAttachmentInput,
   ): Promise<{ attachment: Attachment; uploadUrl: string }> {
@@ -706,6 +708,8 @@ class StubClient implements ApiClient {
     return `stub:${id}`;
   }
   async deleteAttachment(id: string): Promise<void> {
+    if (!this.find(this.store.attachments, id)) return;
+    forgetStubBlob(id);
     this.writes.softDelete(this.store.attachments, id);
   }
 
@@ -985,8 +989,10 @@ class StubClient implements ApiClient {
     if (task.gcalEventId) await this.deleteCalendarEvent(id);
     for (const p of this.alive(this.store.plans).filter((p) => p.taskId === id))
       this.writes.softDelete(this.store.plans, p.id);
-    for (const a of this.alive(this.store.attachments).filter((a) => a.taskId === id))
+    for (const a of this.alive(this.store.attachments).filter((a) => a.taskId === id)) {
+      forgetStubBlob(a.id);
       this.writes.softDelete(this.store.attachments, a.id);
+    }
     this.writes.softDelete(this.store.tasks, id); // task last
     if (release) this.releaseParentState(task.parentId);
   }

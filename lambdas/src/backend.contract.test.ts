@@ -11,6 +11,7 @@ import { inlineInvoker } from './finance/invoker';
 import { runFinanceSync } from './finance/sync';
 import { InMemoryPlaid } from './plaid/gateway';
 import { fakePresigner } from './s3/presigner';
+import { fakeObjectStore } from './s3/objects';
 
 // The Lambda backend, run against the SAME contract suite as the stub — this is the parity proof the
 // whole page-first architecture rests on. Two passes:
@@ -41,13 +42,14 @@ runApiContract('lambda (direct)', (now) => {
     userId: 'local',
     now,
     presigner: fakePresigner(),
+    objects: fakeObjectStore(),
     ...financeDeps(doc, now),
   });
 });
 
 runApiContract('lambda (via handleRpc dispatch)', (now) => {
   const doc = new InMemoryDoc();
-  const deps = { presigner: fakePresigner(), ...financeDeps(doc, now) };
+  const deps = { presigner: fakePresigner(), objects: fakeObjectStore(), ...financeDeps(doc, now) };
   const client: Record<string, unknown> = {};
   for (const method of API_METHODS) {
     client[method] = (...args: unknown[]) =>

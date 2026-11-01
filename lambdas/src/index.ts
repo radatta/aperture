@@ -12,6 +12,7 @@ import { liveWrites } from './ddb/writes';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
 import { createS3Presigner } from './s3/presigner';
+import { createS3ObjectStore } from './s3/objects';
 import { createLivePlaid } from './plaid/livePlaid';
 import { noopInvoker } from './finance/invoker';
 import { liveInvoker } from './finance/liveInvoker';
@@ -24,6 +25,7 @@ const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 // Built once at cold start. Construction never touches the network, so an empty FILES_BUCKET (local /
 // tests) is fine — only an actual attachment call would then fail.
 const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
+const objects = createS3ObjectStore(process.env.FILES_BUCKET ?? ''); // deletes attachment bytes
 
 // Verifier is wired only when the pool env is present (deployed). Locally it's null → dev userId.
 // clientId is left unset (single-client pool, no deploy cycle), but a token minted for the claude.ai MCP
@@ -172,7 +174,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
         google,
         stateSecret: process.env.ORIGIN_SECRET,
       },
-      { presigner, plaid, financeInvoker, anthropic },
+      { presigner, objects, plaid, financeInvoker, anthropic },
     );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };
   } catch (err) {

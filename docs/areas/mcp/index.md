@@ -127,7 +127,7 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   opened that day ([TECH §taskPlans](../../arch/TECH.md)). A timed task is never planned (it's on Today on
   its day, by its time): `update_task status=planned` on one is moved back to backlog by that same sweep.
 - **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
-  and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
+  (deleting their stored bytes, as `delete_attachment` does) and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
   (`seriesId` set), matching the UI — `getDay` would respawn it; cancel it instead.
 - **Rename** is a new contract method, `setTaskTitle` (allowed at any status; with auto-sync on it also

@@ -75,7 +75,9 @@ describe('ApertureDataStack', () => {
         RestrictPublicBuckets: true,
       },
       CorsConfiguration: {
-        CorsRules: Match.arrayWith([Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) })]),
+        CorsRules: Match.arrayWith([
+          Match.objectLike({ AllowedMethods: Match.arrayWith(['PUT']) }),
+        ]),
       },
     });
     // The one bucket in the precious stack is never auto-deleted.
@@ -143,11 +145,12 @@ describe('ApertureAppStack', () => {
     app.hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: Match.objectLike({ FILES_BUCKET: Match.anyValue() }) },
     });
-    // PutObject/GetObject only, scoped to the u/* object prefix — no bucket-level or List permission.
+    // Put/Get/Delete only, scoped to the u/* object prefix — no bucket-level or List permission.
     app.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: Match.arrayWith([
-          Match.objectLike({ Action: ['s3:GetObject', 's3:PutObject'] }), // sorted by minimizePolicies
+          // sorted by minimizePolicies
+          Match.objectLike({ Action: ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'] }),
         ]),
       },
     });
@@ -192,7 +195,9 @@ describe('ApertureAppStack', () => {
     const policies = app.findResources('AWS::IAM::Policy');
     const putCount = Object.values(policies).filter((p) => {
       const stmts = (p.Properties?.PolicyDocument?.Statement ?? []) as { Action?: unknown }[];
-      return stmts.some((s) => Array.isArray(s.Action) && (s.Action as string[]).includes('ssm:PutParameter'));
+      return stmts.some(
+        (s) => Array.isArray(s.Action) && (s.Action as string[]).includes('ssm:PutParameter'),
+      );
     }).length;
     expect(putCount).toBe(1); // the BFF connects/disconnects Google accounts; the MCP function never writes SSM
   });
@@ -429,14 +434,18 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
   });
 
   // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org.
-  it('throttle-alarms the whole account once, at the BFF alarm\'s old id so it updates in place', () => {
+  it("throttle-alarms the whole account once, at the BFF alarm's old id so it updates in place", () => {
     const throttles = Object.entries(build('prod').findResources('AWS::CloudWatch::Alarm')).filter(
-      ([, r]) => (r as { Properties: { MetricName: string } }).Properties.MetricName === 'Throttles',
+      ([, r]) =>
+        (r as { Properties: { MetricName: string } }).Properties.MetricName === 'Throttles',
     );
     expect(throttles).toHaveLength(1);
     const [[id = '', r] = []] = throttles;
     expect(id).toMatch(/^MonitoringThrottles/);
-    expect((r as { Properties: Record<string, unknown> }).Properties).toMatchObject({ Namespace: 'AWS/Lambda', Statistic: 'Sum' });
+    expect((r as { Properties: Record<string, unknown> }).Properties).toMatchObject({
+      Namespace: 'AWS/Lambda',
+      Statistic: 'Sum',
+    });
     expect((r as { Properties: Record<string, unknown> }).Properties.Dimensions).toBeUndefined();
   });
 
@@ -535,6 +544,23 @@ describe('ApertureAppStack finance sync', () => {
     expect(invoke[0]!.Resource).toEqual({ 'Fn::GetAtt': [syncFn().id, 'Arn'] }); // never `arn:*`
   });
 
+  // Attachment deletes run on both functions (BFF panel + MCP delete_attachment/delete_task). A plain
+  // DeleteObject on the versioned bucket leaves a 30-day noncurrent version — no version purge, no List.
+  it('both functions may delete objects under u/* only, never purge versions or list', () => {
+    for (const name of ['aperture-bff-dev', 'aperture-mcp-dev']) {
+      const props = Object.values(
+        app.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }),
+      )[0]!.Properties as Record<string, unknown>;
+      const s3 = policiesOfRole(props.Role).filter((st) =>
+        JSON.stringify(st.Action).includes('s3:'),
+      );
+      expect(s3.map((st) => st.Action)).toEqual([
+        ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'],
+      ]);
+      expect(JSON.stringify(s3[0]!.Resource)).toContain('/u/*');
+    }
+  });
+
   // Quick add: both functions read the one Anthropic key — exactly that parameter, never a wildcard.
   it('the BFF and the MCP function may read exactly the anthropic/api_key parameter', () => {
     for (const name of ['aperture-bff-dev', 'aperture-mcp-dev']) {
@@ -547,9 +573,9 @@ describe('ApertureAppStack finance sync', () => {
       expect(anth.length).toBeGreaterThan(0);
       for (const st of anth) {
         expect(st.Action).toBe('ssm:GetParameter');
-        expect(JSON.stringify(st.Resource).match(/parameter\/aperture\/dev\/anthropic[^"]*/g)).toEqual([
-          'parameter/aperture/dev/anthropic/api_key',
-        ]);
+        expect(
+          JSON.stringify(st.Resource).match(/parameter\/aperture\/dev\/anthropic[^"]*/g),
+        ).toEqual(['parameter/aperture/dev/anthropic/api_key']);
       }
     }
   });
@@ -596,7 +622,9 @@ describe('ApertureAppStack finance sync', () => {
     expect(Object.keys(trust.Condition)).toEqual(['StringEquals']);
     expect(trust.Condition.StringEquals['aws:SourceAccount']).toBe('111111111111');
     // Scheduler matches SourceArn against the schedule group; a schedule ARN fails CreateSchedule.
-    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({ 'Fn::GetAtt': [groupId, 'Arn'] });
+    expect(trust.Condition.StringEquals['aws:SourceArn']).toEqual({
+      'Fn::GetAtt': [groupId, 'Arn'],
+    });
   });
 });
 
@@ -636,7 +664,11 @@ describe('ApertureAppStack finance sync by stage', () => {
 
   it('prod keeps BFF and MCP logs for 90 days', () => {
     const retention = build('prod', 'u').findResources('Custom::LogRetention');
-    expect(Object.values(retention).map((r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays)).toEqual([90, 90]);
+    expect(
+      Object.values(retention).map(
+        (r) => (r as { Properties: { RetentionInDays: number } }).Properties.RetentionInDays,
+      ),
+    ).toEqual([90, 90]);
   });
 
   it('no device user → no schedule (the sync still runs on Refresh)', () => {
@@ -683,7 +715,12 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   const prod = build('prod');
   const resources = (ts: Template[]) =>
     ts.flatMap((t) =>
-      Object.values(t.toJSON().Resources as Record<string, { Type: string; Properties?: Record<string, unknown> }>),
+      Object.values(
+        t.toJSON().Resources as Record<
+          string,
+          { Type: string; Properties?: Record<string, unknown> }
+        >,
+      ),
     );
 
   it("deploys both stages through their own account's stock bootstrap", () => {
@@ -694,10 +731,16 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   });
 
   it("caps dev's table and GSI1 on-demand throughput, and leaves prod uncapped", () => {
-    const cap = { MaxReadRequestUnits: DEV_MAX_READ_UNITS, MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS };
+    const cap = {
+      MaxReadRequestUnits: DEV_MAX_READ_UNITS,
+      MaxWriteRequestUnits: DEV_MAX_WRITE_UNITS,
+    };
     const [devTable] = resources(dev.templates).filter((r) => r.Type === 'AWS::DynamoDB::Table');
     expect(devTable?.Properties?.OnDemandThroughput).toEqual(cap);
-    expect((devTable?.Properties?.GlobalSecondaryIndexes as { OnDemandThroughput?: unknown }[])[0]?.OnDemandThroughput).toEqual(cap);
+    expect(
+      (devTable?.Properties?.GlobalSecondaryIndexes as { OnDemandThroughput?: unknown }[])[0]
+        ?.OnDemandThroughput,
+    ).toEqual(cap);
     expect(JSON.stringify(resources(prod.templates))).not.toContain('OnDemandThroughput');
   });
 
@@ -708,7 +751,11 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     for (const r of all.filter((x) => x.Type === 'AWS::Lambda::Function'))
       expect(r.Properties?.ReservedConcurrentExecutions).toBeUndefined();
     const types = all.map((r) => r.Type);
-    for (const t of ['AWS::Lambda::EventSourceMapping', 'AWS::Lambda::Alias', 'AWS::Lambda::Version'])
+    for (const t of [
+      'AWS::Lambda::EventSourceMapping',
+      'AWS::Lambda::Alias',
+      'AWS::Lambda::Version',
+    ])
       expect(types).not.toContain(t);
     for (const r of all.filter((x) => x.Type === 'AWS::Lambda::EventInvokeConfig'))
       expect(r.Properties?.DestinationConfig).toBeUndefined();
@@ -716,9 +763,15 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
   // The kill switch locks DEV_URL_FUNCTIONS' URLs; a URL on any other function would stay open through a kill.
   it('gives a public Function URL only to the functions the kill switch locks', () => {
-    const t = dev.templates[1]!.toJSON().Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>;
+    const t = dev.templates[1]!.toJSON().Resources as Record<
+      string,
+      { Type: string; Properties: Record<string, unknown> }
+    >;
     const fnName = (ref: unknown) => {
-      const id = (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ?? (ref as { Ref?: string }).Ref ?? '';
+      const id =
+        (ref as { 'Fn::GetAtt'?: [string] })['Fn::GetAtt']?.[0] ??
+        (ref as { Ref?: string }).Ref ??
+        '';
       return t[id]?.Properties.FunctionName;
     };
     const urls = Object.values(t)
@@ -743,17 +796,27 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
       'AWS::CloudFront::MonitoringSubscription': 'cloudfront:CreateMonitoringSubscription',
     };
     const standing = JSON.stringify(guardrailsPolicy());
-    for (const [type, action] of Object.entries(deniedBy)) expect(standing, `${type} → ${action}`).toContain(action);
+    for (const [type, action] of Object.entries(deniedBy))
+      expect(standing, `${type} → ${action}`).toContain(action);
     const types = new Set(resources(dev.templates).map((r) => r.Type));
-    for (const type of Object.keys(deniedBy)) expect(types.has(type), `${type}: the guardrails SCP denies it in dev`).toBe(false);
+    for (const type of Object.keys(deniedBy))
+      expect(types.has(type), `${type}: the guardrails SCP denies it in dev`).toBe(false);
   });
 
   it('uses only services the dev allowlist SCP admits — a new one means widening it in ApertureOrg first', () => {
     const allowed = (allowlistPolicy().Statement[0] as { NotAction: string[] }).NotAction;
     // The allowlist entry each resource type's service needs (SSM is admitted for Parameter Store only).
     const entry: Record<string, string> = {
-      Lambda: 'lambda:*', IAM: 'iam:*', Logs: 'logs:*', S3: 's3:*', CloudFront: 'cloudfront:*', Cognito: 'cognito-idp:*',
-      DynamoDB: 'dynamodb:*', Scheduler: 'scheduler:*', SSM: 'ssm:*Parameter*', KMS: 'kms:*',
+      Lambda: 'lambda:*',
+      IAM: 'iam:*',
+      Logs: 'logs:*',
+      S3: 's3:*',
+      CloudFront: 'cloudfront:*',
+      Cognito: 'cognito-idp:*',
+      DynamoDB: 'dynamodb:*',
+      Scheduler: 'scheduler:*',
+      SSM: 'ssm:*Parameter*',
+      KMS: 'kms:*',
     };
     for (const type of new Set(resources(dev.templates).map((r) => r.Type))) {
       if (type.startsWith('Custom::') || type === 'AWS::CDK::Metadata') continue; // CDK providers run as Lambdas
@@ -769,17 +832,22 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
   // and the freeze denies the bot lane new code in one (FrozenProviderCode). Dev carries none; prod keeps its two.
   it('gives dev no CDK provider function, so a lane switch never touches frozen provider code', () => {
     const unnamed = (ts: Template[]) =>
-      resources(ts).filter((r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.FunctionName === undefined);
+      resources(ts).filter(
+        (r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.FunctionName === undefined,
+      );
     expect(unnamed(dev.templates)).toEqual([]);
     expect(resources(dev.templates).filter((r) => r.Type.startsWith('Custom::'))).toEqual([]);
     expect(unnamed(prod.templates)).toHaveLength(2); // LogRetention and S3 auto-delete
   });
 
   it("names functions so the freeze's provider-code deny would catch a CDK provider and none of the app's", () => {
-    const fns = resources([...dev.templates, ...prod.templates]).filter((r) => r.Type === 'AWS::Lambda::Function');
+    const fns = resources([...dev.templates, ...prod.templates]).filter(
+      (r) => r.Type === 'AWS::Lambda::Function',
+    );
     for (const f of fns) {
       const name = f.Properties?.FunctionName as string | undefined;
-      if (name !== undefined) expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
+      if (name !== undefined)
+        expect(name, 'a named function must not start with Aperture').toMatch(/^aperture-/);
     }
     for (const a of dev.artifacts) expect(a.stackName).toMatch(/^Aperture/); // so an unnamed function's name does
   });
@@ -813,9 +881,16 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
     });
 
     it("differs from the frozen lane's templates only in the bootstrap version parameter and the asset bucket", () => {
-      const same = (t: Template) => JSON.parse(JSON.stringify(strip(t)).replaceAll('cdk-devmain-assets-', 'cdk-hnb659fds-assets-'));
-      main.templates.forEach((t, i) => expect(same(t)).toEqual(strip(dev.templates[i] as Template)));
-      expect(JSON.stringify(main.templates[0]?.toJSON().Parameters)).toContain('/cdk-bootstrap/devmain/version');
+      const same = (t: Template) =>
+        JSON.parse(
+          JSON.stringify(strip(t)).replaceAll('cdk-devmain-assets-', 'cdk-hnb659fds-assets-'),
+        );
+      main.templates.forEach((t, i) =>
+        expect(same(t)).toEqual(strip(dev.templates[i] as Template)),
+      );
+      expect(JSON.stringify(main.templates[0]?.toJSON().Parameters)).toContain(
+        '/cdk-bootstrap/devmain/version',
+      );
     });
 
     it('takes a lane only for dev, and only a known one', () => {
@@ -830,7 +905,9 @@ describe('dev stacks in the dev account, under its SCPs (org-stack.ts)', () => {
 
 describe('ApertureBillingStack (hand-deployed cost guard)', () => {
   const app = new App();
-  const t = Template.fromStack(new ApertureBillingStack(app, 'ApertureBilling', { env: { region: 'us-east-1' } }));
+  const t = Template.fromStack(
+    new ApertureBillingStack(app, 'ApertureBilling', { env: { region: 'us-east-1' } }),
+  );
 
   it('has a monthly cost budget with email notifications', () => {
     t.hasResourceProperties('AWS::Budgets::Budget', {

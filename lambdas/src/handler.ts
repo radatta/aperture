@@ -6,6 +6,8 @@ import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
 import type { Presigner } from './s3/presigner';
+import { noopObjectStore } from './s3/objects';
+import type { ObjectStore } from './s3/objects';
 import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
 import { noopPlaid } from './plaid/gateway';
@@ -27,6 +29,7 @@ export interface RpcCall {
 // separate from RpcCall so the contract suite can supply a fake without a per-call field.
 export interface RpcDeps {
   presigner?: Presigner;
+  objects?: ObjectStore; // deletes attachment bytes in S3; ignored in testMode
   plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
   financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
   anthropic?: AnthropicGateway; // live Claude API seam (index.ts, mcp/index.ts); ignored in testMode
@@ -50,8 +53,9 @@ export async function handleRpc(
     google,
     stateSecret: call.stateSecret,
     presigner: deps.presigner,
-    // testMode forces these inert too — a smoke run reads no Plaid token or API key, starts no sync, and
-    // makes no Claude call.
+    // testMode forces these inert too — a smoke run deletes no S3 object, reads no Plaid token or API
+    // key, starts no sync, and makes no Claude call.
+    objects: call.testMode ? noopObjectStore() : deps.objects,
     plaid: call.testMode ? noopPlaid() : (deps.plaid ?? noopPlaid()),
     financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
     anthropic: call.testMode ? noopAnthropic() : (deps.anthropic ?? noopAnthropic()),
