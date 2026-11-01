@@ -16,6 +16,7 @@ const base: RunResult = {
   orphanIntents: [],
   blockedDeletes: [],
   consoleErrors: [],
+  throttled: [],
   shots: ['smoke-home-home-light.png'],
   durationMs: 61_000,
 };
@@ -26,6 +27,15 @@ describe('report', () => {
     expect(
       statusLine({ ...base, status: 'FAIL', codes: ['STEP_FAILED', 'LEFTOVERS', 'STEP_FAILED'] }),
     ).toBe('FAIL: STEP_FAILED, LEFTOVERS');
+  });
+
+  it('names every throttled call, which the console lines cannot', () => {
+    const md = renderReport({
+      ...base,
+      consoleErrors: ['Failed to load resource: the server responded with a status of 429 ()'],
+      throttled: ['/api/listTasks', '/api/getDay'],
+    });
+    expect(md).toContain('## Throttled (429)\n\n- `/api/listTasks`\n- `/api/getDay`\n');
   });
 
   it('renders a pass', () => {
@@ -47,6 +57,10 @@ describe('report', () => {
       - \`t1\` via ui:createTask → **deleted**
 
       ## Console errors
+
+      None.
+
+      ## Throttled (429)
 
       None.
 

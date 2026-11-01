@@ -1,7 +1,7 @@
-// Waiting for dev to serve the commit under test. Two proofs, in order: the Deploy run for that SHA
+// Waiting for dev to serve the commit under test. Two proofs, in order: the dispatched deploy for that SHA
 // succeeded (gh), then the edge serves index.html with that SHA in its build marker (fetch, no service
-// worker involved). A dispatched deploy (ci-bot's deploy-dev.yml) runs on main, so its headSha is main's —
-// it is matched by its run name, `deploy-dev <sha> <key>`, instead.
+// worker involved). A branch reaches dev only through `pnpm bot deploy-dev` (deploy-dev.yml) since dev-cutover. Its
+// run is matched by its run name, `deploy-dev <sha> <key>`: a main-ref dispatch's headSha is main's, not the SHA.
 import { DEV_ORIGIN } from './config';
 import { DevcheckError } from './errors';
 
@@ -17,12 +17,10 @@ export interface DeployRun {
 
 export const RUN_FIELDS = 'databaseId,headSha,displayTitle,status,conclusion,url,createdAt';
 
-// The newest run for `sha`: a push run on dev (headSha) or a dispatched one (its title names the SHA).
+// The newest dispatched run for `sha` (its title names the SHA).
 export function pickDeployRun(runs: DeployRun[], sha: string): DeployRun | undefined {
   const forSha = runs.filter(
-    (r) =>
-      r.headSha === sha ||
-      r.displayTitle.split(/\s+/).slice(0, 2).join(' ') === `deploy-dev ${sha}`,
+    (r) => r.displayTitle.split(/\s+/).slice(0, 2).join(' ') === `deploy-dev ${sha}`,
   );
   return forSha.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
@@ -32,7 +30,7 @@ export function parseMarker(html: string): string | undefined {
 }
 
 export interface DeployDeps {
-  listRuns: () => Promise<DeployRun[]>; // gh run list over deploy.yml (dev) and deploy-dev.yml when it exists
+  listRuns: () => Promise<DeployRun[]>; // gh run list over deploy-dev.yml
   fetchShell: () => Promise<string>; // GET DEV_ORIGIN/ with no-store
   sleep: (ms: number) => Promise<void>;
   now: () => number;
@@ -74,12 +72,12 @@ export async function waitForDeploy(
     }
     run = pickDeployRun(runs, sha);
     if (run?.status === 'completed') break;
-    // A run should exist within a minute of the push; without one, waiting longer won't help.
+    // A run should exist within a minute of the dispatch; without one, waiting longer won't help.
     if (!run && deps.now() - start > 2 * 60_000) {
       const latest = runs[0];
       throw new DevcheckError(
         'DEPLOY_NOT_FOUND',
-        `no dev deploy for ${sha.slice(0, 7)} (latest dev run: ${latest ? latest.headSha.slice(0, 7) : 'none'}) — was the branch pushed to dev?`,
+        `no dev deploy for ${sha.slice(0, 7)} (latest dispatch: ${latest?.displayTitle ?? 'none'}) — did \`pnpm bot deploy-dev\` run for it?`,
       );
     }
     if (deps.now() - start > budget.runMs)

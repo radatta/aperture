@@ -1,6 +1,6 @@
 ---
 name: devcheck
-description: Test the deployed dev stage as the dev test user — headless Chromium, screenshots, cleanup by recorded id. Use at the Feature workflow's dev test (phase 8) after the branch is pushed to dev, or when asked to check something on dev.
+description: Test the deployed dev stage as the dev test user — headless Chromium, screenshots, cleanup by recorded id. Use at the Feature workflow's dev test (phase 8) after `pnpm bot deploy-dev` dispatched the branch, or when asked to check something on dev.
 ---
 
 # Run the dev check
@@ -9,7 +9,7 @@ The reference is `docs/ops/DEV-CHECK.md`. This is the procedure.
 
 ## Before
 
-- The branch's commit is pushed to `dev` (the user's push, or ci-bot's dispatch). `git rev-parse HEAD` is what
+- The branch's commit is on dev through `pnpm bot deploy-dev` (a `deploy-dev <sha> <key>` run). `git rev-parse HEAD` is what
   the check expects unless you pass `--sha`.
 - Nothing heavy is running in the container — no `pnpm test`, no dev server, no other headless browser. A
   second dev check refuses to start (`run.lock`).
@@ -30,8 +30,10 @@ rather than polling `gh` by hand. Exit 0 PASS, 1 FAIL, 2 CRASH.
 
 1. Read `localNotes/devcheck/<run>/report.md`. The first line is the status.
 2. **Read the screenshots** — both themes. A PASS with a broken-looking screen is not tested; say what you see.
-3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do. `DEV_CHANGED_MID_RUN` means
-   main won: read the merged PRs, rebase, gate, ask for the push again, rerun.
+3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do — but while its _Known 429s_ section
+   exists, check its conditions first: a run that meets them counts as green. `DEV_CHANGED_MID_RUN` means main won:
+   read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's push),
+   `pnpm bot deploy-dev`, rerun.
 4. Leftovers must be 0. Never delete anything the report lists as "not in the ledger" — report it.
 
 ## A feature's own scenario

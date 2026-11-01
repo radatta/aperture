@@ -146,9 +146,12 @@ describe('deployDev', () => {
         },
       ],
     ]);
-    await deployDev(run, g.api, clock, quiet);
+    const logs: string[] = [];
+    await deployDev(run, g.api, clock, (s: string) => void logs.push(s));
     const dispatch = g.calls.find((c) => c.path.endsWith('/dispatches'));
     expect((dispatch?.body as { ref: string }).ref).toBe('ci-bot');
+    // Only a branch the user admitted to the `dev` environment can deploy on its own ref.
+    expect(logs.join('\n')).toMatch(/must admit ci-bot by name/);
     expect(g.calls.some((c) => c.path.includes('runs?event=workflow_dispatch&branch=ci-bot'))).toBe(
       true,
     );

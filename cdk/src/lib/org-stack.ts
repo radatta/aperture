@@ -310,8 +310,8 @@ export const guardrailsPolicy = () =>
 // SCP 3 — the freeze: what a dev deploy needs only the first time, or when it changes a function's shape. Without
 // it, branch code could raise memory 20× and the timeout to 15 min (in-flight calls run to their timeout even after
 // a kill), add Function URLs or self-invoking destinations, or switch the table to provisioned capacity. Attached
-// after the first deploy into the account. Main's own dev deploy is exempt (devMainExec above); a bot dispatch or
-// `dev` push that changes any of these is a hand step: detach, deploy, reattach (docs/ops/CI-BOT.md → Kill switch).
+// after the first deploy into the account. Main's own dev deploy is exempt (devMainExec above); a bot dispatch
+// that changes any of these is a hand step: detach, deploy, reattach (docs/ops/CI-BOT.md → Kill switch).
 export const freezePolicy = () =>
   policy([
     // CDK's own provider functions (LogRetention, S3 auto-delete, the OIDC provider) run for up to 15 min, so new code

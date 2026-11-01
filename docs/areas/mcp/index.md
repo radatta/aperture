@@ -241,10 +241,10 @@ transport. See `lambdas/src/mcp/protocol.ts`.
 
 ## Operator checklist (phase 1)
 
-0. **Before pushing to `dev`:** set GitHub secrets `AGENT_TOKEN_DEV` and `AGENT_TOKEN_PROD`
+0. **Before the first dev deploy** (then a `dev` push; now `pnpm bot deploy-dev`): set GitHub secrets `AGENT_TOKEN_DEV` and `AGENT_TOKEN_PROD`
    (`openssl rand -hex 24`, different values). Unset → every deploy rotates the token and Claude Code stops
    matching (same trap as the recruiting device token).
-1. Push the branch to `dev`; read the diff (expect a second Lambda + a `/mcp` behavior); the health check
+1. Push the branch to `dev` (now: `pnpm bot deploy-dev`); read the diff (expect a second Lambda + a `/mcp` behavior); the health check
    must show the two `/mcp` lines green.
 2. Register it (user scope, so it's available in every project):
    `claude mcp add --transport http aperture-dev https://dev.aperture.rahuldatta.dev/mcp -H "x-aperture-agent-token: <AGENT_TOKEN_DEV>"`

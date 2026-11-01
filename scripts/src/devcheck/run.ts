@@ -97,30 +97,23 @@ export function takeLock(path: string): () => void {
 }
 
 async function listRuns(): Promise<DeployRun[]> {
-  const gh = async (args: string[], optional = false) => {
-    try {
-      const { stdout } = await exec('gh', [
-        'run',
-        'list',
-        ...args,
-        '--limit',
-        '10',
-        '--json',
-        RUN_FIELDS,
-      ]);
-      return JSON.parse(stdout) as DeployRun[];
-    } catch (err) {
-      // deploy-dev.yml exists only once ci-bot lands; any other gh failure (auth, network) is real.
-      const stderr = String((err as { stderr?: unknown }).stderr ?? '');
-      if (optional && /could not find any workflows|not found/i.test(stderr)) return [];
-      throw new Error(`gh run list failed: ${stderr.trim() || String(err)}`, { cause: err });
-    }
-  };
-  const runs = [
-    ...(await gh(['--workflow', 'deploy.yml', '--branch', 'dev'])),
-    ...(await gh(['--workflow', 'deploy-dev.yml'], true)),
-  ];
-  return runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  try {
+    const { stdout } = await exec('gh', [
+      'run',
+      'list',
+      '--workflow',
+      'deploy-dev.yml',
+      '--limit',
+      '10',
+      '--json',
+      RUN_FIELDS,
+    ]);
+    const runs = JSON.parse(stdout) as DeployRun[];
+    return runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? '');
+    throw new Error(`gh run list failed: ${stderr.trim() || String(err)}`, { cause: err });
+  }
 }
 
 const fetchShell = async (): Promise<string> =>

@@ -28,7 +28,7 @@ async function lastDevJob(
 ): Promise<{ run: Run; job: Job } | 'busy' | undefined> {
   const runs = await listRuns(api, workflow, `per_page=${PAGE}&${query}`);
   for (const run of runs) {
-    // A run may carry several matching jobs (a `dev` push: deploy-dev or deploy-dev-fast) — take the one that ran.
+    // A run may carry several matching jobs (an old `dev` push run: deploy-dev or deploy-dev-fast) — take the one that ran.
     const job = (await listJobs(api, run.id)).find(
       (j) => j.name.startsWith(jobPrefix) && j.conclusion !== 'skipped',
     );
@@ -56,8 +56,9 @@ export async function currentBase(api: Api): Promise<string> {
     const [main, dispatched, devPush] = await Promise.all([
       lastDevJob(api, 'deploy.yml', 'event=push&branch=main', 'deploy-dev /', ranCdk),
       lastDevJob(api, 'deploy-dev.yml', 'event=workflow_dispatch', 'deploy /', () => true),
-      // The user's `dev` pushes (kept until dev-bootstrap retires them): whatever branch that was, its diff is
-      // unknown here — so a dev push newer than both others means a full deploy.
+      // `dev` pushes: the path was retired at dev-cutover, but the admin bypass can still recreate the branch and every
+      // older commit's deploy.yml deploys it. Whatever branch that was, its diff is unknown here — so a dev push
+      // newer than both others means a full deploy.
       lastDevJob(api, 'deploy.yml', 'event=push&branch=dev', 'deploy-dev', () => true),
     ]);
     if (main === 'busy' || dispatched === 'busy' || devPush === 'busy') return 'unknown';
@@ -91,15 +92,17 @@ export async function deployDev(
       'HEAD is behind origin/main — rebase (read the merged PRs first), `pnpm bot push --after-rebase`, then deploy',
     );
   }
-  // A branch that changes .github/ deploys on its own ref, so its workflows are what run on dev (the `dev`
-  // environment admits feature branches from CI-BOT.md setup step 8; only the user can push workflow changes).
-  // Everything else runs main's YAML.
+  // A branch that changes .github/ deploys on its own ref, so its workflows are what run on dev. The `dev` environment
+  // admits only `main` and branches the user named (CI-BOT.md → Commands → workflow changes), so say so. Everything
+  // else runs main's YAML.
   let ref = 'main';
   try {
     sh('git', ['diff', '--quiet', 'origin/main', 'HEAD', '--', '.github']);
   } catch {
     ref = branch;
-    log(`${branch} changes .github/ — dispatching on ${branch}, so its own workflows run on dev`);
+    log(
+      `${branch} changes .github/ — dispatching on ${branch}, so its own workflows run on dev. The \`dev\` environment must admit ${branch} by name first (docs/ops/CI-BOT.md → Commands → workflow changes), else its deploy job is refused.`,
+    );
   }
   let holder = await acquire(api, branch, sha, clock.now());
   log(`dev lock: ${branch} until ${holder.expiresAt}`);

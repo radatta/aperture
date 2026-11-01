@@ -3,6 +3,7 @@
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
 import { FLUX_SET_VIA, type ApiClient } from './api';
+import { DEV_ORIGIN } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, type ReasonCode } from './errors';
@@ -53,6 +54,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     orphanIntents: [],
     blockedDeletes: [],
     consoleErrors: [],
+    throttled: [],
     shots: [],
     durationMs: 0,
   };
@@ -76,6 +78,19 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const page = browser.page;
     page.on('console', (m) => m.type() === 'error' && r.consoleErrors.push(m.text()));
     page.on('pageerror', (e) => r.consoleErrors.push(String(e)));
+    page.on('response', (res) => {
+      if (res.status() !== 429) return;
+      const url = new URL(res.url());
+      const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
+      // Off the dev origin, the host too, so a third party's `/api/x` never reads as a BFF method.
+      r.throttled.push(
+        method
+          ? `/api/${method}`
+          : url.origin === DEV_ORIGIN
+            ? url.pathname
+            : url.host + url.pathname,
+      );
+    });
     // Track creates from the request, not the response: one still in flight when a step times out must be
     // waited for (and its id recorded) before cleanup, not lost.
     page.on('request', (req) => {
