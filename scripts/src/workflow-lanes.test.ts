@@ -33,4 +33,14 @@ describe('the devmain deploy lane', () => {
       'if [ "${{ inputs.lane }}" = devmain ] && { [ "${{ github.event_name }}" != push ] || [ "${{ github.ref }}" != refs/heads/main ] || [ -n "${{ inputs.ref }}" ]; }; then',
     );
   });
+
+  // A freeze-refused deploy leaves its stack in UPDATE_ROLLBACK_FAILED, which would block both lanes.
+  it('unsticks a failed dev deploy through the same lane, and never touches prod', () => {
+    const stage = read('deploy-stage.yml');
+    expect(stage).toContain('id: deploy');
+    expect(stage).toContain(
+      "if: failure() && steps.deploy.outcome == 'failure' && inputs.stage == 'dev'",
+    );
+    expect(stage).toContain('cdk rollback --app cdk.out ApertureData-dev ApertureApp-dev --force');
+  });
 });
