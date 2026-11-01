@@ -109,7 +109,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
     return {
       statusCode: 200,
       headers: CORS,
-      body: JSON.stringify({ ok: true, stage: process.env.STAGE ?? null }),
+      body: JSON.stringify({ ok: true, service: 'bff', stage: process.env.STAGE ?? null }),
     };
   }
 
