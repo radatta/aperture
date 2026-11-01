@@ -175,12 +175,22 @@ jobs:
       # A dev deploy the freeze refused doesn't roll back by itself: CloudFormation's rollback re-applies the function's
       # configuration as the same frozen role, which the freeze refuses too, so the stack sticks in
       # UPDATE_ROLLBACK_FAILED — and a stuck stack blocks both lanes, main's included (seen in the dev-account freeze
-      # probe, 2026-10-31). Continue the rollback through the same lane, skipping what can't roll back: the refused
-      # change never applied. The job has already failed; this only leaves dev deployable for the next run. Prod has no
-      # freeze, and a stuck prod stack is the user's to look at, so it never runs there.
+      # probe, 2026-10-31; the unstick itself, probe F2). Continue the rollback through the same lane, skipping what can't
+      # roll back. Frozen lane only: there a failed rollback is the freeze refusing a change it also refused going
+      # forward, so the skipped resource never changed; in main's exempt lane a failed rollback is a real fault, left for
+      # the user. The job has already failed; this only leaves dev deployable for the next run. Never on prod.
       - name: Unstick a refused dev deploy
-        if: failure() && steps.deploy.outcome == 'failure' && inputs.stage == 'dev'
-        run: pnpm --filter @aperture/cdk exec cdk rollback --app cdk.out ApertureData-dev ApertureApp-dev --force || echo "::warning::cdk rollback found nothing to roll back, or failed — check the dev stacks' status"
+        if: failure() && steps.deploy.outcome == 'failure' && inputs.stage == 'dev' && inputs.lane == ''
+        run: |
+          if out=$(pnpm --filter @aperture/cdk exec cdk rollback --app cdk.out ApertureData-dev ApertureApp-dev --force 2>&1); then
+            echo "$out"; echo "::notice::rolled the refused dev deploy back; dev is deployable again"; exit 0
+          fi
+          echo "$out"
+          if grep -q 'No stacks were in a state that could be rolled back' <<<"$out"; then
+            echo "::warning::nothing to roll back — the deploy failed some other way"
+          else
+            echo "::error::a dev stack may still be stuck in UPDATE_ROLLBACK_FAILED, blocking both lanes — break-glass (docs/ops/CI-BOT.md → Kill switch)"
+          fi
       - name: Smoke
         if: inputs.mode == 'full'
         run: pnpm --filter @aperture/scripts exec tsx src/smoke.ts ${{ inputs.stage }}

@@ -33,14 +33,24 @@ describe('the devmain deploy lane', () => {
       'if [ "${{ inputs.lane }}" = devmain ] && { [ "${{ github.event_name }}" != push ] || [ "${{ github.ref }}" != refs/heads/main ] || [ -n "${{ inputs.ref }}" ]; }; then',
     );
   });
+});
 
-  // A freeze-refused deploy leaves its stack in UPDATE_ROLLBACK_FAILED, which would block both lanes.
-  it('unsticks a failed dev deploy through the same lane, and never touches prod', () => {
-    const stage = read('deploy-stage.yml');
-    expect(stage).toContain('id: deploy');
+// A freeze-refused deploy leaves its stack in UPDATE_ROLLBACK_FAILED, which would block both lanes.
+describe('the refused-deploy unstick step', () => {
+  const stage = read('deploy-stage.yml');
+  const at = (needle: string) => stage.indexOf(needle);
+
+  it('runs after the deploy step it reads, on a failed frozen-lane dev deploy only', () => {
+    expect(at('id: deploy')).toBeGreaterThan(-1);
+    expect(at('name: Unstick a refused dev deploy')).toBeGreaterThan(at('id: deploy'));
     expect(stage).toContain(
-      "if: failure() && steps.deploy.outcome == 'failure' && inputs.stage == 'dev'",
+      "if: failure() && steps.deploy.outcome == 'failure' && inputs.stage == 'dev' && inputs.lane == ''",
     );
-    expect(stage).toContain('cdk rollback --app cdk.out ApertureData-dev ApertureApp-dev --force');
+  });
+
+  it('rolls back through the same lane (no role of its own), skipping what the freeze refused', () => {
+    const line = stage.split('\n').find((l) => l.includes('cdk rollback'))!;
+    expect(line).toContain('cdk rollback --app cdk.out ApertureData-dev ApertureApp-dev --force');
+    expect(line).not.toContain('--role-arn');
   });
 });
