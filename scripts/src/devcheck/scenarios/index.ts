@@ -1,13 +1,21 @@
 // Every scenario the dev check knows. A feature adds scenarios/<feature>.ts and lists it here; `--tier
 // delta --scenario <id>` runs just that one, `--tier full` runs them all.
 import type { Scenario, Tier } from '../scenario';
+import { attachmentDelete } from './attachment-delete';
 import { captureTask } from './capture-task';
 import { fluxHistory } from './flux-history';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
 import { smoke } from './smoke';
 
-export const SCENARIOS: Scenario[] = [smoke, captureTask, partsV2, partsV2b, fluxHistory];
+export const SCENARIOS: Scenario[] = [
+  smoke,
+  captureTask,
+  partsV2,
+  partsV2b,
+  fluxHistory,
+  attachmentDelete,
+];
 
 export type RunTier = Tier | 'delta';
 

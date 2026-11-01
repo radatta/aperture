@@ -11,6 +11,7 @@ import type { Verifier } from '../auth/verify';
 import { handleRpc } from '../handler';
 import { createLiveGoogle } from '../google/liveGoogle';
 import { createS3Presigner } from '../s3/presigner';
+import { createS3ObjectStore } from '../s3/objects';
 import { noopPlaid } from '../plaid/gateway';
 import { noopInvoker } from '../finance/invoker';
 import { createLiveAnthropic } from '../anthropic/liveAnthropic';
@@ -23,6 +24,7 @@ export const runtime = `${APERTURE}-mcp` as const;
 const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 // Built once at cold start; construction never touches the network (empty bucket/URL is fine locally).
 const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
+const objects = createS3ObjectStore(process.env.FILES_BUCKET ?? ''); // deletes attachment bytes
 const STAGE = process.env.STAGE ?? 'dev';
 const APP_URL = process.env.APP_URL ?? '';
 const google = createLiveGoogle({ stage: STAGE, appUrl: APP_URL });
@@ -160,7 +162,7 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       handleRpc(
         doc,
         { userId, method, args, google, stateSecret: process.env.ORIGIN_SECRET },
-        { presigner, plaid: noopPlaid(), financeInvoker: noopInvoker(), anthropic },
+        { presigner, objects, plaid: noopPlaid(), financeInvoker: noopInvoker(), anthropic },
       ),
     upload: uploadToPresigned,
   };

@@ -92,7 +92,9 @@ function grantBackendData(
   }
   fn.addToRolePolicy(
     new iam.PolicyStatement({
-      actions: ['s3:PutObject', 's3:GetObject'],
+      // Delete: attachment bytes go when the attachment or its task does (s3/objects.ts). A plain delete
+      // on the versioned bucket leaves a 30-day noncurrent version, so no DeleteObjectVersion.
+      actions: ['s3:PutObject', 's3:GetObject', 's3:DeleteObject'],
       resources: [filesBucket.arnForObjects('u/*')],
     }),
   );

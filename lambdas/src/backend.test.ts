@@ -7,6 +7,7 @@ import { toEntity } from './ddb/mapping';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
+import { fakeObjectStore } from './s3/objects';
 import type { Presigner } from './s3/presigner';
 import { ulid, type RecordFluxSetInput, type Task } from '@aperture/shared';
 
@@ -41,12 +42,14 @@ describe('backend attachments', () => {
   const setup = (userId = 'local') => {
     const doc = new InMemoryDoc();
     let clock = 1_700_000_000_000;
+    const objects = fakeObjectStore();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), userId), {
       userId,
       now: () => clock,
       presigner: fakePresigner(),
+      objects,
     });
-    return { doc, backend, tick: (ms: number) => (clock += ms) };
+    return { doc, backend, objects, tick: (ms: number) => (clock += ms) };
   };
 
   it('keys the S3 object by user + task + id, never the filename', async () => {
@@ -63,7 +66,7 @@ describe('backend attachments', () => {
   });
 
   it('tombstones on delete — kept in the table, gone from the list', async () => {
-    const { doc, backend, tick } = setup();
+    const { doc, backend, objects, tick } = setup();
     const task = await backend.createTask({ title: 't' });
     const { attachment } = await backend.createAttachmentUploadUrl({
       taskId: task.id,
@@ -76,9 +79,62 @@ describe('backend attachments', () => {
     await backend.deleteAttachment(attachment.id);
 
     const raw = await doc.get('u#local', sk.attach(task.id, attachment.id));
-    expect(raw).toBeTruthy(); // still physically present (bytes orphaned, metadata recoverable)
+    expect(raw).toBeTruthy(); // the metadata row stays, tombstoned (recoverable / export-auditable)
     expect(raw!.deletedAt).not.toBeNull();
     expect(await backend.listAttachments(task.id)).toHaveLength(0);
+    expect(objects.deleted).toEqual([attachment.s3Key]); // the bytes go
+  });
+
+  it('a failed S3 delete throws and leaves the row live, so a retry finishes it', async () => {
+    const { doc, backend, objects } = setup();
+    const task = await backend.createTask({ title: 't' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await backend.confirmAttachment(attachment.id);
+    objects.failNext = new Error('AccessDenied');
+    await expect(backend.deleteAttachment(attachment.id)).rejects.toThrow('AccessDenied');
+    expect((await doc.get('u#local', sk.attach(task.id, attachment.id)))!.deletedAt).toBeNull();
+    expect((await backend.listAttachments(task.id)).map((a) => a.id)).toEqual([attachment.id]);
+
+    await backend.deleteAttachment(attachment.id);
+    expect(objects.deleted).toEqual([attachment.s3Key]);
+    expect(await backend.listAttachments(task.id)).toHaveLength(0);
+  });
+
+  it('makes no S3 call for an unknown or already-deleted id', async () => {
+    const { backend, objects } = setup();
+    const task = await backend.createTask({ title: 't' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await backend.deleteAttachment(attachment.id);
+    await backend.deleteAttachment(attachment.id);
+    await backend.deleteAttachment('nope');
+    expect(objects.deleted).toEqual([attachment.s3Key]);
+  });
+
+  it('throws on delete when no object store is configured — never skips the bytes', async () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      presigner: fakePresigner(),
+    });
+    const task = await backend.createTask({ title: 't' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.png',
+      contentType: 'image/png',
+      size: 10,
+    });
+    await expect(backend.deleteAttachment(attachment.id)).rejects.toThrow('no object store');
+    expect(await backend.listAttachments()).toHaveLength(0); // pending, never listed
+    expect((await doc.get('u#local', sk.attach(task.id, attachment.id)))!.deletedAt).toBeNull();
   });
 
   it('keeps a task’s attachments after the task is cancelled (cancel ≠ delete)', async () => {
@@ -167,12 +223,14 @@ describe('backend task delete', () => {
   const setup = (userId = 'local') => {
     const doc = new InMemoryDoc();
     let clock = 1_700_000_000_000;
+    const objects = fakeObjectStore();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), userId), {
       userId,
       now: () => clock,
       presigner: fakePresigner(),
+      objects,
     });
-    return { doc, backend, tick: (ms: number) => (clock += ms) };
+    return { doc, backend, objects, tick: (ms: number) => (clock += ms) };
   };
 
   it('tombstones the task, its plans, and its attachment metadata — kept in the table, gone from every list', async () => {
@@ -209,6 +267,83 @@ describe('backend task delete', () => {
     expect(await backend.getTask(task.id)).toBeNull();
     expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
     expect(await backend.listAttachments(task.id)).toHaveLength(0);
+  });
+
+  it('deletes the bytes of every attachment — ready, pending, and on its parts', async () => {
+    const { backend, objects } = setup();
+    const parent = await backend.createTask({ title: 'parent' });
+    const part = await backend.createTask({ title: 'part', parentId: parent.id });
+    const add = (taskId: string, filename: string) =>
+      backend.createAttachmentUploadUrl({ taskId, filename, contentType: 'text/plain', size: 5 });
+    const ready = (await add(parent.id, 'ready.txt')).attachment;
+    await backend.confirmAttachment(ready.id);
+    const pending = (await add(parent.id, 'pending.txt')).attachment; // never confirmed
+    const onPart = (await add(part.id, 'part.txt')).attachment;
+    await backend.confirmAttachment(onPart.id);
+
+    await backend.deleteTask(parent.id);
+    expect([...objects.deleted].sort()).toEqual([ready.s3Key, pending.s3Key, onPart.s3Key].sort());
+    expect(await backend.getTask(part.id)).toBeNull();
+  });
+
+  it('a failed S3 delete touches nothing else — task, plans intact; the retry completes the cascade', async () => {
+    const { backend, objects } = setup();
+    const task = await backend.createTask({ title: 'retry me' });
+    await backend.upsertPlan({ taskId: task.id, day: '2026-08-04', plannedMinutes: 30, order: 1 });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.txt',
+      contentType: 'text/plain',
+      size: 5,
+    });
+    await backend.confirmAttachment(attachment.id);
+    objects.failNext = new Error('SlowDown');
+    await expect(backend.deleteTask(task.id)).rejects.toThrow('SlowDown');
+    expect(await backend.getTask(task.id)).not.toBeNull();
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(1); // bytes go before the plans
+    expect(await backend.listAttachments(task.id)).toHaveLength(1);
+
+    await backend.deleteTask(task.id);
+    expect(await backend.getTask(task.id)).toBeNull();
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
+    expect(objects.deleted).toEqual([attachment.s3Key]);
+  });
+
+  it('reads the attachments strongly, so a just-deleted file isn’t deleted twice', async () => {
+    const { doc, backend, objects } = setup();
+    const task = await backend.createTask({ title: 'fresh file' });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.txt',
+      contentType: 'text/plain',
+      size: 5,
+    });
+    const key = sk.attach(task.id, attachment.id);
+    const live = await doc.get('u#local', key);
+    doc.staleNextQueries('u#local', key, live, 20); // an eventual read keeps seeing the live copy
+    await backend.deleteTask(task.id);
+    expect(objects.deleted).toEqual([attachment.s3Key]);
+    expect((await doc.get('u#local', key))!.deletedAt).not.toBeNull();
+  });
+
+  it('a failed S3 delete on a part leaves the parent and every part alive', async () => {
+    const { backend, objects } = setup();
+    const parent = await backend.createTask({ title: 'parent' });
+    const a = await backend.createTask({ title: 'a', parentId: parent.id });
+    const b = await backend.createTask({ title: 'b', parentId: parent.id });
+    const { attachment } = await backend.createAttachmentUploadUrl({
+      taskId: b.id,
+      filename: 'b.txt',
+      contentType: 'text/plain',
+      size: 5,
+    });
+    objects.failNext = new Error('AccessDenied');
+    await expect(backend.deleteTask(parent.id)).rejects.toThrow('AccessDenied');
+    for (const t of [parent, a, b]) expect(await backend.getTask(t.id)).not.toBeNull();
+
+    await backend.deleteTask(parent.id);
+    for (const t of [parent, a, b]) expect(await backend.getTask(t.id)).toBeNull();
+    expect(objects.deleted).toEqual([attachment.s3Key]);
   });
 
   it('is a no-op on an unknown or already-deleted id', async () => {

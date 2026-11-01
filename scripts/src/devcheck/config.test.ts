@@ -2,7 +2,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { DEV_ORIGIN, TEST_USER_EMAIL, assertDevOrigin, loadEnv, parseEnv } from './config';
+import {
+  DEV_ORIGIN,
+  TEST_USER_EMAIL,
+  assertDevOrigin,
+  assertPresignedDevUrl,
+  loadEnv,
+  parseEnv,
+} from './config';
 
 const GOOD = [
   `DEVCHECK_EMAIL=${TEST_USER_EMAIL}`,
@@ -12,6 +19,27 @@ const GOOD = [
   'DEVCHECK_CLIENT_ID=client',
   'DEVCHECK_POOL_ID=us-west-1_X',
 ].join('\n');
+
+describe('assertPresignedDevUrl', () => {
+  const host = 'aperturedata-dev-files8e6940b8-1a2b3c4d5e6f.s3.us-west-1.amazonaws.com';
+  const signed = 'X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc123';
+  it('allows a signed URL on the dev Files bucket under u/', () => {
+    expect(() => assertPresignedDevUrl(`https://${host}/u/sub-1/t1/a1?${signed}`)).not.toThrow();
+  });
+  it.each([
+    `https://aperturedata-prod-files8e6940b8-1a2b3c4d5e6f.s3.us-west-1.amazonaws.com/u/s/t/a?${signed}`, // prod
+    `https://apertureapp-dev-site1234.s3.us-west-1.amazonaws.com/u/s/t/a?${signed}`, // another dev bucket
+    `https://${host}.evil.com/u/s/t/a?${signed}`,
+    `https://${host.replace('us-west-1', 'us-east-1')}/u/s/t/a?${signed}`,
+    `http://${host}/u/s/t/a?${signed}`, // wrong scheme
+    `https://${host}:8443/u/s/t/a?${signed}`,
+    `https://${host}/index.html?${signed}`, // outside u/
+    `https://${host}/u/s/t/a?X-Amz-Algorithm=AWS4-HMAC-SHA256`, // unsigned
+    'not a url',
+  ])('refuses %s', (url) => {
+    expect(() => assertPresignedDevUrl(url)).toThrow(/refusing/);
+  });
+});
 
 describe('assertDevOrigin', () => {
   it('allows the dev origin, any path', () => {

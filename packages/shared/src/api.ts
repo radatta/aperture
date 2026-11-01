@@ -373,8 +373,9 @@ export interface ApiClient {
   // a parent's first part clears its estimate and plan rows, and a started part freezes the parent's lock.
   setTaskParent(id: string, parentId: string | null): Promise<Task>;
   // Permanent delete (distinct from cancel, which keeps the row as history). Tombstones the task, its
-  // plan rows, and its attachment metadata; hard-deletes the calendar event via the cancel path; S3
-  // bytes are orphaned. No-op if the task is absent/already gone.
+  // plan rows, and its attachment metadata; hard-deletes the calendar event via the cancel path; deletes
+  // each attachment's S3 bytes first (a failure throws, task left alive and retryable). No-op if the
+  // task is absent/already gone.
   deleteTask(id: string): Promise<void>;
 
   // Plans (scheduling)
@@ -481,8 +482,9 @@ export interface ApiClient {
   deleteStory(id: string): Promise<void>;
 
   // Task attachments — bytes never cross the BFF. The Lambda mints presigned URLs; the browser PUTs the
-  // file to S3, then confirms (pending → ready). Downloads are minted per view, short-lived. delete is a
-  // soft-delete of the metadata; the S3 object is orphaned (no bytes-cleanup path in v1).
+  // file to S3, then confirms (pending → ready). Downloads are minted per view, short-lived. delete
+  // deletes the S3 object (the versioned bucket keeps it 30 days as a noncurrent version), then
+  // tombstones the metadata.
   createAttachmentUploadUrl(
     input: CreateAttachmentInput,
   ): Promise<{ attachment: Attachment; uploadUrl: string }>;

@@ -241,9 +241,12 @@ export class Repo {
   }
 
   // --- Task attachments (metadata; bytes live in S3) ---
-  async listAttachmentsForTask(taskId: string): Promise<Attachment[]> {
+  async listAttachmentsForTask(
+    taskId: string,
+    opts?: { consistent?: boolean },
+  ): Promise<Attachment[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.attachTaskPrefix(taskId))).map((i) =>
+      (await this.doc.query(this.p(), sk.attachTaskPrefix(taskId), opts)).map((i) =>
         toEntity<Attachment>(i),
       ),
     );

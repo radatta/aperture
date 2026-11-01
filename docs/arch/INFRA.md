@@ -41,7 +41,7 @@ Two isolated copies of everything, so changes can be tested before touching real
 ## 3. CDK stacks — split stateful from replaceable
 
 - **`ApertureData-<env>`** — DynamoDB table + Cognito User Pool + the **Files bucket** (task attachments; `RETAIN`, presigned-only, CORS = the stage's app domain — design: `areas/tasks/attachments.md` D5/D9). `removalPolicy: RETAIN`, deployed rarely, protected from teardown. _(Precious: your data + your identity.)_
-- **`ApertureApp-<env>`** — Lambda + Function URL + S3 (Site) + CloudFront (+ ACM cert reference, since the domain step, §8). Redeploys freely; nothing precious. The BFF Lambda gets an object-scoped (`u/*`) `s3:PutObject/GetObject` grant on the data stack's Files bucket to sign presigns.
+- **`ApertureApp-<env>`** — Lambda + Function URL + S3 (Site) + CloudFront (+ ACM cert reference, since the domain step, §8). Redeploys freely; nothing precious. The BFF and MCP Lambdas get an object-scoped (`u/*`) `s3:PutObject/GetObject/DeleteObject` grant on the data stack's Files bucket, to sign presigns and delete an attachment's bytes.
 
 Rationale: never let an app redeploy endanger the stateful resources.
 

@@ -5,9 +5,31 @@
 
 const STUB = 'stub:';
 const stubBlobs = new Map<string, Blob>();
+// Object URLs handed out per stub id. Each one keeps its blob readable, so forgetting revokes them too.
+const issued = new Map<string, string[]>();
+
+function revokeIssued(id: string): void {
+  for (const u of issued.get(id) ?? []) {
+    try {
+      URL.revokeObjectURL(u);
+    } catch {
+      // jsdom lacks revokeObjectURL
+    }
+  }
+  issued.delete(id);
+}
 
 // Test hook: stub uploads live only in this map, so the suite empties it between tests.
-export const forgetStubBlobs = (): void => stubBlobs.clear();
+export const forgetStubBlobs = (): void => {
+  for (const id of [...issued.keys()]) revokeIssued(id);
+  stubBlobs.clear();
+};
+// The stub's twin of the backend's S3 delete: deleting an attachment (or its task) drops its bytes,
+// and any link already opened stops reading them.
+export const forgetStubBlob = (id: string): void => {
+  revokeIssued(id);
+  stubBlobs.delete(id);
+};
 
 // PUT the bytes to the presigned URL. `contentType` MUST be the server-signed value (the presigned PUT
 // signs content-type; sending a different one fails S3's signature check). fetch can't report upload
@@ -44,10 +66,13 @@ export async function uploadTo(
 // a real presigned URL passes straight through.
 export function resolveViewUrl(url: string): string | null {
   if (!url.startsWith(STUB)) return url;
-  const blob = stubBlobs.get(url.slice(STUB.length));
+  const id = url.slice(STUB.length);
+  const blob = stubBlobs.get(id);
   if (!blob) return null;
   try {
-    return URL.createObjectURL(blob);
+    const u = URL.createObjectURL(blob);
+    issued.set(id, [...(issued.get(id) ?? []), u]);
+    return u;
   } catch {
     return null; // jsdom lacks createObjectURL
   }

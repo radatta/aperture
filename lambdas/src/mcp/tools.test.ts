@@ -8,6 +8,7 @@ import { BackendClient } from '../backend';
 import { InMemoryGoogle } from '../google/gateway';
 import { FakeAnthropic } from '../anthropic/gateway';
 import { fakePresigner } from '../s3/presigner';
+import { fakeObjectStore } from '../s3/objects';
 import { handleRpc } from '../handler';
 import { TOOLS } from './tools';
 import type { ToolContext } from './types';
@@ -21,6 +22,7 @@ function makeEnv() {
   const anthropic = new FakeAnthropic();
   const uploads: { url: string; bytes: Buffer; contentType: string }[] = [];
   const now = () => 1_700_000_000_000;
+  const objects = fakeObjectStore();
   const setup = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
     userId: 'local',
     now,
@@ -32,7 +34,7 @@ function makeEnv() {
       handleRpc(
         doc,
         { userId: 'local', method, args, now, google, stateSecret: 'test' },
-        { presigner: fakePresigner(), anthropic },
+        { presigner: fakePresigner(), objects, anthropic },
       ),
     upload: async (url, bytes, contentType) => {
       uploads.push({ url, bytes, contentType });
@@ -45,7 +47,7 @@ function makeEnv() {
     if (!tool) throw new Error(`no tool ${name}`);
     return tool.run(args, ctx);
   };
-  return { doc, google, anthropic, uploads, setup, call };
+  return { doc, google, anthropic, uploads, objects, setup, call };
 }
 
 describe('mcp tools — parse_task (Raycast quick add)', () => {
@@ -308,11 +310,18 @@ describe('mcp tools — tasks', () => {
     await expect(call('complete_task', { id: t.id })).rejects.toThrow(/actualMin/);
   });
 
-  it('delete_task tombstones the task and its plans, and 404s an unknown or already-deleted id', async () => {
-    const { call, setup } = makeEnv();
+  it('delete_task tombstones the task and its plans, deletes its attachment bytes, and 404s an unknown or already-deleted id', async () => {
+    const { call, setup, objects } = makeEnv();
     const t = (await call('create_task', { title: 'gone' })) as Task;
     await setup.upsertPlan({ taskId: t.id, day: '2026-09-22', plannedMinutes: 30, order: 0 });
+    const up = (await call('create_attachment_upload', {
+      taskId: t.id,
+      filename: 'a.txt',
+      contentType: 'text/plain',
+      size: 5,
+    })) as { attachmentId: string };
     expect(await call('delete_task', { id: t.id })).toEqual({ deleted: t.id });
+    expect(objects.deleted).toEqual([`u/local/${t.id}/${up.attachmentId}`]);
     expect((await call('list_tasks')) as Task[]).toHaveLength(0);
     expect(await setup.listPlansForDay('2026-09-22')).toHaveLength(0);
     await expect(call('delete_task', { id: t.id })).rejects.toThrow(/Not found/);
@@ -495,7 +504,7 @@ describe('mcp tools — attachments', () => {
   });
 
   it('create_attachment_upload returns a presigned URL + next-step, and confirm/delete round-trip', async () => {
-    const { call } = makeEnv();
+    const { call, objects } = makeEnv();
     const t = (await call('create_task', { title: 'real file' })) as Task;
     const up = (await call('create_attachment_upload', {
       taskId: t.id,
@@ -513,6 +522,7 @@ describe('mcp tools — attachments', () => {
     expect(await call('delete_attachment', { id: up.attachmentId })).toEqual({
       deleted: up.attachmentId,
     });
+    expect(objects.deleted).toEqual([`u/local/${t.id}/${up.attachmentId}`]);
   });
 });
 

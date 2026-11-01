@@ -494,7 +494,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'delete_task',
     description:
-      'Permanently delete a task (no restore tool). Also removes its day plans and attachments, DELETES its linked Google Calendar event if it has one, and its logged time stops counting toward calibration. Deleting a parent deletes every one of its parts the same way (the result lists them) — confirm the count with the user first. Refused for a recurring occurrence (seriesId set) — the series would just respawn it. To abandon a task while keeping its history, use update_task status=cancelled instead.',
+      'Permanently delete a task (no restore tool). Also removes its day plans and attachments (their stored file bytes too), DELETES its linked Google Calendar event if it has one, and its logged time stops counting toward calibration. Deleting a parent deletes every one of its parts the same way (the result lists them) — confirm the count with the user first. Refused for a recurring occurrence (seriesId set) — the series would just respawn it. To abandon a task while keeping its history, use update_task status=cancelled instead.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -905,7 +905,8 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'delete_attachment',
-    description: 'Soft-delete an attachment (recoverable tombstone; the S3 bytes are orphaned).',
+    description:
+      'Delete an attachment: its stored file bytes are deleted (the bucket keeps a noncurrent version for 30 days) and its metadata is tombstoned.',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },

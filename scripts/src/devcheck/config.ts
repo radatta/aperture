@@ -21,6 +21,25 @@ export function assertDevOrigin(url: string): void {
     throw new Error(`refusing ${origin} — the dev check only talks to ${DEV_ORIGIN}`);
 }
 
+// The one other origin the harness may touch: a presigned URL the dev BFF minted for the test user's own
+// attachment (the attachment-delete scenario's PUT and probes). The host is the dev Files bucket's CDK name
+// (stack ApertureData-dev, construct Files) — never another bucket, prod's included — the key sits under
+// the per-user u/ prefix, and the URL carries a SigV4 signature.
+const DEV_FILES_HOST = /^aperturedata-dev-files[a-z0-9-]+\.s3\.us-west-1\.amazonaws\.com$/;
+
+export function assertPresignedDevUrl(url: string): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error('refusing a non-URL presigned target');
+  }
+  if (u.protocol !== 'https:' || u.port || !DEV_FILES_HOST.test(u.hostname))
+    throw new Error(`refusing ${u.origin} — not the dev Files bucket`);
+  if (!u.pathname.startsWith('/u/')) throw new Error(`refusing ${u.pathname} — not under u/`);
+  if (!u.searchParams.get('X-Amz-Signature')) throw new Error('refusing an unsigned URL');
+}
+
 export const ENV_KEYS = [
   'DEVCHECK_EMAIL',
   'DEVCHECK_PASSWORD',

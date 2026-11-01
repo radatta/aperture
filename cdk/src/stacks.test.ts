@@ -143,11 +143,11 @@ describe('ApertureAppStack', () => {
     app.hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: Match.objectLike({ FILES_BUCKET: Match.anyValue() }) },
     });
-    // PutObject/GetObject only, scoped to the u/* object prefix — no bucket-level or List permission.
+    // Put/Get/Delete only, scoped to the u/* object prefix — no bucket-level or List permission.
     app.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: Match.arrayWith([
-          Match.objectLike({ Action: ['s3:GetObject', 's3:PutObject'] }), // sorted by minimizePolicies
+          Match.objectLike({ Action: ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'] }), // sorted by minimizePolicies
         ]),
       },
     });
@@ -533,6 +533,23 @@ describe('ApertureAppStack finance sync', () => {
     const invoke = stmts.filter((st) => st.Action === 'lambda:InvokeFunction');
     expect(invoke).toHaveLength(1);
     expect(invoke[0]!.Resource).toEqual({ 'Fn::GetAtt': [syncFn().id, 'Arn'] }); // never `arn:*`
+  });
+
+  // Attachment deletes run on both functions (BFF panel + MCP delete_attachment/delete_task). A plain
+  // DeleteObject on the versioned bucket leaves a 30-day noncurrent version — no version purge, no List.
+  it('both functions may delete objects under u/* only, never purge versions or list', () => {
+    for (const name of ['aperture-bff-dev', 'aperture-mcp-dev']) {
+      const props = Object.values(
+        app.findResources('AWS::Lambda::Function', { Properties: { FunctionName: name } }),
+      )[0]!.Properties as Record<string, unknown>;
+      const s3 = policiesOfRole(props.Role).filter((st) =>
+        JSON.stringify(st.Action).includes('s3:'),
+      );
+      expect(s3.map((st) => st.Action)).toEqual([
+        ['s3:DeleteObject', 's3:GetObject', 's3:PutObject'],
+      ]);
+      expect(JSON.stringify(s3[0]!.Resource)).toContain('/u/*');
+    }
   });
 
   // Quick add: both functions read the one Anthropic key — exactly that parameter, never a wildcard.

@@ -30,7 +30,7 @@ ATTACHMENT
                     never in DynamoDB (400 KB item cap), never through the Lambda
 ```
 
-The Lambda only ever handles the metadata plane. The bytes plane is browser↔S3 directly, authorized by a short-lived presigned URL the Lambda *signs* but never carries. That's what keeps the RPC edge JSON-only.
+The Lambda only ever handles the metadata plane. The bytes plane is browser↔S3 directly, authorized by a short-lived presigned URL the Lambda *signs* but never carries. That's what keeps the RPC edge JSON-only. Its one call into the bytes plane is the delete (D7): a control call that moves no bytes.
 
 ## 3. Decision log
 
@@ -63,15 +63,18 @@ Metadata is written at **presign time** (so the server owns size/type and can ve
 *Rejected:* reusing the Site bucket (data loss on the next app-stack destroy); a bucket in the app stack (a deploy could delete it).
 
 **D6 — Object-scoped IAM; size signed; serving forced.**
-The Lambda gets `s3:PutObject/GetObject` on `arnForObjects('u/*')` only — never bucket-level, never List. The presigned PUT signs **content-length** (the size cap is cryptographic — a client can't lie about size). The presigned GET forces `ResponseContentType` + `ResponseContentDisposition`: **`inline` for browser-renderable, script-free types** (`viewableInline` — image, PDF, `text/*`, audio, video), and **`attachment; filename*=…` for `text/html`, SVG / anything `xml`, and unknown binaries**. So markdown/PDF/images open in the tab, while active content is forced to a download — even though bytes serve from a separate S3 origin with no app session, that carve-out is cheap defense-in-depth.
+The Lambda gets `s3:PutObject/GetObject/DeleteObject` on `arnForObjects('u/*')` only — never bucket-level, never List, never `DeleteObjectVersion` (D7). The presigned PUT signs **content-length** (the size cap is cryptographic — a client can't lie about size). The presigned GET forces `ResponseContentType` + `ResponseContentDisposition`: **`inline` for browser-renderable, script-free types** (`viewableInline` — image, PDF, `text/*`, audio, video), and **`attachment; filename*=…` for `text/html`, SVG / anything `xml`, and unknown binaries**. So markdown/PDF/images open in the tab, while active content is forced to a download — even though bytes serve from a separate S3 origin with no app session, that carve-out is cheap defense-in-depth.
 *Why:* a presigned URL acts with the *signer's* permissions, so the IAM scope is the blast radius of a leaked URL — bounded to object keys under `u/`. Forcing the download disposition means SVG/HTML/PDF-with-JS never render inline from the S3 origin, so a malicious upload can't run as script.
 *↳ Reality check (found in build):* the AWS SDK signs **content-length but NOT content-type** into the PUT (verified in `presigner.test.ts` — `SignedHeaders` is `content-length;host`). So the *size* is cryptographically fixed; the content-type is set on the object but not signature-bound. That's fine: serving safety comes from the forced `ResponseContentType`/`Disposition` on the GET (server-controlled), not from the stored type. The plan had claimed both were signed; corrected here.
 
-**D7 — On task delete: tombstone metadata, orphan bytes. And cancel ≠ delete.**
-When a task is deleted (`deleteTask`), its attachment *metadata* is tombstoned; the S3 objects are left in place (no sweeper). **Cancelling** a task (`transitionTask → 'cancelled'`) does **not** touch attachments — a cancelled task is still a record.
-*Why:* orphaned bytes cost pennies and a sweeper is real complexity + a destructive code path we don't need yet. Cancel is a lifecycle state, not a deletion, so its files stay.
-*Landed:* `deleteTask` now honors this — it tombstones the task's attachment metadata (via `repo.listAttachmentsForTask`) alongside its plan rows, orphaning the bytes. Pinned by `backend.test.ts` (`backend task delete` tombstones metadata; `cancel ≠ delete` covers the other side). See [TECH.md §2.2 tasks](../../arch/TECH.md#22-entities).
-*Deferred (not rejected):* a bytes-cleanup sweeper (a scheduled job over tombstoned/pending keys).
+**D7 — On delete: the bytes go first, then the metadata is tombstoned. And cancel ≠ delete.**
+*Revised 2026-11-01 (branch `attachment-s3-delete`).* Until then the bytes were orphaned: the metadata was tombstoned and the S3 object left in place, with a sweeper deferred.
+`deleteAttachment` and `deleteTask` delete each attachment's S3 object (`ObjectStore.deleteObject`, `lambdas/src/s3/objects.ts`), **then** tombstone its row. `deleteTask`'s cascade covers every attachment on the task in any status (a never-confirmed `pending` upload too) and, through the parts recursion, every part's attachments. **Cancelling** a task (`transitionTask → 'cancelled'`) does **not** touch attachments — a cancelled task is still a record.
+*Order and failure:* bytes first. A failed S3 delete throws: the row stays live and still points at real bytes, so a retry works (the panel and the task editor both show the error; never a silent skip), and the live store logs one `s3_delete_failed` line. Tombstone-first would strand the bytes where nothing can reach them. If the S3 delete lands and the put fails, the row briefly points at missing bytes until the retry: `DeleteObject` on a missing key is a 204 (one more free delete marker), then the tombstone lands. `deleteTask` removes the bytes of the task and every part **before** any other cascade step, so a failure there leaves the task, its parts, plans and calendar event untouched; only the files already removed are gone, and a retry finishes.
+*The undo:* the Files bucket is versioned (D5), so a plain `DeleteObject` writes a delete marker and the bytes stay as a noncurrent version for 30 days. That needs only `s3:DeleteObject`.
+*Gating:* the store is a gateway like Google/Plaid. `handleRpc` pins `noopObjectStore()` in testMode, so a smoke run deletes nothing, and a handler built without one throws on delete rather than skipping the bytes. The BFF and MCP (`delete_attachment`, `delete_task`) both get the store and the grant (`grantBackendData`). The stub's twin drops the in-memory blob (`forgetStubBlob`).
+*Pinned by:* `backend.test.ts` (`backend attachments`, `backend task delete`), `handler.test.ts` (testMode), `mcp/tools.test.ts`, `cdk/src/stacks.test.ts` (both roles, `u/*` only), and the devcheck scenario `attachment-delete` (a presigned GET is 200 before the delete, 403/404 after). See [TECH.md §2.2 tasks](../../arch/TECH.md#22-entities).
+*Rejected:* swallowing the S3 error like `deleteCalendarEvent` does, which leaves a permanent orphan; folding the delete into the DynamoDB `Writes` object, which would thread a second store through ~20 `liveWrites` call sites.
 
 **D8 — Export carries metadata only, never bytes.**
 `ExportBundle.attachments` holds the `ready` metadata rows; the bytes are never in the JSON export.
@@ -106,9 +109,9 @@ Five methods on `ApiClient`, registered in `API_METHODS` after the story methods
 - `confirmAttachment(id) → Attachment` — `pending → ready`; idempotent; throws on a tombstoned id.
 - `listAttachments(taskId?) → Attachment[]` — `ready` + alive, upload-order; all tasks when `taskId` omitted (one cached read feeds every card).
 - `getAttachmentDownloadUrl(id) → string` — a short-lived presigned GET, minted per view.
-- `deleteAttachment(id) → void` — soft-delete (re-put with `deletedAt`); the S3 object is orphaned.
+- `deleteAttachment(id) → void` — deletes the S3 object, then soft-deletes the row (re-put with `deletedAt`); D7.
 
-The presigning lives behind a `Presigner` seam (`lambdas/src/s3/presigner.ts`) so the contract suite + unit tests inject a `fakePresigner()`; the real one (`createS3Presigner`) is built once at cold start from `FILES_BUCKET`.
+The presigning lives behind a `Presigner` seam (`lambdas/src/s3/presigner.ts`) so the contract suite + unit tests inject a `fakePresigner()`; the real one (`createS3Presigner`) is built once at cold start from `FILES_BUCKET`. The delete goes through the `ObjectStore` seam (`lambdas/src/s3/objects.ts`) the same way: `fakeObjectStore()` in tests, `createS3ObjectStore` at cold start.
 
 ## 6. How it's wired
 
@@ -171,8 +174,9 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 
 ## 8. Deferred / out of scope
 
-- **Bytes-cleanup sweeper** — a scheduled job to delete orphaned S3 objects (tombstoned metadata, expired-pending uploads). Bytes cost pennies; skip until it matters.
-- **`deleteTask` cascade** — ✅ landed (D7); the bytes sweeper above stays deferred.
-- **HEAD-on-confirm** — `confirmAttachment` trusts the client that the PUT succeeded; a HEAD to verify the object exists would be the Lambda's first S3 call. Low value at single-user scale.
+- **Backfill pre-existing orphans** — a delete has removed the bytes since 2026-11-01 (D7), but objects under rows tombstoned before then are still in the bucket, and so are the bytes of an expired `pending` upload until its task is deleted, and of an upload (or MCP `attach_file`) whose PUT lands after its task was deleted. Clearing them needs a one-off sweep with `ListBucket`. Bytes cost pennies; skip until it matters.
+- **Delete-marker tidy-up** — deleting a never-uploaded `pending` key leaves a free delete marker. An `expiredObjectDeleteMarker` lifecycle rule would tidy them, but lifecycle rules are frozen on dev's bot lane (`docs/ops/CI-BOT.md`), so it would need main's lane or an opened freeze.
+- **`deleteTask` cascade** — ✅ landed (D7), bytes included since 2026-11-01.
+- **HEAD-on-confirm** — `confirmAttachment` trusts the client that the PUT succeeded; a HEAD to verify the object exists would add an S3 call. Low value at single-user scale.
 - **Multipart / resumable uploads** — a single XHR PUT is fine at 20 MB; revisit only if the cap rises to large video.
 - **Bytes in the export** — metadata only for now (D8).

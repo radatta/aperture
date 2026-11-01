@@ -211,7 +211,10 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
         <Button
           variant="quiet"
           size="sm"
-          onClick={() => setConfirming(true)}
+          onClick={() => {
+            del.reset(); // a failed attempt's alert belongs to that attempt, not the next confirm
+            setConfirming(true);
+          }}
           aria-label={`Delete ${attachment.filename}`}
         >
           ✕
@@ -245,6 +248,13 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
           <Button variant="quiet" size="sm" onClick={() => setConfirming(false)}>
             Cancel
           </Button>
+          {del.isError && (
+            <div role="alert" className="w-full">
+              <Text size="sm" tone="danger">
+                Couldn’t delete it — try again.
+              </Text>
+            </div>
+          )}
         </div>
       )}
     </div>

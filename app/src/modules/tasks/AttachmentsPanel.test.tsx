@@ -70,6 +70,32 @@ describe('attachments panel', () => {
     await waitFor(async () => expect(await api.listAttachments(task.id)).toHaveLength(0));
   });
 
+  it('says so when the delete fails, and keeps the file', async () => {
+    const { api, task } = await setup();
+    const { attachment } = await api.createAttachmentUploadUrl({
+      taskId: task.id,
+      filename: 'a.pdf',
+      contentType: 'application/pdf',
+      size: 10,
+    });
+    await api.confirmAttachment(attachment.id);
+    vi.spyOn(api, 'deleteAttachment').mockRejectedValue(new Error('SlowDown'));
+    const user = userEvent.setup();
+    renderWithProviders(<AttachmentsPanel taskId={task.id} />, { api });
+
+    await user.click(await screen.findByRole('button', { name: 'Delete a.pdf' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Couldn’t delete it/);
+    expect(screen.getByText('a.pdf')).toBeTruthy();
+    expect(await api.listAttachments(task.id)).toHaveLength(1);
+
+    // Cancel and reopen: the old failure doesn't greet the next attempt.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Delete a.pdf' }));
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('mints a fresh download url on click and opens it in the pre-opened tab', async () => {
     const { api, task } = await setup();
     const { attachment } = await api.createAttachmentUploadUrl({

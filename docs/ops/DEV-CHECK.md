@@ -46,7 +46,10 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 
 ## What it guarantees
 
-- **Dev only.** The origin is a constant; every request asserts it. There is no prod switch.
+- **Dev only.** The origin is a constant; every request asserts it. There is no prod switch. The one other
+  host is the dev Files bucket, for `scenarios/attachment-delete.ts`: the harness PUTs bytes to, and GETs,
+  only a presigned URL the dev BFF just minted, after `assertPresignedDevUrl` checks the host is the dev
+  Files bucket (`aperturedata-dev-files…`, so never prod's), the key is under `u/`, and the URL is signed.
 - **The test user only.** The env file must name the test user, and before any write the signed-in
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes.
 - **Deletes by recorded id only.** Every task the run creates is recorded in a ledger from the server's create
@@ -54,7 +57,10 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   responses (a split's follow-up, and its parent only when the split task was already recorded and the parent
   didn't exist before the run — deleting a parent deletes its parts). Cleanup deletes ledger ids and nothing else; the delete
   wrapper refuses any other id (`LEDGER_GUARD`). Never by title or marker word — the model rewrites titles.
-- **Flux sets are the one other kind written** (`scenarios/flux-history.ts` writes two a run: a finished set and one stopped early). Their id is minted by the
+- **Attachments are written only on a run's own tasks.** `createAttachment`/`deleteAttachment` refuse a task the
+  ledger never recorded, and `deleteAttachment` refuses an attachment this run didn't create. They're never
+  ledgered themselves: the task's delete cascade removes them, bytes included.
+- **Flux sets are the other kind written** (`scenarios/flux-history.ts` writes two a run: a finished set and one stopped early). Their id is minted by the
   harness (the client mints it in the app too — [flux](../areas/flux/index.md) D47), so `recordFluxSet` records
   it as `created` with `via: api:recordFluxSet` _before_ the call — a set the server stored is never unrecorded.
   Cleanup, the sweep and the read-back go by that `via`: a Flux id is read with `listFluxSets` and deleted with

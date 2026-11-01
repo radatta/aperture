@@ -67,7 +67,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `parentId` (string | null) — the task this one is a part of (2026-10-08; replaced `splitFromId`, whose stored attribute is inert on old rows). One level; parenthood is derived, never stored. A parent holds the deadline and never takes plans, sessions or its own estimate; its `estimateLockedMin` freezes when its first part starts (the one lock that's ever cleared: a parent whose last part goes is plain again, and its lock goes with them), and its `actualAccruedMin` is stamped with Σ done parts when it's marked done (refused while a part is open). Every part, and a done parent, is a calibration point. A parent's one calendar event is its due marker; a part's block is named after it (v2a). Required-nullable; old rows read `undefined` → `!parentId`. Design: [areas/tasks/parts.md](../areas/tasks/parts.md).
 - `actualAccruedMin` — **denormalized**, bumped when a *work* session closes (excludes breaks + paused time). Avoids scanning sessions.
 - `cancelled` tasks are excluded from calibration.
-- **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#delete-on-cancel) (the S3 bytes are orphaned, not swept). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
+- **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#delete-on-cancel); each attachment's S3 bytes are deleted first ([attachments D7](../areas/tasks/attachments.md)). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
 
 **taskPlans** — scheduling (the *when*), separate from the task (the *what*). Enables multi-day + ordering.
 - `id · taskId · day · plannedMinutes · order`. A task may have plan rows on several days. A **timed** task (`dueDay` + `dueTime`) has none: its day is its time, and `upsertPlan` refuses it ([lenses.md](../areas/tasks/lenses.md) D13). Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateMin − actualAccruedMin` (the working estimate).
@@ -114,7 +114,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **attachments** — files on a task (receipt, spec, screenshot); the first entity whose payload is **bytes**, not JSON.
 - `id · taskId · filename · contentType · size · s3Key · status(pending|ready)` — metadata only; the bytes live in a separate **precious S3 bucket** at `u/<userId>/<taskId>/<id>`, never in DynamoDB.
-- Bytes move browser↔S3 directly via **presigned URLs** the Lambda signs but never carries — the JSON RPC edge stays binary-free. `pending` until the browser confirms the PUT; only `ready` rows list/export. Soft-delete tombstones the metadata and orphans the object. Full design: **[tasks/attachments.md](../areas/tasks/attachments.md)**.
+- Bytes move browser↔S3 directly via **presigned URLs** the Lambda signs but never carries — the JSON RPC edge stays binary-free. `pending` until the browser confirms the PUT; only `ready` rows list/export. Delete removes the object (the versioned bucket keeps it 30 days), then tombstones the metadata. Full design: **[tasks/attachments.md](../areas/tasks/attachments.md)**.
 
 **finance** — Plaid-synced bank data: `financeItems` (a bank login), `financeSyncStates` (per item: cursor, lock, request/refresh stamps), `financeAccounts`, `financeTransactions`, `financeRules` (ULID ids). Transaction fields are Plaid-owned (amount, date, merchant…) except the **user-owned** ones a sync never overwrites: `bucket · bucketSetBy · periodOverride · note · refundOfId · startsPeriod`. Design: [finances/](../areas/finances/index.md).
 
@@ -248,7 +248,7 @@ outlier, and two things make it worse than an ordinary bug:
 
 *(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day, and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
-`deleteCheck` is the only one that destroys a row.)*
+`deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days.)*
 
 - **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
   `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The
