@@ -182,4 +182,36 @@ describe('useAddToDay', () => {
     const [plan] = await plansFor(api, todayKey(4));
     expect(plan?.plannedMinutes).toBe(20);
   });
+
+  it('a timed task is never added: “timed”, and nothing written — its day is its time', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const t = await api.createTask({
+      title: 'OA',
+      dueDay: addDays(todayKey(4), 2),
+      dueTime: '23:59',
+    });
+    let res: string | undefined;
+    await act(async () => void (res = await hook.result.current.addToDay(t)));
+    expect(res).toBe('timed');
+    expect(await plansFor(api, todayKey(4))).toEqual([]);
+    expect((await api.getTask(t.id))?.status).toBe('backlog');
+  });
+
+  it('createToday with a timed input: created, not planned, and says it’s timed', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    let out: { task: { id: string }; planned: boolean; timed: boolean } | undefined;
+    await act(
+      async () =>
+        void (out = await hook.result.current.createToday({
+          title: 'submit',
+          dueDay: addDays(todayKey(4), 1),
+          dueTime: '16:00',
+        })),
+    );
+    expect(out).toMatchObject({ planned: false, timed: true });
+    expect(await api.getTask(out!.task.id)).toBeTruthy();
+    expect(await plansFor(api, todayKey(4))).toEqual([]);
+  });
 });

@@ -83,6 +83,12 @@ export function isTimeKey(s: string): boolean {
 export const timeKeyOfInput = (v: string): string =>
   /^\d\d:\d\d:\d\d(\.\d+)?$/.test(v) ? v.slice(0, 5) : v;
 
+// A clock before the day start (00:00–03:59 with a 4am start): on its calendar date, the small hours
+// the app counts as the night before. A clock test, so it matches timedDay's dayKey (which counts real
+// hours back) except for one hour on a DST night — lenses.md D13.
+export const beforeDayStart = (hhmm: string, dayStartHour: number): boolean =>
+  Number(hhmm.slice(0, 2)) < dayStartHour;
+
 // "16:00" → "4pm", "09:30" → "9:30am", "00:00" → "12am", "23:59" → "11:59pm".
 export function fmtClock12(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number) as [number, number];
@@ -236,21 +242,29 @@ export function fmtWeekdayShort(key: string): string {
 }
 
 // Relative due-date phrasing, at the day granularity: "due today" / "due Fri" / "was due Tue", with the
-// clock appended when the task has one ("due Fri 4pm"). Pure over (dueDay, today) — the caller passes
-// today = todayKey(dayStartHour), so the 4am rollover lives in todayKey and never here: a passed time
-// still reads "due today 4pm" until the rollover (the urgency colour, due.ts, says it's past). Weekday
-// names for ±2–6 days; month/day beyond a week (where a weekday alone is ambiguous). verb 'ends' is a
-// part's own time — when its block ends, not a deadline (parts.ts): "ends Fri 4pm" / "ended Tue".
+// clock appended when the task has one ("due Fri 4pm"). The caller passes today = todayKey(dayStartHour),
+// so the 4am rollover lives in todayKey: a passed time still reads "due today 4pm" until the rollover
+// (the urgency colour, due.ts, says it's past). Given dayStartHour, tomorrow's small hours are tonight's
+// (lenses.md D13): "due tonight 12:30am"; without it, as written. Weekday names for ±2–6 days;
+// month/day beyond a week (where a weekday alone is ambiguous). verb 'ends' is a part's own time — when
+// its block ends, not a deadline (parts.ts): "ends Fri 4pm" / "ended Tue".
 export function fmtDueDay(
   dueDay: string,
   today: string,
   dueTime?: string | null,
-  verb: 'due' | 'ends' = 'due',
+  opts: { verb?: 'due' | 'ends'; dayStartHour?: number } = {},
 ): string {
   const n = daysBetween(today, dueDay); // >0 future, <0 past
   const at = dueTime ? ` ${fmtClock12(dueTime)}` : '';
-  const [is, was] = verb === 'due' ? ['due', 'was due'] : ['ends', 'ended'];
+  const [is, was] = opts.verb === 'ends' ? ['ends', 'ended'] : ['due', 'was due'];
   if (n === 0) return `${is} today${at}`;
+  if (
+    n === 1 &&
+    dueTime &&
+    opts.dayStartHour !== undefined &&
+    beforeDayStart(dueTime, opts.dayStartHour)
+  )
+    return `${is} tonight${at}`;
   if (n === 1) return `${is} tomorrow${at}`;
   if (n === -1) return `${was} yesterday${at}`;
   if (n >= 2 && n <= 6) return `${is} ${fmtWeekdayShort(dueDay)}${at}`;

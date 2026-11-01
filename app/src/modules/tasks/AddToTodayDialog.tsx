@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fmtDueDay, todayKey } from '@aperture/shared';
+import { fmtDueDay, isTimed, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -111,7 +111,8 @@ function DialogBody({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const { data: tasks = [] } = useAllTasks();
   const { data: plans = [] } = usePlansForDay(today);
   const { data: categories = [] } = useCategories();
@@ -128,15 +129,16 @@ function DialogBody({
   // A parent is never put on a day — its parts are (parts.ts), each labelled with what it's part of.
   const parentIds = new Set(tasks.map((t) => t.parentId).filter(Boolean));
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const matches = byDueHint(
-    tasks.filter(
-      (t) =>
-        isOpen(t) &&
-        !parentIds.has(t.id) &&
-        (!onToday.has(t.id) || added.has(t.id)) &&
-        matchesText(t, text, labelOf, false),
-    ),
+  const candidates = tasks.filter(
+    (t) =>
+      isOpen(t) &&
+      !parentIds.has(t.id) &&
+      (!onToday.has(t.id) || added.has(t.id)) &&
+      matchesText(t, text, labelOf, false),
   );
+  // A timed task's day is its time (lenses.md D13) — it lands on Today on its day, never added early.
+  const matches = byDueHint(candidates.filter((t) => !isTimed(t)));
+  const hidTimed = candidates.length > matches.length;
   const typed = text.trim();
   const exact =
     typed !== '' && tasks.some((t) => isOpen(t) && normalize(t.title) === normalize(typed));
@@ -211,7 +213,10 @@ function DialogBody({
               )}
               {t.dueDay && (
                 <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay, today, t.dueTime, t.parentId ? 'ends' : 'due')}
+                  {fmtDueDay(t.dueDay, today, t.dueTime, {
+                    verb: t.parentId ? 'ends' : 'due',
+                    dayStartHour,
+                  })}
                 </Text>
               )}
             </div>
@@ -235,6 +240,11 @@ function DialogBody({
         {matches.length > CAP && (
           <Text size="xs" tone="muted">
             {matches.length - CAP} more — narrow it down
+          </Text>
+        )}
+        {hidTimed && (
+          <Text size="xs" tone="muted">
+            Timed tasks land on their day — break one down to work on it earlier.
           </Text>
         )}
         {matches.length === 0 && !typed && (

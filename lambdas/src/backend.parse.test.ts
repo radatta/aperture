@@ -137,4 +137,18 @@ describe('backend parseTask', () => {
     await b.parseTask('y'.repeat(2_000)); // 4s + 5s, capped at 8s
     expect(anthropic.calls.map((c) => c.timeoutMs)).toEqual([6_000, 8_000]);
   });
+
+  it('after midnight, “tonight 2:30am” is the coming night — the next date, still today’s', async () => {
+    const { b, anthropic } = makeBackend(zonedEpoch('2026-10-31', '00:22', USER_TIME_ZONE));
+    anthropic.next = { ok: true, fields: fields({ dueDay: '2026-10-30', dueTime: '02:30' }) };
+    expect(await b.parseTask('essay due tonight 2:30am')).toMatchObject({
+      ok: true,
+      input: { dueDay: '2026-10-31', dueTime: '02:30' },
+      today: '2026-10-30',
+    });
+    anthropic.next = { ok: true, fields: fields({ dueDay: '2026-10-31', dueTime: '02:30' }) };
+    expect(await b.parseTask('essay due tonight 2:30am')).toMatchObject({
+      input: { dueDay: '2026-10-31' },
+    });
+  });
 });

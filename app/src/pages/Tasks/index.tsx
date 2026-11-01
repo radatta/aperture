@@ -25,7 +25,7 @@ const RECEIPT_MS = 2400;
 // next 7 days), Backlog, Done — each open task lives in exactly one — plus Recurring and Calibration.
 // Typing in search looks across every open task. Bulk add lives in the header, visible on every lens.
 export function TasksPage() {
-  const { lens, place, query, setQuery, setLens, today } = useTaskQuery();
+  const { lens, place, query, setQuery, setLens, today, dayStartHour } = useTaskQuery();
   const bulk = useDisclosure();
   // `at` is a nonce so two adds in a row re-arm the fade (same trick as the capture receipt).
   const [receipt, setReceipt] = useState<{ count: number; at: number } | null>(null);
@@ -46,6 +46,7 @@ export function TasksPage() {
     today,
     planOrder: new Map(plans.map((p) => [p.taskId, p.order])),
     categories,
+    dayStartHour,
   };
   // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice.
   const counts = { today: 0, week: 0 };

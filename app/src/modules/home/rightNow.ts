@@ -1,9 +1,11 @@
 import type { Task, TaskPlan, UpsertPlanInput } from '@aperture/shared';
 import type { RunningTimer } from '../pomodoro/pomodoro-context';
+import type { TodayRow } from '../tasks/todayRows';
 
 // The Big 3 = the first three of today's plan, in the order you pulled them in (taskPlans.order).
 // No new field: "focus" is plan position, and the act of choosing is the plan pass (+ "Make it a
-// focus", `promote` below).
+// focus", `promote` below). A timed task due today isn't chosen — its time put it here — so it never
+// takes a slot: it's the "By time" tier (right-now.md D11).
 export const FOCUS_CAP = 3;
 
 export interface RightNowRow {
@@ -14,6 +16,7 @@ export interface RightNowRow {
 
 export interface RightNow {
   focus: RightNowRow[]; // ≤ FOCUS_CAP, in plan order
+  byTime: RightNowRow[]; // timed tasks due today, by clock
   alsoToday: RightNowRow[]; // the rest of today's plan + any in-progress task not planned today
   hero: Task | null; // what's actually happening now — the in-progress task, focus-preferred
   focusDoneCount: number;
@@ -23,17 +26,27 @@ export interface RightNow {
 }
 
 type PlanRow = { plan: TaskPlan; task: Task };
+// The chosen plan: today's rows that a plan pass put there (not a time).
+const planOnly = (rows: TodayRow[]): PlanRow[] =>
+  rows.flatMap((r) => (!r.byTime && r.plan ? [{ plan: r.plan, task: r.task }] : []));
 
-export function rightNow(planRows: PlanRow[], allTasks: Task[]): RightNow {
+export function rightNow(rows: TodayRow[], allTasks: Task[]): RightNow {
   // Cancelled drops out of the plane entirely; done STAYS in place (no promotion of #4 into a freed
   // slot — that would be the auto-advance the design forbids, and it keeps "Big 3 done" a real win).
-  const live = planRows.filter((r) => r.task.status !== 'cancelled');
-  const focus: RightNowRow[] = live.slice(0, FOCUS_CAP).map((r) => ({ plan: r.plan, task: r.task }));
-  const alsoPlanned: RightNowRow[] = live.slice(FOCUS_CAP).map((r) => ({ plan: r.plan, task: r.task }));
+  const live = planOnly(rows).filter((r) => r.task.status !== 'cancelled');
+  const byTime: RightNowRow[] = rows
+    .filter((r) => r.byTime && r.task.status !== 'cancelled')
+    .map((r) => ({ plan: r.plan, task: r.task }));
+  const focus: RightNowRow[] = live
+    .slice(0, FOCUS_CAP)
+    .map((r) => ({ plan: r.plan, task: r.task }));
+  const alsoPlanned: RightNowRow[] = live
+    .slice(FOCUS_CAP)
+    .map((r) => ({ plan: r.plan, task: r.task }));
 
   // The epic's original trigger: a started task not on today's plan must not be buried. Surface it
   // in Also-today (never a stolen Big-3 slot), tagged so it reads as off-plan.
-  const plannedIds = new Set(planRows.map((r) => r.task.id));
+  const plannedIds = new Set(rows.map((r) => r.task.id));
   const unplanned: RightNowRow[] = allTasks
     .filter((t) => t.status === 'in_progress' && !plannedIds.has(t.id))
     .map((t) => ({ plan: null, task: t, unplanned: true }));
@@ -43,6 +56,7 @@ export function rightNow(planRows: PlanRow[], allTasks: Task[]): RightNow {
   // in-progress anywhere, so "Right now" never says "pick one" while a task is genuinely running.
   const hero =
     focus.find((r) => r.task.status === 'in_progress')?.task ??
+    byTime.find((r) => r.task.status === 'in_progress')?.task ??
     alsoToday.find((r) => r.task.status === 'in_progress')?.task ??
     null;
 
@@ -57,7 +71,7 @@ export function rightNow(planRows: PlanRow[], allTasks: Task[]): RightNow {
           ? 'next'
           : 'pick';
 
-  return { focus, alsoToday, hero, focusDoneCount, nextPrompt };
+  return { focus, byTime, alsoToday, hero, focusDoneCount, nextPrompt };
 }
 
 // Live elapsed = what's persisted on the task (closed sessions) + the running work timer's active
@@ -73,7 +87,8 @@ export function liveElapsedMin(task: Task, timers: RunningTimer[]): number {
 // "Make it a focus" — the only way to actually CHOOSE the Big 3, since there is no reorder UI: renumber
 // the day so an Also-today row lands in the last focus slot. Pure; returns the plan upserts whose order
 // changed (empty when the task is missing or already in focus).
-export function promote(planRows: PlanRow[], taskId: string): UpsertPlanInput[] {
+export function promote(rows: TodayRow[], taskId: string): UpsertPlanInput[] {
+  const planRows = planOnly(rows);
   const idx = planRows.findIndex((r) => r.task.id === taskId);
   if (idx < 0 || idx < FOCUS_CAP) return [];
   const reordered = [...planRows];

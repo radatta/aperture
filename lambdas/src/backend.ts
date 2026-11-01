@@ -46,6 +46,8 @@ import {
   PARENT_NO_ESTIMATE_ERROR,
   PARENT_NO_EVENT_ERROR,
   PARENT_NO_PLAN_ERROR,
+  isTimed,
+  TIMED_NO_PLAN_ERROR,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
@@ -254,7 +256,9 @@ export class BackendClient implements ApiClient {
   // either way). Pass the task as it was; call AFTER the first part is written.
   private async adoptAsParent(parent: Task): Promise<Task> {
     const now = this.now();
-    for (const p of (await this.repo.listAllPlans()).filter((p) => p.taskId === parent.id))
+    // Consistent: a row "+ Today" just wrote must go too.
+    const plans = await this.repo.listAllPlans({ consistent: true });
+    for (const p of plans.filter((p) => p.taskId === parent.id))
       await this.repo.putPlan({ ...p, deletedAt: now, updatedAt: now }, p);
     const became = await this.repo.putTask(becomeParent(parent, now));
     return this.syncCalendar(parent, became, true, undefined, { parent: true });
@@ -456,11 +460,14 @@ export class BackendClient implements ApiClient {
       >
     >,
   ): Promise<Task> {
-    const fresh = (await this.repo.getTask(task.id)) ?? task;
+    // Consistent: it follows a write, and what it returns goes straight into the app's list.
+    const fresh = (await this.repo.getTask(task.id, { consistent: true })) ?? task;
     return this.repo.putTask({ ...fresh, ...fields, updatedAt: this.now() });
   }
+  // Consistent: every caller spreads what it reads into a put — a lagging read would write an older copy
+  // over an edit a moment before (a title, then its due). One strongly consistent get per RPC.
   private async mustTask(id: string): Promise<Task> {
-    const t = await this.repo.getTask(id);
+    const t = await this.repo.getTask(id, { consistent: true });
     if (!t) throw new Error(`Not found: ${id}`);
     return t;
   }
@@ -682,7 +689,8 @@ export class BackendClient implements ApiClient {
     const [settings, all] = await Promise.all([this.ensureSettings(), this.repo.listCategories()]);
     const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
     const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
-    return runQuickParse(text, { categories, today }, (line) =>
+    const ctx = { categories, today, dayStartHour: settings.dayStartHour };
+    return runQuickParse(text, ctx, (line) =>
       this.anthropic.parseTask({ text: line, today, categories, timeoutMs: parseBudgetMs(line) }),
     );
   }
@@ -692,12 +700,15 @@ export class BackendClient implements ApiClient {
     const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
     const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     // Parts (parts.ts): every parent is checked before any write. A planned task taking its first part
-    // hands its spot on the plan to that part (the batch's first for it).
+    // hands its spot on the plan to that part (the batch's first for it) — an untimed one: a timed part
+    // is on its own day by its time (option 3).
+    // Consistent: a parent is written back from this copy (adoptAsParent), and a part made a moment
+    // ago must count — else a rename just saved is lost, or the parent is adopted twice.
     const parentIds = [...new Set(tasks.map((x) => x.parentId).filter((x): x is string => !!x))];
-    const all = parentIds.length ? await this.repo.listTasks() : [];
+    const all = parentIds.length ? await this.repo.listTasks({ consistent: true }) : [];
     const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
     if (parentIds.length) {
-      const plans = await this.repo.listAllPlans();
+      const plans = await this.repo.listAllPlans({ consistent: true });
       for (const id of parentIds) {
         const parent = all.find((x) => x.id === id);
         if (!parent) throw new Error(`Not found: ${id}`);
@@ -706,7 +717,7 @@ export class BackendClient implements ApiClient {
         const day = followUpPlanDay(plans, id);
         const row = plans.find((p) => p.taskId === id && p.day === day);
         const first = tasks.find((x) => x.parentId === id)!;
-        if (row) landing.set(first.id, row);
+        if (row && !first.dueTime) landing.set(first.id, row);
       }
     }
     const saved = await this.repo.putTasks(
@@ -828,7 +839,8 @@ export class BackendClient implements ApiClient {
   }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
-    const parts = partsOf(await this.repo.listTasks(), id);
+    // Consistent: completeParent writes the sum of the parts' actuals, often a tap after the last part's.
+    const parts = partsOf(await this.repo.listTasks({ consistent: true }), id);
     if (parts.length) return this.transitionParent(task, parts, to);
     const next = await this.transitionOne(task, to);
     // Its FIRST start only: a rolled-back part starting again isn't the parent's first start.
@@ -838,7 +850,7 @@ export class BackendClient implements ApiClient {
       (to === 'in_progress' || to === 'done');
     if (!task.parentId || !firstStart) return next;
     await this.freezeLock(task.parentId, id);
-    return (await this.repo.getTask(id)) ?? next;
+    return (await this.repo.getTask(id, { consistent: true })) ?? next;
   }
   // A parent is never worked on itself: it's marked done once its parts are dealt with (a hard block
   // otherwise; its due marker stays, as a done task's block does), and dropping it drops its open parts
@@ -920,10 +932,11 @@ export class BackendClient implements ApiClient {
     } else {
       original = await this.syncCalendar(task, await this.repo.putTask(edited));
     }
-    // The follow-up lands on the original's plan day (planned), else in the backlog. Task before row: a
-    // planned task whose row never landed is what getDay's stale sweep moves back to backlog.
+    // The follow-up lands on the original's plan day (planned), else in the backlog — and a timed
+    // original's is on its day by its time (option 3). Task before row: a planned task whose row never
+    // landed is what getDay's stale sweep moves back to backlog.
     const day =
-      task.status === 'planned' || task.status === 'in_progress'
+      !task.dueTime && (task.status === 'planned' || task.status === 'in_progress')
         ? followUpPlanDay(await this.repo.listAllPlans(), id)
         : null;
     const fields = splitFollowUp(task, input.followUp, day !== null, parentId);
@@ -975,10 +988,11 @@ export class BackendClient implements ApiClient {
   // `release`: a part's parent is left plain if this was its last part — not when the parent is going
   // too (its marker is deleted with it, not first patched back into a block: no wasted Google call).
   private async deleteOne(id: string, release: boolean): Promise<void> {
-    const task = await this.repo.getTask(id);
+    // Consistent reads: the tombstone is built from this copy, and a part made a moment ago must go too.
+    const task = await this.repo.getTask(id, { consistent: true });
     if (!task) return; // idempotent — already tombstoned or never existed
     // A parent goes with every part — each through this same path (event, plans, attachments), first.
-    for (const part of partsOf(await this.repo.listTasks(), id))
+    for (const part of partsOf(await this.repo.listTasks({ consistent: true }), id))
       await this.deleteOne(part.id, false);
     // Calendar event FIRST (deleteCalendarEvent uses mustTask, so it must run before the tombstone).
     // Build the tombstone from the RETURNED task: it has the gcal pointers nulled, so we don't re-put
@@ -998,7 +1012,11 @@ export class BackendClient implements ApiClient {
     return (await this.repo.listPlans(day)).sort((a, b) => a.order - b.order);
   }
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
-    if (hasParts(await this.repo.listTasks(), input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
+    // Consistent: "+ Today" can follow straight on the editor's save that cleared the time.
+    const tasks = await this.repo.listTasks({ consistent: true });
+    if (hasParts(tasks, input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
+    const task = tasks.find((t) => t.id === input.taskId);
+    if (task && isTimed(task)) throw new Error(TIMED_NO_PLAN_ERROR);
     const fields = {
       taskId: input.taskId,
       day: input.day,
@@ -1119,7 +1137,7 @@ export class BackendClient implements ApiClient {
   }
   private async accrueToTask(session: PomodoroSession): Promise<void> {
     if (session.kind !== 'work' || !session.taskId) return;
-    const task = await this.repo.getTask(session.taskId);
+    const task = await this.repo.getTask(session.taskId, { consistent: true }); // written back below
     if (!task) return;
     await this.repo.putTask({
       ...task,
@@ -1178,11 +1196,13 @@ export class BackendClient implements ApiClient {
     return this.repo.putRoll({ ...this.base(), ...fields });
   }
   // Reuse the open rep if one exists (re-planning a rolled-back backlog one), else spawn a fresh planned
-  // rep; then ensure it sits on `day`'s plan, appended like addToDay. Mirrors the stub exactly.
+  // rep; then ensure it sits on `day`'s plan, appended like addToDay. A timed open rep is refused like
+  // any timed plan (one open rep per roll — rolls.md D6). Mirrors the stub exactly.
   async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
     const roll = await this.repo.getRoll(rollId);
     if (!roll) throw new Error(`Not found: ${rollId}`);
-    const existing = findOpenRollTask(await this.repo.listTasks(), rollId);
+    const existing = findOpenRollTask(await this.repo.listTasks({ consistent: true }), rollId);
+    if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR);
     const task = existing
       ? existing.status === 'backlog'
         ? await this.repo.putTask(taskTransition(existing, 'planned', this.now()))
@@ -1277,17 +1297,25 @@ export class BackendClient implements ApiClient {
     }
   }
   // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
-  // planned. Each move re-reads the task first: a sweep races the user's own writes (e.g. starting the
-  // task), and writing back the list-time copy would undo them.
+  // planned. Each move re-reads the task first (consistently): a sweep races the user's own writes (e.g.
+  // starting the task, or clearing its time), and writing back the list-time copy would undo them.
   private async sweepStalePlanned(day: string): Promise<void> {
     const tasks = await this.repo.listTasks();
     if (!tasks.some((t) => t.status === 'planned')) return;
-    for (const { task, to } of stalePlannedMoves(tasks, await this.repo.listAllPlans(), day)) {
-      const fresh = await this.repo.getTask(task.id);
-      if (fresh?.status !== 'planned') continue;
+    // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing.
+    if (stalePlannedMoves(tasks, await this.repo.listAllPlans(), day).length === 0) return;
+    const plans = await this.repo.listAllPlans({ consistent: true });
+    for (const { task } of stalePlannedMoves(tasks, plans, day)) {
+      const fresh = await this.repo.getTask(task.id, { consistent: true });
+      if (!fresh) continue;
+      // The rule again on the fresh copy, among the tasks it was judged with (a superseded occurrence
+      // needs its series' copy in the list): the list-time copy may have lost its time since.
+      const listed = tasks.map((t) => (t.id === fresh.id ? fresh : t));
+      const move = stalePlannedMoves(listed, plans, day).find((m) => m.task.id === fresh.id);
+      if (!move) continue;
       // Gained a calendar event since the list read → backlog, never an orphaned event.
       await this.repo.putTask(
-        taskTransition(fresh, fresh.gcalEventId ? 'backlog' : to, this.now()),
+        taskTransition(fresh, fresh.gcalEventId ? 'backlog' : move.to, this.now()),
       );
     }
   }
@@ -1352,7 +1380,10 @@ export class BackendClient implements ApiClient {
     return { category, backfilled };
   }
   async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
-    const tasks = (await this.repo.listTasks()).filter((t) => t.categoryId === id);
+    // Consistent: every matching task is written back.
+    const tasks = (await this.repo.listTasks({ consistent: true })).filter(
+      (t) => t.categoryId === id,
+    );
     const habits = (await this.repo.listHabits()).filter((h) => h.categoryId === id);
     const series = (await this.repo.listSeries()).filter((s) => s.categoryId === id);
     const rolls = (await this.repo.listRolls()).filter((r) => r.categoryId === id);
@@ -1631,7 +1662,7 @@ export class BackendClient implements ApiClient {
     firstSync: boolean, // the account's first sync (no token yet) — calendarPullPlan's first sight
     all: Task[], // the scan: whether it's a parent (its marker), and a part's parent's title
   ): Promise<PullAction['kind']> {
-    const fresh = await this.repo.getTask(taskId);
+    const fresh = await this.repo.getTask(taskId, { consistent: true }); // written back, like putGcal's
     if (
       !fresh ||
       fresh.gcalAccountId !== st.sub ||

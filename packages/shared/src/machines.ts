@@ -2,6 +2,7 @@
 // SAME rules. These never touch storage; they take an entity + inputs and return the next entity
 // (or throw on an illegal move). This is where the calibration integrity actually lives.
 
+import { dayKey, localEpochFromDayTime } from './dates';
 import type { PomodoroSession, Task, TaskPlan, TaskStatus } from './types';
 
 // --- Tasks -----------------------------------------------------------------
@@ -36,11 +37,32 @@ export function taskTransition(task: Task, to: TaskStatus, now: number): Task {
   return next;
 }
 
+// Option 3 (lenses.md D13, parts.md D14): a time decides the day. A timed task is on the app day its
+// deadline falls on, by clock, and never holds a plan row; only an untimed task is planned. Time-only
+// rules — callers add the parent check (a parent is never on Today; parts.ts can't be imported here).
+export const isTimed = (t: Pick<Task, 'dueDay' | 'dueTime'>): boolean => !!t.dueDay && !!t.dueTime;
+// The deadline instant, bucketed like every other instant (dayKey): with a 4am day start a 00:30
+// deadline is still tonight. Browser-side — the zone is the runtime's. null if untimed.
+export const timedDay = (
+  t: Pick<Task, 'dueDay' | 'dueTime'>,
+  dayStartHour: number,
+): string | null =>
+  isTimed(t) ? dayKey(localEpochFromDayTime(t.dueDay!, t.dueTime!), dayStartHour) : null;
+export const placedByTime = (
+  t: Pick<Task, 'dueDay' | 'dueTime'>,
+  day: string,
+  dayStartHour: number,
+): boolean => timedDay(t, dayStartHour) === day;
+export const TIMED_NO_PLAN_ERROR =
+  'A timed task is on the day its time falls on — change its time instead of planning it.';
+
 // Stale-planned sweep (getDay's lazy rollover): a planned task with no alive plan row on `day` or later
-// was left behind. It goes back to backlog — unless it's a recurring occurrence already superseded by
-// its series' copy on `day`, which is dropped instead (a missed daily would otherwise pile up one
-// backlog copy per day). An occurrence carrying a calendar event goes to backlog: a background read
-// never deletes external events. Plan rows are history and stay. Pass alive rows only.
+// was left behind. A timed `planned` task is swept whatever its rows — option 3's standing invariant,
+// and the lazy migration of rows made before it (the rows stay as history). It goes back to backlog —
+// unless it's a recurring occurrence already superseded by its series' copy on `day`, which is dropped
+// instead (a missed daily would otherwise pile up one backlog copy per day). An occurrence carrying a
+// calendar event goes to backlog: a background read never deletes external events. Plan rows are
+// history and stay. Pass alive rows only.
 // Monotone in `day`: a past day never moves more than today would; a FUTURE day would sweep today's plan.
 export function stalePlannedMoves(
   tasks: Task[],
@@ -58,10 +80,14 @@ export function stalePlannedMoves(
     if (seriesId) seriesToday.add(seriesId);
   }
   return planned
-    .filter((t) => !ahead.has(t.id))
+    .filter((t) => isTimed(t) || !ahead.has(t.id))
     .map((task) => {
+      // A timed occurrence's own row today would read as its series' copy: never drop it for that.
       const superseded =
-        task.seriesId !== null && seriesToday.has(task.seriesId) && !task.gcalEventId;
+        !isTimed(task) &&
+        task.seriesId !== null &&
+        seriesToday.has(task.seriesId) &&
+        !task.gcalEventId;
       return { task, to: superseded ? 'cancelled' : 'backlog' };
     });
 }

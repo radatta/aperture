@@ -52,13 +52,14 @@ export function TaskModal({
   // An exit held back: by the confirm (dirty), or until a save in flight lands (saving).
   const [pending, setPending] = useState<Exit | null>(null);
   const [discarded, setDiscarded] = useState<Exit | null>(null);
-  // A finish made here (Mark done, Drop, a done split): the task as the write returned it. It stands in
-  // for the live copy until the list catches up — the refetch is eventually consistent and not retried,
-  // so nothing waits on it — and the editor renders it in the same commit the guard reads.
+  // A finish made here (Mark done, Drop, a done split): the task as the write returned it, rendered in
+  // the same commit the guard reads. The write-through (taskCache.ts) puts it in the list a render
+  // later; this covers the render in between, and a host whose list never had the task. The list's
+  // copy wins a tie (it's the same row).
   const [finished, setFinished] = useState<Task | null>(null);
   const [exiting, setExiting] = useState(false); // its one close, run once the editor has rendered it
   const task =
-    finished && finished.id === live.id && finished.updatedAt >= live.updatedAt ? finished : live;
+    finished && finished.id === live.id && live.updatedAt < finished.updatedAt ? finished : live;
   const openTask = useOpenTask();
 
   const standing = useCallback(

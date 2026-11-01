@@ -1,6 +1,6 @@
 # Parent + parts
 
-**Status: v1 built 2026-10-08** (branch `task-parts`). **v2a built 2026-10-13** (branch `parts-v2`): part blocks named after their parent (D12) and the parent's due marker (D13). v2b (a timed task's day taken from its time, "option 3") is designed below and not built.
+**Status: v1 built 2026-10-08** (branch `task-parts`). **v2a built 2026-10-13** (branch `parts-v2`): part blocks named after their parent (D12) and the parent's due marker (D13). **v2b built 2026-10-30** (branch `parts-v2b`): a timed task's day is its time (D14).
 
 When something is due is often very different from when you work on it, and the work often comes in parts. A pset due Tuesday, done as three chunks across Monday and Tuesday, is really two things: the **deliverable** (due when it's actually due, done when submitted) and the **work** (blocks on do-days, each with an estimate and an actual). A **parent** is the deliverable; its **parts** are the work.
 
@@ -117,7 +117,6 @@ The pull, roll reps and series spawn never create one. Untimed parts keep manual
 | `insertCalendarEvent` / `syncCalendar`                           | D8, D12, D13.                                                                                                                                                                                                                                                                                                                          |
 | `getCalibration`                                                 | `calibrationTasks = filter(contributesCalibration)`.                                                                                                                                                                                                                                                                                   |
 
-## v2b (designed 2026-10-06, not built)
+## D14. A timed task's day is its time ("option 3", v2b, 2026-10-30)
 
-- **A part's time is edited as its block.** It's the same `dueDay`/`dueTime`, already editable in v1 as Ends / Ends at. Two-way sync already moves it on an end drag and sets the estimate on a start drag.
-- **A timed task's day is its block's day ("option 3").** If a task has a time, the time decides its day; otherwise its plan row does. A timed task needs no plan row: dragging its block in Google moves it on Today. The trade-off: a moved block reads as a reschedule, not a rollover. This touches Today, the stale sweep, `useAddToDay` and the night review.
+If a task has a time, the time decides its day; otherwise its plan row does. A timed part is on Today on the app day its end falls on (a 00:30 end with a 4am day start is still tonight, and reads `ends tonight 12:30am`), by clock, tagged "of P2"; on other days it sits under its parent, reading "ends Fri 3pm" instead of "+ Today". A timed first part doesn't take its planned parent's spot, and a timed original's split follow-up isn't planned. Working earlier on a deadline means a part with its own Ends, not planning the deadline. At night, a timed part's Tomorrow isn't offered when a day on would end it after its parent's deadline. The rule, the sweep that enforces it, Today and the night: [lenses.md](lenses.md) D13.

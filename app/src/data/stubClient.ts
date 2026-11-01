@@ -78,6 +78,8 @@ import {
   PARENT_NO_ESTIMATE_ERROR,
   PARENT_NO_EVENT_ERROR,
   PARENT_NO_PLAN_ERROR,
+  isTimed,
+  TIMED_NO_PLAN_ERROR,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   parentOf,
@@ -728,7 +730,8 @@ class StubClient implements ApiClient {
     const all = this.alive(this.store.tasks);
     for (const task of tasks)
       if (task.parentId) assertCanBePart(null, this.mustFind(this.store.tasks, task.parentId), all);
-    // A planned task taking its first part hands its spot on the plan to that part (the batch's first).
+    // A planned task taking its first part hands its spot on the plan to that part (the batch's first) —
+    // an untimed one: a timed part is on its own day by its time (option 3).
     const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
     for (const task of tasks) {
       const parent = task.parentId ? this.mustFind(this.store.tasks, task.parentId) : null;
@@ -736,7 +739,7 @@ class StubClient implements ApiClient {
       if (tasks.find((t) => t.parentId === parent.id) !== task) continue;
       const day = followUpPlanDay(this.alive(this.store.plans), parent.id);
       const row = this.alive(this.store.plans).find((p) => p.taskId === parent.id && p.day === day);
-      if (row) landing.set(task.id, row);
+      if (row && !task.dueTime) landing.set(task.id, row);
     }
     const out: Task[] = [];
     for (const task of tasks) {
@@ -792,7 +795,8 @@ class StubClient implements ApiClient {
       .filter((c) => c.active)
       .map(({ id, label }) => ({ id, label }));
     const today = todayKey(this.dayStartHour(), this.now());
-    return runQuickParse(text, { categories, today }, async (line) =>
+    const ctx = { categories, today, dayStartHour: this.dayStartHour() };
+    return runQuickParse(text, ctx, async (line) =>
       takeStubParseFailure()
         ? { ok: false, reason: 'unavailable', detail: 'stub failNextParse' }
         : { ok: true, fields: heuristicParse(line, categories, today) },
@@ -927,8 +931,9 @@ class StubClient implements ApiClient {
     } else {
       original = this.syncCalendar(task, this.writes.put(this.store.tasks, edited));
     }
+    // A timed original's follow-up isn't planned: it's on its day by its time (option 3).
     const day =
-      task.status === 'planned' || task.status === 'in_progress'
+      !task.dueTime && (task.status === 'planned' || task.status === 'in_progress')
         ? followUpPlanDay(this.alive(this.store.plans), id)
         : null;
     const fields = splitFollowUp(task, input.followUp, day !== null, parentId);
@@ -994,6 +999,8 @@ class StubClient implements ApiClient {
   }
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
     if (hasParts(this.alive(this.store.tasks), input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
+    const task = this.find(this.store.tasks, input.taskId);
+    if (task && isTimed(task)) throw new Error(TIMED_NO_PLAN_ERROR);
     if (input.id) {
       return this.writes.patch(this.store.plans, input.id, {
         taskId: input.taskId,
@@ -1187,6 +1194,7 @@ class StubClient implements ApiClient {
   async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
     const roll = this.mustFind(this.store.rolls, rollId);
     const existing = findOpenRollTask(this.alive(this.store.tasks), rollId);
+    if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR); // rolls.md D6
     const task = existing
       ? existing.status === 'backlog'
         ? this.writes.put(this.store.tasks, taskTransition(existing, 'planned', this.now()))

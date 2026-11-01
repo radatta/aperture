@@ -124,7 +124,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   `deleteCategory` (reassign-everything).
 - **Stale planned tasks lag.** The stale-planned sweep runs inside `getDay`, which no tool calls — so
   `list_tasks status=planned` / `list_backlog` still show yesterday's leftovers as planned until the app is
-  opened that day ([TECH §taskPlans](../../arch/TECH.md)).
+  opened that day ([TECH §taskPlans](../../arch/TECH.md)). A timed task is never planned (it's on Today on
+  its day, by its time): `update_task status=planned` on one is moved back to backlog by that same sweep.
 - **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
   and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence

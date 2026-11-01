@@ -1,21 +1,40 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import type {
+  ApiClient,
   CreateTaskInput,
   ParseTaskResult,
   SetTaskDueInput,
   SplitTaskInput,
+  Task,
   TaskStatus,
 } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
+import { mergeServerList, putTasks, removeTask } from '../taskCache';
 import { invalidateTaskData } from './invalidate';
+
+// The one tasks query: the server's list merged with what our own writes returned (taskCache.ts), so a
+// stale read never undoes a write. Shared with useBacklog, which derives from it.
+export const tasksQuery = (api: ApiClient, qc: QueryClient) => ({
+  queryKey: qk.tasks(),
+  queryFn: async () => mergeServerList(qc, await api.listTasks()),
+});
 
 // All live tasks (any status) — views derive backlog/planned/in-progress/done from this.
 export function useAllTasks() {
   const api = useApi();
-  return useQuery({ queryKey: qk.tasks(), queryFn: () => api.listTasks() });
+  const qc = useQueryClient();
+  return useQuery(tasksQuery(api, qc));
 }
+
+// Every task write: its answer goes into the list now (taskCache.ts); the invalidate still runs for what
+// the answer doesn't carry (a parent's lock, a dropped parent's parts, plan rows, the day's sweep).
+const written = (qc: QueryClient) => ({
+  onSuccess: (t: Task) => putTasks(qc, [t]),
+  onSettled: () => invalidateTaskData(qc),
+});
 
 // Capture creates backlog tasks and never asks for structure: a bare string is title-only, and a Task
 // capture's optional ' | ' tokens (the bulk grammar, parsed before this) arrive as a full input.
@@ -25,7 +44,7 @@ export function useCreateTask() {
   return useMutation({
     mutationFn: (input: string | CreateTaskInput) =>
       api.createTask(typeof input === 'string' ? { title: input } : input),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -43,6 +62,7 @@ export function useCreateTasks() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (inputs: CreateTaskInput[]) => api.createTasks(inputs),
+    onSuccess: (ts: Task[]) => putTasks(qc, ts),
     onSettled: () => invalidateTaskData(qc),
   });
 }
@@ -55,7 +75,7 @@ export function useSetEstimate() {
   return useMutation({
     mutationFn: (v: { id: string; estimateMin: number | null; bufferMin: number | null }) =>
       api.setTaskEstimate(v.id, v.estimateMin, v.bufferMin),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -66,7 +86,7 @@ export function useSetCategory() {
   return useMutation({
     mutationFn: (v: { id: string; categoryId: string | null }) =>
       api.setTaskCategory(v.id, v.categoryId),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -77,7 +97,7 @@ export function useSetDue() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; due: SetTaskDueInput }) => api.setTaskDue(v.id, v.due),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -87,7 +107,7 @@ export function useSetTaskTitle() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; title: string }) => api.setTaskTitle(v.id, v.title),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -97,7 +117,7 @@ export function useSetTaskNotes() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; notes: string | null }) => api.setTaskNotes(v.id, v.notes),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -108,7 +128,7 @@ export function useTransitionTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; to: TaskStatus }) => api.transitionTask(v.id, v.to),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -118,7 +138,7 @@ export function useSetActual() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; actualMin: number }) => api.setTaskActual(v.id, v.actualMin),
-    onSettled: () => invalidateTaskData(qc),
+    ...written(qc),
   });
 }
 
@@ -129,6 +149,7 @@ export function useSplitTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; input: SplitTaskInput }) => api.splitTask(v.id, v.input),
+    onSuccess: (r) => putTasks(qc, [r.parent, r.original, r.followUp]),
     onSettled: () => invalidateTaskData(qc),
   });
 }
@@ -140,6 +161,7 @@ export function useDeleteTask() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.deleteTask(id),
+    onSuccess: (_v: void, id: string) => removeTask(qc, id),
     onSettled: () => {
       invalidateTaskData(qc);
       qc.invalidateQueries({ queryKey: qk.attachments() });

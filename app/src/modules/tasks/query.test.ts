@@ -66,6 +66,12 @@ const ctx = (planOrder: [string, number][] = []): QueryCtx => ({
   today: TODAY,
   planOrder: new Map(planOrder),
   categories: CATS,
+  dayStartHour: 4,
+});
+const pctx = (planOrder = new Map<string, number>(), dayStartHour = 4) => ({
+  today: TODAY,
+  planOrder,
+  dayStartHour,
 });
 const labelOf = (id: string | null) => CATS.find((c) => c.id === id)?.label ?? '';
 const q = (
@@ -94,20 +100,45 @@ describe('placeOf', () => {
     ['p8 past due → week', task({ dueDay: '2026-09-01' }), none, 'week'],
     ['p9 planned for another day, undated → backlog', task({ status: 'planned' }), none, 'backlog'],
   ] as const)('%s', (_name, t, plan, want) => {
-    expect(placeOf(t, TODAY, plan as Map<string, number>)).toBe(want);
+    expect(placeOf(t, pctx(plan as Map<string, number>))).toBe(want);
   });
 
   it('treats an empty-string dueDay as undated', () => {
-    expect(placeOf(task({ dueDay: '' }), TODAY, none)).toBe('backlog');
+    expect(placeOf(task({ dueDay: '' }), pctx())).toBe('backlog');
   });
 
   it('a part off today lives where its open parent does — its own time is when it ends', () => {
     const parent = task({ id: 'p', dueDay: '2026-09-25' });
     const part = task({ id: 'a', parentId: 'p', dueDay: '2026-10-20' });
-    expect(placeOf(part, TODAY, none, parent)).toBe('week');
-    expect(placeOf(part, TODAY, new Map([['a', 0]]), parent)).toBe('today');
-    expect(placeOf(part, TODAY, none, { ...parent, status: 'done' })).toBe('backlog'); // its own
-    expect(placer([parent, part], { today: TODAY, planOrder: none })(part)).toBe('week');
+    expect(placeOf(part, pctx(), parent)).toBe('week');
+    expect(placeOf(part, pctx(new Map([['a', 0]])), parent)).toBe('today');
+    expect(placeOf(part, pctx(), { ...parent, status: 'done' })).toBe('backlog'); // its own
+    expect(placer([parent, part], pctx())(part)).toBe('week');
+  });
+
+  it('option 3: a timed task is on Today on its day, by its time — a plan row never places it', () => {
+    const at = (dueDay: string) => task({ status: 'planned', dueDay, dueTime: '15:00' });
+    expect(placeOf(at(TODAY), pctx())).toBe('today');
+    expect(placeOf(at('2026-09-24'), pctx(new Map([['x', 0]])))).toBe('week'); // a row today: history
+    expect(placeOf(at('2026-09-22'), pctx())).toBe('week'); // overdue
+  });
+
+  it('option 3: a deadline before day start is still the night before (the instant’s app day)', () => {
+    const at = (dueDay: string, dueTime: string) => task({ dueDay, dueTime });
+    const place = (t: Task, h: number) => placeOf(t, pctx(undefined, h));
+    expect(place(at('2026-09-24', '00:30'), 4)).toBe('today');
+    expect(place(at('2026-09-24', '00:30'), 0)).toBe('week');
+    expect(place(at(TODAY, '02:00'), 4)).toBe('week'); // last night's: overdue
+    expect(place(at(TODAY, '02:00'), 0)).toBe('today');
+    expect(place(at('2026-09-24', '04:00'), 4)).toBe('week');
+    expect(place(at('2026-09-30', '00:30'), 4)).toBe('week'); // today+6's night
+    expect(place(at('2026-09-30', '00:30'), 0)).toBe('backlog');
+  });
+
+  it('option 3: a timed parent due today is not on Today — its deadline is its marker', () => {
+    const parent = task({ id: 'p', dueDay: TODAY, dueTime: '23:59' });
+    const part = task({ id: 'a', parentId: 'p' });
+    expect(placer([parent, part], pctx())(parent)).toBe('week');
   });
 });
 
@@ -221,20 +252,57 @@ describe('applyQuery', () => {
     const week = [
       task({ id: 'd29', dueDay: '2026-09-29', categoryId: 'c1' }),
       task({ id: 'untimed', dueDay: TODAY }),
-      task({ id: 'at14', dueDay: TODAY, dueTime: '14:00', categoryId: 'c1' }),
+      // Timed tomorrow (timed today is on Today — option 3): by clock, before that day's untimed.
+      task({ id: 'at14', dueDay: '2026-09-24', dueTime: '14:00', categoryId: 'c1' }),
       task({ id: 'd24', dueDay: '2026-09-24', categoryId: 'c2' }),
-      task({ id: 'at09', dueDay: TODAY, dueTime: '09:00', categoryId: 'c2' }),
+      task({ id: 'at09', dueDay: '2026-09-24', dueTime: '09:00', categoryId: 'c2' }),
       task({ id: 'overdue', dueDay: '2026-09-01', categoryId: 'c2' }),
     ];
     const r = applyQuery(week, 'week', q({}, 'week'), ctx());
     expect(r.groups.map((g) => [g.key, g.label])).toEqual([['all', '']]);
     expect(r.groups[0]!.tasks.map((t) => t.id)).toEqual([
       'overdue',
+      'untimed',
       'at09',
       'at14',
-      'untimed',
       'd24',
       'd29',
+    ]);
+  });
+
+  it('a8 search places a match by the full list — a timed parent is never Today', () => {
+    const lab = [
+      task({ id: 'p', title: 'Lab report', dueDay: TODAY, dueTime: '23:59' }),
+      task({ id: 'a', title: 'read', parentId: 'p' }),
+      task({ id: 'b', title: 'draft', parentId: 'p' }),
+    ];
+    const r = applyQuery(lab, 'backlog', q({ text: 'Lab' }), ctx());
+    expect(r.groups.map((g) => [g.label, g.tasks.map((t) => t.id)])).toEqual([
+      ['This week', ['p']],
+    ]);
+  });
+
+  it('a9 search places a part by its parent even when the parent didn’t match', () => {
+    const list = [
+      task({ id: 'p', title: 'Report', dueDay: '2026-09-26' }),
+      task({ id: 'a', title: 'Lab read', parentId: 'p' }),
+    ];
+    const r = applyQuery(list, 'backlog', q({ text: 'Lab' }), ctx());
+    expect(r.groups.map((g) => [g.label, g.tasks.map((t) => t.id)])).toEqual([
+      ['This week', ['a']],
+    ]);
+  });
+
+  it('a10 search puts timed-today first by deadline, ties oldest first, then the plan', () => {
+    const list = [
+      task({ id: 'plan', title: 'pset plan', status: 'planned' }),
+      task({ id: 'newer', title: 'pset newer', dueDay: TODAY, dueTime: '15:00', createdAt: 2 }),
+      task({ id: 'night', title: 'pset night', dueDay: '2026-09-24', dueTime: '00:30' }),
+      task({ id: 'older', title: 'pset older', dueDay: TODAY, dueTime: '15:00', createdAt: 1 }),
+    ];
+    const r = applyQuery(list, 'backlog', q({ text: 'pset' }), ctx([['plan', 0]]));
+    expect(r.groups.map((g) => [g.label, g.tasks.map((t) => t.id)])).toEqual([
+      ['Today', ['older', 'newer', 'night', 'plan']],
     ]);
   });
 
@@ -248,13 +316,21 @@ describe('applyQuery', () => {
 describe('due buckets', () => {
   it('d1 today / week / dated / undated', () => {
     const due = (d: string | null) => task({ dueDay: d });
-    expect(inDueBucket(due(TODAY), 'today', TODAY)).toBe(true);
-    expect(inDueBucket(due('2026-09-24'), 'today', TODAY)).toBe(false);
-    expect(inDueBucket(due('2026-09-01'), 'week', TODAY)).toBe(true); // past-due counts
-    expect(inDueBucket(due('2026-09-30'), 'week', TODAY)).toBe(false);
-    expect(inDueBucket(due('2027-01-01'), 'dated', TODAY)).toBe(true);
-    expect(inDueBucket(due(null), 'undated', TODAY)).toBe(true);
-    expect(inDueBucket(due(null), 'dated', TODAY)).toBe(false);
+    expect(inDueBucket(due(TODAY), 'today', TODAY, 4)).toBe(true);
+    expect(inDueBucket(due('2026-09-24'), 'today', TODAY, 4)).toBe(false);
+    expect(inDueBucket(due('2026-09-01'), 'week', TODAY, 4)).toBe(true); // past-due counts
+    expect(inDueBucket(due('2026-09-30'), 'week', TODAY, 4)).toBe(false);
+    expect(inDueBucket(due('2027-01-01'), 'dated', TODAY, 4)).toBe(true);
+    expect(inDueBucket(due(null), 'undated', TODAY, 4)).toBe(true);
+    expect(inDueBucket(due(null), 'dated', TODAY, 4)).toBe(false);
+  });
+
+  it('d2 a timed task counts by its deadline’s app day — tonight’s small hours are today', () => {
+    const at = (d: string, t: string) => task({ dueDay: d, dueTime: t });
+    expect(inDueBucket(at('2026-09-24', '00:30'), 'today', TODAY, 4)).toBe(true);
+    expect(inDueBucket(at('2026-09-24', '09:00'), 'today', TODAY, 4)).toBe(false);
+    expect(inDueBucket(at('2026-09-30', '00:30'), 'week', TODAY, 4)).toBe(true);
+    expect(inDueBucket(at('2026-09-30', '00:30'), 'week', TODAY, 0)).toBe(false);
   });
 });
 

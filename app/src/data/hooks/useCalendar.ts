@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PULL_THROTTLE_MS } from '@aperture/shared';
-import type { GetCalendarBusyInput, InsertCalendarEventInput } from '@aperture/shared';
+import type { GetCalendarBusyInput, InsertCalendarEventInput, Task } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
+import { putTasks } from '../taskCache';
 import { invalidateTaskData } from './invalidate';
 import { useSettings } from './useSettings';
 
@@ -65,6 +66,7 @@ export function useInsertCalendarEvent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: InsertCalendarEventInput) => api.insertCalendarEvent(input),
+    onSuccess: (t: Task) => putTasks(qc, [t]),
     onSettled: () => invalidateTaskData(qc),
   });
 }
@@ -75,6 +77,7 @@ export function useSyncCalendarEvent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (taskId: string) => api.syncCalendarEvent(taskId),
+    onSuccess: (t: Task) => putTasks(qc, [t]),
     onSettled: () => invalidateTaskData(qc),
   });
 }
@@ -84,6 +87,7 @@ export function useDeleteCalendarEvent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (taskId: string) => api.deleteCalendarEvent(taskId),
+    onSuccess: (t: Task) => putTasks(qc, [t]),
     onSettled: () => invalidateTaskData(qc),
   });
 }

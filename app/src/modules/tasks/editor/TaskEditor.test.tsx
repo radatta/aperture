@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
+import { todayKey } from '@aperture/shared';
 import type { ApiClient, Task } from '@aperture/shared';
 import { renderWithProviders } from '../../../test/utils';
 import { createStubClient } from '../../../data/stubClient';
@@ -66,6 +67,25 @@ const mkTask = (over: Partial<Task>): Task => ({
 });
 
 describe('TaskEditor', () => {
+  it('a timed task with an old row today shows no “Planned today” — its day is its time', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'pset', estimateMin: 40 });
+    await client.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 40, order: 0 });
+    renderEditor(client, t);
+    expect(await screen.findByText('Planned today')).toBeTruthy();
+    cleanup();
+    const timed = await client.setTaskDue(t.id, { dueDay: todayKey(4), dueTime: '23:58' });
+    const plansRead = vi.spyOn(client, 'listPlansForDay');
+    renderEditor(client, timed);
+    // The row is there to read: wait for it to be read, then for the render after.
+    await waitFor(() => expect(plansRead).toHaveReturned());
+    await act(async () => {
+      await plansRead.mock.results[0]!.value;
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.queryByText('Planned today')).toBeNull();
+  });
+
   it('shows the full title in an editable field', async () => {
     const client = api();
     const t = await client.createTask({

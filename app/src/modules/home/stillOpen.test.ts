@@ -5,6 +5,7 @@ import { stillOpen } from './stillOpen';
 const row = (id: string, status: TaskStatus) => ({
   plan: { id: `p-${id}`, taskId: id } as TaskPlan,
   task: { id, status } as Task,
+  byTime: false,
 });
 
 describe('stillOpen', () => {

@@ -150,8 +150,8 @@ export class Repo {
       (await this.doc.query(this.p(), sk.taskPrefix(), opts)).map((i) => toEntity<Task>(i)),
     );
   }
-  async getTask(id: string): Promise<Task | null> {
-    const it = await this.doc.get(this.p(), sk.task(id));
+  async getTask(id: string, opts?: { consistent?: boolean }): Promise<Task | null> {
+    const it = await this.doc.get(this.p(), sk.task(id), opts);
     const t = it ? toEntity<Task>(it) : null;
     return t && t.deletedAt === null ? t : null;
   }
@@ -174,9 +174,9 @@ export class Repo {
       (await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)),
     );
   }
-  async listAllPlans(): Promise<TaskPlan[]> {
+  async listAllPlans(opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.planAllPrefix())).map((i) => toEntity<TaskPlan>(i)),
+      (await this.doc.query(this.p(), sk.planAllPrefix(), opts)).map((i) => toEntity<TaskPlan>(i)),
     );
   }
   async findPlan(id: string): Promise<TaskPlan | null> {

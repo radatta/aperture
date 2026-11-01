@@ -108,4 +108,4 @@ Interactions (`fill`, `click`, `press`) go through the real input pipeline, so R
 
 ## Gotchas
 
-- Light/dark is a CSS-variable flip on `<html data-theme>`. For a shot pair, set it directly — `page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))` — `ThemeProvider` only rewrites it when the theme setting changes, so the flip holds.
+- Light/dark is a CSS-variable flip on `<html data-theme>`. For a shot pair, set it directly — `page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))` — `ThemeProvider` only rewrites it when the resolved theme changes, so the flip holds, and it renders identically to the header's Night/Daytime buttons (checked pixel for pixel, 2026-10-30). **Wait ≥ 250 ms after any theme switch before a screenshot** (`page.waitForTimeout(250)`): buttons and fields carry a 150 ms colour `transition` while panel backgrounds snap, so an immediate shot shows ghost/quiet buttons washed out — that once read as a broken flip. The app also picks its theme from the clock (night 18:00–04:00 is dark), so set both sides of a pair explicitly; never assume it starts light.

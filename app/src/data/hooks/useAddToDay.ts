@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { todayKey } from '@aperture/shared';
+import { isTimed, todayKey } from '@aperture/shared';
 import type { CreateTaskInput, Task, TaskPlan } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
@@ -9,7 +9,8 @@ import { useRemovePlan, useUpsertPlan } from './usePlans';
 import { useSettings } from './useSettings';
 import { useCreateTask, useTransitionTask } from './useTasks';
 
-export type AddResult = 'added' | 'already';
+// 'timed': a timed task's day is its time — it's never planned (lenses.md D13); nothing was written.
+export type AddResult = 'added' | 'already' | 'timed';
 
 // The one way a task lands on (or leaves) a day's plan — the tasks page, Home "+ Add", capture
 // "→ today", the night "Tomorrow". It owns the write order and the dedupe so no surface re-derives
@@ -46,6 +47,7 @@ export function useAddToDay(day?: string) {
     ]);
 
   async function addToDay(task: Task): Promise<AddResult> {
+    if (isTimed(task)) return 'timed';
     const target = await resolveDay();
     const key = `${target}:${task.id}`;
     if (inFlight.current.has(key)) return 'already';
@@ -115,16 +117,17 @@ export function useAddToDay(day?: string) {
 
   // Create + plan in one gesture. Two writes, not atomic: if planning fails the task still exists
   // (in the backlog), and the caller says so rather than pretending it landed on the day.
-  // A tokenised capture's estimate flows into plannedMinutes via plannedDefault, same as any add.
+  // A tokenised capture's estimate flows into plannedMinutes via plannedDefault, same as any add. A
+  // timed capture isn't planned (`timed`): it's on its own day by its time, and the caller says that.
   async function createToday(
     input: string | CreateTaskInput,
-  ): Promise<{ task: Task; planned: boolean }> {
+  ): Promise<{ task: Task; planned: boolean; timed: boolean }> {
     const task = await createTask.mutateAsync(input);
     try {
-      await addToDay(task);
-      return { task, planned: true };
+      const timed = (await addToDay(task)) === 'timed';
+      return { task, planned: !timed, timed };
     } catch {
-      return { task, planned: false };
+      return { task, planned: false, timed: false };
     }
   }
 

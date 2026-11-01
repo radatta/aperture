@@ -1,6 +1,7 @@
-import { addDays, deadlineOf } from '@aperture/shared';
+import { addDays, deadlineOf, isTimed, placedByTime, timedDay } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import { byDueHint } from './taskMath';
+import { byDeadline } from './todayRows';
 
 // The /tasks query engine: every list view is a preset lens over one task list. Pure — the page
 // feeds it tasks + today's plan and renders what comes back. See docs/areas/tasks/lenses.md.
@@ -28,7 +29,9 @@ export interface QueryCtx {
   // Today's plan: taskId → plan order. Being on it is what puts a task in the Today place.
   planOrder: Map<string, number>;
   categories: Category[];
+  dayStartHour: number;
 }
+type PlaceCtx = Pick<QueryCtx, 'today' | 'planOrder' | 'dayStartHour'>;
 
 export interface TaskGroup {
   key: string;
@@ -52,26 +55,32 @@ export const PLACE_LABEL: Record<Place, string> = {
 export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).includes(lens);
 
 // A part not on today answers to its parent's deadline (its own time is when its block ends), so it
-// lives where its open parent does — and folds under that parent's card there (parts.ts).
-export function placeOf(
-  task: Task,
-  today: string,
-  planOrder: Map<string, number>,
-  parent?: Task,
-): Place {
+// lives where its open parent does — and folds under that parent's card there (parts.ts). A timed task
+// is on Today on the app day its deadline falls on, and a plan row on it places nothing (option 3,
+// lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day, as the
+// due chips and labels do ("due tonight 12:30am").
+export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = false): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
-  if (planOrder.has(task.id) || task.status === 'in_progress') return 'today';
+  if (task.status === 'in_progress') return 'today';
+  const { today, dayStartHour } = ctx;
+  const onToday =
+    isTimed(task) && !isParent
+      ? placedByTime(task, today, dayStartHour)
+      : ctx.planOrder.has(task.id);
+  if (onToday) return 'today';
   const openParent = parent && parent.status !== 'done' && parent.status !== 'cancelled';
-  const due = openParent ? parent.dueDay : task.dueDay;
+  const owner = openParent ? parent : task;
+  const due = timedDay(owner, dayStartHour) ?? owner.dueDay;
   if (due && due <= addDays(today, WEEK_DAYS)) return 'week';
   return 'backlog';
 }
 
 // placeOf over a list, each part looked up against its parent.
-export function placer(tasks: Task[], ctx: Pick<QueryCtx, 'today' | 'planOrder'>) {
+export function placer(tasks: Task[], ctx: PlaceCtx) {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const parents = new Set(tasks.map((t) => t.parentId).filter((id): id is string => !!id));
   return (t: Task): Place =>
-    placeOf(t, ctx.today, ctx.planOrder, t.parentId ? byId.get(t.parentId) : undefined);
+    placeOf(t, ctx, t.parentId ? byId.get(t.parentId) : undefined, parents.has(t.id));
 }
 
 // Outside a search, a part whose parent is in the same list is drawn inside the parent's card, not as a
@@ -143,8 +152,14 @@ function matchesStatus(task: Task, statuses: StatusChip[]): boolean {
   return statuses.includes(chip);
 }
 
-export function inDueBucket(task: Task, due: DueBucket, today: string): boolean {
-  const d = task.dueDay || null;
+// A timed task's day here is its deadline's app day, as placeOf reads it (lenses.md D13).
+export function inDueBucket(
+  task: Task,
+  due: DueBucket,
+  today: string,
+  dayStartHour: number,
+): boolean {
+  const d = timedDay(task, dayStartHour) ?? (task.dueDay || null);
   switch (due) {
     case 'any':
       return true;
@@ -184,19 +199,38 @@ export function labelOfFrom(categories: Category[]): (id: string | null) => stri
 }
 
 // Category groups follow the Settings order; retired categories that still hold tasks come after the
-// active ones, and "No category" is always last. Empty groups are never returned.
-export function groupTasks(tasks: Task[], groupBy: GroupKey, ctx: QueryCtx): TaskGroup[] {
+// active ones, and "No category" is always last. Empty groups are never returned. `place` defaults to
+// placing within `tasks`; a search passes the one built over the full list, so a match whose parent
+// didn't match still places by it.
+export function groupTasks(
+  tasks: Task[],
+  groupBy: GroupKey,
+  ctx: QueryCtx,
+  place = placer(tasks, ctx),
+): TaskGroup[] {
   if (groupBy === 'none') return tasks.length ? [{ key: 'all', label: '', tasks }] : [];
   if (groupBy === 'place') {
-    const place = placer(tasks, ctx);
     return PLACES.map((p) => {
       const inPlace = tasks.filter((t) => place(t) === p);
       // Today keeps the plan's order (the Big 3 is the top of it), in-progress-off-plan after.
       const ordered =
         p === 'today'
           ? inPlace
-              .map((t, i) => ({ t, i, o: ctx.planOrder.get(t.id) ?? Infinity }))
-              .sort((a, b) => a.o - b.o || a.i - b.i)
+              // As the Today lens reads: by time first (by deadline, ties oldest first), then the plan.
+              .map((t, i) => ({
+                t,
+                i,
+                timed: placedByTime(t, ctx.today, ctx.dayStartHour) ? 0 : 1,
+                o: ctx.planOrder.get(t.id) ?? Infinity,
+              }))
+              .sort(
+                (a, b) =>
+                  a.timed - b.timed ||
+                  (a.timed === 0
+                    ? byDeadline(a.t, b.t) || a.t.createdAt - b.t.createdAt
+                    : a.o - b.o) ||
+                  a.i - b.i,
+              )
               .map((x) => x.t)
           : inPlace;
       return { key: p, label: PLACE_LABEL[p], tasks: ordered };
@@ -241,14 +275,14 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
       (q.categories.length === 0 || q.categories.includes(catOf(t))) &&
       matchesStatus(t, q.statuses) &&
-      inDueBucket(deadline(t), q.due, ctx.today) &&
+      inDueBucket(deadline(t), q.due, ctx.today, ctx.dayStartHour) &&
       matchesText(t, q.text, labelOf),
   );
   // Search stays flat (every match is a card); the Done lens is flat history.
   const shown = searching || lens === 'done' ? matched : foldParts(matched);
   const sorted = sortTasks(shown, q.sort);
   const groupBy = searching && lens !== 'done' ? 'place' : q.groupBy;
-  return { searching, groups: groupTasks(sorted, groupBy, ctx), count: shown.length };
+  return { searching, groups: groupTasks(sorted, groupBy, ctx, place), count: shown.length };
 }
 
 // What the reader changed from the lens's own preset (text aside) — drives "Filter · N" + chips.

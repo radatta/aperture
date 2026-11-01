@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey } from '@aperture/shared';
@@ -304,6 +304,47 @@ describe('/tasks lenses', () => {
   });
 });
 
+describe('Today: a time decides the day (option 3)', () => {
+  it('a timed task due today is under "By time", with no Unplan, and counts toward the day', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-bytime-${Math.random()}` });
+    await api.createTask({ title: 'OA', dueDay: todayKey(4), dueTime: '23:58', estimateMin: 45 });
+    const p = await api.createTask({ title: 'essay', estimateMin: 30 });
+    await api.upsertPlan({ taskId: p.id, day: todayKey(4), plannedMinutes: 30, order: 0 });
+    await api.transitionTask(p.id, 'planned');
+    renderApp({ api, path: '/tasks' });
+
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.getAllByText('Planned today')).toHaveLength(1);
+    const oa = (await screen.findByRole('button', { name: 'OA' })).closest(
+      '.rounded-2xl',
+    ) as HTMLElement;
+    expect(within(oa).queryByRole('button', { name: 'Unplan' })).toBeNull();
+    expect(screen.getByText(/1h 15m planned/)).toBeTruthy(); // 45 + 30
+    const titles = screen
+      .getAllByRole('button', { name: /^(OA|essay)$/ })
+      .map((b) => b.textContent);
+    expect(titles).toEqual(['OA', 'essay']); // by time first
+  });
+
+  it('a started timed task due today sits under "By time", not in the off-plan tier', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-bytime-${Math.random()}` });
+    const t = await api.createTask({ title: 'OA', dueDay: todayKey(4), dueTime: '23:58' });
+    await api.transitionTask(t.id, 'in_progress');
+    renderApp({ api, path: '/tasks' });
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.queryByText(/not planned today/)).toBeNull();
+  });
+
+  it('a timed task on Week has no “+ Today” — its day is its time', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-bytime-${Math.random()}` });
+    await api.createTask({ title: 'later', dueDay: addDays(todayKey(4), 2), dueTime: '10:00' });
+    await api.createTask({ title: 'untimed', dueDay: addDays(todayKey(4), 2) });
+    renderApp({ api, path: '/tasks?lens=week' });
+    expect(await screen.findByRole('button', { name: 'Add untimed to today' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add later to today' })).toBeNull();
+  });
+});
+
 describe('focus after a row leaves', () => {
   it('"+ Today" moves the row out of Week and focus lands on the list, not <body>', async () => {
     const api = createStubClient({ seed: false, storageKey: `tasklist-focus-${Math.random()}` });
@@ -336,6 +377,22 @@ describe('focus after a row leaves', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'finish me' })).toBeNull());
     // The collapsed group hides the row's title, so the list area takes focus.
     await waitFor(() => expect(document.activeElement?.getAttribute('tabindex')).toBe('-1'));
+  });
+
+  it('a row marked done moves at once — from the write, not a refetch of the list', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-write-${Math.random()}` });
+    const t = await api.createTask({ title: 'finish me', estimateMin: 20 });
+    await api.upsertPlan({ taskId: t.id, day: todayKey(4), plannedMinutes: 20, order: 0 });
+    await api.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+
+    const row = (await screen.findByRole('button', { name: 'finish me' })).closest('.rounded-2xl');
+    vi.spyOn(api, 'listTasks').mockImplementation(() => new Promise(() => {})); // never answers
+    await user.click(within(row as HTMLElement).getByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '18');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    expect(await screen.findByRole('button', { name: 'Done today · 1' })).toBeTruthy();
   });
 
   it('after a plain close, the next tap ends the watch: a later lens switch never pulls focus back', async () => {

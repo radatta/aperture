@@ -1,5 +1,5 @@
 import type { Task } from '@aperture/shared';
-import { daysBetween } from '@aperture/shared';
+import { daysBetween, timedDay } from '@aperture/shared';
 import { byDueHint } from '../tasks/taskMath';
 
 // The deadline radar: a capped, soonest-due-first glance you plan FROM. No countdown, no overdue tally
@@ -16,7 +16,13 @@ export interface ComingUp {
 // `excludeIds` = everything already shown in Right Now (the tight plane), so a deadline never appears
 // twice. Undated / done / cancelled never reach the radar, and neither do parts: a part's own time is
 // when its block ends, not a deadline — the deadline is its parent's, which is on the radar (parts.ts).
-export function comingUp(tasks: Task[], today: string, excludeIds: Set<string>): ComingUp {
+// "This week" counts by the same day as /tasks' Week: a timed task's is its deadline's app day.
+export function comingUp(
+  tasks: Task[],
+  today: string,
+  excludeIds: Set<string>,
+  dayStartHour: number,
+): ComingUp {
   const dated = tasks.filter(
     (t) =>
       !!t.dueDay &&
@@ -28,6 +34,7 @@ export function comingUp(tasks: Task[], today: string, excludeIds: Set<string>):
   const sorted = byDueHint(dated); // dated ascending, stable, non-mutating
   const items = sorted.slice(0, RADAR_CAP);
   const rest = sorted.slice(RADAR_CAP);
-  const moreThisWeek = rest.filter((t) => daysBetween(today, t.dueDay!) <= 6).length;
+  const dayOf = (t: Task) => timedDay(t, dayStartHour) ?? t.dueDay!;
+  const moreThisWeek = rest.filter((t) => daysBetween(today, dayOf(t)) <= 6).length;
   return { items, moreThisWeek, moreLater: rest.length - moreThisWeek };
 }

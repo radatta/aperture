@@ -9,6 +9,7 @@ import {
   hasKeptPart,
   hasUnsent,
   isPullFresh,
+  isTimed,
   localEpochFromDayTime,
   parentOf,
   partIndex,
@@ -91,7 +92,8 @@ export function TaskEditor({
   const { data: settings } = useSettings();
   const { data: seriesList = [] } = useSeries();
   const now = useNow();
-  const today = todayKey(settings?.dayStartHour ?? 4, now);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour, now);
   const { data: plans = [] } = usePlansForDay(today);
   const deleteEvent = useDeleteCalendarEvent();
   const syncEvent = useSyncCalendarEvent();
@@ -174,7 +176,10 @@ export function TaskEditor({
   const canScope = task.status === 'backlog' || task.status === 'planned';
 
   const series = task.seriesId ? seriesList.find((s) => s.id === task.seriesId) : undefined;
-  const plannedToday = plans.find((p) => p.taskId === task.id)?.plannedMinutes ?? null;
+  // A timed task's row is history (its day is its time, lenses.md D13): nothing planned to show.
+  const plannedToday = isTimed(task)
+    ? null
+    : (plans.find((p) => p.taskId === task.id)?.plannedMinutes ?? null);
   const hasEstimate = task.estimateMin != null;
 
   // "Done" opens the modal here (finish intent) — the actual-minutes capture that closes the task.
@@ -242,7 +247,7 @@ export function TaskEditor({
         )}
         {parent?.dueDay && (
           <Text size="sm" tone="muted">
-            {fmtDueDay(parent.dueDay, today, parent.dueTime)}
+            {fmtDueDay(parent.dueDay, today, parent.dueTime, { dayStartHour })}
           </Text>
         )}
         {series && (

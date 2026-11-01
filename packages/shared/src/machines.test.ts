@@ -3,6 +3,9 @@ import {
   canTransitionTask,
   contributesCalibration,
   heartbeatSession,
+  isTimed,
+  placedByTime,
+  timedDay,
   resolveStaleSession,
   resumeSession,
   stalePlannedMoves,
@@ -168,8 +171,58 @@ describe('stalePlannedMoves', () => {
     ]);
   });
 
+  it('a timed planned task goes back to backlog whatever its rows — today’s, or a later day’s', () => {
+    const today = baseTask({ id: 'a', dueDay: '2026-08-06', dueTime: '15:00' });
+    const later = baseTask({ id: 'b', dueDay: '2026-08-06', dueTime: '15:00' });
+    const moves = stalePlannedMoves(
+      [today, later],
+      [plan('a', '2026-08-04'), plan('b', '2026-08-05')],
+      '2026-08-04',
+    );
+    expect(moves.map((m) => [m.task.id, m.to])).toEqual([
+      ['a', 'backlog'],
+      ['b', 'backlog'],
+    ]);
+  });
+
+  it('an untimed planned task with a row ahead is left alone', () => {
+    const t = baseTask({ id: 'u', dueDay: '2026-08-06' });
+    expect(stalePlannedMoves([t], [plan('u', '2026-08-05')], '2026-08-04')).toEqual([]);
+  });
+
+  it('a timed occurrence with its own row today goes to backlog, never dropped as its own copy', () => {
+    const occ = baseTask({ id: 'o', seriesId: 's', dueDay: '2026-08-04', dueTime: '09:00' });
+    const moves = stalePlannedMoves([occ], [plan('o', '2026-08-04')], '2026-08-04');
+    expect(moves.map((m) => [m.task.id, m.to])).toEqual([['o', 'backlog']]);
+  });
+
   it('ignores anything not planned', () => {
     const started = baseTask({ id: 'x', status: 'in_progress' });
     expect(stalePlannedMoves([started], [], '2026-08-04')).toEqual([]);
+  });
+});
+
+describe('option 3: a time decides the day', () => {
+  it('isTimed needs both a day and a time', () => {
+    expect(isTimed({ dueDay: '2026-08-04', dueTime: '15:00' })).toBe(true);
+    expect(isTimed({ dueDay: '2026-08-04', dueTime: null })).toBe(false);
+    expect(isTimed({ dueDay: null, dueTime: null })).toBe(false);
+  });
+
+  it('placedByTime: timed and its deadline falls on this app day', () => {
+    const t = { dueDay: '2026-08-04', dueTime: '15:00' };
+    expect(placedByTime(t, '2026-08-04', 4)).toBe(true);
+    expect(placedByTime(t, '2026-08-05', 4)).toBe(false);
+    expect(placedByTime({ dueDay: '2026-08-04', dueTime: null }, '2026-08-04', 4)).toBe(false);
+  });
+
+  it('timedDay: the deadline instant’s app day — before day start it is still the night before', () => {
+    const at = (dueTime: string) => ({ dueDay: '2026-08-05', dueTime });
+    expect(timedDay(at('00:00'), 4)).toBe('2026-08-04');
+    expect(timedDay(at('03:59'), 4)).toBe('2026-08-04');
+    expect(timedDay(at('04:00'), 4)).toBe('2026-08-05');
+    expect(timedDay(at('00:00'), 0)).toBe('2026-08-05');
+    expect(timedDay({ dueDay: '2026-08-05', dueTime: null }, 4)).toBeNull();
+    expect(placedByTime(at('00:30'), '2026-08-04', 4)).toBe(true);
   });
 });

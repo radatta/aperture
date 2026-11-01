@@ -120,10 +120,17 @@ full morning. (Revisit if morning loses a card.)
 + the pomodoro focus launch). *Rejected:* keeping either — that duplicates the plan and pushes daytime
 past 5 elements.
 
+**D11 — Timed tasks are a "By time" tier, never a Big-3 slot (2026-10-30, parts v2b).** A task due today
+at a time is on Today by its time ([lenses.md](../tasks/lenses.md) D13), not by choice, so it doesn't
+take a slot the plan pass chose: the Big 3 stay plan rows, and timed rows sit in their own tier above
+Also today, by clock, with no "Make it a focus" (`promote` moves plan rows only). The hero can be a
+started timed task. A day with only timed tasks isn't "Nothing planned". *Rejected:* one merged list,
+timed first — every "submit by 4pm" would take a chosen slot.
+
 ## 4. Where it lives
 
-- `app/src/modules/home/rightNow.ts` — pure derivations: `rightNow(planRows, allTasks)` (focus /
-  also-today / hero / nextPrompt), `liveElapsedMin(task, timers)`, `promote(planRows, taskId)`.
+- `app/src/modules/home/rightNow.ts` — pure derivations: `rightNow(rows, allTasks)` (focus / byTime /
+  also-today / hero / nextPrompt, over `todayRows`), `liveElapsedMin(task, timers)`, `promote(rows, taskId)`.
 - `app/src/modules/home/comingUp.ts` — `comingUp(tasks, today, excludeIds)` (capped radar + overflow).
 - `app/src/pages/Home/RightNowCard.tsx`, `ComingUpCard.tsx` — the two cards. `CardLink` moved into
   `HomeCard.tsx` to share it.

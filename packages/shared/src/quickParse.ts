@@ -5,6 +5,7 @@
 // Design record: docs/areas/tasks/quick-add.md.
 
 import { isDayKey, isTimeKey } from './dates';
+import { nightDueDay } from './due';
 import { hasTaskTokens, parseTaskLine, toCreateInput } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
@@ -52,6 +53,7 @@ export type ParseCategory = Pick<Category, 'id' | 'label'>;
 export interface ParseContext {
   categories: readonly ParseCategory[]; // active only
   today: string;
+  dayStartHour: number; // the day start `today` was resolved with — a small-hours clock is tonight's
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
 }
 
@@ -116,13 +118,14 @@ export function validateParsedTask(
     else dropped.push('dropped due day');
   }
 
-  // A time with no day means today (a product call); a time whose day was dropped is dropped too.
+  // A time with no day means today (a product call); a small-hours clock on today means tonight
+  // (nightDueDay); a time whose day was dropped is dropped too.
   if (p.dueTime != null) {
     const t = str(p.dueTime) && /^\d:/.test(p.dueTime) ? `0${p.dueTime}` : p.dueTime;
     const stated = ctx.line === undefined || CLOCK_IN_LINE.test(ctx.line);
     if (str(t) && isTimeKey(t) && stated && (input.dueDay != null || p.dueDay == null)) {
       input.dueTime = t;
-      input.dueDay ??= ctx.today;
+      input.dueDay = nightDueDay(input.dueDay ?? ctx.today, t, ctx.today, ctx.dayStartHour);
     } else dropped.push('dropped due time');
   }
 

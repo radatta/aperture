@@ -1,8 +1,10 @@
+import { useEffect } from 'react';
 import type { Roll, TaskStatus } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
 import { CheckIcon } from '../../components/icons';
 import { useRolls, usePickRollToday } from '../../data/hooks/useRolls';
+import { useAllTasks } from '../../data/hooks/useTasks';
 import { useTodayPlan } from '../tasks/useTodayPlan';
 
 // The morning ritual: "pick 1–2 today." Tapping a roll drops a tagged rep task onto today's plan, where
@@ -14,6 +16,10 @@ export function RollPicker({ className }: { className?: string }) {
   const { rows, day } = useTodayPlan();
   const { data: rolls = [] } = useRolls();
   const pick = usePickRollToday();
+  // A refusal stands until the tasks change (the rep re-timed, or its time cleared), then clears.
+  const { data: tasks } = useAllTasks();
+  const { reset } = pick;
+  useEffect(() => reset(), [tasks, reset]);
   const active = rolls.filter((r) => r.active);
   if (active.length === 0) return null;
 
@@ -45,10 +51,22 @@ export function RollPicker({ className }: { className?: string }) {
             roll={roll}
             state={stateFor(roll.id)}
             pending={pick.isPending}
-            onPick={() => pick.mutate({ rollId: roll.id, day })}
+            // On the plan already: nothing to pick (a timed rep there would only be refused).
+            onPick={() => {
+              const s = stateFor(roll.id);
+              if (s !== 'planned' && s !== 'in_progress') pick.mutate({ rollId: roll.id, day });
+            }}
           />
         ))}
       </div>
+      {/* A refused pick (a timed open rep — rolls.md D6) says why: never a silent tap. */}
+      {pick.isError && (
+        <div role="alert">
+          <Text size="xs" tone="danger">
+            {pick.error instanceof Error ? pick.error.message : 'Couldn’t pick it — try again.'}
+          </Text>
+        </div>
+      )}
     </div>
   );
 }
@@ -72,7 +90,11 @@ function RollChip({
       disabled={pending}
       onClick={onPick}
       aria-label={
-        onPlan ? `${roll.name} — on today's plan` : done ? `${roll.name} — done today, pick again` : `Pick ${roll.name} for today`
+        onPlan
+          ? `${roll.name} — on today's plan`
+          : done
+            ? `${roll.name} — done today, pick again`
+            : `Pick ${roll.name} for today`
       }
       className={cx(
         'inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm transition disabled:opacity-50',

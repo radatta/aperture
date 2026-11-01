@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { todayKey } from '@aperture/shared';
+import { fmtDueDay, isTimed, placedByTime, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
@@ -14,22 +14,40 @@ import { useOpenTask } from './task-modal-context';
 
 // A parent's parts, nested under its card in Week/Backlog (parts.ts): one compact line each — the title
 // opens the part, then its estimate and where it stands. An open part not yet on a day gets "+ Today";
-// one on today's plan just says so (its full card is on Today).
+// one on today's plan just says so (its full card is on Today). A timed part's day is its time
+// (lenses.md D13): it reads "today" on its day, else when it ends — never "+ Today".
 export function PartsList({ parts }: { parts: Task[] }) {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const { data: plans = [] } = usePlansForDay(today);
   const onToday = new Set(plans.map((p) => p.taskId));
   return (
     <ul className="mt-2 flex flex-col gap-1 border-t border-line pt-2">
       {parts.map((p) => (
-        <PartRow key={p.id} part={p} today={onToday.has(p.id)} />
+        <PartRow
+          key={p.id}
+          part={p}
+          today={isTimed(p) ? placedByTime(p, today, dayStartHour) : onToday.has(p.id)}
+          day={today}
+          dayStartHour={dayStartHour}
+        />
       ))}
     </ul>
   );
 }
 
-function PartRow({ part, today }: { part: Task; today: boolean }) {
+function PartRow({
+  part,
+  today,
+  day,
+  dayStartHour,
+}: {
+  part: Task;
+  today: boolean;
+  day: string;
+  dayStartHour: number;
+}) {
   const openTask = useOpenTask();
   const { addToDay } = useAddToDay();
   const [busy, setBusy] = useState(false);
@@ -45,9 +63,11 @@ function PartRow({ part, today }: { part: Task; today: boolean }) {
           ? 'in progress'
           : today
             ? 'today'
-            : part.status === 'planned'
-              ? 'planned'
-              : null;
+            : isTimed(part)
+              ? fmtDueDay(part.dueDay!, day, part.dueTime, { verb: 'ends', dayStartHour })
+              : part.status === 'planned'
+                ? 'planned'
+                : null;
 
   async function add() {
     setBusy(true);

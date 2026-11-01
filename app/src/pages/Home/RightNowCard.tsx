@@ -6,6 +6,7 @@ import {
   fmtClock12,
   fmtWeekdayShort,
   parentOf,
+  placedByTime,
   todayKey,
 } from '@aperture/shared';
 import type { DueUrgency, Task } from '@aperture/shared';
@@ -61,14 +62,39 @@ function PartCategory({ task }: { task: Task }) {
   );
 }
 
+// A row's title, then its tags. On a phone a tag-heavy row's tags — a part's "of P2 · ends 3pm · due
+// Mon 5pm", a roll rep's category, roll and time — take a second line, so the title keeps the row;
+// elsewhere it's one line.
+function RowText({ task, title, children }: { task: Task; title: ReactNode; children: ReactNode }) {
+  const part = !!task.parentId || !!task.rollId;
+  return (
+    <div
+      className={cx(
+        'flex min-w-0 items-center gap-2',
+        part && 'max-sm:flex-col max-sm:items-start max-sm:gap-0.5',
+      )}
+    >
+      {title}
+      <span
+        className={cx(
+          'contents',
+          part && 'max-sm:flex max-sm:max-w-full max-sm:items-center max-sm:gap-2',
+        )}
+      >
+        {children}
+      </span>
+    </div>
+  );
+}
+
 // "of P2" on a part, so the row says what it's working toward.
 function PartOf({ task }: { task: Task }) {
   const { data: tasks = [] } = useAllTasks();
   const parent = parentOf(tasks, task);
   if (!parent) return null;
-  // Capped, so on a phone the part's own title keeps most of the row.
+  // Capped beside the title; on a phone it sits on the line under it (RowText).
   return (
-    <Text size="xs" tone="muted" className="min-w-0 max-w-[35%] truncate">
+    <Text size="xs" tone="muted" className="min-w-0 truncate sm:max-w-[35%]">
       of {parent.title}
     </Text>
   );
@@ -76,17 +102,20 @@ function PartOf({ task }: { task: Task }) {
 
 // The deadline, on timed tasks only — the day's plan already says "today" for the rest. Compact, so a
 // phone-width row keeps room for its title: "by 4:30pm" today, else "Sun 6:16pm" (whether that's past
-// is the row's colour, and the screen-reader text).
+// is the row's colour, and the screen-reader text). "by 12:30am" for tonight's post-midnight deadline
+// too — its app day is today. On a part it's its parent's, so it says "due" — apart from the part's own
+// "ends".
 function DueTime({ task }: { task: Task }) {
   const { data: settings } = useSettings();
   const label = urgencyLabel(useUrgency(task));
   const { dueDay, dueTime } = useDeadline(task);
   if (!dueDay || !dueTime) return null;
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
   return (
     <Text size="xs" tone="subtle" className="shrink-0">
-      {dueDay === today
-        ? `by ${fmtClock12(dueTime)}`
+      {task.parentId && 'due '}
+      {placedByTime({ dueDay, dueTime }, todayKey(dayStartHour), dayStartHour)
+        ? `${task.parentId ? '' : 'by '}${fmtClock12(dueTime)}`
         : `${fmtWeekdayShort(dueDay)} ${fmtClock12(dueTime)}`}
       {label && <span className="sr-only">, {label}</span>}
     </Text>
@@ -111,13 +140,14 @@ export function RightNowCard() {
     : undefined;
 
   const focusRest = rn.focus.filter((r) => r.task.id !== hero?.id);
+  const byTimeRest = rn.byTime.filter((r) => r.task.id !== hero?.id);
   const alsoRest = rn.alsoToday.filter((r) => r.task.id !== hero?.id);
   const noTimers = timers.length === 0;
   const start = (id: string) => transition.mutate({ id, to: 'in_progress' });
 
   // Nothing planned and nothing running — the honest empty state, then the cold-start pair the old
   // FocusCard owned (the timer dock only appears while something runs, so its entry lives here).
-  if (!hero && rn.focus.length === 0 && rn.alsoToday.length === 0) {
+  if (!hero && rn.focus.length === 0 && rn.byTime.length === 0 && rn.alsoToday.length === 0) {
     return (
       <HomeCard title="Right now" aside={<Asides />}>
         <div className="flex flex-col gap-3">
@@ -204,6 +234,18 @@ export function RightNowCard() {
           </div>
         )}
 
+        {/* Due today at a time: here by its time, not chosen — so no "Make it a focus" (D11). */}
+        {byTimeRest.length > 0 && (
+          <div className="flex flex-col gap-1.5 border-t border-line pt-3">
+            <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+              By time
+            </Text>
+            {byTimeRest.map((r) => (
+              <FocusRow key={r.task.id} row={r} onStart={start} byTime />
+            ))}
+          </div>
+        )}
+
         {alsoRest.length > 0 && (
           <div className="flex flex-col gap-1.5 border-t border-line pt-3">
             <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
@@ -230,23 +272,44 @@ export function RightNowCard() {
 }
 
 // A Big-3 row that isn't the hero: done (struck), in-progress (elapsed), or ready-to-start.
-function FocusRow({ row, onStart }: { row: RightNowRow; onStart: (id: string) => void }) {
+function FocusRow({
+  row,
+  onStart,
+  byTime = false,
+}: {
+  row: RightNowRow;
+  onStart: (id: string) => void;
+  byTime?: boolean;
+}) {
   const t = row.task;
   const u = useUrgency(t);
   return (
     <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <div className="flex min-w-0 items-center gap-2">
-        <Text
-          size="sm"
-          className={cx('min-w-0 truncate', t.status === 'done' && 'text-ink-subtle line-through')}
-        >
-          {t.title}
-        </Text>
+      <RowText
+        task={t}
+        title={
+          <Text
+            size="sm"
+            className={cx(
+              'min-w-0 max-w-full truncate',
+              t.status === 'done' && 'text-ink-subtle line-through',
+            )}
+          >
+            {t.title}
+          </Text>
+        }
+      >
         <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
+        {/* A part's deadline (and colour) is its parent's; in "By time" its own end is why it's here. */}
+        {byTime && t.parentId && t.dueTime && (
+          <Text size="xs" tone="subtle" className="shrink-0">
+            ends {fmtClock12(t.dueTime)}
+          </Text>
+        )}
         <DueTime task={t} />
-      </div>
+      </RowText>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'done' ? (
           <Text size="xs" tone="subtle">
@@ -281,14 +344,18 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
   const u = useUrgency(t);
   return (
     <div className={cx('flex items-center justify-between gap-3', ROW, urgencyClass(u))}>
-      <div className="flex min-w-0 items-center gap-2">
-        <Text
-          size="sm"
-          tone="muted"
-          className={cx('min-w-0 truncate', t.status === 'done' && 'line-through')}
-        >
-          {t.title}
-        </Text>
+      <RowText
+        task={t}
+        title={
+          <Text
+            size="sm"
+            tone="muted"
+            className={cx('min-w-0 max-w-full truncate', t.status === 'done' && 'line-through')}
+          >
+            {t.title}
+          </Text>
+        }
+      >
         <PartCategory task={t} />
         <PartOf task={t} />
         <RollTag rollId={t.rollId} />
@@ -298,7 +365,7 @@ function AlsoRow({ row, onFocus }: { row: RightNowRow; onFocus: (id: string) => 
             not planned today
           </Text>
         )}
-      </div>
+      </RowText>
       <div className="flex shrink-0 items-center gap-2">
         {t.status === 'in_progress' && (
           <Text size="xs" tone="muted" tabular>

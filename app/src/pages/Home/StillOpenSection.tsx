@@ -1,14 +1,16 @@
 import { useRef, useState } from 'react';
-import { addDays } from '@aperture/shared';
+import { addDays, beforeDayStart, endsAfterParent, fmtClock12, parentOf } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Text } from '../../components/Text';
 import { useRowAction } from '../../lib/useRowAction';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
+import { useAllTasks, useSetDue } from '../../data/hooks/useTasks';
 import { usePlansForDay } from '../../data/hooks/usePlans';
 import { usePomodoro } from '../../modules/pomodoro/pomodoro-context';
 import { CategoryTag } from '../../modules/tasks/CategoryTag';
 import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
-import { stillOpen, type PlanRow } from '../../modules/home/stillOpen';
+import { stillOpen } from '../../modules/home/stillOpen';
+import type { TodayRow } from '../../modules/tasks/todayRows';
 
 const LEFT_KEY = 'aperture.night.left';
 
@@ -32,14 +34,19 @@ function writeLeft(day: string, ids: Set<string>): void {
   }
 }
 
-// Night: every unfinished thing from today's plan gets a "when?" — Tomorrow, Backlog, or Leave it.
-// No count and no red: unfinished is information, not a verdict. Lives inside "Today in review".
-export function StillOpenSection({ today }: { today: string }) {
+// Night: every unfinished thing from today gets a "when?" — Tomorrow, Backlog, or Leave it. A timed
+// one (on today by its time) has no Backlog: its Tomorrow moves the time a day, calendar block with it
+// — and isn't offered when that would end a part after its parent's deadline (lenses.md D8, D13).
+// No count and no red: unfinished is information, not a verdict. Lives inside
+// "Today in review".
+export function StillOpenSection({ today, dayStartHour }: { today: string; dayStartHour: number }) {
   const tomorrow = addDays(today, 1);
   const { rows, isError: todayError, totalCount } = useTodayPlan();
   const tomorrowQ = usePlansForDay(tomorrow);
   const toTomorrow = useAddToDay(tomorrow);
   const { unplan } = useAddToDay();
+  const setDue = useSetDue();
+  const { data: tasks = [] } = useAllTasks();
   const { timers, stop } = usePomodoro();
   const [left, setLeft] = useState(() => readLeft(today));
   // Once something's been answered, the section closes on a line instead of vanishing — focus needs
@@ -69,11 +76,21 @@ export function StillOpenSection({ today }: { today: string }) {
 
   // Backlog on a started task: stop its running focus first, so the session's minutes land now
   // instead of accruing onto a task that's no longer in play.
-  async function toBacklog(r: PlanRow) {
+  async function toBacklog(r: TodayRow) {
     for (const t of timers)
       if (t.session.kind === 'work' && t.session.taskId === r.task.id) await stop(t.session.id);
-    await unplan(r.plan, r.task, { fromInProgress: true });
+    if (r.plan) await unplan(r.plan, r.task, { fromInProgress: true });
   }
+  // Same clock, the next day — unless that ends a part after its parent's deadline.
+  const nextDue = ({ task }: TodayRow) => ({
+    dueDay: addDays(task.dueDay!, 1),
+    dueTime: task.dueTime,
+  });
+  const retime = (r: TodayRow) => setDue.mutateAsync({ id: r.task.id, due: nextDue(r) });
+  const canRetime = (r: TodayRow) => {
+    const parent = parentOf(tasks, r.task);
+    return !parent || !endsAfterParent(nextDue(r), parent);
+  };
 
   const answer = (id: string, fn: () => Promise<unknown>) => {
     setAnswered(true);
@@ -100,13 +117,19 @@ export function StillOpenSection({ today }: { today: string }) {
       </Text>
       {open.map((r) => (
         <StillOpenRow
-          key={r.plan.id}
+          key={r.plan?.id ?? r.task.id}
           row={r}
+          dayStartHour={dayStartHour}
           busy={action.isBusy(r.task.id)}
-          // Tomorrow keeps today's row as history; a started task stays started.
-          onTomorrow={() => answer(r.task.id, () => toTomorrow.addToDay(r.task))}
+          // Tomorrow keeps today's row as history; a started task stays started. A timed task's
+          // Tomorrow is its time, a day on — Leave only, if that's past its parent's deadline.
+          onTomorrow={
+            r.byTime && !canRetime(r)
+              ? undefined
+              : () => answer(r.task.id, () => (r.byTime ? retime(r) : toTomorrow.addToDay(r.task)))
+          }
           // Backlog is a real rollover, started or not — the task keeps its locked estimate + time.
-          onBacklog={() => answer(r.task.id, () => toBacklog(r))}
+          onBacklog={r.byTime ? undefined : () => answer(r.task.id, () => toBacklog(r))}
           onLeave={() => leave(r.task.id)}
         />
       ))}
@@ -123,15 +146,17 @@ export function StillOpenSection({ today }: { today: string }) {
 
 function StillOpenRow({
   row,
+  dayStartHour,
   busy,
   onTomorrow,
   onBacklog,
   onLeave,
 }: {
-  row: PlanRow;
+  row: TodayRow;
+  dayStartHour: number;
   busy: boolean;
-  onTomorrow: () => void;
-  onBacklog: () => void;
+  onTomorrow?: () => void;
+  onBacklog?: () => void;
   onLeave: () => void;
 }) {
   const { task } = row;
@@ -147,14 +172,26 @@ function StillOpenRow({
           {task.title}
         </Text>
         <CategoryTag categoryId={task.categoryId} />
+        {row.byTime && task.dueTime && (
+          <Text size="xs" tone="muted" className="shrink-0">
+            {/* The clock alone would read as this morning; tonight's small hours say so. */}
+            {task.parentId ? 'ends' : 'due'}{' '}
+            {beforeDayStart(task.dueTime, dayStartHour) && 'tonight '}
+            {fmtClock12(task.dueTime)}
+          </Text>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <Button variant="ghost" size="sm" disabled={busy} onClick={onTomorrow}>
-          Tomorrow
-        </Button>
-        <Button variant="quiet" size="sm" disabled={busy} onClick={onBacklog}>
-          Backlog
-        </Button>
+        {onTomorrow && (
+          <Button variant="ghost" size="sm" disabled={busy} onClick={onTomorrow}>
+            Tomorrow
+          </Button>
+        )}
+        {onBacklog && (
+          <Button variant="quiet" size="sm" disabled={busy} onClick={onBacklog}>
+            Backlog
+          </Button>
+        )}
         <Button variant="quiet" size="sm" disabled={busy} onClick={onLeave}>
           Leave
         </Button>

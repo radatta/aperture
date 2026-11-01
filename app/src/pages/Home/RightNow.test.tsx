@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { todayKey } from '@aperture/shared';
+import { addDays, todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
@@ -63,7 +63,13 @@ describe('Right now card', () => {
       storageKey: `rn-live-${Math.random()}`,
     });
     const task = await plan(api, 'Deep work', { est: 30, order: 0, start: true });
-    await api.startSession({ taskId: task.id, categoryId: null, kind: 'work', label: null, day: TODAY });
+    await api.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: TODAY,
+    });
     const user = userEvent.setup();
     renderApp({ api });
     await user.click(screen.getByRole('button', { name: 'Daytime' }));
@@ -97,6 +103,52 @@ describe('Right now card', () => {
     expect(await screen.findByText(/nice/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
+  });
+
+  it('a timed task due today is its own “By time” tier — not a Big-3 slot, no “Make it a focus”', async () => {
+    const api = stub();
+    await plan(api, 'Task 0', { order: 0 });
+    await api.createTask({ title: 'OA', dueDay: TODAY, dueTime: '23:58' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.getByText('OA')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Make OA a focus/ })).toBeNull();
+    expect(screen.queryByText('Nothing planned today.')).toBeNull();
+  });
+
+  it('a timed part in By time says when it ends, and its parent’s deadline as “due”', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'Lab', dueDay: TODAY, dueTime: '23:59' });
+    const [part] = await api.createTasks([{ title: 'analysis', parentId: p.id }]);
+    await api.setTaskDue(part!.id, { dueDay: TODAY, dueTime: '23:57' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('ends 11:57pm')).toBeTruthy();
+    expect(screen.getByText('of Lab')).toBeTruthy();
+    expect(screen.getByText(/^due 11:59pm/)).toBeTruthy();
+  });
+
+  it('a deadline in tomorrow’s small hours is tonight’s: “by 12:30am”', async () => {
+    const api = stub();
+    await api.createTask({ title: 'OA', dueDay: addDays(TODAY, 1), dueTime: '00:30' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.getByText('by 12:30am')).toBeTruthy();
+  });
+
+  it('a day with only a timed task isn’t “nothing planned”', async () => {
+    const api = stub();
+    await api.createTask({ title: 'OA', dueDay: TODAY, dueTime: '23:58' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    expect(await screen.findByText('By time')).toBeTruthy();
+    expect(screen.queryByText('Nothing planned today.')).toBeNull();
   });
 
   it('shows the empty state and cold-start when nothing is planned', async () => {

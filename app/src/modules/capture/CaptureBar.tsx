@@ -5,6 +5,8 @@ import {
   parseFailText,
   parseTaskLine,
   toCreateInput,
+  fmtDueDay,
+  isTimed,
   todayKey,
   tokenAtCaret,
 } from '@aperture/shared';
@@ -81,7 +83,8 @@ export function CaptureBar({
   hidden?: boolean;
 }) {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const [mode, setMode] = useState<CaptureMode>('log');
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
@@ -97,7 +100,7 @@ export function CaptureBar({
   // confirmation would vanish after the FIRST timer's remainder.
   const [receipt, setReceipt] = useState<{
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean };
+    dest?: { today: boolean; planned: boolean; timedOn?: string };
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
@@ -293,7 +296,7 @@ export function CaptureBar({
         .then((r) =>
           r.ok
             ? saveTask(r.input, goesToday, restore, settled, {
-                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped),
+                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped, dayStartHour),
               })
             : saveTask({ title: value }, goesToday, restore, settled, {
                 unparsed: parseFailText(r),
@@ -326,15 +329,35 @@ export function CaptureBar({
           (r) =>
             setReceipt({
               mode: 'task',
-              dest: { today: true, planned: r.planned },
+              dest: {
+                today: true,
+                planned: r.planned,
+                ...(r.timed && r.task.dueDay
+                  ? { timedOn: fmtDueDay(r.task.dueDay, today, r.task.dueTime, { dayStartHour }) }
+                  : {}),
+              },
               ...note,
               at: Date.now(),
             }),
           restore,
         )
-      : createTask
-          .mutateAsync(input)
-          .then(() => setReceipt({ mode: 'task', ...note, at: Date.now() }), restore);
+      : createTask.mutateAsync(input).then(
+          // A timed task isn't backlog: its time is its place, so the receipt says when.
+          (t) =>
+            setReceipt({
+              mode: 'task',
+              ...(isTimed(t) && {
+                dest: {
+                  today: false,
+                  planned: false,
+                  timedOn: fmtDueDay(t.dueDay!, today, t.dueTime, { dayStartHour }),
+                },
+              }),
+              ...note,
+              at: Date.now(),
+            }),
+          restore,
+        );
     if (settled) void saved.finally(settled);
   }
 
@@ -552,7 +575,11 @@ export function CaptureBar({
                     no category
                   </Text>
                 )}
-                <TaskTokenChips line={previewLine(preview.result)} today={preview.result.today} />
+                <TaskTokenChips
+                  line={previewLine(preview.result)}
+                  today={preview.result.today}
+                  dayStartHour={dayStartHour}
+                />
               </div>
               {preview.result.input.notes && (
                 <Text size="xs" tone="muted" className="line-clamp-2 break-words">
@@ -671,7 +698,7 @@ function Receipt({
   reason: string;
   receipt: {
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean };
+    dest?: { today: boolean; planned: boolean; timedOn?: string };
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean;
@@ -705,24 +732,21 @@ function Receipt({
       </Text>
     );
   const r = receiptFor(receipt.mode, receipt.dest);
+  // On a phone the row leaves the receipt ~115px, so a long one ("due tomorrow 4pm, by its time",
+  // "backlog (couldn’t plan it)") takes a second line there, never losing the part that says where.
+  const wrap = 'block truncate pr-1 max-sm:line-clamp-2 max-sm:whitespace-normal';
   // Not a failure — the task is saved — but it isn't what you meant, so it reads gold, not teal.
   if (receipt.unparsed)
     return (
-      <Text size="xs" tone="gold" className="block truncate pr-1">
+      <Text size="xs" tone="gold" className={wrap}>
         Saved unparsed → {r.label}
         <span className="sr-only">: couldn&apos;t parse ({receipt.unparsed}), saved as typed</span>
       </Text>
     );
-  if (receipt.parsed)
-    return (
-      <Text size="xs" tone="teal" className="block truncate pr-1">
-        {r.text} → {r.label}
-        <span className="sr-only">: {receipt.parsed}</span>
-      </Text>
-    );
   return (
-    <Text size="xs" tone="teal" className="block truncate pr-1">
+    <Text size="xs" tone="teal" className={wrap}>
       {r.text} → {r.label}
+      {receipt.parsed && <span className="sr-only">: {receipt.parsed}</span>}
     </Text>
   );
 }

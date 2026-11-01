@@ -38,6 +38,25 @@ describe('Home "+ Add" to today', () => {
     expect((await api.getTask(pset.id))?.status).toBe('planned');
   });
 
+  it('leaves out a timed task — its day is its time — and says why, only when one was left out', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-today-${Math.random()}` });
+    await api.createTask({ title: 'pset 4' });
+    await api.createTask({ title: 'pset timed', dueDay: todayKey(4), dueTime: '23:58' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    await user.click(await screen.findByRole('button', { name: 'Add to today' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Add to today' }));
+    await dialog.findByText('pset 4');
+    await user.type(dialog.getByRole('textbox'), 'zzz'); // matches neither: nothing was left out
+    expect(dialog.queryByText(/Timed tasks land on their day/)).toBeNull();
+    await user.clear(dialog.getByRole('textbox'));
+    await user.type(dialog.getByRole('textbox'), 'pset');
+    expect(await dialog.findByText(/Timed tasks land on their day/)).toBeTruthy();
+    expect(dialog.queryByText('pset timed')).toBeNull();
+    expect(dialog.getByText('pset 4')).toBeTruthy();
+  });
+
   it('offers to create what you typed when nothing matches exactly', async () => {
     const { api, user, dialog } = await openFromMorning();
 

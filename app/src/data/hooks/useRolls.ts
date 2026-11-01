@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { UpsertRollInput } from '@aperture/shared';
+import type { Task, UpsertRollInput } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
+import { putTasks } from '../taskCache';
 import { invalidateTaskData } from './invalidate';
 
 // Rolls list — the /rolls page and the morning picker read it (includes archived; callers filter).
@@ -26,6 +27,7 @@ export function usePickRollToday() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { rollId: string; day: string }) => api.pickRollToday(v.rollId, v.day),
+    onSuccess: ({ task }: { task: Task }) => putTasks(qc, [task]),
     onSettled: () => {
       invalidateTaskData(qc);
       qc.invalidateQueries({ queryKey: qk.rolls() });

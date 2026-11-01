@@ -52,7 +52,8 @@ export function DeleteConfirm({
           Cancel
         </Button>
       )}
-      {/* Closes once the task leaves the list; until that refetch lands, say it went. */}
+      {/* The write removes the task from the list (taskCache.ts), which closes the modal; this says it
+          went for a host whose list never had it. */}
       {del.isSuccess && (
         <span role="status">
           <Text size="sm" tone="muted">

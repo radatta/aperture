@@ -1200,6 +1200,68 @@ export function runApiContract(
       expect(await status(c.id)).toBe('planned');
     });
 
+    it('option 3: a timed task is never planned; the same task untimed is', async () => {
+      const t = await api.createTask({ title: 'OA', dueDay: '2026-08-06', dueTime: '23:59' });
+      await expect(
+        api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 }),
+      ).rejects.toThrow(/falls on/);
+      expect(await api.listPlansForDay('2026-08-04')).toEqual([]);
+      await api.setTaskDue(t.id, { dueDay: '2026-08-06', dueTime: null });
+      await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.taskId)).toEqual([t.id]);
+    });
+
+    it('option 3: picking a roll whose open rep is timed is refused — no second rep, no row', async () => {
+      const roll = await api.upsertRoll({ name: 'Mock OA', categoryId: null, estimateMin: 30 });
+      const { task: rep } = await api.pickRollToday(roll.id, '2026-08-04');
+      await api.setTaskDue(rep.id, { dueDay: '2026-08-05', dueTime: '17:00' });
+      const before = (await api.listTasks()).length;
+      await expect(api.pickRollToday(roll.id, '2026-08-05')).rejects.toThrow(/falls on/);
+      expect(await api.listTasks()).toHaveLength(before);
+      expect(await api.listPlansForDay('2026-08-05')).toEqual([]);
+      await api.setTaskDue(rep.id, { dueDay: '2026-08-05', dueTime: null });
+      expect((await api.pickRollToday(roll.id, '2026-08-05')).task.id).toBe(rep.id);
+    });
+
+    it('option 3: a planned task that gains a time goes back to backlog on the next getDay; its row stays as history', async () => {
+      const t = await api.createTask({ title: 'pset' });
+      await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
+      await api.transitionTask(t.id, 'planned');
+      await api.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: '17:00' });
+      await api.getDay('2026-08-04');
+      expect((await api.getTask(t.id))?.status).toBe('backlog');
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.taskId)).toEqual([t.id]);
+    });
+
+    it('option 3: a timed first part doesn’t take its planned parent’s spot', async () => {
+      const p = await api.createTask({ title: 'P2', estimateMin: 60 });
+      await api.upsertPlan({ taskId: p.id, day: '2026-08-04', plannedMinutes: 60, order: 0 });
+      await api.transitionTask(p.id, 'planned');
+      const [timed] = await api.createTasks([
+        { title: 'read', parentId: p.id, dueDay: '2026-08-05', dueTime: '10:00' },
+      ]);
+      expect((await api.getTask(timed!.id))?.status).toBe('backlog');
+      expect((await api.listPlansForDay('2026-08-04')).map((r) => r.taskId)).not.toContain(
+        timed!.id,
+      );
+    });
+
+    it('option 3: splitting a timed task plans no follow-up — it’s in the backlog', async () => {
+      const t = await api.createTask({ title: 'Essay', estimateMin: 90 });
+      await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 90, order: 0 });
+      await api.transitionTask(t.id, 'planned');
+      await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskDue(t.id, { dueDay: '2026-08-04', dueTime: '17:00' });
+      const { followUp } = await api.splitTask(t.id, {
+        finish: 'keep',
+        followUp: { title: 'Essay: edit', estimateMin: 30 },
+      });
+      expect(followUp.status).toBe('backlog');
+      expect((await api.listPlansForDay('2026-08-04')).map((r) => r.taskId)).not.toContain(
+        followUp.id,
+      );
+    });
+
     it('day: intent persists on the singleton', async () => {
       const d = await api.setDayIntent('2026-08-04', 'Protect the morning');
       expect(d.intent).toBe('Protect the morning');

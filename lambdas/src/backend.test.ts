@@ -3,11 +3,12 @@ import { InMemoryDoc } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
 import { sk } from './ddb/keys';
+import { toEntity } from './ddb/mapping';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
 import type { Presigner } from './s3/presigner';
-import { ulid, type RecordFluxSetInput } from '@aperture/shared';
+import { ulid, type RecordFluxSetInput, type Task } from '@aperture/shared';
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -367,9 +368,81 @@ describe('backend task notes on a legacy row', () => {
   });
 });
 
-// The parent's lock is decided on the task list read straight after a part's write. DynamoDB's default
-// query is eventually consistent, so it can still show the part as it was — the decision must not.
-describe('backend parent lock under a lagging task list', () => {
+// Every read whose copy is written back is strongly consistent: two quick RPCs on one task (a title,
+// then its due) must never write the first one's older copy back over it.
+describe('backend read-then-write under lagging reads', () => {
+  const setup = () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+    });
+    // Plain gets (and list queries) of `id` keep showing the copy from before the next write.
+    const snapshot = async (id: string) => {
+      const before = await doc.get('u#local', sk.task(id));
+      return () => {
+        doc.staleNextGets('u#local', sk.task(id), before, 20);
+        doc.staleNextQueries('u#local', sk.task(id), before, 20);
+      };
+    };
+    const stored = async (id: string) =>
+      toEntity<Task>((await doc.get('u#local', sk.task(id), { consistent: true }))!);
+    return { backend, snapshot, stored };
+  };
+
+  it('a due set straight after a rename keeps the new title', async () => {
+    const { backend, snapshot } = setup();
+    const t = await backend.createTask({ title: 'old' });
+    const lag = await snapshot(t.id);
+    await backend.setTaskTitle(t.id, 'new');
+    lag();
+    const saved = await backend.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: null });
+    expect(saved).toMatchObject({ title: 'new', dueDay: '2026-08-05' });
+  });
+
+  it('a part added straight after renaming its parent keeps the new title', async () => {
+    const { backend, snapshot, stored } = setup();
+    const p = await backend.createTask({ title: 'old' });
+    const lag = await snapshot(p.id);
+    await backend.setTaskTitle(p.id, 'new');
+    lag();
+    await backend.createTask({ title: 'part', parentId: p.id });
+    expect((await stored(p.id)).title).toBe('new');
+  });
+
+  it('a focus session stopped straight after a rename keeps the title', async () => {
+    const { backend, snapshot, stored } = setup();
+    const t = await backend.createTask({ title: 'old' });
+    const s = await backend.startSession({
+      taskId: t.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    const lag = await snapshot(t.id);
+    await backend.setTaskTitle(t.id, 'new');
+    lag();
+    await backend.stopSession(s.id, 'completed');
+    expect((await stored(t.id)).title).toBe('new');
+  });
+
+  it('deleting a category straight after a rename keeps the title', async () => {
+    const { backend, snapshot, stored } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: true });
+    const to = await backend.upsertCategory({ label: 'New', isWork: true });
+    const t = await backend.createTask({ title: 'old', categoryId: cat.id });
+    const lag = await snapshot(t.id);
+    await backend.setTaskTitle(t.id, 'new');
+    lag();
+    await backend.deleteCategory(cat.id, to.id);
+    expect(await stored(t.id)).toMatchObject({ title: 'new', categoryId: to.id });
+  });
+});
+
+// The parent's lock, the timed-plan refusal and the sweep are decided on the task list read straight
+// after a task write. DynamoDB's default query is eventually consistent, so it can still show the task
+// as it was — the decision must not.
+describe('backend decisions under a lagging task list', () => {
   const setup = () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
@@ -379,7 +452,7 @@ describe('backend parent lock under a lagging task list', () => {
     // Every non-consistent list read for the next while shows `id` as it is now.
     const lagging = async (id: string) =>
       doc.staleNextQueries('u#local', sk.task(id), await doc.get('u#local', sk.task(id)), 20);
-    return { backend, lagging };
+    return { backend, lagging, doc };
   };
 
   it('a first start freezes the lock though the list still shows the part unstarted', async () => {
@@ -389,6 +462,70 @@ describe('backend parent lock under a lagging task list', () => {
     await lagging(a.id);
     await backend.transitionTask(a.id, 'in_progress');
     expect((await backend.getTask(p.id))?.estimateLockedMin).toBe(30);
+  });
+
+  it('option 3: “+ Today” straight after clearing a time is allowed though the list still shows it timed', async () => {
+    const { backend, lagging } = setup();
+    const t = await backend.createTask({ title: 'OA', dueDay: '2026-08-05', dueTime: '17:00' });
+    await lagging(t.id);
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: null });
+    const plan = { taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+    await expect(backend.upsertPlan(plan)).resolves.toMatchObject({ taskId: t.id });
+  });
+
+  it('option 3: “+ Today” straight after adding a time is refused though the list still shows it untimed', async () => {
+    const { backend, lagging } = setup();
+    const t = await backend.createTask({ title: 'OA' });
+    await lagging(t.id);
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-05', dueTime: '17:00' });
+    const plan = { taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+    await expect(backend.upsertPlan(plan)).rejects.toThrow(/falls on/);
+  });
+
+  it('option 3: the sweep re-judges the fresh copy — a time cleared since the list read keeps it planned', async () => {
+    const { backend, lagging, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    await backend.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
+    await backend.transitionTask(t.id, 'planned');
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-04', dueTime: '17:00' });
+    await lagging(t.id); // the list shows it planned and timed
+    await backend.setTaskDue(t.id, { dueDay: '2026-08-04', dueTime: null });
+    await backend.getDay('2026-08-04');
+    expect((await backend.getTask(t.id))?.status).toBe('planned');
+    expect(doc.gets.some((g) => g.key.endsWith(sk.task(t.id)) && g.consistent)).toBe(true);
+  });
+
+  it('option 3: the sweep reads plan rows consistently — a row just written keeps its task planned', async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const plan = await backend.upsertPlan({
+      taskId: t.id,
+      day: '2026-08-04',
+      plannedMinutes: 30,
+      order: 0,
+    });
+    await backend.transitionTask(t.id, 'planned');
+    doc.staleNextQueries('u#local', sk.plan('2026-08-04', 0, plan.id), null, 20); // row not visible yet
+    await backend.getDay('2026-08-04');
+    expect((await backend.getTask(t.id))?.status).toBe('planned');
+  });
+
+  it('option 3: a roll pick straight after clearing its rep’s time reuses the rep', async () => {
+    const { backend, lagging } = setup();
+    const roll = await backend.upsertRoll({ name: 'OA', categoryId: null, estimateMin: 30 });
+    const { task: rep } = await backend.pickRollToday(roll.id, '2026-08-04');
+    await backend.setTaskDue(rep.id, { dueDay: '2026-08-06', dueTime: '17:00' });
+    await lagging(rep.id); // the list shows it timed
+    await backend.setTaskDue(rep.id, { dueDay: '2026-08-06', dueTime: null });
+    expect((await backend.pickRollToday(roll.id, '2026-08-05')).task.id).toBe(rep.id);
+  });
+
+  it('a part’s first start returns it started though a plain read still shows it unstarted', async () => {
+    const { backend, doc } = setup();
+    const p = await backend.createTask({ title: 'P2' });
+    const a = await backend.createTask({ title: 'a', estimateMin: 30, parentId: p.id });
+    doc.staleNextGets('u#local', sk.task(a.id), await doc.get('u#local', sk.task(a.id)), 20);
+    expect((await backend.transitionTask(a.id, 'in_progress')).status).toBe('in_progress');
   });
 
   it('detaching the last part releases the lock though the list still shows it attached', async () => {

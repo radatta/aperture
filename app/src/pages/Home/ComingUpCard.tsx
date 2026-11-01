@@ -16,7 +16,8 @@ import { CardLink, HomeCard } from './HomeCard';
 // urgency colour as its time nears or passes (dueStyle.ts).
 export function ComingUpCard() {
   const { data: settings } = useSettings();
-  const today = todayKey(settings?.dayStartHour ?? 4);
+  const dayStartHour = settings?.dayStartHour ?? 4;
+  const today = todayKey(dayStartHour);
   const { rows } = useTodayPlan();
   const { data: allTasks = [], isPending, isError } = useAllTasks();
   const now = useNow();
@@ -25,7 +26,7 @@ export function ComingUpCard() {
     ...rows.map((r) => r.task.id),
     ...allTasks.filter((t) => t.status === 'in_progress').map((t) => t.id),
   ]);
-  const cu = comingUp(allTasks, today, excludeIds);
+  const cu = comingUp(allTasks, today, excludeIds, dayStartHour);
   const moreLabel =
     cu.moreThisWeek > 0
       ? `+${cu.moreThisWeek} more this week`
@@ -79,7 +80,7 @@ export function ComingUpCard() {
                   )}
                 </div>
                 <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay!, today, t.dueTime)}
+                  {fmtDueDay(t.dueDay!, today, t.dueTime, { dayStartHour })}
                   {label && <span className="sr-only">, {label}</span>}
                 </Text>
               </div>

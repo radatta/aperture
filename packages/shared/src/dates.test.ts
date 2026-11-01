@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   addDays,
+  beforeDayStart,
   dayKey,
   dayKeyForOffset,
   dayKeyInZone,
@@ -185,13 +186,33 @@ describe('fmtDueDay — relative deadline phrasing', () => {
     expect(fmtDueDay('2026-06-22', today, null)).toBe('due Jun 22'); // untimed unchanged
   });
   it("a part's own time reads as when its block ends, never a deadline", () => {
-    expect(fmtDueDay(today, today, '15:00', 'ends')).toBe('ends today 3pm');
-    expect(fmtDueDay('2026-06-16', today, null, 'ends')).toBe('ends tomorrow');
-    expect(fmtDueDay('2026-06-14', today, null, 'ends')).toBe('ended yesterday');
-    expect(fmtDueDay('2026-06-19', today, '17:00', 'ends')).toBe('ends Fri 5pm');
-    expect(fmtDueDay('2026-06-09', today, null, 'ends')).toBe('ended Tue');
-    expect(fmtDueDay('2026-06-22', today, null, 'ends')).toBe('ends Jun 22');
-    expect(fmtDueDay('2026-06-08', today, null, 'ends')).toBe('ended Jun 8');
+    expect(fmtDueDay(today, today, '15:00', { verb: 'ends' })).toBe('ends today 3pm');
+    expect(fmtDueDay('2026-06-16', today, null, { verb: 'ends' })).toBe('ends tomorrow');
+    expect(fmtDueDay('2026-06-14', today, null, { verb: 'ends' })).toBe('ended yesterday');
+    expect(fmtDueDay('2026-06-19', today, '17:00', { verb: 'ends' })).toBe('ends Fri 5pm');
+    expect(fmtDueDay('2026-06-09', today, null, { verb: 'ends' })).toBe('ended Tue');
+    expect(fmtDueDay('2026-06-22', today, null, { verb: 'ends' })).toBe('ends Jun 22');
+    expect(fmtDueDay('2026-06-08', today, null, { verb: 'ends' })).toBe('ended Jun 8');
+  });
+  it('tomorrow’s small hours are tonight’s, given the day start; without it, as written', () => {
+    const h = { dayStartHour: 4 };
+    expect(fmtDueDay('2026-06-16', today, '00:30', h)).toBe('due tonight 12:30am');
+    expect(fmtDueDay('2026-06-16', today, '03:59', h)).toBe('due tonight 3:59am');
+    expect(fmtDueDay('2026-06-16', today, '04:00', h)).toBe('due tomorrow 4am');
+    expect(fmtDueDay('2026-06-16', today, '00:30', { verb: 'ends', dayStartHour: 4 })).toBe(
+      'ends tonight 12:30am',
+    );
+    expect(fmtDueDay(today, today, '02:00', h)).toBe('due today 2am'); // past: as written
+    expect(fmtDueDay('2026-06-16', today, '00:30')).toBe('due tomorrow 12:30am');
+    expect(fmtDueDay('2026-06-16', today, '00:30', { dayStartHour: 0 })).toBe(
+      'due tomorrow 12:30am',
+    );
+  });
+  it('beforeDayStart: the small hours, by clock', () => {
+    expect(beforeDayStart('00:00', 4)).toBe(true);
+    expect(beforeDayStart('03:59', 4)).toBe(true);
+    expect(beforeDayStart('04:00', 4)).toBe(false);
+    expect(beforeDayStart('00:00', 0)).toBe(false);
   });
 
   // The trap: at 2:30am the wall-clock date has rolled but the logical day (4am start) hasn't. A task

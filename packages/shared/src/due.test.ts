@@ -4,6 +4,7 @@ import {
   dueUrgency,
   eventWindow,
   MARKER_MIN,
+  nightDueDay,
   normalizeDue,
   syncWindow,
 } from './due';
@@ -85,5 +86,17 @@ describe('dueUrgency — the boundaries', () => {
     expect(dueUrgency({ ...task, status: 'done' }, due + H, epoch)).toBe('none');
     expect(dueUrgency({ ...task, status: 'cancelled' }, due + H, epoch)).toBe('none');
     expect(dueUrgency({ ...task, status: 'in_progress' }, due + H, epoch)).toBe('past');
+  });
+});
+
+describe('nightDueDay — a small-hours clock on today is tonight', () => {
+  const today = '2026-10-30';
+  it('moves today + a pre-day-start clock to the next date; anything else stays', () => {
+    expect(nightDueDay(today, '02:30', today, 4)).toBe('2026-10-31');
+    expect(nightDueDay(today, '04:00', today, 4)).toBe(today);
+    expect(nightDueDay(today, '09:00', today, 4)).toBe(today); // already past: stays today
+    expect(nightDueDay('2026-10-31', '01:00', today, 4)).toBe('2026-10-31'); // "tomorrow 1am"
+    expect(nightDueDay('2026-10-29', '02:00', today, 4)).toBe('2026-10-29');
+    expect(nightDueDay(today, '02:30', today, 0)).toBe(today);
   });
 });
