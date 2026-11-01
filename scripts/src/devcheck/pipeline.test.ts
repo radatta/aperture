@@ -67,7 +67,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   // A response the page got with `status` (a throttled call: 429).
   const respond = (path: string, status: number) => {
     const res = {
-      url: () => `https://dev.aperture.rahuldatta.dev${path}`,
+      url: () =>
+        path.startsWith('https://') ? path : `https://dev.aperture.rahuldatta.dev${path}`,
       status: () => status,
       request: () => ({ method: () => 'POST' }),
       json: async () => ({}),
@@ -174,9 +175,15 @@ describe('runPipeline', () => {
       x.respond('/api/getDay', 200);
       x.respond('/assets/index.js', 429);
       x.respond('/api/getDay', 429);
+      x.respond('https://cdn.example.com/api/listTasks', 429);
     })(w);
     const r = await runPipeline(deps(w, [sc]));
-    expect(r.throttled).toEqual(['/api/listTasks', '/assets/index.js', '/api/getDay']);
+    expect(r.throttled).toEqual([
+      '/api/listTasks',
+      '/assets/index.js',
+      '/api/getDay',
+      'cdn.example.com/api/listTasks',
+    ]);
   });
 
   it('a failed step skips the rest of its scenario, and cleanup still runs', async () => {
