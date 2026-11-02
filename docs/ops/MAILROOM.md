@@ -27,7 +27,7 @@ pnpm mailroom open-pr --title T
 
 ## The token
 
-The mailroom uses **no `gh`, no `git`, and never the user's own GitHub login**. It has its own fine-grained PAT. That token reaches only `curl`, only `https://api.github.com`, and only the five calls above.
+The mailroom uses **no `gh`, no `git`, and never the user's own GitHub login**. It has its own fine-grained PAT. That token reaches only `curl`, and only `https://api.github.com`. The runner makes the five calls above, and `install.sh` makes its own reads: `commits/main`, and the files at one commit (_Install_).
 
 **Spec:**
 
@@ -38,7 +38,7 @@ The mailroom uses **no `gh`, no `git`, and never the user's own GitHub login**. 
 
 To create it: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. This one was created 2026-11-01.
 
-**It lives only in the Mac's Keychain**, as generic-password item `aperture-mailroom-gh`, read by `security find-generic-password -s aperture-mailroom-gh -w`. **Never put it in a file under the repo folder.** `/workspace` _is_ the Mac's repo folder, so every file there (`.hostjobs/` and the worktrees included) is readable by the container. A token stored there becomes the container's token. `runner-fixtures.test.ts` checks that the runner and `install.sh` read the token from no other source: no environment variable, no file, nothing on argv. The token reaches `curl` as a header through a process-substituted file, the `tools/raycast` idiom.
+**It lives only in the Mac's Keychain**, as generic-password item `aperture-mailroom-gh`, read by `security find-generic-password -s aperture-mailroom-gh -w`. **Never put it in a file under the repo folder.** `/workspace` _is_ the Mac's repo folder, so every file there (`.hostjobs/` and the worktrees included) is readable by the container. A token stored there becomes the container's token. `runner-fixtures.test.ts` checks that the runner reads the token from no other source: no environment variable, no file, nothing on argv. For `install.sh` it checks that the token comes from `security` and reaches `curl` through the header file. The token reaches `curl` as a header through a process-substituted file, the `tools/raycast` idiom.
 
 What the docs settle (2026-11-01, [fine-grained PAT permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)):
 
@@ -67,25 +67,26 @@ The first add is the same command without `-U`. With no value after `-w`, `secur
 The installed runner is the **trust boundary**. launchd only ever runs `~/Library/Application Support/aperture-mailroom/bin/`, never the repo's copy, which the container can write. `install.sh` fills that folder **from GitHub, at one commit**: by default `main`'s head, which is code the user approved and merged. It fetches `runner.sh`, `jobs/*.sh` and the plist template with the mailroom token (Contents: read). It never copies a local file. `install.sh` itself is fetched the same way, so nothing from the shared folder is trusted. Run it on the Mac, from the main checkout:
 
 ```sh
-cd /Users/rahuldatta/Coding/Personal/aperture && bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/mailroom/install.sh?ref=main')
+cd /Users/rahuldatta/Coding/Personal/aperture && /bin/bash <(curl -sSf -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github.raw+json' 'https://api.github.com/repos/radatta/aperture/contents/tools/mailroom/install.sh?ref=main')
 ```
 
-It needs only what macOS 15+ ships: `bash` 3.2, `jq`, `curl`, `security`, `launchctl`, `plutil` and `shasum`. In order, it:
+This line is also what the CLI prints when the installed runner is out of date (`INSTALL_LINE` in `open-pr.ts`). It needs only what macOS 15+ ships: `/bin/bash` 3.2, `jq`, `curl`, `security`, `launchctl`, `plutil` and `shasum`. In order, it:
 
 1. Resolves main's head.
 2. Fetches the files at that commit.
 3. Computes `VERSION`: the sha256 of `runner.sh` followed by `jobs/*.sh`.
-4. Renders the plist.
-5. Prints the diff against what's installed (runner, jobs and plist).
-6. Swaps the new copy in.
-7. Creates `.hostjobs/{staging,inbox,results}` and writes `.hostjobs/installed.json` (installed at, version, commit, mode).
-8. Loads the agent with `launchctl bootout` then `bootstrap`, retrying while the old instance tears down.
+4. Renders and lints the plist.
+5. Checks that `.hostjobs/{staging,inbox,results}` are not symlinks and creates them. This happens before anything is swapped, so a refusal never leaves a half-install.
+6. Prints the diff against what's installed (runner, jobs and plist).
+7. Swaps the new copy in.
+8. Writes `.hostjobs/installed.json` (installed at, version, commit, mode). This is only a hint, since the container could forge it, so a failed write doesn't stop the install.
+9. Loads the agent with `launchctl bootout` then `bootstrap`, retrying while the old instance tears down.
 
 **Re-run it after a merge that changes `tools/mailroom/`.** The CLI warns when a result's `runnerVersion` differs from the worktree's.
 
 Other uses:
 
-- **Before a merge.** Only the mailroom's own feature branch needs this, for its trial. Use `?ref=<sha>` in the URL plus `--ref <sha>`. The script prints `NOT main's head`. That commit is container-pushed, so read what it installs, then re-run from `main` once it merges.
+- **Before a merge.** Only the mailroom's own feature branch needs this, for its trial. Use `?ref=<sha>` in the URL plus `--ref <sha>`. That commit is bot-pushed and nobody has approved it, and its `install.sh` runs directly on the Mac. So **first read `tools/mailroom/` at that commit on github.com**. The script then prints `NOT main's head` and asks `[y/N]` before swapping anything in. Re-run from `main` once it merges.
 - **`--mode poll`** swaps the folder watch for a 15 s timer. Use it if QueueDirectories never fires on the shared folder (_Trial_).
 - **`--uninstall`** removes the agent and the installed copy. It keeps `.hostjobs/` and the Keychain item. Remove those with `security delete-generic-password -s aperture-mailroom-gh`, and revoke the token on GitHub.
 - **The log** is `~/Library/Logs/aperture-mailroom/agent.log`. It holds codes, ids, durations and HTTP statuses, never the token or the body.
@@ -102,10 +103,10 @@ Other uses:
 1. Refuses a detached HEAD, a deploy branch, or an unpushed branch (`pnpm bot push` first).
 2. Lints the title and body with the runner's fast-pass rules and prints a fix-it hint on failure.
 3. Skips the job if the container's read-only `gh` already sees an open PR. This check is best-effort.
-4. Submits the job and waits **75 s plus 30 s of grace**. That keeps it under the Bash tool's 120 s default timeout. A killed caller would leave the job queued.
-5. Checks that the result's `bodySha256` matches the file.
+4. Submits the job and waits **75 s plus 30 s of grace**, counted from when the command started. That keeps it under the Bash tool's 120 s default timeout, because a killed caller would leave the job queued.
+5. Checks that the result's `bodySha256` matches the file, and that the PR's head is the pushed sha. A push that landed mid-job fails loudly.
 
-Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire. The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits the grace period. It then prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
+Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire. The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
 
 ```sh
 cd <Mac worktree> && gh pr create --title "…" --body-file localNotes/pr-<branch>.md
@@ -149,14 +150,19 @@ The rules, checked before any network call:
 The **body travels inside the job**, so the runner never reads a path the container names. It's checked twice:
 
 1. **The fast pass** runs in jq on the Mac, and in `validateJob` in the container so the error comes early and can be fixed. It refuses:
-   - C0/C1 controls (tab and newline allowed), the soft hyphen, zero-width and invisible characters, line/paragraph separators, bidi controls, BOM, U+FFFD and tag characters;
+   - C0/C1 controls (tab and newline allowed), the soft hyphen, zero-width and invisible characters, line/paragraph separators, bidi controls (U+061C included), BOM, U+FFFD, tag characters, variation selectors, and Hangul and Mongolian fillers;
    - any HTML entity (`&#x40;octocat` renders as a mention);
    - `@login`, `#<n>` and `GH-<n>`;
-   - links to _another_ repo's issue, PR or discussion, which would post a cross-reference there.
+   - links to _another_ repo's issue, PR or discussion, which would post a cross-reference there. This one applies to the title too, since GitHub links titles.
 
    Text inside fenced blocks and exact-run backtick spans is exempt, so `` `@types/node` `` is fine.
 
-2. **GitHub's renderer has the last word.** The runner sends the body to `POST /markdown` (`gfm`, context `radatta/aperture`). It refuses `MENTION` if the HTML holds a `user-mention` or `team-mention`, and `XREF` if it holds an `issue-link` outside this repo. This catches what a regex can't see: indented or tilde fences, HTML blocks, link titles and entities. Round 1's review found 8 such bypasses of the fast pass. The classes were checked against the live renderer on 2026-11-01 with `gh api markdown`: `@octocat`, `&#x40;octocat` and cross-repo URLs all render with those classes, and code spans don't.
+2. **GitHub's renderer has the last word.** The runner sends the title and body to `POST /markdown` (`gfm`, context `radatta/aperture`) and scans the HTML in jq (`RENDER_JQ`). First, GitHub decides what is code: `<pre>` and `<code>` are dropped. Then it refuses:
+   - `MENTION`, for a `user-mention` or `team-mention` class;
+   - `XREF`, for an `issue-link` outside this repo, or a foreign issue URL anywhere in the HTML, attributes included;
+   - `MENTION` or `HASH_REF`, for the fast-pass patterns over what's left as text, once tags and this repo's own issue links are removed.
+
+   The text scan matters because the token sees only this repo. A reference to a private repo or team the token can't see renders as plain text, not as a link with a class, but GitHub would still process it as the user when the PR is made. Rendering catches what a regex over markdown can't see: indented or tilde fences, HTML blocks, link titles, entities. Round 1's review found 8 such bypasses of the fast pass. The scan runs in one jq call, with no pipe. Round 2 found that `grep -o | grep -q` under `pipefail` passed silently on large HTML because of SIGPIPE. The classes were checked against the live renderer on 2026-11-01 with `gh api markdown`: `@octocat`, `&#x40;octocat` and cross-repo URLs all render with those classes, and code spans don't.
 
 These rules are the CLAUDE.md _PR bodies_ rule, enforced where it counts. Without them, a compromised container could ping any login as the user. The repo is private, so only people with access would be notified, but the guard still holds.
 
@@ -211,8 +217,8 @@ Some entries never get a result:
    1. `GET /user`: the login must be `radatta`, and the token's expiry is read here.
    2. `GET …/git/ref/heads/<branch>`: the ref must equal `sha`. A 404 is `HEAD_MISSING`.
    3. `GET …/pulls?head=radatta:<branch>&state=open`: a hit returns `exists`.
-   4. `POST /markdown`: the render check.
-   5. `POST …/pulls` with `{title, head, base: "main", body, draft: false, maintainer_can_modify: false}`: it must return 201, and the URL, author and head in the response are checked. **This is the one write, ever.**
+   4. `POST /markdown` on the title and body: the render check.
+   5. `POST …/pulls` with `{title, head, base: "main", body, draft: false, maintainer_can_modify: false}`: it must return 201, and the response's URL and author are checked. **This is the one write, ever.** The CLI then compares the PR's head with the pushed sha.
 6. **Writes the result.** It `mkdir`s `results/<id>` from the pinned cwd, `cd`s in, re-verifies `pwd -P`, refuses a pre-existing `result.json`, and writes with noclobber.
 
 ## Security
@@ -237,14 +243,15 @@ Residual risks:
 - A credential with the user's identity sits in the Mac Keychain. That's the same posture as the Raycast prod token.
 - The token can also comment on or review PRs opened by others. None exist on this repo.
 - Noclobber in bash still writes through a pre-planted symlink to an existing _non-regular_ file. A FIFO planted into the fresh result dir in the instant between the pre-check and the write could hang the runner. That's DoS only: kill the stuck run. The narrow race carries no data.
-- The trust in `install.sh` rests on the one-line fetch above. A container that controls the line Claude hands over could hand over a different one, so take the command from this doc.
+- The trust in `install.sh` rests on the one-line fetch above. A compromised container could hand over a different line, and the local copy of this doc is writable from the container too. So check the line against [this doc on github.com at `main`](https://github.com/radatta/aperture/blob/main/docs/ops/MAILROOM.md#install-update-remove).
+- Before its own merge, the mailroom's trial installs a bot-pushed commit (_Install_ → before a merge). That's one install, gated by reading the code at that commit on github.com and by the `[y/N]` prompt. It's superseded by the `main` install at merge.
 
 ## Trial
 
 The trial runs at dev test with the real install. A Claude session on the Mac does it, working in the worktree, and writes findings to `localNotes/trial/findings.md`.
 
 1. **Fixtures:** run `bash tools/mailroom/run-fixtures.sh`. On Darwin it re-executes itself under `/bin/bash` 3.2 with the system `PATH`, as launchd would. Want `0 failed`.
-2. **Install:** the branch's commit, using the `--ref` form under _Install_. `launchctl print` should show the label and the inbox path, with no error.
+2. **Install:** the branch's commit, using the `--ref` form under _Install_. First read `tools/mailroom/` at that sha on github.com, then answer `y`. `launchctl print` should show the label and the inbox path, with no error.
 3. **Probe:** the container runs `pnpm mailroom probe`. Want `probe ok`, a latency, and the token expiry.
    - No result in time: re-install with `--mode poll` and re-probe. That's a logged design change, not a kill.
    - `TOKEN_MISSING`: run `security find-generic-password -s aperture-mailroom-gh -w >/dev/null` once from Terminal, click Always Allow, and re-probe.
@@ -273,7 +280,12 @@ Still UNVERIFIED until the trial runs:
   - that the inbox is empty afterwards;
   - for the canonical case, the exact `/markdown` and `/pulls` request bodies.
 
-  The cases include a hard-linked entry, which mutation-tested as load-bearing. They also include a symlinked `.hostjobs`, every reviewer bypass body, which must reach the render check, and each reason code.
+  The suite passes only if every case ran, so a harness that ran nothing fails. The cases include several that were mutation-tested as load-bearing:
+  - a hard-linked entry;
+  - a `.hostjobs` under a symlinked parent, which tests the real-path pin;
+  - a foreign link before 1,000 of this repo's own, which tests the SIGPIPE fix. It needs about 100 KiB of HTML to overflow the pipe buffer; 100 links did not.
+
+  They also include every reviewer bypass body, each of which must reach the render check, plain-text mentions and references in the render, and each reason code.
 
 - **`scripts/src/mailroom/runner-fixtures.test.ts`** runs that suite inside `pnpm test` and CI. It also statically checks:
   - the one token source;

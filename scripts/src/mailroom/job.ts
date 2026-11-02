@@ -82,13 +82,17 @@ export function makeOpenPrJob(
 export const visible = (body: string) => body.replace(FENCE_RE, '\n').replace(SPAN_RE, ' ');
 
 // Any hidden or control character: C0 except tab/newline, DEL + C1, soft hyphen, zero-width, line/paragraph
-// separators, invisible operators, bidi, BOM, U+FFFD, tag characters — and any HTML entity (`&#x40;` renders as @).
+// separators, invisible operators, bidi (incl. U+061C), BOM, U+FFFD, tag characters, variation selectors, Hangul
+// and Mongolian fillers — and any HTML entity (`&#x40;` renders as @).
 const ENTITY_RE = /&#|&[A-Za-z][A-Za-z0-9]*;/;
+const FILLERS = [0xad, 0x61c, 0x115f, 0x1160, 0x180e, 0x3164, 0xffa0];
 function hiddenChar(s: string): boolean {
   if (ENTITY_RE.test(s)) return true;
   for (const ch of s) {
     const c = ch.codePointAt(0) ?? 0;
-    if ((c < 32 && c !== 9 && c !== 10) || (c >= 127 && c <= 159) || c === 0xad) return true;
+    if ((c < 32 && c !== 9 && c !== 10) || (c >= 127 && c <= 159) || FILLERS.includes(c))
+      return true;
+    if (c >= 0xfe00 && c <= 0xfe0f) return true;
     if (
       (c >= 0x200b && c <= 0x200f) ||
       (c >= 0x2028 && c <= 0x202e) ||
@@ -127,6 +131,7 @@ export function validateJob(job: unknown, stem: string, nowMs: number): Reason |
     return 'BAD_PARAM';
   if (!str(p.sha) || !SHA_RE.test(p.sha)) return 'BAD_PARAM';
   if (!str(p.title) || !TITLE_RE.test(p.title)) return 'BAD_PARAM';
+  if (XREF_RE.test(p.title)) return 'XREF';
   if (!str(p.body)) return 'BAD_PARAM';
   const bytes = Buffer.byteLength(p.body, 'utf8');
   if (bytes < 1 || bytes > MAX_BODY_BYTES) return 'BAD_PARAM';

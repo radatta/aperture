@@ -1,5 +1,5 @@
 // The Mac runner's own suite (bash + jq, curl/security stubbed) as part of `pnpm test`, plus static checks on
-// what the runner may touch: the token's one source and the four fixed GitHub calls. docs/ops/MAILROOM.md.
+// what the runner may touch: the token's one source and the five fixed GitHub calls. docs/ops/MAILROOM.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -77,6 +77,9 @@ describe('mailroom runner', () => {
       ' -X ',
     ])
       expect(src).not.toContain(banned);
+    // Every copy comes from the staged GitHub fetch.
+    for (const l of src.split('\n').filter((x) => /^\s*cp\s/.test(x)))
+      expect(l).toMatch(/^\s*cp "\$stage/);
     const calls = src.split('\n').filter((l) => /^\s*curl\s/.test(l));
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('-H @<(printf \'Authorization: Bearer %s\\n\' "$TOKEN")');

@@ -88,13 +88,25 @@ tmpl="${tmpl//@STATE@/$APP/state}"
 tmpl="${tmpl//@LOG@/$LOG}"
 tmpl="${tmpl//@TRIGGER@/$trigger}"
 printf '%s\n' "$tmpl" >"$stage/$LABEL.plist"
-plutil -lint "$stage/$LABEL.plist" >/dev/null
+plutil -lint "$stage/$LABEL.plist" >/dev/null || die "the rendered plist is invalid: $(plutil -lint "$stage/$LABEL.plist")"
+
+# The shared folder the container writes into, checked before anything is swapped (no half-install). Refuse
+# symlinks: the runner would refuse them anyway.
+for d in "$HJ" "$HJ/staging" "$HJ/inbox" "$HJ/results"; do
+  [ ! -L "$d" ] || die "$d is a symlink — remove it and re-run"
+  mkdir -p "$d"
+done
 
 echo "== installing $REPO_SLUG@${ref:0:12} — changes against what is installed:"
 mkdir -p "$APP/bin/jobs" "$APP/state" "$(dirname "$LOG")" "$(dirname "$PLIST")"
 diff -ru "$APP/bin" "$stage/bin" || true
 diff -u "$PLIST" "$stage/$LABEL.plist" 2>/dev/null || true
-[ "$ref" = "$main_sha" ] || echo "!! $ref is NOT main's head — an unmerged commit. Re-run without --ref once it merges."
+if [ "$ref" != "$main_sha" ]; then
+  echo "!! $ref is NOT main's head — an unmerged commit nobody has approved. Read tools/mailroom/ at that commit on"
+  echo "!! github.com first (MAILROOM.md → Trial), and re-run without --ref once it merges."
+  read -r -p "Install this unmerged commit? [y/N] " answer
+  [ "$answer" = y ] || die "not installed"
+fi
 
 rm -f "$APP/bin/runner.sh" "$APP/bin/VERSION" "$APP"/bin/jobs/*.sh
 cp "$stage/bin/runner.sh" "$stage/bin/VERSION" "$APP/bin/"
@@ -102,20 +114,15 @@ cp "$stage"/bin/jobs/*.sh "$APP/bin/jobs/"
 chmod 700 "$APP/bin/runner.sh"
 cp "$stage/$LABEL.plist" "$PLIST"
 
-# The shared folder the container writes into. Refuse symlinks: the runner would refuse them anyway.
-for d in "$HJ" "$HJ/staging" "$HJ/inbox" "$HJ/results"; do
-  [ ! -L "$d" ] || die "$d is a symlink — remove it and re-run"
-  mkdir -p "$d"
-done
-
-# The stamp the container reads to tell "never installed" from "asleep" (pnpm mailroom → MAC_UNREACHABLE).
+# The stamp the container reads to tell "never installed" from "asleep" (pnpm mailroom → MAC_UNREACHABLE). Only
+# a hint — the container can forge it — so a failure to write it doesn't stop the install.
 version="$(cat "$APP/bin/VERSION")"
 rm -f "$HJ/installed.json"
 (
   set -C
   jq -n --arg v "$version" --arg ref "$ref" --arg mode "$mode" \
     '{installedAt: (now | todate), runnerVersion: $v, ref: $ref, mode: $mode}' >"$HJ/installed.json"
-)
+) 2>/dev/null || echo "note: could not write $HJ/installed.json (something replaced it) — the agent is still installed"
 
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 # bootout returns before the old instance is gone; bootstrap can fail ("5: Input/output error") until it is.

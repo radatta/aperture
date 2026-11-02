@@ -10,6 +10,9 @@ MR_REPO="radatta/aperture"
 MR_API="https://api.github.com"
 MR_KEYCHAIN="aperture-mailroom-gh" # the ONLY token source: the Mac Keychain, never a file under the repo folder
 
+# A link to another repo's issue, PR or discussion (GitHub posts a cross-reference there).
+MR_XREF='[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]/(?!radatta/aperture/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull|discussions)/[0-9]'
+
 # Prints a reason code, or nothing when the params are good.
 OPEN_PR_JQ='
   def visible:
@@ -20,7 +23,8 @@ OPEN_PR_JQ='
     explode | any(. as $c | ($c < 32 and $c != 9 and $c != 10) or ($c >= 127 and $c <= 159)
       or $c == 173 or ($c >= 8203 and $c <= 8207) or $c == 8232 or $c == 8233 or ($c >= 8234 and $c <= 8238)
       or ($c >= 8288 and $c <= 8292) or ($c >= 8294 and $c <= 8297) or $c == 65279 or $c == 65533
-      or ($c >= 917504 and $c <= 917631));
+      or ($c >= 917504 and $c <= 917631) or $c == 1564 or $c == 4447 or $c == 4448 or $c == 6158 or $c == 12644
+      or ($c >= 65024 and $c <= 65039) or $c == 65440);
   try (
     .params as $p
     | if ($p | type) != "object" or ($p | keys) != ["body","bodySha256","branch","sha","title"] then "BAD_PARAM"
@@ -28,18 +32,36 @@ OPEN_PR_JQ='
       or (["main","master","dev"] | index($p.branch)) != null then "BAD_PARAM"
     elif ($p.sha | type) != "string" or ($p.sha | whole("^[0-9a-f]{40}$") | not) then "BAD_PARAM"
     elif ($p.title | type) != "string" or ($p.title | whole("^[A-Za-z0-9][A-Za-z0-9 .,:;()/+_&'"'"'-]{3,99}$") | not) then "BAD_PARAM"
+    elif ($p.title | test($xref)) then "XREF"
     elif ($p.body | type) != "string" or ($p.body | utf8bytelength) < 1 or ($p.body | utf8bytelength) > 65536 then "BAD_PARAM"
     elif ($p.bodySha256 | type) != "string" or ($p.bodySha256 | whole("^[0-9a-f]{64}$") | not) then "BAD_PARAM"
     elif ($p.body | hidden_chars) or ($p.body | test("&#|&[A-Za-z][A-Za-z0-9]*;")) then "BAD_TEXT"
     elif ($p.body | visible | test("(^|[^A-Za-z0-9_])@[A-Za-z0-9]")) then "MENTION"
     elif ($p.body | visible | test("#[0-9]|(^|[^A-Za-z0-9_])GH-[0-9]")) then "HASH_REF"
-    elif ($p.body | visible | test("[Gg][Ii][Tt][Hh][Uu][Bb]\\.[Cc][Oo][Mm]/(?!radatta/aperture/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull|discussions)/[0-9]")) then "XREF"
+    elif ($p.body | visible | test($xref)) then "XREF"
     else empty end
   ) catch "BAD_PARAM"'
 
+# Over the rendered HTML: a reason code, or nothing. GitHub decides what is code (<pre>, <code> go first), and an
+# issue link GitHub made for this repo is fine; then mention / reference classes, any foreign issue URL (in text or
+# an attribute — the token may not see a private repo, so GitHub won't always mark it), and the fast-pass patterns
+# over what is left as text.
+RENDER_JQ='
+  gsub("<pre[\\s>][\\s\\S]*?</pre>"; " ") | gsub("<code[\\s>][\\s\\S]*?</code>"; " ")
+  | if test("class=\"[^\"]*(user-mention|team-mention)") then "MENTION"
+    elif ([match("<a [^>]*class=\"[^\"]*issue-link[^>]*>"; "g") | .string
+          | select(contains("href=\"https://github.com/radatta/aperture/") | not)] | length) > 0 then "XREF"
+    elif test($xref) then "XREF"
+    else gsub("<a [^>]*class=\"[^\"]*issue-link[^\"]*\"[^>]*href=\"https://github\\.com/radatta/aperture/[^\"]*\"[^>]*>[\\s\\S]*?</a>"; " ")
+      | gsub("<[^>]*>"; " ")
+      | if test("(^|[^A-Za-z0-9_])@[A-Za-z0-9]") then "MENTION"
+        elif test("#[0-9]|(^|[^A-Za-z0-9_])GH-[0-9]") then "HASH_REF"
+        else empty end
+    end'
+
 validate_open_pr() {
   local w="$1" reason
-  reason="$(jq -r "$OPEN_PR_JQ" "$w" 2>/dev/null)" || reason="BAD_PARAM"
+  reason="$(jq -r --arg xref "$MR_XREF" "$OPEN_PR_JQ" "$w" 2>/dev/null)" || reason="BAD_PARAM"
   if [ -z "$reason" ] && [ "$(jq -j .params.body "$w" | sha256)" != "$(jq -r .params.bodySha256 "$w")" ]; then
     reason="BAD_PARAM" # the body changed in transit, or the container hashed something else
   fi
@@ -129,16 +151,13 @@ run_open_pr() {
   pr="$(jq -c '.[0] // empty' "$MR_P.resp" 2>/dev/null | mr_pr_json)"
   if [ -n "$pr" ]; then mr_emit exists - "$pr"; return 0; fi
 
-  # GitHub's own renderer has the last word on what the body links (the jq checks above are the fast first pass).
-  jq -c --arg ctx "$MR_REPO" '{text: .params.body, mode: "gfm", context: $ctx}' "$w" >"$MR_P.md"
+  # GitHub's own renderer has the last word on what the title + body link (the jq checks above are the fast pass).
+  jq -c --arg ctx "$MR_REPO" '{text: (.params.title + "\n\n" + .params.body), mode: "gfm", context: $ctx}' "$w" >"$MR_P.md"
   mr_call POST /markdown "$MR_P.md"
   fail="$(mr_failure 200)"
   if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
-  if grep -qE 'class="[^"]*(user-mention|team-mention)' "$MR_P.resp"; then mr_emit rejected MENTION; return 0; fi
-  if grep -oE '<a [^>]*class="[^"]*issue-link[^>]*>' "$MR_P.resp" | grep -qv "href=\"https://github.com/$MR_REPO/"; then
-    mr_emit rejected XREF
-    return 0
-  fi
+  fail="$(jq -Rsr --arg xref "$MR_XREF" "$RENDER_JQ" "$MR_P.resp" 2>/dev/null || echo API_FAILED)"
+  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
 
   jq -c --arg base main '{title: .params.title, head: .params.branch, base: $base, body: .params.body,
     draft: false, maintainer_can_modify: false}' "$w" >"$MR_P.post"

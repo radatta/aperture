@@ -109,6 +109,9 @@ while IFS= read -r c; do
       rmdir "$hj/inbox"; ln -s "$T/elsewhere" "$hj/inbox" ;;
     hj-symlink)
       mv "$hj" "$T/real-hj"; ln -s "$T/real-hj" "$hj"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    parent-symlink)
+      mkdir "$T/realparent"; mv "$hj" "$T/realparent/hj"; ln -s "$T/realparent" "$T/lnk"; hj="$T/lnk/hj"
+      mv "$hj/staging/x" "$hj/inbox/$file" ;;
     hardlink)
       mv "$hj/staging/x" "$hj/staging/mine"; ln "$hj/staging/mine" "$hj/inbox/$file" ;;
     results-symlink)
@@ -171,5 +174,6 @@ while IFS= read -r c; do
   rm -r -f -- "$T"
 done < <(tail -n +3 "$CASES")
 
-echo "# $pass passed, $failed failed"
-[ "$failed" = 0 ]
+cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2))"
+echo "# $pass passed, $failed failed, of $cases cases"
+[ "$failed" = 0 ] && [ "$pass" = "$cases" ] # a harness that ran nothing must not pass

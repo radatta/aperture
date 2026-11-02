@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeClock, fakeRun } from '../bot/fakes.ts';
 import { sha256 } from './job.ts';
 import { memFs } from './fakes.ts';
-import { EXIT, RENEW_LINE, WAIT_MS, macPath, openPr, probe } from './open-pr.ts';
+import { EXIT, INSTALL_LINE, RENEW_LINE, WAIT_MS, macPath, openPr, probe } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
 import type { Result } from './submit.ts';
 
@@ -157,6 +157,34 @@ describe('openPr', () => {
     expect(calls.some((c) => c.cmd === 'gh')).toBe(true);
   });
 
+  it('fails loudly when the PR opened on a different commit', async () => {
+    const { d, logs } = setup({
+      mac: (job) => ({ ...opened(job), pr: { ...PR, headSha: 'b'.repeat(40) } }),
+    });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.failed);
+    expect(logs.at(-1)).toMatch(/push landed mid-job/);
+  });
+
+  it('says the PR may still open when the Mac took the job but never answered', async () => {
+    const { d, fs, logs } = setup({ mac: () => null });
+    fs.onRename = (_from, to) => {
+      if (to.includes('/inbox/')) fs.files.delete(to); // the Mac takes it, then goes quiet
+    };
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
+    expect(logs.join('\n')).toMatch(/may still open the PR[\s\S]*gh pr list --head mac-mailroom/);
+  });
+
+  it('counts time spent before submit against the wait budget', async () => {
+    const { d, logs } = setup({ mac: () => null });
+    const run = d.run;
+    d.run = ((cmd: string, args: string[]) => {
+      if (cmd === 'gh') d.clock.sleep(40_000); // a slow container-side check
+      return run(cmd, args);
+    }) as Deps['run'];
+    await openPr(d, 'Mac mailroom opens PRs');
+    expect(logs.find((l) => l.startsWith('submitted'))).toMatch(/up to 35 s/);
+  });
+
   it('fails loudly when the Mac sent a different body', async () => {
     const { d, logs } = setup({
       mac: () => ({ status: 'opened', pr: PR, bodySha256: 'f'.repeat(64) }),
@@ -204,6 +232,10 @@ describe('openPr', () => {
     });
     expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
     expect(logs.join('\n')).toMatch(/TOKEN_EXPIRING[\s\S]*reinstall on the Mac/);
+    // The hint fetches install.sh from merged main — never runs the shared folder's copy.
+    expect(logs.join('\n')).toContain(INSTALL_LINE);
+    expect(logs.join('\n')).not.toMatch(/bash tools\//);
+    expect(INSTALL_LINE).toContain("install.sh?ref=main'");
   });
 });
 

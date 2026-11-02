@@ -7,6 +7,7 @@
 #   runner.sh <hostjobs-dir> <state-dir>     both absolute; the plist passes them (install.sh renders it)
 set -euo pipefail
 umask 077
+export LC_ALL=C # deterministic globs and regexes, as under launchd
 
 HJ="${1:?usage: runner.sh <hostjobs-dir> <state-dir>}"
 STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir>}"
