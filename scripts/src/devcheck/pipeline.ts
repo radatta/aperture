@@ -13,8 +13,16 @@ import type { McpClient } from './mcp';
 import { mcpToken, type McpSession } from './mcp-login';
 import { CREATE_METHODS, idsFromCreateResponse, methodOf } from './recorder';
 import type { CreatedRecord, RunResult, StepResult } from './report';
-import type { PwPage, PwRequest, PwResponse } from './pw-types';
-import { createUi, datesFor, makeShot, type Ctx, type Scenario } from './scenario';
+import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
+import {
+  createUi,
+  datesFor,
+  makeShot,
+  type Ctx,
+  type InterceptOpts,
+  type Interception,
+  type Scenario,
+} from './scenario';
 import type { Session } from './token';
 
 export interface BrowserSession {
@@ -45,6 +53,11 @@ export interface PipelineDeps {
   responseWaitMs?: number; // how long cleanup waits for a create still in flight (default 30 s)
 }
 
+// Chromium's console line for a failed load names no URL, so while an intercept is live these are the
+// harness's own doing (window-scoped, not per method — DEV-CHECK.md → Injected failures).
+const INJECTED_CONSOLE =
+  /^Failed to load resource: (the server responded with a status of \d+|net::ERR_FAILED)/;
+
 const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous shell first (pwa-two-launch-refresh)
 
 export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
@@ -66,6 +79,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     blockedDeletes: [],
     consoleErrors: [],
     throttled: [],
+    injected: [],
     shots: [],
     durationMs: 0,
   };
@@ -80,6 +94,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   let session: Session | undefined;
   let api: ApiClient | undefined;
   let prefix = 'setup';
+  const intercepts = new Set<{ method: string; release: () => Promise<void> }>(); // live ctx.intercept()s
 
   d.ledger.append({ run: d.runId, op: 'run-start' });
   try {
@@ -87,12 +102,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
 
     browser = await d.openBrowser();
     const page = browser.page;
-    page.on('console', (m) => m.type() === 'error' && r.consoleErrors.push(m.text()));
+    page.on('console', (m) => {
+      if (m.type() !== 'error') return;
+      if (intercepts.size && INJECTED_CONSOLE.test(m.text())) return;
+      r.consoleErrors.push(m.text());
+    });
     page.on('pageerror', (e) => r.consoleErrors.push(String(e)));
     page.on('response', (res) => {
       if (res.status() !== 429) return;
       const url = new URL(res.url());
       const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
+      if (method && [...intercepts].some((i) => i.method === method)) return; // ours: in r.injected
       // Off the dev origin, the host too, so a third party's `/api/x` never reads as a BFF method.
       r.throttled.push(
         method
@@ -156,6 +176,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       shot,
       createdIds: () => [...runIds],
       consoleErrors: () => [...r.consoleErrors],
+      intercept: (method, opts) => intercept(page, method, opts),
       log: d.log,
     };
     for (const sc of d.scenarios) {
@@ -190,6 +211,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         }
         res.ms = d.now() - s0;
       }
+      // An intercept a step left live (it threw, or never released) must not fail the next scenario's reads.
+      for (const i of [...intercepts]) await i.release();
     }
   } catch (err) {
     const code = codeOf(err);
@@ -214,6 +237,43 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     d.ledger.append({ run: d.runId, op: 'run-end', status: r.status });
   }
   return r;
+
+  async function intercept(
+    page: PwPage,
+    method: string,
+    opts: InterceptOpts = {},
+  ): Promise<Interception> {
+    const status = opts.status ?? 429;
+    let left = opts.times ?? Infinity;
+    let hits = 0;
+    let passed = 0;
+    const match = (u: URL) => u.origin === DEV_ORIGIN && u.pathname === `/api/${method}`;
+    const handler = async (route: PwRoute) => {
+      if (left <= 0) {
+        passed++;
+        return route.continue();
+      }
+      left--;
+      hits++;
+      r.injected.push(`/api/${method} → ${opts.abort ? 'dropped' : status}`);
+      if (opts.abort) return route.abort('failed');
+      return route.fulfill({ status, body: '{}', headers: { 'content-type': 'application/json' } });
+    };
+    await page.route(match, handler);
+    let released = false;
+    const entry = {
+      method,
+      // Unrouted, not just switched off: a live page route turns off the page's HTTP cache.
+      release: async () => {
+        if (released) return;
+        released = true;
+        intercepts.delete(entry);
+        await page.unroute(match, handler).catch(() => undefined);
+      },
+    };
+    intercepts.add(entry);
+    return { hits: () => hits, passed: () => passed, release: entry.release };
+  }
 
   async function awaitCreate(req: PwRequest, method: string): Promise<void> {
     const timeout = new Promise<'timeout'>((res) =>

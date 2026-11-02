@@ -135,10 +135,14 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 **A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency quota is low for now
 ([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
 cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
-calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console errors: in the
+calls back off on a 429 (five retries, 500 ms → 8 s), and so does the app (two retries, 600 ms → 1.8 s,
+`app/src/data/retry.ts`), so most of the burst now recovers on screen. But Chromium logs every 429 response as a console
+error, retried or not, so they still surface: in the
 smoke scenario's _No console errors on the way_ step, and again in every later step that re-reads the run's cumulative
 console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
-console line doesn't. The run still reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
+console line doesn't; a call that was retried and recovered is still listed there. Failures a scenario injects on
+purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The run still
+reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
 full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold in its `report.md`:**
 
 - the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
@@ -243,12 +247,31 @@ export const quickAdd: Scenario = {
 ```
 
 `ctx` has `page` (Playwright), `ui` (`goto`, `captureTask`, `expectText`, `setTheme`), `api` (reads, and the
-ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA today/tomorrow) and `nonce`
+ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user), `intercept` (_Injected failures_), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA today/tomorrow) and `nonce`
 (makes a title findable on screen — never a cleanup key). A step throws to fail; the rest of that scenario is
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
 extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console check is its own
 step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove.
+
+### Injected failures
+
+A failure dev won't produce on demand (a read that 429s, a dropped connection, a stop that doesn't land) is
+injected **by the harness**, never by a switch in shipped code: `ctx.intercept(method, { status?, times?,
+abort? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
+every call) get `status` (default 429) or a dropped connection, and the rest pass through. The returned handle
+counts `hits()` and `passed()`; `release()` unroutes it, because a live page route turns off the page's HTTP
+cache. The pipeline releases any a step left live when its scenario ends, so a step that threw mid-intercept
+can't fail the next scenario's reads.
+
+While any intercept is live, the console's `Failed to load resource: … status of N` and `net::ERR_FAILED` lines are
+the harness's own doing and are left out of _Console errors_. Chromium's line names no URL, so the drop covers
+the whole window, not one method: a real cold-start 429 inside it is hidden too, for a few seconds per step.
+Injected responses are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last
+in `SCENARIOS` for this reason, and because it waits 32 s for heartbeats. It also starts and stops one ad-hoc focus
+timer through the dock, which leaves a seconds-long completed session in the test user's history each run.
+Sessions have no delete method, so they're not ledgered; a timer an aborted run left running is stopped through
+the dock at the scenario's start.
 
 ### Rows
 

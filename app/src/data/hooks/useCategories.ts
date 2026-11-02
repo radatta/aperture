@@ -26,11 +26,14 @@ export function useActiveCategories() {
 
 // Select options for a category picker: the active ones, plus `currentId` when it's retired (shown as
 // "X (retired)") — an edit form must still show what the item is filed under, not "Uncategorized".
+// `failed`: the roster didn't load, so the picker would offer only "Uncategorized" — callers disable it
+// and say so (CategoryPickerError) rather than let it read as the item's category.
 export function useCategoryOptions(currentId: string | null | undefined) {
-  const { data: cats = [] } = useCategories();
-  return cats
+  const q = useCategories();
+  const options = (q.data ?? [])
     .filter((c) => c.active || c.id === currentId)
     .map((c) => ({ value: c.id, label: c.active ? c.label : `${c.label} (retired)` }));
+  return { options, failed: q.isError && q.data === undefined, retry: () => void q.refetch() };
 }
 
 export function useUpsertCategory() {

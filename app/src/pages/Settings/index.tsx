@@ -6,6 +6,7 @@ import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
 import { Menu } from '../../components/Menu';
 import { Select } from '../../components/Select';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { fmtDateTime } from '../../lib/format';
@@ -33,11 +34,18 @@ import {
 // Settings (PRODUCT §4, §3, §A.4/§A.12): categories (id-referenced, live labels, reassign-on-delete,
 // isWork backfill), preferences (day-start, pomodoro, theme), and data export.
 export function SettingsPage() {
+  const settings = useSettings();
   return (
     <div className="flex flex-col gap-6">
       <Text as="h1" size="2xl" weight="semibold">
         Settings
       </Text>
+      {/* Every section below waits for settings; a failed read says so instead of a blank page. */}
+      {settings.isError && !settings.data && (
+        <LoadError onRetry={() => void settings.refetch()}>
+          Couldn’t load your settings — calendar, preferences, finances and Flux can’t show.
+        </LoadError>
+      )}
       <CategoriesSection />
       <CalendarSection />
       <PreferencesSection />
@@ -53,7 +61,10 @@ export function SettingsPage() {
 }
 
 function CategoriesSection() {
-  const { data: cats = [] } = useCategories();
+  const catsQ = useCategories();
+  const { data: cats = [] } = catsQ;
+  // An empty list here would read as "no categories" and invite re-adding them.
+  const catsFailed = catsQ.isError && catsQ.data === undefined;
   // Retired categories sort after the active ones; arrows reorder within a group only.
   const active = cats.filter((c) => c.active);
   const retired = cats.filter((c) => !c.active);
@@ -66,6 +77,9 @@ function CategoriesSection() {
       <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
         Categories
       </Text>
+      {catsFailed && (
+        <LoadError onRetry={() => void catsQ.refetch()}>Couldn’t load categories.</LoadError>
+      )}
       <div className="flex flex-col gap-2">
         {/* One list, not two maps: a row that retires/restores keeps its key, so it moves instead of
             remounting — focus and any half-typed rename survive. */}
@@ -352,11 +366,16 @@ const sameRef = (a: CalendarRef, b: CalendarRef) =>
 function CalendarSection() {
   const { data: settings } = useSettings();
   const update = useUpdateSettings();
-  const { data: status } = useGoogleStatus();
+  const statusQ = useGoogleStatus();
+  const { data: status } = statusQ;
   const connect = useConnectGoogle();
   const disconnect = useDisconnectGoogleAccount();
   const accounts = settings?.googleAccounts ?? [];
-  const { data: calendars = [] } = useGoogleCalendars(accounts.length > 0);
+  const calendarsQ = useGoogleCalendars(accounts.length > 0);
+  const { data: calendars = [] } = calendarsQ;
+  // Without these, accounts would list with no health and no calendars to pick — said, per read.
+  const statusFailed = accounts.length > 0 && statusQ.isError && status === undefined;
+  const calendarsFailed = calendarsQ.isError && calendarsQ.data === undefined;
 
   if (!settings) return null;
 
@@ -378,6 +397,11 @@ function CalendarSection() {
 
       <Card>
         <div className="flex flex-col gap-3">
+          {statusFailed && (
+            <LoadError onRetry={() => void statusQ.refetch()}>
+              Couldn’t check your accounts’ connection.
+            </LoadError>
+          )}
           {accounts.length === 0 ? (
             <Text size="sm" tone="muted">
               Connect a Google account to read your calendars and add events from tasks.
@@ -436,6 +460,11 @@ function CalendarSection() {
               <Text size="sm" weight="medium">
                 Calendars for your day shape
               </Text>
+              {calendarsFailed && (
+                <LoadError onRetry={() => void calendarsQ.refetch()}>
+                  Couldn’t load your calendars.
+                </LoadError>
+              )}
               {accounts.map((a) => (
                 <div key={a.sub} className="flex flex-col gap-1">
                   <Text size="xs" tone="muted">
@@ -678,7 +707,9 @@ function FinancesSection() {
 // Settings fields — plus the coach's voice, which is per device (D58); the chips live on the Flux page.
 function FluxSection() {
   const { data: settings } = useSettings();
-  const { data: rolls = [] } = useRolls();
+  const rollsQ = useRolls();
+  const { data: rolls = [] } = rollsQ;
+  const rollsFailed = rollsQ.isError && rollsQ.data === undefined;
   const update = useUpdateSettings();
   const { hash } = useLocation();
   const sectionRef = useRef<HTMLElement>(null);
@@ -704,12 +735,18 @@ function FluxSection() {
           onChange={(e) => update.mutate({ fluxRollId: e.target.value || null })}
           placeholder="No Roll"
           options={active.map((r) => ({ value: r.id, label: r.name }))}
+          disabled={rollsFailed} // "No Roll" alone would read as the setting
           className="w-60"
         />
+        {rollsFailed && (
+          <LoadError size="xs" onRetry={() => void rollsQ.refetch()}>
+            Couldn’t load your Rolls.
+          </LoadError>
+        )}
         <Text size="xs" tone="muted">
           The first set of a session (one stopped early too) starts that Roll&apos;s rep for today;
           stopping offers to log it with the session&apos;s minutes.
-          {active.length === 0 && ' Add a Roll on the Rolls page first.'}
+          {active.length === 0 && !rollsFailed && ' Add a Roll on the Rolls page first.'}
         </Text>
         {settings.fluxDisclaimerAckAt !== null && (
           <div>

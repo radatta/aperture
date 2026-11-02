@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseBulkTasks, toCreateInputs } from '@aperture/shared';
 import { Modal } from '../../components/Modal';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { Button } from '../../components/Button';
 import { Textarea } from '../../components/Textarea';
@@ -27,8 +28,13 @@ export function BulkAddDialog({
   onClose: () => void;
   onAdded: (count: number) => void;
 }) {
-  const { data: categories = [], isSuccess: categoriesLoaded } = useActiveCategories();
-  const { data: tasks = [] } = useAllTasks();
+  const categoriesQ = useActiveCategories();
+  const tasksQ = useAllTasks();
+  const { data: categories = [], isSuccess: categoriesLoaded } = categoriesQ;
+  const { data: tasks = [] } = tasksQ;
+  const categoriesFailed = categoriesQ.isError && categoriesQ.data === undefined;
+  // Without the task list the "already exists" warnings can't fire — said, not silently skipped.
+  const tasksFailed = tasksQ.isError && tasksQ.data === undefined;
   const createTasks = useCreateTasks();
   const [text, setText] = useState('');
   const [failed, setFailed] = useState(false);
@@ -151,9 +157,20 @@ export function BulkAddDialog({
           </Text>
         )}
 
-        {awaitingCategories && (
-          <Text size="sm" tone="muted">
-            Loading categories… hold on so your #labels resolve.
+        {awaitingCategories &&
+          (categoriesFailed ? (
+            <LoadError onRetry={() => void categoriesQ.refetch()}>
+              Couldn’t load categories — remove the #labels to save without them.
+            </LoadError>
+          ) : (
+            <Text size="sm" tone="muted">
+              Loading categories… hold on so your #labels resolve.
+            </Text>
+          ))}
+
+        {tasksFailed && (
+          <Text size="xs" tone="muted">
+            Couldn’t check for duplicates — your task list didn’t load.
           </Text>
         )}
 

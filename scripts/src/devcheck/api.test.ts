@@ -46,6 +46,7 @@ describe('createApiClient', () => {
       'listBacklog',
       'listCategories',
       'listFluxSets',
+      'listRunningSessions',
       'listTasks',
       'probePresigned',
     ]);

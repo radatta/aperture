@@ -54,7 +54,15 @@ function rows(...tasks: Task[]) {
 
 function mkTimer(taskId: string | null, kind: 'work' | 'break', activeSec: number): RunningTimer {
   const session = { id: `s-${taskId}-${kind}`, taskId, kind } as unknown as PomodoroSession;
-  return { session, paused: false, remaining: 60, done: false, activeSec };
+  return {
+    session,
+    paused: false,
+    remaining: 60,
+    done: false,
+    activeSec,
+    error: null,
+    syncFailed: false,
+  };
 }
 
 describe('rightNow', () => {

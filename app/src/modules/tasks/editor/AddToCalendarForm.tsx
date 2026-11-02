@@ -11,6 +11,7 @@ import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
 import { Select } from '../../../components/Select';
+import { LoadError } from '../../../components/LoadError';
 import { Text } from '../../../components/Text';
 import { useGoogleCalendars, useInsertCalendarEvent } from '../../../data/hooks/useCalendar';
 import { useSettings } from '../../../data/hooks/useSettings';
@@ -29,7 +30,8 @@ export function AddToCalendarForm({
   onDone: () => void;
 }) {
   const { data: settings } = useSettings();
-  const { data: calendars = [] } = useGoogleCalendars((settings?.googleAccounts.length ?? 0) > 0);
+  const calendarsQ = useGoogleCalendars((settings?.googleAccounts.length ?? 0) > 0);
+  const { data: calendars = [] } = calendarsQ;
   const insert = useInsertCalendarEvent();
   const [durationMin, setDurationMin] = useState<number>(task.estimateMin ?? DEFAULT_EVENT_MIN);
   // With a due time the start follows the duration (so the block keeps ending at the deadline) until
@@ -46,6 +48,15 @@ export function AddToCalendarForm({
   const canAdd = !!time && durationMin > 0;
 
   if (!task.dueDay) return null;
+  // Never "connect an account" for a read that failed while one is connected.
+  if (calendarsQ.isError && calendarsQ.data === undefined)
+    return (
+      <div className="rounded-xl border border-line bg-surface p-3">
+        <LoadError onRetry={() => void calendarsQ.refetch()}>
+          Couldn’t load your calendars.
+        </LoadError>
+      </div>
+    );
   if (calendars.length === 0) {
     return (
       <div className="rounded-xl border border-line bg-surface p-3">

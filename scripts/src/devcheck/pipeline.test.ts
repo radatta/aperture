@@ -4,7 +4,7 @@ import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
 import type { McpClient } from './mcp';
-import type { PwPage, PwRequest, PwResponse } from './pw-types';
+import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
 import type { Ctx, Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
@@ -31,13 +31,24 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const fluxDeleted: string[] = [];
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
+  const consoleListeners: ((m: { type(): string; text(): string }) => void)[] = [];
+  type Match = (u: URL) => boolean;
+  type Handler = (r: PwRoute) => Promise<void> | void;
+  const routes: { match: Match; handler: Handler }[] = [];
   const inPage = [...(opts.inPage ?? [SHA])];
   let n = 0;
   const page = {
     on: (ev: string, fn: (r: never) => void) =>
       void (ev === 'request'
         ? listeners.push(fn as (r: PwRequest) => void)
-        : ev === 'response' && responseListeners.push(fn as (r: PwResponse) => void)),
+        : ev === 'response'
+          ? responseListeners.push(fn as (r: PwResponse) => void)
+          : ev === 'console' && consoleListeners.push(fn as never)),
+    route: async (match: Match, handler: Handler) => void routes.push({ match, handler }),
+    unroute: async (match: Match, handler: Handler) => {
+      const i = routes.findIndex((x) => x.match === match && x.handler === handler);
+      if (i >= 0) routes.splice(i, 1);
+    },
     evaluate: async (expr: string) =>
       expr.includes('aperture-build') ? (inPage.length > 1 ? inPage.shift() : inPage[0]) : null,
     reload: async () => undefined,
@@ -76,11 +87,34 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     };
     for (const l of responseListeners) l(res);
   };
+  // The page's console printing an error line.
+  const consoleError = (text: string) => {
+    for (const l of consoleListeners) l({ type: () => 'error', text: () => text });
+  };
+  // The app calling /api/<method>: the first matching route decides; a fulfilled 429 also reaches the
+  // response listeners, as a real one would.
+  const call = async (method: string): Promise<number | 'real' | 'dropped'> => {
+    const url = `https://dev.aperture.rahuldatta.dev/api/${method}`;
+    const hit = routes.find((x) => x.match(new URL(url)));
+    if (!hit) return 'real';
+    let out: number | 'real' | 'dropped' = 'real';
+    await hit.handler({
+      request: () => ({ url: () => url, method: () => 'POST', response: async () => null }),
+      continue: async () => void (out = 'real'),
+      abort: async () => void (out = 'dropped'),
+      fulfill: async ({ status }) => {
+        out = status;
+        respond(`/api/${method}`, status);
+      },
+    });
+    return out;
+  };
   const api: ApiClient = {
     reads: {
       listTasks: async () => [...tasks.values()],
       listBacklog: async () => [],
       getSettings: async () => ({ dayStartHour: 4 }),
+      listRunningSessions: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [],
       listFluxSets: async () => [...fluxSets.values()],
@@ -144,6 +178,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     fluxDeleted,
     uiCreate,
     respond,
+    consoleError,
+    call,
+    routes,
     api,
     mcp,
     browser,
@@ -530,5 +567,73 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc], ledger));
     expect(r.orphanIntents).toEqual(['api:createTask "x"']);
     expect(r.codes).toContain('LEFTOVERS');
+  });
+
+  it('an intercept fails `times` calls, then passes through, and counts both', async () => {
+    const w = world();
+    const seen: (number | string)[] = [];
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('listCategories', { times: 2 });
+      for (let n = 0; n < 3; n++) seen.push(await x.call('listCategories'));
+      seen.push(await x.call('listTasks')); // another method is untouched
+      expect([i.hits(), i.passed()]).toEqual([2, 1]);
+      await i.release();
+      seen.push(await x.call('listCategories'));
+      const drop = await ctx.intercept('getDay', { abort: true });
+      seen.push(await x.call('getDay'));
+      await drop.release();
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(seen).toEqual([429, 429, 'real', 'real', 'real', 'dropped']);
+    expect(r.injected).toEqual([
+      '/api/listCategories → 429',
+      '/api/listCategories → 429',
+      '/api/getDay → dropped',
+    ]);
+  });
+
+  it('an injected 429 is reported as injected, not throttled', async () => {
+    const w = world();
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('listCategories');
+      await x.call('listCategories');
+      await i.release();
+      x.respond('/api/listCategories', 429); // a real one, after release
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.injected).toEqual(['/api/listCategories → 429']);
+    expect(r.throttled).toEqual(['/api/listCategories']);
+  });
+
+  it('console 429 lines inside an intercept window are dropped; later ones count', async () => {
+    const w = world();
+    const line = 'Failed to load resource: the server responded with a status of 429 ()';
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('listCategories');
+      x.consoleError(line);
+      x.consoleError('Failed to load resource: net::ERR_FAILED');
+      x.consoleError('TypeError: x is undefined'); // never the harness's doing
+      await i.release();
+      x.consoleError(line);
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.consoleErrors).toEqual(['TypeError: x is undefined', line]);
+  });
+
+  it('a scenario’s intercepts are released before the next scenario', async () => {
+    const w = world();
+    let next: number | string = 0;
+    const leaky = scenario(async (_x, ctx) => {
+      await ctx.intercept('listCategories');
+      throw new Error('step failed mid-intercept');
+    })(w);
+    const after = {
+      ...scenario(async (x) => void (next = await x.call('listCategories')))(w),
+      id: 'after',
+    };
+    const r = await runPipeline(deps(w, [leaky, after]));
+    expect(next).toBe('real');
+    expect(w.routes).toHaveLength(0);
+    expect(r.steps.map((s) => s.status)).toEqual(['fail', 'pass']);
   });
 });

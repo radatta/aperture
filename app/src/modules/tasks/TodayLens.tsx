@@ -6,6 +6,7 @@ import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { Field } from '../../components/Field';
 import { MiniBar } from '../../components/MiniBar';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { fmtDuration } from '../../lib/format';
@@ -25,7 +26,8 @@ import { useTodayPlan } from './useTodayPlan';
 // Finished work leaves the plan list for a collapsed "Done today" group at the bottom (lenses.md D11);
 // its rows stay, so capacity still counts it.
 export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: () => void }) {
-  const { day, dayStartHour, rows, plannedMin, pva, isPending, isError } = useTodayPlan();
+  const { day, dayStartHour, rows, plannedMin, pva, isPending, isError, dayError, retry } =
+    useTodayPlan();
   const { data: dayRec } = useDay(day);
   const setCapacity = useSetCapacity(day);
   const { addToDay, unplan } = useAddToDay();
@@ -46,12 +48,17 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
     <div className="flex flex-col gap-4">
       <Card>
         <div className="flex flex-col gap-3">
-          <CapacityField
-            key={dayRec?.id ?? day}
-            initial={dayRec?.capacityHours ?? null}
-            onSave={(h) => setCapacity.mutate(h)}
-          />
-          {pva.availableMin === null ? (
+          {/* A failed day read can't show the capacity, and an empty field would save over it. */}
+          {dayError ? (
+            <LoadError onRetry={retry}>Couldn’t load today’s capacity.</LoadError>
+          ) : (
+            <CapacityField
+              key={dayRec?.id ?? day}
+              initial={dayRec?.capacityHours ?? null}
+              onSave={(h) => setCapacity.mutate(h)}
+            />
+          )}
+          {dayError ? null : pva.availableMin === null ? (
             <Text size="sm" tone="muted">
               {fmtDuration(plannedMin)} planned. Set your available hours to see if you&apos;re
               over-scoping.

@@ -7,7 +7,19 @@ import { fmtMoneyWhole } from '../../modules/finances/money';
 // (PRODUCT §3). Morning: budget left + what's waiting. Night: only the sort count, only when non-zero.
 // Renders nothing until a bank is connected.
 export function FinanceGlance({ mode }: { mode: 'morning' | 'night' }) {
-  const { data: o } = useFinanceOverview();
+  const { data: o, isError } = useFinanceOverview();
+  // A failed read is a visible line pointing at the page (which shows the error), never the no-bank silence.
+  if (isError && !o)
+    return (
+      <Link to="/finances" className="flex items-center justify-between gap-2 px-1 text-sm">
+        <Text size="sm" tone="danger">
+          Finances · couldn’t load
+        </Text>
+        <Text size="sm" tone="muted" aria-hidden>
+          Finances →
+        </Text>
+      </Link>
+    );
   if (!o || o.items.length === 0) return null;
   if (mode === 'night' && o.unsortedCount === 0) return null;
   const toSort = o.unsortedCount > 0 ? `${o.unsortedCount} to sort` : 'all sorted';

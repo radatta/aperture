@@ -143,6 +143,7 @@ export function createApiClient({
     listCategories: () => call<{ id: string; label: string }[]>('listCategories', []),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
     getSettings: () => call<{ dayStartHour: number }>('getSettings', []),
+    listRunningSessions: () => call<{ id: string }[]>('listRunningSessions', []),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
     // Alive only — a deleted set reads as gone, like getTask.
     getFluxSet: async (id: string) =>

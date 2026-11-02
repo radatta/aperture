@@ -4,6 +4,7 @@ import { Button, ButtonLink } from '../../components/Button';
 import { DeltaBar } from '../../components/DeltaBar';
 import { EmptyState } from '../../components/EmptyState';
 import { MiniBar } from '../../components/MiniBar';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { fmtDuration, fmtTime } from '../../lib/format';
 import { useBacklog } from '../../data/hooks/useBacklog';
@@ -84,14 +85,19 @@ function NightHome({ today }: { today: string }) {
 function IntentCard() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
-  const { data: day } = useDay(today);
+  const { data: day, isError, refetch } = useDay(today);
   const setIntent = useSetIntent(today);
   const [value, setValue] = useState('');
   useEffect(() => setValue(day?.intent ?? ''), [day?.intent]);
-  const commit = () => value !== (day?.intent ?? '') && setIntent.mutate(value.trim());
+  // Only once the day has loaded: typing over an intent you were never shown would overwrite it.
+  const commit = () => day && value !== (day.intent ?? '') && setIntent.mutate(value.trim());
   return (
     <HomeCard title="Intent">
+      {isError && !day && (
+        <LoadError onRetry={() => void refetch()}>Couldn’t load today’s intent.</LoadError>
+      )}
       <input
+        disabled={!day}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onBlur={commit}
@@ -106,7 +112,7 @@ function IntentCard() {
 
 // Night: one rotating prompt, fully skippable.
 function ReflectionCard({ today }: { today: string }) {
-  const { data: day } = useDay(today);
+  const { data: day, isError, refetch } = useDay(today);
   const setReflection = useSetReflection(today);
   const prompt = day?.reflectionPrompt ?? reflectionPromptFor(today);
   const [text, setText] = useState('');
@@ -117,7 +123,11 @@ function ReflectionCard({ today }: { today: string }) {
         <Text size="sm" tone="muted">
           {prompt}
         </Text>
+        {isError && !day && (
+          <LoadError onRetry={() => void refetch()}>Couldn’t load today’s reflection.</LoadError>
+        )}
         <textarea
+          disabled={!day} // a reflection you were never shown would be saved over
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Optional — skip freely."
@@ -128,7 +138,7 @@ function ReflectionCard({ today }: { today: string }) {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            disabled={!text.trim() || setReflection.isPending}
+            disabled={!day || !text.trim() || setReflection.isPending}
             onClick={() => setReflection.mutate({ prompt, text: text.trim() })}
           >
             Save
@@ -144,8 +154,8 @@ function ReflectionCard({ today }: { today: string }) {
 
 // Morning: planned hours vs available — the signature under-scoping catch, on the home.
 function PlanTodayCard() {
-  const { plannedMin, totalCount, pva } = useTodayPlan();
-  const { data: backlog = [] } = useBacklog();
+  const { plannedMin, totalCount, pva, isPending, isError, dayError, retry } = useTodayPlan();
+  const { data: backlog = [] } = useBacklog(); // the same tasks query: its failure is isError above
   return (
     <HomeCard
       title="Plan today"
@@ -158,7 +168,11 @@ function PlanTodayCard() {
     >
       {/* The plan summary, then the roll picker: picking one drops a rep onto today's plan (and into
           the daytime Right-now lane). The picker self-hides when there are no rolls. */}
-      {pva.availableMin === null ? (
+      {isPending || isError ? (
+        <EmptyState pending={isPending && !isError} error={isError} onRetry={retry} title="" />
+      ) : dayError ? (
+        <LoadError onRetry={retry}>Couldn’t load today’s capacity.</LoadError>
+      ) : pva.availableMin === null ? (
         <div className="flex flex-col items-start gap-2">
           <Text tone="muted" size="sm">
             {totalCount > 0
@@ -213,8 +227,12 @@ function TimeBudgetCard() {
 function ReviewCard({ today }: { today: string }) {
   const { data: settings } = useSettings();
   const start = settings?.dayStartHour ?? 4;
-  const { data: entries = [] } = useLog(today);
-  const { data: tasks = [] } = useAllTasks();
+  const logQ = useLog(today);
+  const tasksQ = useAllTasks();
+  const { data: entries = [] } = logQ;
+  const { data: tasks = [] } = tasksQ;
+  const logFailed = logQ.isError && logQ.data === undefined;
+  const tasksFailed = tasksQ.isError && tasksQ.data === undefined;
   const recent = entries.slice(-3).reverse();
   // Every task finished today is listed. A calibration point (done + locked) gets its estimate-vs-actual
   // bar — a part on its own, and a parent marked done as the rollup of its parts (parts.ts); a task
@@ -227,7 +245,17 @@ function ReviewCard({ today }: { today: string }) {
   return (
     <HomeCard title="Today in review" aside={<CardLink to="/log">Open log</CardLink>}>
       <div className="flex flex-col gap-3">
-        {entries.length === 0 ? (
+        {(logFailed || tasksFailed) && (
+          <LoadError
+            onRetry={() => {
+              if (logFailed) void logQ.refetch();
+              if (tasksFailed) void tasksQ.refetch();
+            }}
+          >
+            Couldn’t load today’s review.
+          </LoadError>
+        )}
+        {logFailed ? null : entries.length === 0 ? (
           <Text tone="muted" size="sm">
             Nothing logged yet today — the bar below is already in Log mode.
           </Text>
@@ -285,7 +313,7 @@ function ReviewCard({ today }: { today: string }) {
             )}
           </div>
         )}
-        <StillOpenSection today={today} dayStartHour={start} />
+        {!tasksFailed && <StillOpenSection today={today} dayStartHour={start} />}
       </div>
     </HomeCard>
   );

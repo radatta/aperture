@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { PomodoroSession, Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { TimerIcon } from '../../components/icons';
 import { cx } from '../../lib/cx';
@@ -30,17 +31,38 @@ export function TimerBar() {
     startBreak,
     keepStale,
     discardStale,
+    staleErrors,
+    adoptFailed,
+    retryAdopt,
+    startError,
   } = usePomodoro();
+  // A failed tasks read only costs the label ("Focus"); the page's own tasks error says it.
   const { data: tasks = [] } = useAllTasks();
 
-  if (timers.length === 0 && stale.length === 0) return null;
+  const running = timers.length > 0 || stale.length > 0;
+  if (!running && !adoptFailed && !startError) return null;
 
   return (
     <div className="flex flex-col gap-2 sm:ml-auto sm:w-80">
+      {adoptFailed && (
+        <Row>
+          <LoadError onRetry={retryAdopt}>Couldn’t check for running timers.</LoadError>
+        </Row>
+      )}
+      {startError && (
+        <Row>
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              {startError}
+            </Text>
+          </div>
+        </Row>
+      )}
       {stale.map((s) => (
         <StaleRow
           key={s.id}
           session={s}
+          error={staleErrors[s.id] ?? null}
           tasks={tasks}
           onKeep={() => keepStale(s.id)}
           onDiscard={() => discardStale(s.id)}
@@ -54,10 +76,11 @@ export function TimerBar() {
           onPause={() => pause(t.session.id)}
           onResume={() => resume(t.session.id)}
           onExtend={() => extend(t.session.id)}
-          onStop={() => stop(t.session.id, 'completed')}
+          // A failed stop rejects for callers that act on success; here the row's own error says it.
+          onStop={() => void stop(t.session.id, 'completed').catch(() => {})}
         />
       ))}
-      <NewFocus onStart={startFocus} onBreak={startBreak} />
+      {running && <NewFocus onStart={startFocus} onBreak={startBreak} />}
     </div>
   );
 }
@@ -88,15 +111,30 @@ function timerLabel(session: PomodoroSession, tasks: Task[]): string {
   return 'Focus';
 }
 
-function Row({ done, children }: { done?: boolean; children: ReactNode }) {
+function Row({
+  done,
+  error,
+  children,
+}: {
+  done?: boolean;
+  error?: string | null; // the last action on this row failed — said under it
+  children: ReactNode;
+}) {
   return (
     <div
       className={cx(
-        'pointer-events-auto flex items-center gap-1.5 rounded-2xl border bg-panel-2 p-1.5 pl-2.5 shadow-[var(--shadow-dock)]',
-        done ? 'border-gold' : 'border-line',
+        'pointer-events-auto flex flex-col gap-1 rounded-2xl border bg-panel-2 p-1.5 pl-2.5 shadow-[var(--shadow-dock)]',
+        error ? 'border-danger' : done ? 'border-gold' : 'border-line',
       )}
     >
-      {children}
+      <div className="flex items-center gap-1.5">{children}</div>
+      {error && (
+        <div role="alert">
+          <Text size="xs" tone="danger">
+            {error}
+          </Text>
+        </div>
+      )}
     </div>
   );
 }
@@ -116,10 +154,10 @@ function TimerRow({
   onExtend: () => void;
   onStop: () => void;
 }) {
-  const { session, paused, remaining, done } = timer;
+  const { session, paused, remaining, done, error, syncFailed } = timer;
   const running = !paused && !done;
   return (
-    <Row done={done}>
+    <Row done={done} error={error}>
       <span
         className={cx(
           'h-2 w-2 shrink-0 rounded-full',
@@ -129,6 +167,13 @@ function TimerRow({
       <div className="min-w-0 flex-1 truncate">
         <Text size="sm">{timerLabel(session, tasks)}</Text>
       </div>
+      {syncFailed && (
+        <span title="The last heartbeats didn’t reach the server — time may not be saved">
+          <Text size="xs" tone="gold" className="shrink-0">
+            not syncing
+          </Text>
+        </span>
+      )}
       <Text size="sm" tabular tone={done ? 'gold' : undefined} className="shrink-0">
         {done ? 'Done' : fmtClock(remaining)}
       </Text>
@@ -154,17 +199,19 @@ function TimerRow({
 
 function StaleRow({
   session,
+  error,
   tasks,
   onKeep,
   onDiscard,
 }: {
   session: PomodoroSession;
+  error: string | null;
   tasks: Task[];
   onKeep: () => void;
   onDiscard: () => void;
 }) {
   return (
-    <Row>
+    <Row error={error}>
       <div className="min-w-0 flex-1 truncate">
         <Text size="sm" tone="muted">
           {timerLabel(session, tasks)} — was left running

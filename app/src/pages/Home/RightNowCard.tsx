@@ -207,7 +207,16 @@ export function RightNowCard() {
                 size="sm"
                 onClick={async () => {
                   const elapsed = heroElapsed; // capture before the timer stops
-                  if (heroTimer) await stop(heroTimer.session.id);
+                  // A stop that didn't land keeps the timer; its row in the bar below says so, and the
+                  // Actual form waits until the time is really saved.
+                  if (
+                    heroTimer &&
+                    !(await stop(heroTimer.session.id).then(
+                      () => true,
+                      () => false,
+                    ))
+                  )
+                    return;
                   setDoneInitial(elapsed);
                 }}
               >

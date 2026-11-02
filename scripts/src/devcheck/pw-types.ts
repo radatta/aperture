@@ -55,12 +55,18 @@ export interface PwPage {
     url: string | RegExp | ((u: URL) => boolean),
     handler: (route: PwRoute) => Promise<void> | void,
   ): Promise<void>;
+  unroute(
+    url: string | RegExp | ((u: URL) => boolean),
+    handler?: (route: PwRoute) => Promise<void> | void,
+  ): Promise<void>;
   close(): Promise<void>;
 }
 
 export interface PwRoute {
   request(): PwRequest;
   abort(errorCode?: string): Promise<void>;
+  continue(): Promise<void>;
+  fulfill(opts: { status: number; body?: string; headers?: Record<string, string> }): Promise<void>;
 }
 
 export interface PwContext {

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { repDays, todayKey } from '@aperture/shared';
 import type { Roll } from '@aperture/shared';
 import { Button } from '../../components/Button';
+import { LoadError } from '../../components/LoadError';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { Field } from '../../components/Field';
@@ -26,8 +27,11 @@ export function RollsPage() {
   const today = todayKey(settings?.dayStartHour ?? 4);
   const dayStart = settings?.dayStartHour ?? 4;
 
-  const { data: rolls = [], isPending, isError } = useRolls();
-  const { data: tasks = [] } = useAllTasks();
+  const { data: rolls = [], isPending, isError, refetch } = useRolls();
+  const tasksQ = useAllTasks();
+  const { data: tasks = [] } = tasksQ;
+  // The sheets are built from the rep tasks; without them every sheet would read as no reps.
+  const tasksFailed = tasksQ.isError && tasksQ.data === undefined;
   const active = rolls.filter((r) => r.active);
 
   return (
@@ -35,11 +39,22 @@ export function RollsPage() {
       <Text as="h1" size="2xl" weight="semibold">
         Rolls
       </Text>
-      <RollPicker />
+      {/* A failed rolls read is said once, by the list's EmptyState below — not again by the picker. */}
+      {!(isError && rolls.length === 0) && <RollPicker />}
       <NewRoll />
       <div className="flex flex-col gap-3">
+        {tasksFailed && active.length > 0 && (
+          <LoadError onRetry={() => void tasksQ.refetch()}>
+            Couldn’t load your reps — the sheets below are blank until they do.
+          </LoadError>
+        )}
         {active.length === 0 ? (
-          <EmptyState pending={isPending} error={isError} title="No rolls yet.">
+          <EmptyState
+            pending={isPending}
+            error={isError}
+            onRetry={() => void refetch()}
+            title="No rolls yet."
+          >
             Start one with “New roll” — a thing you keep returning to, no deadline. Pick it for a
             day and the sheet fills. A gap is just a gap.
           </EmptyState>
@@ -202,9 +217,15 @@ function RollForm({ roll, onClose }: { roll?: Roll; onClose: () => void }) {
         placeholder="Uncategorized"
         value={categoryId}
         onChange={(e) => setCategoryId(e.target.value)}
-        options={categoryOptions}
+        options={categoryOptions.options}
+        disabled={categoryOptions.failed}
         className="w-40"
       />
+      {categoryOptions.failed && (
+        <LoadError size="xs" onRetry={categoryOptions.retry}>
+          Couldn’t load categories.
+        </LoadError>
+      )}
       <Button size="sm" onClick={save} disabled={!valid || upsert.isPending}>
         {roll ? 'Save' : 'Add roll'}
       </Button>

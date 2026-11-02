@@ -2,6 +2,7 @@ import { addDays, todayKey } from '@aperture/shared';
 import type { CalibrationPoint } from '@aperture/shared';
 import { Card } from '../../components/Card';
 import { DeltaBar } from '../../components/DeltaBar';
+import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
 import { useCalibration } from '../../data/hooks/useCalibration';
@@ -18,14 +19,33 @@ export function CalibrationSection() {
   const today = todayKey(settings?.dayStartHour ?? 4);
   const from = addDays(today, -30);
 
-  const { data: points = [] } = useCalibration(from, today);
-  const { data: tasks = [] } = useAllTasks();
+  const pointsQ = useCalibration(from, today);
+  const tasksQ = useAllTasks();
+  const { data: points = [] } = pointsQ;
+  const { data: tasks = [] } = tasksQ;
   const byId = new Map(tasks.map((t) => [t.id, t]));
   // A done parent is the rollup of its parts (parts.ts), so its label says how many there were.
   const label = (p: CalibrationPoint) => rollupLabel(byId.get(p.taskId)?.title ?? 'Task', p.parts);
 
   const agg = aggregate(points);
   const recent = recentPoints(points, (id) => byId.get(id)?.completedAt);
+
+  // Never the "no finished tasks yet" copy for a read that failed (the Tasks page's error covers lists only).
+  const failed =
+    (pointsQ.isError && pointsQ.data === undefined) ||
+    (tasksQ.isError && tasksQ.data === undefined);
+  if (pointsQ.isPending || tasksQ.isPending || failed)
+    return (
+      <EmptyState
+        pending={!failed}
+        error={failed}
+        onRetry={() => {
+          if (pointsQ.isError) void pointsQ.refetch();
+          if (tasksQ.isError) void tasksQ.refetch();
+        }}
+        title=""
+      />
+    );
 
   return (
     <div className="flex flex-col gap-5">

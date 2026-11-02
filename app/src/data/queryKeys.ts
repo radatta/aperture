@@ -16,6 +16,7 @@ export const qk = {
   attachments: () => ['attachments'] as const,
   attachmentUrl: (id: string) => ['attachmentUrl', id] as const,
   habits: () => ['habits'] as const,
+  runningSessions: () => ['runningSessions'] as const,
   habitChecks: (from: string, to: string) => ['habitChecks', from, to] as const,
   rolls: () => ['rolls'] as const,
   ideas: (status = 'all') => ['ideas', status] as const,

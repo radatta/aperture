@@ -3,6 +3,7 @@ import { fmtDayHeading, fmtMonthShortDay, todayKey } from '@aperture/shared';
 import type { Habit } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Button } from '../../components/Button';
+import { LoadError } from '../../components/LoadError';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { Field } from '../../components/Field';
@@ -34,8 +35,11 @@ export function HabitsPage() {
   const from = weeks[0]![0]!;
   const to = weeks[WEEKS - 1]![6]!;
 
-  const { data: habits = [], isPending, isError } = useHabits();
-  const { data: checks = [] } = useHabitChecks(from, to);
+  const { data: habits = [], isPending, isError, refetch } = useHabits();
+  const checksQ = useHabitChecks(from, to);
+  const { data: checks = [] } = checksQ;
+  // Without the checks every cell would read as a miss — the cards stay, and this says why they're blank.
+  const checksFailed = checksQ.isError && checksQ.data === undefined;
   const active = habits.filter((h) => h.active);
 
   return (
@@ -47,8 +51,18 @@ export function HabitsPage() {
       </div>
       <HabitForm />
       <div className="flex flex-col gap-3">
+        {checksFailed && active.length > 0 && (
+          <LoadError onRetry={() => void checksQ.refetch()}>
+            Couldn’t load your check-ins.
+          </LoadError>
+        )}
         {active.length === 0 ? (
-          <EmptyState pending={isPending} error={isError} title="No habits yet.">
+          <EmptyState
+            pending={isPending}
+            error={isError}
+            onRetry={() => void refetch()}
+            title="No habits yet."
+          >
             Start one with “New habit” — weekly cadence, no streaks, and a miss is just a miss.
           </EmptyState>
         ) : (
@@ -267,9 +281,15 @@ function HabitForm() {
           placeholder="Uncategorized"
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          options={categoryOptions}
+          options={categoryOptions.options}
+          disabled={categoryOptions.failed}
           className="w-40"
         />
+        {categoryOptions.failed && (
+          <LoadError size="xs" onRetry={categoryOptions.retry}>
+            Couldn’t load categories.
+          </LoadError>
+        )}
         <Button size="sm" onClick={create} disabled={!name.trim() || upsert.isPending}>
           Add habit
         </Button>

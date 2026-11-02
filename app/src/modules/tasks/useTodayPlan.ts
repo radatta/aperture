@@ -20,6 +20,9 @@ export interface TodayPlan {
   isPending: boolean;
   // ...and what a FAILED one looks like. Without this, an error renders as a confident empty plan.
   isError: boolean;
+  // The day record (capacity) failed on its own — the plan still shows, its capacity can't.
+  dayError: boolean;
+  retry: () => void; // refetch whichever halves failed
 }
 
 // Today's work — the timed tasks whose time falls today, then the day's plan — shared by the morning
@@ -28,9 +31,12 @@ export function useTodayPlan(): TodayPlan {
   const { data: settings } = useSettings();
   const dayStartHour = settings?.dayStartHour ?? 4;
   const day = todayKey(dayStartHour);
-  const { data: dayRec } = useDay(day);
-  const { data: plans = [], isPending: plansPending, isError: plansError } = usePlansForDay(day);
-  const { data: tasks = [], isPending: tasksPending, isError: tasksError } = useAllTasks();
+  const dayQ = useDay(day);
+  const dayRec = dayQ.data;
+  const plansQ = usePlansForDay(day);
+  const tasksQ = useAllTasks();
+  const { data: plans = [], isPending: plansPending, isError: plansError } = plansQ;
+  const { data: tasks = [], isPending: tasksPending, isError: tasksError } = tasksQ;
 
   const rows = todayRows(plans, tasks, day, dayStartHour);
 
@@ -51,5 +57,11 @@ export function useTodayPlan(): TodayPlan {
     pva: plannedVsAvailable(plannedMin, dayRec?.capacityHours ?? null),
     isPending: plansPending || tasksPending,
     isError: plansError || tasksError,
+    dayError: dayQ.isError && dayRec === undefined,
+    retry: () => {
+      if (plansQ.isError) void plansQ.refetch();
+      if (tasksQ.isError) void tasksQ.refetch();
+      if (dayQ.isError) void dayQ.refetch();
+    },
   };
 }

@@ -1,6 +1,7 @@
 import { AUTH_HEADER } from '@aperture/shared';
 import { describe, expect, it } from 'vitest';
 import { createHttpClient } from './httpClient';
+import { ApiError } from './retry';
 import type { FetchLike } from './httpClient';
 
 describe('createHttpClient (RPC transport)', () => {
@@ -107,5 +108,73 @@ describe('createHttpClient (RPC transport)', () => {
     );
     await api.listTasks();
     expect(headers[AUTH_HEADER]).toBeUndefined();
+  });
+  it('throws an ApiError carrying the status', async () => {
+    const api = createHttpClient('', async () => ({
+      ok: false,
+      status: 503,
+      text: async () => '',
+    }));
+    const err = await api.listTasks().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(503);
+  });
+
+  describe('a 429 (Lambda never ran)', () => {
+    const replies = (...statuses: number[]) => {
+      const calls: string[] = [];
+      const fetchImpl: FetchLike = async (url) => {
+        calls.push(url);
+        const status = statuses.shift() ?? 200;
+        return { ok: status < 400, status, text: async () => 'null' };
+      };
+      const waits: number[] = [];
+      const sleep = async (ms: number) => void waits.push(ms);
+      return {
+        calls,
+        waits,
+        api: createHttpClient(
+          '',
+          fetchImpl,
+          () => null,
+          () => {},
+          sleep,
+        ),
+      };
+    };
+
+    it('retries a write on a 429, then succeeds', async () => {
+      const { api, calls, waits } = replies(429, 429, 200);
+      await api.createTask({ title: 'hi', estimateMin: 30, bufferMin: null });
+      expect(calls).toHaveLength(3);
+      expect(waits).toHaveLength(2);
+    });
+
+    it('gives up after two retries and throws the 429', async () => {
+      const { api, calls } = replies(429, 429, 429, 200);
+      const err = await api.listTasks().catch((e: unknown) => e);
+      expect((err as ApiError).status).toBe(429);
+      expect(calls).toHaveLength(3);
+    });
+
+    it('never retries a write on a 500 or a dropped connection — it may have landed', async () => {
+      const { api, calls } = replies(500, 200);
+      await expect(api.stopSession('s1', 'completed')).rejects.toThrow(/\(500\)/);
+      expect(calls).toHaveLength(1);
+
+      let sent = 0;
+      const offline = createHttpClient(
+        '',
+        async () => {
+          sent++;
+          throw new TypeError('Failed to fetch');
+        },
+        () => null,
+        () => {},
+        async () => {},
+      );
+      await expect(offline.stopSession('s1', 'completed')).rejects.toThrow(TypeError);
+      expect(sent).toBe(1);
+    });
   });
 });

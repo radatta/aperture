@@ -18,6 +18,7 @@ const base: RunResult = {
   orphanIntents: [],
   blockedDeletes: [],
   consoleErrors: [],
+  injected: [],
   throttled: [],
   shots: ['smoke-home-home-light.png'],
   durationMs: 61_000,
@@ -35,6 +36,7 @@ describe('report', () => {
     const md = renderReport({
       ...base,
       consoleErrors: ['Failed to load resource: the server responded with a status of 429 ()'],
+      injected: [],
       throttled: ['/api/listTasks', '/api/getDay'],
     });
     expect(md).toContain('## Throttled (429)\n\n- `/api/listTasks`\n- `/api/getDay`\n');
@@ -67,6 +69,10 @@ describe('report', () => {
       None.
 
       ## Throttled (429)
+
+      None.
+
+      ## Injected by the harness
 
       None.
 
