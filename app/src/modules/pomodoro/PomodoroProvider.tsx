@@ -180,6 +180,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
 
   const startFocus = useCallback(
     (input?: StartFocusInput) => {
+      setStartError(null);
       api
         .startSession({
           taskId: input?.taskId ?? null,
@@ -202,6 +203,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   );
 
   const startBreak = useCallback(() => {
+    setStartError(null);
     api
       .startSession({
         taskId: null,
@@ -221,8 +223,10 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
 
   const pause = useCallback(
     (id: string) => {
-      // The pause holds locally either way — you asked for it. A failed capture beat costs at most one
-      // heartbeat of credit, and the row says it isn't syncing.
+      // The pause holds locally either way — you asked for it. If the capture beat fails, the time since
+      // the last beat that did land isn't credited (Resume resets the server's clock), and the row says
+      // it isn't syncing.
+      clear(id);
       setPausedIds((p) => new Set(p).add(id));
       api.heartbeatSession(id).then(
         (s) => {
@@ -232,15 +236,16 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
         () => setMissed((m) => ({ ...m, [id]: MISSED_BEATS_WARN })),
       );
     },
-    [api, upsert],
+    [api, upsert, clear],
   );
 
   const resume = useCallback(
     (id: string) => {
       // Never flips to running locally on a failure: the server's clock wasn't reset, so the gap would count.
+      clear(id);
       api.resumeSession(id).then(
         (s) => {
-          clear(id);
+          setMissed((m) => without(m, id));
           upsert(s); // reset the clock so the paused gap isn't credited
           setPausedIds((p) => withDeleted(p, id));
         },
@@ -254,9 +259,10 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   // the time spent sitting on "done" isn't credited to the new block.
   const extend = useCallback(
     (id: string) => {
+      clear(id);
       api.resumeSession(id).then(
         (s) => {
-          clear(id);
+          setMissed((m) => without(m, id));
           upsert(s);
           setChimedIds((c) => withDeleted(c, id));
           setPausedIds((p) => withDeleted(p, id));
@@ -268,27 +274,37 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     [api, upsert, clear, fail],
   );
 
+  // The server credits everything since the last beat on a stop. A paused timer, or one sitting on "done",
+  // hasn't beaten since, so its clock is reset first (resumeSession credits nothing) — the pause or the
+  // wait on "done" never counts as worked time.
   const stop = useCallback(
-    (id: string, status: 'completed' | 'discarded' = 'completed') =>
-      api.stopSession(id, status).then(
-        () => {
-          invalidateTaskData(qc);
-          remove(id);
-        },
-        (e: unknown) => {
-          // The timer stays: a stop that didn't land never looks like it did.
-          fail(id, 'Couldn’t stop — try again.');
-          throw e;
-        },
-      ),
-    [api, qc, remove, fail],
+    (id: string, status: 'completed' | 'discarded' = 'completed') => {
+      clear(id);
+      const { sessions: live, pausedIds: paused, targetFor: tf } = beatRef.current;
+      const s = live.find((x) => x.id === id);
+      const idle = paused.has(id) || (!!s && remainingSec(s, tf(s), false, Date.now()) <= 0);
+      return (idle ? api.resumeSession(id).then(() => undefined) : Promise.resolve())
+        .then(() => api.stopSession(id, status))
+        .then(
+          () => {
+            invalidateTaskData(qc);
+            remove(id);
+          },
+          (e: unknown) => {
+            // The timer stays: a stop that didn't land never looks like it did.
+            fail(id, 'Couldn’t stop — try again.');
+            throw e;
+          },
+        );
+    },
+    [api, qc, remove, fail, clear],
   );
 
   const keepStale = useCallback(
     (id: string) => {
+      clear(id);
       api.resolveStaleSession(id, 'keep').then(
         () => {
-          clear(id);
           invalidateTaskData(qc);
           setStale((cur) => cur.filter((s) => s.id !== id));
         },
@@ -300,9 +316,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
 
   const discardStale = useCallback(
     (id: string) => {
+      clear(id);
       api.resolveStaleSession(id, 'discard').then(
         () => {
-          clear(id);
           setStale((cur) => cur.filter((s) => s.id !== id));
         },
         () => fail(id, 'Couldn’t discard — try again.'),

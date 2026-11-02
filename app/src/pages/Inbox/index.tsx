@@ -14,7 +14,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 export function InboxPage() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
-  const { data: ideas = [], isPending, isError } = useIdeas('open');
+  const { data: ideas = [], isPending, isError, refetch } = useIdeas('open');
 
   const createTask = useCreateTask();
   const createLog = useCreateLogEntry(today);
@@ -26,7 +26,12 @@ export function InboxPage() {
         Inbox
       </Text>
       {ideas.length === 0 ? (
-        <EmptyState pending={isPending} error={isError} title="Inbox is clear.">
+        <EmptyState
+          pending={isPending}
+          error={isError}
+          onRetry={() => void refetch()}
+          title="Inbox is clear."
+        >
           Switch the bar below to Idea and anything half-formed lands here, to be sorted whenever
           you feel like it.
         </EmptyState>

@@ -169,9 +169,9 @@ export function BulkAddDialog({
           ))}
 
         {tasksFailed && (
-          <Text size="xs" tone="muted">
+          <LoadError size="xs" onRetry={() => void tasksQ.refetch()}>
             Couldn’t check for duplicates — your task list didn’t load.
-          </Text>
+          </LoadError>
         )}
 
         <div className="flex items-center justify-between gap-3">

@@ -218,9 +218,9 @@ function DialogBody({
           </LoadError>
         )}
         {categoriesFailed && !listFailed && (
-          <Text size="xs" tone="muted">
+          <LoadError size="xs" onRetry={() => void categoriesQ.refetch()}>
             Couldn’t load categories — #label search is off.
-          </Text>
+          </LoadError>
         )}
         {!listFailed &&
           matches.slice(0, CAP).map((t) => (

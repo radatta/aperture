@@ -11,7 +11,7 @@ import { useFluxOutboxFlush } from '../../modules/flux/useFluxOutbox';
 // disclaimer gate (accepted once, synced via Settings) and the shared footer; the library and each
 // exercise's stage are child routes, so an exercise is a deep link and Back works.
 export function FluxPage() {
-  const { data: settings, isPending, isError } = useSettings();
+  const { data: settings, isPending, isError, refetch } = useSettings();
   const update = useUpdateSettings();
   useFluxOutboxFlush(); // sets a closed app or a dropped connection left queued (D49)
   const pageRef = useRef<HTMLDivElement>(null);
@@ -40,7 +40,7 @@ export function FluxPage() {
         </Text>
       </div>
       {!settings ? (
-        <EmptyState pending={isPending} error={isError} title="" />
+        <EmptyState pending={isPending} error={isError} onRetry={() => void refetch()} title="" />
       ) : settings.fluxDisclaimerAckAt === null ? (
         <>
           <Disclaimer

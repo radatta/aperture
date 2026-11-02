@@ -20,7 +20,7 @@ export interface TodayPlan {
   isPending: boolean;
   // ...and what a FAILED one looks like. Without this, an error renders as a confident empty plan.
   isError: boolean;
-  // The day record (capacity) failed on its own — the plan still shows, its capacity can't.
+  // The day record (capacity) failed, or settings did so it never ran — the plan still shows, its capacity can't.
   dayError: boolean;
   retry: () => void; // refetch whichever halves failed
 }
@@ -28,7 +28,8 @@ export interface TodayPlan {
 // Today's work — the timed tasks whose time falls today, then the day's plan — shared by the morning
 // plan card, the daytime tasks + budget cards, so they agree and don't each re-derive it.
 export function useTodayPlan(): TodayPlan {
-  const { data: settings } = useSettings();
+  const settingsQ = useSettings();
+  const { data: settings } = settingsQ;
   const dayStartHour = settings?.dayStartHour ?? 4;
   const day = todayKey(dayStartHour);
   const dayQ = useDay(day);
@@ -56,9 +57,12 @@ export function useTodayPlan(): TodayPlan {
     totalCount: rows.filter((r) => r.task.status !== 'cancelled').length,
     pva: plannedVsAvailable(plannedMin, dayRec?.capacityHours ?? null),
     isPending: plansPending || tasksPending,
-    isError: plansError || tasksError,
-    dayError: dayQ.isError && dayRec === undefined,
+    // Only when there's nothing to show: a failed background refetch keeps the plan on screen.
+    isError: (plansError && plansQ.data === undefined) || (tasksError && tasksQ.data === undefined),
+    // useDay waits for settings, so a failed settings read leaves the day pending for good — a failure too.
+    dayError: dayRec === undefined && (dayQ.isError || (settingsQ.isError && !settings)),
     retry: () => {
+      if (settingsQ.isError) void settingsQ.refetch();
       if (plansQ.isError) void plansQ.refetch();
       if (tasksQ.isError) void tasksQ.refetch();
       if (dayQ.isError) void dayQ.refetch();

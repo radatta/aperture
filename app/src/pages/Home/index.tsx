@@ -81,11 +81,25 @@ function NightHome({ today }: { today: string }) {
   );
 }
 
+// The day record, or why it can't load: useDay waits for settings, so a failed settings read leaves it
+// pending for good — said here too, not left as a disabled field with no reason.
+function useDayOrFail(today: string) {
+  const settingsQ = useSettings();
+  const dayQ = useDay(today);
+  const failed =
+    dayQ.data === undefined && (dayQ.isError || (settingsQ.isError && !settingsQ.data));
+  const retry = () => {
+    if (settingsQ.isError) void settingsQ.refetch();
+    if (dayQ.isError) void dayQ.refetch();
+  };
+  return { data: dayQ.data, failed, retry };
+}
+
 // Morning: one optional line to aim the day — never scored.
 function IntentCard() {
   const { data: settings } = useSettings();
   const today = todayKey(settings?.dayStartHour ?? 4);
-  const { data: day, isError, refetch } = useDay(today);
+  const { data: day, failed, retry } = useDayOrFail(today);
   const setIntent = useSetIntent(today);
   const [value, setValue] = useState('');
   useEffect(() => setValue(day?.intent ?? ''), [day?.intent]);
@@ -93,9 +107,7 @@ function IntentCard() {
   const commit = () => day && value !== (day.intent ?? '') && setIntent.mutate(value.trim());
   return (
     <HomeCard title="Intent">
-      {isError && !day && (
-        <LoadError onRetry={() => void refetch()}>Couldn’t load today’s intent.</LoadError>
-      )}
+      {failed && <LoadError onRetry={retry}>Couldn’t load today’s intent.</LoadError>}
       <input
         disabled={!day}
         value={value}
@@ -112,7 +124,7 @@ function IntentCard() {
 
 // Night: one rotating prompt, fully skippable.
 function ReflectionCard({ today }: { today: string }) {
-  const { data: day, isError, refetch } = useDay(today);
+  const { data: day, failed, retry } = useDayOrFail(today);
   const setReflection = useSetReflection(today);
   const prompt = day?.reflectionPrompt ?? reflectionPromptFor(today);
   const [text, setText] = useState('');
@@ -123,9 +135,7 @@ function ReflectionCard({ today }: { today: string }) {
         <Text size="sm" tone="muted">
           {prompt}
         </Text>
-        {isError && !day && (
-          <LoadError onRetry={() => void refetch()}>Couldn’t load today’s reflection.</LoadError>
-        )}
+        {failed && <LoadError onRetry={retry}>Couldn’t load today’s reflection.</LoadError>}
         <textarea
           disabled={!day} // a reflection you were never shown would be saved over
           value={text}
@@ -204,10 +214,12 @@ function PlanTodayCard() {
 
 // Daytime: hours spent vs planned — the running calibration.
 function TimeBudgetCard() {
-  const { spentMin, plannedMin } = useTodayPlan();
+  const { spentMin, plannedMin, isPending, isError, retry } = useTodayPlan();
   return (
     <HomeCard title="Time budget">
-      {plannedMin === 0 ? (
+      {isPending || isError ? (
+        <EmptyState pending={isPending && !isError} error={isError} onRetry={retry} title="" />
+      ) : plannedMin === 0 ? (
         <Text tone="muted" size="sm">
           No plan to budget against yet.
         </Text>
@@ -322,7 +334,7 @@ function ReviewCard({ today }: { today: string }) {
 // Shared between morning ("due") and night ("check"). Read-only for now — marking them off + the
 // weekly calendar are Phase 7. Shows the real seeded habits so the shell isn't hollow.
 function HabitsCard({ title }: { title: string }) {
-  const { data: habits = [], isPending, isError } = useHabits();
+  const { data: habits = [], isPending, isError, refetch } = useHabits();
   const active = habits.filter((h) => h.active);
   return (
     <HomeCard title={title}>
@@ -330,6 +342,7 @@ function HabitsCard({ title }: { title: string }) {
         <EmptyState
           pending={isPending}
           error={isError}
+          onRetry={() => void refetch()}
           title="No habits yet."
           action={
             <ButtonLink size="sm" to="/habits">

@@ -77,12 +77,16 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     return id;
   };
   // A response the page got with `status` (a throttled call: 429).
-  const respond = (path: string, status: number) => {
+  const respond = (
+    path: string,
+    status: number,
+    request: { method(): string } = { method: () => 'POST' },
+  ) => {
     const res = {
       url: () =>
         path.startsWith('https://') ? path : `https://dev.aperture.rahuldatta.dev${path}`,
       status: () => status,
-      request: () => ({ method: () => 'POST' }),
+      request: () => request,
       json: async () => ({}),
     };
     for (const l of responseListeners) l(res);
@@ -95,16 +99,18 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   // response listeners, as a real one would.
   const call = async (method: string): Promise<number | 'real' | 'dropped'> => {
     const url = `https://dev.aperture.rahuldatta.dev/api/${method}`;
-    const hit = routes.find((x) => x.match(new URL(url)));
+    const hit = [...routes].reverse().find((x) => x.match(new URL(url))); // Playwright: last registered wins
     if (!hit) return 'real';
     let out: number | 'real' | 'dropped' = 'real';
+    const request = { url: () => url, method: () => 'POST', response: async () => null };
     await hit.handler({
-      request: () => ({ url: () => url, method: () => 'POST', response: async () => null }),
+      request: () => request,
       continue: async () => void (out = 'real'),
+      fallback: async () => void (out = 'real'),
       abort: async () => void (out = 'dropped'),
       fulfill: async ({ status }) => {
         out = status;
-        respond(`/api/${method}`, status);
+        respond(`/api/${method}`, status, request);
       },
     });
     return out;
@@ -603,6 +609,22 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc]));
     expect(r.injected).toEqual(['/api/listCategories → 429']);
     expect(r.throttled).toEqual(['/api/listCategories']);
+  });
+
+  it('inside an intercept window, a real throttle still counts and a real failure is recorded', async () => {
+    const w = world();
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('listCategories', { times: 1 });
+      await x.call('listCategories'); // injected
+      x.respond('/api/listCategories', 429); // a real one on the same method, passed through
+      x.respond('/api/getDay', 500); // a real failure while the console lines are being dropped
+      await i.release();
+      x.respond('/api/getDay', 500); // outside the window: the console line itself carries it
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.injected).toEqual(['/api/listCategories → 429']);
+    expect(r.throttled).toEqual(['/api/listCategories']);
+    expect(r.consoleErrors).toEqual(['HTTP 500 on /api/getDay (during an injected failure)']);
   });
 
   it('console 429 lines inside an intercept window are dropped; later ones count', async () => {

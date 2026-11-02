@@ -65,6 +65,7 @@ export function TaskListSection({
   ctx,
   pending,
   error,
+  onRetry,
 }: {
   place: Place;
   query: TaskQuery;
@@ -74,6 +75,7 @@ export function TaskListSection({
   ctx: QueryCtx;
   pending: boolean;
   error: boolean;
+  onRetry?: () => void; // the failed read's refetch
 }) {
   const { addToDay, unplan } = useAddToDay();
   const transition = useTransitionTask();
@@ -112,6 +114,7 @@ export function TaskListSection({
         <EmptyState
           pending={pending}
           error={error}
+          onRetry={onRetry}
           title={`Nothing matches “${query.text.trim()}”.`}
         >
           Search covers titles, category names, and notes.
@@ -122,6 +125,7 @@ export function TaskListSection({
         <EmptyState
           pending={pending}
           error={error}
+          onRetry={onRetry}
           title="Nothing matches."
           action={
             <Button
@@ -138,7 +142,7 @@ export function TaskListSection({
       );
     const empty = EMPTY[place === 'today' ? 'backlog' : place];
     return wrap(
-      <EmptyState pending={pending} error={error} title={empty.title}>
+      <EmptyState pending={pending} error={error} onRetry={onRetry} title={empty.title}>
         {empty.body}
       </EmptyState>,
     );

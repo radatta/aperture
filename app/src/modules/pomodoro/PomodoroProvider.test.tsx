@@ -121,4 +121,33 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await user.click(await screen.findByTitle('Start a 25-minute focus block'));
     await screen.findByText('Couldn’t start the timer — try again.');
   });
+
+  it('stopping a paused timer resets its clock first, so the pause is never credited', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    const calls: string[] = [];
+    const resume = api.resumeSession.bind(api);
+    const stopS = api.stopSession.bind(api);
+    api.resumeSession = (id) => (calls.push('resume'), resume(id));
+    api.stopSession = (id, st) => (calls.push('stop'), stopS(id, st));
+    renderApp({ api, path: '/settings' });
+    await startFocus(user);
+    await user.click(screen.getByRole('button', { name: 'Pause' }));
+    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+    await screen.findByTitle('Start a 25-minute focus block');
+    expect(calls).toEqual(['resume', 'stop']);
+  });
+
+  it('a running timer stops without a reset', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    const calls: string[] = [];
+    const resume = api.resumeSession.bind(api);
+    api.resumeSession = (id) => (calls.push('resume'), resume(id));
+    renderApp({ api, path: '/settings' });
+    await startFocus(user);
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByTitle('Start a 25-minute focus block');
+    expect(calls).toEqual([]);
+  });
 });

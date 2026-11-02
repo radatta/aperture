@@ -103,6 +103,10 @@ export function TasksPage() {
             ctx={ctx}
             pending={pending}
             error={error}
+            onRetry={() => {
+              if (tasksQ.isError) void tasksQ.refetch();
+              if (plansQ.isError) void plansQ.refetch();
+            }}
           />
         ) : null}
         {lens === 'recurring' && <RecurringSection />}

@@ -144,9 +144,10 @@ picker offering only "Uncategorized". It says what didn't load, as an alert with
 only when there's nothing to show (`isError && data === undefined`); a failed background refetch keeps the data
 on screen and says nothing. A field whose value didn't load is disabled, not empty, because typing into it would
 save over what you were never shown (Intent, capacity, the category picker). A label resolver that can't say it
-per item (CategoryTag) marks the gap (a "—" pill) and leaves the red line to one place on the page. Retries:
+per item (CategoryTag) marks the gap (a "—" pill), and the page's own error line carries the Retry. Retries:
 the http client retries a **429** for every call, writes included (`app/src/data/retry.ts`: Lambda refused to
-start, so the call never ran; the BFF never answers 429 itself), twice, 600 ms then 1.8 s ±20%. The query layer
+start, so the call never ran; the BFF never answers 429 itself), with the backoff set there. The query layer
 retries a **5xx or a dropped connection on reads only**, because a write that may have landed must show its
 error, not run twice. A Pomodoro call that fails says so on its row in the dock, and a failed `stop()` rejects
-and keeps the timer.
+and keeps the timer. Reads run with `networkMode: 'always'`, so offline they fail and say so instead of pausing
+on "Loading…".

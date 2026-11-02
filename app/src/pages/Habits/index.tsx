@@ -73,6 +73,7 @@ export function HabitsPage() {
               today={today}
               weeks={weeks}
               checkedDates={new Set(checks.filter((c) => c.habitId === h.id).map((c) => c.date))}
+              checksFailed={checksFailed}
             />
           ))
         )}
@@ -86,11 +87,13 @@ function HabitCard({
   today,
   weeks,
   checkedDates,
+  checksFailed,
 }: {
   habit: Habit;
   today: string;
   weeks: string[][];
   checkedDates: Set<string>;
+  checksFailed: boolean; // the cells can't show their state — blank, not "missed", and not tappable
 }) {
   const check = useCheckHabit();
   const upsert = useUpsertHabit();
@@ -128,7 +131,7 @@ function HabitCard({
           <div className="flex flex-wrap items-center gap-2">
             <CategoryTag categoryId={habit.categoryId} />
             <Text size="xs" tone={count >= habit.cadencePerWeek ? 'teal' : 'muted'} tabular>
-              {count}/{habit.cadencePerWeek} this week
+              {checksFailed ? '—' : count}/{habit.cadencePerWeek} this week
             </Text>
           </div>
         </div>
@@ -168,7 +171,7 @@ function HabitCard({
                     <button
                       key={date}
                       type="button"
-                      disabled={future}
+                      disabled={future || checksFailed}
                       aria-pressed={done}
                       aria-label={`${habit.name} on ${fmtDayHeading(date)}`}
                       title={fmtDayHeading(date)}

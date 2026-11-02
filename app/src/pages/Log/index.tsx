@@ -17,7 +17,7 @@ export function LogPage() {
   const [day, setDay] = useState(today);
   const isToday = day === today;
 
-  const { data: entries = [], isPending, isError } = useLog(day);
+  const { data: entries = [], isPending, isError, refetch } = useLog(day);
   const update = useUpdateLogEntry(day);
 
   return (
@@ -61,6 +61,7 @@ export function LogPage() {
             <EmptyState
               pending={isPending}
               error={isError}
+              onRetry={() => void refetch()}
               title={`Nothing logged ${isToday ? 'yet today' : 'this day'}.`}
             >
               {isToday

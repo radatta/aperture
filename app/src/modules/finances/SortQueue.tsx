@@ -34,11 +34,13 @@ export function SortQueue({
   view,
   pending,
   error,
+  onRetry,
 }: {
   overview: FinanceOverview;
   view: FinanceView | null;
   pending: boolean;
   error: boolean;
+  onRetry?: () => void; // the failed read's refetch
 }) {
   const groups = useMemo(() => {
     if (!view) return [];
@@ -97,7 +99,12 @@ export function SortQueue({
   if (groups.length === 0 && !open)
     return (
       <div ref={doneRef} tabIndex={-1} className="outline-none">
-        <EmptyState pending={!error && (pending || !view)} error={error} title="All sorted.">
+        <EmptyState
+          pending={!error && (pending || !view)}
+          error={error}
+          onRetry={onRetry}
+          title="All sorted."
+        >
           New charges land here after each sync (four times a day). Sort them whenever — mid-cycle
           or right before the payment.
         </EmptyState>

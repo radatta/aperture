@@ -51,14 +51,14 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
           {/* A failed day read can't show the capacity, and an empty field would save over it. */}
           {dayError ? (
             <LoadError onRetry={retry}>Couldn’t load today’s capacity.</LoadError>
-          ) : (
+          ) : !dayRec ? null : (
             <CapacityField
               key={dayRec?.id ?? day}
               initial={dayRec?.capacityHours ?? null}
               onSave={(h) => setCapacity.mutate(h)}
             />
           )}
-          {dayError ? null : pva.availableMin === null ? (
+          {dayError || !dayRec ? null : pva.availableMin === null ? (
             <Text size="sm" tone="muted">
               {fmtDuration(plannedMin)} planned. Set your available hours to see if you&apos;re
               over-scoping.
@@ -104,6 +104,7 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
           <EmptyState
             pending={isPending}
             error={isError}
+            onRetry={retry}
             title="Nothing planned yet."
             action={
               <Button variant="ghost" size="sm" onClick={onOpenWeek}>

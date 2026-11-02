@@ -76,8 +76,8 @@ describe('Home never shows a failed read as empty', () => {
     const user = userEvent.setup();
     renderApp({ api: failing(stub(), 'listPlansForDay') });
     await user.click(await screen.findByRole('button', { name: 'Morning' }));
-    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
-    expect(screen.queryByText('Nothing planned yet.')).toBeNull();
+    await screen.findAllByText(/Couldn.t load this\. Check your connection/);
+    expect(screen.queryByText(/Nothing planned yet/)).toBeNull();
   });
 });
 
@@ -149,9 +149,39 @@ describe('Tasks never shows a failed read as empty', () => {
 });
 
 describe('Settings, Habits and Rolls never show a failed read as empty', () => {
-  it('a failed settings read shows an error, not an empty page', async () => {
+  it('a failed settings read shows an error, not an empty page — once, not twice', async () => {
     renderApp({ api: failing(stub(), 'getSettings'), path: '/settings' });
     await screen.findByText(/Couldn.t load your settings — calendar, preferences/);
+    expect(screen.queryByText(/running on defaults/)).toBeNull(); // the shell's notice steps aside here
+  });
+
+  it('a failed settings read disables Intent and says why, instead of a field that never loads', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: failing(stub(), 'getSettings') });
+    await user.click(await screen.findByRole('button', { name: 'Morning' }));
+    await screen.findByText('Couldn’t load today’s intent.');
+    expect(screen.getByLabelText<HTMLInputElement>('Day intent').disabled).toBe(true);
+  });
+
+  it('a failed settings read hides the Today capacity field instead of an empty one', async () => {
+    renderApp({ api: failing(stub(), 'getSettings'), path: '/tasks' });
+    await screen.findByText('Couldn’t load today’s capacity.');
+  });
+
+  it('a failed plan read on Daytime says so instead of “No plan to budget against”', async () => {
+    const user = userEvent.setup();
+    renderApp({ api: failing(stub(), 'listPlansForDay') });
+    await user.click(await screen.findByRole('button', { name: 'Daytime' }));
+    await screen.findAllByText(/Couldn.t load this\. Check your connection/);
+    expect(screen.queryByText(/No plan to budget against/)).toBeNull();
+  });
+
+  it('failed checks blank the Habits page counts and lock the cells', async () => {
+    renderApp({ api: failing(stub(), 'listHabitChecks'), path: '/habits' });
+    await screen.findByText('Couldn’t load your check-ins.');
+    expect(screen.getAllByText(/^—\/\d this week$/).length).toBeGreaterThan(0);
+    const cell = screen.getAllByRole<HTMLButtonElement>('button', { name: / on / })[0]!;
+    expect(cell.disabled).toBe(true);
   });
 
   it('a failed categories read says so above the list', async () => {

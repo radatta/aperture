@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Outlet, useMatches } from 'react-router';
+import { Outlet, useLocation, useMatches } from 'react-router';
 import { AppHeader } from './AppHeader';
 import { AppNav } from './AppNav';
 import { CaptureBar } from '../modules/capture/CaptureBar';
@@ -32,7 +32,9 @@ export function AppShell() {
   // Every `settings?.x ?? default` across the app quietly runs on defaults when this read fails — this one
   // line says so for all of them.
   const settings = useSettings();
-  const settingsFailed = settings.isError && settings.data === undefined;
+  // The Settings page says it itself, beside the sections that can't show.
+  const onSettings = useLocation().pathname.startsWith('/settings');
+  const settingsFailed = settings.isError && settings.data === undefined && !onSettings;
 
   // Reserve exactly as much room as the dock currently needs. A fixed padding can't be right: the
   // dock grows when a timer is running, when several run at once, and when the capture field wraps

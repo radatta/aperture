@@ -42,6 +42,7 @@ describe('retry policy', () => {
   it('the app QueryClient wires the policy and leaves mutations un-retried', () => {
     const d = queryClient.getDefaultOptions();
     expect(d.queries?.retry).toBe(retryQuery);
+    expect(d.queries?.networkMode).toBe('always'); // offline fails visibly, never pauses on "Loading…"
     expect(d.mutations?.retry).toBeUndefined();
   });
 });

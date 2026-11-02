@@ -6,11 +6,13 @@ import { useCategories } from '../../data/hooks/useCategories';
 export function CategoryTag({ categoryId }: { categoryId: string | null }) {
   const { data: cats, isError } = useCategories();
   // A failed roster read can't resolve the label, and nothing would read as "uncategorized": mark the
-  // absence instead (the red line with Retry lives in QueryControls, on every list lens).
+  // absence instead. A per-card red line would be noise; the page's own categories error (QueryControls on
+  // the Tasks lenses) carries the Retry.
   if (categoryId && isError && !cats)
     return (
       <span
         title="Couldn’t load categories"
+        aria-label="Category unknown — couldn’t load categories"
         className="rounded-full border border-line px-2 py-0.5 text-xs text-ink-subtle"
       >
         —

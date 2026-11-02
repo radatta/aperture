@@ -95,6 +95,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   let api: ApiClient | undefined;
   let prefix = 'setup';
   const intercepts = new Set<{ method: string; release: () => Promise<void> }>(); // live ctx.intercept()s
+  const injectedRequests = new WeakSet<object>(); // the requests an intercept answered itself
 
   d.ledger.append({ run: d.runId, op: 'run-start' });
   try {
@@ -109,10 +110,14 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     });
     page.on('pageerror', (e) => r.consoleErrors.push(String(e)));
     page.on('response', (res) => {
-      if (res.status() !== 429) return;
+      if (injectedRequests.has(res.request())) return; // ours: in r.injected
       const url = new URL(res.url());
       const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
-      if (method && [...intercepts].some((i) => i.method === method)) return; // ours: in r.injected
+      // While an intercept is live the console's failed-load lines are dropped (they name no URL), so a real
+      // failed /api call in that window is recorded from its response instead — never hidden.
+      if (intercepts.size && method && res.status() >= 400 && res.status() !== 429)
+        r.consoleErrors.push(`HTTP ${res.status()} on /api/${method} (during an injected failure)`);
+      if (res.status() !== 429) return;
       // Off the dev origin, the host too, so a third party's `/api/x` never reads as a BFF method.
       r.throttled.push(
         method
@@ -251,10 +256,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const handler = async (route: PwRoute) => {
       if (left <= 0) {
         passed++;
-        return route.continue();
+        return route.fallback();
       }
       left--;
       hits++;
+      injectedRequests.add(route.request());
       r.injected.push(`/api/${method} → ${opts.abort ? 'dropped' : status}`);
       if (opts.abort) return route.abort('failed');
       return route.fulfill({ status, body: '{}', headers: { 'content-type': 'application/json' } });

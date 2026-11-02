@@ -27,7 +27,9 @@ export const isThrottle = (e: unknown) => e instanceof ApiError && e.status === 
 export const isTransientRead = (e: unknown) =>
   e instanceof ApiError ? e.status >= 500 : e instanceof TypeError; // fetch rejects with TypeError offline
 
-// React Query's `retry`: a throttle has already been retried below, so it isn't retried again here.
+// React Query's `retry`: a throttle has already been retried below, so it isn't retried again here. A
+// read that alternates 5xx and 429 can still reach 9 sends (3 query tries × 3 http tries) — bounded, rare.
+// A TypeError thrown by a bug inside a query function also retries; it fails the same way after 3 tries.
 export const retryQuery = (failureCount: number, e: unknown) =>
   failureCount < MAX_RETRIES && isTransientRead(e);
 export const retryQueryDelay = (attempt: number) => retryDelayMs(attempt);

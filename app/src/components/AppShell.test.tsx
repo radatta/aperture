@@ -108,7 +108,7 @@ describe('a failed settings read', () => {
       if (fail) throw new Error('getSettings failed (503)');
       return real();
     };
-    renderApp({ api, path: '/settings' });
+    renderApp({ api, path: '/habits' });
     await screen.findByLabelText('Capture log');
     expect(screen.queryByText(/running on defaults/)).toBeNull(); // still pending
     act(() => release());

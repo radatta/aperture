@@ -135,8 +135,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 **A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency quota is low for now
 ([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
 cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
-calls back off on a 429 (five retries, 500 ms → 8 s), and so does the app (two retries, 600 ms → 1.8 s,
-`app/src/data/retry.ts`), so most of the burst now recovers on screen. But Chromium logs every 429 response as a console
+calls back off on a 429 (five retries, 500 ms → 8 s), and so does the app (`app/src/data/retry.ts`), so most of
+the burst now recovers on screen. But Chromium logs every 429 response as a console
 error, retried or not, so they still surface: in the
 smoke scenario's _No console errors on the way_ step, and again in every later step that re-reads the run's cumulative
 console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
@@ -154,7 +154,8 @@ full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when a
   (one throttled call can log two lines — the resource's and the app's own `Error: … failed (429)`; a refetch loop or
   request storm, also all 429s, would exceed it);
 - the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
-  function, so that call was never tested; if it names one, rerun until it doesn't;
+  function, so that attempt was never tested — the app's retry may have recovered the call, but a listed method
+  isn't proven by this run; if it names one, rerun until it doesn't;
 - every _Feature coverage_ row — _This feature_ and _Other scenarios_ alike — is `pass`, `off dev` or `needs you`. This rule never makes a row green: a 429 that
   fails a proving step leaves its row not proven — rerun until it passes.
 
@@ -266,12 +267,17 @@ can't fail the next scenario's reads.
 
 While any intercept is live, the console's `Failed to load resource: … status of N` and `net::ERR_FAILED` lines are
 the harness's own doing and are left out of _Console errors_. Chromium's line names no URL, so the drop covers
-the whole window, not one method: a real cold-start 429 inside it is hidden too, for a few seconds per step.
-Injected responses are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last
+the whole window (up to ~40 s in `failed-reads`' heartbeat step), not one method. To keep a real failure in that
+window from hiding, every non-injected dev `/api` response ≥ 400 other than a 429 is recorded from the response
+itself, as `HTTP <status> on /api/<method> (during an injected failure)`, and a real 429 still lands in _Throttled
+(429)_. Only a dropped real connection inside the window goes unrecorded. Injected responses are known by their
+request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last
 in `SCENARIOS` for this reason, and because it waits 32 s for heartbeats. It also starts and stops one ad-hoc focus
 timer through the dock, which leaves a seconds-long completed session in the test user's history each run.
 Sessions have no delete method, so they're not ledgered; a timer an aborted run left running is stopped through
-the dock at the scenario's start.
+the dock before the timer steps, judged by the server's list. Some of its rows are off dev only because they need
+data the harness can't write on the test user (a Google account, habits, rolls, categories, a plan); their tests
+are named in the scenario.
 
 ### Rows
 
