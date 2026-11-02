@@ -250,22 +250,23 @@ Residual risks:
 
 ## Trial
 
-The trial runs at dev test with the real install. A Claude session on the Mac does it, working in the worktree, and writes findings to `localNotes/trial/findings.md`.
+The trial runs at dev test with the real install. A Claude session on the Mac does it, and writes its findings to the worktree's `localNotes/trial/findings.md`. **It runs nothing from the shared folder.** Everything it runs runs as the user, and the user can read the Keychain token, so a container-writable script would get that token. Every script it runs comes from GitHub at the reviewed commit.
 
-1. **Fixtures:** run `bash tools/mailroom/run-fixtures.sh`. On Darwin it re-executes itself under `/bin/bash` 3.2 with the system `PATH`, as launchd would. Want `0 failed`.
-2. **Install:** the branch's commit, using the `--ref` form under _Install_. First read `tools/mailroom/` at that sha on github.com, then answer `y`. `launchctl print` should show the label and the inbox path, with no error.
-3. **Probe:** the container runs `pnpm mailroom probe`. Want `probe ok`, a latency, and the token expiry.
+1. **Review:** read `tools/mailroom/` at the branch's sha on github.com: `install.sh`, `runner.sh`, `jobs/`, `run-fixtures.sh` and `testdata/`.
+2. **Fixtures, from GitHub, outside the mount.** Fetch the tarball at that sha with the mailroom token (Contents: read) into a fresh Mac temp dir, then run `/bin/bash tools/mailroom/run-fixtures.sh` there. On Darwin it pins `/bin/bash` 3.2 and the system `PATH`, as launchd would. Want `0 failed`. The trial runbook has the exact line.
+3. **Install:** the branch's commit, with the `--ref` form under _Install_. Answer `y` only if the diff matches what step 1 read. `launchctl print` should show the label and the inbox path, with no error.
+4. **Probe:** the container runs `pnpm mailroom probe`. Want `probe ok`, a latency, and the token expiry.
    - No result in time: re-install with `--mode poll` and re-probe. That's a logged design change, not a kill.
    - `TOKEN_MISSING`: run `security find-generic-password -s aperture-mailroom-gh -w >/dev/null` once from Terminal, click Always Allow, and re-probe.
-4. **Junk file:** a bad file dropped into the inbox should leave the inbox empty, write a `BAD_JSON` result, and not loop in the log.
-5. **Token wall:** a Contents write should get `403` or `404`. If it ever answers `201`, the token is too broad: delete the `mailroom-probe-junk` branch and regenerate the token.
+5. **Junk file:** a bad file dropped into the inbox should leave the inbox empty, write a `BAD_JSON` result, and not loop in the log.
+6. **Token wall:** a Contents write should get `403` or `404`. If it ever answers `201`, the token is too broad: delete the `mailroom-probe-junk` branch and regenerate the token. Use any existing commit sha as `<main sha>`. Don't take it from `git` in the checkout, because that `.git` is container-writable too.
 
    ```sh
-   cd /Users/rahuldatta/Coding/Personal/aperture && curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github+json' --data "{\"ref\":\"refs/heads/mailroom-probe-junk\",\"sha\":\"$(git rev-parse origin/main)\"}" https://api.github.com/repos/radatta/aperture/git/refs
+   curl -sS -o /dev/null -w '%{http_code}\n' -X POST -H @<(printf 'Authorization: Bearer %s\n' "$(security find-generic-password -s aperture-mailroom-gh -w)") -H 'Accept: application/vnd.github+json' --data '{"ref":"refs/heads/mailroom-probe-junk","sha":"<main sha>"}' https://api.github.com/repos/radatta/aperture/git/refs
    ```
 
-6. **End to end:** the branch's own phase-10 `pnpm mailroom open-pr`. Want a PR authored by `radatta`, with a matching `bodySha256`.
-7. **After merge:** re-install from `main` with the plain command under _Install_.
+7. **End to end:** the branch's own phase-10 `pnpm mailroom open-pr`. Want a PR authored by `radatta`, with a matching `bodySha256`.
+8. **After merge:** re-install from `main` with the plain command under _Install_.
 
 Still UNVERIFIED until the trial runs:
 
