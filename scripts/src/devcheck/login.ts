@@ -2,7 +2,7 @@
 // storageState) so later runs skip the form until the 7-day refresh token lapses. Selectors are exact, not
 // guessed: if the Hosted UI changes, the run fails AUTH_PAGE_CHANGED with a screenshot rather than typing a
 // password into whatever field looks close.
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { DEV_ORIGIN, type DevcheckEnv } from './config';
 import { DevcheckError } from './errors';
 import type { PwContext, PwPage } from './pw-types';
@@ -63,6 +63,13 @@ export function validateCachedState(
     log(`discarding the cached session (${err instanceof Error ? err.message : 'unreadable'})`);
     unlinkSync(path);
   }
+}
+
+// The browser's session file holds the refresh token and the Hosted UI cookie: mode 600 on create, and
+// chmod'd after, since `mode` doesn't touch a file that already exists.
+export async function saveState(context: PwContext, path: string): Promise<void> {
+  writeFileSync(path, JSON.stringify(await context.storageState()), { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 // The classic Hosted UI form, by exact selectors — shared by the app's sign-in and the MCP one (mcp-login.ts).
@@ -132,7 +139,6 @@ export async function ensureSignedIn(
   if (!session)
     throw new DevcheckError('WRONG_USER', 'signed-in shell but no oidc session in localStorage');
   assertTestUser(session, env.DEVCHECK_SUB);
-  // Written by hand with mode 600 from the start — it holds the refresh token.
-  writeFileSync(opts.statePath, JSON.stringify(await context.storageState()), { mode: 0o600 });
+  await saveState(context, opts.statePath);
   return session;
 }

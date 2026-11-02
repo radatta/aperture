@@ -5,7 +5,6 @@
 // request's URL and swapped at the dev pool's token endpoint. Nothing here is written to disk but the browser's
 // own session file (mode 600); the tokens live in memory for the run. docs/ops/DEV-CHECK.md → MCP.
 import { createHash, randomBytes } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
 import type { FetchLike } from './api';
 import {
   CLAUDE_CALLBACK,
@@ -15,8 +14,8 @@ import {
   type DevcheckEnv,
 } from './config';
 import { DevcheckError } from './errors';
-import { submitHostedUiForm } from './login';
-import type { PwContext } from './pw-types';
+import { saveState, submitHostedUiForm } from './login';
+import type { PwContext, PwPage, PwRequest } from './pw-types';
 import { assertTestUser, decodeJwtPayload, type Session } from './token';
 
 export interface Pkce {
@@ -91,6 +90,8 @@ export async function swapCode(
       code_verifier: verifier,
     }).toString(),
     redirect: 'error',
+  }).catch(() => {
+    throw fail('the token endpoint request failed'); // a refused redirect or the network; never its URL
   });
   const text = await res.text();
   let body: Record<string, unknown> = {};
@@ -135,73 +136,108 @@ export function mcpToken(s: McpSession, now: () => number): string {
   return s.accessToken;
 }
 
-// Every claude.ai / claude.com request any page in the context makes is aborted. Playwright routes only the
-// first URL of a redirect chain, so the sign-in's 302 to the callback is stopped by the resolver rule
-// instead (browser.ts); this is the wall for any direct request.
-export async function blockClaude(context: PwContext): Promise<void> {
-  await context.route(
+// The sign-in page's own guard: any direct request to a claude host is aborted. Playwright routes only the
+// first URL of a redirect chain, so the 302 to the callback isn't routed — the resolver rule stops it
+// (browser.ts), and ensureMcpSignedIn proves it failed rather than trusting either.
+async function blockClaude(page: PwPage): Promise<void> {
+  await page.route(
     (u) => isClaudeHost(u.hostname),
     (route) => route.abort('blockedbyclient'),
   );
 }
+
+const urlOr = (s: string): URL | undefined => {
+  try {
+    return new URL(s);
+  } catch {
+    return undefined;
+  }
+};
+const delay = <T>(ms: number, v: T) =>
+  new Promise<T>((res) => setTimeout(() => res(v), ms).unref());
 
 export async function ensureMcpSignedIn(
   context: PwContext,
   env: DevcheckEnv,
   deps: {
     fetch: FetchLike;
-    shot: (name: string) => Promise<void>;
+    shotOf: (page: PwPage) => (name: string) => Promise<void>; // screenshots of the sign-in page itself
     statePath: string;
     log: (msg: string) => void;
     now: () => number;
     callbackWaitMs?: number;
+    settleMs?: number;
   },
 ): Promise<McpSession> {
   const pkce = makePkce();
   const url = authorizeUrl(env, pkce);
   const page = await context.newPage();
+  const shot = deps.shotOf(page);
+  await blockClaude(page);
   // Every request the sign-in makes to a claude host — the callback, and nothing else, exactly once.
-  const toClaude: string[] = [];
+  const toClaude: PwRequest[] = [];
   let seen: (() => void) | undefined;
   const arrived = new Promise<void>((res) => (seen = res));
   page.on('request', (req) => {
-    if (!isClaudeHost(new URL(req.url()).hostname)) return;
-    toClaude.push(req.url());
+    if (!isClaudeHost(urlOr(req.url())?.hostname ?? '')) return;
+    toClaude.push(req);
     seen?.();
   });
   try {
     let form = false;
-    // The callback can't load (no claude host resolves), so the navigation itself fails once it gets there.
-    await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    // Reaching the callback fails the navigation (no claude host resolves) — expected; any other failure
+    // before it is named (the net:: code only: the URL carries the state).
+    const navError = await page.goto(url, { waitUntil: 'domcontentloaded' }).then(
+      () => undefined,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
     if (!toClaude.length) {
-      const at = new URL(page.url());
-      if (at.hostname === env.DEVCHECK_COGNITO_HOST && at.pathname !== '/error') {
-        form = true; // no Hosted UI session cookie for this run: the classic form, as the app's sign-in
-        await submitHostedUiForm(page, env, deps.shot);
-      } else if (at.hostname === env.DEVCHECK_COGNITO_HOST) {
-        await deps.shot('mcp-auth-rejected');
+      const at = urlOr(page.url());
+      if (at?.hostname === env.DEVCHECK_COGNITO_HOST && at.pathname === '/error') {
+        await shot('auth-rejected');
         throw fail(
           `Cognito refused the sign-in: ${at.searchParams.get('error') ?? 'an error page'}`,
         );
       }
+      if (at?.hostname === env.DEVCHECK_COGNITO_HOST) {
+        form = true; // no Hosted UI session cookie for this run: the classic form, as the app's sign-in
+        await submitHostedUiForm(page, env, shot);
+      } else if (navError)
+        throw fail(
+          `the authorize page didn't load (${/net::ERR_[A-Z_]+/.exec(navError)?.[0] ?? 'a navigation error'})`,
+        );
     }
-    const wait = deps.callbackWaitMs ?? 20_000;
-    const timeout = new Promise<'timeout'>((res) => setTimeout(() => res('timeout'), wait).unref());
-    if ((await Promise.race([arrived.then(() => 'ok' as const), timeout])) === 'timeout') {
-      await deps.shot('mcp-no-callback');
-      throw fail(`the sign-in never reached the callback (on ${new URL(page.url()).host})`);
+    if (
+      (await Promise.race([
+        arrived.then(() => 'ok'),
+        delay(deps.callbackWaitMs ?? 20_000, 'timeout'),
+      ])) === 'timeout'
+    ) {
+      await shot('no-callback');
+      throw fail(`the sign-in never reached the callback (on ${urlOr(page.url())?.host ?? '?'})`);
     }
+    // Proven, not assumed: the callback request failed in the browser — nothing came back from a claude host.
+    const answered = await Promise.race([
+      toClaude[0]!.response().catch(() => null),
+      delay(5_000, 'pending' as const),
+    ]);
+    if (answered !== null)
+      throw fail(
+        answered === 'pending'
+          ? 'the callback request never failed — a claude host may be reachable'
+          : 'a claude host answered the callback — the browser reached it',
+      );
+    await delay(deps.settleMs ?? 200, undefined); // a second request would land here
     if (toClaude.length !== 1)
       throw fail(
         `the sign-in sent ${toClaude.length} requests to a claude host, expected the one callback`,
       );
-    const code = parseCallback(toClaude[0]!, pkce.state);
+    const code = parseCallback(toClaude[0]!.url(), pkce.state);
     const session = await swapCode(deps.fetch, env, code, pkce.verifier, deps.now);
     assertMcpTestUser(session, env);
-    // The Hosted UI cookie the sign-in may have refreshed — mode 600 from the start, as ensureSignedIn.
-    writeFileSync(deps.statePath, JSON.stringify(await context.storageState()), { mode: 0o600 });
+    await saveState(context, deps.statePath); // the Hosted UI cookie the sign-in may have refreshed
     deps.log(
-      `mcp: signed in as the test user via the claude client (form ${form ? 'shown' : 'skipped'}), callback aborted ×1`,
+      `mcp: signed in as the test user via the claude client (form ${form ? 'shown' : 'skipped'}), the callback failed in the browser ×1`,
     );
     return session;
   } finally {

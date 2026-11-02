@@ -67,7 +67,12 @@ export function createMcpClient({
   async function data<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
     const r = await tool(name, args);
     if (r.isError) throw new Error(`mcp ${name}: ${r.text}`);
-    return (r.text === 'ok' ? undefined : JSON.parse(r.text)) as T;
+    if (r.text === 'ok') return undefined as T;
+    try {
+      return JSON.parse(r.text) as T;
+    } catch {
+      throw new Error(`mcp ${name}: a result that isn't JSON`);
+    }
   }
 
   // A write may only touch a task this harness created (and not a Flux set's id) — as api.ts.

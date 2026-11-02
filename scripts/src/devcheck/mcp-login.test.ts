@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -128,6 +128,15 @@ describe('swapCode', () => {
     expect(s.expiresAt).toBe(NOW / 1000 + 3600);
   });
 
+  it('a token request that throws (a refused redirect, the network) is MCP_AUTH_FAILED, not a crash', async () => {
+    const fetch = vi.fn<FetchLike>(async () => {
+      throw new TypeError('fetch failed: redirect mode is set to error');
+    });
+    await expect(swapCode(fetch, env, 'abc', 'v', () => NOW)).rejects.toThrow(
+      /^MCP_AUTH_FAILED: the token endpoint request failed$/,
+    );
+  });
+
   it('a token endpoint error names Cognito’s error code, never the body', async () => {
     const fetch = tokenFetch(400, { error: 'invalid_client', detail: 'SECRETBODY' });
     await expect(swapCode(fetch, env, 'abc', 'v', () => NOW)).rejects.toThrow(
@@ -176,16 +185,25 @@ describe('the MCP session', () => {
 });
 
 // A fake browser context: the authorize navigation either redirects straight to the callback (a live Hosted
-// UI cookie), lands on the form (whose submit then redirects), or on Cognito's error page.
-function browser(mode: 'cookie' | 'form' | 'error' | 'never' | 'twice') {
+// UI cookie), lands on the form (whose submit then redirects), or on Cognito's error page. The callback
+// request fails (response → null), as the resolver rule makes it — unless the mode says a claude host answered.
+type Mode = 'cookie' | 'form' | 'error' | 'never' | 'twice' | 'late' | 'answered' | 'nav-error';
+function browser(mode: Mode) {
   const listeners: ((r: PwRequest) => void)[] = [];
   let state = '';
   let url = 'about:blank';
   const shots: string[] = [];
+  const routes: ((u: URL) => boolean)[] = [];
+  const request = (cb: string) =>
+    ({
+      url: () => cb,
+      response: async () => (mode === 'answered' ? { status: () => 200 } : null),
+    }) as unknown as PwRequest;
   const toCallback = () => {
     const cb = callback({ code: 'abc', state });
-    for (const l of listeners) l({ url: () => cb } as PwRequest);
-    if (mode === 'twice') for (const l of listeners) l({ url: () => cb } as PwRequest);
+    for (const l of listeners) l(request(cb));
+    if (mode === 'twice') for (const l of listeners) l(request(cb));
+    if (mode === 'late') setTimeout(() => listeners.forEach((l) => l(request(cb))), 5);
   };
   const locator = () => ({
     waitFor: async () => undefined,
@@ -194,11 +212,14 @@ function browser(mode: 'cookie' | 'form' | 'error' | 'never' | 'twice') {
   });
   const page = {
     on: (ev: string, fn: (r: PwRequest) => void) => void (ev === 'request' && listeners.push(fn)),
+    route: async (match: (u: URL) => boolean) => void routes.push(match),
     async goto(target: string) {
       state = new URL(target).searchParams.get('state')!;
       if (mode === 'form') url = target;
       else if (mode === 'error') url = `https://${HOST}/error?error=redirect_mismatch`;
       else if (mode === 'never') url = 'https://dev.aperture.rahuldatta.dev/';
+      else if (mode === 'nav-error')
+        throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${target}`);
       else {
         toCallback();
         throw new Error('net::ERR_NAME_NOT_RESOLVED');
@@ -212,33 +233,45 @@ function browser(mode: 'cookie' | 'form' | 'error' | 'never' | 'twice') {
     newPage: async () => page,
     storageState: async () => ({ cookies: [] }),
   } as unknown as PwContext;
-  return { context, shots, shot: async (n: string) => void shots.push(n) };
+  return { context, shots, routes, shotOf: () => async (n: string) => void shots.push(n) };
 }
 
 describe('ensureMcpSignedIn', () => {
-  const run = (mode: Parameters<typeof browser>[0], fetch = tokenFetch()) => {
+  const run = (mode: Mode, fetch = tokenFetch(), statePath?: string) => {
     const b = browser(mode);
-    const statePath = join(mkdtempSync(join(tmpdir(), 'mcp-')), 'state.json');
+    const path = statePath ?? join(mkdtempSync(join(tmpdir(), 'mcp-')), 'state.json');
     const log = vi.fn();
     const p = ensureMcpSignedIn(b.context, env, {
       fetch,
-      shot: b.shot,
-      statePath,
+      shotOf: b.shotOf,
+      statePath: path,
       log,
       now: () => NOW,
       callbackWaitMs: 20,
+      settleMs: 20,
     });
-    return { p, b, statePath, log, fetch };
+    return { p, b, statePath: path, log, fetch };
   };
 
-  it('with a live Hosted UI cookie: reads the code from the aborted callback, swaps it, saves the state 600', async () => {
-    const { p, statePath, log, fetch } = run('cookie');
+  it('with a live Hosted UI cookie: proves the callback failed, swaps its code, saves the state 600', async () => {
+    const { p, b, statePath, log, fetch } = run('cookie');
     const s = await p;
     expect(s.clientId).toBe('claude-client');
     expect(new URLSearchParams(fetch.mock.calls[0]![1].body as string).get('code')).toBe('abc');
     expect(statSync(statePath).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(statePath, 'utf8'))).toEqual({ cookies: [] });
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/form skipped\), callback aborted ×1/));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(/form skipped\), the callback failed in the browser ×1/),
+    );
+    expect(b.routes[0]!(new URL('https://claude.ai/x'))).toBe(true); // the page's own guard
+    expect(b.routes[0]!(new URL(`https://${HOST}/x`))).toBe(false);
+  });
+
+  it('tightens an existing state file to 600', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'mcp-')), 'state.json');
+    writeFileSync(path, '{}', { mode: 0o644 });
+    await run('cookie', tokenFetch(), path).p;
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it('fills the Hosted UI form through the shared helper when the authorize lands on it', async () => {
@@ -247,18 +280,34 @@ describe('ensureMcpSignedIn', () => {
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/form shown/));
   });
 
-  it('Cognito’s error page fails with its error code and a screenshot, before any swap', async () => {
+  it('Cognito’s error page fails with its error code and a shot of that page, before any swap', async () => {
     const { p, b, fetch } = run('error');
     await expect(p).rejects.toThrow(
       /MCP_AUTH_FAILED: Cognito refused the sign-in: redirect_mismatch/,
     );
-    expect(b.shots).toEqual(['mcp-auth-rejected']);
+    expect(b.shots).toEqual(['auth-rejected']);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('fails when the callback never comes, or comes twice', async () => {
+  it('a callback a claude host answered is refused — the browser reached it', async () => {
+    const { p, fetch } = run('answered');
+    await expect(p).rejects.toThrow(/a claude host answered the callback/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('fails when the callback never comes, comes twice, or a second request lands after it', async () => {
     await expect(run('never').p).rejects.toThrow(/never reached the callback/);
     await expect(run('twice').p).rejects.toThrow(/sent 2 requests to a claude host/);
+    const late = run('late');
+    await expect(late.p).rejects.toThrow(/sent 2 requests to a claude host/);
+    expect(late.fetch).not.toHaveBeenCalled();
+  });
+
+  it('a navigation that fails before the callback names its net:: code, not the URL', async () => {
+    const err = await run('nav-error').p.catch((e: Error) => e);
+    expect((err as Error).message).toBe(
+      "MCP_AUTH_FAILED: the authorize page didn't load (net::ERR_CONNECTION_REFUSED)",
+    );
   });
 
   it('a session that is not the test user is WRONG_USER, and nothing is saved', async () => {

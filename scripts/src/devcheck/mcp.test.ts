@@ -133,6 +133,12 @@ describe('createMcpClient', () => {
     expect(sentTools(fetch).filter((n) => n === 'delete_attachment')).toHaveLength(1);
   });
 
+  it('a result that isn’t JSON throws naming the tool', async () => {
+    await expect(
+      client(server({ list_tasks: result('<html>') })).reads.listTasks(),
+    ).rejects.toThrow(/^mcp list_tasks: a result that isn't JSON$/);
+  });
+
   it('retries a 429, then gives up with the status in the error', async () => {
     let n = 0;
     const flaky = vi.fn<FetchLike>(async () => (n++ < 2 ? http(429, '') : json([])));

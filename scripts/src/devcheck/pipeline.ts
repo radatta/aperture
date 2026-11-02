@@ -21,7 +21,8 @@ export interface BrowserSession {
   page: PwPage;
   signIn(shot: (name: string) => Promise<void>): Promise<Session>;
   readSession(): Promise<Session | null>; // throws WRONG_USER if the page's session isn't the test user
-  signInMcp(shot: (name: string) => Promise<void>): Promise<McpSession>; // the claude client, as the test user
+  // The claude client, as the test user; screenshots come from its own sign-in page.
+  signInMcp(shotOf: (page: PwPage) => (name: string) => Promise<void>): Promise<McpSession>;
   close(): Promise<void>;
 }
 
@@ -125,7 +126,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
     // After the sweep (whose writes use the checked app session), before any step: the MCP token is the
     // test user's — WRONG_USER otherwise — before a step can write through it.
-    const mcpSession = await browser.signInMcp(shot);
+    const mcpSession = await browser.signInMcp((p) =>
+      makeShot(p, createUi(p), d.shotsDir, () => 'mcp', r.shots),
+    );
     const mcp = d.makeMcp(() => mcpToken(mcpSession, d.now));
 
     r.startSha = parseMarker(await d.fetchShell());

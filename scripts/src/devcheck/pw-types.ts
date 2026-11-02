@@ -51,7 +51,10 @@ export interface PwPage {
   on(event: 'pageerror', fn: (err: Error) => void): void;
   on(event: 'request', fn: (req: PwRequest) => void): void;
   on(event: 'response', fn: (res: PwResponse) => void): void;
-  on(event: 'requestfailed', fn: (req: PwRequest) => void): void;
+  route(
+    url: string | RegExp | ((u: URL) => boolean),
+    handler: (route: PwRoute) => Promise<void> | void,
+  ): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -62,10 +65,6 @@ export interface PwRoute {
 
 export interface PwContext {
   newPage(): Promise<PwPage>;
-  route(
-    url: string | RegExp | ((u: URL) => boolean),
-    handler: (route: PwRoute) => Promise<void> | void,
-  ): Promise<void>;
   storageState(): Promise<unknown>;
   close(): Promise<void>;
 }
