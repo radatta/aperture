@@ -46,7 +46,7 @@ export const fluxHistory: Scenario = {
       kind: 'nominal',
       what: 'Finishing a set on screen saves it',
       needsYou:
-        'the harness has no recorded pose clip to feed Chromium’s fake camera — the set is recorded the way the stage would send it',
+        'the harness has no recorded pose clip to feed Chromium’s fake camera; the set is recorded the way the stage would send it',
     },
   ],
   steps: [
@@ -92,7 +92,7 @@ export const fluxHistory: Scenario = {
       id: 'history',
       entry: 'ui',
       proves: ['history'],
-      title: 'History lists both under Today, the stopped one marked',
+      title: 'History lists both, the stopped one marked',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
