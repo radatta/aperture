@@ -4,6 +4,7 @@ dist/
 coverage/
 cdk.out/
 cdk-outputs.*.json
+.hostjobs/
 .secrets/
 .vite/
 *.tsbuildinfo

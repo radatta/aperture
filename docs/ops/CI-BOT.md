@@ -1,6 +1,6 @@
 # CI bot — Claude's GitHub identity
 
-Claude pushes feature branches, deploys a pushed commit to dev and reads dev logs as a **GitHub App, `aperture-cc-bot`**, through `pnpm bot …`. It never opens or merges PRs: **the user opens every PR**, because a squash commit's author is the PR opener and `main` stays the user's (decided 2026-10-29; until the mac-sim bridge gets an allowlisted "open PR" op, the user runs `gh pr create`). `main` needs the user's code-owner approval or admin bypass, and the bot is not a bypass actor. The container's own GitHub token (a read-only PAT, COI-SANDBOX → _GitHub access_) stays as it is, for fetches and reads.
+Claude pushes feature branches, deploys a pushed commit to dev and reads dev logs as a **GitHub App, `aperture-cc-bot`**, through `pnpm bot …`. It never opens or merges PRs: **the user opens every PR**, because a squash commit's author is the PR opener and `main` stays the user's (decided 2026-10-29; since 2026-11-01 the Mac mailroom opens it with a PR-only token of the user's — MAILROOM.md). `main` needs the user's code-owner approval or admin bypass, and the bot is not a bypass actor. The container's own GitHub token (a read-only PAT, COI-SANDBOX → _GitHub access_) stays as it is, for fetches and reads.
 
 Built 2026-10-13 (ci-bot branch, part of "Zero-Touch PRs"). Its dev deploys (`pnpm bot deploy-dev`) stayed **off** until dev ran in its own AWS account (_Dev deploy blast radius_): the `dev-account` PR moved dev there, and the `dev-cutover` PR turned dispatch on and retired the user's `dev` push path (_Setup_ step 8). `DEV_DEPLOY_ISOLATED` is now the pause switch (the end of _Dev deploy blast radius_).
 
@@ -13,7 +13,7 @@ container                                                     GitHub            
                                    verify ─▶ deploy-stage.yml ref=sha ─ OIDC env:dev ─▶ dev stacks (dev account, SCPs)
   logs        dispatch fetch-dev-logs.yml ref=main ─ OIDC env:dev-logs ─▶ aperture-github-logs-dev ─▶ 3 dev log groups
                  ◀── artifact dev-logs-<key> (3 days)
-PR + merge: the user only — opens with gh pr create, merges (admin bypass for their own PRs); no bot bypass
+PR + merge: the user only — opens via the mailroom (MAILROOM.md), merges (admin bypass for their own PRs); no bot bypass
 ```
 
 ## Commands

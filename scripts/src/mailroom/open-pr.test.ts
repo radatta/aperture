@@ -1,0 +1,238 @@
+import { describe, expect, it } from 'vitest';
+import { fakeClock, fakeRun } from '../bot/fakes.ts';
+import { sha256 } from './job.ts';
+import { memFs } from './fakes.ts';
+import { EXIT, RENEW_LINE, macPath, openPr, probe } from './open-pr.ts';
+import type { Deps } from './open-pr.ts';
+import type { Result } from './submit.ts';
+
+const HJ = '/workspace/.hostjobs';
+const ROOT = '/workspace/.claude/worktrees/mac-mailroom';
+const SHA = 'a'.repeat(40);
+const BODY = 'The body.\n';
+const PR = {
+  number: 90,
+  url: 'https://github.com/radatta/aperture/pull/90',
+  headSha: SHA,
+  author: 'radatta',
+};
+
+function setup(
+  opts: {
+    pushed?: boolean;
+    body?: string | null;
+    existing?: string;
+    offline?: boolean;
+    mac?: (job: { id: string; params: { bodySha256: string } }) => Partial<Result> | 'late' | null;
+    inbox?: boolean;
+  } = {},
+) {
+  const fs = memFs(opts.inbox === false ? [] : [`${HJ}/inbox`]);
+  if (opts.body !== null) fs.files.set(`${ROOT}/localNotes/pr-mac-mailroom.md`, opts.body ?? BODY);
+  const { run, calls } = fakeRun([
+    ['git symbolic-ref', 'mac-mailroom'],
+    ['git rev-parse HEAD', SHA],
+    ['git ls-remote', opts.pushed === false ? '' : `${SHA}\trefs/heads/mac-mailroom`],
+    [
+      'gh pr list',
+      () => {
+        if (opts.offline) throw new Error('gh pr list failed: offline');
+        return opts.existing ?? '';
+      },
+    ],
+  ]);
+  const clock = fakeClock();
+  const logs: string[] = [];
+  // The Mac: on the rename into inbox/, answer (or, for 'late', take the job and answer after the deadline).
+  fs.onRename = (_from, to) => {
+    if (!to.startsWith(`${HJ}/inbox/`) || !opts.mac) return;
+    const job = JSON.parse(fs.files.get(to) ?? '{}') as {
+      id: string;
+      params: { bodySha256: string };
+    };
+    const answer = opts.mac(job);
+    if (answer === null) return;
+    const write = (r: Partial<Result>) =>
+      fs.files.set(
+        `${HJ}/results/${job.id}/result.json`,
+        JSON.stringify({
+          v: 1,
+          id: job.id,
+          job: 'open-pr',
+          runnerVersion: 'v1',
+          durationMs: 900,
+          startedAt: 'T',
+          ...r,
+        }),
+      );
+    if (answer === 'late') {
+      fs.files.delete(to);
+      const sleep = clock.sleep;
+      clock.sleep = async (ms) => {
+        await sleep(ms);
+        if (clock.now() - start > 180_000)
+          write({ status: 'opened', pr: PR, bodySha256: job.params.bodySha256 });
+      };
+      return;
+    }
+    write(answer);
+  };
+  const start = clock.now();
+  const d: Deps = {
+    run,
+    fs,
+    clock,
+    dir: HJ,
+    root: ROOT,
+    repoVersion: () => 'v1',
+    log: (s) => logs.push(s),
+  };
+  return { d, fs, calls, logs };
+}
+
+const opened = (job: { params: { bodySha256: string } }) =>
+  ({
+    status: 'opened',
+    reason: null,
+    pr: PR,
+    bodySha256: job.params.bodySha256,
+  }) as Partial<Result>;
+
+describe('openPr', () => {
+  it('opens through the Mac and reports the URL', async () => {
+    const { d, logs } = setup({ mac: opened });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(logs.at(-1)).toBe(`opened ${PR.url} (author radatta)`);
+  });
+
+  it('sends the worktree PR body, hashed', async () => {
+    let seen = '';
+    const { d } = setup({
+      mac: (job) => {
+        seen = job.params.bodySha256;
+        return opened(job);
+      },
+    });
+    await openPr(d, 'Mac mailroom opens PRs');
+    expect(seen).toBe(sha256(BODY));
+  });
+
+  it('refuses an unpushed branch before writing a job', async () => {
+    const { d, fs } = setup({ pushed: false, mac: opened });
+    await expect(openPr(d, 'Mac mailroom opens PRs')).rejects.toThrow(/pnpm bot push/);
+    expect([...fs.files.keys()].some((k) => k.includes('/inbox/'))).toBe(false);
+  });
+
+  it('refuses a missing PR body file', async () => {
+    const { d } = setup({ body: null });
+    await expect(openPr(d, 'Mac mailroom opens PRs')).rejects.toThrow(
+      /pr-mac-mailroom\.md is missing/,
+    );
+  });
+
+  it('refuses a body the Mac would refuse, with a fix-it hint, and submits nothing', async () => {
+    const { d, fs, logs } = setup({ body: 'thanks @octocat', mac: opened });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.failed);
+    expect(logs.join('\n')).toMatch(/MENTION — an @mention outside backticks/);
+    expect(fs.files.size).toBe(1);
+  });
+
+  it('refuses a title the hand-off line could not quote', async () => {
+    const { d, logs } = setup({ mac: opened });
+    expect(await openPr(d, 'Fix "it" now')).toBe(EXIT.failed);
+    expect(logs[0]).toMatch(/BAD_PARAM/);
+  });
+
+  it('short-circuits an already-open PR without a job', async () => {
+    const { d, fs, logs } = setup({ existing: PR.url, mac: opened });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(logs).toEqual([`exists ${PR.url}`]);
+    expect(fs.files.size).toBe(1);
+  });
+
+  it('still submits when the container cannot reach GitHub', async () => {
+    const { d, calls } = setup({ offline: true, mac: opened });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(calls.some((c) => c.cmd === 'gh')).toBe(true);
+  });
+
+  it('fails loudly when the Mac sent a different body', async () => {
+    const { d, logs } = setup({
+      mac: () => ({ status: 'opened', pr: PR, bodySha256: 'f'.repeat(64) }),
+    });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.failed);
+    expect(logs.at(-1)).toMatch(/different body/);
+  });
+
+  it('withdraws an unanswered job and hands over the Mac command', async () => {
+    const { d, fs, logs } = setup({ mac: () => null });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
+    expect([...fs.files.keys()].some((k) => k.endsWith('.withdrawn.json'))).toBe(true);
+    expect(logs.join('\n')).toContain(
+      'cd /Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/mac-mailroom && gh pr create --title "Mac mailroom opens PRs" --body-file localNotes/pr-mac-mailroom.md',
+    );
+    expect(logs.join('\n')).toMatch(/never installed; no result ever written/);
+  });
+
+  it('waits out a job the Mac took late', async () => {
+    const { d, logs } = setup({ mac: () => 'late' });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(logs.join('\n')).toMatch(/picked the job up late/);
+  });
+
+  it('is unreachable, not a crash, when the Mac never installed', async () => {
+    const { d, logs } = setup({ inbox: false });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
+    expect(logs[0]).toMatch(/inbox is missing/);
+  });
+
+  it('prints the renewal line on a token error', async () => {
+    const { d, logs } = setup({ mac: () => ({ status: 'error', reason: 'TOKEN_REJECTED' }) });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.failed);
+    expect(logs.join('\n')).toContain(RENEW_LINE);
+  });
+
+  it('warns on an expiring token and a stale installed runner, and still succeeds', async () => {
+    const { d, logs } = setup({
+      mac: (job) => ({
+        ...opened(job),
+        tokenWarning: 'TOKEN_EXPIRING',
+        tokenExpiresAt: '2026-11-05T00:00:00Z',
+        runnerVersion: 'v0',
+      }),
+    });
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    expect(logs.join('\n')).toMatch(/TOKEN_EXPIRING[\s\S]*reinstall on the Mac/);
+  });
+});
+
+describe('probe', () => {
+  it('passes on HEAD_MISMATCH with a zero sha and reports the token expiry', async () => {
+    let sha = '';
+    const { d, logs } = setup({
+      mac: (job) => {
+        sha = (job as unknown as { params: { sha: string } }).params.sha;
+        return {
+          status: 'rejected',
+          reason: 'HEAD_MISMATCH',
+          tokenExpiresAt: '2027-11-01T00:00:00Z',
+        };
+      },
+    });
+    expect(await probe(d)).toBe(EXIT.ok);
+    expect(sha).toBe('0'.repeat(40));
+    expect(logs.at(-1)).toMatch(/probe ok.*2027-11-01/);
+  });
+
+  it('fails on anything else', async () => {
+    const { d } = setup({ mac: () => ({ status: 'error', reason: 'TOKEN_MISSING' }) });
+    expect(await probe(d)).toBe(EXIT.failed);
+  });
+});
+
+it('maps container paths to the Mac', () => {
+  expect(macPath('/workspace/.claude/worktrees/x')).toBe(
+    '/Users/rahuldatta/Coding/Personal/aperture/.claude/worktrees/x',
+  );
+  expect(macPath('/workspacex')).toBe('/workspacex');
+});
