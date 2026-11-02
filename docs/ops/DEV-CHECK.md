@@ -31,7 +31,7 @@ already serves it). `--sha` is also how a scenario-only commit proves a build al
 deployed, so a fix to a scenario needs no redeploy: run it with `--sha <the deployed SHA>`, and the report's Build
 line names both (`scenarios from …`). A build dev got from a merge to `main` has no `deploy-dev` run: add
 `--no-deploy-wait`, taking the SHA from dev's `<meta name="aperture-build">`. Exit 0 PASS, 1 FAIL, 2 CRASH. The
-load-time codes (`ENV_MISSING`, `PW_MISSING`, `MATRIX_GAP`) stop the run before it starts: printed to stderr, exit 2,
+load-time codes (`ENV_MISSING`, `PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else) stop the run before it starts: printed to stderr, exit 2,
 no `report.md`. Otherwise read `report.md` first — its first line is the status — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
 
 ## One-time setup
@@ -227,7 +227,7 @@ A row is one entry point × one case, as the user would say it (`what`), `nomina
 - **Off dev** (`offDev: { file, test, why }`) — **if dev can produce the failure naturally, prove it on dev; if
   it can't, a named unit test covers it; no test-only switches in shipped code.** Bad input, size limits, an
   expired link or another user's id happen on dev, so they're proven there; S3 refusing a delete doesn't. `file`
-  is a repo-relative `.test.ts(x)`, `test` the title of a runnable `it()`/`test()` in it, verbatim (not `it.skip`,
+  is a repo-relative `.test.ts(x)`, `test` the title of a runnable `it()`/`test()` opening its own line in it, verbatim (not `it.skip`,
   `it.todo` or a bare string); both are checked. One test per row — a failure with a UI
   half and a BFF half is two rows.
 - **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
