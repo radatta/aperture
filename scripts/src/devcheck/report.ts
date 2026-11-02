@@ -80,7 +80,7 @@ const item = (x: RowResult) => `- ${x.scenario}: ${x.what}`;
 const isUnproven = (x: RowResult) => x.status === 'fail' || x.status === 'skipped';
 const counts = (rs: RowResult[], lead = 'Proven on dev') => {
   const n = (...st: RowStatus[]) => rs.filter((x) => st.includes(x.status)).length;
-  return `${lead} **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · not proven **${n('fail', 'skipped')}**`;
+  return `${lead} **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · not proven **${rs.filter(isUnproven).length}**`;
 };
 const table = (rs: RowResult[]) => [
   '| Scenario | Row | Kind | Entry | Proven by | Result |',
@@ -142,14 +142,20 @@ function renderCoverage(
   if (!feature.length)
     return [
       ...lines,
-      '_No `--feature` named: these rows are every scenario’s, so there is nothing to paste as “You don’t need to test” / “Needs you” — a branch with no scenario of its own reports “no feature rows”._',
+      '_No `--feature` named: these rows are every scenario in the run, so there is nothing to paste as “You don’t need to test” / “Needs you” — a branch with no scenario of its own reports “no feature rows”._',
       '',
       counts(rows),
       '',
       ...table(rows),
       ...notProven(rows, '###'),
     ];
+  // selectFeature guarantees each feature scenario ran and declares rows; never paste an empty section anyway.
   const mine = rows.filter((x) => feature.includes(x.scenario));
+  if (!mine.length)
+    return [
+      ...lines,
+      `No rows of ${feature.join(', ')} in this run — nothing proven, nothing to paste.`,
+    ];
   const others = rows.filter((x) => !feature.includes(x.scenario));
   lines.push(
     `### This feature: ${feature.join(', ')}`,
@@ -165,7 +171,7 @@ function renderCoverage(
       '',
       '### Other scenarios (regression)',
       '',
-      '_Their lists belong to their own features — nothing here is this feature’s paste. A row not proven here is a regression, a bug (CLAUDE.md → phase 9)._',
+      '_Their lists belong to their own features — nothing here is this feature’s paste. A row not proven here is a regression to triage (CLAUDE.md → phase 9) unless its reason says otherwise._',
       '',
       ...[...new Set(others.map((x) => x.scenario))].map(
         (id) =>

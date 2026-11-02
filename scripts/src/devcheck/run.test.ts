@@ -54,6 +54,8 @@ describe('parseArgs', () => {
   it('delta defaults --feature to the --scenario ids, smoke excluded; other tiers don’t', () => {
     expect(parseArgs(['--tier', 'delta', '--scenario', 'smoke,a,b']).feature).toEqual(['a', 'b']);
     expect(parseArgs(['--tier', 'full', '--scenario', 'a']).feature).toEqual([]);
+    expect(parseArgs(['--scenario', 'a', '--tier', 'delta']).feature).toEqual(['a']); // any order
+    expect(parseArgs(['--feature', 'a,a', '--scenario', 'b,b']).feature).toEqual(['a']); // deduped
   });
 });
 

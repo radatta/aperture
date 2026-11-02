@@ -39,6 +39,8 @@ export interface Args {
   deployWait: boolean;
 }
 
+const ids = (v: string) => [...new Set(v.split(',').filter(Boolean))];
+
 export function parseArgs(argv: string[]): Args {
   const args: Args = { tier: 'smoke', scenarios: [], feature: [], deployWait: true };
   for (let i = 0; i < argv.length; i++) {
@@ -53,8 +55,8 @@ export function parseArgs(argv: string[]): Args {
       if (t !== 'smoke' && t !== 'delta' && t !== 'full')
         throw new Error(`--tier smoke|delta|full, got ${t}`);
       args.tier = t;
-    } else if (a === '--scenario') args.scenarios = val().split(',').filter(Boolean);
-    else if (a === '--feature') args.feature = val().split(',').filter(Boolean);
+    } else if (a === '--scenario') args.scenarios = ids(val());
+    else if (a === '--feature') args.feature = ids(val());
     else if (a === '--sha') {
       const s = val();
       if (!/^[0-9a-f]{40}$/.test(s)) throw new Error(`--sha needs a full 40-hex SHA, got ${s}`);

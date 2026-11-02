@@ -114,6 +114,12 @@ describe('report', () => {
       ...over,
     });
     const feat = { ...base, feature: ['ad'] };
+    const NO_LIST_HEADINGS = /^#+ (You don't need to test|Needs you)$/m;
+    const pv = [
+      row({ scenario: 'pv', row: 'p1', what: 'PV pass' }),
+      row({ scenario: 'pv', row: 'p2', status: 'needs-you', what: 'PV camera', note: 'camera' }),
+      row({ scenario: 'pv', row: 'p3', status: 'fail', what: 'PV esc', failedSteps: ['x'] }),
+    ];
     const rows = [
       row({ what: 'Delete | Cancel' }),
       row({
@@ -182,6 +188,21 @@ describe('report', () => {
       expect(renderReport({ ...feat, coverage: rows })).not.toContain('_This run is');
     });
 
+    it('the FAIL verdict sits only in this feature’s lists — never under Other or without a feature', () => {
+      const md = renderReport({ ...feat, status: 'FAIL', coverage: [...rows, ...pv] });
+      expect(md.split('_This run is FAIL').length - 1).toBe(1);
+      expect(md.indexOf('_This run is FAIL')).toBeLessThan(md.indexOf('### Other'));
+      expect(renderReport({ ...base, status: 'FAIL', coverage: rows })).not.toContain(
+        '_This run is',
+      );
+    });
+
+    it('a feature with no rows in the run pastes nothing', () => {
+      const md = renderReport({ ...base, feature: ['zz'], coverage: rows });
+      expect(md).toContain('No rows of zz in this run — nothing proven, nothing to paste.');
+      expect(md).not.toMatch(NO_LIST_HEADINGS);
+    });
+
     it('heads the feature’s rows with its name', () => {
       expect(renderReport({ ...feat, coverage: rows })).toContain(
         '## Feature coverage\n\n### This feature: ad\n\nProven on dev **1**',
@@ -193,27 +214,21 @@ describe('report', () => {
         ...base,
         coverage: [...rows, row({ row: 'f', status: 'fail', failedSteps: ['x'] })],
       });
-      expect(md).toContain('_No `--feature` named: these rows are every scenario’s');
+      expect(md).toContain('_No `--feature` named: these rows are every scenario in the run');
       expect(md).toContain('| ad | Delete \\| Cancel |');
       expect(md).toContain('### Not proven on dev\n\n- ad: Delete — step x failed');
-      expect(md).not.toContain("You don't need to test");
-      expect(md).not.toContain('Needs you\n');
+      expect(md).not.toMatch(NO_LIST_HEADINGS);
     });
 
     it('other scenarios collapse to counts and Not proven, and never into the feature’s lists', () => {
-      const pv = [
-        row({ scenario: 'pv', row: 'p1', what: 'PV pass' }),
-        row({ scenario: 'pv', row: 'p2', status: 'needs-you', what: 'PV camera', note: 'camera' }),
-        row({ scenario: 'pv', row: 'p3', status: 'fail', what: 'PV esc', failedSteps: ['x'] }),
-      ];
       const md = renderReport({ ...feat, coverage: [...rows, ...pv] });
       expect(md).toContain('### Other scenarios (regression)');
       expect(md).toContain(
         '- pv: proven on dev **1** · off dev **0** · needs you **1** · not proven **1**',
       );
       expect(md).toContain('#### Not proven on dev\n\n- pv: PV esc — step x failed');
-      const lists = md.slice(md.indexOf("#### You don't need to test"), md.indexOf('### Other'));
-      expect(lists).not.toContain('pv:');
+      const mine = md.slice(md.indexOf('### This feature'), md.indexOf('### Other'));
+      expect(mine).not.toContain('pv:');
       expect(md).not.toContain('| pv |');
       expect(md.indexOf('### This feature')).toBeLessThan(md.indexOf('### Other'));
     });
