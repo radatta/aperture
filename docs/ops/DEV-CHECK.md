@@ -3,14 +3,16 @@
 `pnpm devcheck` drives headless Chromium, signed in as a dev-only test user, against
 `https://dev.aperture.rahuldatta.dev`, after `pnpm bot deploy-dev` dispatched the commit. It waits for the deploy, proves
 the page is the commit under test, runs scenarios with screenshots in both themes, deletes everything it
-created, and writes a report. It replaces the Claude-in-Chrome runbooks: a green full run with zero
-leftovers, plus Claude reading the screenshots, is what "tested on dev" means (CLAUDE.md → _Feature workflow_,
-phases 8–9). Code: `scripts/src/devcheck/`.
+created, and writes a report that leads with which of the feature's coverage rows were proven (_Rows_, below).
+It replaces the Claude-in-Chrome runbooks: a green full run with zero leftovers in which every row is proven,
+covered off dev or listed for the user, plus Claude reading the screenshots, is what "tested on dev" means
+(CLAUDE.md → _Feature workflow_, phases 8–9). Code: `scripts/src/devcheck/`.
 
 ```
 pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=SHA> ─► sign in (Hosted UI, cached)
    ─► sweep earlier leftovers ─► in-page build check ─► scenarios ─► finally: delete ledger ids,
    verify none left, dev build unchanged ─► localNotes/devcheck/<run>/report.md + shots/
+(before all of it: every scenario's rows checked at load — a gap is MATRIX_GAP, nothing waits on dev)
 ```
 
 ## Run it
@@ -20,13 +22,26 @@ CLAUDE.md → COI ceilings):
 
 ```bash
 pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages, an API read; creates nothing
-pnpm devcheck --tier full                          # every scenario
-pnpm devcheck --tier delta --scenario capture-task # smoke + the named feature scenarios
+pnpm devcheck --tier full --feature attachment-delete  # the phase 8 run: every scenario, the feature's rows apart
+pnpm devcheck --tier full                              # every scenario, no feature (a branch with none of its own)
+pnpm devcheck --tier delta --scenario capture-task     # smoke + the named scenarios (--feature defaults to them)
 ```
 
 `--sha <40-hex>` checks a commit other than `HEAD`; `--no-deploy-wait` skips the deploy and edge wait (dev
-already serves it). Exit 0 PASS, 1 FAIL, 2 CRASH. Read `report.md` first — its first line is the status — then
-the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
+already serves it). `--sha` is also how a scenario-only commit proves a build already on dev — `scripts/` isn't
+deployed, so a fix to a scenario needs no redeploy: run it with `--sha <the deployed SHA>`, and the report's Build
+line names both (`scenarios from …`). A build dev got from a merge to `main` has no `deploy-dev` run: add
+`--no-deploy-wait`, taking the SHA from dev's `<meta name="aperture-build">`.
+
+`--feature <id,…>` names the feature's scenario(s): _Feature coverage_ shows their rows, with the two paste lists,
+under _This feature_, and every other scenario's under _Other scenarios (regression)_ as per-scenario counts and a
+_Not proven_ list. `--tier delta` defaults it to `--scenario` (smoke excluded). An unknown id, `smoke`, or a scenario
+not in the run is an error, like a bad `--scenario`.
+
+Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--feature`, and the codes `ENV_MISSING`,
+`PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else — stop the run before it starts:
+printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status — then the
+screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
 
 ## One-time setup
 
@@ -50,6 +65,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   host is the dev Files bucket, for `scenarios/attachment-delete.ts`: the harness PUTs bytes to, and GETs,
   only a presigned URL the dev BFF just minted, after `assertPresignedDevUrl` checks the host is the dev
   Files bucket (`aperturedata-dev-files…`, so never prod's), the key is under `u/`, and the URL is signed.
+  A deleted object answers that GET with 403, not 404 — the roles have no `s3:ListBucket`, so S3 hides
+  `NoSuchKey` — and `isGone` (`api.ts`) counts both as gone.
 - **The test user only.** The env file must name the test user, and before any write the signed-in
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes.
 - **Deletes by recorded id only.** Every task the run creates is recorded in a ledger from the server's create
@@ -79,10 +96,15 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   sweeps them first; a create still in flight at the kill was never recorded, so the next run lists it as not in
   the ledger. Loading the app writes server-side too (`getDay` materialises the day), always as the test user —
   the cached session is checked before any page loads.
+- **A row is proven only through its own entry point.** A UI row proven only through the API is a gap, not
+  a pass. Every scenario's rows are checked when the run loads, before the deploy wait — a row no step proves
+  through its entry, or an off-dev row naming a test that isn't there, is `MATRIX_GAP` — and again by
+  `scenarios/index.test.ts` in the gate (_Rows_, below).
 - **The right build.** The dispatched `deploy-dev <sha> <key>` run for the SHA (matched by name; `dev` pushes were
   retired at dev-cutover) must succeed, then the edge must serve that SHA in `<meta name="aperture-build">`.
   In the page it reloads up to 3 times — the PWA's service worker can serve the previous shell first — else
-  `BUILD_MISMATCH_IN_PAGE`. If dev's build changes before the run ends, `DEV_CHANGED_MID_RUN`.
+  `BUILD_MISMATCH_IN_PAGE`. If dev's build changes before the run ends, `DEV_CHANGED_MID_RUN`, and no row
+  counts as proven — its steps may have driven another build.
 
 ## Known 429s
 
@@ -90,20 +112,23 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 ([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
 cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
 calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console errors: in the
-smoke scenario's _No console errors on the way_ row, and again in every later row that re-reads the run's cumulative
+smoke scenario's _No console errors on the way_ step, and again in every later step that re-reads the run's cumulative
 console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
 console line doesn't. The run still reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
 full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold in its `report.md`:**
 
 - the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
-- no row is `skipped`;
-- every `fail` row is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
-  or a later row reading `console errors: …` with exactly N `\|`-separated entries — nothing new after the burst;
+- no step is `skipped`;
+- every `fail` step is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
+  or a later scenario's (its last step, `noConsoleErrors`) reading `console errors: …` with exactly N `\|`-separated
+  entries — nothing new after the burst;
 - the _Console errors_ section lists exactly N lines, each containing `status of 429` or `failed (429)`, and N ≤ 16
   (one throttled call can log two lines — the resource's and the app's own `Error: … failed (429)`; a refetch loop or
   request storm, also all 429s, would exceed it);
 - the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
-  function, so that call was never tested; if it names one, rerun until it doesn't.
+  function, so that call was never tested; if it names one, rerun until it doesn't;
+- every _Feature coverage_ row — _This feature_ and _Other scenarios_ alike — is `pass`, `off dev` or `needs you`. This rule never makes a row green: a 429 that
+  fails a proving step leaves its row not proven — rerun until it passes.
 
 Anything else is a bug, as always. The burst is one too — a known defect with a dated fix (the in-flight cap below);
 this rule records it, it does not excuse it. Log each such run in the feature's `decisions.md` and its PR body. **The
@@ -128,37 +153,50 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
 
-| Code                       | Means                                                                                                                                    | Do                                                                    |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                          |
-| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                          |
-| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                     | did `pnpm bot deploy-dev` run for it?                                 |
-| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `verify` job names why in its `::error::` line |
-| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                      |
-| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                             |
-| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately                |
-| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                          |
-| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                      |
-| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                                |
-| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                                |
-| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                          |
-| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                               |
-| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun          |
+| Code                       | Means                                                                                                                                    | Do                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                             |
+| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                             |
+| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                     | did `pnpm bot deploy-dev` run for it?                                    |
+| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `verify` job names why in its `::error::` line    |
+| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                         |
+| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                                |
+| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately                   |
+| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                             |
+| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                         |
+| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                                   |
+| `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                 | the message names the scenario and row; fix the scenario, never the rule |
+| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                                   |
+| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                             |
+| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                                  |
+| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun             |
 
 ## Writing a scenario
 
-A feature adds `scripts/src/devcheck/scenarios/<feature>.ts` and lists it in `scenarios/index.ts`. A Chrome
-runbook maps onto it step for step:
+A feature adds `scripts/src/devcheck/scenarios/<feature>.ts` and lists it in `scenarios/index.ts`. Its `rows`
+are the plan's dev-test matrix (_Rows_, below); a Chrome runbook maps onto its steps one for one:
 
 ```ts
 export const quickAdd: Scenario = {
   id: 'quick-add',
   title: 'Quick add parses a line',
   tiers: ['full'],
+  rows: [
+    { id: 'save', entry: 'ui', kind: 'nominal', what: 'Auto Enter saves the parsed fields' },
+    {
+      id: 'raycast',
+      entry: 'raycast',
+      kind: 'nominal',
+      what: 'Raycast quick-add saves',
+      needsYou: 'Raycast runs on the Mac',
+    },
+  ],
   steps: [
     {
       id: 'capture',
       title: 'Auto Enter saves',
+      entry: 'ui',
+      proves: ['save'],
       async run(ctx) {
         await ctx.ui.goto('/tasks');
         await ctx.ui.captureTask(`devcheck ${ctx.nonce} tomorrow 20m`);
@@ -168,6 +206,8 @@ export const quickAdd: Scenario = {
     {
       id: 'server',
       title: 'Fields landed',
+      entry: 'api', // verifies the UI row's server half; never its only proof
+      proves: ['save'],
       async run(ctx) {
         const task = await ctx.api.reads.getTask(ctx.createdIds().at(-1)!);
         if (task?.estimateMin !== 20) throw new Error(JSON.stringify(task));
@@ -182,11 +222,53 @@ ledger-guarded writes), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA t
 (makes a title findable on screen — never a cleanup key). A step throws to fail; the rest of that scenario is
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
-extends `pw-types.ts`.
+extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console check is its own
+step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove.
+
+### Rows
+
+A row is one entry point × one case, as the user would say it (`what`), `nominal` or `edge`. `entry` is `ui`,
+`api`, `mcp`, `ios`, `raycast` or `extension`; a step drives `ui` or `api` today (`STEP_ENTRIES` in `scenario.ts`
+— the MCP-as-test-user PR adds `mcp`). Each row is exactly one of:
+
+- **Proven on dev** — steps name it in `proves`. At least one must drive the row's own entry; every step naming
+  it must pass. An `api` step can verify a UI row's server half, never stand in for the UI.
+- **Off dev** (`offDev: { file, test, why }`) — **if dev can produce the failure naturally, prove it on dev; if
+  it can't, a named unit test covers it; no test-only switches in shipped code.** Bad input, size limits, an
+  expired link or another user's id happen on dev, so they're proven there; S3 refusing a delete doesn't. `file`
+  is a repo-relative `.test.ts(x)`, `test` the title of a runnable `it()`/`test()` opening its own line in it, verbatim (not `it.skip`,
+  `it.todo` or a bare string); both are checked. One test per row — a failure with a UI
+  half and a BFF half is two rows.
+- **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
+  Safari extension, a camera, a Google account, MCP until the next PR.
+
+Walk the plan's matrix through **the edge-case checklist**: empty / max / invalid input; cancel; repeat
+(idempotent); survives a reload; the neighbouring item unaffected; ownership (another user's id). `smoke` alone
+has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
+
+### Selectors and upkeep
+
+- **Roles and labels, never CSS** (`getByRole`, `getByLabel`, `getByText`), and **assert behaviour** — what the
+  server holds, what the user sees — not DOM shape. A class or layout change shouldn't break a scenario.
+- **You change the UI, you update its scenario**, in the same PR.
+- **An old scenario failing on an unrelated PR** (with `--feature`, under _Other scenarios (regression)_ → _Not proven_) is
+  still a bug (phase 9) — read its code path first. To show it
+  isn't this branch, the fallback is the fails-on-main baseline: the last green full run's report (the archived
+  worktrees' `localNotes/devcheck/`), else redeploying `main` to dev and rerunning — two extra deploys, so last.
+  A failure confirmed on `main` gets its own small PR, logged; it doesn't block this one.
+- **Every scenario runs on every full run.** When a full run passes 3 minutes, revisit: area tags (a PR runs
+  smoke, its own scenario and the areas its diff touches, the full suite on `main`), a time budget, a failure in
+  an untouched area reported apart, retiring scenarios a redesign replaced. Not before.
 
 ## Artifacts
 
 Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json`, `shots/`.
+`report.md`'s _Feature coverage_ splits _This feature_ (`--feature`) — its table and two lists, _You don't need to
+test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md` and the `CC done` notes
+paste as they are — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
+since those belong to their own features. Without `--feature` there are no paste lists: the table is every
+scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
+carry its verdict: they hold only if the run counts as green (_Known 429s_).
 Shared, in the main checkout: the two ledgers and `run.lock`. Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session, mode 600).
 

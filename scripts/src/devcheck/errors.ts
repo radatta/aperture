@@ -11,6 +11,7 @@ export const REASON_CODES = [
   'AUTH_REJECTED', // Cognito refused the test user's credentials
   'WRONG_USER', // the signed-in identity isn't the test user — aborts before any write
   'BUILD_MISMATCH_IN_PAGE', // the page kept serving another build after reloads (PWA service worker)
+  'MATRIX_GAP', // a coverage row no step proves through its own entry point, or an off-dev test that doesn't exist — found at load
   'STEP_FAILED', // a scenario step threw
   'LEDGER_GUARD', // a delete was attempted on an id the ledger never recorded
   'LEFTOVERS', // something may be left on dev: a surviving or undeletable ledger id, an unanswered create, an unrecorded new task

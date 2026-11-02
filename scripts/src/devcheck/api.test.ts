@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApiClient, type FetchLike } from './api';
+import { createApiClient, isGone, type FetchLike } from './api';
 import { DEV_ORIGIN } from './config';
 import type { Ledger, LedgerEntry } from './ledger';
 
@@ -228,6 +228,10 @@ describe('createApiClient', () => {
       });
       await expect(api.reads.probePresigned(`${DEV_ORIGIN}/u/x`)).rejects.toThrow(/refusing/);
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('a deleted object is gone at 403 (no ListBucket, so S3 hides NoSuchKey) or 404', () => {
+      expect([403, 404, 200, 500].map(isGone)).toEqual([true, true, false, false]);
     });
   });
 

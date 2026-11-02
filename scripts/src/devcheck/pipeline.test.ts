@@ -164,7 +164,13 @@ const scenario =
     id: 'sc',
     title: 'sc',
     tiers: ['full'],
-    steps: runs.map((run, i) => ({ id: `s${i}`, title: `step ${i}`, run: () => run(w) })),
+    rows: [],
+    steps: runs.map((run, i) => ({
+      id: `s${i}`,
+      title: `step ${i}`,
+      entry: 'api',
+      run: () => run(w),
+    })),
   });
 
 describe('runPipeline', () => {
@@ -384,6 +390,72 @@ describe('runPipeline', () => {
     );
     expect(crash.status).toBe('CRASH');
     expect(exitCode(crash)).toBe(2);
+  });
+
+  it('scores each row from its steps: pass, fail, skipped after a failure; declared rows keep their status', async () => {
+    const w = world();
+    const sc: Scenario = {
+      ...scenario(
+        async () => undefined,
+        async () => {
+          throw new Error('boom');
+        },
+        async () => undefined,
+      )(w),
+      rows: [
+        { id: 'a', entry: 'api', kind: 'nominal', what: 'A' },
+        { id: 'b', entry: 'api', kind: 'edge', what: 'B' },
+        { id: 'c', entry: 'api', kind: 'edge', what: 'C' },
+        { id: 'y', entry: 'ios', kind: 'nominal', what: 'Y', needsYou: 'iOS Safari' },
+      ],
+    };
+    sc.steps[0]!.proves = ['a'];
+    sc.steps[1]!.proves = ['b'];
+    sc.steps[2]!.proves = ['c'];
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.coverage.map((x) => [x.row, x.status, x.failedSteps])).toEqual([
+      ['a', 'pass', undefined],
+      ['b', 'fail', ['s1']],
+      ['c', 'skipped', undefined],
+      ['y', 'needs-you', undefined],
+    ]);
+  });
+
+  it('a setup failure leaves every step-proven row skipped — never proven', async () => {
+    const w = world({ inPage: ['old'] });
+    const sc: Scenario = {
+      ...scenario(async () => undefined)(w),
+      rows: [{ id: 'a', entry: 'api', kind: 'nominal', what: 'A' }],
+    };
+    sc.steps[0]!.proves = ['a'];
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.codes).toEqual(['BUILD_MISMATCH_IN_PAGE']);
+    expect(r.coverage.map((x) => x.status)).toEqual(['skipped']);
+  });
+
+  it('rows are scored after cleanup: a build change mid-run leaves a passing row unproven', async () => {
+    const w = world({ shells: [shell(SHA), shell('b'.repeat(40))] });
+    const sc: Scenario = {
+      ...scenario(async () => undefined)(w),
+      rows: [{ id: 'a', entry: 'api', kind: 'nominal', what: 'A' }],
+    };
+    sc.steps[0]!.proves = ['a'];
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.codes).toEqual(['DEV_CHANGED_MID_RUN']);
+    expect(r.steps[0]!.status).toBe('pass');
+    expect(r.coverage[0]).toMatchObject({ status: 'skipped', note: 'dev’s build changed mid-run' });
+  });
+
+  it('carries the feature ids into the result, [] when none', async () => {
+    expect(
+      (await runPipeline(deps(world(), [], memLedger(), { feature: ['sc'] }))).feature,
+    ).toEqual(['sc']);
+    expect((await runPipeline(deps(world(), []))).feature).toEqual([]);
+  });
+
+  it('carries the scenarios’ commit into the result', async () => {
+    const r = await runPipeline(deps(world(), [], memLedger(), { scenarioSha: 'b'.repeat(40) }));
+    expect(r.scenarioSha).toBe('b'.repeat(40));
   });
 
   it('a create whose response never arrived after an API intent is reported as a possible leak', async () => {

@@ -1,6 +1,6 @@
 // Capture a task through the bar and prove it landed: receipt, Backlog, and the server's copy. The line is a
 // grammar line (space, pipe, space) so it never reaches the model — no Haiku spend, deterministic fields.
-import type { Scenario } from '../scenario';
+import { noConsoleErrors, type Scenario } from '../scenario';
 
 const title = (nonce: string) => `devcheck ${nonce}`;
 
@@ -8,9 +8,25 @@ export const captureTask: Scenario = {
   id: 'capture-task',
   title: 'Capture a task from the bar',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'capture',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Task mode, a grammar line, Enter → "Task added"',
+    },
+    {
+      id: 'landed',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The captured task is in the Backlog, and the server has its title and 15 min',
+    },
+  ],
   steps: [
     {
       id: 'capture',
+      entry: 'ui',
+      proves: ['capture'],
       title: 'Task mode, grammar line, Enter → "Task added"',
       async run(ctx) {
         await ctx.ui.goto('/tasks');
@@ -20,6 +36,8 @@ export const captureTask: Scenario = {
     },
     {
       id: 'in-backlog',
+      entry: 'ui',
+      proves: ['landed'],
       title: 'It shows in the Backlog',
       async run(ctx) {
         await ctx.page.getByRole('button', { name: 'Backlog', exact: true }).click();
@@ -29,6 +47,8 @@ export const captureTask: Scenario = {
     },
     {
       id: 'server-copy',
+      entry: 'api',
+      proves: ['landed'],
       title: 'The server has it: title and 15 min',
       async run(ctx) {
         const id = ctx.createdIds().at(-1);
@@ -38,5 +58,6 @@ export const captureTask: Scenario = {
           throw new Error(`server has ${JSON.stringify(task)}`);
       },
     },
+    noConsoleErrors,
   ],
 };

@@ -1,11 +1,10 @@
 // Deleting a file, or its task, deletes the bytes in S3 — driven the way a user does it: the task editor's
 // Files panel (✕ → Delete / Cancel) and its Delete task…. Files are uploaded through the API exactly as
 // the app does (mint → PUT to the presigned URL → confirm), on ledger-recorded tasks. The byte-level proof
-// is a presigned GET: 200 before the delete, 403 or 404 after (403 is what dev returns — the role has
-// no ListBucket, so S3 won't say NoSuchKey; 404 still counts). Each URL is minted right before its
-// probe (5-minute TTL). Step titles carry their dev-test-matrix rows ([n]) from the PR's report.
-import type { DevAttachment } from '../api';
-import type { Ctx, Scenario } from '../scenario';
+// is a presigned GET: 200 before the delete, gone after (isGone — 403 on dev). Each URL is minted right
+// before its probe (5-minute TTL). The rows are PR 80's dev-test matrix.
+import { isGone, type DevAttachment } from '../api';
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
 const file = (filename: string, confirm = true) => ({
@@ -26,7 +25,7 @@ async function expectLive(ctx: Ctx, id: string, what: string): Promise<void> {
 }
 async function expectGone(ctx: Ctx, url: string, what: string): Promise<void> {
   const status = await ctx.api.reads.probePresigned(url);
-  if (status !== 403 && status !== 404) throw new Error(`${what}: GET after delete → ${status}`);
+  if (!isGone(status)) throw new Error(`${what}: GET after delete → ${status}`);
 }
 
 const editor = (ctx: Ctx, title: string) =>
@@ -42,9 +41,86 @@ export const attachmentDelete: Scenario = {
   id: 'attachment-delete',
   title: 'Deleting a file, or its task, deletes the bytes',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'panel-delete',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Files panel ✕ → Delete: the row goes, the count drops, the bytes are gone',
+    },
+    {
+      id: 'panel-cancel',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Files panel ✕ → Cancel: nothing deleted, the file still downloads',
+    },
+    { id: 'neighbour', entry: 'ui', kind: 'edge', what: 'The task’s other file still downloads' },
+    { id: 'reload', entry: 'ui', kind: 'edge', what: 'After a reload the deleted file stays gone' },
+    {
+      id: 'task-delete',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Delete task… removes the task and every file’s bytes',
+    },
+    {
+      id: 'parent-part',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Deleting a parent removes its part and the part’s file bytes',
+    },
+    {
+      id: 'pending-upload',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Deleting a task removes a never-confirmed upload’s bytes',
+    },
+    { id: 'idempotent', entry: 'api', kind: 'edge', what: 'Deleting again is a quiet no-op' },
+    {
+      id: 'mcp',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'MCP delete_attachment and delete_task delete the bytes',
+      needsYou:
+        'MCP as the test user is the next PR; until then run delete_attachment and delete_task on aperture-dev by hand, presigned GET 200 → 403',
+    },
+    {
+      id: 's3-fails-panel',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'S3 refuses the delete: the panel says so and keeps the file',
+      offDev: {
+        file: 'app/src/modules/tasks/AttachmentsPanel.test.tsx',
+        test: 'says so when the delete fails, and keeps the file',
+        why: 'dev can’t make S3 refuse a delete',
+      },
+    },
+    {
+      id: 's3-fails-row',
+      entry: 'api',
+      kind: 'edge',
+      what: 'S3 refuses the delete: the call fails and the row stays, so a retry finishes it',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a failed S3 delete throws and leaves the row live, so a retry finishes it',
+        why: 'dev can’t make S3 refuse a delete',
+      },
+    },
+    {
+      id: 's3-fails-cascade',
+      entry: 'api',
+      kind: 'edge',
+      what: 'S3 refuses a task delete’s bytes: the task and its plans stay; the retry completes it',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a failed S3 delete touches nothing else — task, plans intact; the retry completes the cascade',
+        why: 'dev can’t make S3 refuse a delete',
+      },
+    },
+  ],
   steps: [
     {
       id: 'setup',
+      entry: 'api',
       title:
         'Task A with two files; parent B with a file, a pending upload, and a part with a file (API)',
       async run(ctx) {
@@ -75,7 +151,9 @@ export const attachmentDelete: Scenario = {
     },
     {
       id: 'ui-cancel',
-      title: '[2] Files panel: ✕ then Cancel deletes nothing — the file still downloads',
+      entry: 'ui',
+      proves: ['panel-cancel'],
+      title: 'Files panel: ✕ then Cancel deletes nothing — the file still downloads',
       async run(ctx) {
         await openTask(ctx, name(ctx, 'A'));
         const d = editor(ctx, name(ctx, 'A'));
@@ -92,8 +170,10 @@ export const attachmentDelete: Scenario = {
     },
     {
       id: 'ui-delete-file',
+      entry: 'ui',
+      proves: ['panel-delete', 'neighbour'],
       title:
-        '[1][3] Files panel: ✕ then Delete removes the row and the bytes; the other file still downloads',
+        'Files panel: ✕ then Delete removes the row and the bytes; the other file still downloads',
       async run(ctx) {
         const d = editor(ctx, name(ctx, 'A'));
         const before = await ctx.api.reads.getAttachmentDownloadUrl(A.a1.id);
@@ -117,7 +197,9 @@ export const attachmentDelete: Scenario = {
     },
     {
       id: 'ui-reload',
-      title: '[4] After a reload the deleted file stays gone and the other is still there',
+      entry: 'ui',
+      proves: ['reload'],
+      title: 'After a reload the deleted file stays gone and the other is still there',
       async run(ctx) {
         await ctx.page.reload({ waitUntil: 'load' });
         await openTask(ctx, name(ctx, 'A'));
@@ -133,8 +215,10 @@ export const attachmentDelete: Scenario = {
     },
     {
       id: 'ui-delete-task',
+      entry: 'ui',
+      proves: ['task-delete', 'parent-part', 'pending-upload'],
       title:
-        '[5][6][7] Delete task… on parent B removes B, its part, and every file’s bytes — pending and the part’s too',
+        'Delete task… on parent B removes B, its part, and every file’s bytes — pending and the part’s too',
       async run(ctx) {
         const urls: string[] = [];
         for (const f of B.files) {
@@ -159,13 +243,14 @@ export const attachmentDelete: Scenario = {
     },
     {
       id: 'idempotent',
-      title: '[8] Deleting again is a quiet no-op; no console errors',
+      entry: 'api',
+      proves: ['idempotent'],
+      title: 'Deleting again is a quiet no-op',
       async run(ctx) {
         await ctx.api.writes.deleteAttachment(A.taskId, A.a1.id);
         await ctx.api.writes.deleteTask(B.taskId);
-        const errors = ctx.consoleErrors();
-        if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
       },
     },
+    noConsoleErrors,
   ],
 };

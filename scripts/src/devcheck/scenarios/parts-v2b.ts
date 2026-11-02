@@ -2,7 +2,7 @@
 // planned. Tasks are made through the API (ledger-recorded, so cleanup deletes them). The test user has
 // no Google account, so a timed create writes nothing to any calendar. Run before 4am LA, the app's day
 // is still yesterday (dayStartHour), and "today" here would be tomorrow there — run it in the day.
-import type { Ctx, Scenario } from '../scenario';
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
 
@@ -10,9 +10,24 @@ export const partsV2b: Scenario = {
   id: 'parts-v2b',
   title: 'A timed task’s day is its time',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'today-by-time',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A timed task and a timed part due today sit under “By time”, by clock, never planned',
+    },
+    {
+      id: 'week-no-add',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A timed task on Week offers no “+ Today”',
+    },
+  ],
   steps: [
     {
       id: 'setup',
+      entry: 'api',
       title: 'A timed task and a timed part due today, a timed task later this week (API)',
       async run(ctx) {
         await ctx.api.writes.createTask({
@@ -22,7 +37,7 @@ export const partsV2b: Scenario = {
         });
         const p = await ctx.api.writes.createTask({ title: name(ctx, 'P') });
         await ctx.api.writes.createTask({
-          title: name(ctx, 'read'),
+          title: name(ctx, 'read2b'),
           parentId: p.id,
           dueDay: ctx.dates.today,
           dueTime: '23:57',
@@ -36,19 +51,38 @@ export const partsV2b: Scenario = {
     },
     {
       id: 'today-by-time',
+      entry: 'ui',
+      proves: ['today-by-time'],
       title: 'Today shows them under “By time”, by clock, with no Unplan',
       async run(ctx) {
         await ctx.ui.goto('/tasks');
         await ctx.ui.expectText('By time', 15_000);
         await ctx.ui.expectText(name(ctx, 'OA'));
-        await ctx.ui.expectText(name(ctx, 'read'));
-        const all = await ctx.page.getByRole('button', { name: /devcheck .* (read|OA)$/ }).count();
+        await ctx.ui.expectText(name(ctx, 'read2b'));
+        const all = await ctx.page
+          .getByRole('button', { name: /devcheck .* (read2b|OA)$/ })
+          .count();
         if (all < 2) throw new Error(`expected both timed rows on Today, saw ${all}`);
+        // The "By time" section runs from its label to the next group's (Planned today, In progress, Done
+        // today — whichever comes first): both in it, the 23:57 part before the 23:58 task, and no Unplan.
+        // textContent, not innerText — the label is CSS-uppercased.
+        const text = await ctx.page.evaluate<string>(`document.body.textContent ?? ''`);
+        const from = text.indexOf('By time');
+        const ends = ['Planned today', 'In progress · not planned today', 'Done today']
+          .map((label) => text.indexOf(label, from))
+          .filter((i) => i !== -1);
+        const section = text.slice(from, ends.length ? Math.min(...ends) : undefined);
+        const [read, oa] = [section.indexOf(name(ctx, 'read2b')), section.indexOf(name(ctx, 'OA'))];
+        if (from === -1 || read === -1 || oa === -1) throw new Error('not both under “By time”');
+        if (read > oa) throw new Error('“By time” is not by clock: 23:58 shows before 23:57');
+        if (section.includes('Unplan')) throw new Error('a timed row offers Unplan');
         await ctx.shot('today-by-time');
       },
     },
     {
       id: 'week-no-add',
+      entry: 'ui',
+      proves: ['week-no-add'],
       title: 'A timed task on Week offers no “+ Today”',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=week');
@@ -60,6 +94,8 @@ export const partsV2b: Scenario = {
     },
     {
       id: 'server-copy',
+      entry: 'api',
+      proves: ['today-by-time', 'week-no-add'],
       title: 'None of them is planned',
       async run(ctx) {
         const mine = (await ctx.api.reads.listTasks()).filter((t) =>
@@ -67,9 +103,8 @@ export const partsV2b: Scenario = {
         );
         const planned = mine.filter((t) => t.status === 'planned').map((t) => t.title);
         if (planned.length) throw new Error(`planned: ${planned.join(', ')}`);
-        const errors = ctx.consoleErrors();
-        if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
       },
     },
+    noConsoleErrors,
   ],
 };

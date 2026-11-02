@@ -3,7 +3,7 @@
 // the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
 // records it before the call) — never through the UI, which can't tell this set from another.
 import { randomInt } from 'node:crypto';
-import { laDay, type Scenario } from '../scenario';
+import { laDay, noConsoleErrors, type Scenario } from '../scenario';
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -21,9 +21,39 @@ export const fluxHistory: Scenario = {
   id: 'flux-history',
   title: 'A saved Flux set shows in History and on the night home',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'record',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'recordFluxSet stores a finished set and one stopped early, and reads them back',
+    },
+    {
+      id: 'history',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'History lists both, the stopped one marked',
+    },
+    {
+      id: 'night-line',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The night home says "Flux · … chin tuck"',
+    },
+    {
+      id: 'on-screen',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Finishing a set on screen saves it',
+      needsYou:
+        'the harness has no recorded pose clip to feed Chromium’s fake camera; the set is recorded the way the stage would send it',
+    },
+  ],
   steps: [
     {
       id: 'record',
+      entry: 'api',
+      proves: ['record'],
       title: 'recordFluxSet as the test user — a finished set and one stopped early — read back',
       async run(ctx) {
         // The app's day, not the calendar's: before the user's day start (4am) a set belongs to yesterday,
@@ -60,7 +90,9 @@ export const fluxHistory: Scenario = {
     },
     {
       id: 'history',
-      title: 'History lists both under Today, the stopped one marked',
+      entry: 'ui',
+      proves: ['history'],
+      title: 'History lists both, the stopped one marked',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
@@ -82,6 +114,8 @@ export const fluxHistory: Scenario = {
     },
     {
       id: 'night-line',
+      entry: 'ui',
+      proves: ['night-line'],
       title: 'Night home says "Flux · … chin tuck"',
       async run(ctx) {
         await ctx.ui.goto('/');
@@ -90,5 +124,6 @@ export const fluxHistory: Scenario = {
         await ctx.shot('night');
       },
     },
+    noConsoleErrors,
   ],
 };

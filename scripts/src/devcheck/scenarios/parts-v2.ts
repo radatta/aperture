@@ -1,8 +1,8 @@
 // Parts v2a on the deployed app: the task modal's unsaved-changes guard across a parent and its parts,
 // and Add parts' plain-words errors. The tasks are made through the API (ledger-recorded, so cleanup
 // deletes them); nothing is added through the UI. The calendar half (part block titles, the due marker)
-// needs a Google account the test user doesn't have — that stays a Claude-in-Chrome check.
-import type { Ctx, Scenario } from '../scenario';
+// needs a Google account the test user doesn't have — a Needs you row.
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const parentTitle = (nonce: string) => `devcheck ${nonce} P2`;
 const partTitle = (nonce: string) => `devcheck ${nonce} read`;
@@ -27,9 +27,32 @@ export const partsV2: Scenario = {
   id: 'parts-v2',
   title: 'Parts: the modal guard and Add parts errors',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'switch-guard',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Switching to the parent with an unsaved title asks; Keep editing keeps it',
+    },
+    { id: 'fast-esc', entry: 'ui', kind: 'edge', what: 'Esc right after typing still asks' },
+    {
+      id: 'add-parts-errors',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Add parts says what’s wrong in plain words; unsent lines ask before a section swap',
+    },
+    {
+      id: 'calendar-titles',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Part block titles and the due marker on Google Calendar',
+      needsYou: 'needs a Google account the test user doesn’t have',
+    },
+  ],
   steps: [
     {
       id: 'setup',
+      entry: 'api',
       title: 'A parent with two parts (API)',
       async run(ctx) {
         const p = await ctx.api.writes.createTask({ title: parentTitle(ctx.nonce) });
@@ -39,6 +62,8 @@ export const partsV2: Scenario = {
     },
     {
       id: 'switch-guard',
+      entry: 'ui',
+      proves: ['switch-guard'],
       title: 'Switching to the parent with an unsaved title asks; Keep editing keeps it',
       async run(ctx) {
         await openPart(ctx);
@@ -60,6 +85,8 @@ export const partsV2: Scenario = {
     },
     {
       id: 'fast-esc',
+      entry: 'ui',
+      proves: ['fast-esc'],
       title: 'Esc right after typing still asks',
       async run(ctx) {
         await openPart(ctx);
@@ -74,6 +101,8 @@ export const partsV2: Scenario = {
     },
     {
       id: 'add-parts-errors',
+      entry: 'ui',
+      proves: ['add-parts-errors'],
       title: 'Add parts says what’s wrong in plain words; unsent lines ask before a section swap',
       async run(ctx) {
         await ctx.ui.goto('/tasks');
@@ -103,6 +132,8 @@ export const partsV2: Scenario = {
     },
     {
       id: 'server-copy',
+      entry: 'api',
+      proves: ['switch-guard', 'fast-esc', 'add-parts-errors'],
       title: 'Nothing discarded reached the server',
       async run(ctx) {
         // Exact titles: the run's other scenarios share the nonce (capture-task's "devcheck <nonce>").
@@ -117,9 +148,8 @@ export const partsV2: Scenario = {
           .sort();
         if (JSON.stringify(titles) !== JSON.stringify(want))
           throw new Error(`server has ${JSON.stringify(titles)}`);
-        const errors = ctx.consoleErrors();
-        if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
       },
     },
+    noConsoleErrors,
   ],
 };

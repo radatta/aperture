@@ -6,9 +6,12 @@ export const smoke: Scenario = {
   id: 'smoke',
   title: 'Signed-in app renders; API read works',
   tiers: ['smoke', 'full'],
+  // smoke proves the harness, not a feature, so it declares no rows.
+  rows: [],
   steps: [
     {
       id: 'home',
+      entry: 'ui',
       title: 'Home renders',
       async run(ctx) {
         await ctx.ui.goto('/');
@@ -17,6 +20,7 @@ export const smoke: Scenario = {
     },
     {
       id: 'tasks',
+      entry: 'ui',
       title: 'Tasks renders',
       async run(ctx) {
         await ctx.ui.goto('/tasks');
@@ -26,6 +30,7 @@ export const smoke: Scenario = {
     },
     {
       id: 'settings',
+      entry: 'ui',
       title: 'Settings renders with the build stamp',
       async run(ctx) {
         await ctx.ui.goto('/settings');
@@ -35,6 +40,7 @@ export const smoke: Scenario = {
     },
     {
       id: 'api-read',
+      entry: 'api',
       title: 'API read as the test user',
       async run(ctx) {
         const cats = await ctx.api.reads.listCategories();
@@ -45,6 +51,7 @@ export const smoke: Scenario = {
     },
     {
       id: 'no-console-errors',
+      entry: 'ui',
       title: 'No console errors on the way',
       async run(ctx) {
         const errors = ctx.consoleErrors();
