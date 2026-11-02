@@ -3,6 +3,9 @@
 // says so instead of an empty list or a default, that Retry recovers, and that a 429 is retried away.
 import { noConsoleErrors, type Ctx, type Row, type Scenario } from '../scenario';
 
+// Counted on /settings: task cards there would each mount a categories reader, and React Query refetches a
+// failed query when a new reader mounts — so on /tasks the injected count depends on how fast listTasks is.
+const SETTINGS_CATEGORIES = 'Couldn’t load categories.';
 const CATEGORIES_LINE = /Couldn.t load categories — labels and category filters are off/;
 const LIST_ERROR = /Couldn.t load this\. Check your connection/;
 const FOCUS = '[title="Start a 25-minute focus block"]';
@@ -26,6 +29,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // The app gets an injected response a moment after the route counts it, then React renders: wait that out
 // before asserting something is NOT on screen.
 const SETTLE_MS = 1_500;
+const PAUSE_MS = 20_000;
 
 // A run that died mid-timer leaves one running (or stale) on the test user. Clear it through the dock, judged
 // by the server's list — the dock's idle Focus shows before that read lands. Timers live only in the test
@@ -71,7 +75,7 @@ export const failedReads: Scenario = {
       id: 'error-shown',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Categories keep failing → Tasks says “Couldn’t load categories” with Retry, after 3 tries',
+      what: 'Categories keep failing → “Couldn’t load categories” with Retry, after 3 tries (Settings and Tasks)',
     },
     {
       id: 'retry-button',
@@ -200,6 +204,12 @@ export const failedReads: Scenario = {
       what: 'A resume that fails stays paused and says “Couldn’t resume”; Resume again works',
     },
     {
+      id: 'paused-stop',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Stopping a paused timer never counts the pause as worked time',
+    },
+    {
       id: 'stop-fails',
       entry: 'ui',
       kind: 'edge',
@@ -209,12 +219,7 @@ export const failedReads: Scenario = {
       id: 'mutation-not-retried',
       entry: 'ui',
       kind: 'edge',
-      what: 'The query layer never retries a write',
-      offDev: {
-        file: 'app/src/data/retry.test.ts',
-        test: 'the app QueryClient wires the policy and leaves mutations un-retried',
-        why: 'a setting of the client, not a behaviour dev can show',
-      },
+      what: 'The query layer never retries a write (a 500 on createTask is one send)',
     },
     offDev(
       'day-shape-failed',
@@ -256,14 +261,14 @@ export const failedReads: Scenario = {
       'Done on the hero with a failed stop keeps the timer and never opens the Actual form',
       'app/src/pages/Home/RightNow.test.tsx',
       'Done on the hero with a failed stop keeps the timer and never opens the Actual form',
-      NO_SEED,
+      'the hero is the first task on the test user’s plan for today; the harness can add one but not put it first, so on dev the step would drive whatever task is there',
     ),
     offDev(
       'stale-keep-failed',
       'Keep on a timer left running, when the save fails, keeps the prompt and says so',
       'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
       'a failed keep keeps the stale prompt and says so',
-      'a stale timer needs one silent for over 90 s on the test user before the run',
+      'dev can make one (heartbeats failed for over 90 s, then a reload), at ~100 s of run time on top of the ~2.5 min this scenario takes — a logged trade-off (decisions.md), revisit if the full run is trimmed',
     ),
     {
       id: 'ios-offline',
@@ -281,10 +286,10 @@ export const failedReads: Scenario = {
       title: 'One 429 on listCategories is retried away',
       async run(ctx) {
         const i = await ctx.intercept('listCategories', { times: 1 });
-        await ctx.ui.goto('/tasks?lens=backlog');
+        await ctx.ui.goto('/settings');
         await until('the retried categories read', () => i.passed() >= 1);
         await wait(SETTLE_MS);
-        await absent(ctx, CATEGORIES_LINE);
+        await absent(ctx, SETTINGS_CATEGORIES);
         if (i.hits() !== 1) throw new Error(`expected 1 injected 429, got ${i.hits()}`);
         await i.release();
       },
@@ -293,13 +298,18 @@ export const failedReads: Scenario = {
       id: 'shown',
       entry: 'ui',
       proves: ['error-shown'],
-      title: 'listCategories keeps failing → the line, with Retry',
+      title: 'listCategories keeps failing → the line after 3 tries, on Settings and on Tasks',
       async run(ctx) {
         const i = await ctx.intercept('listCategories');
+        await ctx.ui.goto('/settings');
+        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
+        const tries = i.hits(); // at the moment it shows, before any later reader refetches
+        if (tries !== 3) throw new Error(`expected 3 tries (1 + 2 retries), saw ${tries}`);
         await ctx.ui.goto('/tasks?lens=backlog');
         await ctx.ui.expectText(CATEGORIES_LINE, 15_000);
-        if (i.hits() !== 3) throw new Error(`expected 3 tries (1 + 2 retries), saw ${i.hits()}`);
         await ctx.shot('categories-failed');
+        await ctx.ui.goto('/settings');
+        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
         await i.release();
       },
     },
@@ -310,7 +320,7 @@ export const failedReads: Scenario = {
       title: 'Retry clears it once the read works',
       async run(ctx) {
         await button(ctx, 'Retry').click();
-        await gone(ctx, CATEGORIES_LINE);
+        await gone(ctx, SETTINGS_CATEGORIES);
       },
     },
     {
@@ -320,9 +330,10 @@ export const failedReads: Scenario = {
       title: 'A dropped connection is retried twice, then shows the same line',
       async run(ctx) {
         const i = await ctx.intercept('listCategories', { abort: true });
-        await ctx.ui.goto('/tasks?lens=backlog');
-        await ctx.ui.expectText(CATEGORIES_LINE, 15_000);
-        if (i.hits() !== 3) throw new Error(`expected 3 tries (1 + 2 retries), saw ${i.hits()}`);
+        await ctx.ui.goto('/settings');
+        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
+        const tries = i.hits();
+        if (tries !== 3) throw new Error(`expected 3 tries (1 + 2 retries), saw ${tries}`);
         await i.release();
       },
     },
@@ -333,8 +344,8 @@ export const failedReads: Scenario = {
       title: 'A 400 on the read shows the line at once, one try',
       async run(ctx) {
         const i = await ctx.intercept('listCategories', { status: 400 });
-        await ctx.ui.goto('/tasks?lens=backlog');
-        await ctx.ui.expectText(CATEGORIES_LINE, 15_000);
+        await ctx.ui.goto('/settings');
+        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
         await wait(SETTLE_MS); // past where a retry would have fired
         if (i.hits() !== 1) throw new Error(`expected 1 try, saw ${i.hits()}`);
         await i.release();
@@ -359,7 +370,7 @@ export const failedReads: Scenario = {
     {
       id: 'write-500',
       entry: 'ui',
-      proves: ['write-5xx-not-retried'],
+      proves: ['write-5xx-not-retried', 'mutation-not-retried'],
       title: 'A capture whose createTask gets a 500 is sent once and says so',
       async run(ctx) {
         const i = await ctx.intercept('createTask', { status: 500, times: 1 });
@@ -418,6 +429,8 @@ export const failedReads: Scenario = {
           throw new Error('Intent is editable over a day that never loaded');
         await ctx.ui.goto('/tasks?lens=today');
         await ctx.ui.expectText('Couldn’t load today’s capacity.', 15_000);
+        if (await ctx.page.getByLabel('Hours available today').count())
+          throw new Error('the capacity field shows over a day that never loaded');
         await ctx.shot('capacity-failed');
         await i.release();
       },
@@ -516,7 +529,11 @@ export const failedReads: Scenario = {
         await button(ctx, /Bulk add/).click();
         await ctx.page.getByLabel('Tasks, one per line').fill('write memo | #Admin');
         await ctx.ui.expectText(/Couldn.t load categories — remove the #labels/, 15_000);
-        if (!(await button(ctx, /^Add/).isDisabled())) throw new Error('Add is enabled');
+        const add = ctx.page
+          .getByRole('dialog', { name: 'Bulk add tasks' })
+          .getByRole('button', { name: /^Add \d+ task/ })
+          .first();
+        if (!(await add.isDisabled())) throw new Error('Add is enabled');
         await ctx.page.keyboard.press('Escape');
         await i.release();
       },
@@ -613,8 +630,8 @@ export const failedReads: Scenario = {
     {
       id: 'stop',
       entry: 'ui',
-      proves: ['stop-fails'],
-      title: 'A failed stop keeps the timer and says so; Stop again ends it',
+      proves: ['stop-fails', 'paused-stop'],
+      title: 'A failed stop keeps the timer and says so; then paused 20 s, Stop ends it',
       async run(ctx) {
         const i = await ctx.intercept('stopSession');
         try {
@@ -625,6 +642,9 @@ export const failedReads: Scenario = {
         } finally {
           await i.release();
         }
+        await button(ctx, 'Pause').click();
+        await button(ctx, 'Resume').waitFor({ timeout: 15_000 });
+        await wait(PAUSE_MS);
         await button(ctx, 'Stop').click();
         await ctx.page.locator(FOCUS).first().waitFor({ timeout: 15_000 });
       },
@@ -632,11 +652,23 @@ export const failedReads: Scenario = {
     {
       id: 'no-timer-left',
       entry: 'api',
-      proves: ['stop-fails'],
-      title: 'The server has no running timer left',
+      proves: ['stop-fails', 'paused-stop'],
+      title: 'No timer left running, and the stopped one wasn’t credited its 20 s pause',
       async run(ctx) {
         const left = await ctx.api.reads.listRunningSessions();
         if (left.length) throw new Error(`${left.length} timer(s) still running on the test user`);
+        const done = (await ctx.api.reads.listSessionsForDay(ctx.dates.today))
+          .filter((x) => x.status === 'completed' && x.endedAt !== null)
+          .sort((a, b) => b.endedAt! - a.endedAt!)[0];
+        if (!done) throw new Error('the stopped timer is not in today’s sessions');
+        const wallSec = (done.endedAt! - done.startedAt) / 1000;
+        const creditedSec = done.activeMinutes * 60;
+        // The run paused it twice (the resume step, then PAUSE_MS here): credit must fall short of the wall
+        // clock by at least the last pause, less a heartbeat's worth of slack.
+        if (creditedSec > wallSec - PAUSE_MS / 1000 + 5)
+          throw new Error(
+            `credited ${creditedSec.toFixed(1)} s of a ${wallSec.toFixed(1)} s timer`,
+          );
       },
     },
     noConsoleErrors,

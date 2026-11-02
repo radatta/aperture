@@ -12,6 +12,7 @@ export function CategoryTag({ categoryId }: { categoryId: string | null }) {
     return (
       <span
         title="Couldn’t load categories"
+        role="img"
         aria-label="Category unknown — couldn’t load categories"
         className="rounded-full border border-line px-2 py-0.5 text-xs text-ink-subtle"
       >

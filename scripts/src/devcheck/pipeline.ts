@@ -114,9 +114,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       const url = new URL(res.url());
       const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
       // While an intercept is live the console's failed-load lines are dropped (they name no URL), so a real
-      // failed /api call in that window is recorded from its response instead — never hidden.
-      if (intercepts.size && method && res.status() >= 400 && res.status() !== 429)
-        r.consoleErrors.push(`HTTP ${res.status()} on /api/${method} (during an injected failure)`);
+      // failed load in that window — /api or anything else — is recorded from its response instead.
+      if (intercepts.size && res.status() >= 400 && res.status() !== 429)
+        r.consoleErrors.push(
+          `HTTP ${res.status()} on ${method ? `/api/${method}` : url.host + url.pathname} (during an injected failure)`,
+        );
       if (res.status() !== 429) return;
       // Off the dev origin, the host too, so a third party's `/api/x` never reads as a BFF method.
       r.throttled.push(

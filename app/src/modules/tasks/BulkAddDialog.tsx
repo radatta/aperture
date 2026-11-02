@@ -30,7 +30,9 @@ export function BulkAddDialog({
 }) {
   const categoriesQ = useActiveCategories();
   const tasksQ = useAllTasks();
-  const { data: categories = [], isSuccess: categoriesLoaded } = categoriesQ;
+  const { data: categories = [] } = categoriesQ;
+  // The data, not the status: a failed background refetch keeps the roster, and the #labels still resolve.
+  const categoriesLoaded = categoriesQ.data !== undefined;
   const { data: tasks = [] } = tasksQ;
   const categoriesFailed = categoriesQ.isError && categoriesQ.data === undefined;
   // Without the task list the "already exists" warnings can't fire — said, not silently skipped.

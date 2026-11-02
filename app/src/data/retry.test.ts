@@ -44,5 +44,6 @@ describe('retry policy', () => {
     expect(d.queries?.retry).toBe(retryQuery);
     expect(d.queries?.networkMode).toBe('always'); // offline fails visibly, never pauses on "Loading…"
     expect(d.mutations?.retry).toBeUndefined();
+    expect(d.mutations?.networkMode).toBe('always'); // offline, a write fails and says so
   });
 });

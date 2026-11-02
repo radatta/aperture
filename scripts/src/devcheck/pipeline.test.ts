@@ -121,6 +121,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listBacklog: async () => [],
       getSettings: async () => ({ dayStartHour: 4 }),
       listRunningSessions: async () => [],
+      listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [],
       listFluxSets: async () => [...fluxSets.values()],
@@ -618,13 +619,17 @@ describe('runPipeline', () => {
       await x.call('listCategories'); // injected
       x.respond('/api/listCategories', 429); // a real one on the same method, passed through
       x.respond('/api/getDay', 500); // a real failure while the console lines are being dropped
+      x.respond('/assets/app.js', 404); // not /api: recorded too
       await i.release();
       x.respond('/api/getDay', 500); // outside the window: the console line itself carries it
     })(w);
     const r = await runPipeline(deps(w, [sc]));
     expect(r.injected).toEqual(['/api/listCategories → 429']);
     expect(r.throttled).toEqual(['/api/listCategories']);
-    expect(r.consoleErrors).toEqual(['HTTP 500 on /api/getDay (during an injected failure)']);
+    expect(r.consoleErrors).toEqual([
+      'HTTP 500 on /api/getDay (during an injected failure)',
+      'HTTP 404 on dev.aperture.rahuldatta.dev/assets/app.js (during an injected failure)',
+    ]);
   });
 
   it('console 429 lines inside an intercept window are dropped; later ones count', async () => {

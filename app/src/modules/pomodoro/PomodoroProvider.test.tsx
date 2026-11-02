@@ -150,4 +150,27 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await screen.findByTitle('Start a 25-minute focus block');
     expect(calls).toEqual([]);
   });
+
+  it('a finished block beats once as it ends, and stopping it resets the clock first', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const api = stub();
+    const calls: string[] = [];
+    const beat = api.heartbeatSession.bind(api);
+    const resume = api.resumeSession.bind(api);
+    const stopS = api.stopSession.bind(api);
+    api.heartbeatSession = (id) => (calls.push('beat'), beat(id));
+    api.resumeSession = (id) => (calls.push('resume'), resume(id));
+    api.stopSession = (id, st) => (calls.push('stop'), stopS(id, st));
+    renderApp({ api, path: '/settings' });
+    await startFocus(user);
+    await act(async () => void vi.advanceTimersByTime(25 * 60_000 + 2_000));
+    await screen.findByText('Done');
+    calls.length = 0;
+    await act(async () => void vi.advanceTimersByTime(60_000)); // sitting on done: no more beats
+    expect(calls).toEqual([]);
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByTitle('Start a 25-minute focus block');
+    expect(calls).toEqual(['resume', 'stop']);
+  });
 });

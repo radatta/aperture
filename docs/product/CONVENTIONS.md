@@ -144,7 +144,7 @@ picker offering only "Uncategorized". It says what didn't load, as an alert with
 only when there's nothing to show (`isError && data === undefined`); a failed background refetch keeps the data
 on screen and says nothing. A field whose value didn't load is disabled, not empty, because typing into it would
 save over what you were never shown (Intent, capacity, the category picker). A label resolver that can't say it
-per item (CategoryTag) marks the gap (a "—" pill), and the page's own error line carries the Retry. Retries:
+per item (CategoryTag) marks the gap (a "—" pill), and the page's own error line, where the page has one, carries the Retry. Retries:
 the http client retries a **429** for every call, writes included (`app/src/data/retry.ts`: Lambda refused to
 start, so the call never ran; the BFF never answers 429 itself), with the backoff set there. The query layer
 retries a **5xx or a dropped connection on reads only**, because a write that may have landed must show its

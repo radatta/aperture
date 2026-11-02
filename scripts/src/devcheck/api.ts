@@ -68,6 +68,15 @@ export interface DevAttachment {
   status: string;
 }
 
+// The slice of a Pomodoro session the check reads. Sessions are never written by the harness's API client.
+export interface DevSession {
+  id: string;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  activeMinutes: number;
+}
+
 // The ledger's `via` for a Flux set — cleanup reads it to delete the right kind of row.
 export const FLUX_SET_VIA = 'api:recordFluxSet';
 
@@ -144,6 +153,7 @@ export function createApiClient({
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
     getSettings: () => call<{ dayStartHour: number }>('getSettings', []),
     listRunningSessions: () => call<{ id: string }[]>('listRunningSessions', []),
+    listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
     // Alive only — a deleted set reads as gone, like getTask.
     getFluxSet: async (id: string) =>

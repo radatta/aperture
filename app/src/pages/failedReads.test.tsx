@@ -166,6 +166,7 @@ describe('Settings, Habits and Rolls never show a failed read as empty', () => {
   it('a failed settings read hides the Today capacity field instead of an empty one', async () => {
     renderApp({ api: failing(stub(), 'getSettings'), path: '/tasks' });
     await screen.findByText('Couldn’t load today’s capacity.');
+    expect(screen.queryByLabelText(/hours available/i)).toBeNull();
   });
 
   it('a failed plan read on Daytime says so instead of “No plan to budget against”', async () => {

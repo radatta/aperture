@@ -52,14 +52,18 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   const fail = useCallback((id: string, msg: string) => setErrors((e) => ({ ...e, [id]: msg })), []);
   const clear = useCallback((id: string) => setErrors((e) => without(e, id)), []);
 
+  // A heartbeat or resume answered after its timer was stopped must not bring the row back.
+  const stopped = useRef(new Set<string>());
   const upsert = useCallback(
     (s: PomodoroSession) =>
+      !stopped.current.has(s.id) &&
       setSessions((cur) =>
         cur.some((x) => x.id === s.id) ? cur.map((x) => (x.id === s.id ? s : x)) : [...cur, s],
       ),
     [],
   );
   const remove = useCallback((id: string) => {
+    stopped.current.add(id);
     setSessions((cur) => cur.filter((x) => x.id !== id));
     setPausedIds((p) => withDeleted(p, id));
     setChimedIds((c) => withDeleted(c, id));
@@ -174,9 +178,15 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     const doneIds = doneKey ? doneKey.split(',') : [];
     const fresh = doneIds.filter((id) => !chimedIds.has(id));
     if (fresh.length === 0) return;
+    // One beat as a block finishes: a done timer stops beating, so this credits its last few seconds (a
+    // later stop or extend resets the clock first and credits nothing more).
+    for (const id of fresh)
+      api.heartbeatSession(id).then(upsert, () =>
+        setMissed((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 })),
+      );
     chime();
     setChimedIds((c) => new Set([...c, ...fresh]));
-  }, [doneKey, chimedIds]);
+  }, [doneKey, chimedIds, api, upsert]);
 
   const startFocus = useCallback(
     (input?: StartFocusInput) => {
@@ -282,7 +292,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       clear(id);
       const { sessions: live, pausedIds: paused, targetFor: tf } = beatRef.current;
       const s = live.find((x) => x.id === id);
-      const idle = paused.has(id) || (!!s && remainingSec(s, tf(s), false, Date.now()) <= 0);
+      const idle =
+        status === 'completed' &&
+        (paused.has(id) || (!!s && remainingSec(s, tf(s), false, Date.now()) <= 0));
       return (idle ? api.resumeSession(id).then(() => undefined) : Promise.resolve())
         .then(() => api.stopSession(id, status))
         .then(

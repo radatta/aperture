@@ -150,9 +150,9 @@ full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when a
 - every `fail` step is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
   or a later scenario's (its last step, `noConsoleErrors`) reading `console errors: …` with exactly N `\|`-separated
   entries — nothing new after the burst;
-- the _Console errors_ section lists exactly N lines, each containing `status of 429` or `failed (429)`, and N ≤ 16
-  (one throttled call can log two lines — the resource's and the app's own `Error: … failed (429)`; a refetch loop or
-  request storm, also all 429s, would exceed it);
+- the _Console errors_ section lists exactly N lines, each containing `status of 429`, and N ≤ 16 (Chromium logs
+  one line per throttled attempt, and the app retries a 429 twice, so one call can log up to three; a refetch
+  loop or request storm, also all 429s, would exceed it);
 - the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
   function, so that attempt was never tested — the app's retry may have recovered the call, but a listed method
   isn't proven by this run; if it names one, rerun until it doesn't;
@@ -268,11 +268,12 @@ can't fail the next scenario's reads.
 While any intercept is live, the console's `Failed to load resource: … status of N` and `net::ERR_FAILED` lines are
 the harness's own doing and are left out of _Console errors_. Chromium's line names no URL, so the drop covers
 the whole window (up to ~40 s in `failed-reads`' heartbeat step), not one method. To keep a real failure in that
-window from hiding, every non-injected dev `/api` response ≥ 400 other than a 429 is recorded from the response
-itself, as `HTTP <status> on /api/<method> (during an injected failure)`, and a real 429 still lands in _Throttled
-(429)_. Only a dropped real connection inside the window goes unrecorded. Injected responses are known by their
-request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last
-in `SCENARIOS` for this reason, and because it waits 32 s for heartbeats. It also starts and stops one ad-hoc focus
+window from hiding, every non-injected response ≥ 400 other than a 429 — `/api` or not — is recorded from the
+response itself, as `HTTP <status> on /api/<method>` (or the host and path) `(during an injected failure)`, and a
+real 429 still lands in _Throttled (429)_. Only a dropped real connection inside the window goes unrecorded. Injected responses are known by their
+request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last in `SCENARIOS` for this reason, and because it is slow: about 2.5 minutes alone (a 32 s
+heartbeat wait, a 20 s pause, retry backoffs, ~17 page loads), which takes a full run past the 3-minute revisit
+line in _Selectors and upkeep_ — accepted when it landed (2026-11-01, failed-reads `decisions.md`). It also starts and stops one ad-hoc focus
 timer through the dock, which leaves a seconds-long completed session in the test user's history each run.
 Sessions have no delete method, so they're not ledgered; a timer an aborted run left running is stopped through
 the dock before the timer steps, judged by the server's list. Some of its rows are off dev only because they need
