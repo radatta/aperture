@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeClock, fakeRun } from '../bot/fakes.ts';
 import { sha256 } from './job.ts';
 import { memFs } from './fakes.ts';
-import { EXIT, RENEW_LINE, macPath, openPr, probe } from './open-pr.ts';
+import { EXIT, RENEW_LINE, WAIT_MS, macPath, openPr, probe } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
 import type { Result } from './submit.ts';
 
@@ -70,7 +70,8 @@ function setup(
       const sleep = clock.sleep;
       clock.sleep = async (ms) => {
         await sleep(ms);
-        if (clock.now() - start > 180_000)
+        if (clock.now() - start > WAIT_MS + 5_000)
+          // after the first wait gave up
           write({ status: 'opened', pr: PR, bodySha256: job.params.bodySha256 });
       };
       return;
@@ -222,6 +223,20 @@ describe('probe', () => {
     expect(await probe(d)).toBe(EXIT.ok);
     expect(sha).toBe('0'.repeat(40));
     expect(logs.at(-1)).toMatch(/probe ok.*2027-11-01/);
+  });
+
+  it('fails on HEAD_MISSING with a token-access hint (the branch is pushed)', async () => {
+    const { d, logs } = setup({ mac: () => ({ status: 'rejected', reason: 'HEAD_MISSING' }) });
+    expect(await probe(d)).toBe(EXIT.failed);
+    expect(logs.join('\n')).toMatch(/lacks access to radatta\/aperture/);
+  });
+
+  it('refuses an unpushed branch', async () => {
+    const { d } = setup({
+      pushed: false,
+      mac: () => ({ status: 'rejected', reason: 'HEAD_MISMATCH' }),
+    });
+    await expect(probe(d)).rejects.toThrow(/pnpm bot push/);
   });
 
   it('fails on anything else', async () => {

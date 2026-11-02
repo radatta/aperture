@@ -51,6 +51,11 @@ describe('job building', () => {
     expect(job.submittedAt).toBe('2026-11-01T20:45:12Z');
   });
 
+  it('wait plus grace stays under the Bash tool timeout', async () => {
+    const { WAIT_MS } = await import('./open-pr.ts');
+    expect(WAIT_MS + 30_000).toBeLessThan(120_000);
+  });
+
   it('refuses a lone surrogate (jq would read it as U+FFFD)', () => {
     const job = makeOpenPrJob(
       { branch: 'b', sha: 'a'.repeat(40), title: 'Lone surrogate', body: 'x\ud800y' },

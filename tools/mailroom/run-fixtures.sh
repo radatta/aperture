@@ -4,6 +4,11 @@
 # line holding a path ending in the curl name trips COI's Sigma rule; docs/ops/COI-INCIDENTS.md → Incident H).
 # Bash 3.2 + jq, so it runs in the container (vitest: scripts/src/mailroom/runner-fixtures.test.ts) and on the Mac.
 set -uo pipefail
+# On the Mac, run as launchd will: Apple's /bin/bash 3.2 and the system tools, not Homebrew's.
+if [ "$(uname)" = Darwin ]; then
+  export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+  [ "${BASH_VERSINFO[0]}" -le 3 ] || exec /bin/bash "$0" "$@"
+fi
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 CASES="$HERE/testdata/jobs.jsonl"
 export MAILROOM_FIXTURE_TOKEN="fixture-token-5f3a9c"
@@ -41,7 +46,7 @@ curl() {
   rc="$(jq -r '.exit // 0' <<<"$route")"
   [ "$rc" = 0 ] || return "$rc"
   jq -r '"HTTP/2 \(.status)\r", ((.headers // {}) | to_entries[] | "\(.key): \(.value)\r")' <<<"$route" >"$hdr"
-  jq -c '.body // {}' <<<"$route" >"$out"
+  jq -r 'if (.body | type) == "string" then .body else (.body // {} | tojson) end' <<<"$route" >"$out"
   printf '%s' "$(jq -r .status <<<"$route")"
 }
 security() {
@@ -59,7 +64,7 @@ defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 
 while IFS= read -r c; do
   name="$(jq -r .name <<<"$c")"
-  T="$(mktemp -d)"
+  T="$(cd "$(mktemp -d)" && pwd -P)" # the real path: the runner refuses a .hostjobs that resolves elsewhere
   hj="$T/hj"
   st="$T/state"
   mkdir -p "$hj/inbox" "$hj/results" "$hj/staging" "$st"
@@ -102,6 +107,10 @@ while IFS= read -r c; do
     inbox-symlink)
       mkdir "$T/elsewhere"; mv "$hj/staging/x" "$T/elsewhere/$file"
       rmdir "$hj/inbox"; ln -s "$T/elsewhere" "$hj/inbox" ;;
+    hj-symlink)
+      mv "$hj" "$T/real-hj"; ln -s "$T/real-hj" "$hj"; mv "$hj/staging/x" "$hj/inbox/$file" ;;
+    hardlink)
+      mv "$hj/staging/x" "$hj/staging/mine"; ln "$hj/staging/mine" "$hj/inbox/$file" ;;
     results-symlink)
       mkdir "$T/elsewhere"; rmdir "$hj/results"; ln -s "$T/elsewhere" "$hj/results"
       mv "$hj/staging/x" "$hj/inbox/$file" ;;
@@ -143,10 +152,15 @@ while IFS= read -r c; do
     [ "$got" = "$want" ] || why="calls $got, want $want"
     if grep -qv ' auth=ok leak=0$' "$T/calls"; then why="a call without the header-file token, or with it on argv"; fi
   fi
-  if [ -z "$why" ] && [ "$(jq -r 'has("post")' <<<"$c")" = true ]; then
-    sent="$(cat "$T"/calls.*.data 2>/dev/null || true)"
-    jq -e --argjson p "$(jq -c .post <<<"$c")" '. == $p' <<<"$sent" >/dev/null 2>&1 || why="POST body $sent"
-  fi
+  # The exact request body of a call: "post" for POST …/pulls, "md" for POST /markdown.
+  for k in post md; do
+    [ -z "$why" ] && [ "$(jq -r --arg k "$k" 'has($k)' <<<"$c")" = true ] || continue
+    case "$k" in post) route='^POST /repos/radatta/aperture/pulls ' ;; md) route='^POST /markdown ' ;; esac
+    idx="$(grep -n "$route" "$T/calls" | head -1 | cut -d: -f1)"
+    sent="$( [ -z "$idx" ] || cat "$T/calls.$((idx - 1)).data" 2>/dev/null || true)"
+    jq -e --argjson p "$(jq -c --arg k "$k" '.[$k]' <<<"$c")" '. == $p' <<<"$sent" >/dev/null 2>&1 || why="$k body ${sent:-not sent}"
+  done
+  if [ -z "$why" ] && [ "$setup" = hardlink ] && [ ! -f "$hj/staging/mine" ]; then why="the hard-linked original went missing"; fi
   if [ -z "$why" ] && grep -rq -e "$MAILROOM_FIXTURE_TOKEN" -e BODYMARK "$T/out" "$hj/results/" 2>/dev/null; then
     why="the token or body text reached the log or a result"
   fi

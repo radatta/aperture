@@ -47,7 +47,7 @@ describe('mailroom runner', () => {
     expect(src).not.toMatch(/(^|[\s;(|&])(gh|git)\s/m);
   });
 
-  it('calls GitHub only at api.github.com, with four fixed method + path pairs', () => {
+  it('calls GitHub only at api.github.com, with five fixed method + path pairs, one write', () => {
     const src = code();
     expect(src).toContain('MR_API="https://api.github.com"');
     expect(
@@ -56,9 +56,37 @@ describe('mailroom runner', () => {
       'GET /user',
       'GET "/repos/$MR_REPO/git/ref/heads/$branch"',
       'GET "/repos/$MR_REPO/pulls?head=$MR_OWNER:$branch&state=open"',
+      'POST /markdown',
       'POST "/repos/$MR_REPO/pulls"',
     ]);
     expect(src).toContain('MR_REPO="radatta/aperture"');
     expect(src.match(/\bcurl\b/g)).toHaveLength(1);
+  });
+
+  it('installs only what GitHub holds at a commit, reading nothing from the shared folder', () => {
+    const src = readFileSync(`${TOOLS_DIR}install.sh`, 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
+    // No path back to this folder's own files: every install source is a GitHub read at $ref.
+    for (const banned of [
+      'dirname "$0"',
+      'BASH_SOURCE',
+      '$SRC',
+      'tools/mailroom/runner.sh"',
+      ' -X ',
+    ])
+      expect(src).not.toContain(banned);
+    const calls = src.split('\n').filter((l) => /^\s*curl\s/.test(l));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('-H @<(printf \'Authorization: Bearer %s\\n\' "$TOKEN")');
+    expect(src).toContain('"https://api.github.com/repos/$REPO_SLUG/$1"');
+    expect(src.match(/\bget "[^"]+"/g)).toEqual([
+      'get "contents/tools/mailroom/jobs?ref=$ref"',
+      'get "contents/tools/mailroom/runner.sh?ref=$ref"',
+      'get "contents/tools/mailroom/jobs/$j?ref=$ref"',
+      'get "contents/tools/mailroom/$LABEL.plist.tmpl?ref=$ref"',
+    ]);
+    expect(src).toContain('TOKEN="$(security find-generic-password -s "$KEYCHAIN" -w');
   });
 });

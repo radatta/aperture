@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # The `open-pr` job: open a ready PR on radatta/aperture from a pushed feature branch, as the user, with their
-# PR-only fine-grained token from Keychain. Sourced by runner.sh. Four fixed calls, one write:
+# PR-only fine-grained token from Keychain. Sourced by runner.sh. Five fixed calls, one write:
 #   GET /user · GET /repos/radatta/aperture/git/ref/heads/<branch> · GET …/pulls?head=radatta:<branch>&state=open
-#   · POST …/pulls
+#   · POST /markdown (read-only: GitHub renders the body, and a mention or foreign issue link refuses it) · POST …/pulls
 # Params and checks mirror scripts/src/mailroom/job.ts (the fixtures run both). Design: docs/ops/MAILROOM.md.
 
 MR_OWNER="radatta"
@@ -18,8 +18,9 @@ OPEN_PR_JQ='
   def whole($re): (contains("\n") | not) and test($re); # in jq, $ also matches before a final newline
   def hidden_chars:
     explode | any(. as $c | ($c < 32 and $c != 9 and $c != 10) or ($c >= 127 and $c <= 159)
-      or ($c >= 8203 and $c <= 8207) or ($c >= 8234 and $c <= 8238) or ($c >= 8294 and $c <= 8297)
-      or $c == 65279 or $c == 65533);
+      or $c == 173 or ($c >= 8203 and $c <= 8207) or $c == 8232 or $c == 8233 or ($c >= 8234 and $c <= 8238)
+      or ($c >= 8288 and $c <= 8292) or ($c >= 8294 and $c <= 8297) or $c == 65279 or $c == 65533
+      or ($c >= 917504 and $c <= 917631));
   try (
     .params as $p
     | if ($p | type) != "object" or ($p | keys) != ["body","bodySha256","branch","sha","title"] then "BAD_PARAM"
@@ -29,7 +30,7 @@ OPEN_PR_JQ='
     elif ($p.title | type) != "string" or ($p.title | whole("^[A-Za-z0-9][A-Za-z0-9 .,:;()/+_&'"'"'-]{3,99}$") | not) then "BAD_PARAM"
     elif ($p.body | type) != "string" or ($p.body | utf8bytelength) < 1 or ($p.body | utf8bytelength) > 65536 then "BAD_PARAM"
     elif ($p.bodySha256 | type) != "string" or ($p.bodySha256 | whole("^[0-9a-f]{64}$") | not) then "BAD_PARAM"
-    elif ($p.body | hidden_chars) then "BAD_TEXT"
+    elif ($p.body | hidden_chars) or ($p.body | test("&#|&[A-Za-z][A-Za-z0-9]*;")) then "BAD_TEXT"
     elif ($p.body | visible | test("(^|[^A-Za-z0-9_])@[A-Za-z0-9]")) then "MENTION"
     elif ($p.body | visible | test("#[0-9]|(^|[^A-Za-z0-9_])GH-[0-9]")) then "HASH_REF"
     elif ($p.body | visible | test("[Gg][Ii][Tt][Hh][Uu][Bb]\\.[Cc][Oo][Mm]/(?!radatta/aperture/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull|discussions)/[0-9]")) then "XREF"
@@ -66,6 +67,7 @@ mr_failure() {
   [ "$MR_HTTP" != "$1" ] || return 0
   case "$MR_HTTP" in
     401) echo TOKEN_REJECTED ;;
+    404) echo TOKEN_FORBIDDEN ;; # a fine-grained token answers 404 for what it may not see
     403 | 429)
       if grep -qiE '^(retry-after:|x-ratelimit-remaining: *0)' "$MR_P.hdr" 2>/dev/null; then echo RATE_LIMITED; else echo TOKEN_FORBIDDEN; fi ;;
     *) echo API_FAILED ;;
@@ -126,6 +128,17 @@ run_open_pr() {
   if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
   pr="$(jq -c '.[0] // empty' "$MR_P.resp" 2>/dev/null | mr_pr_json)"
   if [ -n "$pr" ]; then mr_emit exists - "$pr"; return 0; fi
+
+  # GitHub's own renderer has the last word on what the body links (the jq checks above are the fast first pass).
+  jq -c --arg ctx "$MR_REPO" '{text: .params.body, mode: "gfm", context: $ctx}' "$w" >"$MR_P.md"
+  mr_call POST /markdown "$MR_P.md"
+  fail="$(mr_failure 200)"
+  if [ -n "$fail" ]; then mr_emit "$(status_of "$fail")" "$fail"; return 0; fi
+  if grep -qE 'class="[^"]*(user-mention|team-mention)' "$MR_P.resp"; then mr_emit rejected MENTION; return 0; fi
+  if grep -oE '<a [^>]*class="[^"]*issue-link[^>]*>' "$MR_P.resp" | grep -qv "href=\"https://github.com/$MR_REPO/"; then
+    mr_emit rejected XREF
+    return 0
+  fi
 
   jq -c --arg base main '{title: .params.title, head: .params.branch, base: $base, body: .params.body,
     draft: false, maintainer_can_modify: false}' "$w" >"$MR_P.post"

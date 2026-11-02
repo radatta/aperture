@@ -1,16 +1,18 @@
 #!/bin/bash
-# Install, update or remove the Mac mailroom (docs/ops/MAILROOM.md). Run on the Mac, from any checkout or worktree:
-#   bash tools/mailroom/install.sh [--mode queue|poll]     install / update (re-run after any tools/mailroom/ change)
-#   bash tools/mailroom/install.sh --uninstall
-# It COPIES runner.sh + jobs/ out of the repo into ~/Library/Application Support/aperture-mailroom/bin — the trust
-# boundary: launchd runs that copy, never the repo's, which the container can write — and prints the diff first.
+# Install, update or remove the Mac mailroom (docs/ops/MAILROOM.md → Install). It installs what GitHub holds at one
+# commit — by default main's head, code the user approved and merged — fetched with the mailroom token (Contents:
+# read). It never installs the files in this folder: the container can write them. Run it fetched the same way,
+# from the main checkout (the exact line is in MAILROOM.md):
+#   cd <main checkout> && bash <(curl … /contents/tools/mailroom/install.sh?ref=main) [--mode queue|poll] [--ref <sha>]
+#   … --uninstall
 # Needs only what macOS 15+ ships: bash, jq, curl, security, launchctl, plutil, shasum.
 set -euo pipefail
+export LC_ALL=C # glob order = the container's sort, for VERSION
 
 LABEL="dev.rahuldatta.aperture.mailroom"
-SRC="$(cd "$(dirname "$0")" && pwd -P)"
-CHECKOUT="$(cd "$SRC/../.." && pwd -P)"
-REPO="${CHECKOUT%%/.claude/worktrees/*}" # the main checkout: every worktree shares its .hostjobs/
+REPO_SLUG="radatta/aperture"
+KEYCHAIN="aperture-mailroom-gh"
+REPO="$(pwd -P)"
 HJ="$REPO/.hostjobs"
 APP="$HOME/Library/Application Support/aperture-mailroom"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -18,51 +20,57 @@ LOG="$HOME/Library/Logs/aperture-mailroom/agent.log"
 DOMAIN="gui/$(id -u)"
 
 die() { echo "install: $*" >&2; exit 1; }
-usage() { die "usage: bash tools/mailroom/install.sh [--mode queue|poll] | --uninstall"; }
+usage() { die "usage: install.sh [--mode queue|poll] [--ref <40-hex commit>] | --uninstall  (run from the main checkout)"; }
 
 mode=queue
-case "${1:-}" in
-  "") ;;
-  --mode) mode="${2:-}"; [ "$mode" = queue ] || [ "$mode" = poll ] || usage ;;
-  --uninstall)
-    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-    rm -f "$PLIST"
-    [ ! -d "$APP" ] || rm -r "$APP"
-    echo "removed the agent and $APP."
-    echo "kept: $HJ/ and the Keychain item — drop the token with \`security delete-generic-password -s aperture-mailroom-gh\` and revoke it on GitHub."
-    exit 0 ;;
-  *) usage ;;
-esac
+ref=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mode) mode="${2:-}"; [ "$mode" = queue ] || [ "$mode" = poll ] || usage; shift 2 ;;
+    --ref) ref="${2:-}"; [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || usage; shift 2 ;;
+    --uninstall)
+      launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+      rm -f "$PLIST"
+      [ ! -d "$APP" ] || rm -r "$APP"
+      echo "removed the agent and $APP."
+      echo "kept: .hostjobs/ and the Keychain item — drop the token with \`security delete-generic-password -s $KEYCHAIN\` and revoke it on GitHub."
+      exit 0 ;;
+    *) usage ;;
+  esac
+done
 
 [ "$(uname)" = Darwin ] || die "run this on the Mac"
 for t in jq curl security launchctl plutil shasum; do command -v "$t" >/dev/null || die "$t not found (needs macOS 15+)"; done
-security find-generic-password -s aperture-mailroom-gh >/dev/null 2>&1 \
-  || echo "note: no Keychain item aperture-mailroom-gh yet — jobs will fail TOKEN_MISSING until you add it (MAILROOM.md → Token)"
+[ -d "$REPO/.git" ] || die "run from the main checkout (cd to it first) — .hostjobs/ lives there, shared by every worktree"
 case "$HJ$APP$LOG" in *'&'* | *'<'* | *'>'*) die "a path holds an XML-special character" ;; esac
-for f in "$SRC/runner.sh" "$SRC"/jobs/*.sh "$SRC/$LABEL.plist.tmpl"; do
-  [ -f "$f" ] && [ ! -L "$f" ] || die "$f is missing or a symlink — refusing to install it"
-done
+TOKEN="$(security find-generic-password -s "$KEYCHAIN" -w 2>/dev/null || true)"
+[ -n "$TOKEN" ] || die "no Keychain item $KEYCHAIN — add the token first (MAILROOM.md → The token)"
 
-# Stage the new copy, show what changes against the installed one, then swap it in.
+# get PATH OUT [raw] — one GitHub read with the token as a header fd (never argv); fails loudly.
+get() {
+  local accept='application/vnd.github+json'
+  [ -z "${3:-}" ] || accept='application/vnd.github.raw+json'
+  curl -sSf --max-time 30 -o "$2" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H "Accept: $accept" \
+    -H 'X-GitHub-Api-Version: 2022-11-28' -H 'User-Agent: aperture-mailroom-install' \
+    "https://api.github.com/repos/$REPO_SLUG/$1" || die "GitHub read failed: $1"
+}
+
 stage="$(mktemp -d)"
 trap 'rm -r "$stage"' EXIT
-mkdir -p "$stage/jobs"
-cp "$SRC/runner.sh" "$stage/runner.sh"
-cp "$SRC"/jobs/*.sh "$stage/jobs/"
-cat "$SRC/runner.sh" "$SRC"/jobs/*.sh | shasum -a 256 | cut -d' ' -f1 >"$stage/VERSION"
-mkdir -p "$APP/bin/jobs" "$APP/state" "$(dirname "$LOG")" "$(dirname "$PLIST")"
-echo "== changes to the installed runner ($APP/bin)"
-diff -ru "$APP/bin" "$stage" || true
-rm -f "$APP/bin/runner.sh" "$APP/bin/VERSION" "$APP"/bin/jobs/*.sh
-cp "$stage/runner.sh" "$stage/VERSION" "$APP/bin/"
-cp "$stage"/jobs/*.sh "$APP/bin/jobs/"
-chmod 700 "$APP/bin/runner.sh"
+get commits/main "$stage/main.json"
+main_sha="$(jq -r .sha "$stage/main.json")"
+[[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || die "could not read main's head"
+[ -n "$ref" ] || ref="$main_sha"
 
-# The shared folder the container writes into. Refuse symlinks: the runner would refuse them anyway.
-for d in "$HJ" "$HJ/staging" "$HJ/inbox" "$HJ/results"; do
-  [ ! -L "$d" ] || die "$d is a symlink — remove it and re-run"
-  mkdir -p "$d"
-done
+# Fetch the runner, its jobs and the plist template at that commit.
+mkdir -p "$stage/bin/jobs"
+get "contents/tools/mailroom/jobs?ref=$ref" "$stage/jobs.json"
+jobs="$(jq -r '.[] | select(.type == "file") | .name | select(test("^[a-z0-9-]+\\.sh$"))' "$stage/jobs.json")"
+[ -n "$jobs" ] || die "no jobs at $ref"
+get "contents/tools/mailroom/runner.sh?ref=$ref" "$stage/bin/runner.sh" raw
+for j in $jobs; do get "contents/tools/mailroom/jobs/$j?ref=$ref" "$stage/bin/jobs/$j" raw; done
+get "contents/tools/mailroom/$LABEL.plist.tmpl?ref=$ref" "$stage/plist.tmpl" raw
+cat "$stage/bin/runner.sh" "$stage"/bin/jobs/*.sh | shasum -a 256 | cut -d' ' -f1 >"$stage/bin/VERSION"
 
 if [ "$mode" = queue ]; then
   trigger="  <key>QueueDirectories</key>
@@ -73,24 +81,48 @@ else
   trigger="  <key>StartInterval</key>
   <integer>15</integer>"
 fi
-tmpl="$(cat "$SRC/$LABEL.plist.tmpl")"
+tmpl="$(cat "$stage/plist.tmpl")"
 tmpl="${tmpl//@RUNNER@/$APP/bin/runner.sh}"
 tmpl="${tmpl//@HOSTJOBS@/$HJ}"
 tmpl="${tmpl//@STATE@/$APP/state}"
 tmpl="${tmpl//@LOG@/$LOG}"
 tmpl="${tmpl//@TRIGGER@/$trigger}"
-printf '%s\n' "$tmpl" >"$PLIST"
-plutil -lint "$PLIST" >/dev/null
+printf '%s\n' "$tmpl" >"$stage/$LABEL.plist"
+plutil -lint "$stage/$LABEL.plist" >/dev/null
+
+echo "== installing $REPO_SLUG@${ref:0:12} — changes against what is installed:"
+mkdir -p "$APP/bin/jobs" "$APP/state" "$(dirname "$LOG")" "$(dirname "$PLIST")"
+diff -ru "$APP/bin" "$stage/bin" || true
+diff -u "$PLIST" "$stage/$LABEL.plist" 2>/dev/null || true
+[ "$ref" = "$main_sha" ] || echo "!! $ref is NOT main's head — an unmerged commit. Re-run without --ref once it merges."
+
+rm -f "$APP/bin/runner.sh" "$APP/bin/VERSION" "$APP"/bin/jobs/*.sh
+cp "$stage/bin/runner.sh" "$stage/bin/VERSION" "$APP/bin/"
+cp "$stage"/bin/jobs/*.sh "$APP/bin/jobs/"
+chmod 700 "$APP/bin/runner.sh"
+cp "$stage/$LABEL.plist" "$PLIST"
+
+# The shared folder the container writes into. Refuse symlinks: the runner would refuse them anyway.
+for d in "$HJ" "$HJ/staging" "$HJ/inbox" "$HJ/results"; do
+  [ ! -L "$d" ] || die "$d is a symlink — remove it and re-run"
+  mkdir -p "$d"
+done
 
 # The stamp the container reads to tell "never installed" from "asleep" (pnpm mailroom → MAC_UNREACHABLE).
 version="$(cat "$APP/bin/VERSION")"
 rm -f "$HJ/installed.json"
 (
   set -C
-  jq -n --arg v "$version" --arg mode "$mode" '{installedAt: (now | todate), runnerVersion: $v, mode: $mode}' >"$HJ/installed.json"
+  jq -n --arg v "$version" --arg ref "$ref" --arg mode "$mode" \
+    '{installedAt: (now | todate), runnerVersion: $v, ref: $ref, mode: $mode}' >"$HJ/installed.json"
 )
 
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-launchctl bootstrap "$DOMAIN" "$PLIST"
-echo "installed $LABEL (mode $mode, runner ${version:0:12}) watching $HJ/inbox"
+# bootout returns before the old instance is gone; bootstrap can fail ("5: Input/output error") until it is.
+for try in 1 2 3 4 5; do
+  if launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; then break; fi
+  [ "$try" -lt 5 ] || die "launchctl bootstrap failed 5 times — run: launchctl bootstrap $DOMAIN $PLIST"
+  sleep 1
+done
+echo "installed $LABEL (mode $mode, runner ${version:0:12}, $REPO_SLUG@${ref:0:12}) watching $HJ/inbox"
 echo "check: launchctl print $DOMAIN/$LABEL | head -20   ·   log: $LOG"

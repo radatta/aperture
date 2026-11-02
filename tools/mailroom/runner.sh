@@ -30,6 +30,11 @@ for d in "$HJ" "$HJ/inbox" "$HJ/results"; do
   fi
 done
 HJ_REAL="$(cd "$HJ" && pwd -P)"
+# The plist passes the real path (install.sh resolves it), so any difference means .hostjobs was swapped meanwhile.
+if [ "$HJ_REAL" != "$HJ" ]; then
+  log "refusing: $HJ resolves elsewhere ($HJ_REAL)"
+  exit 1
+fi
 mkdir -p "$STATE/work" "$STATE/rejected"
 WORK="$(cd "$STATE/work" && pwd -P)"
 REJECTED="$(cd "$STATE/rejected" && pwd -P)"
@@ -129,30 +134,38 @@ for entry in ./*; do
     log "rejected an entry with a bad name"
     continue
   fi
-  # Out of the shared folder before anything reads it: after this mv the container can't change what we parse.
+  # Out of the shared folder, then a private copy. The moved file can still be the container's inode (a hard link,
+  # or a handle opened before the move), so everything below reads only the snapshot: a file the runner created.
+  moved="$WORK/$stem.moved"
   w="$WORK/$stem.json"
-  if [ -e "$w" ] || [ -L "$w" ]; then park "$w"; fi
-  mv -- "$entry" "$w" || {
+  for f in "$moved" "$w"; do if [ -e "$f" ] || [ -L "$f" ]; then park "$f"; fi; done
+  mv -- "$entry" "$moved" || {
     log "$stem could not be moved out — skipped"
     continue
   }
   # A re-sent id runs nothing: its result dir exists (the original's, or one the container made to block it).
   if [ -e "$HJ_REAL/results/$stem" ] || [ -L "$HJ_REAL/results/$stem" ]; then
-    park "$w"
+    park "$moved"
     log "$stem DUPLICATE — results/$stem exists, not run"
     continue
   fi
-  if [ -L "$w" ] || [ ! -f "$w" ]; then
-    park "$w"
+  if [ -L "$moved" ] || [ ! -f "$moved" ] || [ -z "$(find "$moved" -maxdepth 0 -links 1)" ]; then
+    park "$moved"
     result "$stem" rejected BAD_FILE "$started"
     continue
   fi
+  if ! (set -C && head -c $((MAX_FILE + 1)) <"$moved" >"$w"); then
+    park "$moved"
+    log "$stem could not be snapshotted — skipped"
+    continue
+  fi
+  rm -f -- "$moved"
   if [ "$(wc -c <"$w" | tr -d ' ')" -gt "$MAX_FILE" ]; then
     rm -f -- "$w"
     result "$stem" rejected TOO_LARGE "$started"
     continue
   fi
-  if ! jq -e . "$w" >/dev/null 2>&1; then
+  if ! jq -se 'length == 1' "$w" >/dev/null 2>&1; then # exactly one JSON value
     rm -f -- "$w"
     result "$stem" rejected BAD_JSON "$started"
     continue

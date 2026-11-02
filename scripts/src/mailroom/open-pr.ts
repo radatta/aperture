@@ -15,6 +15,12 @@ export const macPath = (p: string) =>
   p === '/workspace' || p.startsWith('/workspace/') ? MAC_ROOT + p.slice('/workspace'.length) : p;
 export const RENEW_LINE = `cd ${MAC_ROOT} && security add-generic-password -a "$USER" -s aperture-mailroom-gh -T /usr/bin/security -U -w`;
 const GRACE_MS = 30_000; // after a failed withdraw the Mac holds the job: give it this long to finish
+// Wait + grace stays under the Bash tool's 120 s default timeout, so a caller is never killed before the withdraw.
+export const WAIT_MS = 75_000;
+
+// The branch is pushed (checked before submit), so a 404 on its ref means the token can't see it.
+const HEAD_MISSING_HINT =
+  'GitHub hid the pushed branch from the mailroom token — it lacks access to radatta/aperture or Contents: read (MAILROOM.md → The token)';
 
 export const EXIT = { ok: 0, failed: 1, usage: 2, unreachable: 3 } as const;
 
@@ -75,7 +81,7 @@ function refuse(d: Deps, job: Job, reason: keyof typeof REASON_HINT): number {
   return EXIT.failed;
 }
 
-export async function openPr(d: Deps, title: string, waitMs = 180_000): Promise<number> {
+export async function openPr(d: Deps, title: string, waitMs = WAIT_MS): Promise<number> {
   const branch = featureBranch(d.run);
   const sha = requirePushed(d.run, branch);
   const bodyPath = join(d.root, 'localNotes', `pr-${branch}.md`);
@@ -137,13 +143,15 @@ export async function openPr(d: Deps, title: string, waitMs = 180_000): Promise<
     d.log(`the mailroom token needs attention (MAILROOM.md → Token). Renew:\n  ${RENEW_LINE}`);
   if (r.reason === 'HEAD_MISMATCH')
     d.log('origin moved since this job was built — `pnpm bot push`, then retry');
+  if (r.reason === 'HEAD_MISSING') d.log(HEAD_MISSING_HINT);
   return EXIT.failed;
 }
 
 // The trial's probe: the whole path (inbox → launchd → Keychain → GitHub) with a zero sha, so it stops at
 // HEAD_MISMATCH before any write.
-export async function probe(d: Deps, waitMs = 180_000): Promise<number> {
+export async function probe(d: Deps, waitMs = WAIT_MS): Promise<number> {
   const branch = featureBranch(d.run);
+  requirePushed(d.run, branch); // so HEAD_MISSING can only mean the token can't see the repo
   const job = makeOpenPrJob(
     { branch, sha: '0'.repeat(40), title: 'Mailroom probe', body: 'probe' },
     d.clock.now(),
@@ -165,12 +173,12 @@ export async function probe(d: Deps, waitMs = 180_000): Promise<number> {
       'Mailroom probe',
     );
   warnings(d, r);
-  const ok =
-    r.status === 'rejected' && (r.reason === 'HEAD_MISMATCH' || r.reason === 'HEAD_MISSING');
+  const ok = r.status === 'rejected' && r.reason === 'HEAD_MISMATCH';
   d.log(
     ok
-      ? `probe ok: the Mac answered in ${r.durationMs} ms (started ${r.startedAt}); token expires ${r.tokenExpiresAt ?? 'unknown'}${r.reason === 'HEAD_MISSING' ? ' — branch not pushed, so the PR-list step went untested' : ''}`
+      ? `probe ok: the Mac answered in ${r.durationMs} ms (started ${r.startedAt}); token expires ${r.tokenExpiresAt ?? 'unknown'}`
       : `probe failed: ${r.status} ${r.reason}`,
   );
+  if (r.reason === 'HEAD_MISSING') d.log(HEAD_MISSING_HINT);
   return ok ? EXIT.ok : EXIT.failed;
 }

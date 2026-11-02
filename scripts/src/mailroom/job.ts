@@ -81,15 +81,20 @@ export function makeOpenPrJob(
 
 export const visible = (body: string) => body.replace(FENCE_RE, '\n').replace(SPAN_RE, ' ');
 
-// Any hidden or control character: C0 except tab/newline, DEL + C1, zero-width, bidi, BOM, U+FFFD.
+// Any hidden or control character: C0 except tab/newline, DEL + C1, soft hyphen, zero-width, line/paragraph
+// separators, invisible operators, bidi, BOM, U+FFFD, tag characters — and any HTML entity (`&#x40;` renders as @).
+const ENTITY_RE = /&#|&[A-Za-z][A-Za-z0-9]*;/;
 function hiddenChar(s: string): boolean {
+  if (ENTITY_RE.test(s)) return true;
   for (const ch of s) {
     const c = ch.codePointAt(0) ?? 0;
-    if ((c < 32 && c !== 9 && c !== 10) || (c >= 127 && c <= 159)) return true;
+    if ((c < 32 && c !== 9 && c !== 10) || (c >= 127 && c <= 159) || c === 0xad) return true;
     if (
       (c >= 0x200b && c <= 0x200f) ||
-      (c >= 0x202a && c <= 0x202e) ||
-      (c >= 0x2066 && c <= 0x2069)
+      (c >= 0x2028 && c <= 0x202e) ||
+      (c >= 0x2060 && c <= 0x2064) ||
+      (c >= 0x2066 && c <= 0x2069) ||
+      (c >= 0xe0000 && c <= 0xe007f)
     )
       return true;
     if (c === 0xfeff || c === 0xfffd || (c >= 0xd800 && c <= 0xdfff)) return true; // jq reads a lone surrogate as U+FFFD
