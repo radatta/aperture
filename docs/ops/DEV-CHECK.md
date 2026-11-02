@@ -274,7 +274,7 @@ real 429 still lands in _Throttled (429)_. Only a dropped real connection inside
 request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last in `SCENARIOS` for this reason, and because it is slow: about 2.5 minutes alone (a 32 s
 heartbeat wait, a 20 s pause, retry backoffs, ~17 page loads), which takes a full run past the 3-minute revisit
 line in _Selectors and upkeep_ — accepted when it landed (2026-11-01, failed-reads `decisions.md`). It also starts and stops one ad-hoc focus
-timer through the dock, which leaves a seconds-long completed session in the test user's history each run.
+timer through the dock, which leaves a completed session of about two minutes in the test user's history each run.
 Sessions have no delete method, so they're not ledgered; a timer an aborted run left running is stopped through
 the dock before the timer steps, judged by the server's list. Some of its rows are off dev only because they need
 data the harness can't write on the test user (a Google account, habits, rolls, categories, a plan); their tests

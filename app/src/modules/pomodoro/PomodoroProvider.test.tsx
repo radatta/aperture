@@ -164,13 +164,37 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     api.stopSession = (id, st) => (calls.push('stop'), stopS(id, st));
     renderApp({ api, path: '/settings' });
     await startFocus(user);
-    await act(async () => void vi.advanceTimersByTime(25 * 60_000 + 2_000));
+    await act(async () => void vi.advanceTimersByTime(25 * 60_000 + 1_000));
     await screen.findByText('Done');
+    await waitFor(() => expect(calls).toContain('beat')); // the finish beat
     calls.length = 0;
     await act(async () => void vi.advanceTimersByTime(60_000)); // sitting on done: no more beats
     expect(calls).toEqual([]);
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     await screen.findByTitle('Start a 25-minute focus block');
     expect(calls).toEqual(['resume', 'stop']);
+  });
+
+  it('a timer adopted already done gets no finish beat — it would credit the time it sat there', async () => {
+    const api = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    const done: PomodoroSession = {
+      ...s0,
+      activeMinutes: 25.5,
+      lastHeartbeatAt: Date.now() - 30_000,
+    };
+    api.listRunningSessions = async () => [done];
+    let beats = 0;
+    api.heartbeatSession = async () => (beats++, done);
+    renderApp({ api, path: '/settings' });
+    await screen.findByText('Done');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(beats).toBe(0);
   });
 });

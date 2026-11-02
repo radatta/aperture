@@ -14,8 +14,5 @@ export const queryClient = new QueryClient({
       retry: retryQuery,
       retryDelay: retryQueryDelay,
     },
-    // Same for writes: offline, a paused mutation never settles, so a capture would neither land nor come
-    // back to the field. It fails, and the caller's error path says so. (Still never retried — retry.ts.)
-    mutations: { networkMode: 'always' },
   },
 });

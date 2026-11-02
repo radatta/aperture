@@ -1,7 +1,7 @@
 // A failed read never fails silently (docs/product/CONVENTIONS.md → Failed reads). The harness fails dev's
 // /api/<method> itself (ctx.intercept, a Playwright route — nothing in the app switches) and checks the screen
 // says so instead of an empty list or a default, that Retry recovers, and that a 429 is retried away.
-import { noConsoleErrors, type Ctx, type Row, type Scenario } from '../scenario';
+import { laDay, noConsoleErrors, type Ctx, type Row, type Scenario } from '../scenario';
 
 // Counted on /settings: task cards there would each mount a categories reader, and React Query refetches a
 // failed query when a new reader mounts — so on /tasks the injected count depends on how fast listTasks is.
@@ -598,7 +598,7 @@ export const failedReads: Scenario = {
         await ctx.ui.expectText('not syncing', 5_000);
         await until('the failed categories refetch', () => cats.hits() >= 3, 10_000);
         await wait(SETTLE_MS);
-        await absent(ctx, 'Couldn’t load categories.');
+        await absent(ctx, SETTINGS_CATEGORIES);
         await ctx.shot('not-syncing');
         // Each failed beat is 3 sends (the http client retries a 429 twice).
         if (beats.hits() < 6)
@@ -657,14 +657,17 @@ export const failedReads: Scenario = {
       async run(ctx) {
         const left = await ctx.api.reads.listRunningSessions();
         if (left.length) throw new Error(`${left.length} timer(s) still running on the test user`);
-        const done = (await ctx.api.reads.listSessionsForDay(ctx.dates.today))
+        // The app's day, not the calendar's: before the day start (4am) the session belongs to yesterday.
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const day = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
+        const done = (await ctx.api.reads.listSessionsForDay(day))
           .filter((x) => x.status === 'completed' && x.endedAt !== null)
           .sort((a, b) => b.endedAt! - a.endedAt!)[0];
         if (!done) throw new Error('the stopped timer is not in today’s sessions');
         const wallSec = (done.endedAt! - done.startedAt) / 1000;
         const creditedSec = done.activeMinutes * 60;
         // The run paused it twice (the resume step, then PAUSE_MS here): credit must fall short of the wall
-        // clock by at least the last pause, less a heartbeat's worth of slack.
+        // clock by at least the last pause, less 5 s for the lag between the pause's beat and the stop's reset.
         if (creditedSec > wallSec - PAUSE_MS / 1000 + 5)
           throw new Error(
             `credited ${creditedSec.toFixed(1)} s of a ${wallSec.toFixed(1)} s timer`,

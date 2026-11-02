@@ -150,4 +150,5 @@ start, so the call never ran; the BFF never answers 429 itself), with the backof
 retries a **5xx or a dropped connection on reads only**, because a write that may have landed must show its
 error, not run twice. A Pomodoro call that fails says so on its row in the dock, and a failed `stop()` rejects
 and keeps the timer. Reads run with `networkMode: 'always'`, so offline they fail and say so instead of pausing
-on "Loading…".
+on "Loading…". Writes keep TanStack's `'online'`: offline, a write is held and sent on reconnect, never
+failed and never lost while the app stays open.

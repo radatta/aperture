@@ -18,6 +18,7 @@ import { chime, unlockAudio } from './chime';
 // so several finishing at once don't spawn a pile of break timers. On load, adopts still-running
 // sessions and flags long-silent ones for keep/discard. Only `work` accrues to the task (stub side).
 const HEARTBEAT_MS = 15_000;
+const JUST_FINISHED_SEC = 3; // the finish beat fires only this close to the block's end
 const MISSED_BEATS_WARN = 2; // ≥30 s unheard — well inside STALE_MS, so it warns before the server caps time
 
 const without = <T,>(rec: Record<string, T>, id: string) => {
@@ -114,9 +115,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
         // Merged, not replaced: a timer started while this read had failed survives its Retry.
         setSessions((cur) => [
           ...cur.filter((c) => !list.some((s) => s.id === c.id)),
-          ...list.filter((s) => !isStale(s, t)),
+          ...list.filter((s) => !isStale(s, t) && !stopped.current.has(s.id)),
         ]);
-        setStale(list.filter((s) => isStale(s, t)));
+        setStale(list.filter((s) => isStale(s, t) && !stopped.current.has(s.id)));
       },
       () => {
         if (!cancelled) setAdoptFailed(true);
@@ -178,12 +179,22 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     const doneIds = doneKey ? doneKey.split(',') : [];
     const fresh = doneIds.filter((id) => !chimedIds.has(id));
     if (fresh.length === 0) return;
-    // One beat as a block finishes: a done timer stops beating, so this credits its last few seconds (a
-    // later stop or extend resets the clock first and credits nothing more).
-    for (const id of fresh)
-      api.heartbeatSession(id).then(upsert, () =>
-        setMissed((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 })),
+    // One beat as a block finishes credits its last few seconds (a done timer stops beating, and a later stop
+    // or extend resets the clock first). Only right at the finish: the server credits everything since the
+    // last beat, so a block that ended while the phone slept, or one adopted already done, gets no beat.
+    const { sessions: live, targetFor: tf } = beatRef.current;
+    const t = Date.now();
+    for (const id of fresh) {
+      const s = live.find((x) => x.id === id);
+      if (!s || activeSec(s, false, t) - tf(s) > JUST_FINISHED_SEC) continue;
+      api.heartbeatSession(id).then(
+        (next) => {
+          upsert(next);
+          setMissed((m) => without(m, id));
+        },
+        () => setMissed((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 })),
       );
+    }
     chime();
     setChimedIds((c) => new Set([...c, ...fresh]));
   }, [doneKey, chimedIds, api, upsert]);
