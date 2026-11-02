@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderReport, statusLine, type RunResult } from './report';
+import { renderReport, statusLine, type RowResult, type RunResult } from './report';
 
 const base: RunResult = {
   runId: '2026-10-13T12-00-00-full',
@@ -9,6 +9,7 @@ const base: RunResult = {
   endSha: 'a'.repeat(40),
   status: 'PASS',
   codes: [],
+  coverage: [],
   steps: [{ scenario: 'smoke', step: 'home', title: 'Home renders', status: 'pass', ms: 1200 }],
   created: [{ id: 't1', via: 'ui:createTask', final: 'deleted' }],
   swept: [],
@@ -45,6 +46,10 @@ describe('report', () => {
       Run \`2026-10-13T12-00-00-full\` · tier full · 61.0s
       Build: expected \`aaaaaaa\`, start \`aaaaaaa\`, end \`aaaaaaa\`
       Leftovers: **0**
+
+      ## Feature coverage
+
+      No feature rows in this run — smoke proves the harness.
 
       ## Steps
 
@@ -94,5 +99,80 @@ describe('report', () => {
     expect(md).toContain('Leftovers: **1** (t9)');
     expect(md).toContain('| cap | a \\| b | fail | 0.0s | no match ![](shots/x.png) |');
     expect(md).toContain('**Not in the ledger** (reported, never deleted — check by hand): u1');
+  });
+
+  describe('feature coverage', () => {
+    const row = (over: Partial<RowResult>): RowResult => ({
+      scenario: 'ad',
+      row: 'r',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Delete',
+      status: 'pass',
+      provenBy: 'steps del (ui)',
+      ...over,
+    });
+    const rows = [
+      row({ what: 'Delete | Cancel' }),
+      row({
+        row: 'o',
+        kind: 'edge',
+        status: 'off-dev',
+        what: 'S3 fails',
+        provenBy: 'off dev: a.test.ts › says so',
+      }),
+      row({
+        row: 'y',
+        entry: 'mcp',
+        status: 'needs-you',
+        what: 'MCP delete',
+        provenBy: 'needs you: next PR',
+      }),
+    ];
+
+    it('leads with the table, before the steps, pipes escaped', () => {
+      const md = renderReport({ ...base, coverage: rows });
+      expect(md.indexOf('## Feature coverage')).toBeLessThan(md.indexOf('## Steps'));
+      expect(md).toContain(
+        'Proven on dev **1** · off dev **1** · needs you **1** · not proven **0**',
+      );
+      expect(md).toContain('| ad | Delete \\| Cancel | nominal | ui | steps del (ui) | pass |');
+      expect(md).toContain(
+        '| ad | S3 fails | edge | ui | off dev: a.test.ts › says so | off dev |',
+      );
+      expect(md).not.toContain('### Not proven on dev');
+    });
+
+    it('lists what the user need not test (off dev annotated) and what needs them', () => {
+      const md = renderReport({ ...base, coverage: rows });
+      expect(md).toContain(
+        "### You don't need to test\n\n- ad: Delete | Cancel\n- ad: S3 fails — covered off dev by a.test.ts › says so\n",
+      );
+      expect(md).toContain('### Needs you\n\n- ad: MCP delete — next PR\n');
+    });
+
+    it('names what was not proven, and the step that failed', () => {
+      const md = renderReport({
+        ...base,
+        coverage: [
+          row({ status: 'fail', failedSteps: ['del'] }),
+          row({ row: 's', status: 'skipped', what: 'Reload' }),
+        ],
+      });
+      expect(md).toContain('not proven **2**');
+      expect(md).toContain(
+        '### Not proven on dev\n\n- ad: Delete — step del failed\n- ad: Reload — its steps never ran\n',
+      );
+      expect(md).toContain("### You don't need to test\n\nNothing yet.");
+    });
+
+    it('names the scenarios’ commit only when it differs from the build', () => {
+      expect(renderReport({ ...base, scenarioSha: base.expectedSha })).not.toContain(
+        'scenarios from',
+      );
+      expect(renderReport({ ...base, scenarioSha: 'b'.repeat(40) })).toContain(
+        'end `aaaaaaa` · scenarios from `bbbbbbb`',
+      );
+    });
   });
 });

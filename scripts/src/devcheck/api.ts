@@ -7,8 +7,13 @@ import { AUTH_HEADER, DEV_ORIGIN, assertDevOrigin, assertPresignedDevUrl } from 
 import { DevcheckError } from './errors';
 import type { Ledger } from './ledger';
 
+// After a delete S3 answers a presigned GET with 403, not 404: the roles have no s3:ListBucket, so S3 hides
+// NoSuchKey behind AccessDenied. 404 still counts as gone.
+export const isGone = (status: number): boolean => status === 403 || status === 404;
+
 // The slice of @aperture/shared's Task the check reads (scripts doesn't depend on shared; the contract
 // tests on both sides own the full shape).
+
 export interface DevTask {
   id: string;
   title: string;
@@ -146,6 +151,7 @@ export function createApiClient({
     listAttachments: (taskId: string) => call<DevAttachment[]>('listAttachments', [taskId]),
     getAttachmentDownloadUrl: (id: string) => call<string>('getAttachmentDownloadUrl', [id]),
     // GET a BFF-minted presigned URL and return only its status (200 while the bytes exist, 403/404 after).
+    // Gone is 403 or 404 — see isGone.
     async probePresigned(url: string): Promise<number> {
       assertPresignedDevUrl(url);
       const res = await fetch(url, { method: 'GET', headers: {}, redirect: 'error' });

@@ -2,6 +2,7 @@
 // what it created and what's left. report.md is for reading (Claude reads it, then the screenshots);
 // report.json is the same result for tooling.
 import type { ReasonCode } from './errors';
+import type { EntryPoint, RowKind } from './scenario';
 
 export type StepStatus = 'pass' | 'fail' | 'skipped';
 
@@ -15,6 +16,19 @@ export interface StepResult {
   shot?: string;
 }
 
+export type RowStatus = 'pass' | 'fail' | 'skipped' | 'off-dev' | 'needs-you';
+
+export interface RowResult {
+  scenario: string;
+  row: string;
+  entry: EntryPoint;
+  kind: RowKind;
+  what: string;
+  status: RowStatus;
+  provenBy: string; // "steps a (ui), b (api)" | "off dev: <file> › <test>" | "needs you: <reason>"
+  failedSteps?: string[];
+}
+
 export interface CreatedRecord {
   id: string;
   via: string;
@@ -26,11 +40,13 @@ export interface RunResult {
   runId: string;
   tier: string;
   expectedSha: string;
+  scenarioSha?: string; // the commit the scenarios came from — differs from expectedSha on a scenario-only check
   startSha?: string;
   endSha?: string;
   deployUrl?: string;
   status: 'PASS' | 'FAIL' | 'CRASH';
   codes: ReasonCode[];
+  coverage: RowResult[]; // every selected scenario's rows, in order
   steps: StepResult[];
   created: CreatedRecord[];
   swept: string[];
@@ -50,6 +66,66 @@ export const statusLine = (r: RunResult): string =>
 
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+const ROW_LABEL: Record<RowStatus, string> = {
+  pass: 'pass',
+  fail: 'fail',
+  skipped: 'skipped',
+  'off-dev': 'off dev',
+  'needs-you': 'needs you',
+};
+
+// The feature's rows first, so the report says what was proven before how the steps went. The two lists
+// paste into report-<branch>.md and the CC done notes as they are.
+function renderCoverage(rows: RowResult[]): string[] {
+  const lines = ['', '## Feature coverage', ''];
+  if (!rows.length) return [...lines, 'No feature rows in this run — smoke proves the harness.'];
+  const n = (...st: RowStatus[]) => rows.filter((x) => st.includes(x.status)).length;
+  const item = (x: RowResult) => `- ${x.scenario}: ${x.what}`;
+  lines.push(
+    `Proven on dev **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · not proven **${n('fail', 'skipped')}**`,
+    '',
+    '| Scenario | Row | Kind | Entry | Proven by | Result |',
+    '| --- | --- | --- | --- | --- | --- |',
+    ...rows.map(
+      (x) =>
+        `| ${x.scenario} | ${cell(x.what)} | ${x.kind} | ${x.entry} | ${cell(x.provenBy)} | ${ROW_LABEL[x.status]} |`,
+    ),
+  );
+  const unproven = rows.filter((x) => x.status === 'fail' || x.status === 'skipped');
+  if (unproven.length)
+    lines.push(
+      '',
+      '### Not proven on dev',
+      '',
+      ...unproven.map(
+        (x) =>
+          `${item(x)} — ${x.failedSteps?.length ? `step ${x.failedSteps.join(', ')} failed` : 'its steps never ran'}`,
+      ),
+    );
+  const done = rows.filter((x) => x.status === 'pass' || x.status === 'off-dev');
+  lines.push(
+    '',
+    "### You don't need to test",
+    '',
+    ...(done.length
+      ? done.map((x) =>
+          x.status === 'off-dev'
+            ? `${item(x)} — covered off dev by ${x.provenBy.slice('off dev: '.length)}`
+            : item(x),
+        )
+      : ['Nothing yet.']),
+  );
+  const you = rows.filter((x) => x.status === 'needs-you');
+  lines.push(
+    '',
+    '### Needs you',
+    '',
+    ...(you.length
+      ? you.map((x) => `${item(x)} — ${x.provenBy.slice('needs you: '.length)}`)
+      : ['Nothing.']),
+  );
+  return lines;
+}
 
 export function renderReport(r: RunResult): string {
   const left = r.created.filter((c) => c.final === 'left');
@@ -57,10 +133,11 @@ export function renderReport(r: RunResult): string {
     `# Dev check — ${statusLine(r)}`,
     '',
     `Run \`${r.runId}\` · tier ${r.tier} · ${sec(r.durationMs)}`,
-    `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}`,
+    `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);
+  lines.push(...renderCoverage(r.coverage));
   lines.push(
     '',
     '## Steps',

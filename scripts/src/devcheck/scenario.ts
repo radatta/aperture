@@ -1,7 +1,8 @@
 // A scenario is a plain module: an id, the tiers it runs in, and ordered steps. A step gets a Ctx — the page,
 // UI helpers, the guarded API client, screenshots in both themes — and throws to fail. A failed step is
 // recorded with a screenshot and the rest of that scenario is skipped (later steps build on it); the next
-// scenario still runs, and cleanup always does. Writing one from a runbook: docs/ops/DEV-CHECK.md.
+// scenario still runs, and cleanup always does. Its rows are the feature's coverage matrix (entry point ×
+// case); each step names the rows it proves. Writing one from a runbook: docs/ops/DEV-CHECK.md.
 import { join } from 'node:path';
 import type { ApiClient } from './api';
 import { DEV_ORIGIN, assertDevOrigin } from './config';
@@ -10,9 +11,34 @@ import type { PwPage } from './pw-types';
 
 export type Tier = 'smoke' | 'full';
 
+// Where a user or client enters the feature. A step drives one of STEP_ENTRIES; the rest name surfaces
+// headless Chromium can't reach, so their rows are needsYou (mcp until the MCP-as-test-user PR adds it).
+export type EntryPoint = 'ui' | 'api' | 'mcp' | 'ios' | 'raycast' | 'extension';
+export const STEP_ENTRIES: readonly EntryPoint[] = ['ui', 'api'];
+export type RowKind = 'nominal' | 'edge';
+
+// Dev can't make this failure happen, so a unit or handler test is the proof. `file` is repo-relative,
+// `test` the it() title verbatim. A test-only switch in shipped code never stands in for this.
+export interface OffDevTest {
+  file: string;
+  test: string;
+  why: string;
+}
+
+export interface Row {
+  id: string; // the key steps name in `proves`
+  entry: EntryPoint;
+  kind: RowKind;
+  what: string; // the case as the user would say it
+  offDev?: OffDevTest;
+  needsYou?: string; // why only the user can reach it
+}
+
 export interface Step {
   id: string;
   title: string;
+  entry: EntryPoint; // how this step drives the app — 'api' for setup and verify-only steps
+  proves?: string[]; // row ids; a row needs at least one proving step through its own entry
   run(ctx: Ctx): Promise<void>;
 }
 
@@ -20,6 +46,7 @@ export interface Scenario {
   id: string;
   title: string;
   tiers: Tier[];
+  rows: Row[]; // [] only for smoke, which proves the harness, not a feature
   steps: Step[];
 }
 

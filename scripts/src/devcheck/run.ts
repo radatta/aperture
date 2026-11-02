@@ -21,7 +21,9 @@ import {
   worktreeRoot,
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
+import { DevcheckError } from './errors';
 import { openLedger } from './ledger';
+import { matrixProblems } from './matrix';
 import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
@@ -128,8 +130,15 @@ async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const main = mainCheckout();
   const worktree = worktreeRoot();
-  const sha = args.sha ?? (await exec('git', ['rev-parse', 'HEAD'])).stdout.trim();
+  const head = (await exec('git', ['rev-parse', 'HEAD'])).stdout.trim();
+  const sha = args.sha ?? head;
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
+  // Every scenario, whatever the tier: a broken matrix is a bug before anything waits on dev.
+  const gaps = matrixProblems(SCENARIOS, worktree, {
+    exists: existsSync,
+    read: (p) => readFileSync(p, 'utf8'),
+  });
+  if (gaps.length) throw new DevcheckError('MATRIX_GAP', gaps.join('\n  '));
   const env = loadEnv(envPath(main));
   const pw = loadPlaywright();
 
@@ -159,6 +168,7 @@ async function main(): Promise<number> {
       runId,
       tier: args.tier,
       expectedSha: sha,
+      scenarioSha: head,
       scenarios,
       ledger,
       shotsDir,

@@ -8,6 +8,7 @@ import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, type ReasonCode } from './errors';
 import { orphanIntents, pendingIds, type Ledger } from './ledger';
+import { coverageOf } from './matrix';
 import { CREATE_METHODS, idsFromCreateResponse, methodOf } from './recorder';
 import type { CreatedRecord, RunResult, StepResult } from './report';
 import type { PwPage, PwRequest, PwResponse } from './pw-types';
@@ -25,6 +26,7 @@ export interface PipelineDeps {
   runId: string;
   tier: string;
   expectedSha: string;
+  scenarioSha?: string; // HEAD, where the scenarios came from
   scenarios: Scenario[];
   ledger: Ledger;
   shotsDir: string;
@@ -45,8 +47,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     runId: d.runId,
     tier: d.tier,
     expectedSha: d.expectedSha,
+    scenarioSha: d.scenarioSha,
     status: 'PASS',
     codes: [],
+    coverage: [],
     steps: [],
     created: [],
     swept: [],
@@ -183,6 +187,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       r.crash = err instanceof Error ? (err.stack ?? err.message) : String(err);
     }
   } finally {
+    // Scored from whatever ran: a setup failure leaves every step-proven row skipped, never proven.
+    r.coverage = d.scenarios.flatMap((sc) => coverageOf(sc, r.steps));
     await Promise.allSettled(pendingRecords);
     await cleanup().catch((err: unknown) => {
       r.status = 'CRASH';

@@ -32,6 +32,12 @@ Be concise. Don't restate the diff. Don't pad with generic checklists. A local-d
 - **Stub/http contract divergence** — the stub and http clients must satisfy the one shared contract suite. A change to one that isn't mirrored/tested against the contract is a finding.
 - **Three-state data handling** — React Query consumers must handle loading / error / data, not assume success.
 - Broken invariants, races, data loss.
+- **Dev-test matrix** (when the diff touches `app/`, `lambdas/`, the MCP tools or a devcheck scenario; rules: `docs/ops/DEV-CHECK.md` → _Rows_):
+  - **matrix vs diff** — every changed UI action, BFF method and MCP tool appears in some row of the feature's scenario, and the edge-case checklist (empty/max/invalid, cancel, repeat, survives reload, neighbour unaffected, ownership) was considered;
+  - **scenario vs matrix** — each step's `entry` is how it really drives the app (a `ui` step that only calls `ctx.api` is a mislabelled proof), and no UI row rests on API steps alone;
+  - **off-dev rows** name a test that exists _and asserts that failure_, not a nearby one, for a failure dev truly can't produce — one dev can produce (bad input, limits, an expired link, another user's id) belongs on dev;
+  - **no fault injection** — no test-only switch, env flag or failure branch in `app/` or `lambdas/` added to make a failure reachable;
+  - a diff that changes a screen an existing scenario drives updates that scenario.
 
 ## Severity 3 — Convention
 

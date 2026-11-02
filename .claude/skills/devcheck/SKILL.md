@@ -10,7 +10,8 @@ The reference is `docs/ops/DEV-CHECK.md`. This is the procedure.
 ## Before
 
 - The branch's commit is on dev through `pnpm bot deploy-dev` (a `deploy-dev <sha> <key>` run). `git rev-parse HEAD` is what
-  the check expects unless you pass `--sha`.
+  the check expects unless you pass `--sha` — which is also how a scenario-only fix proves the build already on
+  dev (`scripts/` isn't deployed, so no redeploy).
 - Nothing heavy is running in the container — no `pnpm test`, no dev server, no other headless browser. A
   second dev check refuses to start (`run.lock`).
 - Setup exists: `/workspace/.secrets/devcheck.dev.env` and `~/pw` with Playwright. Missing → the run fails
@@ -28,17 +29,22 @@ rather than polling `gh` by hand. Exit 0 PASS, 1 FAIL, 2 CRASH.
 
 ## After
 
-1. Read `localNotes/devcheck/<run>/report.md`. The first line is the status.
+1. Read `localNotes/devcheck/<run>/report.md`. The first line is the status; then _Feature coverage_ — every row
+   must be `pass`, `off dev` or `needs you`. A `fail` or `skipped` row is not proven, whatever the status line or
+   _Known 429s_ say.
 2. **Read the screenshots** — both themes. A PASS with a broken-looking screen is not tested; say what you see.
 3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do — but while its _Known 429s_ section
    exists, check its conditions first: a run that meets them counts as green. `DEV_CHANGED_MID_RUN` means main won:
    read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's push),
    `pnpm bot deploy-dev`, rerun.
 4. Leftovers must be 0. Never delete anything the report lists as "not in the ledger" — report it.
+5. Paste _You don't need to test_ and _Needs you_ into `report-<branch>.md` and the `CC done` notes.
 
 ## A feature's own scenario
 
 Phase 8 wants proof of what the feature changed, not just smoke. Add `scripts/src/devcheck/scenarios/<feature>.ts`
-(template in the doc), register it in `scenarios/index.ts`, and it rides the PR like any other test. Steps
-mirror what you would have asked the user to click; every created task comes from the UI or `ctx.api.writes`,
-so cleanup knows its id.
+(template in the doc), register it in `scenarios/index.ts`, and it rides the PR like any other test. Its `rows`
+are the plan's matrix and each step names its `entry` and the rows it `proves` (`docs/ops/DEV-CHECK.md` → _Rows_):
+a row nothing proves through its own entry is `MATRIX_GAP` at load, and `scenarios/index.test.ts` fails the gate
+on it first. Steps mirror what you would have asked the user to click; every created task comes from the UI or
+`ctx.api.writes`, so cleanup knows its id.

@@ -21,9 +21,39 @@ export const fluxHistory: Scenario = {
   id: 'flux-history',
   title: 'A saved Flux set shows in History and on the night home',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'record',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'recordFluxSet stores a finished set and one stopped early, and reads them back',
+    },
+    {
+      id: 'history',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'History lists both under Today, the stopped one marked',
+    },
+    {
+      id: 'night-line',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The night home says "Flux · … chin tuck"',
+    },
+    {
+      id: 'on-screen',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Finishing a set on screen saves it',
+      needsYou:
+        'headless Chromium has no camera — the set is recorded the way the stage would send it',
+    },
+  ],
   steps: [
     {
       id: 'record',
+      entry: 'api',
+      proves: ['record'],
       title: 'recordFluxSet as the test user — a finished set and one stopped early — read back',
       async run(ctx) {
         // The app's day, not the calendar's: before the user's day start (4am) a set belongs to yesterday,
@@ -60,6 +90,8 @@ export const fluxHistory: Scenario = {
     },
     {
       id: 'history',
+      entry: 'ui',
+      proves: ['history'],
       title: 'History lists both under Today, the stopped one marked',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
@@ -82,6 +114,8 @@ export const fluxHistory: Scenario = {
     },
     {
       id: 'night-line',
+      entry: 'ui',
+      proves: ['night-line'],
       title: 'Night home says "Flux · … chin tuck"',
       async run(ctx) {
         await ctx.ui.goto('/');

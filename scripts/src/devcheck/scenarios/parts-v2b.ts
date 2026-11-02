@@ -10,9 +10,24 @@ export const partsV2b: Scenario = {
   id: 'parts-v2b',
   title: 'A timed task’s day is its time',
   tiers: ['full'],
+  rows: [
+    {
+      id: 'today-by-time',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'A timed task and a timed part due today sit under “By time”, by clock, never planned',
+    },
+    {
+      id: 'week-no-add',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A timed task on Week offers no “+ Today”',
+    },
+  ],
   steps: [
     {
       id: 'setup',
+      entry: 'api',
       title: 'A timed task and a timed part due today, a timed task later this week (API)',
       async run(ctx) {
         await ctx.api.writes.createTask({
@@ -36,6 +51,8 @@ export const partsV2b: Scenario = {
     },
     {
       id: 'today-by-time',
+      entry: 'ui',
+      proves: ['today-by-time'],
       title: 'Today shows them under “By time”, by clock, with no Unplan',
       async run(ctx) {
         await ctx.ui.goto('/tasks');
@@ -49,6 +66,8 @@ export const partsV2b: Scenario = {
     },
     {
       id: 'week-no-add',
+      entry: 'ui',
+      proves: ['week-no-add'],
       title: 'A timed task on Week offers no “+ Today”',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=week');
@@ -60,6 +79,8 @@ export const partsV2b: Scenario = {
     },
     {
       id: 'server-copy',
+      entry: 'api',
+      proves: ['today-by-time', 'week-no-add'],
       title: 'None of them is planned',
       async run(ctx) {
         const mine = (await ctx.api.reads.listTasks()).filter((t) =>
