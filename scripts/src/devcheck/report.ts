@@ -40,6 +40,7 @@ export interface CreatedRecord {
 export interface RunResult {
   runId: string;
   tier: string;
+  feature: string[]; // scenario ids whose rows are this feature's ([] = none named)
   expectedSha: string;
   scenarioSha?: string; // the commit the scenarios came from — differs from expectedSha on a scenario-only check
   startSha?: string;
@@ -75,56 +76,106 @@ const ROW_LABEL: Record<RowStatus, string> = {
   'needs-you': 'needs you',
 };
 
-// The feature's rows first, so the report says what was proven before how the steps went. The two lists
-// paste into report-<branch>.md and the CC done notes as they are.
-function renderCoverage(rows: RowResult[], status: RunResult['status']): string[] {
-  const lines = ['', '## Feature coverage', ''];
-  if (!rows.length) return [...lines, 'No feature rows in this run — smoke proves the harness.'];
-  const n = (...st: RowStatus[]) => rows.filter((x) => st.includes(x.status)).length;
-  const item = (x: RowResult) => `- ${x.scenario}: ${x.what}`;
-  lines.push(
-    `Proven on dev **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · not proven **${n('fail', 'skipped')}**`,
+const item = (x: RowResult) => `- ${x.scenario}: ${x.what}`;
+const isUnproven = (x: RowResult) => x.status === 'fail' || x.status === 'skipped';
+const counts = (rs: RowResult[], lead = 'Proven on dev') => {
+  const n = (...st: RowStatus[]) => rs.filter((x) => st.includes(x.status)).length;
+  return `${lead} **${n('pass')}** · off dev **${n('off-dev')}** · needs you **${n('needs-you')}** · not proven **${n('fail', 'skipped')}**`;
+};
+const table = (rs: RowResult[]) => [
+  '| Scenario | Row | Kind | Entry | Proven by | Result |',
+  '| --- | --- | --- | --- | --- | --- |',
+  ...rs.map(
+    (x) =>
+      `| ${x.scenario} | ${cell(x.what)} | ${x.kind} | ${x.entry} | ${cell(x.provenBy)} | ${ROW_LABEL[x.status]} |`,
+  ),
+];
+function notProven(rs: RowResult[], h: string): string[] {
+  const un = rs.filter(isUnproven);
+  if (!un.length) return [];
+  return [
     '',
-    '| Scenario | Row | Kind | Entry | Proven by | Result |',
-    '| --- | --- | --- | --- | --- | --- |',
-    ...rows.map(
+    `${h} Not proven on dev`,
+    '',
+    ...un.map(
       (x) =>
-        `| ${x.scenario} | ${cell(x.what)} | ${x.kind} | ${x.entry} | ${cell(x.provenBy)} | ${ROW_LABEL[x.status]} |`,
+        `${item(x)} — ${x.failedSteps?.length ? `step ${x.failedSteps.join(', ')} failed` : (x.note ?? 'its steps never ran')}`,
     ),
-  );
-  const unproven = rows.filter((x) => x.status === 'fail' || x.status === 'skipped');
-  if (unproven.length)
-    lines.push(
-      '',
-      '### Not proven on dev',
-      '',
-      ...unproven.map(
-        (x) =>
-          `${item(x)} — ${x.failedSteps?.length ? `step ${x.failedSteps.join(', ')} failed` : (x.note ?? 'its steps never ran')}`,
-      ),
-    );
-  const done = rows.filter((x) => x.status === 'pass' || x.status === 'off-dev');
-  lines.push('', "### You don't need to test", '');
-  // The lists stand on a FAIL too (a Known 429s run is one), but never without the run's verdict beside them.
-  if (status !== 'PASS')
-    lines.push(
-      `_This run is ${status}: these hold only if it counts as green (DEV-CHECK.md → Known 429s)._`,
-      '',
-    );
-  lines.push(
+  ];
+}
+// The two lists report-<branch>.md and the CC done notes paste. They stand on a FAIL too (a Known 429s run is
+// one), but never without the run's verdict beside them.
+function pasteLists(rs: RowResult[], h: string, status: RunResult['status']): string[] {
+  const done = rs.filter((x) => x.status === 'pass' || x.status === 'off-dev');
+  const you = rs.filter((x) => x.status === 'needs-you');
+  return [
+    '',
+    `${h} You don't need to test`,
+    '',
+    ...(status !== 'PASS'
+      ? [
+          `_This run is ${status}: these hold only if it counts as green (DEV-CHECK.md → Known 429s)._`,
+          '',
+        ]
+      : []),
     ...(done.length
       ? done.map((x) =>
           x.status === 'off-dev' ? `${item(x)} — covered off dev by ${x.note}` : item(x),
         )
       : ['Nothing yet.']),
-  );
-  const you = rows.filter((x) => x.status === 'needs-you');
-  lines.push(
     '',
-    '### Needs you',
+    `${h} Needs you`,
     '',
     ...(you.length ? you.map((x) => `${item(x)} — ${x.note}`) : ['Nothing.']),
+  ];
+}
+
+// The feature's rows first, so the report says what was proven before how the steps went — and apart from
+// every other scenario's, so the paste lists never carry another feature's rows.
+function renderCoverage(
+  rows: RowResult[],
+  status: RunResult['status'],
+  feature: string[],
+): string[] {
+  const lines = ['', '## Feature coverage', ''];
+  if (!rows.length) return [...lines, 'No feature rows in this run — smoke proves the harness.'];
+  if (!feature.length)
+    return [
+      ...lines,
+      '_No `--feature` named: these rows are every scenario’s, so there is nothing to paste as “You don’t need to test” / “Needs you” — a branch with no scenario of its own reports “no feature rows”._',
+      '',
+      counts(rows),
+      '',
+      ...table(rows),
+      ...notProven(rows, '###'),
+    ];
+  const mine = rows.filter((x) => feature.includes(x.scenario));
+  const others = rows.filter((x) => !feature.includes(x.scenario));
+  lines.push(
+    `### This feature: ${feature.join(', ')}`,
+    '',
+    counts(mine),
+    '',
+    ...table(mine),
+    ...notProven(mine, '####'),
+    ...pasteLists(mine, '####', status),
   );
+  if (others.length)
+    lines.push(
+      '',
+      '### Other scenarios (regression)',
+      '',
+      '_Their lists belong to their own features — nothing here is this feature’s paste. A row not proven here is a regression, a bug (CLAUDE.md → phase 9)._',
+      '',
+      ...[...new Set(others.map((x) => x.scenario))].map(
+        (id) =>
+          `- ${id}: ${counts(
+            others.filter((x) => x.scenario === id),
+            'proven on dev',
+          )}`,
+      ),
+      ...notProven(others, '####'),
+    );
   return lines;
 }
 
@@ -138,7 +189,7 @@ export function renderReport(r: RunResult): string {
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);
-  lines.push(...renderCoverage(r.coverage, r.status));
+  lines.push(...renderCoverage(r.coverage, r.status, r.feature));
   lines.push(
     '',
     '## Steps',

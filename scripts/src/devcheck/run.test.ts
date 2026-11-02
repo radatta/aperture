@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs, shasFor, takeLock } from './run';
-import { SCENARIOS, selectScenarios } from './scenarios/index';
+import { SCENARIOS, selectFeature, selectScenarios } from './scenarios/index';
 
 describe('shasFor', () => {
   const H = 'a'.repeat(40);
@@ -19,15 +19,27 @@ describe('shasFor', () => {
 
 describe('parseArgs', () => {
   it('defaults to smoke with a deploy wait', () => {
-    expect(parseArgs([])).toEqual({ tier: 'smoke', scenarios: [], deployWait: true });
+    expect(parseArgs([])).toEqual({ tier: 'smoke', scenarios: [], feature: [], deployWait: true });
   });
   it('reads every flag', () => {
     const sha = 'c'.repeat(40);
     expect(
-      parseArgs(['--', '--tier', 'delta', '--scenario', 'a,b', '--sha', sha, '--no-deploy-wait']),
+      parseArgs([
+        '--',
+        '--tier',
+        'delta',
+        '--scenario',
+        'a,b',
+        '--feature',
+        'a',
+        '--sha',
+        sha,
+        '--no-deploy-wait',
+      ]),
     ).toEqual({
       tier: 'delta',
       scenarios: ['a', 'b'],
+      feature: ['a'],
       sha,
       deployWait: false,
     });
@@ -37,6 +49,26 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--sha', 'abc1234'])).toThrow(/40-hex/);
     expect(() => parseArgs(['--prod'])).toThrow(/unknown argument/);
     expect(() => parseArgs(['--tier'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--feature'])).toThrow(/needs a value/);
+  });
+  it('delta defaults --feature to the --scenario ids, smoke excluded; other tiers don’t', () => {
+    expect(parseArgs(['--tier', 'delta', '--scenario', 'smoke,a,b']).feature).toEqual(['a', 'b']);
+    expect(parseArgs(['--tier', 'full', '--scenario', 'a']).feature).toEqual([]);
+  });
+});
+
+describe('selectFeature', () => {
+  const full = selectScenarios('full', []);
+  it('returns the ids when each is a known, row-bearing scenario in the run', () => {
+    expect(selectFeature(['capture-task'], full)).toEqual(['capture-task']);
+    expect(selectFeature([], full)).toEqual([]);
+  });
+  it('refuses an unknown id, smoke, and a scenario not in the run', () => {
+    expect(() => selectFeature(['nope'], full)).toThrow(/unknown scenario nope/);
+    expect(() => selectFeature(['smoke'], full)).toThrow(/declares no rows/);
+    expect(() => selectFeature(['capture-task'], selectScenarios('smoke', []))).toThrow(
+      /not in this run \(smoke\)/,
+    );
   });
 });
 

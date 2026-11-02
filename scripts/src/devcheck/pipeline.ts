@@ -25,6 +25,7 @@ export interface BrowserSession {
 export interface PipelineDeps {
   runId: string;
   tier: string;
+  feature?: string[]; // --feature: whose rows the report shows as this feature's
   expectedSha: string;
   scenarioSha?: string; // HEAD, where the scenarios came from
   scenarios: Scenario[];
@@ -46,6 +47,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const r: RunResult = {
     runId: d.runId,
     tier: d.tier,
+    feature: d.feature ?? [],
     expectedSha: d.expectedSha,
     scenarioSha: d.scenarioSha,
     status: 'PASS',

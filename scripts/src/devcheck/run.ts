@@ -1,5 +1,5 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
-//   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full [--scenario a,b] [--sha <40-hex>]
+//   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
 // Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per container: the
 // sweep of earlier runs' leftovers would otherwise race a live run.
@@ -27,19 +27,20 @@ import { matrixProblems } from './matrix';
 import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
-import { SCENARIOS, selectScenarios, type RunTier } from './scenarios/index';
+import { SCENARIOS, selectFeature, selectScenarios, type RunTier } from './scenarios/index';
 
 const exec = promisify(execFile);
 
 export interface Args {
   tier: RunTier;
   scenarios: string[];
+  feature: string[];
   sha?: string;
   deployWait: boolean;
 }
 
 export function parseArgs(argv: string[]): Args {
-  const args: Args = { tier: 'smoke', scenarios: [], deployWait: true };
+  const args: Args = { tier: 'smoke', scenarios: [], feature: [], deployWait: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -53,6 +54,7 @@ export function parseArgs(argv: string[]): Args {
         throw new Error(`--tier smoke|delta|full, got ${t}`);
       args.tier = t;
     } else if (a === '--scenario') args.scenarios = val().split(',').filter(Boolean);
+    else if (a === '--feature') args.feature = val().split(',').filter(Boolean);
     else if (a === '--sha') {
       const s = val();
       if (!/^[0-9a-f]{40}$/.test(s)) throw new Error(`--sha needs a full 40-hex SHA, got ${s}`);
@@ -60,6 +62,9 @@ export function parseArgs(argv: string[]): Args {
     } else if (a === '--no-deploy-wait') args.deployWait = false;
     else if (a !== '--') throw new Error(`unknown argument ${a}`);
   }
+  // In delta the feature is what was asked for; smoke always rides along and is never a feature.
+  if (!args.feature.length && args.tier === 'delta')
+    args.feature = args.scenarios.filter((id) => id !== 'smoke');
   return args;
 }
 
@@ -144,6 +149,7 @@ async function main(): Promise<number> {
     args.sha,
   );
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
+  const feature = selectFeature(args.feature, scenarios);
   // Every scenario, whatever the tier: a broken matrix is a bug before anything waits on dev.
   const gaps = matrixProblems(SCENARIOS, worktree, {
     exists: existsSync,
@@ -172,12 +178,15 @@ async function main(): Promise<number> {
   const shotsDir = join(out, 'shots');
   mkdirSync(shotsDir, { recursive: true });
   const log = (msg: string) => console.log(`[devcheck] ${msg}`);
-  log(`run ${runId}: ${scenarios.map((s) => s.id).join(', ')} against ${sha.slice(0, 7)} → ${out}`);
+  log(
+    `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} against ${sha.slice(0, 7)} → ${out}`,
+  );
 
   try {
     const result = await runPipeline({
       runId,
       tier: args.tier,
+      feature,
       expectedSha: sha,
       scenarioSha,
       scenarios,

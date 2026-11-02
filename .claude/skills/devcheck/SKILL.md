@@ -20,25 +20,29 @@ The reference is `docs/ops/DEV-CHECK.md`. This is the procedure.
 ## Run
 
 ```bash
-pnpm devcheck --tier full                                   # the phase 8 run
-pnpm devcheck --tier delta --scenario <feature-scenario>    # iterating on one feature
+pnpm devcheck --tier full --feature <feature-scenario>      # the phase 8 run
+pnpm devcheck --tier delta --scenario <feature-scenario>    # iterating on one feature (--feature defaults to it)
 ```
 
 It waits for the deploy (up to ~25 min) and the edge itself — run it in the background with a long timeout
-rather than polling `gh` by hand. Exit 0 PASS, 1 FAIL, 2 CRASH.
+rather than polling `gh` by hand. Exit 0 PASS, 1 FAIL, 2 CRASH. A branch with no scenario of its own (harness,
+docs, infra) runs without `--feature`; naming a scenario that isn't in the run is an error, not an empty section.
 
 ## After
 
 1. Read `localNotes/devcheck/<run>/report.md`. The first line is the status; then _Feature coverage_ — every row
-   must be `pass`, `off dev` or `needs you`. A `fail` or `skipped` row is not proven, whatever the status line or
-   _Known 429s_ say.
+   — under _This feature_ and _Other scenarios (regression)_ alike — must be `pass`, `off dev` or `needs you`. A
+   `fail` or `skipped` row is not proven, whatever the status line or _Known 429s_ say; under _Other scenarios_ it
+   is a regression, still a bug (phase 9; the fails-on-main fallback in the doc).
 2. **Read the screenshots** — both themes. A PASS with a broken-looking screen is not tested; say what you see.
 3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do — but while its _Known 429s_ section
    exists, check its conditions first: a run that meets them counts as green. `DEV_CHANGED_MID_RUN` means main won:
    read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's push),
    `pnpm bot deploy-dev`, rerun.
 4. Leftovers must be 0. Never delete anything the report lists as "not in the ledger" — report it.
-5. Paste _You don't need to test_ and _Needs you_ into `report-<branch>.md` and the `CC done` notes.
+5. Paste _This feature_'s _You don't need to test_ and _Needs you_ into `report-<branch>.md` and the `CC done` notes —
+   never _Other scenarios_'. Without `--feature` (a branch with no scenario of its own) there are none: write "no
+   feature rows".
 
 ## A feature's own scenario
 

@@ -22,17 +22,26 @@ CLAUDE.md → COI ceilings):
 
 ```bash
 pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages, an API read; creates nothing
-pnpm devcheck --tier full                          # every scenario
-pnpm devcheck --tier delta --scenario capture-task # smoke + the named feature scenarios
+pnpm devcheck --tier full --feature attachment-delete  # the phase 8 run: every scenario, the feature's rows apart
+pnpm devcheck --tier full                              # every scenario, no feature (a branch with none of its own)
+pnpm devcheck --tier delta --scenario capture-task     # smoke + the named scenarios (--feature defaults to them)
 ```
 
 `--sha <40-hex>` checks a commit other than `HEAD`; `--no-deploy-wait` skips the deploy and edge wait (dev
 already serves it). `--sha` is also how a scenario-only commit proves a build already on dev — `scripts/` isn't
 deployed, so a fix to a scenario needs no redeploy: run it with `--sha <the deployed SHA>`, and the report's Build
 line names both (`scenarios from …`). A build dev got from a merge to `main` has no `deploy-dev` run: add
-`--no-deploy-wait`, taking the SHA from dev's `<meta name="aperture-build">`. Exit 0 PASS, 1 FAIL, 2 CRASH. The
-load-time codes (`ENV_MISSING`, `PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else) stop the run before it starts: printed to stderr, exit 2,
-no `report.md`. Otherwise read `report.md` first — its first line is the status — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
+`--no-deploy-wait`, taking the SHA from dev's `<meta name="aperture-build">`.
+
+`--feature <id,…>` names the feature's scenario(s): _Feature coverage_ shows their rows, with the two paste lists,
+under _This feature_, and every other scenario's under _Other scenarios (regression)_ as per-scenario counts and a
+_Not proven_ list. `--tier delta` defaults it to `--scenario` (smoke excluded). An unknown id, `smoke`, or a scenario
+not in the run is an error, like a bad `--scenario`.
+
+Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--feature`, and the codes `ENV_MISSING`,
+`PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else — stop the run before it starts:
+printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status — then the
+screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
 
 ## One-time setup
 
@@ -118,7 +127,7 @@ full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when a
   request storm, also all 429s, would exceed it);
 - the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
   function, so that call was never tested; if it names one, rerun until it doesn't;
-- every _Feature coverage_ row is `pass`, `off dev` or `needs you`. This rule never makes a row green: a 429 that
+- every _Feature coverage_ row — _This feature_ and _Other scenarios_ alike — is `pass`, `off dev` or `needs you`. This rule never makes a row green: a 429 that
   fails a proving step leaves its row not proven — rerun until it passes.
 
 Anything else is a bug, as always. The burst is one too — a known defect with a dated fix (the in-flight cap below);
@@ -242,7 +251,8 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 - **Roles and labels, never CSS** (`getByRole`, `getByLabel`, `getByText`), and **assert behaviour** — what the
   server holds, what the user sees — not DOM shape. A class or layout change shouldn't break a scenario.
 - **You change the UI, you update its scenario**, in the same PR.
-- **An old scenario failing on an unrelated PR** is still a bug (phase 9) — read its code path first. To show it
+- **An old scenario failing on an unrelated PR** (it shows under _Other scenarios (regression)_ → _Not proven_) is
+  still a bug (phase 9) — read its code path first. To show it
   isn't this branch, the fallback is the fails-on-main baseline: the last green full run's report (the archived
   worktrees' `localNotes/devcheck/`), else redeploying `main` to dev and rerunning — two extra deploys, so last.
   A failure confirmed on `main` gets its own small PR, logged; it doesn't block this one.
@@ -253,9 +263,12 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 ## Artifacts
 
 Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json`, `shots/`.
-`report.md`'s _Feature coverage_ ends in two lists — _You don't need to test_ (proven on dev, and off dev with its
-test) and _Needs you_ — that `report-<branch>.md` and the `CC done` notes paste as they are. On a run that isn't
-PASS they carry its verdict: they hold only if the run counts as green (_Known 429s_).
+`report.md`'s _Feature coverage_ splits _This feature_ (`--feature`) — its table and two lists, _You don't need to
+test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md` and the `CC done` notes
+paste as they are — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
+since those belong to their own features. Without `--feature` there are no paste lists: the table is every
+scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
+carry its verdict: they hold only if the run counts as green (_Known 429s_).
 Shared, in the main checkout: the two ledgers and `run.lock`. Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session, mode 600).
 

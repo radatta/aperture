@@ -446,6 +446,13 @@ describe('runPipeline', () => {
     expect(r.coverage[0]).toMatchObject({ status: 'skipped', note: 'dev’s build changed mid-run' });
   });
 
+  it('carries the feature ids into the result, [] when none', async () => {
+    expect(
+      (await runPipeline(deps(world(), [], memLedger(), { feature: ['sc'] }))).feature,
+    ).toEqual(['sc']);
+    expect((await runPipeline(deps(world(), []))).feature).toEqual([]);
+  });
+
   it('carries the scenarios’ commit into the result', async () => {
     const r = await runPipeline(deps(world(), [], memLedger(), { scenarioSha: 'b'.repeat(40) }));
     expect(r.scenarioSha).toBe('b'.repeat(40));

@@ -9,6 +9,7 @@ const base: RunResult = {
   endSha: 'a'.repeat(40),
   status: 'PASS',
   codes: [],
+  feature: [],
   coverage: [],
   steps: [{ scenario: 'smoke', step: 'home', title: 'Home renders', status: 'pass', ms: 1200 }],
   created: [{ id: 't1', via: 'ui:createTask', final: 'deleted' }],
@@ -112,6 +113,7 @@ describe('report', () => {
       provenBy: 'steps del (ui)',
       ...over,
     });
+    const feat = { ...base, feature: ['ad'] };
     const rows = [
       row({ what: 'Delete | Cancel' }),
       row({
@@ -133,7 +135,7 @@ describe('report', () => {
     ];
 
     it('leads with the table, before the steps, pipes escaped', () => {
-      const md = renderReport({ ...base, coverage: rows });
+      const md = renderReport({ ...feat, coverage: rows });
       expect(md.indexOf('## Feature coverage')).toBeLessThan(md.indexOf('## Steps'));
       expect(md).toContain(
         'Proven on dev **1** · off dev **1** · needs you **1** · not proven **0**',
@@ -146,16 +148,16 @@ describe('report', () => {
     });
 
     it('lists what the user need not test (off dev annotated) and what needs them', () => {
-      const md = renderReport({ ...base, coverage: rows });
+      const md = renderReport({ ...feat, coverage: rows });
       expect(md).toContain(
-        "### You don't need to test\n\n- ad: Delete | Cancel\n- ad: S3 fails — covered off dev by a.test.ts › says so\n",
+        "#### You don't need to test\n\n- ad: Delete | Cancel\n- ad: S3 fails — covered off dev by a.test.ts › says so\n",
       );
-      expect(md).toContain('### Needs you\n\n- ad: MCP delete — next PR\n');
+      expect(md).toContain('#### Needs you\n\n- ad: MCP delete — next PR\n');
     });
 
     it('names what was not proven, and the step that failed', () => {
       const md = renderReport({
-        ...base,
+        ...feat,
         coverage: [
           row({ status: 'fail', failedSteps: ['del'] }),
           row({ row: 's', status: 'skipped', what: 'Reload' }),
@@ -163,21 +165,61 @@ describe('report', () => {
       });
       expect(md).toContain('not proven **2**');
       expect(md).toContain(
-        '### Not proven on dev\n\n- ad: Delete — step del failed\n- ad: Reload — its steps never ran\n',
+        '#### Not proven on dev\n\n- ad: Delete — step del failed\n- ad: Reload — its steps never ran\n',
       );
-      expect(md).toContain("### You don't need to test\n\nNothing yet.");
+      expect(md).toContain("#### You don't need to test\n\nNothing yet.");
     });
 
     it('a FAIL run’s lists carry its verdict; a build change mid-run names why a row is unproven', () => {
       const md = renderReport({
-        ...base,
+        ...feat,
         status: 'FAIL',
         codes: ['DEV_CHANGED_MID_RUN'],
         coverage: [row({ status: 'skipped', note: 'dev’s build changed mid-run' })],
       });
       expect(md).toContain('- ad: Delete — dev’s build changed mid-run');
       expect(md).toContain('_This run is FAIL: these hold only if it counts as green');
-      expect(renderReport({ ...base, coverage: rows })).not.toContain('_This run is');
+      expect(renderReport({ ...feat, coverage: rows })).not.toContain('_This run is');
+    });
+
+    it('heads the feature’s rows with its name', () => {
+      expect(renderReport({ ...feat, coverage: rows })).toContain(
+        '## Feature coverage\n\n### This feature: ad\n\nProven on dev **1**',
+      );
+    });
+
+    it('without a feature there are no paste lists — the note, the table and Not proven only', () => {
+      const md = renderReport({
+        ...base,
+        coverage: [...rows, row({ row: 'f', status: 'fail', failedSteps: ['x'] })],
+      });
+      expect(md).toContain('_No `--feature` named: these rows are every scenario’s');
+      expect(md).toContain('| ad | Delete \\| Cancel |');
+      expect(md).toContain('### Not proven on dev\n\n- ad: Delete — step x failed');
+      expect(md).not.toContain("You don't need to test");
+      expect(md).not.toContain('Needs you\n');
+    });
+
+    it('other scenarios collapse to counts and Not proven, and never into the feature’s lists', () => {
+      const pv = [
+        row({ scenario: 'pv', row: 'p1', what: 'PV pass' }),
+        row({ scenario: 'pv', row: 'p2', status: 'needs-you', what: 'PV camera', note: 'camera' }),
+        row({ scenario: 'pv', row: 'p3', status: 'fail', what: 'PV esc', failedSteps: ['x'] }),
+      ];
+      const md = renderReport({ ...feat, coverage: [...rows, ...pv] });
+      expect(md).toContain('### Other scenarios (regression)');
+      expect(md).toContain(
+        '- pv: proven on dev **1** · off dev **0** · needs you **1** · not proven **1**',
+      );
+      expect(md).toContain('#### Not proven on dev\n\n- pv: PV esc — step x failed');
+      const lists = md.slice(md.indexOf("#### You don't need to test"), md.indexOf('### Other'));
+      expect(lists).not.toContain('pv:');
+      expect(md).not.toContain('| pv |');
+      expect(md.indexOf('### This feature')).toBeLessThan(md.indexOf('### Other'));
+    });
+
+    it('no Other scenarios block when only the feature ran', () => {
+      expect(renderReport({ ...feat, coverage: rows })).not.toContain('### Other scenarios');
     });
 
     it('names the scenarios’ commit only when it differs from the build', () => {
