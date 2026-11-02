@@ -2,7 +2,7 @@
 // storageState) so later runs skip the form until the 7-day refresh token lapses. Selectors are exact, not
 // guessed: if the Hosted UI changes, the run fails AUTH_PAGE_CHANGED with a screenshot rather than typing a
 // password into whatever field looks close.
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { DEV_ORIGIN, type DevcheckEnv } from './config';
 import { DevcheckError } from './errors';
 import type { PwContext, PwPage } from './pw-types';
@@ -65,6 +65,43 @@ export function validateCachedState(
   }
 }
 
+// The browser's session file holds the refresh token and the Hosted UI cookie: mode 600 on create, and an
+// existing file tightened first, since `mode` doesn't touch a file that already exists.
+export async function saveState(context: PwContext, path: string): Promise<void> {
+  const state = JSON.stringify(await context.storageState());
+  if (existsSync(path)) chmodSync(path, 0o600);
+  writeFileSync(path, state, { mode: 0o600 });
+}
+
+// The classic Hosted UI form, by exact selectors — shared by the app's sign-in and the MCP one (mcp-login.ts).
+export async function submitHostedUiForm(
+  page: PwPage,
+  env: DevcheckEnv,
+  shot: (name: string) => Promise<void>,
+): Promise<void> {
+  try {
+    for (const sel of Object.values(FORM)) await page.locator(sel).waitFor({ timeout: 10_000 });
+  } catch {
+    await shot('auth-page-changed');
+    throw new DevcheckError(
+      'AUTH_PAGE_CHANGED',
+      `the Hosted UI form at ${page.url()} isn't the classic one`,
+    );
+  }
+  try {
+    await page.locator(FORM.username).fill(env.DEVCHECK_EMAIL);
+    await page.locator(FORM.password).fill(env.DEVCHECK_PASSWORD);
+    await page.locator(FORM.submit).click();
+  } catch {
+    // Playwright's error text can echo the filled value — never let it reach a report.
+    await shot('auth-page-changed');
+    throw new DevcheckError(
+      'AUTH_PAGE_CHANGED',
+      `filling the Hosted UI form at ${page.url()} failed`,
+    );
+  }
+}
+
 export async function ensureSignedIn(
   page: PwPage,
   context: PwContext,
@@ -85,27 +122,7 @@ export async function ensureSignedIn(
         `Sign in went to ${page.url()}, not ${env.DEVCHECK_COGNITO_HOST}`,
       );
     }
-    try {
-      for (const sel of Object.values(FORM)) await page.locator(sel).waitFor({ timeout: 10_000 });
-    } catch {
-      await opts.shot('auth-page-changed');
-      throw new DevcheckError(
-        'AUTH_PAGE_CHANGED',
-        `the Hosted UI form at ${page.url()} isn't the classic one`,
-      );
-    }
-    try {
-      await page.locator(FORM.username).fill(env.DEVCHECK_EMAIL);
-      await page.locator(FORM.password).fill(env.DEVCHECK_PASSWORD);
-      await page.locator(FORM.submit).click();
-    } catch {
-      // Playwright's error text can echo the filled value — never let it reach a report.
-      await opts.shot('auth-page-changed');
-      throw new DevcheckError(
-        'AUTH_PAGE_CHANGED',
-        `filling the Hosted UI form at ${page.url()} failed`,
-      );
-    }
+    await submitHostedUiForm(page, env, opts.shot);
     try {
       await page.waitForURL((u) => u.origin === DEV_ORIGIN, { timeout: 20_000 });
     } catch {
@@ -123,7 +140,6 @@ export async function ensureSignedIn(
   if (!session)
     throw new DevcheckError('WRONG_USER', 'signed-in shell but no oidc session in localStorage');
   assertTestUser(session, env.DEVCHECK_SUB);
-  // Written by hand with mode 600 from the start — it holds the refresh token.
-  writeFileSync(opts.statePath, JSON.stringify(await context.storageState()), { mode: 0o600 });
+  await saveState(context, opts.statePath);
   return session;
 }

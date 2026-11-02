@@ -2,7 +2,8 @@
 // Files panel (✕ → Delete / Cancel) and its Delete task…. Files are uploaded through the API exactly as
 // the app does (mint → PUT to the presigned URL → confirm), on ledger-recorded tasks. The byte-level proof
 // is a presigned GET: 200 before the delete, gone after (isGone — 403 on dev). Each URL is minted right
-// before its probe (5-minute TTL). The rows are PR 80's dev-test matrix.
+// before its probe (5-minute TTL). The rows are PR 80's dev-test matrix; its MCP rows run as the test user
+// through ctx.mcp, on a third task C.
 import { isGone, type DevAttachment } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -17,6 +18,7 @@ const file = (filename: string, confirm = true) => ({
 // Steps share what setup made; a failed setup skips the rest, so these are always set when read.
 let A: { taskId: string; a1: DevAttachment; a2: DevAttachment };
 let B: { taskId: string; partId: string; files: DevAttachment[] };
+let C: { taskId: string; c1: DevAttachment; c2: DevAttachment };
 
 async function expectLive(ctx: Ctx, id: string, what: string): Promise<void> {
   const url = await ctx.api.reads.getAttachmentDownloadUrl(id);
@@ -76,12 +78,22 @@ export const attachmentDelete: Scenario = {
     },
     { id: 'idempotent', entry: 'api', kind: 'edge', what: 'Deleting again is a quiet no-op' },
     {
-      id: 'mcp',
+      id: 'mcp-file',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'MCP delete_attachment and delete_task delete the bytes',
-      needsYou:
-        'MCP as the test user is the next PR; until then run delete_attachment and delete_task on aperture-dev by hand, presigned GET 200 → 403',
+      what: 'MCP delete_attachment removes the row and the bytes; the task’s other file still downloads',
+    },
+    {
+      id: 'mcp-task',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'MCP delete_task removes the task and every file’s bytes',
+    },
+    {
+      id: 'mcp-repeat',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'MCP delete_task on a task already gone answers Not found, nothing else',
     },
     {
       id: 's3-fails-panel',
@@ -122,7 +134,7 @@ export const attachmentDelete: Scenario = {
       id: 'setup',
       entry: 'api',
       title:
-        'Task A with two files; parent B with a file, a pending upload, and a part with a file (API)',
+        'Task A with two files; parent B with a file, a pending upload, and a part with a file; task C with two files (API)',
       async run(ctx) {
         const a = await ctx.api.writes.createTask({ title: name(ctx, 'A') });
         A = {
@@ -143,6 +155,12 @@ export const attachmentDelete: Scenario = {
             await ctx.api.writes.createAttachment(b.id, file('c.txt', false)), // never confirmed
             await ctx.api.writes.createAttachment(part.id, file('p.txt')),
           ],
+        };
+        const c = await ctx.api.writes.createTask({ title: name(ctx, 'C') });
+        C = {
+          taskId: c.id,
+          c1: await ctx.api.writes.createAttachment(c.id, file('c1.txt')),
+          c2: await ctx.api.writes.createAttachment(c.id, file('c2.txt')),
         };
         await ctx.ui.goto('/tasks?lens=backlog');
         await ctx.ui.expectText(name(ctx, 'A'), 15_000);
@@ -249,6 +267,50 @@ export const attachmentDelete: Scenario = {
       async run(ctx) {
         await ctx.api.writes.deleteAttachment(A.taskId, A.a1.id);
         await ctx.api.writes.deleteTask(B.taskId);
+      },
+    },
+    {
+      id: 'mcp-delete-file',
+      entry: 'mcp',
+      proves: ['mcp-file'],
+      title: 'MCP delete_attachment removes c1.txt and its bytes; c2.txt still downloads',
+      async run(ctx) {
+        await expectLive(ctx, C.c1.id, 'c1.txt before the MCP delete');
+        const url = await ctx.api.reads.getAttachmentDownloadUrl(C.c1.id);
+        const r = await ctx.mcp.writes.deleteAttachment(C.taskId, C.c1.id);
+        if (r.deleted !== C.c1.id)
+          throw new Error(`delete_attachment answered ${JSON.stringify(r)}`);
+        const left = (await ctx.mcp.reads.listAttachments(C.taskId)).map((x) => x.id);
+        if (left.join() !== C.c2.id) throw new Error(`MCP lists ${left.join(', ')}`);
+        await expectGone(ctx, url, 'c1.txt');
+        await expectLive(ctx, C.c2.id, 'c2.txt after c1.txt’s MCP delete');
+      },
+    },
+    {
+      id: 'mcp-delete-task',
+      entry: 'mcp',
+      proves: ['mcp-task'],
+      title: 'MCP delete_task removes task C and c2.txt’s bytes',
+      async run(ctx) {
+        const url = await ctx.api.reads.getAttachmentDownloadUrl(C.c2.id);
+        if ((await ctx.api.reads.probePresigned(url)) !== 200)
+          throw new Error('c2.txt not downloadable before the MCP delete');
+        const r = await ctx.mcp.writes.deleteTask(C.taskId);
+        if (!('deleted' in r) || r.deleted !== C.taskId || r.parts.length)
+          throw new Error(`delete_task answered ${JSON.stringify(r)}`);
+        if (await ctx.api.reads.getTask(C.taskId))
+          throw new Error('task C survived the MCP delete');
+        await expectGone(ctx, url, 'c2.txt');
+      },
+    },
+    {
+      id: 'mcp-repeat',
+      entry: 'mcp',
+      proves: ['mcp-repeat'],
+      title: 'MCP delete_task again answers Not found',
+      async run(ctx) {
+        const r = await ctx.mcp.writes.deleteTask(C.taskId);
+        if (!('notFound' in r)) throw new Error(`delete_task again answered ${JSON.stringify(r)}`);
       },
     },
     noConsoleErrors,

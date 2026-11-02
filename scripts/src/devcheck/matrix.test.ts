@@ -78,10 +78,11 @@ describe('matrixProblems', () => {
     ]);
   });
 
-  it('no step can drive mcp yet', () => {
-    expect(problems(sc([row('m', { entry: 'mcp' })], [step('m', 'mcp', ['m'])]))).toEqual([
-      'feat: step m claims entry mcp, which no step can drive yet',
-    ]);
+  it('a step drives mcp; none can drive ios, raycast or the extension', () => {
+    expect(problems(sc([row('m', { entry: 'mcp' })], [step('m', 'mcp', ['m'])]))).toEqual([]);
+    expect(
+      problems(sc([row('i', { entry: 'ios', needsYou: 'iOS Safari' })], [step('i', 'ios')])),
+    ).toEqual(['feat: step i claims entry ios, which no step can drive yet']);
   });
 
   it('a row is off dev or needs you, never both, and needs you gives a reason', () => {

@@ -1,5 +1,5 @@
-// Smoke (~2 min): the signed-in app renders its main pages with no console errors, and the API answers a
-// read as the test user. Writes nothing.
+// Smoke (~2 min): the signed-in app renders its main pages with no console errors, and the API and MCP both
+// answer a read as the test user. Writes nothing.
 import type { Scenario } from '../scenario';
 
 export const smoke: Scenario = {
@@ -47,6 +47,31 @@ export const smoke: Scenario = {
         if (!Array.isArray(cats))
           throw new Error(`listCategories returned ${JSON.stringify(cats)}`);
         ctx.log(`listCategories → ${cats.length}`);
+      },
+    },
+    {
+      id: 'mcp-read',
+      entry: 'mcp',
+      title: 'MCP read as the test user',
+      // The MCP token names the same partition as the app's: both clients list the same backlog.
+      async run(ctx) {
+        const tools = await ctx.mcp.reads.toolsList();
+        for (const name of ['delete_task', 'delete_attachment', 'create_task'])
+          if (!tools.includes(name)) throw new Error(`tools/list has no ${name}`);
+        const ids = (xs: { id: string }[]) =>
+          xs
+            .map((x) => x.id)
+            .sort()
+            .join();
+        const [viaMcp, viaApi] = [
+          await ctx.mcp.reads.listBacklog(),
+          await ctx.api.reads.listBacklog(),
+        ];
+        if (ids(viaMcp) !== ids(viaApi))
+          throw new Error(
+            `MCP lists ${viaMcp.length} backlog tasks, the API ${viaApi.length} — not one partition`,
+          );
+        ctx.log(`mcp: ${tools.length} tools, backlog ${viaMcp.length} — same as the API`);
       },
     },
     {

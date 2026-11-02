@@ -24,6 +24,8 @@ import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { DevcheckError } from './errors';
 import { openLedger } from './ledger';
 import { matrixProblems } from './matrix';
+import { createMcpClient } from './mcp';
+import { ensureMcpSignedIn } from './mcp-login';
 import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
@@ -214,10 +216,19 @@ async function main(): Promise<number> {
           signIn: (shot) =>
             ensureSignedIn(page, context, env, { statePath: statePath(main), shot }),
           readSession: () => readCheckedSession(page, env),
+          signInMcp: (shotOf) =>
+            ensureMcpSignedIn(context, env, {
+              fetch,
+              shotOf,
+              statePath: statePath(main),
+              log,
+              now: Date.now,
+            }),
           close: () => browser.close(),
         };
       },
       makeApi: (token) => createApiClient({ fetch, token, ledger, run: runId }),
+      makeMcp: (token) => createMcpClient({ fetch, token, ledger, run: runId }),
       now: Date.now,
       log,
     });

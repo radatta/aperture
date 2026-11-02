@@ -3,8 +3,9 @@ import { FLUX_SET_VIA, type ApiClient, type DevFluxSet, type DevTask } from './a
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
+import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse } from './pw-types';
-import type { Scenario } from './scenario';
+import type { Ctx, Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
 const shell = (sha: string) => `<meta name="aperture-build" content="${sha}" />`;
@@ -120,8 +121,22 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     page,
     signIn: async () => ({ accessToken: 'tok', expiresAt: 0, email: 'x', sub: 's' }),
     readSession: async () => null,
+    // Far from expiry; a test overrides it to check the MCP sign-in's failure path.
+    signInMcp: async () => ({
+      accessToken: 'mcp',
+      expiresAt: 1e10,
+      email: 'x',
+      sub: 's',
+      clientId: 'claude',
+    }),
     close: async () => undefined,
   };
+  // A fake MCP client whose one read reads the token, so an expired token fails the step that uses it.
+  const mcp = (token: () => string) =>
+    ({
+      reads: { toolsList: async () => [token()] },
+      writes: {},
+    }) as unknown as McpClient;
   return {
     tasks,
     deleted,
@@ -130,6 +145,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     uiCreate,
     respond,
     api,
+    mcp,
     browser,
     fetchShell: async () => (shells.length > 1 ? shells.shift()! : shells[0]!),
   };
@@ -152,6 +168,7 @@ function deps(
     fetchShell: w.fetchShell,
     openBrowser: async () => w.browser,
     makeApi: () => w.api,
+    makeMcp: w.mcp,
     now: () => (t += 10),
     log: () => undefined,
     ...over,
@@ -159,7 +176,7 @@ function deps(
 }
 
 const scenario =
-  (...runs: ((w: ReturnType<typeof world>) => Promise<void>)[]) =>
+  (...runs: ((w: ReturnType<typeof world>, ctx: Ctx) => Promise<void>)[]) =>
   (w: ReturnType<typeof world>): Scenario => ({
     id: 'sc',
     title: 'sc',
@@ -169,7 +186,7 @@ const scenario =
       id: `s${i}`,
       title: `step ${i}`,
       entry: 'api',
-      run: () => run(w),
+      run: (ctx) => run(w, ctx),
     })),
   });
 
@@ -444,6 +461,51 @@ describe('runPipeline', () => {
     expect(r.codes).toEqual(['DEV_CHANGED_MID_RUN']);
     expect(r.steps[0]!.status).toBe('pass');
     expect(r.coverage[0]).toMatchObject({ status: 'skipped', note: 'dev’s build changed mid-run' });
+  });
+
+  it('signs MCP in after the sweep and hands its client to the steps', async () => {
+    const w = world();
+    const order: string[] = [];
+    w.api.reads.listTasks = async () => (order.push('baseline'), []);
+    w.browser.signInMcp = async () => {
+      order.push('mcp');
+      return { accessToken: 'mcp', expiresAt: 1e10, email: 'x', sub: 's', clientId: 'c' };
+    };
+    let tools: string[] = [];
+    const r = await runPipeline(
+      deps(w, [scenario(async (_, ctx) => void (tools = await ctx.mcp.reads.toolsList()))(w)]),
+    );
+    expect(r.status).toBe('PASS');
+    expect(order.slice(0, 2)).toEqual(['baseline', 'mcp']);
+    expect(tools).toEqual(['mcp']);
+  });
+
+  it('an MCP sign-in failure fails the run with its code before any step, and cleanup still runs', async () => {
+    const w = world();
+    w.browser.signInMcp = async () => {
+      throw new DevcheckError('MCP_AUTH_FAILED', 'Cognito refused the sign-in: invalid_client');
+    };
+    let ran = false;
+    const r = await runPipeline(deps(w, [scenario(async () => void (ran = true))(w)]));
+    expect([r.status, r.codes]).toEqual(['FAIL', ['MCP_AUTH_FAILED']]);
+    expect(ran).toBe(false);
+    expect(r.steps).toEqual([]);
+  });
+
+  it('an MCP token past its expiry fails the step that uses it, not the run setup', async () => {
+    const w = world();
+    w.browser.signInMcp = async () => ({
+      accessToken: 'mcp',
+      expiresAt: 0,
+      email: 'x',
+      sub: 's',
+      clientId: 'c',
+    });
+    const r = await runPipeline(
+      deps(w, [scenario(async (_, ctx) => void (await ctx.mcp.reads.toolsList()))(w)]),
+    );
+    expect(r.steps[0]).toMatchObject({ status: 'fail', error: expect.stringMatching(/expired/) });
+    expect(r.codes).toEqual(['STEP_FAILED']);
   });
 
   it('carries the feature ids into the result, [] when none', async () => {

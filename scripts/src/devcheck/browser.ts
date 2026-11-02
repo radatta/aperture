@@ -28,7 +28,15 @@ export async function launch(
 ): Promise<{ browser: PwBrowser; context: PwContext }> {
   const browser = await pw.chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    // claude.ai/claude.com resolve nowhere — the wall that stops the MCP sign-in's redirect to the callback
+    // (a route never sees a redirect), and no proxy, which would resolve the host itself and bypass it. The
+    // sign-in checks the callback failed regardless (mcp-login.ts). The harness never has a reason to reach them.
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--no-proxy-server',
+      '--host-resolver-rules=MAP claude.ai ~NOTFOUND, MAP *.claude.ai ~NOTFOUND, MAP claude.com ~NOTFOUND, MAP *.claude.com ~NOTFOUND',
+    ],
     ...(process.env.DEVCHECK_CHROMIUM ? { executablePath: process.env.DEVCHECK_CHROMIUM } : {}),
   });
   const context = await browser.newContext({
