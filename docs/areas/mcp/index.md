@@ -317,7 +317,7 @@ exchange; the façade only publishes correct metadata from our origin.
   exposes" true by construction.
 - **The dev check is the bearer path's third caller** (after claude.ai and Claude Code's agent-token path):
   it signs the dev test user in as the public claude client with PKCE, catches the redirect to claude.ai's
-  callback in its own browser (aborted — claude.ai is never contacted) and swaps the code itself. No cdk
+  callback in its own browser (it fails in the browser — claude hosts resolve nowhere — and the harness proves it did) and swaps the code itself. No cdk
   change: the client already allows the code grant with no secret. Mechanics: `docs/ops/DEV-CHECK.md`.
 - **D13 — 30-day refresh token** for the claude client (vs the SPA client's 7). Its refresh token lives
   in claude.ai's server-side store, not a browser, and expiry means re-running the connector OAuth dance

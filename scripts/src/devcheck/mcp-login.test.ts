@@ -187,7 +187,18 @@ describe('the MCP session', () => {
 // A fake browser context: the authorize navigation either redirects straight to the callback (a live Hosted
 // UI cookie), lands on the form (whose submit then redirects), or on Cognito's error page. The callback
 // request fails (response → null), as the resolver rule makes it — unless the mode says a claude host answered.
-type Mode = 'cookie' | 'form' | 'error' | 'never' | 'twice' | 'late' | 'answered' | 'nav-error';
+type Mode =
+  | 'cookie'
+  | 'form'
+  | 'error'
+  | 'never'
+  | 'twice'
+  | 'late'
+  | 'answered'
+  | 'pending'
+  | 'closed'
+  | 'nav-error'
+  | 'shot-throws';
 function browser(mode: Mode) {
   const listeners: ((r: PwRequest) => void)[] = [];
   let state = '';
@@ -197,7 +208,12 @@ function browser(mode: Mode) {
   const request = (cb: string) =>
     ({
       url: () => cb,
-      response: async () => (mode === 'answered' ? { status: () => 200 } : null),
+      response: () =>
+        mode === 'pending'
+          ? new Promise(() => undefined)
+          : mode === 'closed'
+            ? Promise.reject(new Error('Target page, context or browser has been closed'))
+            : Promise.resolve(mode === 'answered' ? { status: () => 200 } : null),
     }) as unknown as PwRequest;
   const toCallback = () => {
     const cb = callback({ code: 'abc', state });
@@ -216,7 +232,8 @@ function browser(mode: Mode) {
     async goto(target: string) {
       state = new URL(target).searchParams.get('state')!;
       if (mode === 'form') url = target;
-      else if (mode === 'error') url = `https://${HOST}/error?error=redirect_mismatch`;
+      else if (mode === 'error' || mode === 'shot-throws')
+        url = `https://${HOST}/error?error=redirect_mismatch`;
       else if (mode === 'never') url = 'https://dev.aperture.rahuldatta.dev/';
       else if (mode === 'nav-error')
         throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${target}`);
@@ -233,7 +250,11 @@ function browser(mode: Mode) {
     newPage: async () => page,
     storageState: async () => ({ cookies: [] }),
   } as unknown as PwContext;
-  return { context, shots, routes, shotOf: () => async (n: string) => void shots.push(n) };
+  const shotOf = () => async (n: string) => {
+    if (mode === 'shot-throws') throw new Error('Execution context was destroyed');
+    shots.push(n);
+  };
+  return { context, shots, routes, shotOf };
 }
 
 describe('ensureMcpSignedIn', () => {
@@ -249,6 +270,7 @@ describe('ensureMcpSignedIn', () => {
       now: () => NOW,
       callbackWaitMs: 20,
       settleMs: 20,
+      responseWaitMs: 20,
     });
     return { p, b, statePath: path, log, fetch };
   };
@@ -293,6 +315,21 @@ describe('ensureMcpSignedIn', () => {
     const { p, fetch } = run('answered');
     await expect(p).rejects.toThrow(/a claude host answered the callback/);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('a callback that never fails, or whose page closed first, proves nothing — no swap', async () => {
+    const pending = run('pending');
+    await expect(pending.p).rejects.toThrow(/the callback request never failed/);
+    expect(pending.fetch).not.toHaveBeenCalled();
+    const closed = run('closed');
+    await expect(closed.p).rejects.toThrow(/closed before the callback was shown to have failed/);
+    expect(closed.fetch).not.toHaveBeenCalled();
+  });
+
+  it('a screenshot that throws never replaces the MCP_AUTH_FAILED it explains', async () => {
+    await expect(run('shot-throws').p).rejects.toThrow(
+      /MCP_AUTH_FAILED: Cognito refused the sign-in: redirect_mismatch/,
+    );
   });
 
   it('fails when the callback never comes, comes twice, or a second request lands after it', async () => {

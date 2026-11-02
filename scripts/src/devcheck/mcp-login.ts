@@ -1,8 +1,8 @@
 // MCP as the test user: dev's /mcp accepts only tokens minted for the claude client (D14), so the harness
 // signs the test user in as that client — authorization code + PKCE, no secret (a public client) — the way
 // claude.ai's connector does. The redirect to claude.ai's callback never leaves the browser: Chromium resolves
-// claude hosts nowhere (browser.ts) and a context route aborts any that slip past; the code is read from the
-// request's URL and swapped at the dev pool's token endpoint. Nothing here is written to disk but the browser's
+// claude hosts nowhere (browser.ts), the sign-in page's route aborts any direct request, and the sign-in proves
+// the callback failed; the code is read from the request's URL and swapped at the dev pool's token endpoint. Nothing here is written to disk but the browser's
 // own session file (mode 600); the tokens live in memory for the run. docs/ops/DEV-CHECK.md → MCP.
 import { createHash, randomBytes } from 'node:crypto';
 import type { FetchLike } from './api';
@@ -167,12 +167,17 @@ export async function ensureMcpSignedIn(
     now: () => number;
     callbackWaitMs?: number;
     settleMs?: number;
+    responseWaitMs?: number;
   },
 ): Promise<McpSession> {
   const pkce = makePkce();
   const url = authorizeUrl(env, pkce);
   const page = await context.newPage();
-  const shot = deps.shotOf(page);
+  // Best effort: a shot that throws (a page mid-navigation) must never replace the MCP_AUTH_FAILED it explains.
+  const shot = (name: string) =>
+    deps
+      .shotOf(page)(name)
+      .catch(() => undefined);
   await blockClaude(page);
   // Every request the sign-in makes to a claude host — the callback, and nothing else, exactly once.
   const toClaude: PwRequest[] = [];
@@ -218,14 +223,16 @@ export async function ensureMcpSignedIn(
     }
     // Proven, not assumed: the callback request failed in the browser — nothing came back from a claude host.
     const answered = await Promise.race([
-      toClaude[0]!.response().catch(() => null),
-      delay(5_000, 'pending' as const),
+      toClaude[0]!.response().catch(() => 'threw' as const), // a closed page proves nothing
+      delay(deps.responseWaitMs ?? 5_000, 'pending' as const),
     ]);
     if (answered !== null)
       throw fail(
         answered === 'pending'
           ? 'the callback request never failed — a claude host may be reachable'
-          : 'a claude host answered the callback — the browser reached it',
+          : answered === 'threw'
+            ? 'the sign-in page closed before the callback was shown to have failed'
+            : 'a claude host answered the callback — the browser reached it',
       );
     await delay(deps.settleMs ?? 200, undefined); // a second request would land here
     if (toClaude.length !== 1)

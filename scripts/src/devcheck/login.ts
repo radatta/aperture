@@ -65,11 +65,12 @@ export function validateCachedState(
   }
 }
 
-// The browser's session file holds the refresh token and the Hosted UI cookie: mode 600 on create, and
-// chmod'd after, since `mode` doesn't touch a file that already exists.
+// The browser's session file holds the refresh token and the Hosted UI cookie: mode 600 on create, and an
+// existing file tightened first, since `mode` doesn't touch a file that already exists.
 export async function saveState(context: PwContext, path: string): Promise<void> {
-  writeFileSync(path, JSON.stringify(await context.storageState()), { mode: 0o600 });
-  chmodSync(path, 0o600);
+  const state = JSON.stringify(await context.storageState());
+  if (existsSync(path)) chmodSync(path, 0o600);
+  writeFileSync(path, state, { mode: 0o600 });
 }
 
 // The classic Hosted UI form, by exact selectors — shared by the app's sign-in and the MCP one (mcp-login.ts).
