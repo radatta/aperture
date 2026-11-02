@@ -178,11 +178,23 @@ describe('openPr', () => {
     const { d, logs } = setup({ mac: () => null });
     const run = d.run;
     d.run = ((cmd: string, args: string[]) => {
-      if (cmd === 'gh') d.clock.sleep(40_000); // a slow container-side check
+      if (cmd === 'gh') void d.clock.sleep(40_000); // a slow container-side check
       return run(cmd, args);
     }) as Deps['run'];
     await openPr(d, 'Mac mailroom opens PRs');
     expect(logs.find((l) => l.startsWith('submitted'))).toMatch(/up to 35 s/);
+  });
+
+  it('queues nothing when the pre-submit checks used up the budget', async () => {
+    const { d, fs, logs } = setup({ mac: opened });
+    const run = d.run;
+    d.run = ((cmd: string, args: string[]) => {
+      if (cmd === 'gh') void d.clock.sleep(70_000);
+      return run(cmd, args);
+    }) as Deps['run'];
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.unreachable);
+    expect([...fs.files.keys()].some((k) => k.includes('/inbox/'))).toBe(false);
+    expect(logs.join('\n')).toMatch(/nothing was queued/);
   });
 
   it('fails loudly when the Mac sent a different body', async () => {

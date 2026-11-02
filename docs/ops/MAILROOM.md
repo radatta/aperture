@@ -82,6 +82,8 @@ This line is also what the CLI prints when the installed runner is out of date (
 8. Writes `.hostjobs/installed.json` (installed at, version, commit, mode). This is only a hint, since the container could forge it, so a failed write doesn't stop the install.
 9. Loads the agent with `launchctl bootout` then `bootstrap`, retrying while the old instance tears down.
 
+The whole script is one `main` function, called on its last line, so a truncated download defines nothing and runs nothing.
+
 **Re-run it after a merge that changes `tools/mailroom/`.** The CLI warns when a result's `runnerVersion` differs from the worktree's.
 
 Other uses:
@@ -103,7 +105,7 @@ Other uses:
 1. Refuses a detached HEAD, a deploy branch, or an unpushed branch (`pnpm bot push` first).
 2. Lints the title and body with the runner's fast-pass rules and prints a fix-it hint on failure.
 3. Skips the job if the container's read-only `gh` already sees an open PR. This check is best-effort.
-4. Submits the job and waits **75 s plus 30 s of grace**, counted from when the command started. That keeps it under the Bash tool's 120 s default timeout, because a killed caller would leave the job queued.
+4. Submits the job and waits **75 s plus 30 s of grace**, counted from when the command started. That keeps it under the Bash tool's 120 s default timeout, because a killed caller would leave the job queued. If the pre-submit checks have left under 10 s of that budget, it queues nothing and exits 3.
 5. Checks that the result's `bodySha256` matches the file, and that the PR's head is the pushed sha. A push that landed mid-job fails loudly.
 
 Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire. The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
@@ -157,9 +159,9 @@ The **body travels inside the job**, so the runner never reads a path the contai
 
    Text inside fenced blocks and exact-run backtick spans is exempt, so `` `@types/node` `` is fine.
 
-2. **GitHub's renderer has the last word.** The runner sends the title and body to `POST /markdown` (`gfm`, context `radatta/aperture`) and scans the HTML in jq (`RENDER_JQ`). First, GitHub decides what is code: `<pre>` and `<code>` are dropped. Then it refuses:
+2. **GitHub's renderer has the last word.** The runner sends the title and body to `POST /markdown` (`gfm`, context `radatta/aperture`) and scans the HTML in jq (`RENDER_JQ`). First, any tag holding a literal `<` is refused as `BAD_TEXT`. GitHub escapes `<` inside attributes (checked live 2026-11-01), so such a tag is HTML the scan can't read safely: a fake `<code>` inside an attribute would otherwise make the code strip swallow a real link. Next, GitHub decides what is code: `<pre>` and `<code>` are dropped. Then it refuses:
    - `MENTION`, for a `user-mention` or `team-mention` class;
-   - `XREF`, for an `issue-link` outside this repo, or a foreign issue URL anywhere in the HTML, attributes included;
+   - `XREF`, for an `issue-link` whose href isn't exactly this repo's `issues|pull|discussions/<n>` (so `../` can't walk out), or a foreign issue URL anywhere in the HTML, attributes included;
    - `MENTION` or `HASH_REF`, for the fast-pass patterns over what's left as text, once tags and this repo's own issue links are removed.
 
    The text scan matters because the token sees only this repo. A reference to a private repo or team the token can't see renders as plain text, not as a link with a class, but GitHub would still process it as the user when the PR is made. Rendering catches what a regex over markdown can't see: indented or tilde fences, HTML blocks, link titles, entities. Round 1's review found 8 such bypasses of the fast pass. The scan runs in one jq call, with no pipe. Round 2 found that `grep -o | grep -q` under `pipefail` passed silently on large HTML because of SIGPIPE. The classes were checked against the live renderer on 2026-11-01 with `gh api markdown`: `@octocat`, `&#x40;octocat` and cross-repo URLs all render with those classes, and code spans don't.
@@ -285,7 +287,13 @@ Still UNVERIFIED until the trial runs:
   - a `.hostjobs` under a symlinked parent, which tests the real-path pin;
   - a foreign link before 1,000 of this repo's own, which tests the SIGPIPE fix. It needs about 100 KiB of HTML to overflow the pipe buffer; 100 links did not.
 
-  They also include every reviewer bypass body, each of which must reach the render check, plain-text mentions and references in the render, and each reason code.
+  They also include:
+  - every reviewer bypass body, each of which must reach the render check;
+  - plain-text mentions and references in the render;
+  - GitHub's real escaped render of the attribute trick;
+  - each reason code.
+
+  The cases are generated: edit `testdata/gen-jobs.py`, then run `python3 tools/mailroom/testdata/gen-jobs.py tools/mailroom/testdata/jobs.jsonl`. A test fails if the committed JSONL drifts from the generator.
 
 - **`scripts/src/mailroom/runner-fixtures.test.ts`** runs that suite inside `pnpm test` and CI. It also statically checks:
   - the one token source;

@@ -92,7 +92,12 @@ function hiddenChar(s: string): boolean {
     const c = ch.codePointAt(0) ?? 0;
     if ((c < 32 && c !== 9 && c !== 10) || (c >= 127 && c <= 159) || FILLERS.includes(c))
       return true;
-    if (c >= 0xfe00 && c <= 0xfe0f) return true;
+    if (
+      (c >= 0xfe00 && c <= 0xfe0f) ||
+      (c >= 0x180b && c <= 0x180f) ||
+      (c >= 0xe0100 && c <= 0xe01ef)
+    )
+      return true;
     if (
       (c >= 0x200b && c <= 0x200f) ||
       (c >= 0x2028 && c <= 0x202e) ||

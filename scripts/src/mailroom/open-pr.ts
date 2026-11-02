@@ -65,6 +65,14 @@ function unreachable(d: Deps, why: string, branch: string, title: string, late =
 // what is left of the budget, so wait + grace never outlasts the caller's timeout.
 async function deliver(d: Deps, job: Job, waitMs: number, title: string): Promise<Result | number> {
   const branch = job.params.branch;
+  // Too little left to wait for an answer: don't queue a job the caller's timeout would orphan.
+  if (waitMs < MIN_WAIT_MS)
+    return unreachable(
+      d,
+      'the pre-submit checks used up the wait budget; nothing was queued',
+      branch,
+      title,
+    );
   try {
     submit(d.fs, d.dir, job);
   } catch (err) {
@@ -83,8 +91,8 @@ async function deliver(d: Deps, job: Job, waitMs: number, title: string): Promis
   );
 }
 
-const budget = (d: Deps, startMs: number, waitMs: number) =>
-  Math.max(10_000, waitMs - (d.clock.now() - startMs));
+const MIN_WAIT_MS = 10_000;
+const budget = (d: Deps, startMs: number, waitMs: number) => waitMs - (d.clock.now() - startMs);
 
 // Warnings every result can carry: an expiring token, an installed runner older than the repo's.
 function warnings(d: Deps, r: Result): void {

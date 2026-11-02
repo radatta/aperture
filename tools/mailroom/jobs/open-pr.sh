@@ -24,7 +24,8 @@ OPEN_PR_JQ='
       or $c == 173 or ($c >= 8203 and $c <= 8207) or $c == 8232 or $c == 8233 or ($c >= 8234 and $c <= 8238)
       or ($c >= 8288 and $c <= 8292) or ($c >= 8294 and $c <= 8297) or $c == 65279 or $c == 65533
       or ($c >= 917504 and $c <= 917631) or $c == 1564 or $c == 4447 or $c == 4448 or $c == 6158 or $c == 12644
-      or ($c >= 65024 and $c <= 65039) or $c == 65440);
+      or ($c >= 65024 and $c <= 65039) or $c == 65440 or ($c >= 6155 and $c <= 6159)
+      or ($c >= 917760 and $c <= 917999));
   try (
     .params as $p
     | if ($p | type) != "object" or ($p | keys) != ["body","bodySha256","branch","sha","title"] then "BAD_PARAM"
@@ -47,17 +48,22 @@ OPEN_PR_JQ='
 # an attribute — the token may not see a private repo, so GitHub won't always mark it), and the fast-pass patterns
 # over what is left as text.
 RENDER_JQ='
+  def own: "href=\"https://github\\.com/radatta/aperture/(issues|pull|discussions)/[0-9]+(#[^\"]*)?\"";
+  # GitHub escapes < inside attribute values; a literal one means HTML this scan cannot read safely, so refuse.
+  if ([match("<[^>]*>"; "g").string | select(.[1:] | contains("<"))] | length) > 0 then "BAD_TEXT"
+  else
   gsub("<pre[\\s>][\\s\\S]*?</pre>"; " ") | gsub("<code[\\s>][\\s\\S]*?</code>"; " ")
   | if test("class=\"[^\"]*(user-mention|team-mention)") then "MENTION"
-    elif ([match("<a [^>]*class=\"[^\"]*issue-link[^>]*>"; "g") | .string
-          | select(contains("href=\"https://github.com/radatta/aperture/") | not)] | length) > 0 then "XREF"
+    elif ([match("<a [^>]*class=\"[^\"]*issue-link[^>]*>"; "g") | .string | select(test(own) | not)] | length) > 0
+      then "XREF"
     elif test($xref) then "XREF"
-    else gsub("<a [^>]*class=\"[^\"]*issue-link[^\"]*\"[^>]*href=\"https://github\\.com/radatta/aperture/[^\"]*\"[^>]*>[\\s\\S]*?</a>"; " ")
+    else gsub("<a [^>]*class=\"[^\"]*issue-link[^\"]*\"[^>]*" + own + "[^>]*>[\\s\\S]*?</a>"; " ")
       | gsub("<[^>]*>"; " ")
       | if test("(^|[^A-Za-z0-9_])@[A-Za-z0-9]") then "MENTION"
         elif test("#[0-9]|(^|[^A-Za-z0-9_])GH-[0-9]") then "HASH_REF"
         else empty end
-    end'
+    end
+  end'
 
 validate_open_pr() {
   local w="$1" reason

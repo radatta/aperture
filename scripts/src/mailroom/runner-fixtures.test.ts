@@ -1,7 +1,9 @@
 // The Mac runner's own suite (bash + jq, curl/security stubbed) as part of `pnpm test`, plus static checks on
 // what the runner may touch: the token's one source and the five fixed GitHub calls. docs/ops/MAILROOM.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TOOLS_DIR } from './fixtures.ts';
 
@@ -34,6 +36,20 @@ describe('mailroom runner', () => {
       });
     }
     expect(out).toMatch(/# \d+ passed, 0 failed/);
+  });
+
+  it('jobs.jsonl is exactly what gen-jobs.py generates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mailroom-gen-'));
+    try {
+      execFileSync('python3', [`${TOOLS_DIR}testdata/gen-jobs.py`, join(dir, 'jobs.jsonl')], {
+        stdio: 'pipe',
+      });
+      expect(readFileSync(join(dir, 'jobs.jsonl'), 'utf8')).toBe(
+        readFileSync(`${TOOLS_DIR}testdata/jobs.jsonl`, 'utf8'),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('reads the token only from its Keychain item, never a file or the environment', () => {
