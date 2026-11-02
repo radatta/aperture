@@ -24,6 +24,8 @@ import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { DevcheckError } from './errors';
 import { openLedger } from './ledger';
 import { matrixProblems } from './matrix';
+import { createMcpClient } from './mcp';
+import { blockClaude, ensureMcpSignedIn } from './mcp-login';
 import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
@@ -208,16 +210,26 @@ async function main(): Promise<number> {
       async openBrowser() {
         validateCachedState(statePath(main), env, log);
         const { browser, context } = await launch(pw, statePath(main));
+        await blockClaude(context); // before any page: no claude host is ever reached
         const page = await context.newPage();
         return {
           page,
           signIn: (shot) =>
             ensureSignedIn(page, context, env, { statePath: statePath(main), shot }),
           readSession: () => readCheckedSession(page, env),
+          signInMcp: (shot) =>
+            ensureMcpSignedIn(context, env, {
+              fetch,
+              shot,
+              statePath: statePath(main),
+              log,
+              now: Date.now,
+            }),
           close: () => browser.close(),
         };
       },
       makeApi: (token) => createApiClient({ fetch, token, ledger, run: runId }),
+      makeMcp: (token) => createMcpClient({ fetch, token, ledger, run: runId }),
       now: Date.now,
       log,
     });

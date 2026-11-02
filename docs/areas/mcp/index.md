@@ -270,6 +270,10 @@ Claude Code has a bug history of not sending custom headers on the initial hands
   Google fake + a recording uploader, the auth fork, and the contract rename (3× via the shared suite).
 - **Only a deployed stage** proves: CloudFront forwarding the custom header, Claude Code actually sending
   it, and `DEVICE_USER_ID` = your `sub` (a wrong value writes tasks under `u#local`).
+- **Every dev check** (`docs/ops/DEV-CHECK.md` → _MCP as the test user_) proves the bearer path end to end on
+  dev: the claude client's code + PKCE sign-in, `Authorization` reaching `/mcp` through CloudFront, the
+  client-bound verifier, and the tools a feature's scenario drives (`create_task`, `delete_task`,
+  `delete_attachment`, the reads) — as the dev test user, never your partition.
 
 ## claude.ai — the OAuth façade (built)
 
@@ -311,6 +315,10 @@ exchange; the façade only publishes correct metadata from our origin.
   claude.ai-minted token would otherwise be a valid full `/api/*` token. The BFF now **denies** tokens
   carrying the claude client id (`assertClientAllowed`), keeping "claude.ai can only do what `/mcp`
   exposes" true by construction.
+- **The dev check is the bearer path's third caller** (after claude.ai and Claude Code's agent-token path):
+  it signs the dev test user in as the public claude client with PKCE, catches the redirect to claude.ai's
+  callback in its own browser (aborted — claude.ai is never contacted) and swaps the code itself. No cdk
+  change: the client already allows the code grant with no secret. Mechanics: `docs/ops/DEV-CHECK.md`.
 - **D13 — 30-day refresh token** for the claude client (vs the SPA client's 7). Its refresh token lives
   in claude.ai's server-side store, not a browser, and expiry means re-running the connector OAuth dance
   on web _and_ phone; the localStorage-leak reasoning behind the 7-day SPA ceiling doesn't apply.

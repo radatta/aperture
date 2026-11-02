@@ -1,12 +1,16 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CLAUDE_CALLBACK,
   DEV_ORIGIN,
   TEST_USER_EMAIL,
+  ENV_KEYS,
+  assertDevCognitoUrl,
   assertDevOrigin,
   assertPresignedDevUrl,
+  isClaudeHost,
   loadEnv,
   parseEnv,
 } from './config';
@@ -18,6 +22,7 @@ const GOOD = [
   'DEVCHECK_COGNITO_HOST=host.example',
   'DEVCHECK_CLIENT_ID=client',
   'DEVCHECK_POOL_ID=us-west-1_X',
+  'DEVCHECK_CLAUDE_CLIENT_ID=claude-client',
 ].join('\n');
 
 describe('assertPresignedDevUrl', () => {
@@ -84,5 +89,46 @@ describe('loadEnv', () => {
     const warn = vi.fn();
     loadEnv(path, warn);
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/chmod 600/));
+  });
+});
+
+describe('MCP sign-in guards', () => {
+  const HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com';
+
+  it('parseEnv names DEVCHECK_CLAUDE_CLIENT_ID among the missing keys', () => {
+    expect(ENV_KEYS).toContain('DEVCHECK_CLAUDE_CLIENT_ID');
+    expect(() => parseEnv(GOOD.replace(/^DEVCHECK_CLAUDE_CLIENT_ID=.*$/m, ''))).toThrow(
+      /ENV_MISSING: missing DEVCHECK_CLAUDE_CLIENT_ID/,
+    );
+  });
+
+  it('assertDevCognitoUrl allows only the env host on the dev pool’s Hosted UI, at the named path', () => {
+    expect(() =>
+      assertDevCognitoUrl(`https://${HOST}/oauth2/token`, HOST, '/oauth2/token'),
+    ).not.toThrow();
+    const prod = 'aperture-prod-123456789012.auth.us-west-1.amazoncognito.com';
+    for (const [url, host] of [
+      [`https://${prod}/oauth2/token`, prod], // a prod-shaped pool, even when the env names it
+      [`http://${HOST}/oauth2/token`, HOST],
+      [`https://${HOST}/oauth2/authorize`, HOST], // another path
+      [`https://${HOST}:8443/oauth2/token`, HOST],
+      [`https://${HOST}/oauth2/token`, 'other.example'], // not the env's host
+    ])
+      expect(() => assertDevCognitoUrl(url!, host!, '/oauth2/token')).toThrow(/refusing/);
+  });
+
+  it('the callback is one cdk registers on the claude client', () => {
+    const cdk = readFileSync(
+      new URL('../../../cdk/src/config/claudeConnector.ts', import.meta.url),
+      'utf8',
+    );
+    expect(cdk).toContain(`'${CLAUDE_CALLBACK}'`);
+  });
+
+  it('isClaudeHost covers both hosts and their subdomains, not look-alikes', () => {
+    for (const h of ['claude.ai', 'CLAUDE.AI', 'www.claude.ai', 'claude.com', 'api.claude.com'])
+      expect(isClaudeHost(h)).toBe(true);
+    for (const h of ['notclaude.ai', 'claude.ai.evil.com', 'claude.app', DEV_ORIGIN.slice(8)])
+      expect(isClaudeHost(h)).toBe(false);
   });
 });

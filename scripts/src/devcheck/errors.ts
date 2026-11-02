@@ -9,6 +9,7 @@ export const REASON_CODES = [
   'AUTH_REDIRECT_UNEXPECTED', // Sign in went somewhere other than the dev Hosted UI
   'AUTH_PAGE_CHANGED', // the Hosted UI form isn't the classic one the harness knows
   'AUTH_REJECTED', // Cognito refused the test user's credentials
+  'MCP_AUTH_FAILED', // the claude-client PKCE sign-in failed: a Cognito error, state mismatch, the token endpoint refused, the callback never came or came twice, the token expired
   'WRONG_USER', // the signed-in identity isn't the test user — aborts before any write
   'BUILD_MISMATCH_IN_PAGE', // the page kept serving another build after reloads (PWA service worker)
   'MATRIX_GAP', // a coverage row no step proves through its own entry point, or an off-dev test that doesn't exist — found at load

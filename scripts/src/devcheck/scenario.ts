@@ -5,6 +5,7 @@
 // case); each step names the rows it proves. Writing one from a runbook: docs/ops/DEV-CHECK.md.
 import { join } from 'node:path';
 import type { ApiClient } from './api';
+import type { McpClient } from './mcp';
 import { DEV_ORIGIN, assertDevOrigin } from './config';
 import { SHELL } from './login';
 import type { PwPage } from './pw-types';
@@ -12,9 +13,9 @@ import type { PwPage } from './pw-types';
 export type Tier = 'smoke' | 'full';
 
 // Where a user or client enters the feature. A step drives one of STEP_ENTRIES; the rest name surfaces
-// headless Chromium can't reach, so their rows are needsYou (mcp until the MCP-as-test-user PR adds it).
+// headless Chromium can't reach, so their rows are needsYou.
 export type EntryPoint = 'ui' | 'api' | 'mcp' | 'ios' | 'raycast' | 'extension';
-export const STEP_ENTRIES: readonly EntryPoint[] = ['ui', 'api'];
+export const STEP_ENTRIES: readonly EntryPoint[] = ['ui', 'api', 'mcp'];
 export type RowKind = 'nominal' | 'edge';
 
 // Dev can't make this failure happen, so a unit or handler test is the proof. `file` is repo-relative,
@@ -58,6 +59,7 @@ export interface Dates {
 export interface Ctx {
   page: PwPage;
   api: ApiClient;
+  mcp: McpClient; // dev's /mcp as the test user, through the claude client (mcp-login.ts)
   nonce: string; // unique per run — makes a title findable on screen; never a cleanup key
   dates: Dates;
   ui: Ui;

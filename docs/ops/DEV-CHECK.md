@@ -10,7 +10,8 @@ covered off dev or listed for the user, plus Claude reading the screenshots, is 
 
 ```
 pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=SHA> ─► sign in (Hosted UI, cached)
-   ─► sweep earlier leftovers ─► in-page build check ─► scenarios ─► finally: delete ledger ids,
+   ─► sweep earlier leftovers ─► MCP sign-in (claude client, PKCE) ─► in-page build check ─► scenarios
+   ─► finally: delete ledger ids,
    verify none left, dev build unchanged ─► localNotes/devcheck/<run>/report.md + shots/
 (before all of it: every scenario's rows checked at load — a gap is MATRIX_GAP, nothing waits on dev)
 ```
@@ -53,6 +54,14 @@ screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
    dev-account PR** dev's pool lives in the dev account (`--profile aperture-dev`), so the user was re-created
    there, the env file's pool, client, host and sub replaced, `devcheck.dev.state.json` deleted and the old
    ledgers archived — their ids name rows in a table that no longer exists.
+   `DEVCHECK_CLAUDE_CLIENT_ID` (the `aperture-claude-dev` client, for _MCP as the test user_ below) came later —
+   not a secret, kept beside the rest so the harness reads one file; required, so a file without it is
+   `ENV_MISSING`. Appended on the Mac with: `cd /Users/rahuldatta/Coding/Personal/aperture && id=$(aws
+cloudformation describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureApp-dev --query
+"Stacks[0].Outputs[?OutputKey=='McpClientId'].OutputValue" --output text) && [ -n "$id" ] && [ "$id" != "None" ]
+&& ! grep -q '^DEVCHECK_CLAUDE_CLIENT_ID=' .secrets/devcheck.dev.env && printf 'DEVCHECK_CLAUDE_CLIENT_ID=%s\n'
+"$id" >> .secrets/devcheck.dev.env && chmod 600 .secrets/devcheck.dev.env` (one line; a recreated dev stack
+   means removing the old line and rerunning it).
 2. **Playwright, outside the repo** — it is no package's dependency (it would add a browser download to every
    CI install, and no test needs it). `~/pw` is a scratch directory outside the monorepo, so npm there doesn't
    break the pnpm-only rule: `mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx
@@ -68,7 +77,22 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   A deleted object answers that GET with 403, not 404 — the roles have no `s3:ListBucket`, so S3 hides
   `NoSuchKey` — and `isGone` (`api.ts`) counts both as gone.
 - **The test user only.** The env file must name the test user, and before any write the signed-in
-  session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes.
+  session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes. The MCP
+  session is held to the same check (below).
+- **MCP as the test user.** Dev's `/mcp` accepts only tokens minted for the claude client (D14,
+  `docs/areas/mcp/index.md`), so after the sweep the harness signs the test user in as `aperture-claude-dev` —
+  authorization code + PKCE, no secret (a public client), the Hosted UI cookie reused so the form usually
+  doesn't show (`mcp-login.ts`). The redirect to claude.ai's callback never leaves the browser: Chromium
+  resolves claude.ai/claude.com nowhere (`browser.ts`), a context route aborts any direct request to them, and
+  the sign-in fails unless exactly one request — the callback — went there. The code is swapped only at the
+  env's dev-pool token endpoint (`assertDevCognitoUrl`), never following a redirect. The token's email and `sub`
+  (ID token), `sub`, `client_id` and `token_use` (access token) must be the test user's claude-client access
+  token — else `WRONG_USER` or `MCP_AUTH_FAILED` before any step runs. It lives in memory for the run (never on
+  disk: no refresh token is kept), the BFF refuses it (D14), and errors name Cognito's `error` field, never a
+  token, code or body. Smoke checks MCP and the API list the same backlog; capture-task's MCP task showing in the
+  app's Backlog is the stronger same-partition proof. `ctx.mcp` (`mcp.ts`) mirrors `api.ts`: declared reads and
+  writes, creates ledgered from the response (`via: mcp:create_task`), deletes only of ledger ids (a parent with
+  an unrecorded part is refused; an attachment only when the server lists it on a recorded task).
 - **Deletes by recorded id only.** Every task the run creates is recorded in a ledger from the server's create
   response — the API client's `createTask`, and the browser's `createTask`/`createTasks`/`splitTask`
   responses (a split's follow-up, and its parent only when the split task was already recorded and the parent
@@ -137,10 +161,10 @@ rule expires** when the quota reaches 30, or when the client in-flight cap ships
 
 ## Ledgers
 
-| File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                            |
-| ---------------------------------------------------- | --------------------------------- | ------------------------------------------------- |
-| `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser + API creates) |
-| `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`       |
+| File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                   |
+| ---------------------------------------------------- | --------------------------------- | -------------------------------------------------------- |
+| `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) |
+| `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`              |
 
 Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?}`, `op`
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` after it is reported as a
@@ -153,23 +177,24 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
 
-| Code                       | Means                                                                                                                                    | Do                                                                       |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                             |
-| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                             |
-| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                     | did `pnpm bot deploy-dev` run for it?                                    |
-| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `verify` job names why in its `::error::` line    |
-| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                         |
-| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                                |
-| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately                   |
-| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                             |
-| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                         |
-| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                                   |
-| `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                 | the message names the scenario and row; fix the scenario, never the rule |
-| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                                   |
-| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                             |
-| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                                  |
-| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun             |
+| Code                       | Means                                                                                                                                    | Do                                                                                                                                                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ENV_MISSING`              | env file absent or a key missing                                                                                                         | setup step 1                                                                                                                                                                                                                               |
+| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                  | setup step 2                                                                                                                                                                                                                               |
+| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                     | did `pnpm bot deploy-dev` run for it?                                                                                                                                                                                                      |
+| `DEPLOY_FAILED`            | the run failed                                                                                                                           | read the run; a failed `verify` job names why in its `::error::` line                                                                                                                                                                      |
+| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                               | the message names what it serves                                                                                                                                                                                                           |
+| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                   | check the env file's host                                                                                                                                                                                                                  |
+| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                 | screenshot in `shots/`; update `login.ts` deliberately                                                                                                                                                                                     |
+| `AUTH_REJECTED`            | Cognito refused the credentials                                                                                                          | password expired or user disabled — operator                                                                                                                                                                                               |
+| `WRONG_USER`               | the session isn't the test user                                                                                                          | delete `.secrets/devcheck.dev.state.json`, rerun                                                                                                                                                                                           |
+| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                               | rerun; persistent → service-worker bug                                                                                                                                                                                                     |
+| `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                 | the message names the scenario and row; fix the scenario, never the rule                                                                                                                                                                   |
+| `MCP_AUTH_FAILED`          | the claude-client sign-in or code swap failed: Cognito's error, a state mismatch, no callback (or two), an expiring token                | the message names Cognito's `error`: `invalid_client` means the client needs a secret now (fall back to a test-user agent token); `redirect_mismatch` means `CLAUDE_CALLBACK` drifted from `cdk/src/config/claudeConnector.ts`; else rerun |
+| `STEP_FAILED`              | a scenario step threw                                                                                                                    | its row has the error and a screenshot                                                                                                                                                                                                     |
+| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                          | a harness bug — never bypass                                                                                                                                                                                                               |
+| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, or a delete was blocked by unrecorded parts | rerun (the sweep retries); else by hand                                                                                                                                                                                                    |
+| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                            | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun                                                                                                                                                                               |
 
 ## Writing a scenario
 
@@ -218,7 +243,7 @@ export const quickAdd: Scenario = {
 ```
 
 `ctx` has `page` (Playwright), `ui` (`goto`, `captureTask`, `expectText`, `setTheme`), `api` (reads, and the
-ledger-guarded writes), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA today/tomorrow) and `nonce`
+ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA today/tomorrow) and `nonce`
 (makes a title findable on screen — never a cleanup key). A step throws to fail; the rest of that scenario is
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
@@ -228,8 +253,8 @@ step, proving no row, so a console error fails the run without unproving the row
 ### Rows
 
 A row is one entry point × one case, as the user would say it (`what`), `nominal` or `edge`. `entry` is `ui`,
-`api`, `mcp`, `ios`, `raycast` or `extension`; a step drives `ui` or `api` today (`STEP_ENTRIES` in `scenario.ts`
-— the MCP-as-test-user PR adds `mcp`). Each row is exactly one of:
+`api`, `mcp`, `ios`, `raycast` or `extension`; a step drives `ui`, `api` or `mcp` (`STEP_ENTRIES` in
+`scenario.ts`). Each row is exactly one of:
 
 - **Proven on dev** — steps name it in `proves`. At least one must drive the row's own entry; every step naming
   it must pass. An `api` step can verify a UI row's server half, never stand in for the UI.
@@ -240,7 +265,7 @@ A row is one entry point × one case, as the user would say it (`what`), `nomina
   `it.todo` or a bare string); both are checked. One test per row — a failure with a UI
   half and a BFF half is two rows.
 - **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
-  Safari extension, a camera, a Google account, MCP until the next PR.
+  Safari extension, a camera, a Google account.
 
 Walk the plan's matrix through **the edge-case checklist**: empty / max / invalid input; cancel; repeat
 (idempotent); survives a reload; the neighbouring item unaffected; ownership (another user's id). `smoke` alone
@@ -270,7 +295,8 @@ since those belong to their own features. Without `--feature` there are no paste
 scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
 carry its verdict: they hold only if the run counts as green (_Known 429s_).
 Shared, in the main checkout: the two ledgers and `run.lock`. Secrets beside the env file:
-`.secrets/devcheck.dev.state.json` (the cached session, mode 600).
+`.secrets/devcheck.dev.state.json` (the cached session and the Hosted UI cookie, mode 600 — re-saved after the MCP
+sign-in).
 
 ## Why not Claude in Chrome
 

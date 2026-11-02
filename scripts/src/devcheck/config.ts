@@ -40,6 +40,34 @@ export function assertPresignedDevUrl(url: string): void {
   if (!u.searchParams.get('X-Amz-Signature')) throw new Error('refusing an unsigned URL');
 }
 
+// MCP as the test user: the harness signs in as the claude client (authorization code + PKCE, a public client)
+// and catches the redirect to claude.ai's callback in the browser. CLAUDE_CALLBACK must equal a registered
+// callback (cdk/src/config/claudeConnector.ts) or Cognito answers redirect_mismatch — it is only ever a
+// parameter value: no request to a claude host ever leaves the harness (isClaudeHost, blockClaude).
+export const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
+export const MCP_SCOPES = ['openid', 'email', `${DEV_ORIGIN}/mcp/access`];
+export const isClaudeHost = (hostname: string): boolean =>
+  /(^|\.)claude\.(ai|com)$/.test(hostname.toLowerCase());
+
+// The dev pool's Hosted UI (the CDK domain prefix carries the dev account id), and only the env's host on it.
+const DEV_COGNITO_HOST = /^aperture-dev-[0-9]{12}\.auth\.us-west-1\.amazoncognito\.com$/;
+
+export function assertDevCognitoUrl(
+  url: string,
+  host: string,
+  path: '/oauth2/authorize' | '/oauth2/token',
+): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error('refusing a non-URL Cognito target');
+  }
+  if (u.protocol !== 'https:' || u.port || u.hostname !== host || !DEV_COGNITO_HOST.test(host))
+    throw new Error(`refusing ${u.origin} — not the dev pool's Hosted UI`);
+  if (u.pathname !== path) throw new Error(`refusing ${u.pathname} — expected ${path}`);
+}
+
 export const ENV_KEYS = [
   'DEVCHECK_EMAIL',
   'DEVCHECK_PASSWORD',
@@ -47,6 +75,7 @@ export const ENV_KEYS = [
   'DEVCHECK_COGNITO_HOST',
   'DEVCHECK_CLIENT_ID',
   'DEVCHECK_POOL_ID',
+  'DEVCHECK_CLAUDE_CLIENT_ID', // aperture-claude-dev — the only client dev's /mcp accepts (D14)
 ] as const;
 export type DevcheckEnv = Record<(typeof ENV_KEYS)[number], string>;
 

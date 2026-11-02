@@ -65,6 +65,35 @@ export function validateCachedState(
   }
 }
 
+// The classic Hosted UI form, by exact selectors — shared by the app's sign-in and the MCP one (mcp-login.ts).
+export async function submitHostedUiForm(
+  page: PwPage,
+  env: DevcheckEnv,
+  shot: (name: string) => Promise<void>,
+): Promise<void> {
+  try {
+    for (const sel of Object.values(FORM)) await page.locator(sel).waitFor({ timeout: 10_000 });
+  } catch {
+    await shot('auth-page-changed');
+    throw new DevcheckError(
+      'AUTH_PAGE_CHANGED',
+      `the Hosted UI form at ${page.url()} isn't the classic one`,
+    );
+  }
+  try {
+    await page.locator(FORM.username).fill(env.DEVCHECK_EMAIL);
+    await page.locator(FORM.password).fill(env.DEVCHECK_PASSWORD);
+    await page.locator(FORM.submit).click();
+  } catch {
+    // Playwright's error text can echo the filled value — never let it reach a report.
+    await shot('auth-page-changed');
+    throw new DevcheckError(
+      'AUTH_PAGE_CHANGED',
+      `filling the Hosted UI form at ${page.url()} failed`,
+    );
+  }
+}
+
 export async function ensureSignedIn(
   page: PwPage,
   context: PwContext,
@@ -85,27 +114,7 @@ export async function ensureSignedIn(
         `Sign in went to ${page.url()}, not ${env.DEVCHECK_COGNITO_HOST}`,
       );
     }
-    try {
-      for (const sel of Object.values(FORM)) await page.locator(sel).waitFor({ timeout: 10_000 });
-    } catch {
-      await opts.shot('auth-page-changed');
-      throw new DevcheckError(
-        'AUTH_PAGE_CHANGED',
-        `the Hosted UI form at ${page.url()} isn't the classic one`,
-      );
-    }
-    try {
-      await page.locator(FORM.username).fill(env.DEVCHECK_EMAIL);
-      await page.locator(FORM.password).fill(env.DEVCHECK_PASSWORD);
-      await page.locator(FORM.submit).click();
-    } catch {
-      // Playwright's error text can echo the filled value — never let it reach a report.
-      await opts.shot('auth-page-changed');
-      throw new DevcheckError(
-        'AUTH_PAGE_CHANGED',
-        `filling the Hosted UI form at ${page.url()} failed`,
-      );
-    }
+    await submitHostedUiForm(page, env, opts.shot);
     try {
       await page.waitForURL((u) => u.origin === DEV_ORIGIN, { timeout: 20_000 });
     } catch {

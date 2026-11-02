@@ -9,6 +9,8 @@ import { parseMarker } from './deploy';
 import { DevcheckError, codeOf, type ReasonCode } from './errors';
 import { orphanIntents, pendingIds, type Ledger } from './ledger';
 import { coverageOf } from './matrix';
+import type { McpClient } from './mcp';
+import { mcpToken, type McpSession } from './mcp-login';
 import { CREATE_METHODS, idsFromCreateResponse, methodOf } from './recorder';
 import type { CreatedRecord, RunResult, StepResult } from './report';
 import type { PwPage, PwRequest, PwResponse } from './pw-types';
@@ -19,6 +21,7 @@ export interface BrowserSession {
   page: PwPage;
   signIn(shot: (name: string) => Promise<void>): Promise<Session>;
   readSession(): Promise<Session | null>; // throws WRONG_USER if the page's session isn't the test user
+  signInMcp(shot: (name: string) => Promise<void>): Promise<McpSession>; // the claude client, as the test user
   close(): Promise<void>;
 }
 
@@ -35,6 +38,7 @@ export interface PipelineDeps {
   fetchShell: () => Promise<string>;
   openBrowser: () => Promise<BrowserSession>;
   makeApi: (token: () => string) => ApiClient;
+  makeMcp: (token: () => string) => McpClient;
   now: () => number;
   log: (msg: string) => void;
   responseWaitMs?: number; // how long cleanup waits for a create still in flight (default 30 s)
@@ -119,6 +123,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       }
     }
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
+    // After the sweep (whose writes use the checked app session), before any step: the MCP token is the
+    // test user's — WRONG_USER otherwise — before a step can write through it.
+    const mcpSession = await browser.signInMcp(shot);
+    const mcp = d.makeMcp(() => mcpToken(mcpSession, d.now));
 
     r.startSha = parseMarker(await d.fetchShell());
     let inPage: string | undefined;
@@ -138,6 +146,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const ctx: Ctx = {
       page,
       api,
+      mcp,
       ui,
       nonce: d.runId.replace(/[^a-z0-9]/gi, '').slice(-10),
       dates: datesFor(new Date(d.now())),
