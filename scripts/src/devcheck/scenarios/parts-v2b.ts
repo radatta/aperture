@@ -37,7 +37,7 @@ export const partsV2b: Scenario = {
         });
         const p = await ctx.api.writes.createTask({ title: name(ctx, 'P') });
         await ctx.api.writes.createTask({
-          title: name(ctx, 'read'),
+          title: name(ctx, 'read2b'),
           parentId: p.id,
           dueDay: ctx.dates.today,
           dueTime: '23:57',
@@ -58,16 +58,21 @@ export const partsV2b: Scenario = {
         await ctx.ui.goto('/tasks');
         await ctx.ui.expectText('By time', 15_000);
         await ctx.ui.expectText(name(ctx, 'OA'));
-        await ctx.ui.expectText(name(ctx, 'read'));
-        const all = await ctx.page.getByRole('button', { name: /devcheck .* (read|OA)$/ }).count();
+        await ctx.ui.expectText(name(ctx, 'read2b'));
+        const all = await ctx.page
+          .getByRole('button', { name: /devcheck .* (read2b|OA)$/ })
+          .count();
         if (all < 2) throw new Error(`expected both timed rows on Today, saw ${all}`);
-        // The "By time" section runs from its label to "Planned today" (or the end): both in it, the 23:57
-        // part before the 23:58 task, and no Unplan. textContent, not innerText — the label is CSS-uppercased.
+        // The "By time" section runs from its label to the next group's (Planned today, In progress, Done
+        // today — whichever comes first): both in it, the 23:57 part before the 23:58 task, and no Unplan.
+        // textContent, not innerText — the label is CSS-uppercased.
         const text = await ctx.page.evaluate<string>(`document.body.textContent ?? ''`);
         const from = text.indexOf('By time');
-        const to = text.indexOf('Planned today', from);
-        const section = text.slice(from, to === -1 ? undefined : to);
-        const [read, oa] = [section.indexOf(name(ctx, 'read')), section.indexOf(name(ctx, 'OA'))];
+        const ends = ['Planned today', 'In progress · not planned today', 'Done today']
+          .map((label) => text.indexOf(label, from))
+          .filter((i) => i !== -1);
+        const section = text.slice(from, ends.length ? Math.min(...ends) : undefined);
+        const [read, oa] = [section.indexOf(name(ctx, 'read2b')), section.indexOf(name(ctx, 'OA'))];
         if (from === -1 || read === -1 || oa === -1) throw new Error('not both under “By time”');
         if (read > oa) throw new Error('“By time” is not by clock: 23:58 shows before 23:57');
         if (section.includes('Unplan')) throw new Error('a timed row offers Unplan');

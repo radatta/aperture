@@ -1,6 +1,6 @@
 // Capture a task through the bar and prove it landed: receipt, Backlog, and the server's copy. The line is a
 // grammar line (space, pipe, space) so it never reaches the model — no Haiku spend, deterministic fields.
-import type { Scenario } from '../scenario';
+import { noConsoleErrors, type Scenario } from '../scenario';
 
 const title = (nonce: string) => `devcheck ${nonce}`;
 
@@ -58,5 +58,6 @@ export const captureTask: Scenario = {
           throw new Error(`server has ${JSON.stringify(task)}`);
       },
     },
+    noConsoleErrors,
   ],
 };

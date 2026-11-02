@@ -126,16 +126,23 @@ const fetchShell = async (): Promise<string> =>
     })
   ).text();
 
+// The build under test is HEAD unless --sha names one; the scenarios are always HEAD's, marked -dirty when
+// scripts/src/devcheck has uncommitted edits — never in `sha`, which must name a real deployed commit.
+export const shasFor = (head: string, dirty: boolean, argSha?: string) => ({
+  sha: argSha ?? head,
+  scenarioSha: dirty ? `${head}-dirty` : head,
+});
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const main = mainCheckout();
   const worktree = worktreeRoot();
-  // A scenario edit not yet committed runs too — say so rather than name a commit it isn't.
-  const dirty = (
-    await exec('git', ['status', '--porcelain', '--', 'scripts/src/devcheck'])
-  ).stdout.trim();
-  const head = `${(await exec('git', ['rev-parse', 'HEAD'])).stdout.trim()}${dirty ? '-dirty' : ''}`;
-  const sha = args.sha ?? head;
+  const git = async (a: string[]) => (await exec('git', a, { cwd: worktree })).stdout.trim();
+  const { sha, scenarioSha } = shasFor(
+    await git(['rev-parse', 'HEAD']),
+    !!(await git(['--no-optional-locks', 'status', '--porcelain', '--', ':/scripts/src/devcheck'])),
+    args.sha,
+  );
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
   // Every scenario, whatever the tier: a broken matrix is a bug before anything waits on dev.
   const gaps = matrixProblems(SCENARIOS, worktree, {
@@ -172,7 +179,7 @@ async function main(): Promise<number> {
       runId,
       tier: args.tier,
       expectedSha: sha,
-      scenarioSha: head,
+      scenarioSha,
       scenarios,
       ledger,
       shotsDir,

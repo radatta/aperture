@@ -2,8 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseArgs, takeLock } from './run';
+import { parseArgs, shasFor, takeLock } from './run';
 import { SCENARIOS, selectScenarios } from './scenarios/index';
+
+describe('shasFor', () => {
+  const H = 'a'.repeat(40);
+  it('tests HEAD, or --sha; -dirty marks only the scenarios, never the build under test', () => {
+    expect(shasFor(H, false)).toEqual({ sha: H, scenarioSha: H });
+    expect(shasFor(H, true)).toEqual({ sha: H, scenarioSha: `${H}-dirty` });
+    expect(shasFor(H, true, 'b'.repeat(40))).toEqual({
+      sha: 'b'.repeat(40),
+      scenarioSha: `${H}-dirty`,
+    });
+  });
+});
 
 describe('parseArgs', () => {
   it('defaults to smoke with a deploy wait', () => {

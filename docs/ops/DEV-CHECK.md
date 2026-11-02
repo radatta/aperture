@@ -30,8 +30,9 @@ pnpm devcheck --tier delta --scenario capture-task # smoke + the named feature s
 already serves it). `--sha` is also how a scenario-only commit proves a build already on dev — `scripts/` isn't
 deployed, so a fix to a scenario needs no redeploy: run it with `--sha <the deployed SHA>`, and the report's Build
 line names both (`scenarios from …`). A build dev got from a merge to `main` has no `deploy-dev` run: add
-`--no-deploy-wait`, taking the SHA from dev's `<meta name="aperture-build">`. Exit 0 PASS, 1 FAIL, 2 CRASH. Read `report.md` first — its first line is the status — then
-the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
+`--no-deploy-wait`, taking the SHA from dev's `<meta name="aperture-build">`. Exit 0 PASS, 1 FAIL, 2 CRASH. The
+load-time codes (`ENV_MISSING`, `PW_MISSING`, `MATRIX_GAP`) stop the run before it starts: printed to stderr, exit 2,
+no `report.md`. Otherwise read `report.md` first — its first line is the status — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
 
 ## One-time setup
 

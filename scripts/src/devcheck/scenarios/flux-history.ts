@@ -3,7 +3,7 @@
 // the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
 // records it before the call) — never through the UI, which can't tell this set from another.
 import { randomInt } from 'node:crypto';
-import { laDay, type Scenario } from '../scenario';
+import { laDay, noConsoleErrors, type Scenario } from '../scenario';
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -124,5 +124,6 @@ export const fluxHistory: Scenario = {
         await ctx.shot('night');
       },
     },
+    noConsoleErrors,
   ],
 };

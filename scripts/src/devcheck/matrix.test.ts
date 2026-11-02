@@ -133,7 +133,7 @@ describe('matrixProblems', () => {
 
   it('the named test must be a runnable it()/test() in a test file — not skipped, todo or a bare string', () => {
     files['/repo/app/b.test.ts'] =
-      `it.skip('skipped one', () => {});\nit.todo('todo one');\nconst s = 'bare one';\ntest(\n  "multi line one", () => {});`;
+      `it.skip('skipped one', () => {});\nit.todo('todo one');\nconst s = 'bare one';\n  // it('commented one', () => {});\ntest(\n  "multi line one", () => {});`;
     files['/repo/app/notes.ts'] = `it('in a source file', () => {});`;
     const off = (test: string, file = 'app/b.test.ts') => ({ ...OFF, file, test });
     expect(
@@ -143,6 +143,7 @@ describe('matrixProblems', () => {
             row('a', { offDev: off('skipped one') }),
             row('b', { offDev: off('todo one') }),
             row('c', { offDev: off('bare one') }),
+            row('f', { offDev: off('commented one') }),
             row('d', { offDev: off('multi line one') }),
             row('e', { offDev: off('in a source file', 'app/notes.ts') }),
           ],
@@ -153,6 +154,7 @@ describe('matrixProblems', () => {
       'feat: row a: no it()/test() titled "skipped one" in app/b.test.ts',
       'feat: row b: no it()/test() titled "todo one" in app/b.test.ts',
       'feat: row c: no it()/test() titled "bare one" in app/b.test.ts',
+      'feat: row f: no it()/test() titled "commented one" in app/b.test.ts',
       "feat: row e names app/notes.ts, which isn't a test file",
     ]);
   });

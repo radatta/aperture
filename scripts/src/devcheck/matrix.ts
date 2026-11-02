@@ -13,11 +13,11 @@ export const MATRIX_EXEMPT = ['smoke']; // proves the harness, not a feature
 
 const dupes = (xs: string[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
 const TEST_FILE = /\.test\.tsx?$/;
-// A runnable it()/test() with this title — not it.skip/it.todo, a describe, a comment or a bare string.
+// A runnable it()/test() with this title, opening its line — not it.skip/it.todo, a describe, a commented-out
+// test or a bare string. Known limit: an it() inside a describe.skip still matches.
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const testCall = (title: string) =>
-  new RegExp(
-    `(?<![.\\w])(it|test)\\(\\s*(['"\`])${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\2`,
-  );
+  new RegExp(`^\\s*(it|test)\\(\\s*(['"\`])${escape(title)}\\2`, 'm');
 
 // Every problem as "<scenario>: <what>"; empty means every matrix holds.
 export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs): string[] {
