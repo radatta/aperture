@@ -130,7 +130,11 @@ async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   const main = mainCheckout();
   const worktree = worktreeRoot();
-  const head = (await exec('git', ['rev-parse', 'HEAD'])).stdout.trim();
+  // A scenario edit not yet committed runs too — say so rather than name a commit it isn't.
+  const dirty = (
+    await exec('git', ['status', '--porcelain', '--', 'scripts/src/devcheck'])
+  ).stdout.trim();
+  const head = `${(await exec('git', ['rev-parse', 'HEAD'])).stdout.trim()}${dirty ? '-dirty' : ''}`;
   const sha = args.sha ?? head;
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
   // Every scenario, whatever the tier: a broken matrix is a bug before anything waits on dev.

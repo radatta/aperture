@@ -120,6 +120,7 @@ describe('report', () => {
         status: 'off-dev',
         what: 'S3 fails',
         provenBy: 'off dev: a.test.ts › says so',
+        note: 'a.test.ts › says so',
       }),
       row({
         row: 'y',
@@ -127,6 +128,7 @@ describe('report', () => {
         status: 'needs-you',
         what: 'MCP delete',
         provenBy: 'needs you: next PR',
+        note: 'next PR',
       }),
     ];
 
@@ -166,12 +168,27 @@ describe('report', () => {
       expect(md).toContain("### You don't need to test\n\nNothing yet.");
     });
 
+    it('a FAIL run’s lists carry its verdict; a build change mid-run names why a row is unproven', () => {
+      const md = renderReport({
+        ...base,
+        status: 'FAIL',
+        codes: ['DEV_CHANGED_MID_RUN'],
+        coverage: [row({ status: 'skipped', note: 'dev’s build changed mid-run' })],
+      });
+      expect(md).toContain('- ad: Delete — dev’s build changed mid-run');
+      expect(md).toContain('_This run is FAIL: these hold only if it counts as green');
+      expect(renderReport({ ...base, coverage: rows })).not.toContain('_This run is');
+    });
+
     it('names the scenarios’ commit only when it differs from the build', () => {
       expect(renderReport({ ...base, scenarioSha: base.expectedSha })).not.toContain(
         'scenarios from',
       );
       expect(renderReport({ ...base, scenarioSha: 'b'.repeat(40) })).toContain(
         'end `aaaaaaa` · scenarios from `bbbbbbb`',
+      );
+      expect(renderReport({ ...base, scenarioSha: `${'a'.repeat(40)}-dirty` })).toContain(
+        'scenarios from `aaaaaaa-dirty`',
       );
     });
   });

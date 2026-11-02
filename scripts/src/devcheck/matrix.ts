@@ -12,6 +12,12 @@ export interface MatrixFs {
 export const MATRIX_EXEMPT = ['smoke']; // proves the harness, not a feature
 
 const dupes = (xs: string[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
+const TEST_FILE = /\.test\.tsx?$/;
+// A runnable it()/test() with this title — not it.skip/it.todo, a describe, a comment or a bare string.
+const testCall = (title: string) =>
+  new RegExp(
+    `(?<![.\\w])(it|test)\\(\\s*(['"\`])${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\2`,
+  );
 
 // Every problem as "<scenario>: <what>"; empty means every matrix holds.
 export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs): string[] {
@@ -39,10 +45,11 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
         const { file, test, why } = row.offDev;
         if (!file.trim() || !test.trim() || !why.trim())
           p(`row ${row.id} is off dev but its file, test or why is empty`);
+        else if (!TEST_FILE.test(file)) p(`row ${row.id} names ${file}, which isn't a test file`);
         else if (!fs.exists(join(root, file)))
           p(`row ${row.id} names a test file that doesn't exist: ${file}`);
-        else if (!fs.read(join(root, file)).includes(test))
-          p(`row ${row.id}: test "${test}" not found in ${file}`);
+        else if (!testCall(test).test(fs.read(join(root, file))))
+          p(`row ${row.id}: no it()/test() titled "${test}" in ${file}`);
         if (by.length)
           p(
             `row ${row.id} is off dev but step ${by.map((s) => s.id).join(', ')} proves it — if dev can produce it, prove it on dev`,
@@ -58,17 +65,21 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
 
 // Each row's result: off dev and needs you as declared; a step-proven row passes only when every step
 // naming it passed, fails when any failed, and is skipped otherwise (a step that never ran proves nothing).
-export function coverageOf(sc: Scenario, steps: StepResult[]): RowResult[] {
+// `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven another build.
+export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = false): RowResult[] {
   return sc.rows.map((row) => {
     const base = { scenario: sc.id, row: row.id, entry: row.entry, kind: row.kind, what: row.what };
-    if (row.offDev)
+    if (row.offDev) {
+      const note = `${row.offDev.file} › ${row.offDev.test}`;
+      return { ...base, status: 'off-dev', provenBy: `off dev: ${note}`, note };
+    }
+    if (row.needsYou !== undefined)
       return {
         ...base,
-        status: 'off-dev',
-        provenBy: `off dev: ${row.offDev.file} › ${row.offDev.test}`,
+        status: 'needs-you',
+        provenBy: `needs you: ${row.needsYou}`,
+        note: row.needsYou,
       };
-    if (row.needsYou !== undefined)
-      return { ...base, status: 'needs-you', provenBy: `needs you: ${row.needsYou}` };
     const by = sc.steps.filter((s) => s.proves?.includes(row.id));
     const results = by.map(
       (s) => steps.find((r) => r.scenario === sc.id && r.step === s.id)?.status ?? 'skipped',
@@ -81,9 +92,12 @@ export function coverageOf(sc: Scenario, steps: StepResult[]): RowResult[] {
     const failed = by.filter((_, i) => results[i] === 'fail').map((s) => s.id);
     return {
       ...base,
-      status,
-      provenBy: `steps ${by.map((s) => `${s.id} (${s.entry})`).join(', ')}`,
+      status: buildChanged && status === 'pass' ? 'skipped' : status,
+      provenBy: by.length
+        ? `steps ${by.map((s) => `${s.id} (${s.entry})`).join(', ')}`
+        : 'no proving step',
       ...(failed.length ? { failedSteps: failed } : {}),
+      ...(buildChanged && status === 'pass' ? { note: 'dev’s build changed mid-run' } : {}),
     };
   });
 }

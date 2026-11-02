@@ -27,6 +27,7 @@ export interface RowResult {
   status: RowStatus;
   provenBy: string; // "steps a (ui), b (api)" | "off dev: <file> › <test>" | "needs you: <reason>"
   failedSteps?: string[];
+  note?: string; // the off-dev test, the needs-you reason, or why a passing row isn't proven
 }
 
 export interface CreatedRecord {
@@ -76,7 +77,7 @@ const ROW_LABEL: Record<RowStatus, string> = {
 
 // The feature's rows first, so the report says what was proven before how the steps went. The two lists
 // paste into report-<branch>.md and the CC done notes as they are.
-function renderCoverage(rows: RowResult[]): string[] {
+function renderCoverage(rows: RowResult[], status: RunResult['status']): string[] {
   const lines = ['', '## Feature coverage', ''];
   if (!rows.length) return [...lines, 'No feature rows in this run — smoke proves the harness.'];
   const n = (...st: RowStatus[]) => rows.filter((x) => st.includes(x.status)).length;
@@ -99,19 +100,21 @@ function renderCoverage(rows: RowResult[]): string[] {
       '',
       ...unproven.map(
         (x) =>
-          `${item(x)} — ${x.failedSteps?.length ? `step ${x.failedSteps.join(', ')} failed` : 'its steps never ran'}`,
+          `${item(x)} — ${x.failedSteps?.length ? `step ${x.failedSteps.join(', ')} failed` : (x.note ?? 'its steps never ran')}`,
       ),
     );
   const done = rows.filter((x) => x.status === 'pass' || x.status === 'off-dev');
+  lines.push('', "### You don't need to test", '');
+  // The lists stand on a FAIL too (a Known 429s run is one), but never without the run's verdict beside them.
+  if (status !== 'PASS')
+    lines.push(
+      `_This run is ${status}: these hold only if it counts as green (DEV-CHECK.md → Known 429s)._`,
+      '',
+    );
   lines.push(
-    '',
-    "### You don't need to test",
-    '',
     ...(done.length
       ? done.map((x) =>
-          x.status === 'off-dev'
-            ? `${item(x)} — covered off dev by ${x.provenBy.slice('off dev: '.length)}`
-            : item(x),
+          x.status === 'off-dev' ? `${item(x)} — covered off dev by ${x.note}` : item(x),
         )
       : ['Nothing yet.']),
   );
@@ -120,9 +123,7 @@ function renderCoverage(rows: RowResult[]): string[] {
     '',
     '### Needs you',
     '',
-    ...(you.length
-      ? you.map((x) => `${item(x)} — ${x.provenBy.slice('needs you: '.length)}`)
-      : ['Nothing.']),
+    ...(you.length ? you.map((x) => `${item(x)} — ${x.note}`) : ['Nothing.']),
   );
   return lines;
 }
@@ -133,11 +134,11 @@ export function renderReport(r: RunResult): string {
     `# Dev check — ${statusLine(r)}`,
     '',
     `Run \`${r.runId}\` · tier ${r.tier} · ${sec(r.durationMs)}`,
-    `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}\`` : ''}`,
+    `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);
-  lines.push(...renderCoverage(r.coverage));
+  lines.push(...renderCoverage(r.coverage, r.status));
   lines.push(
     '',
     '## Steps',

@@ -4,7 +4,7 @@
 // is a presigned GET: 200 before the delete, gone after (isGone — 403 on dev). Each URL is minted right
 // before its probe (5-minute TTL). The rows are PR 80's dev-test matrix.
 import { isGone, type DevAttachment } from '../api';
-import type { Ctx, Scenario } from '../scenario';
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
 const file = (filename: string, confirm = true) => ({
@@ -245,13 +245,12 @@ export const attachmentDelete: Scenario = {
       id: 'idempotent',
       entry: 'api',
       proves: ['idempotent'],
-      title: 'Deleting again is a quiet no-op; no console errors',
+      title: 'Deleting again is a quiet no-op',
       async run(ctx) {
         await ctx.api.writes.deleteAttachment(A.taskId, A.a1.id);
         await ctx.api.writes.deleteTask(B.taskId);
-        const errors = ctx.consoleErrors();
-        if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
       },
     },
+    noConsoleErrors,
   ],
 };

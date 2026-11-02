@@ -152,18 +152,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           scenario: sc.id,
           step: step.id,
           title: step.title,
-          status: 'pass',
+          status: 'skipped', // until it has run — a row never reads proven off a step that didn't
           ms: 0,
         };
         r.steps.push(res);
-        if (failed) {
-          res.status = 'skipped';
-          continue;
-        }
+        if (failed) continue;
         const s0 = d.now();
         try {
           await step.run(ctx);
           await Promise.all(pendingRecords); // a create's id is in the ledger before the next step reads it
+          res.status = 'pass';
         } catch (err) {
           failed = true;
           res.status = 'fail';
@@ -187,13 +185,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       r.crash = err instanceof Error ? (err.stack ?? err.message) : String(err);
     }
   } finally {
-    // Scored from whatever ran: a setup failure leaves every step-proven row skipped, never proven.
-    r.coverage = d.scenarios.flatMap((sc) => coverageOf(sc, r.steps));
     await Promise.allSettled(pendingRecords);
     await cleanup().catch((err: unknown) => {
       r.status = 'CRASH';
       r.crash = `${r.crash ? `${r.crash}\n` : ''}cleanup: ${err instanceof Error ? err.message : String(err)}`;
     });
+    // Scored after cleanup, from whatever ran: a setup failure leaves every step-proven row skipped, and a
+    // build change mid-run unproves them all — the steps may have driven another build.
+    r.coverage = d.scenarios.flatMap((sc) =>
+      coverageOf(sc, r.steps, r.codes.includes('DEV_CHANGED_MID_RUN')),
+    );
     await browser?.close().catch(() => undefined);
     r.durationMs = d.now() - t0;
     d.ledger.append({ run: d.runId, op: 'run-end', status: r.status });

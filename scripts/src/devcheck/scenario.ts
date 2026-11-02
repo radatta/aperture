@@ -75,6 +75,18 @@ export interface Ui {
   settle(): Promise<void>;
 }
 
+// A scenario's last step: the run's console so far is clean. Its own step, proving no row, so a console error
+// (the cold-start 429 burst, DEV-CHECK.md → Known 429s) fails it without unproving the feature's rows.
+export const noConsoleErrors: Step = {
+  id: 'no-console-errors',
+  title: 'No console errors on the way',
+  entry: 'ui',
+  async run(ctx) {
+    const errors = ctx.consoleErrors();
+    if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
+  },
+};
+
 // Resolves once every finite CSS transition/animation on the page has finished — a theme flip animates the
 // palette, and a shot taken mid-way mixes both themes. Infinite ones (spinners) are left out.
 const SETTLE = `Promise.all(document.getAnimations()

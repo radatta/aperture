@@ -32,7 +32,7 @@ export const fluxHistory: Scenario = {
       id: 'history',
       entry: 'ui',
       kind: 'nominal',
-      what: 'History lists both under Today, the stopped one marked',
+      what: 'History lists both, the stopped one marked',
     },
     {
       id: 'night-line',
@@ -46,7 +46,7 @@ export const fluxHistory: Scenario = {
       kind: 'nominal',
       what: 'Finishing a set on screen saves it',
       needsYou:
-        'headless Chromium has no camera — the set is recorded the way the stage would send it',
+        'the harness has no recorded pose clip to feed Chromium’s fake camera — the set is recorded the way the stage would send it',
     },
   ],
   steps: [

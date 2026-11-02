@@ -16,9 +16,4 @@ describe('SCENARIOS', () => {
   it('only smoke declares no rows', () => {
     expect(SCENARIOS.filter((s) => !s.rows.length).map((s) => s.id)).toEqual(MATRIX_EXEMPT);
   });
-
-  it('every off-dev row names a test that is really there', () => {
-    for (const row of SCENARIOS.flatMap((s) => s.rows).filter((r) => r.offDev))
-      expect(readFileSync(`${ROOT}${row.offDev!.file}`, 'utf8')).toContain(row.offDev!.test);
-  });
 });

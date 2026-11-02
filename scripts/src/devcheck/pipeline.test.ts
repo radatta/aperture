@@ -433,6 +433,19 @@ describe('runPipeline', () => {
     expect(r.coverage.map((x) => x.status)).toEqual(['skipped']);
   });
 
+  it('rows are scored after cleanup: a build change mid-run leaves a passing row unproven', async () => {
+    const w = world({ shells: [shell(SHA), shell('b'.repeat(40))] });
+    const sc: Scenario = {
+      ...scenario(async () => undefined)(w),
+      rows: [{ id: 'a', entry: 'api', kind: 'nominal', what: 'A' }],
+    };
+    sc.steps[0]!.proves = ['a'];
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.codes).toEqual(['DEV_CHANGED_MID_RUN']);
+    expect(r.steps[0]!.status).toBe('pass');
+    expect(r.coverage[0]).toMatchObject({ status: 'skipped', note: 'dev’s build changed mid-run' });
+  });
+
   it('carries the scenarios’ commit into the result', async () => {
     const r = await runPipeline(deps(world(), [], memLedger(), { scenarioSha: 'b'.repeat(40) }));
     expect(r.scenarioSha).toBe('b'.repeat(40));

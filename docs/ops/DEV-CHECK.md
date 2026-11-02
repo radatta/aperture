@@ -93,7 +93,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 - **The right build.** The dispatched `deploy-dev <sha> <key>` run for the SHA (matched by name; `dev` pushes were
   retired at dev-cutover) must succeed, then the edge must serve that SHA in `<meta name="aperture-build">`.
   In the page it reloads up to 3 times — the PWA's service worker can serve the previous shell first — else
-  `BUILD_MISMATCH_IN_PAGE`. If dev's build changes before the run ends, `DEV_CHANGED_MID_RUN`.
+  `BUILD_MISMATCH_IN_PAGE`. If dev's build changes before the run ends, `DEV_CHANGED_MID_RUN`, and no row
+  counts as proven — its steps may have driven another build.
 
 ## Known 429s
 
@@ -101,15 +102,16 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 ([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
 cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
 calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console errors: in the
-smoke scenario's _No console errors on the way_ row, and again in every later row that re-reads the run's cumulative
+smoke scenario's _No console errors on the way_ step, and again in every later step that re-reads the run's cumulative
 console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
 console line doesn't. The run still reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
 full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold in its `report.md`:**
 
 - the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
-- no row is `skipped`;
-- every `fail` row is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
-  or a later row reading `console errors: …` with exactly N `\|`-separated entries — nothing new after the burst;
+- no step is `skipped`;
+- every `fail` step is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
+  or a later scenario's (its last step, `noConsoleErrors`) reading `console errors: …` with exactly N `\|`-separated
+  entries — nothing new after the burst;
 - the _Console errors_ section lists exactly N lines, each containing `status of 429` or `failed (429)`, and N ≤ 16
   (one throttled call can log two lines — the resource's and the app's own `Error: … failed (429)`; a refetch loop or
   request storm, also all 429s, would exceed it);
@@ -210,7 +212,8 @@ ledger-guarded writes), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA t
 (makes a title findable on screen — never a cleanup key). A step throws to fail; the rest of that scenario is
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
-extends `pw-types.ts`.
+extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console check is its own
+step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove.
 
 ### Rows
 
@@ -223,7 +226,8 @@ A row is one entry point × one case, as the user would say it (`what`), `nomina
 - **Off dev** (`offDev: { file, test, why }`) — **if dev can produce the failure naturally, prove it on dev; if
   it can't, a named unit test covers it; no test-only switches in shipped code.** Bad input, size limits, an
   expired link or another user's id happen on dev, so they're proven there; S3 refusing a delete doesn't. `file`
-  is repo-relative, `test` the `it()` title verbatim; both are checked. One test per row — a failure with a UI
+  is a repo-relative `.test.ts(x)`, `test` the title of a runnable `it()`/`test()` in it, verbatim (not `it.skip`,
+  `it.todo` or a bare string); both are checked. One test per row — a failure with a UI
   half and a BFF half is two rows.
 - **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
   Safari extension, a camera, a Google account, MCP until the next PR.
@@ -249,7 +253,8 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 
 Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json`, `shots/`.
 `report.md`'s _Feature coverage_ ends in two lists — _You don't need to test_ (proven on dev, and off dev with its
-test) and _Needs you_ — that `report-<branch>.md` and the `CC done` notes paste as they are.
+test) and _Needs you_ — that `report-<branch>.md` and the `CC done` notes paste as they are. On a run that isn't
+PASS they carry its verdict: they hold only if the run counts as green (_Known 429s_).
 Shared, in the main checkout: the two ledgers and `run.lock`. Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session, mode 600).
 

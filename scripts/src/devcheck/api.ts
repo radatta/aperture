@@ -13,7 +13,6 @@ export const isGone = (status: number): boolean => status === 403 || status === 
 
 // The slice of @aperture/shared's Task the check reads (scripts doesn't depend on shared; the contract
 // tests on both sides own the full shape).
-
 export interface DevTask {
   id: string;
   title: string;

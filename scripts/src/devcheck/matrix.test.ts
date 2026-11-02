@@ -126,8 +126,34 @@ describe('matrixProblems', () => {
       ),
     ).toEqual([
       "feat: row a names a test file that doesn't exist: app/missing.test.ts",
-      'feat: row b: test "something else" not found in app/a.test.ts',
+      'feat: row b: no it()/test() titled "something else" in app/a.test.ts',
       'feat: row c is off dev but its file, test or why is empty',
+    ]);
+  });
+
+  it('the named test must be a runnable it()/test() in a test file — not skipped, todo or a bare string', () => {
+    files['/repo/app/b.test.ts'] =
+      `it.skip('skipped one', () => {});\nit.todo('todo one');\nconst s = 'bare one';\ntest(\n  "multi line one", () => {});`;
+    files['/repo/app/notes.ts'] = `it('in a source file', () => {});`;
+    const off = (test: string, file = 'app/b.test.ts') => ({ ...OFF, file, test });
+    expect(
+      problems(
+        sc(
+          [
+            row('a', { offDev: off('skipped one') }),
+            row('b', { offDev: off('todo one') }),
+            row('c', { offDev: off('bare one') }),
+            row('d', { offDev: off('multi line one') }),
+            row('e', { offDev: off('in a source file', 'app/notes.ts') }),
+          ],
+          [],
+        ),
+      ),
+    ).toEqual([
+      'feat: row a: no it()/test() titled "skipped one" in app/b.test.ts',
+      'feat: row b: no it()/test() titled "todo one" in app/b.test.ts',
+      'feat: row c: no it()/test() titled "bare one" in app/b.test.ts',
+      "feat: row e names app/notes.ts, which isn't a test file",
     ]);
   });
 
@@ -181,6 +207,16 @@ describe('coverageOf', () => {
       'off-dev',
       'needs-you',
     ]);
+  });
+
+  it('a build change mid-run unproves every passing row, and says why', () => {
+    const c = coverageOf(s, [res('d', 'pass'), res('v', 'pass')], true);
+    expect(c.map((x) => x.status)).toEqual(['skipped', 'skipped', 'off-dev', 'needs-you']);
+    expect(c[0]!.note).toBe('dev’s build changed mid-run');
+  });
+
+  it('a row no step names reads "no proving step"', () => {
+    expect(coverageOf(sc([row('x')], []), [])[0]!.provenBy).toBe('no proving step');
   });
 
   it('ignores another scenario’s step of the same id', () => {

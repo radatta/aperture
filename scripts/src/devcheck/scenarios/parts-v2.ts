@@ -1,8 +1,8 @@
 // Parts v2a on the deployed app: the task modal's unsaved-changes guard across a parent and its parts,
 // and Add parts' plain-words errors. The tasks are made through the API (ledger-recorded, so cleanup
 // deletes them); nothing is added through the UI. The calendar half (part block titles, the due marker)
-// needs a Google account the test user doesn't have — that stays a Claude-in-Chrome check.
-import type { Ctx, Scenario } from '../scenario';
+// needs a Google account the test user doesn't have — a Needs you row.
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const parentTitle = (nonce: string) => `devcheck ${nonce} P2`;
 const partTitle = (nonce: string) => `devcheck ${nonce} read`;
@@ -148,9 +148,8 @@ export const partsV2: Scenario = {
           .sort();
         if (JSON.stringify(titles) !== JSON.stringify(want))
           throw new Error(`server has ${JSON.stringify(titles)}`);
-        const errors = ctx.consoleErrors();
-        if (errors.length) throw new Error(`console errors: ${errors.join(' | ')}`);
       },
     },
+    noConsoleErrors,
   ],
 };
