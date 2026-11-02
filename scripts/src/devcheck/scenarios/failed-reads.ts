@@ -659,8 +659,13 @@ export const failedReads: Scenario = {
         if (left.length) throw new Error(`${left.length} timer(s) still running on the test user`);
         // The app's day, not the calendar's: before the day start (4am) the session belongs to yesterday.
         const { dayStartHour } = await ctx.api.reads.getSettings();
-        const day = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
-        const done = (await ctx.api.reads.listSessionsForDay(day))
+        const now = Date.now() - dayStartHour * 3_600_000;
+        // And the day before: a run that crosses the day start filed its timer under yesterday.
+        const days = [laDay(new Date(now)), laDay(new Date(now - 86_400_000))];
+        const sessions = (
+          await Promise.all(days.map((d) => ctx.api.reads.listSessionsForDay(d)))
+        ).flat();
+        const done = sessions
           .filter((x) => x.status === 'completed' && x.endedAt !== null)
           .sort((a, b) => b.endedAt! - a.endedAt!)[0];
         if (!done) throw new Error('the stopped timer is not in today’s sessions');

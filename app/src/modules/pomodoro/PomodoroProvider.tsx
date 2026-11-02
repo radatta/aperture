@@ -18,7 +18,6 @@ import { chime, unlockAudio } from './chime';
 // so several finishing at once don't spawn a pile of break timers. On load, adopts still-running
 // sessions and flags long-silent ones for keep/discard. Only `work` accrues to the task (stub side).
 const HEARTBEAT_MS = 15_000;
-const JUST_FINISHED_SEC = 3; // the finish beat fires only this close to the block's end
 const MISSED_BEATS_WARN = 2; // ≥30 s unheard — well inside STALE_MS, so it warns before the server caps time
 
 const without = <T,>(rec: Record<string, T>, id: string) => {
@@ -179,25 +178,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     const doneIds = doneKey ? doneKey.split(',') : [];
     const fresh = doneIds.filter((id) => !chimedIds.has(id));
     if (fresh.length === 0) return;
-    // One beat as a block finishes credits its last few seconds (a done timer stops beating, and a later stop
-    // or extend resets the clock first). Only right at the finish: the server credits everything since the
-    // last beat, so a block that ended while the phone slept, or one adopted already done, gets no beat.
-    const { sessions: live, targetFor: tf } = beatRef.current;
-    const t = Date.now();
-    for (const id of fresh) {
-      const s = live.find((x) => x.id === id);
-      if (!s || activeSec(s, false, t) - tf(s) > JUST_FINISHED_SEC) continue;
-      api.heartbeatSession(id).then(
-        (next) => {
-          upsert(next);
-          setMissed((m) => without(m, id));
-        },
-        () => setMissed((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 })),
-      );
-    }
     chime();
     setChimedIds((c) => new Set([...c, ...fresh]));
-  }, [doneKey, chimedIds, api, upsert]);
+  }, [doneKey, chimedIds]);
 
   const startFocus = useCallback(
     (input?: StartFocusInput) => {
@@ -295,18 +278,16 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     [api, upsert, clear, fail],
   );
 
-  // The server credits everything since the last beat on a stop. A paused timer, or one sitting on "done",
-  // hasn't beaten since, so its clock is reset first (resumeSession credits nothing) — the pause or the
-  // wait on "done" never counts as worked time.
+  // The server credits everything since the last beat on a stop. A paused timer hasn't beaten since its
+  // pause captured the worked time, so its clock is reset first (resumeSession credits nothing) — the pause
+  // never counts. A timer sitting on "done" is NOT reset: if the block ended behind a locked phone, its last
+  // stretch was never beaten either, and a reset would drop it. It over-credits the wait on "done" instead,
+  // as before; capping that needs a capped heartbeat on the server (follow-up).
   const stop = useCallback(
     (id: string, status: 'completed' | 'discarded' = 'completed') => {
       clear(id);
-      const { sessions: live, pausedIds: paused, targetFor: tf } = beatRef.current;
-      const s = live.find((x) => x.id === id);
-      const idle =
-        status === 'completed' &&
-        (paused.has(id) || (!!s && remainingSec(s, tf(s), false, Date.now()) <= 0));
-      return (idle ? api.resumeSession(id).then(() => undefined) : Promise.resolve())
+      const reset = status === 'completed' && beatRef.current.pausedIds.has(id);
+      return (reset ? api.resumeSession(id).then(() => undefined) : Promise.resolve())
         .then(() => api.stopSession(id, status))
         .then(
           () => {
