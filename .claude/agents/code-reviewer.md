@@ -35,7 +35,7 @@ Be concise. Don't restate the diff. Don't pad with generic checklists. A local-d
 - **Dev-test matrix** (when the diff touches `app/`, `lambdas/`, the MCP tools or a devcheck scenario; rules: `docs/ops/DEV-CHECK.md` → _Rows_):
   - **matrix vs diff** — every changed UI action, BFF method and MCP tool appears in some row of the feature's scenario, and the edge-case checklist (empty/max/invalid, cancel, repeat, survives reload, neighbour unaffected, ownership) was considered;
   - **scenario vs matrix** — each step's `entry` is how it really drives the app (a `ui` step that only calls `ctx.api` is a mislabelled proof), and no UI row rests on API steps alone;
-  - **off-dev rows** name a test that exists _and asserts that failure_, not a nearby one, for a failure dev truly can't produce — one dev can produce (bad input, limits, an expired link, another user's id) belongs on dev;
+  - **off-dev rows** name a test that exists _and asserts that failure_, not a nearby one, for a failure dev truly can't produce — one dev can produce (bad input, limits, an expired link, another user's id) belongs on dev — or for a case whose path a dev-proven row of the same scenario already runs (`why`: `same path as <row> (proven on dev)`; check the claim against DEV-CHECK.md → _Rows_: same client branch, same BFF method unless injected, never a new entry point, server effect or untaken branch);
   - **no fault injection** — no test-only switch, env flag or failure branch in `app/` or `lambdas/` added to make a failure reachable;
   - a diff that changes a screen an existing scenario drives updates that scenario.
 

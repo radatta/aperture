@@ -1,9 +1,10 @@
 // A failed read never fails silently (docs/product/CONVENTIONS.md → Failed reads). Dev proves the one path the
 // stub can't run — real fetch → http client → query layer → screen — once per distinct path: a read whose 429
-// is retried away, a read that keeps failing (error, then Retry), a write whose 429 is retried away, and a
-// Pomodoro call that fails. The harness fails dev's /api/<method> itself (ctx.intercept — nothing in the app
+// the http client retries away, a read whose dropped connection the query layer retries and then shows (with
+// Retry), a write whose 429 is retried away, and a Pomodoro stop that fails (then a paused stop's credit). The harness fails dev's /api/<method> itself (ctx.intercept — nothing in the app
 // switches). Every other case runs one of those paths on another screen, so its named test covers it
 // (DEV-CHECK.md → Rows: same path as a dev-proven row).
+import type { DevSession } from '../api';
 import { laDay, noConsoleErrors, type Ctx, type Row, type Scenario } from '../scenario';
 
 // Counted on /settings: task cards each mount a categories reader, and React Query refetches a failed query
@@ -14,6 +15,18 @@ const title = (nonce: string) => `devcheck-fr ${nonce}`;
 // The app gets an injected response a moment after the route counts it, then React renders: wait that out
 // before asserting something is NOT on screen.
 const SETTLE_MS = 1_500;
+const PAUSE_MS = 4_000;
+
+// The completed sessions before this run's timer, so the check after it finds this run's own.
+let completedBefore = new Set<string>();
+const isCompleted = (x: DevSession) => x.status === 'completed' && x.endedAt !== null;
+// The app's day, not the calendar's; and the day before, for a run that crossed the day start.
+async function sessionsAround(ctx: Ctx): Promise<DevSession[]> {
+  const { dayStartHour } = await ctx.api.reads.getSettings();
+  const now = Date.now() - dayStartHour * 3_600_000;
+  const days = [laDay(new Date(now)), laDay(new Date(now - 86_400_000))];
+  return (await Promise.all(days.map((d) => ctx.api.reads.listSessionsForDay(d)))).flat();
+}
 
 const button = (ctx: Ctx, name: string) =>
   ctx.page.getByRole('button', { name, exact: true }).first();
@@ -92,40 +105,46 @@ export const failedReads: Scenario = {
       kind: 'edge',
       what: 'A stop that fails keeps the timer and says “Couldn’t stop”; Stop again ends it on the server',
     },
+    {
+      id: 'network-error',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A dropped connection on a read is retried twice by the query layer, then shows the same line',
+    },
     row(
-      'network-error',
-      'A dropped connection on a read is retried, then shows the same line',
-      RETRY,
-      'retries a 5xx and a network failure on reads, up to two more tries',
-      'same path as error-shown (proven on dev) — only the error type differs, and the policy is a pure function',
+      'throttle-gives-up',
+      'A read whose 429s keep coming is retried twice, then fails',
+      HTTP,
+      'gives up after two retries and throws the 429',
+      'same path as retry-recovers (proven on dev): the http client’s 429 loop, here running out',
     ),
     row(
       'refusal-not-retried',
       'A 400 on a read shows the line at once, without retrying',
       RETRY,
       'does not retry a 400 refusal, a 401, a 404 or a plain Error at the query layer',
-      'same path as error-shown (proven on dev) — only the policy’s answer differs, and it is a pure function',
+      'same path as error-shown (proven on dev): the query layer’s retry decision, here declining — a pure function',
     ),
     row(
       'write-5xx-not-retried',
       'A write that gets a 500 or a dropped connection is sent once',
       HTTP,
       'never retries a write on a 500 or a dropped connection — it may have landed',
-      'same path as write-429-retried (proven on dev) — the http client’s other branch',
+      'dev never answers a write with a 500 or drops it on its own; the http client branch is the whole case and the test drives it',
     ),
     row(
       'mutation-not-retried',
       'The query layer never retries a write',
       RETRY,
       'the app QueryClient wires the policy and leaves mutations un-retried',
-      'a setting of the client; write-429-retried (proven on dev) runs the same wiring',
+      'a static setting of the client: no request on dev reaches it (a 429 is retried below it, and dev never fails a write on its own)',
     ),
     row(
       'keeps-data',
       'A failed background refetch keeps the loaded data and shows no error',
       FR,
       'a failed background refetch keeps the loaded categories and shows no error',
-      READ_PATH,
+      'same path as error-shown (proven on dev): the same failed read, landing on a screen that already has data — the test asserts it stays quiet',
     ),
     row(
       'settings-fails',
@@ -258,14 +277,27 @@ export const failedReads: Scenario = {
       'Two failed heartbeats mark the timer “not syncing”; a good one clears it',
       POMO,
       'two failed heartbeats mark the timer not syncing; a good one clears it',
-      DOCK_PATH,
+      'same path as stop-fails (proven on dev): a Pomodoro call failing — the miss counting on top is timer logic the fake-timer test drives',
+    ),
+    {
+      id: 'paused-stop',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Stopping a paused timer never counts the pause as worked time',
+    },
+    row(
+      'capture-500',
+      'A capture whose save fails says “Couldn’t save” and puts the text back',
+      'app/src/modules/capture/CaptureBar.test.tsx',
+      'puts the text back and says so when the write fails',
+      'same path as write-429-retried (proven on dev): the same capture write, here failing',
     ),
     row(
-      'paused-stop',
-      'Stopping a paused timer never counts the pause as worked time',
-      POMO,
-      'stopping a paused timer resets its clock first, so the pause is never credited',
-      'the fix is which calls go to the server and in what order, and the test asserts exactly that; on dev it costs a 20 s pause',
+      'defaults-notice',
+      'With settings failing, every screen says “running on defaults”, with Retry',
+      'app/src/components/AppShell.test.tsx',
+      'shows the defaults notice with Retry; a pending one shows nothing',
+      READ_PATH,
     ),
     row(
       'day-shape-failed',
@@ -344,10 +376,12 @@ export const failedReads: Scenario = {
     {
       id: 'shown',
       entry: 'ui',
-      proves: ['error-shown'],
-      title: 'listCategories keeps failing → the line after 3 tries',
+      proves: ['error-shown', 'network-error'],
+      title:
+        'listCategories’ connection keeps dropping → the query layer retries twice, then the line',
       async run(ctx) {
-        const i = await ctx.intercept('listCategories');
+        // Dropped, not 429: a 429 is retried inside the http client and never reaches the query layer's retry.
+        const i = await ctx.intercept('listCategories', { abort: true });
         await ctx.ui.goto('/settings');
         await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
         const tries = i.hits(); // at the moment it shows, before any later reader refetches
@@ -391,6 +425,7 @@ export const failedReads: Scenario = {
       title: 'Start a focus (leftover timers cleared first)',
       async run(ctx) {
         await clearTimers(ctx);
+        completedBefore = new Set((await sessionsAround(ctx)).filter(isCompleted).map((x) => x.id));
         await ctx.ui.goto('/settings');
         await ctx.page.locator(FOCUS).first().click();
         await button(ctx, 'Pause').waitFor({ timeout: 15_000 });
@@ -399,8 +434,8 @@ export const failedReads: Scenario = {
     {
       id: 'stop',
       entry: 'ui',
-      proves: ['stop-fails'],
-      title: 'A failed stop keeps the timer and says so; Stop again ends it',
+      proves: ['stop-fails', 'paused-stop'],
+      title: 'A failed stop keeps the timer and says so; then paused, Stop ends it',
       async run(ctx) {
         const i = await ctx.intercept('stopSession');
         try {
@@ -411,6 +446,9 @@ export const failedReads: Scenario = {
         } finally {
           await i.release();
         }
+        await button(ctx, 'Pause').click();
+        await button(ctx, 'Resume').waitFor({ timeout: 15_000 });
+        await wait(PAUSE_MS);
         await button(ctx, 'Stop').click();
         await ctx.page.locator(FOCUS).first().waitFor({ timeout: 15_000 });
       },
@@ -419,19 +457,21 @@ export const failedReads: Scenario = {
       id: 'no-timer-left',
       entry: 'api',
       proves: ['stop-fails'],
-      title: 'The server has no running timer left, and has the stopped one',
+      title: 'No timer left running; this run’s stopped one wasn’t credited its pause',
       async run(ctx) {
         const left = await ctx.api.reads.listRunningSessions();
         if (left.length) throw new Error(`${left.length} timer(s) still running on the test user`);
-        // The app's day, not the calendar's; and the day before, for a run that crossed the day start.
-        const { dayStartHour } = await ctx.api.reads.getSettings();
-        const now = Date.now() - dayStartHour * 3_600_000;
-        const days = [laDay(new Date(now)), laDay(new Date(now - 86_400_000))];
-        const sessions = (
-          await Promise.all(days.map((d) => ctx.api.reads.listSessionsForDay(d)))
-        ).flat();
-        if (!sessions.some((s) => s.status === 'completed' && s.endedAt !== null))
-          throw new Error('the stopped timer is not in the test user’s sessions');
+        const mine = (await sessionsAround(ctx))
+          .filter((x) => isCompleted(x) && !completedBefore.has(x.id))
+          .sort((a, b) => b.endedAt! - a.endedAt!)[0];
+        if (!mine) throw new Error('this run’s stopped timer is not among the completed sessions');
+        const wallSec = (mine.endedAt! - mine.startedAt) / 1000;
+        const creditedSec = mine.activeMinutes * 60;
+        // Short of the wall clock by at least the pause, less 1.5 s for the pause beat's own round trip.
+        if (creditedSec > wallSec - PAUSE_MS / 1000 + 1.5)
+          throw new Error(
+            `credited ${creditedSec.toFixed(1)} s of a ${wallSec.toFixed(1)} s timer`,
+          );
       },
     },
     noConsoleErrors,

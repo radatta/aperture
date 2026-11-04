@@ -54,6 +54,16 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
           p(
             `row ${row.id} is off dev but step ${by.map((s) => s.id).join(', ')} proves it — if dev can produce it, prove it on dev`,
           );
+        // "same path as <row>" (DEV-CHECK.md → Rows) must name a row of this scenario that dev proves.
+        const same = /^same path as ([\w-]+)/.exec(why);
+        if (same) {
+          const target = sc.rows.find((r) => r.id === same[1]);
+          const proven = sc.steps.some((s) => s.proves?.includes(same[1]!));
+          if (!target || target.offDev || target.needsYou !== undefined || !proven)
+            p(
+              `row ${row.id} is off dev as the same path as ${same[1]}, which dev doesn't prove here`,
+            );
+        }
       } else if (!by.some((s) => s.entry === row.entry))
         p(
           `row ${row.id} (${row.entry}) has no proving step through ${row.entry}${by.length ? ` — only ${by.map((s) => `${s.id} (${s.entry})`).join(', ')}` : ''}`,

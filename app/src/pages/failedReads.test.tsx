@@ -156,12 +156,14 @@ describe('a failed background refetch', () => {
   it('a failed background refetch keeps the loaded categories and shows no error', async () => {
     const user = userEvent.setup();
     const api = stub();
+    let qc: ReturnType<typeof useQueryClient> | undefined;
     function Refetch() {
-      const qc = useQueryClient();
+      qc = useQueryClient();
+      const client = qc;
       return (
         <button
           type="button"
-          onClick={() => void qc.invalidateQueries({ queryKey: qk.categories() })}
+          onClick={() => void client.invalidateQueries({ queryKey: qk.categories() })}
         >
           refetch
         </button>
@@ -180,7 +182,8 @@ describe('a failed background refetch', () => {
     api.listCategories = () => (failed++, Promise.reject(new Error('listCategories failed (503)')));
     await user.click(screen.getByRole('button', { name: 'refetch' }));
     await waitFor(() => expect(failed).toBe(1));
-    await new Promise((r) => setTimeout(r, 50));
+    // The cache has recorded the failure: the query is in error, with its old data.
+    await waitFor(() => expect(qc!.getQueryState(qk.categories())?.status).toBe('error'));
     expect(screen.getByText('Admin')).toBeTruthy(); // still there
     expect(screen.queryByText(/Couldn.t load categories/)).toBeNull();
   });

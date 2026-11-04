@@ -274,7 +274,7 @@ real 429 still lands in _Throttled (429)_. Only a dropped real connection inside
 request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last in `SCENARIOS` for this reason. It
 starts and stops one ad-hoc focus timer through the dock, which leaves a seconds-long completed session in the test
 user's history each run. Sessions have no delete method, so they're not ledgered; a timer an aborted run left running
-is stopped through the dock before the timer steps, judged by the server's list.
+is stopped or discarded through the dock before the timer steps, judged by the server's list.
 
 ### Rows
 
@@ -286,14 +286,12 @@ A row is one entry point × one case, as the user would say it (`what`), `nomina
   it must pass. An `api` step can verify a UI row's server half, never stand in for the UI.
 - **Off dev** (`offDev: { file, test, why }`) — **if dev can produce the failure naturally, prove it on dev; if
   it can't, a named unit test covers it; no test-only switches in shipped code.** One exception, so a feature
-  with many screens doesn't prove the same path on each: a case whose whole path a dev-proven row of the same
-  scenario already runs (another screen showing the same error state, another call failing the same way) may be
-  covered off dev — its `why` names that row (`same path as <row> (proven on dev)`). Dev proves each distinct
-  path once; the tests prove each screen. Bad input, size limits, an
-  expired link or another user's id happen on dev, so they're proven there; S3 refusing a delete doesn't. `file`
-  is a repo-relative `.test.ts(x)`, `test` the title of a runnable `it()`/`test()` opening its own line in it, verbatim (not `it.skip`,
-  `it.todo` or a bare string); both are checked. One test per row — a failure with a UI
-  half and a BFF half is two rows.
+  with many screens doesn't prove the same path on each: a case may be covered off dev when a dev-proven row of
+  the **same scenario** already runs everything only dev can run for it: the same client branch (the http
+  client's 429 loop, the query layer's retry, or no retry) and, when the failure isn't injected by the harness,
+  the same BFF method. What differs (another screen's copy, a pure decision) must run entirely in the named
+  test. Its `why` starts `same path as <row> (proven on dev)`, and `matrix.ts` checks that row exists and dev
+  proves it. The exception never covers a new entry point, a server-side effect, or a branch no dev row takes.
 - **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
   Safari extension, a camera, a Google account.
 

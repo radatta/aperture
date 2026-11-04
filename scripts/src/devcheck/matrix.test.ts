@@ -132,6 +132,27 @@ describe('matrixProblems', () => {
     ]);
   });
 
+  it('“same path as <row>” must name a row of the same scenario that dev proves', () => {
+    const same = (target: string) => ({ ...OFF, why: `same path as ${target} (proven on dev)` });
+    expect(
+      problems(
+        sc(
+          [
+            row('shown'),
+            row('other', { offDev: OFF }),
+            row('ok', { offDev: same('shown') }),
+            row('missing', { offDev: same('nope') }),
+            row('via-off', { offDev: same('other') }),
+          ],
+          [step('s', 'ui', ['shown'])],
+        ),
+      ),
+    ).toEqual([
+      "feat: row missing is off dev as the same path as nope, which dev doesn't prove here",
+      "feat: row via-off is off dev as the same path as other, which dev doesn't prove here",
+    ]);
+  });
+
   it('the named test must be a runnable it()/test() in a test file — not skipped, todo or a bare string', () => {
     files['/repo/app/b.test.ts'] =
       `it.skip('skipped one', () => {});\nit.todo('todo one');\nconst s = 'bare one';\n  // it('commented one', () => {});\ntest(\n  "multi line one", () => {});`;
