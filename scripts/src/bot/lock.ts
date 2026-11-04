@@ -65,7 +65,18 @@ async function makeTag(api: Api, holder: Holder): Promise<string> {
 const describe = (h: Holder | null) =>
   h ? `${h.branch} @ ${h.sha.slice(0, 7)} until ${h.expiresAt}` : 'an unreadable holder';
 
-// Acquire (or, if this branch already holds it, renew). Throws when another live holder has it.
+// Another live branch holds the lock. Typed, so the CLI can print who to tell before the error line.
+export class LockHeld extends Error {
+  readonly holder: Holder | null;
+  constructor(holder: Holder | null) {
+    super(
+      `dev is locked by ${describe(holder)} — \`pnpm bot lock wait\` (in the background) wakes you when it frees`,
+    );
+    this.holder = holder;
+  }
+}
+
+// Acquire (or, if this branch already holds it, renew). Throws LockHeld when another live holder has it.
 export async function acquire(
   api: Api,
   branch: string,
@@ -87,10 +98,7 @@ export async function acquire(
       await api('PATCH', `${R}/git/refs/${LOCK_REF}`, { sha: tagSha, force: true });
       return holder;
     }
-    if (!isExpired(cur.holder, nowMs))
-      throw new Error(
-        `dev is locked by ${describe(cur.holder)} — \`pnpm bot lock wait\` (in the background) wakes you when it frees`,
-      );
+    if (!isExpired(cur.holder, nowMs)) throw new LockHeld(cur.holder);
     // Expired: delete only if it still points at the tag we judged expired (narrows the take-over race).
     const again = await readLock(api);
     if (again && again.tagSha === cur.tagSha) {
@@ -157,7 +165,7 @@ export function holderLine(h: Holder, nowMs: number, session?: string): string {
 }
 
 // Polls every 30 s, and wakes at the holder's expiry when that comes sooner. Read-only: taking the lock is still
-// `deploy-dev`'s acquire. Transient read errors keep it polling; three in a row throw.
+// `deploy-dev`'s acquire. A failed read waits a full poll before the next; three in a row throw (exit 1).
 export async function waitForLock(
   api: Api,
   branch: string,
@@ -176,11 +184,11 @@ export async function waitForLock(
     try {
       cur = await readLock(api);
       errors = 0;
-      o.onRead?.(cur);
     } catch (err) {
       if (++errors >= 3) throw err;
       log(`lock read failed (${(err as Error).message}) — retrying`);
     }
+    if (cur !== undefined) o.onRead?.(cur);
     const now = clock.now();
     if (cur !== undefined) {
       if (!cur) return { outcome: 'free', holder: null };
@@ -194,9 +202,11 @@ export async function waitForLock(
       }
     }
     if (now >= deadline) return { outcome: 'gave-up', holder: last };
-    const untilExpiry = last ? Date.parse(last.expiresAt) - now + 1000 : pollMs;
-    // At least 1 s between reads, so an error streak past the expiry can't spin through its three tries.
-    await clock.sleep(Math.max(0, Math.min(pollMs, Math.max(1000, untilExpiry), deadline - now)));
+    // Wake at the holder's expiry only after a good read; after a failed one, a full poll (a GitHub blip at the
+    // expiry must not burn the three tries in three seconds).
+    const untilExpiry =
+      cur !== undefined && last ? Date.parse(last.expiresAt) - now + 1000 : pollMs;
+    await clock.sleep(Math.max(0, Math.min(pollMs, untilExpiry, deadline - now)));
   }
 }
 
@@ -209,12 +219,12 @@ export function parseWaitMax(v: string | undefined): number {
   return min * 60_000;
 }
 
-// The two messages a queued session sends, once each (docs/ops/HUB.md → Lock etiquette): the hub always, the
-// holder only when the board names its live session.
+// The two messages a queued session sends at once, once each (docs/ops/HUB.md → Lock etiquette): the hub always,
+// the holder only when the board names its live session. Printed with the foreground refusal (LockHeld).
 export function queueNotes(branch: string, h: Holder, hub?: string, session?: string): string[] {
   const who = session ? `${h.branch} (${session})` : h.branch;
   return [
-    `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}, up to 45 min."`,
+    `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}; lock wait running."`,
     ...(session
       ? [
           `SendMessage ${session}: "Queued behind you for the dev lock (${branch}) — release at phase 10 rather than letting the TTL run; no rush."`,

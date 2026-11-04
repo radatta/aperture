@@ -19,8 +19,9 @@ branch=$(jq -r '.branch // empty' "$BOARD_DIR/sessions/$PID.json" 2>/dev/null)
 {
   echo "Session board (\`scripts/board/board.sh status\` for the full view):"
   cat "$BOARD_DIR/status.line" 2>/dev/null
-  # Two read-only calls of at most 3 s each, skipped when the cache is under a minute old (the hook's timeout is 10 s).
-  bash "$B/devlock.sh" refresh --max-age 60 --timeout 3 >/dev/null 2>&1
+  # Two read-only calls of at most 2 s each, skipped when the cache is under a minute old: the hook's timeout is
+  # 10 s, and an overrun loses every line below, not just this one.
+  bash "$B/devlock.sh" refresh --max-age 60 --timeout 2 >/dev/null 2>&1
   bash "$B/devlock.sh" line 2>/dev/null
   name=$(jq -r '.name // empty' "$BOARD_DIR/sessions/$PID.json" 2>/dev/null)
   if [ -n "$name" ] && [ "$name" = "$(jq -r '.name // empty' "$B/hub.json" 2>/dev/null)" ]; then

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeApi, fakeClock, ghError } from './fakes.ts';
 import {
+  LockHeld,
   TTL_MS,
   acquire,
   parseWaitMax,
@@ -82,9 +83,10 @@ describe('dev lock', () => {
 
   it('refuses while another branch holds it, naming the holder', async () => {
     const g = github(live('dev-e2e'));
-    await expect(acquire(g.api, 'ci-bot', SHA, NOW)).rejects.toThrow(
-      /locked by dev-e2e .*`pnpm bot lock wait`/,
-    );
+    const err = await acquire(g.api, 'ci-bot', SHA, NOW).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LockHeld); // typed: the CLI prints whom to tell from its holder
+    expect((err as LockHeld).holder?.branch).toBe('dev-e2e');
+    expect(String(err)).toMatch(/locked by dev-e2e .*`pnpm bot lock wait`/);
     expect(g.holder()?.branch).toBe('dev-e2e');
   });
 
@@ -249,6 +251,56 @@ describe('lock wait', () => {
     );
   });
 
+  it('rides out a GitHub blip at the holder’s expiry, a full poll apart', async () => {
+    const clock = fakeClock(NOW);
+    // Held until 45 s; then 40 s of 502s; then the ref is gone.
+    const g = timeline(clock, (t) =>
+      t < NOW + 45_000 ? until('flux', 45_000) : t < NOW + 85_000 ? 'error' : null,
+    );
+    const r = await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN });
+    expect(r.outcome).toBe('free');
+    expect(clock.t).toBe(NOW + 106_000); // 0, 30, 46 (502), 76 (502), 106
+  });
+
+  it('an unreadable holder counts as expired', async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, () => ({ branch: 'flux', sha: SHA }) as Holder);
+    expect(await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN })).toEqual({
+      outcome: 'expired',
+      holder: null,
+    });
+  });
+
+  it('follows real renew, release and a new taker on the lock while it waits', async () => {
+    const g = github(live('flux'));
+    // A clock whose sleeps run what other sessions do at those times.
+    const events: [number, () => Promise<unknown>][] = [
+      [NOW + 30_000, () => renew(g.api, 'flux', NOW + 30_000)],
+      [
+        NOW + 60_000,
+        () => release(g.api, 'flux').then(() => acquire(g.api, 'flux-2', SHA, NOW + 60_000)),
+      ],
+      [NOW + 90_000, () => release(g.api, 'flux-2')],
+    ];
+    const clock = {
+      t: NOW,
+      now: () => clock.t,
+      sleep: async (ms: number) => {
+        clock.t += ms;
+        while (events.length && (events[0]?.[0] ?? Infinity) <= clock.t)
+          await events.shift()?.[1]();
+      },
+    };
+    const lines: string[] = [];
+    const r = await waitForLock(g.api, 'ci-bot', clock, {
+      maxMs: 45 * MIN,
+      log: (l) => lines.push(l),
+    });
+    expect(r.outcome).toBe('free');
+    expect(clock.t).toBe(NOW + 90_000);
+    expect(lines.map((l) => l.match(/locked by (\S+)/)?.[1])).toEqual(['flux', 'flux', 'flux-2']);
+  });
+
   it("reports each read to onRead (the board's lock cache)", async () => {
     const clock = fakeClock(NOW);
     const g = timeline(clock, (t) => (t < NOW + 30_000 ? until('flux', 30 * MIN) : null));
@@ -270,7 +322,7 @@ describe('lock wait', () => {
   it('writes the hub note always and the holder note only for a known session', () => {
     const h = until('flux', 30 * MIN);
     expect(queueNotes('ci-bot', h, 'dispatch')).toEqual([
-      'SendMessage dispatch: "[lock] ci-bot — queued behind flux, up to 45 min."',
+      'SendMessage dispatch: "[lock] ci-bot — queued behind flux; lock wait running."',
     ]);
     const both = queueNotes('ci-bot', h, 'dispatch', 'flux-session');
     expect(both).toHaveLength(2);

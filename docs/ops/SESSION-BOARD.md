@@ -165,9 +165,10 @@ longer Bash timeout or run them in the background.) Slots whose wrapper died are
 
 - **`scripts/board/devlock.sh refresh`** peeks read-only with the container's own credential —
   `git ls-remote origin refs/locks/dev`, then `gh api …/git/tags/<sha>` for the holder — each call under
-  `timeout` (4 s; the hook passes 3). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
+  `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
   the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
-  `failedAt`. No bot key, no token mint, no node.
+  `failedAt`; a peek that finds the bot wrote while it was asking keeps the bot's write. No bot key, no token
+  mint, no node.
 - **The bot** (`scripts/src/bot/lock-cache.ts`) writes it on every `pnpm bot lock …`, `lock wait` poll and
   `deploy-dev` lock change.
 

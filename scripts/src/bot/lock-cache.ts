@@ -31,8 +31,8 @@ export function boardDir(run: Run): string | null {
 export function writeLockCache(dir: string | null, holder: Holder | null, nowMs: number): void {
   if (!dir || !existsSync(dir)) return;
   const file = join(dir, 'devlock.json');
-  const body: LockCache = { v: 1, t: new Date(nowMs).toISOString(), source: 'bot', holder };
   try {
+    const body: LockCache = { v: 1, t: new Date(nowMs).toISOString(), source: 'bot', holder };
     writeFileSync(`${file}.tmp.${process.pid}`, JSON.stringify(body) + '\n');
     renameSync(`${file}.tmp.${process.pid}`, file);
   } catch {

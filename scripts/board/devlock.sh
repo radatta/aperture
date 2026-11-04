@@ -13,7 +13,8 @@ CACHE="$BOARD_DIR/devlock.json"
 STALE_SEC=300
 
 # → the holder JSON (or null: no ref, or an unreadable holder — both mean the next acquire takes it) on stdout;
-# non-zero when GitHub couldn't be asked. Each network call is bounded by $1 seconds.
+# non-zero when GitHub couldn't be asked. Each network call is bounded by $1 seconds. The repo is spelled out here
+# because this is shell-only (no node): it's config.ts's OWNER/REPO.
 _peek() {
   local to="$1" src="${APERTURE_DEVLOCK_SOURCE:-}" ref msg
   if [ "${src#file:}" != "$src" ]; then
@@ -30,7 +31,7 @@ _peek() {
 }
 
 cmd_refresh() {
-  local max=60 to=4 t h
+  local max=60 to=4 t h before
   while [ $# -gt 0 ]; do
     case "$1" in
       --max-age) max="$2"; shift 2 ;;
@@ -39,9 +40,12 @@ cmd_refresh() {
     esac
   done
   [ -d "$BOARD_DIR" ] || return 0
+  before=$(jq -r '.t // empty' "$CACHE" 2>/dev/null)
   t=$(jq -r '.t | sub("\\.[0-9]+"; "") | fromdate' "$CACHE" 2>/dev/null)
   [ -n "$t" ] && [ $(( $(sb_epoch) - t )) -lt "$max" ] && return 0
   if h=$(_peek "$to"); then
+    # The bot wrote while we were asking GitHub: its write is newer than our answer, so keep it.
+    [ "$(jq -r '.t // empty' "$CACHE" 2>/dev/null)" = "$before" ] || return 0
     jq -nc --argjson h "$h" --arg t "$(sb_now)" '{v: 1, t: $t, source: "peek", holder: $h}' | sb_write "$CACHE"
   elif [ -f "$CACHE" ]; then
     jq -c --arg f "$(sb_now)" '.failedAt = $f' "$CACHE" 2>/dev/null | sb_write "$CACHE"

@@ -20,7 +20,7 @@ preview the user sees, so the tag and branch go first.
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Mode: collab\|auto.`                               |
 | Phase 8, after `deploy-dev`                           | `[lock] <branch> — taken until <HH:MM>, ETA <n> min.`                                                                                         |
-| Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>), up to 45 min.` (`pnpm bot lock wait` prints it ready to send)                          |
+| Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait running.` (the refusal prints it ready to send)                              |
 | Phase 10, `pnpm bot lock release`                     | `[lock] <branch> — released.`                                                                                                                 |
 | _Blocked anyway_                                      | `[blocked] <branch> — <what>; needs <the user \| resource>.`                                                                                  |
 | Phase 10, after `pnpm mailroom open-pr`               | `[pr-open] <branch> — "<title>" <url>. Devcheck: <n proven / n off dev / n needs you \| no feature rows>. Needs the user: <list \| nothing>.` |
@@ -69,13 +69,15 @@ touch <area>; whichever merges second rebases — agree an order.`
 One branch on dev at a time, under `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_). A session that finds
 another branch holding it never works around it:
 
-1. `pnpm bot lock wait` in the background. It polls every 30 s, wakes when the holder releases or its TTL
-   lapses, and exits 0 (free, expired or already ours) or **75** (still held after `--max`, default 45 min,
-   at most 55). On 75, tell the user who holds it and until when.
-2. At its start it prints, once, the two messages to send: `[lock] … queued behind …` to the hub, and, when the
-   board names the holder's live session, a note to the holder: "Queued behind you for the dev lock — release at
-   phase 10 rather than letting the TTL run; no rush." Send each once.
-3. When it returns, `pnpm bot deploy-dev` takes the lock (an expired one is taken over).
+1. The refusal (`pnpm bot deploy-dev`, or `lock acquire`, saying "dev is locked by …") prints, above its error
+   line, the two messages to send **now**, once each: `[lock] … queued behind …` to the hub, and, when the board
+   names the holder's live session, a note to the holder: "Queued behind you for the dev lock — release at
+   phase 10 rather than letting the TTL run; no rush."
+2. `pnpm bot lock wait` in the background (the harness wakes the session when it exits; don't poll its output).
+   It polls every 30 s, wakes when the holder releases or its TTL lapses, and exits 0 (free, expired or already
+   ours), **75** (still held after `--max`, default 45 min, at most 55: tell the user who holds it and until
+   when) or 1 (three GitHub errors in a row: say so, and retry once).
+3. On 0, `pnpm bot deploy-dev` again — it takes the lock (an expired one is taken over).
 
 The board shows the real lock (`board.sh status`, the SessionStart hook, the status line's `dev:`), from a
 read-only cache (`docs/ops/SESSION-BOARD.md` → _Dev lock line_).

@@ -213,6 +213,14 @@ describe('devlock.sh', () => {
     expect(cache().holder).toBeNull();
   });
 
+  it('says unknown for a garbled cache, and a refresh replaces it', () => {
+    writeFileSync(join(tmp, 'board/devlock.json'), '{"v":1,"t":');
+    expect(devlock(['line']).out).toBe('dev lock: unknown (unreadable cache)');
+    ghLock('');
+    expect(devlock(['refresh']).code).toBe(0);
+    expect(devlock(['line']).out).toBe('dev lock: free');
+  });
+
   it('reads a cache the bot wrote (milliseconds in its times)', () => {
     writeFileSync(
       join(tmp, 'board/devlock.json'),

@@ -12,9 +12,9 @@ import { deployDev } from './deploy-dev.ts';
 import type { Clock } from './dispatch.ts';
 import { featureBranch, requirePushed } from './git.ts';
 import {
+  LockHeld,
   acquire,
   formatStatus,
-  isExpired,
   parseWaitMax,
   queueNotes,
   readLock,
@@ -79,20 +79,11 @@ async function lockWait(
 ): Promise<number> {
   const maxMs = parseWaitMax(max);
   const branch = featureBranch(run);
-  let told = false;
   const r = await waitForLock(api, branch, clock, {
     maxMs,
     log: console.log,
     sessionOf: (b) => holderSession(dir, b),
-    onRead: (cur) => {
-      cache(cur?.holder ?? null);
-      const h = cur?.holder;
-      if (told || !h || h.branch === branch || isExpired(h, clock.now())) return;
-      told = true;
-      console.log('tell them, once each:');
-      for (const l of queueNotes(branch, h, hubName(), holderSession(dir, h.branch)))
-        console.log(`  ${l}`);
-    },
+    onRead: (cur) => cache(cur?.holder ?? null),
   });
   if (r.outcome === 'free') console.log('dev lock: free — `pnpm bot deploy-dev` takes it');
   else if (r.outcome === 'ours') console.log(`dev lock: ${branch} already holds it`);
@@ -109,6 +100,35 @@ async function lockWait(
   return 0;
 }
 
+// A refused acquire (deploy-dev, lock acquire) runs in the foreground, so that's where the session learns whom to
+// tell: the notes print before the error line (docs/ops/HUB.md → Lock etiquette).
+async function tellingWhoToTell<T>(dir: string | null, f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (err) {
+    if (err instanceof LockHeld && err.holder) {
+      writeLockCache(dir, err.holder, clock.now());
+      let branch = '';
+      try {
+        branch = featureBranch(run);
+      } catch {
+        // only the notes' wording needs it
+      }
+      console.log(
+        'dev is locked — send these now, once each, then `pnpm bot lock wait` in the background:',
+      );
+      for (const l of queueNotes(
+        branch,
+        err.holder,
+        hubName(),
+        holderSession(dir, err.holder.branch),
+      ))
+        console.log(`  ${l}`);
+    }
+    throw err;
+  }
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { positional, flags } = parseArgs(argv);
   const [cmd, sub] = positional;
@@ -118,12 +138,9 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     case 'deploy-dev': {
       const dir = boardDir(run);
-      const r = await deployDev(
-        run,
-        makeApi(await token(PERMS.deployDev)),
-        clock,
-        console.log,
-        (h) => writeLockCache(dir, h, clock.now()),
+      const api = makeApi(await token(PERMS.deployDev));
+      const r = await tellingWhoToTell(dir, () =>
+        deployDev(run, api, clock, console.log, (h) => writeLockCache(dir, h, clock.now())),
       );
       return r.conclusion === 'success' ? 0 : 1;
     }
@@ -136,11 +153,8 @@ export async function main(argv: string[]): Promise<number> {
         cache(cur?.holder ?? null);
         console.log(formatStatus(cur, clock.now()));
       } else if (sub === 'acquire') {
-        const h = await acquire(
-          api,
-          featureBranch(run),
-          requirePushed(run, featureBranch(run)),
-          clock.now(),
+        const h = await tellingWhoToTell(dir, () =>
+          acquire(api, featureBranch(run), requirePushed(run, featureBranch(run)), clock.now()),
         );
         cache(h);
         console.log(`held until ${h.expiresAt}`);
