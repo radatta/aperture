@@ -66,10 +66,38 @@ describe('createMcpClient', () => {
       'getAttachmentDownloadUrl',
       'listAttachments',
       'listBacklog',
+      'listPlaceTasks',
+      'listPlaces',
       'listTasks',
       'toolsList',
     ]);
     expect(Object.keys(c.writes).sort()).toEqual(['createTask', 'deleteAttachment', 'deleteTask']);
+  });
+
+  it('reads a place’s list by slug, and passes place on create_task', async () => {
+    const digest = { place: 'Shop', slug: 'shop', count: 1, titles: ['a'], text: 'Shop · 1 — a' };
+    const fetch = server({
+      list_place_tasks: json({ ...digest, tasks: [{ id: 'T9', title: 'a', status: 'backlog' }] }),
+      create_task: json({ id: 'T9', title: 'a', place: 'shop' }),
+    });
+    const c = client(fetch);
+    expect((await c.reads.listPlaceTasks('shop')).tasks[0]!.id).toBe('T9');
+    await c.writes.createTask({ title: 'a', place: 'shop' });
+    const args = fetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse(init.body as string) as { params: { arguments: unknown } }).params.arguments,
+    );
+    expect(args).toEqual([{ place: 'shop' }, { title: 'a', place: 'shop' }]);
+  });
+
+  it('refuses delete_task on a place id the ledger recorded', async () => {
+    const fetch = server({});
+    const c = client(
+      fetch,
+      memLedger([{ run: 'r0', op: 'created', id: 'P1', via: 'ui:upsertPlace' }]),
+    );
+    await expect(c.writes.deleteTask('P1')).rejects.toThrow(/LEDGER_GUARD/);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('lists tool names, and parses a string result', async () => {

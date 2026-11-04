@@ -6,8 +6,9 @@ import { byDeadline } from './todayRows';
 // The /tasks query engine: every list view is a preset lens over one task list. Pure — the page
 // feeds it tasks + today's plan and renders what comes back. See docs/areas/tasks/lenses.md.
 
-// Where an open task lives. Exactly one place per task, so lenses never show a task twice.
-export type Place = 'today' | 'week' | 'backlog' | 'done';
+// Where an open task lives. Exactly one place per task, so lenses never show a task twice. ('places' is
+// the errand lists' bucket — a task on a store's list, places.ts — not to be confused with this type.)
+export type Place = 'today' | 'week' | 'places' | 'backlog' | 'done';
 export type LensId = Place | 'recurring' | 'calibration';
 export type DueBucket = 'any' | 'today' | 'week' | 'dated' | 'undated';
 export type SortKey = 'due' | 'newest' | 'oldest' | 'estimate' | 'title';
@@ -44,10 +45,11 @@ export const WEEK_DAYS = 6;
 // A group this big starts collapsed on first visit; smaller ones start open.
 export const COLLAPSE_AT = 8;
 
-export const PLACES: Place[] = ['today', 'week', 'backlog', 'done'];
+export const PLACES: Place[] = ['today', 'week', 'places', 'backlog', 'done'];
 export const PLACE_LABEL: Record<Place, string> = {
   today: 'Today',
   week: 'This week',
+  places: 'Places',
   backlog: 'Backlog',
   done: 'Done',
 };
@@ -58,7 +60,8 @@ export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).inc
 // lives where its open parent does — and folds under that parent's card there (parts.ts). A timed task
 // is on Today on the app day its deadline falls on, and a plan row on it places nothing (option 3,
 // lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day, as the
-// due chips and labels do ("due tonight 12:30am").
+// due chips and labels do ("due tonight 12:30am"). An errand (a task on a store's list) that nothing
+// above claimed waits on the Places lens instead of the Backlog.
 export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = false): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
   if (task.status === 'in_progress') return 'today';
@@ -72,7 +75,7 @@ export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = fal
   const owner = openParent ? parent : task;
   const due = timedDay(owner, dayStartHour) ?? owner.dueDay;
   if (due && due <= addDays(today, WEEK_DAYS)) return 'week';
-  return 'backlog';
+  return task.place ? 'places' : 'backlog';
 }
 
 // placeOf over a list, each part looked up against its parent.
@@ -96,6 +99,8 @@ export const LENS_PRESET: Record<Place, TaskQuery> = {
   today: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
   // Flat: the only question on Week is what's due next, and every row already carries its category.
   week: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
+  // Drawn by PlacesLens (grouped by store, oldest first); this preset only shapes a search from it.
+  places: { ...BLANK, categories: [], statuses: [], sort: 'oldest', groupBy: 'none' },
   backlog: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'category' },
   done: { ...BLANK, categories: [], statuses: [], sort: 'newest', groupBy: 'none' },
 };

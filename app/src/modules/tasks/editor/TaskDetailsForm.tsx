@@ -16,11 +16,13 @@ import { Select } from '../../../components/Select';
 import { Text } from '../../../components/Text';
 import { Textarea } from '../../../components/Textarea';
 import { useCategoryOptions } from '../../../data/hooks/useCategories';
+import { usePlaceOptions } from '../../../data/hooks/usePlaces';
 import {
   useSetCategory,
   useSetDue,
   useSetEstimate,
   useSetTaskNotes,
+  useSetTaskPlace,
   useSetTaskTitle,
 } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
@@ -35,7 +37,7 @@ import type { EditSlots } from './editState';
 // Estimate + buffer (the working estimate) edit at any open status — rescoping mid-task is fine, since
 // calibration is measured against the baseline frozen at start, which never moves; a finished task's
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
-// due locks once finished. Notes edit at any status too. Save writes only what changed and keeps the modal open
+// due locks once finished. Notes and the place (the store's errand list) edit at any status too. Save writes only what changed and keeps the modal open
 // (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
 // (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts),
 // with a quiet note when that's after its parent's deadline.
@@ -58,11 +60,13 @@ export function TaskDetailsForm({
   const [saved, setSaved] = useState<Task | null>(null);
   const task = saved && saved.updatedAt >= live.updatedAt ? saved : live;
   const categoryOptions = useCategoryOptions(task.categoryId);
+  const placeOptions = usePlaceOptions();
   const setTitle = useSetTaskTitle();
   const setEstimate = useSetEstimate();
   const setCategory = useSetCategory();
   const setDue = useSetDue();
   const setNotes = useSetTaskNotes();
+  const setPlace = useSetTaskPlace();
 
   const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
@@ -77,6 +81,7 @@ export function TaskDetailsForm({
   const [dueDay, setDueDay_] = useState<string>(task.dueDay ?? '');
   const [dueTime, setDueTime] = useState<string>(task.dueTime ?? '');
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
+  const [place, setPlace_] = useState<string>(task.place ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
   // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
   // Google), another device, the MCP — reseeds every field the user hasn't touched (still showing the
@@ -101,6 +106,7 @@ export function TaskDetailsForm({
       setDueTime(task.dueTime ?? '');
     }
     reseed(setNotes_, prevTask.notes ?? '', task.notes ?? '');
+    reseed(setPlace_, prevTask.place ?? '', task.place ?? '');
   }
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);
@@ -119,8 +125,14 @@ export function TaskDetailsForm({
   // must never read as a change (or be saved back over a newer note).
   const notesDirty = editingNotes && notesTrimmed !== (task.notes ?? '');
   const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
+  const placeDirty = (task.place ?? '') !== place;
   const dirty =
-    titleDirty || estimateDirty || (task.categoryId ?? '') !== categoryId || dueDirty || notesDirty;
+    titleDirty ||
+    estimateDirty ||
+    (task.categoryId ?? '') !== categoryId ||
+    dueDirty ||
+    notesDirty ||
+    placeDirty;
 
   // What the modal's exit paths (Esc/backdrop/Close, opening another task) act on: 'dirty' confirms
   // before discarding; 'saving' waits for the write — those edits are on their way, so "Discard" would
@@ -128,7 +140,7 @@ export function TaskDetailsForm({
   useEditSlot(edits, 'details', saving ? 'saving' : dirty ? 'dirty' : 'clean');
 
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
-  const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes };
+  const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes, place };
   const current = useRef(fields);
   useEffect(() => {
     current.current = fields;
@@ -162,6 +174,7 @@ export function TaskDetailsForm({
         });
       if (notesDirty)
         next = await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
+      if (placeDirty) next = await setPlace.mutateAsync({ id: task.id, place: place || null });
       const now = current.current;
       const untouched = (k: keyof typeof sent) => now[k] === sent[k];
       if (untouched('title')) setTitle_(next.title);
@@ -170,6 +183,7 @@ export function TaskDetailsForm({
       if (untouched('categoryId')) setCategoryId(next.categoryId ?? '');
       if (untouched('dueDay')) setDueDay_(next.dueDay ?? '');
       if (untouched('dueTime')) setDueTime(next.dueTime ?? '');
+      if (untouched('place')) setPlace_(next.place ?? '');
       if (untouched('notes')) {
         setNotes_(next.notes ?? '');
         setEditingNotes(false);
@@ -283,6 +297,29 @@ export function TaskDetailsForm({
         {categoryOptions.failed && (
           <LoadError size="xs" onRetry={categoryOptions.retry}>
             Couldn’t load categories.
+          </LoadError>
+        )}
+        {/* With no places at all there's no list to put it on — the picker would only say "No place". */}
+        {(placeOptions.failed || placeOptions.places.length > 0 || task.place) && (
+          <Select
+            label="Place"
+            placeholder="No place"
+            value={place}
+            onChange={(e) => setPlace_(e.target.value)}
+            options={[
+              ...placeOptions.places.map((p) => ({ value: p.slug, label: p.name })),
+              // A slug the roster doesn't know still shows as what it is, never as "No place".
+              ...(task.place && !placeOptions.places.some((p) => p.slug === task.place)
+                ? [{ value: task.place, label: `@${task.place}` }]
+                : []),
+            ]}
+            disabled={!placeOptions.loaded}
+            className="w-40"
+          />
+        )}
+        {placeOptions.failed && (
+          <LoadError size="xs" onRetry={placeOptions.retry}>
+            Couldn’t load places.
           </LoadError>
         )}
         {isTerminal ? (

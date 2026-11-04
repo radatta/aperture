@@ -52,6 +52,7 @@ describe('backend parseTask', () => {
         estimateMin: 30,
       },
       categoryLabel: 'Aperture',
+      placeName: null,
       dropped: [],
       today: '2026-10-12',
     });

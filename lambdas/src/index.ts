@@ -1,14 +1,24 @@
 // @aperture/lambdas — the RPC BFF handler. One Lambda, one route: POST /api/<method> → the matching
 // ApiClient method over DynamoDB (single-table). Business logic lives in BackendClient (shared
 // machines); this file is just the AWS/HTTP edge. Phase 11 replaces the fixed userId with the Cognito
-// `sub`; Phase 12 provisions the table + wires TABLE_NAME.
-import { APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
+// `sub`; Phase 12 provisions the table + wires TABLE_NAME. Beside the RPC route sit three non-RPC ones:
+// /api/health, the Google OAuth callback, and the iPhone Shortcut's GET /api/places/<slug>/tasks.
+import {
+  APERTURE,
+  AUTH_HEADER,
+  ORIGIN_SECRET_HEADER,
+  placeLensPath,
+  placeUnknownError,
+} from '@aperture/shared';
+import type { PlaceRead } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
 import { handleRpc } from './handler';
 import { BackendClient } from './backend';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
+import { PlaceTokenStore } from './ddb/placeTokens';
+import { PlaceReadCapError, resolvePlaceRead } from './auth/placeToken';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
 import { createS3Presigner } from './s3/presigner';
@@ -92,10 +102,6 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   if (event.requestContext?.http?.method === 'OPTIONS')
     return { statusCode: 204, headers: CORS, body: '' };
 
-  const body = event.body
-    ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
-    : {};
-
   // Origin lockdown for HTTP requests only: the Function URL is public, so only requests through
   // CloudFront (which stamps the shared secret) are honored. Direct invokes are AWS-cred-gated already.
   const originSecret = process.env.ORIGIN_SECRET;
@@ -152,6 +158,15 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       return back('error');
     }
   }
+  // The iPhone Shortcut's read (places.md): GET /api/places/<slug>/tasks with a place token — OUTSIDE the
+  // RPC dispatch, and the only thing a place token opens. Behind the origin gate above, ahead of the
+  // JWT path: every /api/places/* path ends here, so it never reaches handleRpc and never falls through
+  // to JWT. The body (and testMode) is ignored.
+  if (path.startsWith('/api/places/')) return placeRead(event, path);
+
+  const body = event.body
+    ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
+    : {};
   // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;
@@ -185,5 +200,52 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
         ? 404
         : 400;
     return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
+  }
+}
+
+const PLACE_ROUTE = /^\/api\/places\/([a-z0-9-]{1,32})\/tasks$/;
+// A fixed code per 401 (so the log line can never echo anything a message might one day carry).
+const UNAUTHORIZED_REASON = (message: string): string =>
+  /missing/.test(message)
+    ? 'missing'
+    : /not a place token/.test(message)
+      ? 'malformed'
+      : /revoked/.test(message)
+        ? 'revoked'
+        : 'unknown';
+
+// 405 non-GET → 401 no/unknown token (no 'local' fallback, any stage) → 429 at the daily cap → 404 an
+// unknown slug, only once authenticated (no unauthenticated slug probing) → 200 the digest + lens link.
+// Only a 200 writes (the count + the place's heartbeat — BackendClient.readPlaceForShortcut). The log
+// line carries the outcome only — never the header, token or hash.
+async function placeRead(event: HttpEvent, path: string): Promise<HttpResult> {
+  const reply = (statusCode: number, reason: string, body: unknown): HttpResult => {
+    console.log(JSON.stringify({ event: 'place_read', ok: statusCode === 200, reason }));
+    return { statusCode, headers: CORS, body: JSON.stringify(body) };
+  };
+  if (event.requestContext?.http?.method !== 'GET') {
+    const res = reply(405, 'method', { error: 'Method Not Allowed' });
+    return { ...res, headers: { ...res.headers, allow: 'GET' } };
+  }
+  const now = Date.now();
+  const slug = PLACE_ROUTE.exec(path)?.[1];
+  const store = new PlaceTokenStore(doc, liveWrites(doc));
+  try {
+    const auth = await resolvePlaceRead(store, event.headers?.[AUTH_HEADER], now);
+    if (!slug) return reply(404, 'path', { error: 'Not found' });
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), auth.userId), {
+      userId: auth.userId,
+      placeTokens: store,
+    });
+    const digest = await backend.readPlaceForShortcut(slug, auth);
+    const read: PlaceRead = { ...digest, url: `${APP_URL}${placeLensPath(digest.slug)}` };
+    return reply(200, 'ok', read);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    if (err instanceof PlaceReadCapError) return reply(429, 'cap', { error: message });
+    if (message.startsWith('Unauthorized'))
+      return reply(401, UNAUTHORIZED_REASON(message), { error: message });
+    if (slug && message === placeUnknownError(slug)) return reply(404, 'place', { error: message });
+    return reply(500, 'error', { error: 'Internal error' });
   }
 }

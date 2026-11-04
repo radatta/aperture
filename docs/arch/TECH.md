@@ -145,6 +145,10 @@ SK (type-prefixed range keys):
   habit#<id> · roll#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
   fin#item#<id> · fin#sync#<itemId> · fin#acct#<id> · fin#txn#<id> · fin#rule#<ulid>   finances
   gcal#sync#<sub>               calendar two-way sync cursor, one per Google account
+  place#<id> · ptoken           errand places; the place token's pointer {hash, createdAt, hint}
+PK = placetoken#<sha256hex> / SK = placetoken
+                                the place token's lookup row {userId, …} — the one non-u# partition: the
+                                Shortcut route resolves a user from a token (tasks/places.md §4)
 ```
 - **One GSI, two key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms).
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.

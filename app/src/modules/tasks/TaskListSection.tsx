@@ -26,11 +26,16 @@ import { TaskCard } from './TaskCard';
 // History grows forever; show it a page at a time.
 const DONE_PAGE = 50;
 
-// Today has its own renderer (TodayLens) — it only reaches this component while searching.
+// Today and Places have their own renderers (TodayLens, PlacesLens) — they reach this one only while
+// searching.
 const EMPTY: Record<Exclude<Place, 'today'>, { title: string; body: string }> = {
   week: {
     title: 'Nothing due in the next 7 days.',
     body: 'That’s real slack — the backlog is still there if you want it.',
+  },
+  places: {
+    title: 'No errands.',
+    body: 'Put one on a store’s list from the bar below: a title, then “ | @” and the place.',
   },
   backlog: {
     title: 'Backlog is clear.',

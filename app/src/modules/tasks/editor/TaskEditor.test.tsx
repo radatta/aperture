@@ -55,6 +55,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   bufferMin: null,
   estimateLockedMin: null,
   parentId: null,
+  place: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -1171,5 +1172,45 @@ describe('TaskEditor', () => {
       expect((field as HTMLTextAreaElement).value).toHaveLength(5100); // never silently truncated
       expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
     });
+  });
+});
+
+describe('the task’s place', () => {
+  it('puts a task on a store’s list and takes it off again, keeping the modal open', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    const t = await client.createTask({ title: 'milk' });
+    const user = userEvent.setup();
+    renderWithProviders(<TaskDetailsForm task={t} />, { api: client });
+    const select = await screen.findByLabelText<HTMLSelectElement>('Place');
+    expect(select.value).toBe('');
+    await user.selectOptions(select, 'market');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () => expect((await client.getTask(t.id))!.place).toBe('market'));
+    expect(await screen.findByText('Saved')).toBeTruthy();
+
+    await user.selectOptions(select, '');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () => expect((await client.getTask(t.id))!.place).toBeNull());
+  });
+
+  it('works on a finished task too', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    let t = await client.createTask({ title: 'milk', place: 'market' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    t = await client.transitionTask(t.id, 'done');
+    renderEditor(client, t);
+    const select = await screen.findByLabelText<HTMLSelectElement>('Place');
+    await waitFor(() => expect(select.value).toBe('market'));
+    expect(select.disabled).toBe(false);
+  });
+
+  it('has no picker when there are no places and the task has none', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'pset' });
+    renderWithProviders(<TaskDetailsForm task={t} />, { api: client });
+    await screen.findByLabelText('Category');
+    await waitFor(() => expect(screen.queryByLabelText('Place')).toBeNull());
   });
 });

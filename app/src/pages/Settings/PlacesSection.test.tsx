@@ -1,0 +1,273 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { AUTH_HEADER, PLACE_TOKEN_PREFIX } from '@aperture/shared';
+import { createStubClient } from '../../data/stubClient';
+import { renderWithProviders } from '../../test/utils';
+import { PlacesSection } from './PlacesSection';
+
+beforeEach(() => globalThis.localStorage?.clear());
+
+const stub = () => createStubClient({ seed: false, storageKey: `places-${Math.random()}` });
+
+async function twoPlaces() {
+  const api = stub();
+  const corner = await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+  const market = await api.upsertPlace({ name: 'Market' });
+  return { api, corner, market };
+}
+
+const row = (name: string) =>
+  screen.getByLabelText(`Rename ${name}`).closest<HTMLElement>('.rounded-2xl')!;
+
+describe('Settings › Places: the list', () => {
+  it('starts empty with an invitation — no default store offered', async () => {
+    renderWithProviders(<PlacesSection />, { api: stub() });
+    await screen.findByText(/No places yet — add the stores you run errands at/);
+    expect(screen.queryByRole('button', { name: /Safeway/i })).toBeNull();
+  });
+
+  it('adds a place, showing its link word as you type, and refuses a clash before sending', async () => {
+    const { api } = await twoPlaces();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await screen.findByLabelText('Rename Market');
+    const field = screen.getByLabelText('New place');
+    await user.type(field, 'market');
+    expect(screen.getByText('Another place already uses "market"')).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Add place' }).disabled).toBe(
+      true,
+    );
+
+    await user.clear(field);
+    await user.type(field, "Trader Joe's");
+    expect(screen.getByText('Link word: @trader-joe-s')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Add place' }));
+    await waitFor(async () =>
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual([
+        'corner',
+        'market',
+        'trader-joe-s',
+      ]),
+    );
+    expect(await screen.findByLabelText("Rename Trader Joe's")).toBeTruthy();
+    expect((field as HTMLInputElement).value).toBe('');
+  });
+
+  it('a refused add says why and keeps the typed name', async () => {
+    const api = stub();
+    vi.spyOn(api, 'upsertPlace').mockRejectedValueOnce(new Error('upsertPlace failed (503)'));
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    const field = await screen.findByLabelText('New place');
+    await user.type(field, 'Hardware');
+    await user.click(screen.getByRole('button', { name: 'Add place' }));
+    expect(await screen.findByText('upsertPlace failed (503)')).toBeTruthy();
+    expect((field as HTMLInputElement).value).toBe('Hardware');
+  });
+
+  it('renames on blur and edits the link word, moving its errands with it', async () => {
+    const { api, corner } = await twoPlaces();
+    const t = await api.createTask({ title: 'milk', place: 'corner' });
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+
+    const name = await screen.findByLabelText('Rename Corner Shop');
+    await user.clear(name);
+    await user.type(name, 'Corner Store');
+    await user.tab();
+    await waitFor(async () =>
+      expect((await api.listPlaces()).find((p) => p.id === corner.id)?.name).toBe('Corner Store'),
+    );
+
+    const slug = await screen.findByLabelText('Link word for Corner Store');
+    await user.clear(slug);
+    await user.type(slug, 'CS'); // typed capitals land lowercase
+    await user.tab();
+    await waitFor(async () => expect((await api.getTask(t.id))!.place).toBe('cs'));
+  });
+
+  it('a refused link word says why and keeps what was typed', async () => {
+    const { api } = await twoPlaces();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    const slug = await screen.findByLabelText('Link word for Corner Shop');
+    await user.clear(slug);
+    await user.type(slug, 'market');
+    await user.tab();
+    expect(await screen.findByText('Another place already uses "market"')).toBeTruthy();
+    expect((slug as HTMLInputElement).value).toBe('market');
+  });
+
+  it('an emptied name says it needs one instead of quietly not saving', async () => {
+    const { api } = await twoPlaces();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    const name = await screen.findByLabelText('Rename Market');
+    await user.clear(name);
+    await user.tab();
+    expect(await screen.findByText('A place needs a name')).toBeTruthy();
+  });
+
+  it('shows open errands and when the Shortcut last called', async () => {
+    const { api } = await twoPlaces();
+    await api.createTask({ title: 'milk', place: 'corner' });
+    renderWithProviders(<PlacesSection />, { api });
+    await screen.findByText('1 open errand · Shortcut never called');
+  });
+
+  it('Test shows what the notification would say, and says so when the list is empty', async () => {
+    const { api } = await twoPlaces();
+    await api.createTask({ title: 'milk', place: 'corner' });
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Test Corner Shop' }));
+    expect(await screen.findByText('Corner Shop · 1 — milk')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Test Market' }));
+    expect(await screen.findByText(/Nothing on the list — the Shortcut stays quiet/)).toBeTruthy();
+  });
+
+  it('a failed Test read says so with Retry, not an empty list', async () => {
+    const { api } = await twoPlaces();
+    api.listPlaceTasks = () => Promise.reject(new Error('listPlaceTasks failed (503)'));
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Test Market' }));
+    expect(await screen.findByText('Couldn’t read this list.')).toBeTruthy();
+    expect(screen.queryByText(/Nothing on the list/)).toBeNull();
+  });
+});
+
+describe('Settings › Places: delete asks where the errands go', () => {
+  it('moves them to the chosen place', async () => {
+    const { api, corner } = await twoPlaces();
+    const t = await api.createTask({ title: 'milk', place: 'corner' });
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Delete Corner Shop' }));
+    const panel = within(row('Corner Shop'));
+    await user.selectOptions(panel.getByLabelText('Move its 1 errand to'), 'market');
+    await user.click(panel.getByRole('button', { name: 'Delete' }));
+    await waitFor(async () => expect((await api.getTask(t.id))!.place).toBe('market'));
+    expect((await api.listPlaces()).some((p) => p.id === corner.id)).toBe(false);
+  });
+
+  it('or off any list with "No place"', async () => {
+    const { api } = await twoPlaces();
+    const t = await api.createTask({ title: 'milk', place: 'corner' });
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Delete Corner Shop' }));
+    const select = within(row('Corner Shop')).getByLabelText<HTMLSelectElement>(
+      'Move its 1 errand to',
+    );
+    expect(select.value).toBe(''); // "No place"
+    expect([...select.options].map((o) => o.text)).toEqual(['No place', 'Market']);
+    await user.click(within(row('Corner Shop')).getByRole('button', { name: 'Delete' }));
+    await waitFor(async () => expect((await api.getTask(t.id))!.place).toBeNull());
+  });
+
+  it('an empty list just confirms', async () => {
+    const { api, market } = await twoPlaces();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Delete Market' }));
+    expect(screen.getByText('Delete Market? Nothing is on its list.')).toBeTruthy();
+    await user.click(within(row('Market')).getByRole('button', { name: 'Delete' }));
+    await waitFor(async () =>
+      expect((await api.listPlaces()).some((p) => p.id === market.id)).toBe(false),
+    );
+  });
+
+  it('a failed delete says so and keeps the panel', async () => {
+    const { api } = await twoPlaces();
+    vi.spyOn(api, 'deletePlace').mockRejectedValueOnce(new Error('deletePlace failed (503)'));
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Delete Market' }));
+    await user.click(within(row('Market')).getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText('Couldn’t delete — try again.')).toBeTruthy();
+    expect(within(row('Market')).getByRole('button', { name: 'Delete' })).toBeTruthy();
+  });
+});
+
+describe('Settings › Places: the Shortcut token', () => {
+  it('generates one, shows it once with Copy, and keeps only the hint after', async () => {
+    const api = stub();
+    const user = userEvent.setup(); // installs its own clipboard — stub ours after it
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderWithProviders(<PlacesSection />, { api });
+    await screen.findByText(/No token yet/);
+    await user.click(screen.getByRole('button', { name: 'Generate token' }));
+    const field = await screen.findByLabelText<HTMLInputElement>('Shortcut token');
+    expect(field.value.startsWith(PLACE_TOKEN_PREFIX)).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith(field.value);
+    expect(await screen.findByText('Copied')).toBeTruthy();
+    const hint = field.value.slice(-4);
+    expect(screen.getByText(new RegExp(`Active · ends …${hint}`))).toBeTruthy();
+    expect(screen.getByText(/never used · 0 reads today/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByLabelText('Shortcut token')).toBeNull(); // gone for good
+  });
+
+  it('a refused clipboard says to copy by hand', async () => {
+    const api = stub();
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: () => Promise.reject(new Error('denied')) },
+      configurable: true,
+    });
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Generate token' }));
+    await screen.findByLabelText('Shortcut token');
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await screen.findByText(/Couldn’t copy — select the token above/)).toBeTruthy();
+  });
+
+  it('rotate asks first and mints a different token; revoke asks first and turns it off', async () => {
+    const api = stub();
+    const first = await api.rotatePlaceToken();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Rotate…' }));
+    expect(screen.getByText(/stops working until you paste the new token/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Rotate' }));
+    const field = await screen.findByLabelText<HTMLInputElement>('Shortcut token');
+    expect(field.value).not.toBe(first.token);
+
+    await user.click(screen.getByRole('button', { name: 'Revoke…' }));
+    await user.click(screen.getByRole('button', { name: 'Revoke' }));
+    await screen.findByText(/No token yet/);
+    expect((await api.getPlaceTokenStatus()).active).toBe(false);
+    expect(screen.queryByLabelText('Shortcut token')).toBeNull();
+  });
+
+  it('a failed rotate says so', async () => {
+    const api = stub();
+    vi.spyOn(api, 'rotatePlaceToken').mockRejectedValueOnce(new Error('rotate failed (503)'));
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Generate token' }));
+    expect(await screen.findByText('Couldn’t make a token — try again.')).toBeTruthy();
+  });
+});
+
+describe('Settings › Places: the setup recipe', () => {
+  it('opens to one Shortcut with this origin’s URL and the header, and one automation per store', async () => {
+    const { api } = await twoPlaces();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Set up the iPhone Shortcut' }));
+    expect(screen.getByLabelText<HTMLInputElement>('URL (before Shortcut Input)').value).toBe(
+      `${window.location.origin}/api/places/`,
+    );
+    expect(screen.getByLabelText<HTMLInputElement>('Header key').value).toBe(AUTH_HEADER);
+    expect(screen.getAllByText('Aperture list', { exact: false }).length).toBeGreaterThan(0);
+    expect(screen.getByText('corner')).toBeTruthy();
+    expect(screen.getByText('market')).toBeTruthy();
+    expect(screen.getByText('Notify When Run')).toBeTruthy();
+  });
+});

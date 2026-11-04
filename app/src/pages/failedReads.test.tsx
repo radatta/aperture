@@ -141,6 +141,56 @@ describe('Tasks never shows a failed read as empty', () => {
     expect(screen.getByLabelText<HTMLSelectElement>('Category').disabled).toBe(true);
   });
 
+  it('a failed places read on the Places lens says so, still lists by link word, and marks the tags', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    const real = api.listPlaces.bind(api);
+    let fail = true;
+    api.listPlaces = () => (fail ? Promise.reject(new Error('listPlaces failed (503)')) : real());
+    renderApp({ api, path: '/tasks?lens=places' });
+    await screen.findByText(/Couldn.t load your places — lists show by their link word/);
+    expect(screen.getByRole('region', { name: '@safeway' })).toBeTruthy(); // the seed's sample list
+    expect(screen.queryByText('No places yet.')).toBeNull();
+    fail = false;
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('region', { name: 'Safeway' });
+  });
+
+  it('a failed tasks read on the Places lens says so instead of “No errands”', async () => {
+    renderApp({ api: failing(stub(), 'listTasks'), path: '/tasks?lens=places' });
+    await screen.findByText(/Couldn.t load this\. Check your connection/);
+    expect(screen.queryByText('No errands.')).toBeNull();
+  });
+
+  it('a failed places read marks an errand’s place tag instead of dropping it', async () => {
+    renderApp({ api: failing(stub(), 'listPlaces'), path: '/tasks?lens=places' });
+    await screen.findByText(/Couldn.t load your places/);
+    // A search shows the cards (TaskCard), whose tag can't resolve the name.
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Search tasks'), 'shampoo');
+    expect((await screen.findAllByTitle('Couldn’t load places')).length).toBeGreaterThan(0);
+  });
+
+  it('a failed places read disables the task’s place picker', async () => {
+    const api = stub(false);
+    await api.upsertPlace({ name: 'Market' });
+    const task = await api.createTask({ title: 'milk', place: 'market' });
+    failing(api, 'listPlaces');
+    renderWithProviders(<TaskDetailsForm task={task} />, { api });
+    await screen.findByText('Couldn’t load places.');
+    expect(screen.getByLabelText<HTMLSelectElement>('Place').disabled).toBe(true);
+  });
+
+  it('an @place paste with failed places says so and stays blocked', async () => {
+    const user = userEvent.setup();
+    const api = failing(stub(), 'listPlaces');
+    renderWithProviders(<BulkAddDialog open onClose={() => {}} onAdded={() => {}} />, { api });
+    await user.click(await screen.findByRole('textbox'));
+    await user.paste('milk | @safeway');
+    await screen.findByText(/Couldn.t load places — remove the @places/);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Add/ }).disabled).toBe(true);
+  });
+
   it('a #label paste with failed categories says so and stays blocked', async () => {
     const user = userEvent.setup();
     const api = failing(stub(), 'listCategories');
@@ -224,6 +274,26 @@ describe('Settings, Habits and Rolls never show a failed read as empty', () => {
     expect(screen.getAllByText(/^—\/\d this week$/).length).toBeGreaterThan(0);
     const cell = screen.getAllByRole<HTMLButtonElement>('button', { name: / on / })[0]!;
     expect(cell.disabled).toBe(true);
+  });
+
+  it('a failed places read says so in Settings instead of “No places yet”', async () => {
+    renderApp({ api: failing(stub(), 'listPlaces'), path: '/settings' });
+    await screen.findByText('Couldn’t load places.');
+    expect(screen.queryByText(/No places yet/)).toBeNull();
+    // Without the roster a clash can't be checked: adding waits for it.
+    await userEvent.type(screen.getByLabelText('New place'), 'Hardware');
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Add place' }).disabled).toBe(
+      true,
+    );
+  });
+
+  it('a failed token status read says so and disables the token buttons', async () => {
+    renderApp({ api: failing(stub(), 'getPlaceTokenStatus'), path: '/settings' });
+    await screen.findByText('Couldn’t load the token’s status.');
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Generate token' }).disabled).toBe(
+      true,
+    );
+    expect(screen.queryByText(/No token yet/)).toBeNull();
   });
 
   it('a failed categories read says so above the list', async () => {

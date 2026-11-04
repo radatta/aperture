@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApiClient, isGone, type FetchLike } from './api';
+import {
+  PLACE_TOKEN_VIA,
+  PLACE_VIA,
+  UI_PLACE_VIA,
+  createApiClient,
+  isGone,
+  ledgerKind,
+  type FetchLike,
+} from './api';
 import { DEV_ORIGIN } from './config';
 import type { Ledger, LedgerEntry } from './ledger';
 
@@ -39,16 +47,21 @@ describe('createApiClient', () => {
     });
     expect(Object.keys(api.reads).sort()).toEqual([
       'getAttachmentDownloadUrl',
+      'getCalibration',
       'getFluxSet',
+      'getPlaceTokenStatus',
       'getSettings',
       'getTask',
       'listAttachments',
       'listBacklog',
       'listCategories',
       'listFluxSets',
+      'listPlaceTasks',
+      'listPlaces',
       'listRunningSessions',
       'listSessionsForDay',
       'listTasks',
+      'placeDigestRaw',
       'probePresigned',
     ]);
     expect(Object.keys(api.writes).sort()).toEqual([
@@ -56,8 +69,12 @@ describe('createApiClient', () => {
       'createTask',
       'deleteAttachment',
       'deleteFluxSet',
+      'deletePlace',
       'deleteTask',
       'recordFluxSet',
+      'revokePlaceToken',
+      'rotatePlaceToken',
+      'upsertPlace',
     ]);
   });
 
@@ -234,6 +251,151 @@ describe('createApiClient', () => {
 
     it('a deleted object is gone at 403 (no ListBucket, so S3 hides NoSuchKey) or 404', () => {
       expect([403, 404, 200, 500].map(isGone)).toEqual([true, true, false, false]);
+    });
+  });
+
+  describe('places', () => {
+    const SECRET = `apl_${'x'.repeat(43)}`;
+
+    it('names each ledger id’s kind by the via it was created with', () => {
+      const entries = [
+        { run: 'r', op: 'created' as const, id: 'T', via: 'ui:createTask' },
+        { run: 'r', op: 'created' as const, id: 'F', via: 'api:recordFluxSet' },
+        { run: 'r', op: 'created' as const, id: 'P', via: PLACE_VIA },
+        { run: 'r', op: 'created' as const, id: 'Q', via: UI_PLACE_VIA },
+        { run: 'r', op: 'created' as const, id: 'place-token:r', via: PLACE_TOKEN_VIA },
+      ].map((e) => ({ t: '', ...e }));
+      expect(
+        ['T', 'F', 'P', 'Q', 'place-token:r', 'never'].map((id) => ledgerKind(entries, id)),
+      ).toEqual(['task', 'flux', 'place', 'place', 'placeToken', 'task']);
+    });
+
+    it('GETs the Shortcut route on the dev origin with the place token, never the session token', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { count: 0 }));
+      const api = createApiClient({ fetch, token: () => 'jwt', ledger: memLedger(), run: 'r1' });
+      expect(await api.reads.placeDigestRaw('safeway', SECRET)).toEqual({
+        status: 200,
+        body: { count: 0 },
+      });
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/safeway/tasks`, {
+        method: 'GET',
+        headers: { 'x-aperture-authorization': `Bearer ${SECRET}` },
+        redirect: 'error',
+      });
+      await api.reads.placeDigestRaw('safeway', null, 'POST');
+      expect(fetch).toHaveBeenLastCalledWith(`${DEV_ORIGIN}/api/places/safeway/tasks`, {
+        method: 'POST',
+        headers: {},
+        redirect: 'error',
+      });
+    });
+
+    it('returns a refusal as its status and body; a slug is kept inside the path', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(404, { error: 'No place "x"' }));
+      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      expect(await api.reads.placeDigestRaw('x', SECRET)).toEqual({
+        status: 404,
+        body: { error: 'No place "x"' },
+      });
+      await api.reads.placeDigestRaw('../../listTasks', SECRET);
+      expect(fetch.mock.calls.at(-1)![0]).toBe(
+        `${DEV_ORIGIN}/api/places/..%2F..%2FlistTasks/tasks`,
+      );
+    });
+
+    it('returns the BFF’s own 429 (the daily cap) at once, but backs off a Lambda throttle', async () => {
+      const sleep = vi.fn<(ms: number) => Promise<void>>(async () => undefined);
+      const cap = vi.fn<FetchLike>(async () => reply(429, { error: 'Daily read cap reached' }));
+      const capped = createApiClient({
+        fetch: cap,
+        token: () => 't',
+        ledger: memLedger(),
+        run: 'r1',
+        sleep,
+      });
+      expect((await capped.reads.placeDigestRaw('s', SECRET)).status).toBe(429);
+      expect(cap).toHaveBeenCalledTimes(1);
+      let n = 0;
+      const throttled = vi.fn<FetchLike>(async () =>
+        ++n < 2 ? reply(429, { Message: 'Rate Exceeded.' }) : reply(200, { count: 1 }),
+      );
+      const api = createApiClient({
+        fetch: throttled,
+        token: () => 't',
+        ledger: memLedger(),
+        run: 'r1',
+        sleep,
+      });
+      expect(await api.reads.placeDigestRaw('s', SECRET)).toEqual({
+        status: 200,
+        body: { count: 1 },
+      });
+      expect(throttled).toHaveBeenCalledTimes(2);
+    });
+
+    it('ledgers a place create (intent, then the server id); an edit or delete must name a recorded place', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () =>
+        reply(200, { id: 'P1', name: 'Shop', slug: 'shop', lastReadAt: null }),
+      );
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await api.writes.upsertPlace({ name: 'Shop' });
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'intent', via: PLACE_VIA, title: 'Shop' },
+        { run: 'r1', op: 'created', id: 'P1', via: PLACE_VIA, title: 'Shop' },
+      ]);
+      ledger.append({ run: 'r0', op: 'created', id: 'T1', via: 'api:createTask' });
+      fetch.mockClear();
+      await expect(api.writes.upsertPlace({ id: 'theirs', name: 'X' })).rejects.toThrow(
+        /LEDGER_GUARD/,
+      );
+      await expect(api.writes.deletePlace('theirs', null)).rejects.toThrow(/LEDGER_GUARD/);
+      await expect(api.writes.deletePlace('T1', null)).rejects.toThrow(/LEDGER_GUARD/); // a task isn't a place
+      await expect(api.writes.deleteTask('P1')).rejects.toThrow(/LEDGER_GUARD/); // nor a place a task
+      expect(fetch).not.toHaveBeenCalled();
+      await api.writes.deletePlace('P1', null);
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/deletePlace`,
+        expect.objectContaining({ body: '{"args":["P1",null]}' }),
+      );
+    });
+
+    it('records the token as place-token:<run> before the rotate, once a run, and never its plaintext', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => {
+        expect(ledger.entries.map((x) => x.op)).toEqual(['created']); // durable before the request
+        return reply(200, { token: SECRET, status: { active: true, hint: 'xxxx' } });
+      });
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      expect((await api.writes.rotatePlaceToken()).token).toBe(SECRET);
+      await api.writes.rotatePlaceToken();
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'place-token:r1',
+          via: PLACE_TOKEN_VIA,
+          title: 'place token',
+        },
+      ]);
+      expect(JSON.stringify(ledger.entries)).not.toContain(SECRET);
+    });
+
+    it('revokes only while a run’s minted token is unresolved in the ledger', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await expect(api.writes.revokePlaceToken()).rejects.toThrow(/LEDGER_GUARD/);
+      ledger.append({ run: 'r0', op: 'created', id: 'place-token:r0', via: PLACE_TOKEN_VIA });
+      ledger.append({ run: 'r0', op: 'deleted', id: 'place-token:r0' });
+      await expect(api.writes.revokePlaceToken()).rejects.toThrow(/LEDGER_GUARD/);
+      expect(fetch).not.toHaveBeenCalled();
+      ledger.append({ run: 'r2', op: 'created', id: 'place-token:r2', via: PLACE_TOKEN_VIA });
+      await api.writes.revokePlaceToken();
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/revokePlaceToken`,
+        expect.objectContaining({ body: '{"args":[]}' }),
+      );
     });
   });
 

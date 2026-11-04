@@ -4,6 +4,7 @@ import type { LensId } from './query';
 const LENSES: { id: LensId; label: string }[] = [
   { id: 'today', label: 'Today' },
   { id: 'week', label: 'Week' },
+  { id: 'places', label: 'Places' },
   { id: 'backlog', label: 'Backlog' },
   { id: 'done', label: 'Done' },
   { id: 'recurring', label: 'Recurring' },
@@ -11,15 +12,15 @@ const LENSES: { id: LensId; label: string }[] = [
 ];
 
 // The /tasks views as one pill row. It scrolls sideways at phone width (AppNav's precedent) — the
-// last pill peeking past the edge is the "there's more" cue. Counts only on Today and Week: those are
-// the two you plan against; a backlog count would be a tally to feel bad about.
+// last pill peeking past the edge is the "there's more" cue. Counts on Today and Week — the two you plan
+// against — and on Places, a shopping list's length; a backlog count would be a tally to feel bad about.
 export function LensStrip({
   lens,
   counts,
   onChange,
 }: {
   lens: LensId;
-  counts: { today: number; week: number };
+  counts: { today: number; week: number; places: number };
   onChange: (lens: LensId) => void;
 }) {
   return (
@@ -30,7 +31,7 @@ export function LensStrip({
     >
       {LENSES.map(({ id, label }) => {
         const on = id === lens;
-        const n = id === 'today' ? counts.today : id === 'week' ? counts.week : 0;
+        const n = id === 'today' || id === 'week' || id === 'places' ? counts[id] : 0;
         return (
           <button
             key={id}

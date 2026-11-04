@@ -1159,3 +1159,16 @@ describe('parent + parts', () => {
     expect(within(card).queryByRole('button', { name: 'Add draft to today' })).toBeNull();
   });
 });
+
+describe('an errand’s card', () => {
+  it('carries its store as “@Name” and asks for no scoping', async () => {
+    const api = freshApi();
+    await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    await api.createTask({ title: 'stamps', place: 'corner', dueDay: todayKey(4) });
+    renderApp({ api, path: '/tasks?lens=week' });
+    expect(await screen.findByText('@Corner Shop')).toBeTruthy();
+    expect(screen.queryByText('not scoped')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Scope' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
+  });
+});

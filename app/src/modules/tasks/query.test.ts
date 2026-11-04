@@ -38,6 +38,7 @@ const task = (over: Partial<Task>): Task => ({
   bufferMin: null,
   estimateLockedMin: null,
   parentId: null,
+  place: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -99,6 +100,21 @@ describe('placeOf', () => {
     ['p7 due today+7 → backlog', task({ dueDay: '2026-09-30' }), none, 'backlog'],
     ['p8 past due → week', task({ dueDay: '2026-09-01' }), none, 'week'],
     ['p9 planned for another day, undated → backlog', task({ status: 'planned' }), none, 'backlog'],
+    ['p10 an errand → places', task({ place: 'market' }), none, 'places'],
+    ['p11 an errand due this week → week', task({ place: 'market', dueDay: TODAY }), none, 'week'],
+    [
+      'p12 an errand on today’s plan → today',
+      task({ id: 'a', status: 'planned', place: 'market' }),
+      new Map([['a', 0]]),
+      'today',
+    ],
+    [
+      'p13 an errand started → today',
+      task({ status: 'in_progress', place: 'market' }),
+      none,
+      'today',
+    ],
+    ['p14 an errand done → done', task({ status: 'done', place: 'market' }), none, 'done'],
   ] as const)('%s', (_name, t, plan, want) => {
     expect(placeOf(t, pctx(plan as Map<string, number>))).toBe(want);
   });
@@ -387,6 +403,19 @@ describe('groupTasks', () => {
       ]),
     );
     expect(groups[0]!.tasks.map((t) => t.id)).toEqual(['first', 'second', 'ip']);
+  });
+
+  it('g3 a search’s place groups put Places between This week and Backlog', () => {
+    const tasks = [
+      task({ id: 'b' }),
+      task({ id: 'e', place: 'market' }),
+      task({ id: 'w', dueDay: TODAY }),
+    ];
+    expect(groupTasks(tasks, 'place', ctx()).map((g) => g.label)).toEqual([
+      'This week',
+      'Places',
+      'Backlog',
+    ]);
   });
 
   it('never returns an empty group', () => {

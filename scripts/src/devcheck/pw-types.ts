@@ -11,6 +11,7 @@ export interface PwResponse {
 export interface PwRequest {
   url(): string;
   method(): string;
+  postData(): string | null;
   response(): Promise<PwResponse | null>;
 }
 

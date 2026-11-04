@@ -5,7 +5,7 @@
 // the origin is a presigned URL the dev BFF minted for an attachment, under assertPresignedDevUrl.
 import { AUTH_HEADER, DEV_ORIGIN, assertDevOrigin, assertPresignedDevUrl } from './config';
 import { DevcheckError } from './errors';
-import type { Ledger } from './ledger';
+import { pendingIds, type Ledger, type LedgerEntry } from './ledger';
 
 // After a delete S3 answers a presigned GET with 403, not 404: the roles have no s3:ListBucket, so S3 hides
 // NoSuchKey behind AccessDenied. 404 still counts as gone.
@@ -19,6 +19,8 @@ export interface DevTask {
   estimateMin?: number | null;
   status?: string;
   parentId?: string | null;
+  place?: string | null; // a place slug — an errand (the places scenario)
+  estimateLockedMin?: number | null;
 }
 
 export interface CreateTaskInput {
@@ -28,6 +30,33 @@ export interface CreateTaskInput {
   dueTime?: string | null; // HH:MM on dueDay (the option-3 scenario; the test user has no Google account)
   notes?: string | null;
   parentId?: string | null; // a part of that task (the parts scenario)
+  place?: string | null; // a place slug (the places scenario)
+}
+
+// The slices of @aperture/shared's places contract the check reads (packages/shared/src/places.ts).
+export interface DevPlace {
+  id: string;
+  name: string;
+  slug: string;
+  lastReadAt: number | null;
+}
+export interface DevPlaceDigest {
+  place: string;
+  slug: string;
+  count: number;
+  titles: string[];
+  text: string;
+}
+export interface DevPlaceTokenStatus {
+  active: boolean;
+  createdAt: number | null;
+  lastUsedAt: number | null;
+  hint: string | null;
+  readsToday: number;
+}
+export interface DevCalibrationPoint {
+  taskId: string;
+  day: string;
 }
 
 // The slice of a saved Flux set the check writes and reads (docs/areas/flux D47). Its id is minted here,
@@ -79,6 +108,22 @@ export interface DevSession {
 
 // The ledger's `via` for a Flux set — cleanup reads it to delete the right kind of row.
 export const FLUX_SET_VIA = 'api:recordFluxSet';
+// A place this harness created (through the API, or the browser's upsertPlace create — recorder.ts).
+export const PLACE_VIA = 'api:upsertPlace';
+export const UI_PLACE_VIA = 'ui:upsertPlace';
+// The test user's Shortcut token. It has no id, so a rotate records `place-token:<run>` — before the call, like
+// a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
+export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
+export const placeTokenId = (run: string): string => `place-token:${run}`;
+
+// What a ledger id names, by the `via` it was created with — each kind is read and deleted its own way.
+export type LedgerKind = 'task' | 'flux' | 'place' | 'placeToken';
+export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
+  const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
+  if (via === FLUX_SET_VIA) return 'flux';
+  if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
+  return via === PLACE_TOKEN_VIA ? 'placeToken' : 'task';
+}
 
 export type FetchLike = (
   url: string,
@@ -86,7 +131,7 @@ export type FetchLike = (
     method: string;
     headers: Record<string, string>;
     body?: string | Uint8Array;
-    redirect?: 'error'; // presigned requests: a 3xx must never reach a host the guard didn't check
+    redirect?: 'error'; // presigned requests and the place route: a 3xx must never leave the checked host
   },
 ) => Promise<{
   status: number;
@@ -105,6 +150,16 @@ export interface ApiDeps {
 // fires many requests at once), so the call never ran: retrying is safe for every method, createTask too.
 const THROTTLE_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
 
+// The BFF's own refusal body, `{error: '…'}` — as against Lambda's throttle, which the function never wrote.
+function bffError(text: string): boolean {
+  try {
+    const v = JSON.parse(text) as unknown;
+    return !!v && typeof v === 'object' && typeof (v as { error?: unknown }).error === 'string';
+  } catch {
+    return false;
+  }
+}
+
 export function createApiClient({
   fetch,
   token,
@@ -112,36 +167,45 @@ export function createApiClient({
   run,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }: ApiDeps) {
+  // `retry(status, text)` says whether this answer is a throttle to back off from.
+  async function backoff(
+    send: () => ReturnType<FetchLike>,
+    retry: (status: number, text: string) => boolean = (status) => status === 429,
+  ): Promise<{ status: number; text: string }> {
+    let res = await send();
+    let text = await res.text();
+    for (const wait of THROTTLE_BACKOFF_MS) {
+      if (!retry(res.status, text)) break;
+      await sleep(wait);
+      res = await send();
+      text = await res.text();
+    }
+    return { status: res.status, text };
+  }
+
   async function call<T>(method: string, args: unknown[]): Promise<T> {
     const url = `${DEV_ORIGIN}/api/${method}`;
     assertDevOrigin(url);
-    const send = () =>
+    const { status, text } = await backoff(() =>
       fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token()}` },
         body: JSON.stringify({ args }),
-      });
-    let res = await send();
-    for (const wait of THROTTLE_BACKOFF_MS) {
-      if (res.status !== 429) break;
-      await sleep(wait);
-      res = await send();
-    }
-    const text = await res.text();
-    if (res.status !== 200)
-      throw new Error(`${method} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }),
+    );
+    if (status !== 200) throw new Error(`${method} → HTTP ${status}: ${text.slice(0, 200)}`);
     return JSON.parse(text) as T;
   }
 
-  // A write may only touch a task this harness created (and not a Flux set's id).
-  function assertLedgerTask(id: string): void {
-    const isFlux = ledger.read().some((e) => e.id === id && e.via === FLUX_SET_VIA);
-    if (!ledger.has(id) || isFlux)
+  // A write may only touch a row this harness created, through its own kind's methods.
+  function assertLedger(id: string, kind: LedgerKind): void {
+    if (!ledger.has(id) || ledgerKind(ledger.read(), id) !== kind)
       throw new DevcheckError(
         'LEDGER_GUARD',
-        `refusing to touch ${id} — the ledger never recorded it`,
+        `refusing to touch ${id} — the ledger never recorded it as a ${kind}`,
       );
   }
+  const assertLedgerTask = (id: string) => assertLedger(id, 'task');
   // Attachments this client created; deleteAttachment refuses any other id.
   const attachmentIds = new Set<string>();
 
@@ -167,6 +231,38 @@ export function createApiClient({
       const res = await fetch(url, { method: 'GET', headers: {}, redirect: 'error' });
       await res.text(); // drain
       return res.status;
+    },
+    listPlaces: () => call<DevPlace[]>('listPlaces', []),
+    // The digest as an RPC read — no heartbeat, no count (the Shortcut route below is the one that counts).
+    listPlaceTasks: (slug: string) => call<DevPlaceDigest>('listPlaceTasks', [slug]),
+    getPlaceTokenStatus: () => call<DevPlaceTokenStatus>('getPlaceTokenStatus', []),
+    getCalibration: (range: { from: string; to: string }) =>
+      call<DevCalibrationPoint[]>('getCalibration', [range]),
+    // The iPhone Shortcut's route, raw: GET /api/places/<slug>/tasks with the place token (never the session
+    // JWT) in the BFF header, or none — the status and parsed body, whatever they are, so a step can assert a
+    // refusal. A 200 bumps the token's count and the place's lastReadAt server-side, as the Shortcut does;
+    // every other answer writes nothing (lambdas/src/index.ts). `method` is GET but for proving the 405. A
+    // 429 carrying the BFF's own `{error}` is the daily cap, returned as is; any other 429 is Lambda throttling
+    // and is backed off like call()'s.
+    async placeDigestRaw(
+      slug: string,
+      placeToken: string | null,
+      method: 'GET' | 'POST' = 'GET',
+    ): Promise<{ status: number; body: unknown }> {
+      const url = `${DEV_ORIGIN}/api/places/${encodeURIComponent(slug)}/tasks`;
+      assertDevOrigin(url);
+      const headers: Record<string, string> = placeToken
+        ? { [AUTH_HEADER]: `Bearer ${placeToken}` }
+        : {};
+      const { status, text } = await backoff(
+        () => fetch(url, { method, headers, redirect: 'error' }),
+        (s, t) => s === 429 && !bffError(t),
+      );
+      try {
+        return { status, body: JSON.parse(text) as unknown };
+      } catch {
+        return { status, body: text.slice(0, 200) };
+      }
     },
   };
 
@@ -233,6 +329,41 @@ export function createApiClient({
           `refusing to delete attachment ${id} — not this run's`,
         );
       await call<null>('deleteAttachment', [id]);
+    },
+    // Create (no id) is ledgered like createTask — intent, then the server's id; an update must name a place
+    // the ledger recorded.
+    async upsertPlace(input: { id?: string; name: string; slug?: string }): Promise<DevPlace> {
+      if (input.id) {
+        assertLedger(input.id, 'place');
+        return call<DevPlace>('upsertPlace', [input]);
+      }
+      ledger.append({ run, op: 'intent', via: PLACE_VIA, title: input.name });
+      const place = await call<DevPlace>('upsertPlace', [input]);
+      ledger.append({ run, op: 'created', id: place.id, via: PLACE_VIA, title: input.name });
+      return place;
+    },
+    // Its alive tasks move to `reassignToSlug`, or off any list (null) — cleanup passes null.
+    async deletePlace(id: string, reassignToSlug: string | null): Promise<void> {
+      assertLedger(id, 'place');
+      await call<null>('deletePlace', [id, reassignToSlug]);
+    },
+    // The plaintext comes back once; it lives in the step's memory only — never logged, never ledgered.
+    async rotatePlaceToken(): Promise<{ token: string; status: DevPlaceTokenStatus }> {
+      const id = placeTokenId(run);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: PLACE_TOKEN_VIA, title: 'place token' });
+      return call<{ token: string; status: DevPlaceTokenStatus }>('rotatePlaceToken', []);
+    },
+    // Only while the ledger holds a token a run minted and nothing has resolved yet: the test user's token
+    // is the harness's to revoke only when the harness made it.
+    async revokePlaceToken(): Promise<void> {
+      const entries = ledger.read();
+      if (!pendingIds(entries).some((id) => ledgerKind(entries, id) === 'placeToken'))
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          'refusing to revoke the place token — no run recorded minting it',
+        );
+      await call<null>('revokePlaceToken', []);
     },
   };
 

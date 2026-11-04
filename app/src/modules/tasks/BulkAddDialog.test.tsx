@@ -157,6 +157,40 @@ describe('bulk add', () => {
     await waitFor(() => expect(addBtn().disabled).toBe(false));
   });
 
+  it('an @place puts the task on that list; an unknown one warns and lands off any list', async () => {
+    const api = await apiWithAdmin();
+    await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await open(user);
+
+    expect(await screen.findByText('Places: @corner')).toBeTruthy();
+    await user.paste('milk | @Corner\nnails | @nowhere');
+    expect(screen.getByText('@Corner Shop')).toBeTruthy(); // the chip reads the name
+    expect(screen.getByText(/no place '@nowhere'/)).toBeTruthy();
+    await user.click(addBtn());
+    await waitFor(async () => {
+      const tasks = await api.listBacklog();
+      expect(tasks.find((t) => t.title === 'milk')?.place).toBe('corner');
+      expect(tasks.find((t) => t.title === 'nails')?.place).toBeNull();
+    });
+  });
+
+  it('blocks submit while places are still loading, if the paste uses @places', async () => {
+    const api = await apiWithAdmin();
+    vi.spyOn(api, 'listPlaces').mockImplementation(() => new Promise<never>(() => {}));
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await open(user);
+
+    await user.paste('milk | @corner');
+    expect(screen.getByText(/Loading places/)).toBeTruthy();
+    expect(addBtn().disabled).toBe(true);
+    await user.clear(area());
+    await user.paste('milk');
+    await waitFor(() => expect(addBtn().disabled).toBe(false));
+  });
+
   it('a failed write keeps the dialog open with the text intact', async () => {
     const api = await apiWithAdmin();
     vi.spyOn(api, 'createTasks').mockRejectedValue(new Error('network'));

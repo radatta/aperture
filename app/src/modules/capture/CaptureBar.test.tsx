@@ -567,6 +567,7 @@ describe('CaptureBar', () => {
         source: 'haiku',
         input: { title: 'STALE' },
         categoryLabel: null,
+        placeName: null,
         dropped: [],
         today: todayKey(4),
       });
@@ -835,6 +836,7 @@ describe('CaptureBar', () => {
         source: 'haiku',
         input: { title: 'yesterday parse' },
         categoryLabel: null,
+        placeName: null,
         dropped: [],
         today: addDays(todayKey(4), -1),
       });
@@ -863,5 +865,55 @@ describe('CaptureBar', () => {
       );
       expect(titles.sort()).toEqual(['book flight', 'pay rent']);
     });
+  });
+});
+
+describe('CaptureBar — places', () => {
+  async function placeBar(opts: { hangPlaces?: boolean } = {}) {
+    const api = createStubClient({ seed: false, storageKey: `cap-place-${Math.random()}` });
+    await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    if (opts.hangPlaces) vi.spyOn(api, 'listPlaces').mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    const box = () => screen.getByLabelText('Capture task') as HTMLTextAreaElement;
+    return { api, user, box };
+  }
+
+  it('an @ chip types the link word, the preview reads the name, and the task lands on the list', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @co');
+    const chip = await waitFor(() =>
+      within(screen.getByRole('group', { name: 'Suggestions' })).getByText('@Corner Shop', {
+        selector: 'button',
+      }),
+    );
+    await user.click(chip);
+    expect(box().value).toBe('milk | @corner ');
+    expect(await screen.findByText('@Corner Shop', { selector: 'span' })).toBeTruthy();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+  });
+
+  it('waits for places before an @place line can save', async () => {
+    const { api, user, box } = await placeBar({ hangPlaces: true });
+    await user.type(box(), 'milk | @corner');
+    expect(await screen.findByText('Loading places…')).toBeTruthy();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(box().value).toBe('milk | @corner');
+    expect(await api.listTasks()).toHaveLength(0);
+  });
+
+  it('quick add takes a known @word and says which list it went on', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk @corner');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+    expect(await screen.findByText('milk · no category · @Corner Shop')).toBeTruthy();
   });
 });

@@ -13,6 +13,7 @@ export * from './parts';
 export * from './attachments';
 export * from './taskNotes';
 export * from './due';
+export * from './places';
 export * from './calendarSync';
 export * from './calendarPull';
 export * from './api';

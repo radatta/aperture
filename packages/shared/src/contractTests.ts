@@ -4,6 +4,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from '.
 import { TASK_NOTES_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
+import { PLACE_TOKEN_PREFIX, placeUnknownError } from './places';
 import {
   deriveFinanceView,
   FINANCE_REFRESH_COOLDOWN_MS,
@@ -1480,6 +1481,7 @@ export function runApiContract(
           'ideas',
           'leetcodeAttempts',
           'logEntries',
+          'places',
           'plans',
           'rolls',
           'series',
@@ -2020,6 +2022,132 @@ export function runApiContract(
       expect(data.financeAccounts).toHaveLength(3);
       expect(data.financeTransactions.length).toBeGreaterThan(10);
       expect(data.financeRules.map((r) => r.pattern)).toEqual(['netflix']);
+    });
+
+    it('places: create slugs the name, list keeps add order, and refuses a clash or a bad slug', async () => {
+      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      expect(safeway).toMatchObject({ name: 'Safeway', slug: 'safeway', lastReadAt: null });
+      advance(1); // add order is createdAt; a same-ms tie falls to the ULID, random across Lambda calls
+      const tj = await api.upsertPlace({ name: "Trader Joe's", slug: 'tj' });
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['safeway', 'tj']);
+      await expect(api.upsertPlace({ name: 'Safeway 2', slug: 'safeway' })).rejects.toThrow(
+        /already uses/,
+      );
+      await expect(api.upsertPlace({ name: 'Bad', slug: 'Bad Slug' })).rejects.toThrow(/lowercase/);
+      await expect(api.upsertPlace({ name: '  ' })).rejects.toThrow(/needs a name/);
+      const renamed = await api.upsertPlace({ id: tj.id, name: 'TJs' });
+      expect(renamed).toMatchObject({ name: 'TJs', slug: 'tj' }); // omitted slug is kept
+    });
+
+    it('places: tasks carry a known slug at create, any status, and refuse an unknown one', async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      const t = await api.createTask({ title: 'shampoo', place: 'safeway' });
+      expect(t.place).toBe('safeway');
+      expect((await api.createTask({ title: 'plain' })).place).toBeNull();
+      await expect(api.createTask({ title: 'x', place: 'target' })).rejects.toThrow(
+        placeUnknownError('target'),
+      );
+      const before = (await api.listTasks()).length;
+      await expect(
+        api.createTasks([
+          { title: 'ok', place: 'safeway' },
+          { title: 'bad', place: 'target' },
+        ]),
+      ).rejects.toThrow(placeUnknownError('target'));
+      expect(await api.listTasks()).toHaveLength(before); // the batch wrote nothing
+      const [bulk] = await api.createTasks([{ title: 'nails', place: 'safeway' }]);
+      expect(bulk!.place).toBe('safeway');
+
+      expect((await api.setTaskPlace(t.id, null)).place).toBeNull();
+      await expect(api.setTaskPlace(t.id, 'target')).rejects.toThrow(placeUnknownError('target'));
+      await api.transitionTask(bulk!.id, 'in_progress');
+      await api.transitionTask(bulk!.id, 'done');
+      expect((await api.setTaskPlace(bulk!.id, null)).place).toBeNull(); // done is fine
+    });
+
+    it('places: a slug change follows its tasks; delete moves them to a place or off any list', async () => {
+      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      const target = await api.upsertPlace({ name: 'Target' });
+      const a = await api.createTask({ title: 'a', place: 'safeway' });
+      await api.upsertPlace({ id: safeway.id, name: 'Safeway', slug: 'sw' });
+      expect((await api.getTask(a.id))!.place).toBe('sw');
+
+      await expect(api.deletePlace(safeway.id, 'nowhere')).rejects.toThrow(
+        placeUnknownError('nowhere'),
+      );
+      await expect(api.deletePlace(safeway.id, 'sw')).rejects.toThrow(); // not onto itself
+      await api.deletePlace(safeway.id, 'target');
+      expect((await api.getTask(a.id))!.place).toBe('target');
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['target']);
+
+      await api.deletePlace(target.id, null);
+      expect((await api.getTask(a.id))!.place).toBeNull();
+      expect(await api.listPlaces()).toEqual([]);
+    });
+
+    it("places: listPlaceTasks is the Shortcut's digest of open errands, oldest first", async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      expect(await api.listPlaceTasks('safeway')).toEqual({
+        place: 'Safeway',
+        slug: 'safeway',
+        count: 0,
+        titles: [],
+        text: '',
+      });
+      await api.createTask({ title: 'shampoo', place: 'safeway' });
+      clock += 1000;
+      const nails = await api.createTask({ title: 'nails', place: 'safeway' });
+      clock += 1000;
+      const gone = await api.createTask({ title: 'gone', place: 'safeway' });
+      await api.transitionTask(gone.id, 'cancelled');
+      expect(await api.listPlaceTasks('safeway')).toMatchObject({
+        count: 2,
+        titles: ['shampoo', 'nails'],
+        text: 'Safeway · 2 — shampoo, nails',
+      });
+      await api.transitionTask(nails.id, 'in_progress');
+      await api.transitionTask(nails.id, 'done');
+      expect((await api.listPlaceTasks('safeway')).titles).toEqual(['shampoo']);
+      await expect(api.listPlaceTasks('target')).rejects.toThrow(placeUnknownError('target'));
+    });
+
+    it('places: an errand never becomes a calibration point, even with an estimate', async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      const errand = await api.createTask({ title: 'shampoo', place: 'safeway', estimateMin: 5 });
+      const work = await api.createTask({ title: 'pset', estimateMin: 60 });
+      for (const t of [errand, work]) {
+        await api.transitionTask(t.id, 'in_progress');
+        await api.transitionTask(t.id, 'done');
+      }
+      const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
+        (p) => p.taskId,
+      );
+      expect(ids).toEqual([work.id]);
+    });
+
+    it('places: the Shortcut token is shown once, rotates, revokes, and is never exported', async () => {
+      expect(await api.getPlaceTokenStatus()).toEqual({
+        active: false,
+        createdAt: null,
+        lastUsedAt: null,
+        hint: null,
+        readsToday: 0,
+      });
+      const first = await api.rotatePlaceToken();
+      expect(first.token.startsWith(PLACE_TOKEN_PREFIX)).toBe(true);
+      expect(first.token.length).toBeGreaterThan(40);
+      expect(first.status).toMatchObject({ active: true, createdAt: clock, lastUsedAt: null });
+      expect(first.status.hint).toBe(first.token.slice(-4));
+      expect(await api.getPlaceTokenStatus()).toEqual(first.status);
+      const second = await api.rotatePlaceToken();
+      expect(second.token).not.toBe(first.token);
+      await api.upsertPlace({ name: 'Safeway' });
+      const data = JSON.stringify(await api.exportData());
+      expect(data).not.toContain(second.token);
+      expect(data).not.toContain(first.token);
+      expect((await api.exportData()).places.map((p) => p.slug)).toEqual(['safeway']);
+      await api.revokePlaceToken();
+      expect((await api.getPlaceTokenStatus()).active).toBe(false);
     });
   });
 }

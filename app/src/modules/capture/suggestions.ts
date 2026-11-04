@@ -44,6 +44,26 @@ export function categorySuggestions(
     }));
 }
 
+// A place by its link word or a word of its name: `@tr` finds "Trader Joe's" (slug `tj`) as well as a
+// slug starting "tr". The chip types the slug — the grammar's word.
+export function placeSuggestions(
+  partial: string,
+  places: readonly { slug: string; name: string }[],
+): Suggestion[] {
+  const p = partial.toLowerCase();
+  return places
+    .filter((x) => {
+      const n = x.name.toLowerCase();
+      return x.slug.startsWith(p) || n.startsWith(p) || n.split(/\s+/).some((w) => w.startsWith(p));
+    })
+    .map((x) => ({
+      key: `p:${x.slug}`,
+      label: `@${x.name}`,
+      a11y: `Place ${x.name}`,
+      insert: `@${x.slug}`,
+    }));
+}
+
 export function estimateSuggestions(partial: string): Suggestion[] {
   return ESTIMATE_PRESETS.filter((m) => String(m).startsWith(partial)).map((m) => ({
     key: `e:${m}`,
@@ -80,9 +100,14 @@ export function dueSuggestions(partial: string, today: string): Suggestion[] {
 
 export function suggestionsFor(
   tok: CaretToken,
-  ctx: { cats: readonly { id: string; label: string }[]; today: string },
+  ctx: {
+    cats: readonly { id: string; label: string }[];
+    places: readonly { slug: string; name: string }[];
+    today: string;
+  },
 ): Suggestion[] {
   if (tok.kind === 'category') return categorySuggestions(tok.partial, ctx.cats);
+  if (tok.kind === 'place') return placeSuggestions(tok.partial, ctx.places);
   if (tok.kind === 'estimate') return estimateSuggestions(tok.partial);
   return dueSuggestions(tok.partial, ctx.today);
 }

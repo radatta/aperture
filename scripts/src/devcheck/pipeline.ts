@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { FLUX_SET_VIA, type ApiClient } from './api';
+import { ledgerKind, type ApiClient } from './api';
 import { DEV_ORIGIN } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -11,7 +11,7 @@ import { orphanIntents, pendingIds, type Ledger } from './ledger';
 import { coverageOf } from './matrix';
 import type { McpClient } from './mcp';
 import { mcpToken, type McpSession } from './mcp-login';
-import { CREATE_METHODS, idsFromCreateResponse, methodOf } from './recorder';
+import { CREATE_METHODS, idsFromCreateResponse, isCreateRequest, methodOf } from './recorder';
 import type { CreatedRecord, RunResult, StepResult } from './report';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
 import {
@@ -90,6 +90,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const runIds: string[] = []; // created in this run, oldest first
   const pendingRecords: Promise<void>[] = []; // one per create request, from the moment it's SENT
   let baseline: Set<string> | undefined; // the partition's task ids right after the sweep
+  let placeBaseline: Set<string> | undefined; // and its place ids
   let browser: BrowserSession | undefined;
   let session: Session | undefined;
   let api: ApiClient | undefined;
@@ -133,7 +134,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // waited for (and its id recorded) before cleanup, not lost.
     page.on('request', (req) => {
       const method = req.method() === 'POST' ? methodOf(req.url()) : undefined;
-      if (method && (CREATE_METHODS as readonly string[]).includes(method))
+      if (
+        method &&
+        (CREATE_METHODS as readonly string[]).includes(method) &&
+        isCreateRequest(method, req.postData())
+      )
         pendingRecords.push(awaitCreate(req, method));
     });
     const ui = createUi(page);
@@ -151,6 +156,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       }
     }
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
+    placeBaseline = new Set((await api.reads.listPlaces()).map((p) => p.id));
     // After the sweep (whose writes use the checked app session), before any step: the MCP token is the
     // test user's — WRONG_USER otherwise — before a step can write through it.
     const mcpSession = await browser.signInMcp((p) =>
@@ -328,20 +334,36 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     return true;
   }
 
-  // A ledger id is a task unless the ledger says it came from recordFluxSet — each kind is read back and
-  // deleted through its own method, so a Flux set is never "verified gone" by a task lookup.
-  function isFluxSet(id: string): boolean {
-    return d.ledger.read().some((e) => e.op === 'created' && e.id === id && e.via === FLUX_SET_VIA);
-  }
+  // A ledger id is a task unless its `via` says otherwise (ledgerKind) — each kind is read back and deleted
+  // through its own method, so a Flux set or a place is never "verified gone" by a task lookup. The place
+  // token has no id of its own: `place-token:<run>` stands for "a run minted the test user's token", which
+  // exists while the status reads active and is removed by a revoke.
   async function exists(client: ApiClient, id: string): Promise<boolean> {
-    return isFluxSet(id)
-      ? (await client.reads.getFluxSet(id)) !== null
-      : (await client.reads.getTask(id)) !== null;
+    switch (ledgerKind(d.ledger.read(), id)) {
+      case 'flux':
+        return (await client.reads.getFluxSet(id)) !== null;
+      case 'place':
+        return (await client.reads.listPlaces()).some((p) => p.id === id);
+      case 'placeToken':
+        return (await client.reads.getPlaceTokenStatus()).active;
+      case 'task':
+        return (await client.reads.getTask(id)) !== null;
+    }
   }
   async function removeRecorded(client: ApiClient, id: string): Promise<boolean> {
-    if (!isFluxSet(id)) return safeDelete(client, id);
-    await client.writes.deleteFluxSet(id);
-    return true;
+    switch (ledgerKind(d.ledger.read(), id)) {
+      case 'flux':
+        await client.writes.deleteFluxSet(id);
+        return true;
+      case 'place':
+        await client.writes.deletePlace(id, null); // any task still on it just leaves the list
+        return true;
+      case 'placeToken':
+        await client.writes.revokePlaceToken();
+        return true;
+      case 'task':
+        return safeDelete(client, id);
+    }
   }
 
   async function cleanup(): Promise<void> {
@@ -399,6 +421,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const unknown = [...visible].filter((id) => !known.has(id));
     r.unrecorded = unknown.filter((id) => !baseline || baseline.has(id));
     r.appeared = baseline ? unknown.filter((id) => !baseline!.has(id)) : [];
+    // The same for places: one added by a path the recorder missed would outlive the run unseen.
+    const places = (await api.reads.listPlaces()).map((p) => p.id).filter((id) => !known.has(id));
+    r.unrecorded.push(...places.filter((id) => !placeBaseline || placeBaseline.has(id)));
+    if (placeBaseline) r.appeared.push(...places.filter((id) => !placeBaseline!.has(id)));
     if (r.appeared.length) fail('LEFTOVERS');
 
     if (r.startSha) {

@@ -94,6 +94,11 @@ import {
   UPLOAD_URL_TTL_MS,
   withEstimate,
   runQuickParse,
+  PLACE_TOKEN_PREFIX,
+  placeDigestOf,
+  placeError,
+  placeUnknownError,
+  slugify,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -142,6 +147,9 @@ import type {
   FluxSetFilter,
   RecordFluxSetInput,
   LogEntry,
+  Place,
+  PlaceDigest,
+  PlaceTokenStatus,
   PomodoroSession,
   RecordLeetcodeAttemptInput,
   Roll,
@@ -157,6 +165,7 @@ import type {
   TaskStatus,
   UpsertCategoryInput,
   UpsertHabitInput,
+  UpsertPlaceInput,
   UpsertPlanInput,
   UpsertRollInput,
   UpsertSeriesInput,
@@ -174,6 +183,13 @@ const FINANCE_SETTINGS_DEFAULTS = {
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null };
 const STORAGE_KEY = 'aperture.stub.v1';
 
+// The Shortcut's token, kept in plaintext here — hashing it is the backend's job (places.md). The stub has
+// no Shortcut route, so nothing ever reads with it: lastUsedAt stays null and readsToday 0.
+interface StubPlaceToken {
+  token: string;
+  createdAt: number;
+}
+
 export interface Store {
   logEntries: LogEntry[];
   tasks: Task[];
@@ -186,6 +202,8 @@ export interface Store {
   sessions: PomodoroSession[];
   days: Day[];
   categories: Category[];
+  places: Place[];
+  placeToken: StubPlaceToken | null; // a credential: never exported
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[];
@@ -212,6 +230,8 @@ export function emptyStore(): Store {
     sessions: [],
     days: [],
     categories: [],
+    places: [],
+    placeToken: null,
     leetcodeAttempts: [],
     stories: [],
     attachments: [],
@@ -339,6 +359,8 @@ class StubClient implements ApiClient {
         refundOfId: t.refundOfId ?? null,
         startsPeriod: t.startsPeriod ?? false,
       }));
+      // Tasks from before places read as off every list.
+      store.tasks = store.tasks.map((t) => ({ ...t, place: t.place ?? null }));
       store.financeSyncStates = store.financeSyncStates.map((x) => ({
         ...x,
         lastSyncErrorAt: x.lastSyncErrorAt ?? null,
@@ -415,6 +437,7 @@ class StubClient implements ApiClient {
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
       parentId: input.parentId || null, // '' is no parent, never a link to validate
+      place: this.knownPlace(input.place ?? null), // throws on an unknown slug, before createTasks writes
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -529,6 +552,13 @@ class StubClient implements ApiClient {
   }
   private dayStartHour(): number {
     return this.ensureSettings().dayStartHour;
+  }
+  // A task's place as given ('' is none), refused when no alive place has that slug.
+  private knownPlace(slug: string | null): string | null {
+    if (!slug) return null;
+    if (!this.alive(this.store.places).some((p) => p.slug === slug))
+      throw new Error(placeUnknownError(slug));
+    return slug;
   }
   private ensureSettings(): Settings {
     if (this.store.settings) return this.store.settings;
@@ -798,8 +828,9 @@ class StubClient implements ApiClient {
     const categories = this.alive(this.store.categories)
       .filter((c) => c.active)
       .map(({ id, label }) => ({ id, label }));
+    const places = this.alive(this.store.places).map(({ slug, name }) => ({ slug, name }));
     const today = todayKey(this.dayStartHour(), this.now());
-    const ctx = { categories, today, dayStartHour: this.dayStartHour() };
+    const ctx = { categories, places, today, dayStartHour: this.dayStartHour() };
     return runQuickParse(text, ctx, async (line) =>
       takeStubParseFailure()
         ? { ok: false, reason: 'unavailable', detail: 'stub failNextParse' }
@@ -1271,6 +1302,7 @@ class StubClient implements ApiClient {
         bufferMin: null,
         estimateLockedMin: null,
         parentId: null,
+        place: null,
         actualAccruedMin: 0,
         startedAt: null,
         completedAt: null,
@@ -1371,6 +1403,82 @@ class StubClient implements ApiClient {
       this.writes.patch(this.store.rolls, r.id, { categoryId: reassignToId });
     }
     this.writes.softDelete(this.store.categories, id);
+  }
+
+  // --- Places --------------------------------------------------------------
+  async listPlaces(): Promise<Place[]> {
+    return this.alive(this.store.places).sort(
+      (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
+    );
+  }
+  async upsertPlace(input: UpsertPlaceInput): Promise<Place> {
+    const name = input.name.trim();
+    const others = this.alive(this.store.places).filter((p) => p.id !== input.id);
+    if (input.id) {
+      const existing = this.mustFind(this.store.places, input.id);
+      const slug = input.slug ?? existing.slug;
+      const err = placeError(name, slug, others);
+      if (err) throw new Error(err);
+      // The slug is what tasks store, so a new one follows them.
+      if (slug !== existing.slug)
+        for (const t of this.alive(this.store.tasks).filter((x) => x.place === existing.slug))
+          this.writes.patch(this.store.tasks, t.id, { place: slug });
+      return this.writes.patch(this.store.places, input.id, { name, slug });
+    }
+    const slug = input.slug ?? slugify(name);
+    const err = placeError(name, slug, others);
+    if (err) throw new Error(err);
+    return this.writes.insert(this.store.places, { ...this.base(), name, slug, lastReadAt: null });
+  }
+  async deletePlace(id: string, reassignToSlug: string | null): Promise<void> {
+    const place = this.mustFind(this.store.places, id);
+    if (reassignToSlug === place.slug)
+      throw new Error('Move its errands to another place, or to no place');
+    const to = this.knownPlace(reassignToSlug);
+    for (const t of this.alive(this.store.tasks).filter((x) => x.place === place.slug))
+      this.writes.patch(this.store.tasks, t.id, { place: to });
+    this.writes.softDelete(this.store.places, id);
+  }
+  async setTaskPlace(id: string, place: string | null): Promise<Task> {
+    this.mustFind(this.store.tasks, id);
+    return this.writes.patch(this.store.tasks, id, { place: this.knownPlace(place) });
+  }
+  async listPlaceTasks(slug: string): Promise<PlaceDigest> {
+    const place = this.alive(this.store.places).find((p) => p.slug === slug);
+    if (!place) throw new Error(placeUnknownError(slug));
+    return placeDigestOf(place, this.alive(this.store.tasks));
+  }
+  private placeTokenStatus(): PlaceTokenStatus {
+    const t = this.store.placeToken;
+    return t
+      ? {
+          active: true,
+          createdAt: t.createdAt,
+          lastUsedAt: null,
+          hint: t.token.slice(-4),
+          readsToday: 0,
+        }
+      : { active: false, createdAt: null, lastUsedAt: null, hint: null, readsToday: 0 };
+  }
+  async getPlaceTokenStatus(): Promise<PlaceTokenStatus> {
+    return this.placeTokenStatus();
+  }
+  // 32 random bytes, base64url — the backend's shape, so the Settings reveal reads the same.
+  async rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }> {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const b64 = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const token = `${PLACE_TOKEN_PREFIX}${b64}`;
+    // A singleton credential, not a collection — set directly, like ensureSettings.
+    this.store.placeToken = { token, createdAt: this.now() };
+    this.persist();
+    return { token, status: this.placeTokenStatus() };
+  }
+  async revokePlaceToken(): Promise<void> {
+    this.store.placeToken = null;
+    this.persist();
   }
 
   // --- Settings ------------------------------------------------------------
@@ -1976,6 +2084,7 @@ class StubClient implements ApiClient {
       sessions: this.alive(this.store.sessions),
       days: this.alive(this.store.days),
       categories: this.alive(this.store.categories),
+      places: this.alive(this.store.places),
       leetcodeAttempts: this.alive(this.store.leetcodeAttempts),
       stories: this.alive(this.store.stories),
       fluxSets: this.alive(this.store.fluxSets),
@@ -1993,6 +2102,7 @@ class StubClient implements ApiClient {
     // automatically, which made the contract's key-set assertion go red until the backend caught up.
     // Enumerating lost that signal, so assert coverage explicitly: add a collection to Store and this
     // stops compiling, which forces it into ExportBundle, which in turn breaks the backend's literal.
-    return bundle satisfies Record<keyof Store, unknown>;
+    // The one Store key left out on purpose: the place token is a credential.
+    return bundle satisfies Record<Exclude<keyof Store, 'placeToken'>, unknown>;
   }
 }

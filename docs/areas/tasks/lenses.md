@@ -18,6 +18,7 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 | done or dropped | Done |
 | timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
 | due today through today+6, or past due | Week |
+| an errand (has a `place`) — [places.md](places.md) §3 | Places |
 | everything else | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it

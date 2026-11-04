@@ -142,6 +142,7 @@ One task per line. A line is:   <title>[ | <tokens>]
              due:<YYYY-MM-DD>  real calendar date, ISO   e.g. due:2026-09-25
              due:<YYYY-MM-DD>@<HH:MM>  + a 24h deadline time   e.g. due:2026-09-25@17:00
              notes:"<text>"    quoted; \n = a newline    e.g. notes:"Ch. 4\nq6: use the lemma"
+             @<place>          a place's link word       e.g. @safeway  (an errand — places.md)
 ```
 
 The `notes:"…"` value is the task's notes (light markdown — see [notes.md](notes.md)). Inside the

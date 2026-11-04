@@ -111,9 +111,10 @@ export function withEstimate(
 }
 
 // A done task with a frozen baseline is a calibration point; a cancelled one never is. Parts are points of
-// their own, and so is a done parent (its lock vs Σ parts — parts.ts).
+// their own, and so is a done parent (its lock vs Σ parts — parts.ts). An errand (a placed task) never is,
+// even with an estimate typed: it's checked off, not timed (places.ts).
 export function contributesCalibration(task: Task): boolean {
-  return task.status === 'done' && task.estimateLockedMin !== null;
+  return task.status === 'done' && task.estimateLockedMin !== null && !task.place;
 }
 
 // --- Sessions --------------------------------------------------------------

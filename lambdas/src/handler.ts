@@ -2,6 +2,7 @@ import { isApiMethod } from '@aperture/shared';
 import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
+import { PlaceTokenStore } from './ddb/placeTokens';
 import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
@@ -59,6 +60,7 @@ export async function handleRpc(
     plaid: call.testMode ? noopPlaid() : (deps.plaid ?? noopPlaid()),
     financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
     anthropic: call.testMode ? noopAnthropic() : (deps.anthropic ?? noopAnthropic()),
+    placeTokens: new PlaceTokenStore(doc, writes), // the same writes: a smoke run mints nothing
   });
   const fn = (
     backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>

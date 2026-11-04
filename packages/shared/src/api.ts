@@ -20,6 +20,7 @@ import type {
   IdeaStatus,
   LeetcodeAttempt,
   LogEntry,
+  Place,
   PomodoroSession,
   RecurrenceRule,
   Roll,
@@ -35,6 +36,7 @@ import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 import type { ParseTaskResult } from './quickParse';
+import type { PlaceDigest, PlaceTokenStatus, UpsertPlaceInput } from './places';
 import type {
   CreateLinkTokenInput,
   ExchangePublicTokenInput,
@@ -61,6 +63,7 @@ export interface CreateTaskInput {
   dueTime?: string | null; // "HH:MM" on dueDay; requires dueDay (normalizeDue). A timed task auto-syncs to gcal
   notes?: string | null; // normalized like setTaskNotes; createTasks rejects the whole batch if any is over the cap
   parentId?: string | null; // a part of that task (parts.ts); createTasks validates every one before any write
+  place?: string | null; // a Place slug (places.ts); an unknown slug is refused — createTasks before any write
 }
 
 // The deadline as one write. Object-shaped (not positional) so an OMITTED dueTime survives JSON: absent
@@ -238,6 +241,7 @@ export interface ExportBundle {
   sessions: PomodoroSession[];
   days: Day[];
   categories: Category[];
+  places: Place[]; // the place token (pointer + lookup row) is a credential and is never exported
   leetcodeAttempts: LeetcodeAttempt[];
   stories: Story[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
@@ -438,6 +442,21 @@ export interface ApiClient {
     backfillPast: boolean,
   ): Promise<{ category: Category; backfilled: number }>;
   deleteCategory(id: string, reassignToId: string | null): Promise<void>;
+
+  // Places (errand lists — places.ts). list is alive, oldest first (the order you added them). A slug
+  // change on upsert rewrites that place's tasks; delete moves its alive tasks to `reassignToSlug` (another
+  // place) or off any list (null), then tombstones it. setTaskPlace works at any status and refuses an
+  // unknown slug (placeUnknownError). listPlaceTasks is the Shortcut's digest as a pure read (no heartbeat).
+  listPlaces(): Promise<Place[]>;
+  upsertPlace(input: UpsertPlaceInput): Promise<Place>;
+  deletePlace(id: string, reassignToSlug: string | null): Promise<void>;
+  setTaskPlace(id: string, place: string | null): Promise<Task>;
+  listPlaceTasks(slug: string): Promise<PlaceDigest>;
+  // The Shortcut's token: one per user. rotate mints a new one (the old stops working) and returns the
+  // plaintext exactly once; the server keeps only its hash. revoke deletes it.
+  getPlaceTokenStatus(): Promise<PlaceTokenStatus>;
+  rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }>;
+  revokePlaceToken(): Promise<void>;
 
   // Settings
   getSettings(): Promise<Settings>;

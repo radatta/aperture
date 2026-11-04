@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gsi1, pk, sk } from './keys';
+import { gsi1, pk, placeTokenPk, PLACE_TOKEN_SK, sk } from './keys';
 
 describe('single-table keys', () => {
   it('partitions per user', () => {
@@ -39,6 +39,18 @@ describe('single-table keys', () => {
     expect(sk.hcheck('2026-08-04', 'h1').startsWith(sk.hcheckPrefix('2026-08-04'))).toBe(true);
     expect(sk.day('2026-08-04')).toBe('day#2026-08-04');
     expect(sk.settings()).toBe('settings');
+  });
+
+  it('keys places per user and the token lookup outside every user partition', () => {
+    expect(sk.place('p1')).toBe('place#p1');
+    expect(sk.place('p1').startsWith(sk.placePrefix())).toBe(true);
+    expect(sk.ptoken()).toBe('ptoken');
+    // `place#` and `plan#` share three letters — neither prefix may pull the other's rows.
+    expect(sk.place('p1').startsWith(sk.planAllPrefix())).toBe(false);
+    expect(sk.plan('2026-08-04', 0, 'x').startsWith(sk.placePrefix())).toBe(false);
+    expect(placeTokenPk('ab12')).toBe('placetoken#ab12');
+    expect(placeTokenPk('ab12').startsWith(pk(''))).toBe(false);
+    expect(PLACE_TOKEN_SK).toBe('placetoken');
   });
 
   it('keys the calibration GSI on done + raw completion time', () => {

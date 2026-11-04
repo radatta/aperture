@@ -5,6 +5,8 @@ import {
   categorySuggestions,
   dueSuggestions,
   estimateSuggestions,
+  placeSuggestions,
+  suggestionsFor,
 } from './suggestions';
 
 const CATS = [
@@ -27,6 +29,27 @@ describe('categorySuggestions', () => {
   it('quotes a multi-word label', () => {
     expect(categorySuggestions('deep', CATS)[0]!.insert).toBe('#"Deep Work"');
     expect(categorySuggestions('ad', CATS)[0]!.insert).toBe('#Admin');
+  });
+});
+
+describe('placeSuggestions', () => {
+  const PLACES = [
+    { slug: 'corner', name: 'Corner Shop' },
+    { slug: 'tj', name: "Trader Joe's" },
+  ];
+  it('matches the link word or a word of the name, and types the link word', () => {
+    expect(labels(placeSuggestions('', PLACES))).toEqual(['@Corner Shop', "@Trader Joe's"]);
+    expect(labels(placeSuggestions('tj', PLACES))).toEqual(["@Trader Joe's"]);
+    expect(labels(placeSuggestions('JOE', PLACES))).toEqual(["@Trader Joe's"]);
+    expect(placeSuggestions('shop', PLACES)[0]!.insert).toBe('@corner');
+    expect(placeSuggestions('x', PLACES)).toEqual([]);
+  });
+  it('is what an @ token under the caret offers', () => {
+    const text = 'milk | @co';
+    const tok = tokenAtCaret(text, text.length)!;
+    expect(tok.kind).toBe('place');
+    const chips = suggestionsFor(tok, { cats: [], places: PLACES, today: '2026-10-12' });
+    expect(applySuggestion(text, tok, chips[0]!).text).toBe('milk | @corner ');
   });
 });
 

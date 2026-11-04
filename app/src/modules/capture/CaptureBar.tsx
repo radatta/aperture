@@ -21,6 +21,7 @@ import { useCreateTask } from '../../data/hooks/useTasks';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { useCreateIdea } from '../../data/hooks/useIdeas';
 import { useActiveCategories } from '../../data/hooks/useCategories';
+import { usePlaces } from '../../data/hooks/usePlaces';
 import { isTypingTarget } from '../../lib/keys';
 import { TaskTokenChips } from '../tasks/TaskTokenChips';
 import { useAutoGrow } from './useAutoGrow';
@@ -55,7 +56,7 @@ const PARKED_LABEL: Record<Parked['why'], string> = {
 
 // Why a submit was refused. Each keeps the text and says so — a refused capture is never silent. The
 // visible notice is just "Not saved" (the mode row is ~375px on a phone); the reason is in the preview row.
-type Blocked = 'invalid' | 'categories' | 'categories-failed';
+type Blocked = 'invalid' | 'categories' | 'categories-failed' | 'places' | 'places-failed';
 
 // The global capture bar — PRODUCT's #1 mechanic. Always present, bottom-docked for thumb reach.
 // Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
@@ -66,7 +67,7 @@ type Blocked = 'invalid' | 'categories' | 'categories-failed';
 // that. A failed parse saves the line as typed and says so — never silently, never lost.
 // A line with ' | ' skips the model: it takes one line of the bulk grammar (`memo | ~30 #Admin`), and a red
 // error refuses the submit and keeps the text (docs/areas/tasks/bulk-add.md).
-// Once you've typed `#`, `~` or `due:` there, chips offer completions; a tap (or Tab) types the literal
+// Once you've typed `#`, `~`, `@` or `due:` there, chips offer completions; a tap (or Tab) types the literal
 // token, so the grammar is unchanged — and nothing appears until you start a token, so it never asks.
 //
 // The field is a growing textarea, not an input, and the mode toggle sits on its own row: on a
@@ -146,15 +147,22 @@ export function CaptureBar({
     () => categories.map((c) => ({ id: c.id, label: c.label })),
     [categories],
   );
+  // The same rule for an @place line: wait for the roster, never save it off its list unseen.
+  const { data: placeData, isError: placesFailed } = usePlaces();
+  const placesLoaded = placeData !== undefined;
+  const placeRefs = useMemo(
+    () => (placeData ?? []).map((p) => ({ slug: p.slug, name: p.name })),
+    [placeData],
+  );
 
   // Trailing whitespace holding a newline is dropped (invisible, so a "single line" error would
   // confuse); a bare trailing space is kept so "milk | " reads as an empty token region.
   const line = useMemo(
     () =>
       mode === 'task' && hasTaskTokens(text)
-        ? parseTaskLine(text.replace(/\s*\n\s*$/, ''), catRefs)
+        ? parseTaskLine(text.replace(/\s*\n\s*$/, ''), catRefs, placeRefs)
         : null,
-    [mode, text, catRefs],
+    [mode, text, catRefs, placeRefs],
   );
   const token = useMemo(
     () => (mode === 'task' && hasTaskTokens(text) ? tokenAtCaret(text, caret) : null),
@@ -163,12 +171,14 @@ export function CaptureBar({
   // Before categories load catRefs is empty, so `#` offers nothing — the preview row already says
   // "Loading categories…" for that line.
   const suggestions = useMemo(
-    () => (token ? suggestionsFor(token, { cats: catRefs, today }) : []),
-    [token, catRefs, today],
+    () => (token ? suggestionsFor(token, { cats: catRefs, places: placeRefs, today }) : []),
+    [token, catRefs, placeRefs, today],
   );
 
   // Before categories load, a real #label would parse as unknown and land uncategorised — wait instead.
   const awaitingCategories = line !== null && line.categoryLabel !== null && !categoriesLoaded;
+  const awaitingPlaces = line !== null && line.placeSlug !== null && !placesLoaded;
+  const awaiting = awaitingCategories || awaitingPlaces;
   const invalid = line !== null && line.errors.length > 0;
   const block: Blocked | null = invalid
     ? 'invalid'
@@ -176,13 +186,22 @@ export function CaptureBar({
       ? categoriesFailed
         ? 'categories-failed'
         : 'categories'
-      : null;
+      : awaitingPlaces
+        ? placesFailed
+          ? 'places-failed'
+          : 'places'
+        : null;
   // The one reason a screen reader hears on a refused submit — the preview row isn't announced.
   const blockReason = invalid
     ? line.errors[0]!
-    : categoriesFailed
-      ? 'Couldn’t load categories — remove the #label to save without one'
-      : 'Loading categories…';
+    : awaitingCategories
+      ? categoriesFailed
+        ? 'Couldn’t load categories — remove the #label to save without one'
+        : 'Loading categories…'
+      : placesFailed
+        ? 'Couldn’t load places — remove the @place to save without one'
+        : 'Loading places…';
+  const awaitingFailed = awaitingCategories ? categoriesFailed : placesFailed;
   // A Review's preview — only while the field still holds exactly the text it was parsed from.
   // A parse resolves "tmw" against its day, so one made before the 4am rollover is dropped after it.
   const previewed = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
@@ -296,7 +315,14 @@ export function CaptureBar({
         .then((r) =>
           r.ok
             ? saveTask(r.input, goesToday, restore, settled, {
-                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped, dayStartHour),
+                parsed: savedSummary(
+                  r.input,
+                  r.categoryLabel,
+                  r.today,
+                  r.dropped,
+                  dayStartHour,
+                  r.placeName,
+                ),
               })
             : saveTask({ title: value }, goesToday, restore, settled, {
                 unparsed: parseFailText(r),
@@ -538,11 +564,11 @@ export function CaptureBar({
           onClick={submit}
           disabled={!text.trim()}
           // Refused, not disabled: a tap must still say why (a dead button on iPhone is silent).
-          aria-disabled={invalid || awaitingCategories || undefined}
+          aria-disabled={invalid || awaiting || undefined}
           aria-label={`Save ${mode}`}
           className={cx(
             'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition',
-            text.trim() && !invalid && !awaitingCategories
+            text.trim() && !invalid && !awaiting
               ? 'bg-teal text-surface hover:opacity-90'
               : 'border border-line text-ink-subtle',
           )}
@@ -656,9 +682,10 @@ export function CaptureBar({
               {e}
             </Text>
           ))}
-          {/* While categories load, the "no category" warning would be a lie — say what's happening. */}
-          {awaitingCategories ? (
-            <Text size="xs" tone={categoriesFailed ? 'danger' : 'muted'}>
+          {/* While categories (or places) load, the "no category" warning would be a lie — say what's
+              happening. */}
+          {awaiting ? (
+            <Text size="xs" tone={awaitingFailed ? 'danger' : 'muted'}>
               {blockReason}
             </Text>
           ) : (

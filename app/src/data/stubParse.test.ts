@@ -106,6 +106,7 @@ describe('stub parseTask', () => {
       source: 'haiku',
       input: { title: 'fix it', categoryId: ap.id, dueDay: '2026-10-13', estimateMin: 30 },
       categoryLabel: 'Aperture',
+      placeName: null,
       dropped: [],
       today: '2026-10-12',
     });
@@ -129,5 +130,25 @@ describe('stub parseTask', () => {
       source: 'grammar',
       input: { title: 'fix it', estimateMin: 30 },
     });
+  });
+
+  it('a known @place word puts it on that list, in either path; an unknown one stays in the title', async () => {
+    const api = stub();
+    await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    expect(await api.parseTask('shampoo @Corner')).toMatchObject({
+      ok: true,
+      source: 'haiku',
+      input: { title: 'shampoo', place: 'corner' },
+      placeName: 'Corner Shop',
+    });
+    expect(await api.parseTask('shampoo | @corner')).toMatchObject({
+      ok: true,
+      source: 'grammar',
+      input: { title: 'shampoo', place: 'corner' },
+      placeName: 'Corner Shop',
+    });
+    const unknown = await api.parseTask('shampoo @nowhere');
+    expect(unknown).toMatchObject({ ok: true, input: { title: 'shampoo @nowhere' } });
+    expect(unknown.ok && unknown.input.place).toBeFalsy();
   });
 });

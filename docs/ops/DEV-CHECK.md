@@ -109,6 +109,15 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   through the History tab, which can't tell one set from another. Its `day` is the app's day (the test user's
   `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's one
   non-ledger write: a test user who never opened Flux has the disclaimer accepted (a Settings field, logged).
+- **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
+  A place is recorded from the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's
+  request has no `id` — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is
+  deleted with `deletePlace(id, null)`. The token is recorded as `place-token:<run>` _before_ `rotatePlaceToken`
+  (never the token itself), and `revokePlaceToken` is refused unless a run-minted token is still unresolved;
+  cleanup revokes it. `ledgerKind()` tells task, Flux, place and token apart by `via`, so a task delete refuses a
+  place id and vice versa. An unrecorded place that appears during the run is a `LEFTOVERS` failure, like a task.
+  Every run, smoke included, lists places after the sweep — so this harness needs a dev build with the places
+  methods.
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't

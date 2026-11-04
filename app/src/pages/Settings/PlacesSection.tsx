@@ -1,0 +1,576 @@
+import { useState } from 'react';
+import { AUTH_HEADER, placeError, placeTasks, slugify } from '@aperture/shared';
+import type { Place, PlaceTokenStatus } from '@aperture/shared';
+import { Button } from '../../components/Button';
+import { Card } from '../../components/Card';
+import { Field } from '../../components/Field';
+import { LoadError } from '../../components/LoadError';
+import { Select } from '../../components/Select';
+import { Text } from '../../components/Text';
+import { ChevronRightIcon } from '../../components/icons';
+import { cx } from '../../lib/cx';
+import { fmtDateTime } from '../../lib/format';
+import { useDisclosure } from '../../lib/useDisclosure';
+import {
+  useDeletePlace,
+  usePlaceDigest,
+  usePlaces,
+  usePlaceTokenStatus,
+  useRevokePlaceToken,
+  useRotatePlaceToken,
+  useUpsertPlace,
+} from '../../data/hooks/usePlaces';
+import { useAllTasks } from '../../data/hooks/useTasks';
+
+// The field look the Categories rows use: a faint resting border, full box on focus. No text size — every
+// field keeps the 16px base, or iOS Safari zooms the page on focus.
+const ROW_INPUT =
+  'rounded-lg border border-line/60 bg-transparent px-2 py-1.5 text-ink outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface';
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : 'Couldn’t save — try again.');
+
+// Settings › Places (docs/areas/tasks/places.md): the stores you run errands at, the token the iPhone
+// Shortcut reads them with, and how to set that Shortcut up. A place's link word (slug) is what `@word`
+// in the capture bar and the Shortcut's URL use, so editing it moves its errands with it; deleting one
+// asks where its errands go.
+export function PlacesSection() {
+  const placesQ = usePlaces();
+  const places = placesQ.data ?? [];
+  // An empty list here would read as "no places" and invite re-adding them.
+  const failed = placesQ.isError && placesQ.data === undefined;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
+        Places
+      </Text>
+      <Text size="sm" tone="muted">
+        Errand lists by store. Put a task on one with “ | @” and its link word in the bar; your
+        iPhone reads the list out when you arrive.
+      </Text>
+      {failed && (
+        <LoadError onRetry={() => void placesQ.refetch()}>Couldn’t load places.</LoadError>
+      )}
+      {placesQ.data && places.length === 0 && (
+        <Text size="sm" tone="muted">
+          No places yet — add the stores you run errands at.
+        </Text>
+      )}
+      <div className="flex flex-col gap-2">
+        {places.map((p) => (
+          <PlaceRow key={p.id} place={p} places={places} />
+        ))}
+      </div>
+      <AddPlace places={places} loaded={placesQ.data !== undefined} />
+      <TokenCard />
+      <ShortcutRecipe places={places} />
+    </section>
+  );
+}
+
+function AddPlace({ places, loaded }: { places: Place[]; loaded: boolean }) {
+  const upsert = useUpsertPlace();
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const trimmed = name.trim();
+  const slug = slugify(trimmed);
+  // Said as you type, so a clash or an all-symbols name never waits for a round trip.
+  const problem = trimmed ? placeError(trimmed, slug, places) : null;
+
+  async function add() {
+    if (!trimmed || problem || !loaded) return;
+    setError(null);
+    try {
+      await upsert.mutateAsync({ name: trimmed });
+      setName('');
+    } catch (e) {
+      setError(errText(e)); // the typed name stays
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-end gap-3">
+        <Field
+          label="New place"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => e.key === 'Enter' && void add()}
+          placeholder="Store name"
+          className="w-48"
+        />
+        <Button
+          size="sm"
+          aria-label="Add place"
+          disabled={!trimmed || !!problem || !loaded || upsert.isPending}
+          onClick={() => void add()}
+        >
+          Add
+        </Button>
+      </div>
+      {(problem || error) && (
+        <Text size="xs" tone="danger" className="mt-2">
+          {error ?? problem}
+        </Text>
+      )}
+      {trimmed && !problem && !error && (
+        <Text size="xs" tone="muted" className="mt-2">
+          Link word: @{slug}
+        </Text>
+      )}
+    </Card>
+  );
+}
+
+type RowPanel = null | 'test' | 'delete';
+
+function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
+  const upsert = useUpsertPlace();
+  const del = useDeletePlace();
+  const tasksQ = useAllTasks();
+  const [panel, setPanel] = useState<RowPanel>(null);
+  const [name, setName] = useState(place.name);
+  const [slug, setSlug] = useState(place.slug);
+  const [error, setError] = useState<string | null>(null);
+  const others = places.filter((p) => p.id !== place.id);
+  // Unknown while the task list hasn't loaded — then the delete still asks, never claims "nothing on it".
+  const open = tasksQ.data ? placeTasks(place.slug, tasksQ.data).length : null;
+
+  // A change from elsewhere (the other field's save, another device) reseeds a field you haven't touched.
+  const [prev, setPrev] = useState(place);
+  if (prev !== place) {
+    setPrev(place);
+    if (name === prev.name) setName(place.name);
+    if (slug === prev.slug) setSlug(place.slug);
+  }
+
+  async function save(next: { name: string; slug: string }) {
+    if (next.name === place.name && next.slug === place.slug) return;
+    setError(null);
+    try {
+      await upsert.mutateAsync({ id: place.id, name: next.name, slug: next.slug });
+    } catch (e) {
+      setError(errText(e)); // what you typed stays, so you can fix it
+    }
+  }
+
+  return (
+    <Card className="px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            // An emptied name goes through too: the refusal ("needs a name") shows, never a quiet no-op.
+            onBlur={() => void save({ name: name.trim(), slug: place.slug })}
+            aria-label={`Rename ${place.name}`}
+            className={cx(ROW_INPUT, 'w-40')}
+          />
+          <label className="flex items-center gap-0.5 text-ink-muted">
+            <span aria-hidden>@</span>
+            <input
+              value={slug}
+              // Link words are lowercase; typing "TJ" means tj.
+              onChange={(e) => setSlug(e.target.value.toLowerCase())}
+              onBlur={() => void save({ name: place.name, slug: slug.trim() })}
+              aria-label={`Link word for ${place.name}`}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className={cx(ROW_INPUT, 'w-32')}
+            />
+          </label>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={panel === 'test'}
+            aria-label={`Test ${place.name}`}
+            onClick={() => setPanel(panel === 'test' ? null : 'test')}
+          >
+            Test
+          </Button>
+          <Button
+            variant="quiet"
+            size="sm"
+            aria-label={`Delete ${place.name}`}
+            onClick={() => setPanel(panel === 'delete' ? null : 'delete')}
+          >
+            Delete…
+          </Button>
+        </div>
+      </div>
+      <Text size="xs" tone="muted" className="mt-1.5">
+        {open === null ? '' : `${open} open ${open === 1 ? 'errand' : 'errands'} · `}
+        {place.lastReadAt
+          ? `Shortcut last called ${fmtDateTime(place.lastReadAt)}`
+          : 'Shortcut never called'}
+      </Text>
+      {error && (
+        <Text size="xs" tone="danger" className="mt-1.5">
+          {error}
+        </Text>
+      )}
+
+      {panel === 'test' && <TestPanel slug={place.slug} />}
+
+      {panel === 'delete' && (
+        <DeletePanel
+          place={place}
+          others={others}
+          open={open}
+          pending={del.isPending}
+          failed={del.isError}
+          onDelete={(to) =>
+            del.mutate({ id: place.id, reassignToSlug: to }, { onSuccess: () => setPanel(null) })
+          }
+          onCancel={() => setPanel(null)}
+        />
+      )}
+    </Card>
+  );
+}
+
+// What the Shortcut would show for this place right now — the same digest, read on demand.
+function TestPanel({ slug }: { slug: string }) {
+  const digest = usePlaceDigest(slug);
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-xl border border-line bg-surface p-3">
+      {digest.isError && !digest.data ? (
+        <LoadError size="xs" onRetry={() => void digest.refetch()}>
+          Couldn’t read this list.
+        </LoadError>
+      ) : !digest.data ? (
+        <Text size="sm" tone="muted">
+          Reading…
+        </Text>
+      ) : digest.data.count === 0 ? (
+        <Text size="sm" tone="muted">
+          Nothing on the list — the Shortcut stays quiet.
+        </Text>
+      ) : (
+        <>
+          <Text size="xs" tone="muted">
+            The notification would read:
+          </Text>
+          <Text size="sm">{digest.data.text}</Text>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DeletePanel({
+  place,
+  others,
+  open,
+  pending,
+  failed,
+  onDelete,
+  onCancel,
+}: {
+  place: Place;
+  others: Place[];
+  open: number | null;
+  pending: boolean;
+  failed: boolean;
+  onDelete: (reassignToSlug: string | null) => void;
+  onCancel: () => void;
+}) {
+  // '' = off any list. Asked, never assumed: deleting a store shouldn't quietly drop its errands.
+  const [to, setTo] = useState('');
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-xl border border-line bg-surface p-3">
+      {open === 0 ? (
+        <Text size="sm" tone="muted">
+          Delete {place.name}? Nothing is on its list.
+        </Text>
+      ) : (
+        <Select
+          label={
+            open === null
+              ? 'Move its errands to'
+              : `Move its ${open} ${open === 1 ? 'errand' : 'errands'} to`
+          }
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="No place"
+          options={others.map((p) => ({ value: p.slug, label: p.name }))}
+          className="w-48"
+        />
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="gold" size="sm" disabled={pending} onClick={() => onDelete(to || null)}>
+          Delete
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        {failed && (
+          <Text size="xs" tone="danger">
+            Couldn’t delete — try again.
+          </Text>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function tokenLine(s: PlaceTokenStatus): string {
+  if (!s.active) return 'No token yet — the Shortcut can’t read your lists until you generate one.';
+  return [
+    `Active · ends …${s.hint}`,
+    s.createdAt !== null ? `created ${fmtDateTime(s.createdAt)}` : null,
+    s.lastUsedAt !== null ? `last used ${fmtDateTime(s.lastUsedAt)}` : 'never used',
+    `${s.readsToday} ${s.readsToday === 1 ? 'read' : 'reads'} today`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+// The one token the Shortcut sends. Generated here, shown once (the server keeps only its hash), rotated
+// or revoked here. A failed status read disables the buttons — rotating blind could break a working setup.
+function TokenCard() {
+  const statusQ = usePlaceTokenStatus();
+  const rotate = useRotatePlaceToken();
+  const revoke = useRevokePlaceToken();
+  const [confirm, setConfirm] = useState<null | 'rotate' | 'revoke'>(null);
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const s = statusQ.data;
+  const failed = statusQ.isError && !s;
+  const busy = rotate.isPending || revoke.isPending;
+
+  function mint() {
+    setConfirm(null);
+    rotate.mutate(undefined, { onSuccess: (r) => setRevealed(r.token) });
+  }
+  function drop() {
+    revoke.mutate(undefined, {
+      onSuccess: () => {
+        setConfirm(null);
+        setRevealed(null);
+      },
+    });
+  }
+
+  return (
+    <Card className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <Text weight="medium">Shortcut token</Text>
+        {failed ? (
+          <LoadError size="xs" onRetry={() => void statusQ.refetch()}>
+            Couldn’t load the token’s status.
+          </LoadError>
+        ) : (
+          <Text size="sm" tone="muted" tabular>
+            {s ? tokenLine(s) : 'Loading…'}
+          </Text>
+        )}
+      </div>
+
+      {revealed && <TokenReveal token={revealed} onDone={() => setRevealed(null)} />}
+
+      {confirm === 'rotate' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3">
+          <Text size="sm" tone="muted">
+            The Shortcut stops working until you paste the new token into it.
+          </Text>
+          <Button size="sm" disabled={busy} onClick={mint}>
+            Rotate
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setConfirm(null)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+      {confirm === 'revoke' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3">
+          <Text size="sm" tone="muted">
+            The Shortcut stops working until you generate a new token.
+          </Text>
+          <Button variant="gold" size="sm" disabled={busy} onClick={drop}>
+            Revoke
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setConfirm(null)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {s?.active ? (
+          <>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirm('rotate')}>
+              Rotate…
+            </Button>
+            <Button variant="quiet" size="sm" disabled={busy} onClick={() => setConfirm('revoke')}>
+              Revoke…
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" disabled={!s || busy} onClick={mint}>
+            Generate token
+          </Button>
+        )}
+        <span role="alert">
+          {(rotate.isError || revoke.isError) && (
+            <Text size="xs" tone="danger">
+              {rotate.isError
+                ? 'Couldn’t make a token — try again.'
+                : 'Couldn’t revoke — try again.'}
+            </Text>
+          )}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+// The plaintext, once. Copy goes through the clipboard; where that's refused, the field is selectable.
+function TokenReveal({ token, onDone }: { token: string; onDone: () => void }) {
+  const [copy, setCopy] = useState<null | 'copied' | 'failed'>(null);
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopy('copied');
+    } catch {
+      setCopy('failed');
+    }
+  }
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-teal bg-surface p-3">
+      <Text size="sm">
+        Your new token — shown this once. Paste it into the Shortcut’s header now; Aperture keeps
+        only a fingerprint of it.
+      </Text>
+      <input
+        readOnly
+        value={token}
+        aria-label="Shortcut token"
+        onFocus={(e) => e.currentTarget.select()}
+        className="w-full rounded-lg border border-line bg-panel px-2 py-1.5 font-mono text-ink outline-none focus:border-teal"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={() => void copyToken()}>
+          Copy
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDone}>
+          Done
+        </Button>
+        <span role="status">
+          {copy && (
+            <Text size="xs" tone={copy === 'copied' ? 'teal' : 'danger'}>
+              {copy === 'copied'
+                ? 'Copied'
+                : 'Couldn’t copy — select the token above and copy it by hand.'}
+            </Text>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// One generic Shortcut holds the URL and the token and takes the store's link word as its input; each
+// store's Arrive automation only runs it. A rotated token is pasted once, into that one Shortcut.
+function ShortcutRecipe({ places }: { places: Place[] }) {
+  const recipe = useDisclosure();
+  const base = `${window.location.origin}/api/places/`;
+  return (
+    <Card className="flex flex-col gap-3">
+      <button
+        type="button"
+        ref={recipe.triggerRef}
+        aria-expanded={recipe.open}
+        onClick={recipe.open ? recipe.onClose : recipe.onOpen}
+        className="flex items-center gap-1 self-start text-left text-ink"
+      >
+        <ChevronRightIcon size={14} className={cx('transition', recipe.open && 'rotate-90')} />
+        <Text weight="medium">Set up the iPhone Shortcut</Text>
+      </button>
+      {recipe.open && (
+        <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-ink">
+          <li>
+            In Shortcuts, tap + and name the shortcut <b>Aperture list</b>. Tap ⓘ and let it receive{' '}
+            <b>Text</b> input — each store’s automation hands it that store’s link word.
+          </li>
+          <li className="flex flex-col gap-1.5">
+            <span>
+              Add <b>Get Contents of URL</b>. URL: this address followed by the{' '}
+              <b>Shortcut Input</b> variable. Method <b>GET</b>.
+            </span>
+            <CopyField label="URL (before Shortcut Input)" value={base} />
+            <span>
+              Under Headers, add one: the key below, and the value <b>Bearer</b>, a space, then your
+              token (from the card above).
+            </span>
+            <CopyField label="Header key" value={AUTH_HEADER} />
+          </li>
+          <li>
+            Add <b>Get Dictionary Value</b>: <b>count</b> from Contents of URL. Then <b>If</b> it’s
+            greater than 0: <b>Get Dictionary Value</b> <b>text</b> from Contents of URL, then{' '}
+            <b>Show Notification</b> with it. End If.
+          </li>
+          <li className="flex flex-col gap-1.5">
+            <span>
+              For each store: Automation → + → <b>Arrive</b> → pick the store’s location. Choose{' '}
+              <b>Run Immediately</b> and turn <b>Notify When Run</b> off. Its one action:{' '}
+              <b>Run Shortcut</b> → Aperture list, with the store’s link word as the input.
+            </span>
+            {places.length > 0 && (
+              <ul className="flex flex-col gap-0.5 pl-1">
+                {places.map((p) => (
+                  <li key={p.id} className="text-ink-muted">
+                    {p.name} → <code>{p.slug}</code>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+          <li className="text-ink-muted">
+            Rotated the token? Paste the new one into Aperture list’s header — the automations stay
+            as they are. Use <b>Test</b> on a place above to see what its banner will say.
+          </li>
+        </ol>
+      )}
+    </Card>
+  );
+}
+
+function CopyField({ label, value }: { label: string; value: string }) {
+  const [copy, setCopy] = useState<null | 'copied' | 'failed'>(null);
+  async function onCopy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopy('copied');
+    } catch {
+      setCopy('failed');
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input
+        readOnly
+        value={value}
+        aria-label={label}
+        onFocus={(e) => e.currentTarget.select()}
+        // text-base: the list around it is text-sm, and a field under 16px zooms iOS Safari on focus.
+        className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2 py-1 font-mono text-base text-ink outline-none focus:border-teal"
+      />
+      <Button variant="ghost" size="sm" aria-label={`Copy ${label}`} onClick={() => void onCopy()}>
+        Copy
+      </Button>
+      <span role="status">
+        {copy && (
+          <Text size="xs" tone={copy === 'copied' ? 'teal' : 'danger'}>
+            {copy === 'copied' ? 'Copied' : 'Couldn’t copy — select it and copy by hand.'}
+          </Text>
+        )}
+      </span>
+    </div>
+  );
+}

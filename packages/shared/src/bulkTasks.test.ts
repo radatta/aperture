@@ -14,8 +14,13 @@ const CATS = [
   { id: 'c3', label: 'Recruiting' },
 ];
 
+const PLACES = [
+  { slug: 'safeway', name: 'Safeway' },
+  { slug: 'trader-joes', name: "Trader Joe's" },
+];
+
 const parse = (text: string, existing?: ReadonlySet<string>) =>
-  parseBulkTasks(text, CATS, existing);
+  parseBulkTasks(text, CATS, PLACES, existing);
 const only = (text: string) => parse(text).lines[0]!;
 
 describe('parseBulkTasks — titles', () => {
@@ -123,7 +128,7 @@ describe('parseBulkTasks — category resolution', () => {
       { id: 'a', label: 'Ops' },
       { id: 'b', label: 'ops' },
     ];
-    const l = parseBulkTasks('t | #Ops', dupe).lines[0]!;
+    const l = parseBulkTasks('t | #Ops', dupe, PLACES).lines[0]!;
     expect(l.errors.length).toBe(1);
     expect(l.categoryId).toBeNull();
   });
@@ -214,6 +219,7 @@ describe('toCreateInputs', () => {
         dueDay: '2026-09-25',
         dueTime: null,
         notes: null,
+        place: null,
       },
       {
         title: 'second',
@@ -222,6 +228,7 @@ describe('toCreateInputs', () => {
         dueDay: null,
         dueTime: null,
         notes: null,
+        place: null,
       },
     ]);
   });
@@ -295,14 +302,14 @@ describe('parseTaskLine — capture', () => {
       'x | #Nope',
       'read | notes:"a\\nb"',
     ])
-      expect(parseTaskLine(raw, CATS)).toEqual(only(raw));
+      expect(parseTaskLine(raw, CATS, PLACES)).toEqual(only(raw));
   });
   it('a line break is a hard error, never split', () => {
-    const l = parseTaskLine('a\nb | ~5', CATS);
+    const l = parseTaskLine('a\nb | ~5', CATS, PLACES);
     expect(l.errors.some((e) => e.includes('single line'))).toBe(true);
   });
   it('never warns about duplicate titles', () => {
-    expect(parseTaskLine('email coach', CATS).warnings).toEqual([]);
+    expect(parseTaskLine('email coach', CATS, PLACES).warnings).toEqual([]);
   });
   it('hasTaskTokens gates on the exact separator, untrimmed', () => {
     expect(hasTaskTokens('a | ~5')).toBe(true);
@@ -312,7 +319,7 @@ describe('parseTaskLine — capture', () => {
   });
   it('toCreateInput maps every field', () => {
     expect(
-      toCreateInput(parseTaskLine('memo | ~30 #admin due:2026-10-03 notes:"x"', CATS)),
+      toCreateInput(parseTaskLine('memo | ~30 #admin due:2026-10-03 notes:"x"', CATS, PLACES)),
     ).toEqual({
       title: 'memo',
       categoryId: 'c1',
@@ -320,8 +327,11 @@ describe('parseTaskLine — capture', () => {
       dueDay: '2026-10-03',
       dueTime: null,
       notes: 'x',
+      place: null,
     });
-    expect(toCreateInput(parseTaskLine('memo | due:2026-10-03@09:30', CATS)).dueTime).toBe('09:30');
+    expect(toCreateInput(parseTaskLine('memo | due:2026-10-03@09:30', CATS, PLACES)).dueTime).toBe(
+      '09:30',
+    );
   });
 });
 
@@ -366,9 +376,9 @@ describe('tokenAtCaret', () => {
 });
 
 describe('errorKinds', () => {
-  const kinds = (raw: string) => parseTaskLine(raw, CATS).errorKinds;
+  const kinds = (raw: string) => parseTaskLine(raw, CATS, PLACES).errorKinds;
   it('runs parallel to errors, saying what each is about', () => {
-    const l = parseTaskLine('x | soon #"open ~0', CATS);
+    const l = parseTaskLine('x | soon #"open ~0', CATS, PLACES);
     expect(l.errorKinds).toHaveLength(l.errors.length);
     expect(kinds('x | soon')).toEqual([{ kind: 'unknown', token: 'soon' }]);
     expect(kinds('x | #')).toEqual([{ kind: 'category' }]);
@@ -379,5 +389,47 @@ describe('errorKinds', () => {
     expect(kinds('x | due:2026-10-01 due:2026-10-02')).toEqual([{ kind: 'due' }]);
     expect(kinds('x | ~0')).toEqual([{ kind: 'other' }]);
     expect(kinds('x | category')).toEqual([{ kind: 'unknown', token: 'category' }]);
+  });
+});
+
+describe('@place', () => {
+  it('resolves a known place, case-insensitively', () => {
+    const l = only('shampoo | @Safeway ~5');
+    expect(l.errors).toEqual([]);
+    expect(l.placeSlug).toBe('safeway');
+    expect(l.place).toBe('safeway');
+    expect(toCreateInput(l).place).toBe('safeway');
+    expect(only('syrup | @trader-joes').place).toBe('trader-joes');
+  });
+  it('an unknown place is a yellow warning — created off any list', () => {
+    const l = only('nails | @target');
+    expect(l.errors).toEqual([]);
+    expect(l.place).toBeNull();
+    expect(l.placeSlug).toBe('target');
+    expect(l.warnings).toEqual(["no place '@target' — created without one"]);
+  });
+  it('empty, malformed and duplicate places are red', () => {
+    expect(only('x | @').errorKinds).toEqual([{ kind: 'place' }]);
+    expect(only('x | @-bad').errorKinds).toEqual([{ kind: 'place' }]);
+    expect(only('x | @safeway @trader-joes').errors).toEqual([
+      'duplicate place (@) token — each is allowed once',
+    ]);
+  });
+  it("a due time's @ is never a place", () => {
+    const l = only('x | due:2026-10-03@09:30 @safeway');
+    expect(l.errors).toEqual([]);
+    expect(l.dueTime).toBe('09:30');
+    expect(l.place).toBe('safeway');
+  });
+  it('an @ in the title is literal', () => {
+    expect(only('email bob@example.com').title).toBe('email bob@example.com');
+  });
+  it('tokenAtCaret completes @', () => {
+    expect(tokenAtCaret('x | @saf', 8)).toEqual({
+      kind: 'place',
+      partial: 'saf',
+      replaceStart: 4,
+      replaceEnd: 8,
+    });
   });
 });
