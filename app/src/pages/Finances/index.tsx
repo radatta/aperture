@@ -22,6 +22,7 @@ interface FinancesOutlet {
   view: FinanceView | null;
   pending: boolean;
   error: boolean;
+  retry: () => void;
 }
 
 // Finances (docs/areas/finances): the three-bucket budget over the synced bank. The header answers
@@ -76,6 +77,7 @@ export function FinancesPage() {
                 view,
                 pending: txnsQ.isPending,
                 error: txnsQ.isError,
+                retry: () => void txnsQ.refetch(),
               } satisfies FinancesOutlet
             }
           />
@@ -85,6 +87,7 @@ export function FinancesPage() {
           <EmptyState
             pending={overviewQ.isPending}
             error={overviewQ.isError}
+            onRetry={() => void overviewQ.refetch()}
             title="No bank connected."
             action={
               overview && <ConnectButton environment={overview.sync.environment} link={link} />
@@ -120,13 +123,23 @@ function useConnectFromUrl(start: ReturnType<typeof useBankLink>['start'], ready
 }
 
 export function FinancesSortTab() {
-  const { overview, view, pending, error } = useOutletContext<FinancesOutlet>();
-  return <SortQueue overview={overview} view={view} pending={pending} error={error} />;
+  const { overview, view, pending, error, retry } = useOutletContext<FinancesOutlet>();
+  return (
+    <SortQueue overview={overview} view={view} pending={pending} error={error} onRetry={retry} />
+  );
 }
 
 export function FinancesAllTab() {
-  const { overview, view, pending, error } = useOutletContext<FinancesOutlet>();
-  return <TransactionList overview={overview} view={view} pending={pending} error={error} />;
+  const { overview, view, pending, error, retry } = useOutletContext<FinancesOutlet>();
+  return (
+    <TransactionList
+      overview={overview}
+      view={view}
+      pending={pending}
+      error={error}
+      onRetry={retry}
+    />
+  );
 }
 
 export function FinancesRulesTab() {

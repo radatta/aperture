@@ -61,6 +61,7 @@ export function FluxHistoryTab() {
         <EmptyState
           pending={loading}
           error={q.isError}
+          onRetry={() => void q.refetch()}
           title={all ? 'No saved sets yet.' : `No sets in the last ${WINDOW_DAYS} days.`}
           action={
             <ButtonLink to="/flux" size="sm">

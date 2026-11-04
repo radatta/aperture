@@ -19,7 +19,7 @@ const BUCKET_OPTIONS = FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BU
 // "Always put X in Y". A rule sorts new charges as they sync (and, when saved from the sort queue,
 // everything unsorted that matches). It never re-sorts a charge you already sorted by hand.
 export function RulesSection() {
-  const { data: rules = [], isPending, isError } = useFinanceRules();
+  const { data: rules = [], isPending, isError, refetch } = useFinanceRules();
   const upsert = useUpsertFinanceRule();
   const [pattern, setPattern] = useState('');
   const [bucket, setBucket] = useState<FinanceBucket>('budget');
@@ -30,7 +30,12 @@ export function RulesSection() {
   return (
     <div className="flex flex-col gap-3">
       {rules.length === 0 ? (
-        <EmptyState pending={isPending} error={isError} title="No rules yet.">
+        <EmptyState
+          pending={isPending}
+          error={isError}
+          onRetry={() => void refetch()}
+          title="No rules yet."
+        >
           Tick “Always” while sorting, or add one below. The longest matching text wins.
         </EmptyState>
       ) : (

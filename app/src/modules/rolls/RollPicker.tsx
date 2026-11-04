@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import type { Roll, TaskStatus } from '@aperture/shared';
 import { cx } from '../../lib/cx';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { CheckIcon } from '../../components/icons';
 import { useRolls, usePickRollToday } from '../../data/hooks/useRolls';
@@ -14,13 +15,20 @@ type Today = 'none' | 'planned' | 'in_progress' | 'done';
 
 export function RollPicker({ className }: { className?: string }) {
   const { rows, day } = useTodayPlan();
-  const { data: rolls = [] } = useRolls();
+  const rollsQ = useRolls();
+  const { data: rolls = [] } = rollsQ;
   const pick = usePickRollToday();
   // A refusal stands until the tasks change (the rep re-timed, or its time cleared), then clears.
   const { data: tasks } = useAllTasks();
   const { reset } = pick;
   useEffect(() => reset(), [tasks, reset]);
   const active = rolls.filter((r) => r.active);
+  if (rollsQ.isError && !rollsQ.data)
+    return (
+      <div className={className}>
+        <LoadError onRetry={() => void rollsQ.refetch()}>Couldn’t load your Rolls.</LoadError>
+      </div>
+    );
   if (active.length === 0) return null;
 
   // Today's rep tasks per roll → the chip's state (in_progress > planned > done > none).

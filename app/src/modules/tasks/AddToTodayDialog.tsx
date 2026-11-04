@@ -3,6 +3,7 @@ import { fmtDueDay, isTimed, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
+import { LoadError } from '../../components/LoadError';
 import { Modal } from '../../components/Modal';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
@@ -113,9 +114,16 @@ function DialogBody({
   const { data: settings } = useSettings();
   const dayStartHour = settings?.dayStartHour ?? 4;
   const today = todayKey(dayStartHour);
-  const { data: tasks = [] } = useAllTasks();
-  const { data: plans = [] } = usePlansForDay(today);
-  const { data: categories = [] } = useCategories();
+  const tasksQ = useAllTasks();
+  const plansQ = usePlansForDay(today);
+  const categoriesQ = useCategories();
+  const { data: tasks = [] } = tasksQ;
+  const { data: plans = [] } = plansQ;
+  const { data: categories = [] } = categoriesQ;
+  // An empty candidate list would read as "nothing to add" — a failed read says so instead.
+  const listFailed =
+    (tasksQ.isError && tasksQ.data === undefined) || (plansQ.isError && plansQ.data === undefined);
+  const categoriesFailed = categoriesQ.isError && categoriesQ.data === undefined;
   const { addToDay, createToday } = useAddToDay();
   const [text, setText] = useState('');
   // Added this visit: they stay listed, marked "Added", instead of vanishing from under your thumb.
@@ -199,44 +207,60 @@ function DialogBody({
             <PlusIcon size={13} /> Add “{typed}” as a new task today
           </Button>
         )}
-        {matches.slice(0, CAP).map((t) => (
-          <div key={t.id} className="flex items-center justify-between gap-3 py-0.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <Text size="sm" className="min-w-0 truncate">
-                {t.title}
-              </Text>
-              <CategoryTag categoryId={t.categoryId} />
-              {t.parentId && byId.get(t.parentId) && (
-                <Text size="xs" tone="muted" className="min-w-0 truncate">
-                  of {byId.get(t.parentId)!.title}
+        {listFailed && (
+          <LoadError
+            onRetry={() => {
+              if (tasksQ.isError) void tasksQ.refetch();
+              if (plansQ.isError) void plansQ.refetch();
+            }}
+          >
+            Couldn’t load your tasks.
+          </LoadError>
+        )}
+        {categoriesFailed && !listFailed && (
+          <LoadError size="xs" onRetry={() => void categoriesQ.refetch()}>
+            Couldn’t load categories — #label search is off.
+          </LoadError>
+        )}
+        {!listFailed &&
+          matches.slice(0, CAP).map((t) => (
+            <div key={t.id} className="flex items-center justify-between gap-3 py-0.5">
+              <div className="flex min-w-0 items-center gap-2">
+                <Text size="sm" className="min-w-0 truncate">
+                  {t.title}
                 </Text>
-              )}
-              {t.dueDay && (
-                <Text size="xs" tone="subtle" className="shrink-0">
-                  {fmtDueDay(t.dueDay, today, t.dueTime, {
-                    verb: t.parentId ? 'ends' : 'due',
-                    dayStartHour,
-                  })}
+                <CategoryTag categoryId={t.categoryId} />
+                {t.parentId && byId.get(t.parentId) && (
+                  <Text size="xs" tone="muted" className="min-w-0 truncate">
+                    of {byId.get(t.parentId)!.title}
+                  </Text>
+                )}
+                {t.dueDay && (
+                  <Text size="xs" tone="subtle" className="shrink-0">
+                    {fmtDueDay(t.dueDay, today, t.dueTime, {
+                      verb: t.parentId ? 'ends' : 'due',
+                      dayStartHour,
+                    })}
+                  </Text>
+                )}
+              </div>
+              {added.has(t.id) ? (
+                <Text size="xs" tone="teal" className="shrink-0 px-3">
+                  Added
                 </Text>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0"
+                  aria-label={`Add ${t.title} to today`}
+                  onClick={() => add(t)}
+                >
+                  Add
+                </Button>
               )}
             </div>
-            {added.has(t.id) ? (
-              <Text size="xs" tone="teal" className="shrink-0 px-3">
-                Added
-              </Text>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="shrink-0"
-                aria-label={`Add ${t.title} to today`}
-                onClick={() => add(t)}
-              >
-                Add
-              </Button>
-            )}
-          </div>
-        ))}
+          ))}
         {matches.length > CAP && (
           <Text size="xs" tone="muted">
             {matches.length - CAP} more — narrow it down
@@ -247,7 +271,7 @@ function DialogBody({
             Timed tasks land on their day — break one down to work on it earlier.
           </Text>
         )}
-        {matches.length === 0 && !typed && (
+        {!listFailed && matches.length === 0 && !typed && (
           <Text size="sm" tone="muted">
             Nothing waiting — type a title to create one for today.
           </Text>

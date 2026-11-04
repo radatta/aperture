@@ -12,10 +12,12 @@ import { useSettings } from './useSettings';
 export function useDay(day: string) {
   const api = useApi();
   const qc = useQueryClient();
-  const { isSuccess: settingsLoaded } = useSettings();
+  // Settings' data, not its status: a failed background refetch flips the status to error with the data still
+  // there, and a new day key (the 4am rollover, app left open) must still load.
+  const { data: settings } = useSettings();
   return useQuery({
     queryKey: qk.day(day),
-    enabled: settingsLoaded,
+    enabled: settings !== undefined,
     queryFn: async () => {
       const d = await api.getDay(day);
       for (const key of [qk.tasks(), qk.plans(day)]) qc.invalidateQueries({ queryKey: key });

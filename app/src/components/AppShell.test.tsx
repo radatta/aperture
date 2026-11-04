@@ -94,3 +94,27 @@ describe('dock: a route that hides capture', () => {
     expect((field as HTMLTextAreaElement).value).toBe('half a thought');
   });
 });
+
+describe('a failed settings read', () => {
+  it('shows the defaults notice with Retry; a pending one shows nothing', async () => {
+    const user = userEvent.setup();
+    const api = createStubClient({ seed: true, storageKey: `shell-${Math.random()}` });
+    const real = api.getSettings.bind(api);
+    let fail = true;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    api.getSettings = async () => {
+      await gate;
+      if (fail) throw new Error('getSettings failed (503)');
+      return real();
+    };
+    renderApp({ api, path: '/habits' });
+    await screen.findByLabelText('Capture log');
+    expect(screen.queryByText(/running on defaults/)).toBeNull(); // still pending
+    act(() => release());
+    await screen.findByText(/Couldn.t load your settings — running on defaults/);
+    fail = false;
+    await user.click(screen.getAllByRole('button', { name: 'Retry' })[0]!);
+    await waitFor(() => expect(screen.queryByText(/running on defaults/)).toBeNull());
+  });
+});

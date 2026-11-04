@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { LoadError } from '../LoadError';
 import { Text } from '../Text';
 
 export interface EmptyStateProps {
@@ -7,6 +8,7 @@ export interface EmptyStateProps {
   // "Backlog is clear" during the very first render and then swap the copy underneath the reader.
   pending?: boolean;
   error?: boolean;
+  onRetry?: () => void; // the failed query's refetch, shown as Retry beside the error
   title: string;
   children?: ReactNode; // the guidance line: what to do about it
   action?: ReactNode;
@@ -15,7 +17,7 @@ export interface EmptyStateProps {
 // One place that knows the three states a list can be in. The empty states in this app got louder
 // (a headline, a sentence of guidance, sometimes a button), which made asserting emptiness too
 // early correspondingly worse — so the guard lives here instead of being re-remembered per site.
-export function EmptyState({ pending, error, title, children, action }: EmptyStateProps) {
+export function EmptyState({ pending, error, onRetry, title, children, action }: EmptyStateProps) {
   if (pending)
     return (
       <Text tone="muted" size="sm">
@@ -24,9 +26,9 @@ export function EmptyState({ pending, error, title, children, action }: EmptySta
     );
   if (error)
     return (
-      <Text tone="danger" size="sm">
+      <LoadError onRetry={onRetry}>
         Couldn&apos;t load this. Check your connection and try again.
-      </Text>
+      </LoadError>
     );
 
   return (

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Outlet, useMatches } from 'react-router';
+import { Outlet, useLocation, useMatches } from 'react-router';
 import { AppHeader } from './AppHeader';
 import { AppNav } from './AppNav';
 import { CaptureBar } from '../modules/capture/CaptureBar';
 import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
 import { useKeyboardInset } from '../lib/useKeyboardInset';
 import { useCalendarPull } from '../data/hooks/useCalendar';
+import { useSettings } from '../data/hooks/useSettings';
+import { LoadError } from './LoadError';
 import { cx } from '../lib/cx';
 import { hidesCapture } from '../lib/routeHandle';
 
@@ -27,6 +29,12 @@ export function AppShell() {
   const hideCapture = hidesCapture(useMatches());
   // Edits made in Google Calendar come back onto their tasks on open/foreground.
   useCalendarPull();
+  // Every `settings?.x ?? default` across the app quietly runs on defaults when this read fails — this one
+  // line says so for all of them.
+  const settings = useSettings();
+  // The Settings page says it itself, beside the sections that can't show.
+  const onSettings = useLocation().pathname.startsWith('/settings');
+  const settingsFailed = settings.isError && settings.data === undefined && !onSettings;
 
   // Reserve exactly as much room as the dock currently needs. A fixed padding can't be right: the
   // dock grows when a timer is running, when several run at once, and when the capture field wraps
@@ -63,6 +71,13 @@ export function AppShell() {
       >
         <AppHeader />
         <AppNav />
+        {settingsFailed && (
+          <div className="pt-4">
+            <LoadError onRetry={() => void settings.refetch()}>
+              Couldn’t load your settings — running on defaults.
+            </LoadError>
+          </div>
+        )}
         <main className="pt-5">
           <Outlet />
         </main>

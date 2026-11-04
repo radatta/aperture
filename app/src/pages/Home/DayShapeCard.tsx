@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { computeDayShape, todayKey } from '@aperture/shared';
+import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -21,7 +22,12 @@ export function DayShapeCard({ mode }: { mode: 'morning' | 'day' }) {
   );
   const hasAccounts = (settings?.googleAccounts.length ?? 0) > 0;
   const hasRefs = (settings?.calendarShapeRefs.length ?? 0) > 0;
-  const { data: busy, isLoading } = useCalendarBusy(
+  const {
+    data: busy,
+    isLoading,
+    isError,
+    refetch,
+  } = useCalendarBusy(
     { day: today, windowStartMs: startMs, windowEndMs: endMs },
     hasAccounts && hasRefs,
   );
@@ -74,6 +80,9 @@ export function DayShapeCard({ mode }: { mode: 'morning' | 'day' }) {
           <Text size="sm" tone="muted">
             Reading your calendars…
           </Text>
+        ) : isError && !busy ? (
+          // Never the empty-calendar fallback: that reads as a wide-open day.
+          <LoadError onRetry={() => void refetch()}>Couldn’t read your calendars.</LoadError>
         ) : (
           <>
             <div className="flex items-baseline gap-2">

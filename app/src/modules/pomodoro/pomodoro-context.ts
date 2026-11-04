@@ -8,6 +8,8 @@ export interface RunningTimer {
   remaining: number; // seconds left in the current block (0 once done)
   done: boolean; // reached target — holding for stop/extend (no auto-break)
   activeSec: number; // live active seconds worked (count-up), incl. time since the last heartbeat
+  error: string | null; // the last action on this timer failed (stop, resume, extend) — said on its row
+  syncFailed: boolean; // two heartbeats in a row failed: the server isn't hearing this timer
 }
 
 export interface StartFocusInput {
@@ -18,12 +20,17 @@ export interface StartFocusInput {
 export interface PomodoroContextValue {
   timers: RunningTimer[]; // all running timers (work + break), newest last
   stale: PomodoroSession[]; // sessions left running when the app closed — awaiting keep/discard
+  staleErrors: Record<string, string>; // a keep/discard that failed, by session id
+  adoptFailed: boolean; // the on-load read of running sessions failed — never shown as "none running"
+  retryAdopt: () => void;
+  startError: string | null; // the last start failed
   startFocus: (input?: StartFocusInput) => void; // add a concurrent work block (dedups per task)
   startBreak: () => void;
   pause: (id: string) => void;
   resume: (id: string) => void;
   extend: (id: string) => void; // give a done timer one more block
-  stop: (id: string, status?: 'completed' | 'discarded') => Promise<void>; // resolves after accrual persists
+  // Resolves after accrual persists; rejects when the stop didn't land (the timer stays, its row says so).
+  stop: (id: string, status?: 'completed' | 'discarded') => Promise<void>;
   keepStale: (id: string) => void;
   discardStale: (id: string) => void;
 }

@@ -21,6 +21,7 @@ export interface PwLocator {
   press(key: string, opts?: { timeout?: number }): Promise<void>;
   waitFor(opts?: { state?: 'visible' | 'attached' | 'hidden'; timeout?: number }): Promise<void>;
   isVisible(): Promise<boolean>;
+  isDisabled(): Promise<boolean>;
   or(other: PwLocator): PwLocator;
   textContent(): Promise<string | null>;
   inputValue(): Promise<string>;
@@ -55,12 +56,19 @@ export interface PwPage {
     url: string | RegExp | ((u: URL) => boolean),
     handler: (route: PwRoute) => Promise<void> | void,
   ): Promise<void>;
+  unroute(
+    url: string | RegExp | ((u: URL) => boolean),
+    handler?: (route: PwRoute) => Promise<void> | void,
+  ): Promise<void>;
   close(): Promise<void>;
 }
 
 export interface PwRoute {
   request(): PwRequest;
   abort(errorCode?: string): Promise<void>;
+  continue(): Promise<void>;
+  fallback(): Promise<void>; // on to the next matching route (or the network) — what a pass-through should use
+  fulfill(opts: { status: number; body?: string; headers?: Record<string, string> }): Promise<void>;
 }
 
 export interface PwContext {

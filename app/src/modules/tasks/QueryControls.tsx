@@ -7,6 +7,7 @@ import { Text } from '../../components/Text';
 import { cx } from '../../lib/cx';
 import { useDisclosure } from '../../lib/useDisclosure';
 import { useActiveCategories, useCategories } from '../../data/hooks/useCategories';
+import { LoadError } from '../../components/LoadError';
 import { overrideChips, resetToLens, SORT_LABEL, STATUS_LABEL } from './query';
 import type { DueBucket, Place, SortKey, StatusChip, TaskQuery } from './query';
 
@@ -36,7 +37,10 @@ export function QueryControls({
   query: TaskQuery;
   onChange: (q: TaskQuery) => void;
 }) {
-  const { data: categories = [] } = useCategories();
+  const categoriesQ = useCategories();
+  const { data: categories = [] } = categoriesQ;
+  // Without the roster, labels, #label search and the Category filter are all off — said once, here.
+  const categoriesFailed = categoriesQ.isError && categoriesQ.data === undefined;
   const panel = useDisclosure();
   const searchOnly = place === 'today';
   const chips = searchOnly ? [] : overrideChips(query, place, categories);
@@ -70,6 +74,11 @@ export function QueryControls({
           </Button>
         )}
       </div>
+      {categoriesFailed && (
+        <LoadError onRetry={() => void categoriesQ.refetch()}>
+          Couldn’t load categories — labels and category filters are off.
+        </LoadError>
+      )}
       {chips.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {chips.map((c) => (
@@ -107,7 +116,8 @@ function FilterPanel({
   onChange: (q: TaskQuery) => void;
   onDone: () => void;
 }) {
-  const { data: active = [] } = useActiveCategories();
+  const activeQ = useActiveCategories();
+  const { data: active = [] } = activeQ;
   // Status only splits history (every open task off Today is backlog or planned-for-later).
   const statuses: StatusChip[] = place === 'done' ? ['done', 'cancelled'] : [];
   // Escape closes the panel wherever focus is — clicking panel text (or a chip, in Safari) leaves
@@ -131,6 +141,11 @@ function FilterPanel({
   return (
     <Card id="task-filters" className="flex flex-col gap-3">
       <Row label="Category">
+        {activeQ.isError && !activeQ.data && (
+          <LoadError size="xs" onRetry={() => void activeQ.refetch()}>
+            Couldn’t load categories.
+          </LoadError>
+        )}
         {active.map((c) => (
           <Chip
             key={c.id}

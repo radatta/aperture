@@ -4,6 +4,7 @@
 import type { Scenario, Tier } from '../scenario';
 import { attachmentDelete } from './attachment-delete';
 import { captureTask } from './capture-task';
+import { failedReads } from './failed-reads';
 import { fluxHistory } from './flux-history';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
@@ -16,6 +17,7 @@ export const SCENARIOS: Scenario[] = [
   partsV2b,
   fluxHistory,
   attachmentDelete,
+  failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];
 
 export type RunTier = Tier | 'delta';

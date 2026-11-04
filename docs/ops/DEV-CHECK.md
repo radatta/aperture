@@ -135,10 +135,14 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 **A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency quota is low for now
 ([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
 cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
-calls back off on a 429 (five retries, 500 ms → 8 s); the browser's don't, so they surface as console errors: in the
+calls back off on a 429 (five retries, 500 ms → 8 s), and so does the app (`app/src/data/retry.ts`), so most of
+the burst now recovers on screen. But Chromium logs every 429 response as a console
+error, retried or not, so they still surface: in the
 smoke scenario's _No console errors on the way_ step, and again in every later step that re-reads the run's cumulative
 console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
-console line doesn't. The run still reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
+console line doesn't; a call that was retried and recovered is still listed there. Failures a scenario injects on
+purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The run still
+reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
 full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold in its `report.md`:**
 
 - the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
@@ -146,11 +150,12 @@ full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when a
 - every `fail` step is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
   or a later scenario's (its last step, `noConsoleErrors`) reading `console errors: …` with exactly N `\|`-separated
   entries — nothing new after the burst;
-- the _Console errors_ section lists exactly N lines, each containing `status of 429` or `failed (429)`, and N ≤ 16
-  (one throttled call can log two lines — the resource's and the app's own `Error: … failed (429)`; a refetch loop or
-  request storm, also all 429s, would exceed it);
+- the _Console errors_ section lists exactly N lines, each containing `status of 429`, and N ≤ 16 (Chromium logs
+  one line per throttled attempt, and the app retries a 429 twice, so one call can log up to three; a refetch
+  loop or request storm, also all 429s, would exceed it);
 - the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
-  function, so that call was never tested; if it names one, rerun until it doesn't;
+  function, so that attempt was never tested — the app's retry may have recovered the call, but a listed method
+  isn't proven by this run; if it names one, rerun until it doesn't;
 - every _Feature coverage_ row — _This feature_ and _Other scenarios_ alike — is `pass`, `off dev` or `needs you`. This rule never makes a row green: a 429 that
   fails a proving step leaves its row not proven — rerun until it passes.
 
@@ -243,12 +248,33 @@ export const quickAdd: Scenario = {
 ```
 
 `ctx` has `page` (Playwright), `ui` (`goto`, `captureTask`, `expectText`, `setTheme`), `api` (reads, and the
-ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA today/tomorrow) and `nonce`
+ledger-guarded writes), `mcp` (the same, through dev's `/mcp` as the test user), `intercept` (_Injected failures_), `shot`, `createdIds()`, `consoleErrors()`, `dates` (LA today/tomorrow) and `nonce`
 (makes a title findable on screen — never a cleanup key). A step throws to fail; the rest of that scenario is
 skipped, the next one still runs, cleanup always does. Prefer the grammar line (space, pipe, space) when the
 model isn't what's under test: no Haiku spend, deterministic fields. A step that needs more of Playwright
 extends `pw-types.ts`. A feature scenario ends with `noConsoleErrors` (`scenario.ts`): the console check is its own
 step, proving no row, so a console error fails the run without unproving the rows the feature's steps did prove.
+
+### Injected failures
+
+A failure dev won't produce on demand (a read that 429s, a dropped connection, a stop that doesn't land) is
+injected **by the harness**, never by a switch in shipped code: `ctx.intercept(method, { status?, times?,
+abort? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
+every call) get `status` (default 429) or a dropped connection, and the rest pass through. The returned handle
+counts `hits()` and `passed()`; `release()` unroutes it, because a live page route turns off the page's HTTP
+cache. The pipeline releases any a step left live when its scenario ends, so a step that threw mid-intercept
+can't fail the next scenario's reads.
+
+While any intercept is live, the console's `Failed to load resource: … status of N` and `net::ERR_FAILED` lines are
+the harness's own doing and are left out of _Console errors_. Chromium's line names no URL, so the drop covers
+the whole window (a few seconds per step), not one method. To keep a real failure in that
+window from hiding, every non-injected response ≥ 400 other than a 429 — `/api` or not — is recorded from the
+response itself, as `HTTP <status> on /api/<method>` (or the host and path) `(during an injected failure)`, and a
+real 429 still lands in _Throttled (429)_. Only a dropped real connection inside the window goes unrecorded. Injected responses are known by their
+request, not their method, and are listed under _Injected by the harness_, never _Throttled (429)_. `failed-reads` runs last in `SCENARIOS` for this reason. It
+starts and stops one ad-hoc focus timer through the dock, which leaves a seconds-long completed session in the test
+user's history each run. Sessions have no delete method, so they're not ledgered; a timer an aborted run left running
+is stopped or discarded through the dock before the timer steps, judged by the server's list.
 
 ### Rows
 
@@ -259,11 +285,13 @@ A row is one entry point × one case, as the user would say it (`what`), `nomina
 - **Proven on dev** — steps name it in `proves`. At least one must drive the row's own entry; every step naming
   it must pass. An `api` step can verify a UI row's server half, never stand in for the UI.
 - **Off dev** (`offDev: { file, test, why }`) — **if dev can produce the failure naturally, prove it on dev; if
-  it can't, a named unit test covers it; no test-only switches in shipped code.** Bad input, size limits, an
-  expired link or another user's id happen on dev, so they're proven there; S3 refusing a delete doesn't. `file`
-  is a repo-relative `.test.ts(x)`, `test` the title of a runnable `it()`/`test()` opening its own line in it, verbatim (not `it.skip`,
-  `it.todo` or a bare string); both are checked. One test per row — a failure with a UI
-  half and a BFF half is two rows.
+  it can't, a named unit test covers it; no test-only switches in shipped code.** One exception, so a feature
+  with many screens doesn't prove the same path on each: a case may be covered off dev when a dev-proven row of
+  the **same scenario** already runs everything only dev can run for it: the same client branch (the http
+  client's 429 loop, the query layer's retry, or no retry) and, when the failure isn't injected by the harness,
+  the same BFF method. What differs (another screen's copy, a pure decision) must run entirely in the named
+  test. Its `why` starts `same path as <row> (proven on dev)`, and `matrix.ts` checks that row exists and dev
+  proves it. The exception never covers a new entry point, a server-side effect, or a branch no dev row takes.
 - **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
   Safari extension, a camera, a Google account.
 

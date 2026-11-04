@@ -125,7 +125,7 @@ function DueTime({ task }: { task: Task }) {
 // The daytime hero: what's happening right now (the in-progress task, count-up vs estimate) over the
 // Big 3, then the rest of today. Replaces the old FocusCard + TodayTasksCard.
 export function RightNowCard() {
-  const { rows, isPending, isError } = useTodayPlan();
+  const { rows, isPending, isError, retry } = useTodayPlan();
   const { data: allTasks = [] } = useAllTasks();
   const { timers, startFocus, startBreak, stop } = usePomodoro();
   const transition = useTransitionTask();
@@ -154,6 +154,7 @@ export function RightNowCard() {
           <EmptyState
             pending={isPending}
             error={isError}
+            onRetry={retry}
             title="Nothing planned today."
             action={
               <ButtonLink size="sm" to="/tasks">
@@ -207,7 +208,16 @@ export function RightNowCard() {
                 size="sm"
                 onClick={async () => {
                   const elapsed = heroElapsed; // capture before the timer stops
-                  if (heroTimer) await stop(heroTimer.session.id);
+                  // A stop that didn't land keeps the timer; its row in the bar below says so, and the
+                  // Actual form waits until the time is really saved.
+                  if (
+                    heroTimer &&
+                    !(await stop(heroTimer.session.id).then(
+                      () => true,
+                      () => false,
+                    ))
+                  )
+                    return;
                   setDoneInitial(elapsed);
                 }}
               >

@@ -8,7 +8,7 @@ import { summarize, verdictLabel, verdictTone, withAttemptOrdinals } from './rec
 // with a derived per-problem attempt-count. Rows are fed by the browser extension; there's no authoring
 // here. Firm-but-honest, never a streak or a red "you failed".
 export function AttemptsSection() {
-  const { data: attempts = [], isPending, isError } = useLeetcodeAttempts();
+  const { data: attempts = [], isPending, isError, refetch } = useLeetcodeAttempts();
   const rows = withAttemptOrdinals(attempts);
   const s = summarize(attempts);
 
@@ -29,6 +29,7 @@ export function AttemptsSection() {
             <EmptyState
               pending={isPending}
               error={isError}
+              onRetry={() => void refetch()}
               title="No LeetCode attempts captured yet."
             >
               Install the extension to start logging them here.

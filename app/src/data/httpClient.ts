@@ -1,6 +1,7 @@
 import { API_METHODS, AUTH_HEADER } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { getAuthToken, notifyUnauthorized } from '../auth/tokenStore';
+import { ApiError, MAX_RETRIES, retryDelayMs } from './retry';
 
 // The minimal fetch surface we use — narrow enough that the global `fetch` satisfies it and a test can
 // inject an in-process handler in its place.
@@ -17,6 +18,7 @@ export function createHttpClient(
   fetchImpl?: FetchLike,
   getToken: () => string | null = getAuthToken,
   onUnauthorized: () => void = notifyUnauthorized,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 ): ApiClient {
   const doFetch: FetchLike = fetchImpl ?? ((url, init) => fetch(url, init));
 
@@ -24,13 +26,17 @@ export function createHttpClient(
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     const token = getToken(); // read per request — it refreshes under us
     if (token) headers[AUTH_HEADER] = `Bearer ${token}`; // custom header — survives CloudFront OAC signing
-    const res = await doFetch(`${base}/api/${method}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ args }),
-    });
+    const send = () =>
+      doFetch(`${base}/api/${method}`, { method: 'POST', headers, body: JSON.stringify({ args }) });
+    let res = await send();
+    // A 429 never ran (retry.ts → isThrottle), so every method retries it, writes included.
+    for (let i = 0; res.status === 429 && i < MAX_RETRIES; i++) {
+      await sleep(retryDelayMs(i));
+      res = await send();
+    }
     if (res.status === 401) onUnauthorized(); // session is gone server-side — re-auth, don't just fail
-    if (!res.ok) throw new Error((await refusal(res)) ?? `${method} failed (${res.status})`);
+    if (!res.ok)
+      throw new ApiError((await refusal(res)) ?? `${method} failed (${res.status})`, res.status);
     const text = await res.text();
     return text ? JSON.parse(text) : undefined;
   }

@@ -10,6 +10,7 @@ import {
 } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
+import { LoadError } from '../../../components/LoadError';
 import { Field } from '../../../components/Field';
 import { Select } from '../../../components/Select';
 import { Text } from '../../../components/Text';
@@ -275,9 +276,15 @@ export function TaskDetailsForm({
           placeholder="Uncategorized"
           value={categoryId}
           onChange={(e) => setCategoryId(e.target.value)}
-          options={categoryOptions}
+          options={categoryOptions.options}
+          disabled={categoryOptions.failed}
           className="w-40"
         />
+        {categoryOptions.failed && (
+          <LoadError size="xs" onRetry={categoryOptions.retry}>
+            Couldn’t load categories.
+          </LoadError>
+        )}
         {isTerminal ? (
           <div className="flex flex-col gap-1">
             <Text size="sm" tone="muted">

@@ -57,11 +57,13 @@ export function TransactionList({
   view,
   pending,
   error,
+  onRetry,
 }: {
   overview: FinanceOverview;
   view: FinanceView | null;
   pending: boolean;
   error: boolean;
+  onRetry?: () => void; // the failed read's refetch
 }) {
   const [filter, setFilter] = useState<FinanceListFilter>('all');
   const [search, setSearch] = useState('');
@@ -183,7 +185,14 @@ export function TransactionList({
   });
 
   if (!view)
-    return <EmptyState pending={pending && !error} error={error} title="No transactions yet." />;
+    return (
+      <EmptyState
+        pending={pending && !error}
+        error={error}
+        onRetry={onRetry}
+        title="No transactions yet."
+      />
+    );
 
   const kindOf = view.kindOf;
   const needle = search.trim().toLowerCase();

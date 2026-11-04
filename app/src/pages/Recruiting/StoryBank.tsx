@@ -19,7 +19,7 @@ import { StoryEditor, type StoryFields } from './StoryEditor';
 // place. The "New story" form is collapsed by default (the tab's job is to show the bank, not greet you
 // with a form); opening/closing hands focus back to the trigger via useDisclosure.
 export function StoryBank() {
-  const { data: stories = [], isPending, isError } = useStories();
+  const { data: stories = [], isPending, isError, refetch } = useStories();
   const create = useCreateStory();
   const { open, triggerRef, onOpen, onClose } = useDisclosure();
 
@@ -48,7 +48,7 @@ export function StoryBank() {
 
       <div className="flex flex-col gap-3">
         {stories.length === 0 ? (
-          <EmptyState pending={isPending} error={isError} title="No stories yet.">
+          <EmptyState pending={isPending} error={isError} onRetry={() => void refetch()} title="No stories yet.">
             Add your first with “New story” — a title now, the STAR details whenever you have them.
           </EmptyState>
         ) : (

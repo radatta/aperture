@@ -78,6 +78,26 @@ describe('Right now card', () => {
     expect(await screen.findByText('1m of ~30m')).toBeTruthy();
   });
 
+  it('Done on the hero with a failed stop keeps the timer and never opens the Actual form', async () => {
+    const api = stub();
+    const task = await plan(api, 'Deep work', { est: 30, order: 0, start: true });
+    await api.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: TODAY,
+    });
+    api.stopSession = () => Promise.reject(new Error('stopSession failed (503)'));
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Done' }));
+    await screen.findByText('Couldn’t stop — try again.');
+    expect(screen.queryByLabelText('Actual (min)')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
+  });
+
   it('finishing the hero returns a “what’s next” prompt without auto-advancing', async () => {
     const api = stub();
     await plan(api, 'First thing', { est: 20, order: 0, start: true });

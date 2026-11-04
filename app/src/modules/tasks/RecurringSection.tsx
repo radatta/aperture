@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { todayKey } from '@aperture/shared';
 import type { RecurrenceRule, TaskSeries } from '@aperture/shared';
 import { Button } from '../../components/Button';
+import { LoadError } from '../../components/LoadError';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
 import { Select } from '../../components/Select';
+import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
 import { PlusIcon } from '../../components/icons';
 import { useCategoryOptions } from '../../data/hooks/useCategories';
@@ -20,8 +22,10 @@ type Kind = RecurrenceRule['kind'];
 // Recurring tasks: each occurrence is a real task (its own estimate/actual → its own calibration
 // point), materialized lazily when its day loads. This tab creates/lists the templates.
 export function RecurringSection() {
-  const { data: series = [] } = useSeries();
+  const seriesQ = useSeries();
+  const { data: series = [] } = seriesQ;
   const active = series.filter((s) => s.active);
+  const seriesFailed = seriesQ.isError && seriesQ.data === undefined;
   return (
     <div className="flex flex-col gap-4">
       <SeriesForm />
@@ -29,7 +33,14 @@ export function RecurringSection() {
         <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
           Active series
         </Text>
-        {active.length === 0 ? (
+        {seriesQ.isPending || seriesFailed ? (
+          <EmptyState
+            pending={!seriesFailed}
+            error={seriesFailed}
+            onRetry={() => void seriesQ.refetch()}
+            title=""
+          />
+        ) : active.length === 0 ? (
           <Text tone="muted" size="sm">
             No recurring tasks yet.
           </Text>
@@ -170,9 +181,15 @@ function SeriesForm() {
             placeholder="Uncategorized"
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
-            options={categoryOptions}
+            options={categoryOptions.options}
+            disabled={categoryOptions.failed}
             className="w-40"
           />
+          {categoryOptions.failed && (
+            <LoadError size="xs" onRetry={categoryOptions.retry}>
+              Couldn’t load categories.
+            </LoadError>
+          )}
         </div>
         {kind === 'weekly' && (
           <div className="flex flex-wrap gap-1.5">

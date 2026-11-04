@@ -19,7 +19,7 @@ export function ComingUpCard() {
   const dayStartHour = settings?.dayStartHour ?? 4;
   const today = todayKey(dayStartHour);
   const { rows } = useTodayPlan();
-  const { data: allTasks = [], isPending, isError } = useAllTasks();
+  const { data: allTasks = [], isPending, isError, refetch } = useAllTasks();
   const now = useNow();
 
   const excludeIds = new Set<string>([
@@ -40,7 +40,12 @@ export function ComingUpCard() {
       aside={moreLabel ? <CardLink to="/tasks?lens=week">{moreLabel}</CardLink> : undefined}
     >
       {cu.items.length === 0 ? (
-        <EmptyState pending={isPending} error={isError} title="No deadlines on the radar.">
+        <EmptyState
+          pending={isPending}
+          error={isError}
+          onRetry={() => void refetch()}
+          title="No deadlines on the radar."
+        >
           Set a due day when you scope a task and it’ll show up here.
         </EmptyState>
       ) : (
