@@ -8,6 +8,7 @@ import type { Clock, Job, Run } from './dispatch.ts';
 import { DispatchRejected, dispatchAndWait, listJobs, listRuns } from './dispatch.ts';
 import { featureBranch, requirePushed, runKey } from './git.ts';
 import { acquire, release, renew } from './lock.ts';
+import type { Holder } from './lock.ts';
 import type { Run as Sh } from './sh.ts';
 
 export const deployTitle = (sha: string, key: string) => `deploy-dev ${sha} ${key}`;
@@ -81,6 +82,7 @@ export async function deployDev(
   api: Api,
   clock: Clock,
   log: (s: string) => void = console.log,
+  onLock: (h: Holder | null) => void = () => undefined, // each lock change (the board's lock cache)
 ): Promise<Run> {
   const branch = featureBranch(sh);
   const sha = requirePushed(sh, branch);
@@ -105,12 +107,14 @@ export async function deployDev(
     );
   }
   let holder = await acquire(api, branch, sha, clock.now());
+  onLock(holder);
   log(`dev lock: ${branch} until ${holder.expiresAt}`);
   // Renewal starts with 15 minutes left, so a transient failure just retries on the next poll.
   const keepLock = async () => {
     if (Date.parse(holder.expiresAt) - clock.now() >= RENEW_BELOW_MS) return;
     try {
       holder = await renew(api, branch, clock.now());
+      onLock(holder);
     } catch (err) {
       log(`dev lock renewal failed (${(err as Error).message}) — retrying on the next poll`);
     }
@@ -130,7 +134,10 @@ export async function deployDev(
     });
   } catch (err) {
     if (err instanceof DispatchRejected) {
-      await release(api, branch).catch(() => undefined);
+      await release(api, branch).then(
+        () => onLock(null),
+        () => undefined,
+      );
       throw new Error(`${err.message} — no run started; lock released`, { cause: err });
     }
     throw new Error(
@@ -139,11 +146,15 @@ export async function deployDev(
     );
   }
   if (run.conclusion !== 'success') {
-    await release(api, branch).catch(() => undefined);
+    await release(api, branch).then(
+      () => onLock(null),
+      () => undefined,
+    );
     throw new Error(`deploy-dev ${run.conclusion}: ${run.html_url} — lock released`);
   }
   try {
     holder = await renew(api, branch, clock.now()); // the devcheck gets a full TTL
+    onLock(holder);
   } catch (err) {
     log(
       `warning: the deploy succeeded but the final lock renewal failed (${(err as Error).message}) — check \`pnpm bot lock status\``,

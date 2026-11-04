@@ -1,11 +1,8 @@
 #!/bin/bash
-# Leases (docs/ops/SESSION-BOARD.md → Leases). Sourced by board.sh and heavy.sh after lib.sh; decisions
+# Heavy slots (docs/ops/SESSION-BOARD.md → Leases). Sourced by heavy.sh and the heavy guard after lib.sh; decisions
 # come from scripts/src/board/lease.ts via cli.ts (tested), state changes happen here under the board lock.
-#   board.sh lease acquire dev [--wait SEC] [--force] [--note "…"] [--ttl SEC]
-#   board.sh lease renew dev | release dev [--force] | status
 
 BOARD_CLI=(node "$SB_REPO/scripts/src/board/cli.ts")
-DEV="$BOARD_DIR/leases/dev.json"
 
 lease_me() {  # pid → "start␟name␟branch" (\x1f-separated, so an empty field survives `read`)
   local ps start name branch f="$BOARD_DIR/sessions/$1.json"
@@ -16,85 +13,6 @@ lease_me() {  # pid → "start␟name␟branch" (\x1f-separated, so an empty fie
 }
 
 lease_event() { sb_append events "$(jq -nc --arg t "$(sb_now)" --argjson e "$1" '{v: 1, t: $t, kind: "lease"} + $e')"; }
-
-# One attempt, under the lock. Exit 0 granted/renewed/taken over, 3 held by someone else.
-# $5 = renew: only renew your own lease or resume your branch's gone one — never grant or take over.
-_dev_try() {
-  local pid="$1" ttl="$2" force="$3" note="$4" mode="${5:-}" start name branch cur req dec kind
-  IFS=$'\x1f' read -r start name branch < <(lease_me "$pid")
-  [ -n "$branch" ] || { echo "board: dev lease needs a branch (detached HEAD?)" >&2; return 2; }
-  cur=$(cat "$DEV" 2>/dev/null); [ -n "$cur" ] || cur=null
-  req=$(jq -nc --argjson pid "$pid" --arg start "$start" --arg name "$name" --arg branch "$branch" \
-    --argjson ttl "$ttl" --argjson force "$force" '{pid: $pid, start: $start, name: $name, branch: $branch, ttlSec: $ttl, force: $force}')
-  dec=$(jq -nc --argjson c "$cur" --argjson r "$req" --arg note "$note" '{current: $c, req: $r, note: $note}' | "${BOARD_CLI[@]}" decide-dev) || return 2
-  kind=$(jq -r .kind <<<"$dec")
-  if [ "$mode" = renew ] && { [ "$kind" = grant ] || { [ "$kind" = takeover ] && [ "$(jq -r .reason <<<"$dec")" != resumed ]; }; }; then
-    echo "board: you don't hold dev — lease acquire dev" >&2; return 3
-  fi
-  case "$kind" in
-    wait)
-      jq -r '.holder | "dev held by \(.holderName) (\(.branch)) since \(.acquiredAt), expires \(.expiresAt)\(if .holderGone then " — holder gone; its branch takes it back on restart" else "" end) — --wait <sec> polls, --force takes it (logged)"' <<<"$dec" >&2
-      return 3 ;;
-    renew)
-      jq -c --arg now "$(sb_now)" --argjson ttl "$ttl" --arg note "$note" '
-        .expiresAt = (now + $ttl | todate) | .ttlSec = $ttl | del(.holderGone) | if $note != "" then .note = $note else . end' "$DEV" | sb_write "$DEV"
-      echo "dev lease renewed ($branch) until $(jq -r .expiresAt "$DEV")" ;;
-    grant|takeover)
-      sb_init_dirs
-      jq -c '.lease // empty' <<<"$dec" | sb_write "$DEV" || { echo "board: couldn't write the dev lease" >&2; return 2; }
-      lease_event "$(jq -c --arg k "$kind" '{lease: "dev", action: $k, reason: .reason, previous: (.previous | if . then {holderName, branch, holderPid} else null end)}' <<<"$dec")"
-      echo "dev lease: $branch ($name) until $(jq -r .expiresAt "$DEV")"
-      if [ "$kind" = takeover ] && [ "$(jq -r .reason <<<"$dec")" != resumed ]; then
-        jq -r '"took over from \(.previous.holderName) (\(.previous.branch)) — \(.reason). SendMessage `\(.previous.holderName)`: \"Took the dev lease from you (\(.reason)); tell me if you still need dev.\""' <<<"$dec"
-      fi ;;
-    *) echo "board: unexpected decision $dec" >&2; return 2 ;;
-  esac
-}
-
-lease_dev_acquire() {  # pid wait ttl force note
-  local pid="$1" wait="$2" ttl="$3" force="$4" note="$5" t0 rc
-  t0=$(sb_epoch)
-  while :; do
-    sb_locked _dev_try "$pid" "$ttl" "$force" "$note"; rc=$?
-    [ "$rc" = 3 ] || return "$rc"
-    [ $(( $(sb_epoch) - t0 )) -lt "$wait" ] || return 3
-    sleep 5
-  done
-}
-
-_dev_release() {
-  local pid="$1" force="$2" holder
-  [ -f "$DEV" ] || { echo "dev lease: already free"; return 0; }
-  holder=$(jq -r .holderPid "$DEV")
-  if [ "$holder" != "$pid" ] && [ "$force" != true ]; then
-    echo "board: dev is held by $(jq -r .holderName "$DEV") — only the holder releases it (--force overrides, logged)" >&2; return 3
-  fi
-  lease_event "$(jq -c --arg f "$force" '{lease: "dev", action: "release", forced: ($f == "true"), holderName, branch}' "$DEV")"
-  rm -f "$DEV"; echo "dev lease released"
-}
-
-# Hot path (UserPromptSubmit): jq only (node only on a resume), no lock wait beyond a flock. Renews the holder's lease;
-# a restarted session on a gone holder's branch takes it back (logged `resumed`) through the tested path.
-lease_renew_dev() {
-  [ -f "$DEV" ] || return 0
-  local pid="$1" branch holder gone
-  read -r holder gone < <(jq -r '"\(.holderPid) \(.holderGone // false)"' "$DEV" 2>/dev/null)
-  branch=$(jq -r '.branch // empty' "$BOARD_DIR/sessions/$pid.json" 2>/dev/null)
-  if [ "$holder" != "$pid" ]; then
-    [ "$gone" = true ] && [ -n "$branch" ] && [ "$branch" = "$(jq -r .branch "$DEV")" ] &&
-      sb_locked _dev_try "$pid" "$(jq -r .ttlSec "$DEV")" false "" renew >/dev/null 2>&1
-    return 0
-  fi
-  [ -z "$branch" ] || [ "$branch" = "$(jq -r .branch "$DEV")" ] || return 0
-  sb_locked sh -c 'jq -c ".expiresAt = (now + .ttlSec | todate) | del(.holderGone)" "$1" >"$1.tmp.$$" && mv -f "$1.tmp.$$" "$1"' _ "$DEV"
-}
-
-# SessionEnd: the holder is gone, the lease stays until TTL (answer 4 — dev testing outlives a restart).
-lease_end_dev() {
-  [ -f "$DEV" ] || return 0
-  [ "$(jq -r .holderPid "$DEV" 2>/dev/null)" = "$1" ] || return 0
-  sb_locked sh -c 'jq -c ".holderGone = true" "$1" >"$1.tmp.$$" && mv -f "$1.tmp.$$" "$1"' _ "$DEV"
-}
 
 # --- heavy slots ---
 
@@ -242,27 +160,4 @@ _heavy_give_up() {
     echo "heavy: still past the measured edge after ${wait}s — running: $(_heavy_holders) — tell the user (board.sh status)" \
       "rather than retrying; a longer wait is heavy.sh --wait <sec> with the Bash call run in the background." >&2
   fi
-}
-
-cmd_lease() {
-  local sub="${1:-status}" kind="${2:-dev}" wait=0 force=false note= ttl= pid
-  shift 2 2>/dev/null || shift $#
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --wait) wait="$2"; shift 2 ;;
-      --force) force=true; shift ;;
-      --note) note="$2"; shift 2 ;;
-      --ttl) ttl="$2"; shift 2 ;;
-      *) echo "board: unknown lease option $1" >&2; return 2 ;;
-    esac
-  done
-  [ "$sub" = status ] && { [ -f "$DEV" ] && jq . "$DEV" || echo "dev lease: free"; return 0; }
-  [ "$kind" = dev ] || { echo "board: only the dev lease is taken by hand (heavy slots come from heavy.sh)" >&2; return 2; }
-  pid=$(me_pid) || { echo "board: no claude ancestor" >&2; return 1; }
-  case "$sub" in
-    acquire) lease_dev_acquire "$pid" "$wait" "${ttl:-2700}" "$force" "$note" ;;
-    renew) sb_locked _dev_try "$pid" "${ttl:-$(jq -r '.ttlSec // 2700' "$DEV" 2>/dev/null || echo 2700)}" false "$note" renew ;;  # keeps its TTL  # renews yours, resumes your branch's gone lease, else 3
-    release) sb_locked _dev_release "$pid" "$force" ;;
-    *) echo "usage: board.sh lease acquire|renew|release|status dev" >&2; return 2 ;;
-  esac
 }

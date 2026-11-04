@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { fakeApi, ghError } from './fakes.ts';
-import { TTL_MS, acquire, release, renew, status } from './lock.ts';
+import { fakeApi, fakeClock, ghError } from './fakes.ts';
+import {
+  TTL_MS,
+  acquire,
+  parseWaitMax,
+  queueNotes,
+  release,
+  renew,
+  status,
+  waitForLock,
+} from './lock.ts';
 import type { Holder } from './lock.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
@@ -73,7 +82,9 @@ describe('dev lock', () => {
 
   it('refuses while another branch holds it, naming the holder', async () => {
     const g = github(live('dev-e2e'));
-    await expect(acquire(g.api, 'ci-bot', SHA, NOW)).rejects.toThrow(/locked by dev-e2e/);
+    await expect(acquire(g.api, 'ci-bot', SHA, NOW)).rejects.toThrow(
+      /locked by dev-e2e .*`pnpm bot lock wait`/,
+    );
     expect(g.holder()?.branch).toBe('dev-e2e');
   });
 
@@ -141,5 +152,129 @@ describe('dev lock', () => {
       /^dev lock: ci-bot @ aaaaaaa until /,
     );
     expect(await status(github(expired('ci-bot')).api, NOW)).toMatch(/EXPIRED/);
+  });
+});
+
+// The lock as a function of time: a holder, null (no ref), or 'error' (GitHub hiccup).
+function timeline(clock: { now: () => number }, at: (t: number) => Holder | null | 'error') {
+  return fakeApi({
+    [`GET ${R}/git/ref/locks/dev`]: () => {
+      const h = at(clock.now());
+      if (h === 'error') throw ghError(502);
+      if (!h) throw ghError(404);
+      return { object: { sha: `t-${h.expiresAt}`, type: 'tag' } };
+    },
+    [`GET ${R}/git/tags/`]: () => ({ message: JSON.stringify(at(clock.now())) }),
+  });
+}
+const until = (branch: string, ms: number): Holder => ({
+  branch,
+  sha: SHA,
+  expiresAt: new Date(NOW + ms).toISOString(),
+});
+const reads = (calls: { path: string }[]) =>
+  calls.filter((c) => c.path.includes('/git/ref/')).length;
+const MIN = 60_000;
+
+describe('lock wait', () => {
+  it('returns free at once when no lock exists', async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, () => null);
+    expect(await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN })).toEqual({
+      outcome: 'free',
+      holder: null,
+    });
+    expect(clock.t).toBe(NOW);
+  });
+
+  it("treats its own branch's lock as free", async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, () => until('ci-bot', 30 * MIN));
+    expect((await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN })).outcome).toBe('ours');
+  });
+
+  it('polls every 30 s and returns when the holder releases', async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, (t) => (t < NOW + 70_000 ? until('flux', 30 * MIN) : null));
+    expect((await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN })).outcome).toBe('free');
+    expect(clock.t).toBe(NOW + 90_000); // reads at 0, 30, 60 (held) and 90 s
+    expect(reads(g.calls)).toBe(4);
+  });
+
+  it("wakes at the holder's expiry instead of the next 30 s tick", async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, () => until('flux', 45_000));
+    const r = await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN });
+    expect(r).toMatchObject({ outcome: 'expired', holder: { branch: 'flux' } });
+    expect(clock.t).toBe(NOW + 46_000); // 0, 30, then expiry + 1 s
+  });
+
+  it('gives up after the cap, naming the holder', async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, () => until('flux', 40 * MIN));
+    const r = await waitForLock(g.api, 'ci-bot', clock, { maxMs: 2 * MIN });
+    expect(r).toMatchObject({ outcome: 'gave-up', holder: { branch: 'flux' } });
+    expect(clock.t).toBe(NOW + 2 * MIN);
+  });
+
+  it('logs the holder once, and again when a renew moves the expiry', async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, (t) => until('flux', t < NOW + MIN ? 20 * MIN : 50 * MIN));
+    const lines: string[] = [];
+    await waitForLock(g.api, 'ci-bot', clock, {
+      maxMs: 3 * MIN,
+      log: (l) => lines.push(l),
+      sessionOf: (b) => (b === 'flux' ? 'flux-session' : undefined),
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(
+      /^waiting: dev locked by flux @ aaaaaaa until \d\d:\d\d \(20 min\) — session flux-session$/,
+    );
+    expect(lines[1]).toMatch(/\(49 min\)/); // renewed at 60 s, read at 60 s
+  });
+
+  it('keeps polling through two API errors and throws on the third', async () => {
+    const clock = fakeClock(NOW);
+    const two = timeline(clock, (t) => (t < NOW + 60_000 ? 'error' : null));
+    const lines: string[] = [];
+    const r = await waitForLock(two.api, 'ci-bot', clock, {
+      maxMs: 45 * MIN,
+      log: (l) => lines.push(l),
+    });
+    expect(r.outcome).toBe('free');
+    expect(lines.filter((l) => l.startsWith('lock read failed'))).toHaveLength(2);
+    const three = timeline(clock, () => 'error');
+    await expect(waitForLock(three.api, 'ci-bot', clock, { maxMs: 45 * MIN })).rejects.toThrow(
+      /502/,
+    );
+  });
+
+  it("reports each read to onRead (the board's lock cache)", async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, (t) => (t < NOW + 30_000 ? until('flux', 30 * MIN) : null));
+    const seen: (string | null)[] = [];
+    await waitForLock(g.api, 'ci-bot', clock, {
+      maxMs: 45 * MIN,
+      onRead: (cur) => seen.push(cur?.holder?.branch ?? null),
+    });
+    expect(seen).toEqual(['flux', null]);
+  });
+
+  it("refuses a --max past the token's hour", () => {
+    expect(parseWaitMax(undefined)).toBe(45 * MIN);
+    expect(parseWaitMax('55')).toBe(55 * MIN);
+    for (const bad of ['56', '0', '-5', 'soon'])
+      expect(() => parseWaitMax(bad)).toThrow(/at most 55/);
+  });
+
+  it('writes the hub note always and the holder note only for a known session', () => {
+    const h = until('flux', 30 * MIN);
+    expect(queueNotes('ci-bot', h, 'dispatch')).toEqual([
+      'SendMessage dispatch: "[lock] ci-bot — queued behind flux, up to 45 min."',
+    ]);
+    const both = queueNotes('ci-bot', h, 'dispatch', 'flux-session');
+    expect(both).toHaveLength(2);
+    expect(both[0]).toMatch(/queued behind flux \(flux-session\)/);
+    expect(both[1]).toMatch(/^SendMessage flux-session: "Queued behind you for the dev lock/);
   });
 });
