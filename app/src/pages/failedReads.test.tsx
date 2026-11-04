@@ -9,6 +9,10 @@ import { AddToTodayDialog } from '../modules/tasks/AddToTodayDialog';
 import { AddToCalendarForm } from '../modules/tasks/editor/AddToCalendarForm';
 import { TaskDetailsForm } from '../modules/tasks/editor/TaskDetailsForm';
 import { BulkAddDialog } from '../modules/tasks/BulkAddDialog';
+import { QueryControls } from '../modules/tasks/QueryControls';
+import { LENS_PRESET } from '../modules/tasks/query';
+import { useQueryClient } from '@tanstack/react-query';
+import { qk } from '../data/queryKeys';
 
 // A failed read never collapses to an empty list or a default (docs/product/CONVENTIONS.md → Failed
 // reads). Each test fails one read on the stub and checks the screen says so instead of the empty copy.
@@ -145,6 +149,40 @@ describe('Tasks never shows a failed read as empty', () => {
     await user.paste('write memo | #Admin');
     await screen.findByText(/Couldn.t load categories — remove the #labels/);
     expect(screen.getByRole<HTMLButtonElement>('button', { name: /^Add/ }).disabled).toBe(true);
+  });
+});
+
+describe('a failed background refetch', () => {
+  it('a failed background refetch keeps the loaded categories and shows no error', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    function Refetch() {
+      const qc = useQueryClient();
+      return (
+        <button
+          type="button"
+          onClick={() => void qc.invalidateQueries({ queryKey: qk.categories() })}
+        >
+          refetch
+        </button>
+      );
+    }
+    renderWithProviders(
+      <>
+        <QueryControls place="backlog" query={LENS_PRESET.backlog} onChange={() => {}} />
+        <Refetch />
+      </>,
+      { api },
+    );
+    await user.click(await screen.findByRole('button', { name: 'Filter' }));
+    await screen.findByText('Admin'); // the roster loaded
+    let failed = 0;
+    api.listCategories = () => (failed++, Promise.reject(new Error('listCategories failed (503)')));
+    await user.click(screen.getByRole('button', { name: 'refetch' }));
+    await waitFor(() => expect(failed).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getByText('Admin')).toBeTruthy(); // still there
+    expect(screen.queryByText(/Couldn.t load categories/)).toBeNull();
   });
 });
 

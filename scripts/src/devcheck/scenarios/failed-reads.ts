@@ -1,23 +1,23 @@
-// A failed read never fails silently (docs/product/CONVENTIONS.md → Failed reads). The harness fails dev's
-// /api/<method> itself (ctx.intercept, a Playwright route — nothing in the app switches) and checks the screen
-// says so instead of an empty list or a default, that Retry recovers, and that a 429 is retried away.
+// A failed read never fails silently (docs/product/CONVENTIONS.md → Failed reads). Dev proves the one path the
+// stub can't run — real fetch → http client → query layer → screen — once per distinct path: a read whose 429
+// is retried away, a read that keeps failing (error, then Retry), a write whose 429 is retried away, and a
+// Pomodoro call that fails. The harness fails dev's /api/<method> itself (ctx.intercept — nothing in the app
+// switches). Every other case runs one of those paths on another screen, so its named test covers it
+// (DEV-CHECK.md → Rows: same path as a dev-proven row).
 import { laDay, noConsoleErrors, type Ctx, type Row, type Scenario } from '../scenario';
 
-// Counted on /settings: task cards there would each mount a categories reader, and React Query refetches a
-// failed query when a new reader mounts — so on /tasks the injected count depends on how fast listTasks is.
+// Counted on /settings: task cards each mount a categories reader, and React Query refetches a failed query
+// when a new reader mounts — on /tasks the injected count would depend on how fast listTasks is.
 const SETTINGS_CATEGORIES = 'Couldn’t load categories.';
-const CATEGORIES_LINE = /Couldn.t load categories — labels and category filters are off/;
-const LIST_ERROR = /Couldn.t load this\. Check your connection/;
 const FOCUS = '[title="Start a 25-minute focus block"]';
 const title = (nonce: string) => `devcheck-fr ${nonce}`;
+// The app gets an injected response a moment after the route counts it, then React renders: wait that out
+// before asserting something is NOT on screen.
+const SETTLE_MS = 1_500;
 
-const button = (ctx: Ctx, name: string | RegExp) =>
-  ctx.page.getByRole('button', { name, exact: typeof name === 'string' }).first();
-const gone = (ctx: Ctx, text: string | RegExp, timeout = 10_000) =>
-  ctx.page.getByText(text).first().waitFor({ state: 'hidden', timeout });
-async function absent(ctx: Ctx, text: string | RegExp) {
-  if (await ctx.page.getByText(text).count()) throw new Error(`"${String(text)}" is on screen`);
-}
+const button = (ctx: Ctx, name: string) =>
+  ctx.page.getByRole('button', { name, exact: true }).first();
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(what: string, ok: () => boolean, timeoutMs = 15_000) {
   const end = Date.now() + timeoutMs;
   while (!ok()) {
@@ -25,11 +25,6 @@ async function until(what: string, ok: () => boolean, timeoutMs = 15_000) {
     await wait(200);
   }
 }
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-// The app gets an injected response a moment after the route counts it, then React renders: wait that out
-// before asserting something is NOT on screen.
-const SETTLE_MS = 1_500;
-const PAUSE_MS = 20_000;
 
 // A run that died mid-timer leaves one running (or stale) on the test user. Clear it through the dock, judged
 // by the server's list — the dock's idle Focus shows before that read lands. Timers live only in the test
@@ -48,14 +43,22 @@ async function clearTimers(ctx: Ctx) {
   throw new Error('a timer left running on the test user would not clear');
 }
 
-const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
+const FR = 'app/src/pages/failedReads.test.tsx';
+const RETRY = 'app/src/data/retry.test.ts';
+const HTTP = 'app/src/data/httpClient.test.ts';
+const POMO = 'app/src/modules/pomodoro/PomodoroProvider.test.tsx';
+const row = (id: string, what: string, file: string, test: string, why: string): Row => ({
   id,
   entry: 'ui',
   kind: 'edge',
   what,
   offDev: { file, test, why },
 });
-const FR = 'app/src/pages/failedReads.test.tsx';
+// The reasons, by the dev-proven row whose path a case shares.
+const READ_PATH =
+  'same path as error-shown (proven on dev): a read fails through the real client and the screen says so — this is another screen’s copy of it';
+const DOCK_PATH =
+  'same path as stop-fails (proven on dev): a Pomodoro call fails and its row says so — this is another call';
 const NO_GOOGLE = 'the dev test user has no Google account, so these reads never run on dev';
 const NO_SEED =
   'needs data the harness can’t write on the test user (no habit, roll, category or plan writes are declared)';
@@ -69,31 +72,13 @@ export const failedReads: Scenario = {
       id: 'retry-recovers',
       entry: 'ui',
       kind: 'nominal',
-      what: 'One 429 on the categories read is retried away: no error line',
+      what: 'One 429 on a read is retried away: no error line',
     },
     {
       id: 'error-shown',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Categories keep failing → “Couldn’t load categories” with Retry, after 3 tries (Settings and Tasks)',
-    },
-    {
-      id: 'retry-button',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Once the read works again, Retry clears the line',
-    },
-    {
-      id: 'network-error',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A dropped connection is retried twice, then shows the same line',
-    },
-    {
-      id: 'refusal-not-retried',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A 400 on the read shows the line at once, without retrying',
+      what: 'A read that keeps failing says “Couldn’t load” after 3 tries, and Retry recovers it',
     },
     {
       id: 'write-429-retried',
@@ -102,173 +87,234 @@ export const failedReads: Scenario = {
       what: 'A capture whose createTask gets one 429 still lands (“Task added”)',
     },
     {
-      id: 'write-5xx-not-retried',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A capture whose createTask gets a 500 is sent once, says “Couldn’t save”, and keeps the text',
-    },
-    {
-      id: 'settings-fails',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Settings failing says so on /settings, survives a reload, and Retry clears it',
-    },
-    {
-      id: 'settings-cascade',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'With settings failing, Home says “running on defaults” and Intent says it couldn’t load',
-    },
-    {
-      id: 'day-failed',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'The day read failing disables Intent and hides the capacity field, each saying why',
-    },
-    {
-      id: 'plan-failed',
-      entry: 'ui',
-      kind: 'nominal',
-      what: 'The plan read failing: Plan today and Time budget say couldn’t load, not “Nothing planned yet”',
-    },
-    {
-      id: 'home-no-lies',
-      entry: 'ui',
-      kind: 'nominal',
-      what: 'Night Home with habits and the log failing says couldn’t load, not “No habits yet” / “Nothing logged yet”',
-    },
-    {
-      id: 'glances',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'The Flux and Finance lines on night Home say couldn’t load instead of vanishing',
-    },
-    {
-      id: 'recurring-failed',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'The series read failing says so, not “No recurring tasks yet”',
-    },
-    {
-      id: 'calibration-failed',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'The calibration read failing says so, not “No finished tasks with an estimate yet”',
-    },
-    {
-      id: 'add-to-today-failed',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Add to today with the tasks read failing says so, not “Nothing waiting”',
-    },
-    {
-      id: 'bulk-add-failed',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Bulk add with a #label and categories failing says to remove the label, and stays blocked',
-    },
-    {
-      id: 'adopt-error',
-      entry: 'ui',
-      kind: 'nominal',
-      what: 'The running-timers read failing shows “Couldn’t check for running timers”, never an empty dock',
-    },
-    {
-      id: 'adopt-retry',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Retry on that row, once the read works, clears it',
-    },
-    {
-      id: 'start-fails',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A focus start that fails says “Couldn’t start the timer”',
-    },
-    {
-      id: 'keeps-data',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A failed background refetch keeps the loaded categories and shows no error',
-    },
-    {
-      id: 'heartbeat-fails',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Heartbeats failing for 30 s mark the timer “not syncing”; a good beat clears it',
-    },
-    {
-      id: 'resume-fails',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'A resume that fails stays paused and says “Couldn’t resume”; Resume again works',
-    },
-    {
-      id: 'paused-stop',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'Stopping a paused timer never counts the pause as worked time',
-    },
-    {
       id: 'stop-fails',
       entry: 'ui',
       kind: 'edge',
       what: 'A stop that fails keeps the timer and says “Couldn’t stop”; Stop again ends it on the server',
     },
-    {
-      id: 'mutation-not-retried',
-      entry: 'ui',
-      kind: 'edge',
-      what: 'The query layer never retries a write (a 500 on createTask is one send)',
-    },
-    offDev(
+    row(
+      'network-error',
+      'A dropped connection on a read is retried, then shows the same line',
+      RETRY,
+      'retries a 5xx and a network failure on reads, up to two more tries',
+      'same path as error-shown (proven on dev) — only the error type differs, and the policy is a pure function',
+    ),
+    row(
+      'refusal-not-retried',
+      'A 400 on a read shows the line at once, without retrying',
+      RETRY,
+      'does not retry a 400 refusal, a 401, a 404 or a plain Error at the query layer',
+      'same path as error-shown (proven on dev) — only the policy’s answer differs, and it is a pure function',
+    ),
+    row(
+      'write-5xx-not-retried',
+      'A write that gets a 500 or a dropped connection is sent once',
+      HTTP,
+      'never retries a write on a 500 or a dropped connection — it may have landed',
+      'same path as write-429-retried (proven on dev) — the http client’s other branch',
+    ),
+    row(
+      'mutation-not-retried',
+      'The query layer never retries a write',
+      RETRY,
+      'the app QueryClient wires the policy and leaves mutations un-retried',
+      'a setting of the client; write-429-retried (proven on dev) runs the same wiring',
+    ),
+    row(
+      'keeps-data',
+      'A failed background refetch keeps the loaded data and shows no error',
+      FR,
+      'a failed background refetch keeps the loaded categories and shows no error',
+      READ_PATH,
+    ),
+    row(
+      'settings-fails',
+      'Settings failing says so on /settings, once',
+      FR,
+      'a failed settings read shows an error, not an empty page — once, not twice',
+      READ_PATH,
+    ),
+    row(
+      'settings-cascade',
+      'With settings failing, Intent says it couldn’t load instead of a field that never loads',
+      FR,
+      'a failed settings read disables Intent and says why, instead of a field that never loads',
+      READ_PATH,
+    ),
+    row(
+      'day-failed',
+      'The day read failing disables Intent instead of letting it overwrite',
+      FR,
+      'a failed day read disables Intent instead of overwriting it',
+      READ_PATH,
+    ),
+    row(
+      'capacity-failed',
+      'With the day unreadable, the capacity field is hidden and says why',
+      FR,
+      'a failed settings read hides the Today capacity field instead of an empty one',
+      READ_PATH,
+    ),
+    row(
+      'plan-failed',
+      'The plan read failing says so, not “Nothing planned yet”',
+      FR,
+      'a failed plan read says so instead of “Nothing planned yet”',
+      READ_PATH,
+    ),
+    row(
+      'time-budget-failed',
+      'The plan read failing on Daytime says so, not “No plan to budget against”',
+      FR,
+      'a failed plan read on Daytime says so instead of “No plan to budget against”',
+      READ_PATH,
+    ),
+    row(
+      'log-failed',
+      'Night Home with the log failing says so, not “Nothing logged yet”',
+      FR,
+      'a failed log read says so instead of “Nothing logged yet”',
+      READ_PATH,
+    ),
+    row(
+      'habits-failed',
+      'Night Home with habits failing says so, not “No habits yet”',
+      FR,
+      'a failed habits read says so instead of “No habits yet”',
+      READ_PATH,
+    ),
+    row(
+      'glances',
+      'The Flux and Finance lines on night Home say couldn’t load instead of vanishing',
+      FR,
+      'the Flux and Finance lines say couldn’t load instead of vanishing',
+      READ_PATH,
+    ),
+    row(
+      'recurring-failed',
+      'The series read failing says so, not “No recurring tasks yet”',
+      FR,
+      'a failed series read says so instead of “No recurring tasks yet”',
+      READ_PATH,
+    ),
+    row(
+      'calibration-failed',
+      'The calibration read failing says so, not “No finished tasks with an estimate yet”',
+      FR,
+      'a failed calibration read says so instead of the empty state',
+      READ_PATH,
+    ),
+    row(
+      'add-to-today-failed',
+      'Add to today with the tasks read failing says so, not “Nothing waiting”',
+      FR,
+      'a failed tasks read in Add to today says so instead of an empty list',
+      READ_PATH,
+    ),
+    row(
+      'bulk-add-failed',
+      'Bulk add with a #label and categories failing says to remove the label, and stays blocked',
+      FR,
+      'a #label paste with failed categories says so and stays blocked',
+      READ_PATH,
+    ),
+    row(
+      'category-picker-failed',
+      'The task editor’s category picker is disabled, not “Uncategorized”, when categories fail',
+      FR,
+      'a failed categories read disables the task’s category picker',
+      READ_PATH,
+    ),
+    row(
+      'adopt-error',
+      'The running-timers read failing shows “Couldn’t check for running timers”, never an empty dock',
+      POMO,
+      'a failed adopt-load shows an error row, never an empty dock',
+      READ_PATH,
+    ),
+    row(
+      'adopt-retry',
+      'Retry on that row re-reads running timers',
+      POMO,
+      'Retry on the adopt row re-reads running sessions',
+      READ_PATH,
+    ),
+    row(
+      'start-fails',
+      'A focus start that fails says so',
+      POMO,
+      'a failed start says so',
+      DOCK_PATH,
+    ),
+    row(
+      'resume-fails',
+      'A resume that fails stays paused and says so',
+      POMO,
+      'a failed resume stays paused and says so',
+      DOCK_PATH,
+    ),
+    row(
+      'heartbeat-fails',
+      'Two failed heartbeats mark the timer “not syncing”; a good one clears it',
+      POMO,
+      'two failed heartbeats mark the timer not syncing; a good one clears it',
+      DOCK_PATH,
+    ),
+    row(
+      'paused-stop',
+      'Stopping a paused timer never counts the pause as worked time',
+      POMO,
+      'stopping a paused timer resets its clock first, so the pause is never credited',
+      'the fix is which calls go to the server and in what order, and the test asserts exactly that; on dev it costs a 20 s pause',
+    ),
+    row(
       'day-shape-failed',
       'A failed calendar read never shows a free day',
       FR,
       'a failed calendar read never shows a free day',
       NO_GOOGLE,
     ),
-    offDev(
+    row(
       'add-to-calendar-failed',
       'Add to calendar with the calendars read failing never says to connect an account',
       FR,
       'a failed calendars read never says to connect an account',
       NO_GOOGLE,
     ),
-    offDev(
+    row(
       'habit-checks-failed',
       'Failed check-ins blank the Habits page counts and lock the cells',
       FR,
       'failed checks blank the Habits page counts and lock the cells',
       NO_SEED,
     ),
-    offDev(
+    row(
       'roll-reps-failed',
       'The Rolls page says its reps couldn’t load instead of empty sheets',
       FR,
       'a failed tasks read says so above the roll sheets',
       NO_SEED,
     ),
-    offDev(
+    row(
       'category-pill',
       'A task whose category can’t resolve shows a “—” pill, not nothing',
       FR,
       'a failed categories read says so with Retry, and marks the tags it can’t resolve',
       NO_SEED,
     ),
-    offDev(
+    row(
       'hero-done-failed-stop',
       'Done on the hero with a failed stop keeps the timer and never opens the Actual form',
       'app/src/pages/Home/RightNow.test.tsx',
       'Done on the hero with a failed stop keeps the timer and never opens the Actual form',
-      'the hero is the first task on the test user’s plan for today; the harness can add one but not put it first, so on dev the step would drive whatever task is there',
+      'the hero is the first task on the test user’s plan for today; the harness can add one but not put it first',
     ),
-    offDev(
+    row(
       'stale-keep-failed',
       'Keep on a timer left running, when the save fails, keeps the prompt and says so',
-      'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
+      POMO,
       'a failed keep keeps the stale prompt and says so',
-      'dev can make one (heartbeats failed for over 90 s, then a reload), at ~100 s of run time on top of the ~2.5 min this scenario takes — a logged trade-off (decisions.md), revisit if the full run is trimmed',
+      DOCK_PATH,
     ),
     {
       id: 'ios-offline',
@@ -289,7 +335,8 @@ export const failedReads: Scenario = {
         await ctx.ui.goto('/settings');
         await until('the retried categories read', () => i.passed() >= 1);
         await wait(SETTLE_MS);
-        await absent(ctx, SETTINGS_CATEGORIES);
+        if (await ctx.page.getByText(SETTINGS_CATEGORIES).count())
+          throw new Error('the error line shows after a retried 429');
         if (i.hits() !== 1) throw new Error(`expected 1 injected 429, got ${i.hits()}`);
         await i.release();
       },
@@ -298,57 +345,28 @@ export const failedReads: Scenario = {
       id: 'shown',
       entry: 'ui',
       proves: ['error-shown'],
-      title: 'listCategories keeps failing → the line after 3 tries, on Settings and on Tasks',
+      title: 'listCategories keeps failing → the line after 3 tries',
       async run(ctx) {
         const i = await ctx.intercept('listCategories');
         await ctx.ui.goto('/settings');
         await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
         const tries = i.hits(); // at the moment it shows, before any later reader refetches
         if (tries !== 3) throw new Error(`expected 3 tries (1 + 2 retries), saw ${tries}`);
-        await ctx.ui.goto('/tasks?lens=backlog');
-        await ctx.ui.expectText(CATEGORIES_LINE, 15_000);
         await ctx.shot('categories-failed');
-        await ctx.ui.goto('/settings');
-        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
         await i.release();
       },
     },
     {
       id: 'retry',
       entry: 'ui',
-      proves: ['retry-button'],
+      proves: ['error-shown'],
       title: 'Retry clears it once the read works',
       async run(ctx) {
         await button(ctx, 'Retry').click();
-        await gone(ctx, SETTINGS_CATEGORIES);
-      },
-    },
-    {
-      id: 'aborted',
-      entry: 'ui',
-      proves: ['network-error'],
-      title: 'A dropped connection is retried twice, then shows the same line',
-      async run(ctx) {
-        const i = await ctx.intercept('listCategories', { abort: true });
-        await ctx.ui.goto('/settings');
-        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
-        const tries = i.hits();
-        if (tries !== 3) throw new Error(`expected 3 tries (1 + 2 retries), saw ${tries}`);
-        await i.release();
-      },
-    },
-    {
-      id: 'refusal',
-      entry: 'ui',
-      proves: ['refusal-not-retried'],
-      title: 'A 400 on the read shows the line at once, one try',
-      async run(ctx) {
-        const i = await ctx.intercept('listCategories', { status: 400 });
-        await ctx.ui.goto('/settings');
-        await ctx.ui.expectText(SETTINGS_CATEGORIES, 15_000);
-        await wait(SETTLE_MS); // past where a retry would have fired
-        if (i.hits() !== 1) throw new Error(`expected 1 try, saw ${i.hits()}`);
-        await i.release();
+        await ctx.page
+          .getByText(SETTINGS_CATEGORIES)
+          .first()
+          .waitFor({ state: 'hidden', timeout: 10_000 });
       },
     },
     {
@@ -368,270 +386,21 @@ export const failedReads: Scenario = {
       },
     },
     {
-      id: 'write-500',
-      entry: 'ui',
-      proves: ['write-5xx-not-retried', 'mutation-not-retried'],
-      title: 'A capture whose createTask gets a 500 is sent once and says so',
-      async run(ctx) {
-        const i = await ctx.intercept('createTask', { status: 500, times: 1 });
-        await ctx.ui.goto('/tasks');
-        await button(ctx, 'Task').click();
-        const field = ctx.page.locator('textarea[aria-label="Capture task"]');
-        await field.fill(`${title(ctx.nonce)} not saved | ~15`);
-        await field.press('Enter');
-        try {
-          await ctx.ui.expectText(/Couldn.t save — your text is back in the box/, 15_000);
-          await wait(SETTLE_MS * 2); // past where a retry would have fired
-          if (i.hits() !== 1 || i.passed() !== 0)
-            throw new Error(`expected one send, saw ${i.hits()} failed / ${i.passed()} through`);
-          if (!(await field.inputValue()).includes('not saved'))
-            throw new Error('the text was not kept');
-          await ctx.shot('capture-500');
-        } finally {
-          await field.fill(''); // never leave it to be sent later
-          await i.release();
-        }
-      },
-    },
-    {
-      id: 'settings',
-      entry: 'ui',
-      proves: ['settings-fails', 'settings-cascade'],
-      title:
-        'getSettings failing: /settings says so (after a reload too), Home cascades, Retry clears',
-      async run(ctx) {
-        const i = await ctx.intercept('getSettings');
-        await ctx.ui.goto('/settings');
-        await ctx.ui.expectText(/Couldn.t load your settings — calendar, preferences/, 15_000);
-        await ctx.page.reload({ waitUntil: 'domcontentloaded' });
-        await ctx.ui.expectText(/Couldn.t load your settings — calendar, preferences/, 15_000);
-        await ctx.shot('settings-failed');
-        await ctx.page.getByRole('link', { name: 'Home', exact: true }).first().click();
-        await ctx.ui.expectText(/running on defaults/, 15_000);
-        await button(ctx, 'Morning').click();
-        await ctx.ui.expectText('Couldn’t load today’s intent.', 15_000);
-        await i.release();
-        await button(ctx, 'Retry').click();
-        await gone(ctx, /running on defaults/);
-      },
-    },
-    {
-      id: 'day',
-      entry: 'ui',
-      proves: ['day-failed'],
-      title: 'getDay failing: Intent disabled and capacity hidden, each saying why',
-      async run(ctx) {
-        const i = await ctx.intercept('getDay');
-        await ctx.ui.goto('/');
-        await button(ctx, 'Morning').click();
-        await ctx.ui.expectText('Couldn’t load today’s intent.', 15_000);
-        if (!(await ctx.page.getByLabel('Day intent').isDisabled()))
-          throw new Error('Intent is editable over a day that never loaded');
-        await ctx.ui.goto('/tasks?lens=today');
-        await ctx.ui.expectText('Couldn’t load today’s capacity.', 15_000);
-        if (await ctx.page.getByLabel('Hours available today').count())
-          throw new Error('the capacity field shows over a day that never loaded');
-        await ctx.shot('capacity-failed');
-        await i.release();
-      },
-    },
-    {
-      id: 'plan',
-      entry: 'ui',
-      proves: ['plan-failed'],
-      title: 'listPlansForDay failing: Plan today and Time budget say couldn’t load',
-      async run(ctx) {
-        const i = await ctx.intercept('listPlansForDay');
-        await ctx.ui.goto('/');
-        await button(ctx, 'Morning').click();
-        await ctx.ui.expectText(LIST_ERROR, 15_000);
-        await absent(ctx, /Nothing planned yet/);
-        await button(ctx, 'Daytime').click();
-        await ctx.ui.expectText(LIST_ERROR, 15_000);
-        await absent(ctx, /No plan to budget against/);
-        await i.release();
-      },
-    },
-    {
-      id: 'home',
-      entry: 'ui',
-      proves: ['home-no-lies', 'glances'],
-      title: 'Night Home with its reads failing says couldn’t load',
-      async run(ctx) {
-        const off = await Promise.all(
-          ['listHabits', 'listLogEntries', 'listFluxSets', 'getFinanceOverview'].map((m) =>
-            ctx.intercept(m),
-          ),
-        );
-        await ctx.ui.goto('/');
-        await button(ctx, 'Night').click();
-        await ctx.ui.expectText('Couldn’t load today’s review.', 15_000);
-        await ctx.ui.expectText(LIST_ERROR, 15_000);
-        await ctx.ui.expectText('Flux · couldn’t load today’s sets', 15_000);
-        await ctx.ui.expectText('Finances · couldn’t load', 15_000);
-        await absent(ctx, /No habits yet/);
-        await absent(ctx, /Nothing logged yet/);
-        await ctx.shot('night-failed');
-        for (const i of off) await i.release();
-      },
-    },
-    {
-      id: 'recurring',
-      entry: 'ui',
-      proves: ['recurring-failed'],
-      title: 'listSeries failing says so on the Recurring lens',
-      async run(ctx) {
-        const i = await ctx.intercept('listSeries');
-        await ctx.ui.goto('/tasks?lens=recurring');
-        await ctx.ui.expectText(LIST_ERROR, 15_000);
-        await absent(ctx, 'No recurring tasks yet.');
-        await i.release();
-      },
-    },
-    {
-      id: 'calibration',
-      entry: 'ui',
-      proves: ['calibration-failed'],
-      title: 'getCalibration failing says so on the Calibration lens',
-      async run(ctx) {
-        const i = await ctx.intercept('getCalibration');
-        await ctx.ui.goto('/tasks?lens=calibration');
-        await ctx.ui.expectText(LIST_ERROR, 15_000);
-        await absent(ctx, /No finished tasks with an estimate yet/);
-        await i.release();
-      },
-    },
-    {
-      id: 'add-to-today',
-      entry: 'ui',
-      proves: ['add-to-today-failed'],
-      title: 'Add to today with listTasks failing says so',
-      async run(ctx) {
-        const i = await ctx.intercept('listTasks');
-        await ctx.ui.goto('/');
-        await button(ctx, 'Morning').click();
-        await button(ctx, 'Add to today').click();
-        await ctx.ui.expectText('Couldn’t load your tasks.', 15_000);
-        await absent(ctx, /Nothing waiting/);
-        await ctx.shot('add-to-today-failed');
-        await ctx.page.keyboard.press('Escape');
-        await i.release();
-      },
-    },
-    {
-      id: 'bulk-add',
-      entry: 'ui',
-      proves: ['bulk-add-failed'],
-      title: 'Bulk add with a #label and categories failing says so and stays blocked',
-      async run(ctx) {
-        const i = await ctx.intercept('listCategories');
-        await ctx.ui.goto('/tasks');
-        await button(ctx, /Bulk add/).click();
-        await ctx.page.getByLabel('Tasks, one per line').fill('write memo | #Admin');
-        await ctx.ui.expectText(/Couldn.t load categories — remove the #labels/, 15_000);
-        const add = ctx.page
-          .getByRole('dialog', { name: 'Bulk add tasks' })
-          .getByRole('button', { name: /^Add \d+ task/ })
-          .first();
-        if (!(await add.isDisabled())) throw new Error('Add is enabled');
-        await ctx.page.keyboard.press('Escape');
-        await i.release();
-      },
-    },
-    {
-      id: 'adopt',
-      entry: 'ui',
-      proves: ['adopt-error'],
-      title: 'listRunningSessions failing → “Couldn’t check for running timers”',
-      async run(ctx) {
-        await clearTimers(ctx);
-        const i = await ctx.intercept('listRunningSessions');
-        await ctx.ui.goto('/settings');
-        await ctx.ui.expectText('Couldn’t check for running timers.', 15_000);
-        await ctx.shot('adopt-failed');
-        await i.release();
-      },
-    },
-    {
-      id: 'adopt-retry',
-      entry: 'ui',
-      proves: ['adopt-retry'],
-      title: 'Retry on the timer row clears it',
-      async run(ctx) {
-        await button(ctx, 'Retry').click();
-        await gone(ctx, 'Couldn’t check for running timers.');
-      },
-    },
-    {
-      id: 'start-fails',
-      entry: 'ui',
-      proves: ['start-fails'],
-      title: 'A focus start that fails says so',
-      async run(ctx) {
-        const i = await ctx.intercept('startSession');
-        await ctx.page.locator(FOCUS).first().click();
-        await ctx.ui.expectText('Couldn’t start the timer — try again.', 15_000);
-        await i.release();
-      },
-    },
-    {
       id: 'start',
       entry: 'ui',
-      title: 'Start a focus',
+      title: 'Start a focus (leftover timers cleared first)',
       async run(ctx) {
-        await ctx.ui.goto('/tasks?lens=backlog');
+        await clearTimers(ctx);
+        await ctx.ui.goto('/settings');
         await ctx.page.locator(FOCUS).first().click();
-        await button(ctx, 'Pause').waitFor({ timeout: 15_000 });
-      },
-    },
-    {
-      id: 'background',
-      entry: 'ui',
-      proves: ['keeps-data', 'heartbeat-fails'],
-      title:
-        'Heartbeats and a stale categories refetch fail for 32 s: “not syncing”, categories kept',
-      async run(ctx) {
-        const beats = await ctx.intercept('heartbeatSession');
-        const cats = await ctx.intercept('listCategories');
-        await wait(32_000); // two beats (15 s apart) and past the 30 s staleTime
-        await ctx.page.getByRole('link', { name: 'Settings', exact: true }).first().click(); // in-app: refetch on mount
-        await ctx.ui.expectText('not syncing', 5_000);
-        await until('the failed categories refetch', () => cats.hits() >= 3, 10_000);
-        await wait(SETTLE_MS);
-        await absent(ctx, SETTINGS_CATEGORIES);
-        await ctx.shot('not-syncing');
-        // Each failed beat is 3 sends (the http client retries a 429 twice).
-        if (beats.hits() < 6)
-          throw new Error(`expected 2 failed heartbeats, saw ${beats.hits()} sends`);
-        await beats.release();
-        await cats.release();
-        await gone(ctx, 'not syncing', 20_000);
-      },
-    },
-    {
-      id: 'resume',
-      entry: 'ui',
-      proves: ['resume-fails'],
-      title: 'A failed resume stays paused and says so; Resume again works',
-      async run(ctx) {
-        await button(ctx, 'Pause').click();
-        const i = await ctx.intercept('resumeSession');
-        try {
-          await button(ctx, 'Resume').click();
-          await ctx.ui.expectText('Couldn’t resume — try again.', 15_000);
-          await button(ctx, 'Resume').waitFor({ timeout: 2_000 });
-        } finally {
-          await i.release();
-        }
-        await button(ctx, 'Resume').click();
         await button(ctx, 'Pause').waitFor({ timeout: 15_000 });
       },
     },
     {
       id: 'stop',
       entry: 'ui',
-      proves: ['stop-fails', 'paused-stop'],
-      title: 'A failed stop keeps the timer and says so; then paused 20 s, Stop ends it',
+      proves: ['stop-fails'],
+      title: 'A failed stop keeps the timer and says so; Stop again ends it',
       async run(ctx) {
         const i = await ctx.intercept('stopSession');
         try {
@@ -642,9 +411,6 @@ export const failedReads: Scenario = {
         } finally {
           await i.release();
         }
-        await button(ctx, 'Pause').click();
-        await button(ctx, 'Resume').waitFor({ timeout: 15_000 });
-        await wait(PAUSE_MS);
         await button(ctx, 'Stop').click();
         await ctx.page.locator(FOCUS).first().waitFor({ timeout: 15_000 });
       },
@@ -652,31 +418,20 @@ export const failedReads: Scenario = {
     {
       id: 'no-timer-left',
       entry: 'api',
-      proves: ['stop-fails', 'paused-stop'],
-      title: 'No timer left running, and the stopped one wasn’t credited its 20 s pause',
+      proves: ['stop-fails'],
+      title: 'The server has no running timer left, and has the stopped one',
       async run(ctx) {
         const left = await ctx.api.reads.listRunningSessions();
         if (left.length) throw new Error(`${left.length} timer(s) still running on the test user`);
-        // The app's day, not the calendar's: before the day start (4am) the session belongs to yesterday.
+        // The app's day, not the calendar's; and the day before, for a run that crossed the day start.
         const { dayStartHour } = await ctx.api.reads.getSettings();
         const now = Date.now() - dayStartHour * 3_600_000;
-        // And the day before: a run that crosses the day start filed its timer under yesterday.
         const days = [laDay(new Date(now)), laDay(new Date(now - 86_400_000))];
         const sessions = (
           await Promise.all(days.map((d) => ctx.api.reads.listSessionsForDay(d)))
         ).flat();
-        const done = sessions
-          .filter((x) => x.status === 'completed' && x.endedAt !== null)
-          .sort((a, b) => b.endedAt! - a.endedAt!)[0];
-        if (!done) throw new Error('the stopped timer is not in today’s sessions');
-        const wallSec = (done.endedAt! - done.startedAt) / 1000;
-        const creditedSec = done.activeMinutes * 60;
-        // The run paused it twice (the resume step, then PAUSE_MS here): credit must fall short of the wall
-        // clock by at least the last pause, less 5 s for the lag between the pause's beat and the stop's reset.
-        if (creditedSec > wallSec - PAUSE_MS / 1000 + 5)
-          throw new Error(
-            `credited ${creditedSec.toFixed(1)} s of a ${wallSec.toFixed(1)} s timer`,
-          );
+        if (!sessions.some((s) => s.status === 'completed' && s.endedAt !== null))
+          throw new Error('the stopped timer is not in the test user’s sessions');
       },
     },
     noConsoleErrors,
