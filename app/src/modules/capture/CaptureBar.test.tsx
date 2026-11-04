@@ -1045,6 +1045,22 @@ describe('CaptureBar — places', () => {
     expect(box().value).toBe('');
   });
 
+  it('no other bar control takes focus from the field while a warning is held back', async () => {
+    const { user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    const blurred = vi.fn();
+    box().addEventListener('blur', blurred);
+    for (const name of [/today/, /^Log$/]) {
+      const control = screen.getByRole('button', { name });
+      await user.pointer({ keys: '[MouseLeft>]', target: control });
+      expect(document.activeElement).toBe(box());
+      expect(screen.queryByText(/no place/)).toBeNull(); // nothing grew under the press
+      await user.pointer({ keys: '[/MouseLeft]', target: control });
+      if (name.source === '^Log$') break; // Log mode drops the token warning by design
+    }
+    expect(blurred).not.toHaveBeenCalled();
+  });
+
   it('the Save button keeps focus in the field: no blur, no layout shift, a refusal then a save', async () => {
     const { api, user, box } = await placeBar();
     await user.type(box(), 'milk | @zz');

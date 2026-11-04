@@ -497,13 +497,20 @@ export const places: Scenario = {
       id: 'ui-unknown',
       entry: 'ui',
       proves: ['unknown-slug'],
-      title: 'An unknown @word warns, and Enter still saves',
+      title: 'An unknown @word refuses once and warns; Enter again saves',
       async run(ctx) {
         await ctx.ui.goto('/tasks'); // a fresh bar: the last receipt can't stand in for this one's
         await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
         const field = ctx.page.locator('textarea[aria-label="Capture task"]');
+        // fill() leaves the caret in the @word, so the warning is held back until the first Enter.
         await field.fill(`${errand(ctx, 'stray')} | @${unknownSlug(ctx)}`);
-        await ctx.ui.expectText(`no place '@${unknownSlug(ctx)}' — created without one`);
+        await field.press('Enter');
+        await ctx.ui.expectText(/Not saved/);
+        // Exact: a screen-reader-only span in the refusal repeats these words.
+        const exact = (text: string) =>
+          ctx.page.getByText(text, { exact: true }).waitFor({ state: 'visible' });
+        await exact(`no place '@${unknownSlug(ctx)}' — created without one`);
+        await exact('Enter or Save again to save without it.');
         await ctx.shot('unknown-warning');
         await field.press('Enter');
         await ctx.ui.expectText(/Task added/, 15_000);

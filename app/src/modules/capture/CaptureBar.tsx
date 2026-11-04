@@ -534,7 +534,9 @@ export function CaptureBar({
       className="pointer-events-auto rounded-2xl border border-line bg-panel-2 p-2 shadow-[var(--shadow-dock)]"
     >
       <div className="flex items-center justify-between gap-2 pb-1.5">
-        <div className="flex shrink-0 items-center gap-1.5">
+        {/* No control in the bar takes focus from the field: a blur would reveal a held-back warning,
+            grow the bar and move the button out from under the tap (the first tap would be lost). */}
+        <div className="flex shrink-0 items-center gap-1.5" onMouseDown={(e) => e.preventDefault()}>
           <ModeToggle<CaptureMode>
             size="sm"
             options={CAPTURE_MODES.map((m) => ({
@@ -723,6 +725,7 @@ export function CaptureBar({
           </Text>
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => putBack(p)}
             aria-describedby={`${parkedId}-${p.id}`}
             className="min-h-8 shrink-0 rounded-md px-2 text-xs text-teal hover:underline"
@@ -733,6 +736,7 @@ export function CaptureBar({
             type="button"
             aria-label="Discard"
             aria-describedby={`${parkedId}-${p.id}`}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => setParked((list) => list.filter((x) => x.id !== p.id))}
             className="min-h-8 min-w-8 shrink-0 rounded-md text-sm text-ink-muted hover:text-ink"
           >
