@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   AUTH_HEADER,
   PLACE_TOKEN_RACE_ERROR,
@@ -153,18 +153,27 @@ function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
     if (slug === prev.slug) setSlug(place.slug);
   }
 
-  // Either field's blur sends both as they stand now, so a rename and a link-word edit made back to back
-  // never race each other's stale copy. The error is the last attempt's: unchanged (put back) or saved
-  // clears it.
-  async function save() {
+  // Either field's blur sends both as they stand now, and the row's saves run one after another — a later
+  // save never lands before an earlier one, so a link-word edit can't be undone by a stale copy still on
+  // its way. Each compares against what the server last said (`known`: the place as loaded, or the last
+  // save's answer). The error is the last attempt's: unchanged (put back) or saved clears it.
+  const known = useRef(place);
+  useEffect(() => {
+    known.current = place;
+  }, [place]);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  function save() {
     const next = { name: name.trim(), slug: slug.trim() };
-    setError(null);
-    if (next.name === place.name && next.slug === place.slug) return;
-    try {
-      await upsert.mutateAsync({ id: place.id, name: next.name, slug: next.slug });
-    } catch (e) {
-      setError(errText(e)); // what you typed stays, so you can fix it
-    }
+    queue.current = queue.current.then(async () => {
+      setError(null);
+      if (next.name === known.current.name && next.slug === known.current.slug) return;
+      try {
+        known.current = await upsert.mutateAsync({ id: place.id, ...next });
+      } catch (e) {
+        setError(errText(e)); // what you typed stays, so you can fix it
+      }
+    });
+    return queue.current;
   }
 
   return (
@@ -494,8 +503,11 @@ function TokenReveal({ token, onDone }: { token: string; onDone: () => void }) {
 // One generic Shortcut holds the URL and the token and takes the store's link word as its input; each
 // store's Arrive automation only runs it. A rotated token is pasted once, into that one Shortcut. Every
 // answer the route gives carries `text` — the list, or what went wrong, '' when there's nothing to buy — so
-// the Shortcut's one rule is "show text if it has any value": no failure is ever silent on the phone.
+// the Shortcut's rule is "show text if it has any value", and an answer with no `count` either (not the
+// route's: a CloudFront 5xx or throttle) says Aperture didn't answer. No failure is silent on the phone.
 const SHORTCUT_INPUT = '[Shortcut Input]';
+// Shown when the answer carries neither `text` nor `count` — a CloudFront 5xx or throttle has no body.
+const NO_ANSWER = 'Aperture didn’t answer';
 const shortcutUrlTemplate = (origin: string) => `${origin}/api/places/${SHORTCUT_INPUT}/tasks`;
 
 function ShortcutRecipe({ places }: { places: Place[] }) {
@@ -539,9 +551,14 @@ function ShortcutRecipe({ places }: { places: Place[] }) {
           <li>
             Add <b>Get Dictionary Value</b>: <b>text</b> from Contents of URL. Then <b>If</b>{' '}
             Dictionary Value <b>has any value</b>: <b>Show Notification</b> with Dictionary Value.
-            End If. The text is the list — or, if something’s wrong (a revoked token, a deleted
-            place), what to fix — and it’s empty when there’s nothing to buy, so the Shortcut stays
-            quiet.
+            The text is the list — or, if something’s wrong (a revoked token, a deleted place), what
+            to fix.
+          </li>
+          <li>
+            Under <b>Otherwise</b>: <b>Get Dictionary Value</b> <b>count</b> from Contents of URL,
+            then <b>If</b> it <b>does not have any value</b>: <b>Show Notification</b> “{NO_ANSWER}
+            ”. End If, End If. An empty list still has a count, so the Shortcut stays quiet; an
+            answer with neither (a server error or throttle) still tells you.
           </li>
           <li>
             <div className="flex flex-col gap-1.5">

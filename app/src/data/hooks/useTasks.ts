@@ -90,7 +90,8 @@ export function useSetCategory() {
   });
 }
 
-// The errand list a task is on (a Place slug, or null) — settable at any status; an unknown slug is refused.
+// The errand list a task is on (a Place slug, or null) — settable while it's open (a finished task's place is
+// history) and on a parent, whose open parts move with it; a part follows its parent, an unknown slug is refused.
 export function useSetTaskPlace() {
   const api = useApi();
   const qc = useQueryClient();

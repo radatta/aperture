@@ -61,6 +61,12 @@ const PARKED_LABEL: Record<Parked['why'], string> = {
   'set-aside': 'Set aside:',
 };
 
+// The grammar's own words (shared bulkTasks.ts) for what may wait while you're still typing it.
+const SEP = ' | ';
+const EMPTY_TOKENS = "nothing after ' | '";
+const UNKNOWN_PLACE = "no place '";
+const UNKNOWN_CATEGORY = "no category '";
+
 // Why a submit was refused. Each keeps the text and says so — a refused capture is never silent. The
 // visible notice is just "Not saved" (the mode row is ~375px on a phone); the reason is in the preview row.
 type Blocked = 'invalid' | 'categories' | 'categories-failed' | 'places' | 'places-failed';
@@ -96,6 +102,7 @@ export function CaptureBar({
   const [mode, setMode] = useState<CaptureMode>('log');
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
+  const [focused, setFocused] = useState(false);
   // Set by an accepted suggestion; applied after the new value renders (see the layout effect). The
   // nonce, not `text`, triggers it — an accept that changes nothing must still place the caret.
   const pendingCaret = useRef<number | null>(null);
@@ -221,15 +228,26 @@ export function CaptureBar({
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
   // line fixed) it goes too, and its text always names the current cause.
   const shown = receipt?.blocked && !block ? null : receipt;
-  // The #/@ token being typed at the caret speaks through its chips: its own refusal (a bare "@", a
-  // partial that starts several) doesn't flash red mid-word. It still blocks a save, and shows once one
-  // is refused — or once you move off it.
-  const typingKind =
-    suggestions.length > 0 &&
-    !shown?.blocked &&
-    (token?.kind === 'category' || token?.kind === 'place')
-      ? token.kind
-      : null;
+  // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
+  // shows once one is refused — or once the caret leaves it (or the field). Three cases:
+  const typing = focused && !shown?.blocked;
+  const tokenKind = token?.kind === 'category' || token?.kind === 'place' ? token.kind : null;
+  // - the #/@ token speaks through its chips: its own refusal (a bare "@", a partial that starts several);
+  const typingKind = typing && suggestions.length > 0 ? tokenKind : null;
+  // - its gold "no category" / "no place" warning waits too — the next letter may make it a match;
+  const typingWarn = typing ? tokenKind : null;
+  // - "milk | " with the caret right after the separator: the token is the next thing you type.
+  const sepAt = text.indexOf(SEP);
+  const typingAfterSep =
+    typing &&
+    sepAt !== -1 &&
+    caret >= sepAt + SEP.length &&
+    text.slice(sepAt + SEP.length).trim() === '';
+  const quietError = (e: string, i: number) =>
+    line?.errorKinds[i]?.kind === typingKind || (typingAfterSep && e.startsWith(EMPTY_TOKENS));
+  const quietWarning = (w: string) =>
+    (typingWarn === 'place' && w.startsWith(UNKNOWN_PLACE)) ||
+    (typingWarn === 'category' && w.startsWith(UNKNOWN_CATEGORY));
   useEffect(() => {
     if (!block) setReceipt((r) => (r?.blocked ? null : r));
   }, [block]);
@@ -553,6 +571,8 @@ export function CaptureBar({
           }}
           onSelect={syncCaret}
           onKeyUp={syncCaret}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           onKeyDown={onKeyDown}
           placeholder={placeholderFor(mode, toToday)}
           aria-label={`Capture ${mode}`}
@@ -704,7 +724,7 @@ export function CaptureBar({
             <TaskTokenChips line={line} />
           </div>
           {line.errors.map((e, i) =>
-            line.errorKinds[i]?.kind === typingKind ? null : (
+            quietError(e, i) ? null : (
               <Text key={`e${i}`} size="xs" tone="danger" className="break-words">
                 {e}
               </Text>
@@ -717,11 +737,13 @@ export function CaptureBar({
               {blockReason}
             </Text>
           ) : (
-            line.warnings.map((w, i) => (
-              <Text key={`w${i}`} size="xs" tone="gold" className="break-words">
-                {w}
-              </Text>
-            ))
+            line.warnings.map((w, i) =>
+              quietWarning(w) ? null : (
+                <Text key={`w${i}`} size="xs" tone="gold" className="break-words">
+                  {w}
+                </Text>
+              ),
+            )
           )}
         </div>
       )}

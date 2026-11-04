@@ -37,6 +37,10 @@ Shortcut "Aperture list"  ── GET /api/places/safeway/tasks ──▶  place 
   (§3), and it is **never a calibration point**, even with an estimate typed (`contributesCalibration`). A slug
   edit rewrites the place's tasks; deleting a place asks where its tasks go (another place, or off any list — finished errands keep the old slug,
   D3).
+- **Parts**: a part's place is always its parent's — parts are created with it, `setTaskPlace` refuses a part and
+  carries a parent's open parts along, attaching a part gives it the parent's place. The digest lists the
+  _items_: a parent with open parts is left out and its parts listed, so the Shortcut, Settings' count and the lens
+  agree.
 - **Grammar**: `shampoo | @safeway` (bulk add + capture's token line, `bulkTasks.ts`); in a natural-language quick
   add, a known `@slug` word is taken before the model call (`takePlaceWord`) — the model never guesses a place.
 - **Digest** (`places.ts placeDigestOf`): open errands oldest first; `text` = `Safeway · 3 — shampoo, nails, syrup`
@@ -69,12 +73,15 @@ store — the notification's tap-through.
   rule is "show `text` if it has any value".
 - **Token lifecycle**: the user's pointer `{hash | null, retiring[]}` is written with a condition on the version
   read, so a rotate racing a revoke on another device loses cleanly (it deletes its own new row and asks to try
-  again). Old hashes sit in `retiring` until their lookup rows are deleted; a failed delete is retried by the next
-  rotate or revoke, so a rotated-out token can't stay valid. Revoke leaves the pointer inactive (`hash: null`).
+  again). **The pointer is the authority**: every read also does a consistent GetItem of the user's pointer and
+  401s unless its `hash` is this token's (round 2) — so a rotated-out or revoked token stops working the moment
+  the pointer moves, even if deleting its lookup row failed. Old hashes sit in `retiring` only as cleanup, retried
+  by the next rotate or revoke. Revoke leaves the pointer inactive (`hash: null`).
 - **Writes** (200 only, through the handler's `writes`): the token row's daily read count + `lastUsedAt`, then the
   place's `lastReadAt` — Settings' "last called", the proof the automation fires. The heartbeat is best-effort: if
   it fails after the count landed, the failure is logged (`place_heartbeat_failed`) and the digest still returns.
-- **Cost**: a read is 1 GetItem + 2 Queries + 2 PutItems; past the cap, 1 GetItem and nothing else. A leaked token
+- **Cost**: a read is 2 GetItems (lookup + pointer) + 2 Queries + 2 PutItems; past the cap, 2 consistent GetItems and nothing
+  else. A leaked token
   scripted at 1 req/s for a month is a few dollars of Lambda/CloudFront request floor (the counter can't cap
   invocations without reserved concurrency, which would hurt the app); the Monitoring alarms are the tripwire.
   Realistic use is cents. Revoke or rotate in Settings to kill a leaked token at once.
@@ -88,7 +95,9 @@ Once (Settings › Places shows these with the URL and token filled in):
 1. Settings › Places → add a place (e.g. Safeway) → **Generate token** → Copy.
 2. Shortcuts → **+** → name it **Aperture list** → _Get Contents of URL_ `https://<app>/api/places/[Shortcut Input]/tasks`,
    Method GET, header `x-aperture-authorization` = `Bearer apl_…` → _Get Dictionary Value_ `text` → _If_ `text` has any
-   value → _Show Notification_ `text` → _End If_.
+   value → _Show Notification_ `text` → _Otherwise_ → _If_ `count` does not have any value → _Show Notification_ "Aperture didn't
+   answer" → _End If_ → _End If_. An empty list (`text` '', `count` 0) stays quiet; a non-answer (a CloudFront 5xx or
+   throttle has no JSON body) doesn't.
 
 Per store (about a minute each, only for stores you actually go to):
 

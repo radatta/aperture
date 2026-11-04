@@ -38,7 +38,8 @@ import type { EditSlots } from './editState';
 // calibration is measured against the baseline frozen at start, which never moves; a finished task's
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
 // due and the place (the store's errand list) lock once finished — a finished errand's place is what
-// kept it out of calibration, so it's history too. Notes edit at any status. Save writes only what
+// kept it out of calibration, so it's history too. A part's place is its parent's (places.ts), so a part
+// has no picker, only a quiet line. Notes edit at any status. Save writes only what
 // changed and keeps the modal open (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
 // (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts),
 // with a quiet note when that's after its parent's deadline.
@@ -68,6 +69,9 @@ export function TaskDetailsForm({
   const setDue = useSetDue();
   const setNotes = useSetTaskNotes();
   const setPlace = useSetTaskPlace();
+  // The roster's name for a slug; one it doesn't know reads as the slug itself.
+  const placeName = (slug: string) =>
+    placeOptions.places.find((p) => p.slug === slug)?.name ?? slug;
 
   const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
@@ -126,7 +130,7 @@ export function TaskDetailsForm({
   // must never read as a change (or be saved back over a newer note).
   const notesDirty = editingNotes && notesTrimmed !== (task.notes ?? '');
   const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
-  const placeDirty = !isTerminal && (task.place ?? '') !== place;
+  const placeDirty = !isTerminal && !isPart && (task.place ?? '') !== place;
   const dirty =
     titleDirty ||
     estimateDirty ||
@@ -300,30 +304,42 @@ export function TaskDetailsForm({
             Couldn’t load categories.
           </LoadError>
         )}
-        {/* With no places at all there's no list to put it on — the picker would only say "No place". */}
-        {(placeOptions.failed || placeOptions.places.length > 0 || task.place) && (
-          <Select
-            label="Place"
-            placeholder="No place"
-            value={isTerminal ? (task.place ?? '') : place}
-            onChange={(e) => setPlace_(e.target.value)}
-            options={[
-              ...placeOptions.places.map((p) => ({ value: p.slug, label: p.name })),
-              // A slug the roster doesn't know still shows as what it is, never as "No place".
-              ...(task.place && !placeOptions.places.some((p) => p.slug === task.place)
-                ? [{ value: task.place, label: `@${task.place}` }]
-                : []),
-            ]}
-            disabled={!placeOptions.loaded || isTerminal}
-            className="w-40"
-          />
-        )}
-        {isTerminal && (placeOptions.places.length > 0 || task.place) && (
-          <Text size="xs" tone="muted">
-            Finished — its place is history, like its estimate.
-          </Text>
-        )}
-        {placeOptions.failed && (
+        {isPart
+          ? // It follows its parent: moving the parent moves it, so there's nothing to pick here.
+            task.place && (
+              <Text size="xs" tone="muted" className="w-full">
+                On @{placeName(task.place)} — a part follows its parent’s place.
+              </Text>
+            )
+          : isTerminal
+            ? // History, shown like the other finished fields — not a select that looks editable.
+              (placeOptions.places.length > 0 || task.place) && (
+                <div className="flex flex-col gap-1">
+                  <Text size="sm" tone="muted">
+                    Place
+                  </Text>
+                  <Text>{task.place ? `@${placeName(task.place)}` : 'No place'}</Text>
+                </div>
+              )
+            : // With no places at all there's no list to put it on — the picker would only say "No place".
+              (placeOptions.failed || placeOptions.places.length > 0 || task.place) && (
+                <Select
+                  label="Place"
+                  placeholder="No place"
+                  value={place}
+                  onChange={(e) => setPlace_(e.target.value)}
+                  options={[
+                    ...placeOptions.places.map((p) => ({ value: p.slug, label: p.name })),
+                    // A slug the roster doesn't know still shows as what it is, never as "No place".
+                    ...(task.place && !placeOptions.places.some((p) => p.slug === task.place)
+                      ? [{ value: task.place, label: `@${task.place}` }]
+                      : []),
+                  ]}
+                  disabled={!placeOptions.loaded}
+                  className="w-40"
+                />
+              )}
+        {placeOptions.failed && (!isPart || task.place) && (
           <LoadError size="xs" onRetry={placeOptions.retry}>
             Couldn’t load places.
           </LoadError>

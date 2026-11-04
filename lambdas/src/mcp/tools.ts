@@ -210,7 +210,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_task',
     description:
-      "Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day (on a part: when its block ends, not a deadline); notes is free-form context (light markdown). The estimate stays editable until the task is done or cancelled. parentId makes it a PART of that task (one level: not a part, not finished, not already worked on): the parent is the deliverable and holds the deadline; its parts hold the work. Its first part clears the parent's estimate (now the sum of its parts), and if the parent was planned an untimed first part takes its spot. A timed task (dueDay + dueTime) is never planned: it's on Today on its day, by its time. place puts it on an errand list (a slug from list_places) — \"add shampoo to my Safeway list\" is create_task { title: 'shampoo', place: 'safeway' }.",
+      "Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day (on a part: when its block ends, not a deadline); notes is free-form context (light markdown). The estimate stays editable until the task is done or cancelled. parentId makes it a PART of that task (one level: not a part, not finished, not already worked on): the parent is the deliverable and holds the deadline; its parts hold the work. Its first part clears the parent's estimate (now the sum of its parts), and if the parent was planned an untimed first part takes its spot. A timed task (dueDay + dueTime) is never planned: it's on Today on its day, by its time. place puts it on an errand list (a slug from list_places) — \"add shampoo to my Safeway list\" is create_task { title: 'shampoo', place: 'safeway' }. A part always takes its parent's place: omit place (a different one errors).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -243,7 +243,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_tasks',
     description:
-      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task, parentId included — breaking a deliverable into parts is one call with every part pointing at it. All-or-nothing on invalid input: one bad task (e.g. notes over the cap, an ineligible parentId, an unknown place) creates none. Use this for a study plan or a session backlog dump.',
+      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task, parentId included — breaking a deliverable into parts is one call with every part pointing at it. All-or-nothing on invalid input: one bad task (e.g. notes over the cap, an ineligible parentId, an unknown place, a part placed differently from its parent) creates none. Use this for a study plan or a session backlog dump.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -306,7 +306,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→place→parentId→due→notes→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).',
+      "Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent's baseline; an open part takes its parent's place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent's place and errors — set the parent's, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or \"\" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -359,13 +359,15 @@ export const TOOLS: Tool[] = [
           await ctx.dispatch('setTaskCategory', [id, nullableStr(args, 'categoryId')]);
           applied.push('categoryId');
         }
-        if (place !== undefined) {
-          await ctx.dispatch('setTaskPlace', [id, place]);
-          applied.push('place');
-        }
+        // parentId before place: a detach then frees the place, and a place given with an attach is
+        // refused (a part follows its parent) rather than silently overwritten by the parent's.
         if (present(args, 'parentId')) {
           await ctx.dispatch('setTaskParent', [id, nullableStr(args, 'parentId')]);
           applied.push('parentId');
+        }
+        if (place !== undefined) {
+          await ctx.dispatch('setTaskPlace', [id, place]);
+          applied.push('place');
         }
         if (dueDay !== undefined || dueTime !== undefined) {
           // A time-only change keeps the task's day; the server rejects a time with no day at all.

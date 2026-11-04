@@ -60,6 +60,19 @@ describe('placeDigest', () => {
       text: 'Safeway · 3 — shampoo, nails, syrup',
     });
   });
+  it('lists the items: a parent with open parts gives way to them, one with only finished parts stays', () => {
+    const tasks = [
+      task({ id: 'p', title: 'party', createdAt: 1 }),
+      task({ id: 'p1', title: 'cups', parentId: 'p', createdAt: 2 }),
+      task({ id: 'p2', title: 'ice', parentId: 'p', createdAt: 3, status: 'done' }),
+      task({ id: 'q', title: 'dinner', createdAt: 4 }),
+      task({ id: 'q1', title: 'rice', parentId: 'q', createdAt: 5, status: 'cancelled' }),
+      task({ id: 'q2', title: 'beans', parentId: 'q', createdAt: 6, deletedAt: 7 }),
+      task({ id: 'r', title: 'loose', createdAt: 8 }),
+    ];
+    expect(placeTasks('safeway', tasks).map((t) => t.id)).toEqual(['p1', 'q', 'r']);
+    expect(placeDigestOf({ name: 'Safeway', slug: 'safeway' }, tasks).count).toBe(3);
+  });
   it('an empty list has empty text, so the Shortcut skips the banner', () => {
     expect(placeDigestText('Safeway', [])).toBe('');
   });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PLACE_FINISHED_ERROR, placeUnknownError } from '@aperture/shared';
+import { PLACE_FINISHED_ERROR, PLACE_PART_ERROR, placeUnknownError } from '@aperture/shared';
 import type { ApiMethod, Place, Task } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
@@ -117,6 +117,32 @@ describe('place on the task tools', () => {
       PLACE_FINISHED_ERROR,
     );
     expect((await setup.getTask(t.id))!.place).toBe('safeway');
+  });
+
+  it("a part follows its parent's place: create and update refuse another, parentId applies first", async () => {
+    await setup.upsertPlace({ name: 'Target' });
+    const party = (await call('create_task', { title: 'party', place: 'safeway' })) as Task;
+    const cups = (await call('create_task', { title: 'cups', parentId: party.id })) as Task;
+    expect(cups.place).toBe('safeway');
+    await expect(
+      call('create_task', { title: 'x', parentId: party.id, place: 'target' }),
+    ).rejects.toThrow(PLACE_PART_ERROR);
+    await expect(call('update_task', { id: cups.id, place: 'target' })).rejects.toThrow(
+      PLACE_PART_ERROR,
+    );
+    // An attach with a place: attached, then the place refused — never silently the parent's.
+    const loose = (await call('create_task', { title: 'ice' })) as Task;
+    await expect(
+      call('update_task', { id: loose.id, parentId: party.id, place: 'target' }),
+    ).rejects.toThrow(new RegExp(`${PLACE_PART_ERROR}.*already applied: parentId`));
+    expect((await setup.getTask(loose.id))!.place).toBe('safeway');
+    // A detach with a place: detached first, so the place lands.
+    const out = (await call('update_task', {
+      id: cups.id,
+      parentId: null,
+      place: 'target',
+    })) as Task;
+    expect(out).toMatchObject({ parentId: null, place: 'target' });
   });
 
   it('complete_task checks off an errand without actualMin — and no calibration point', async () => {

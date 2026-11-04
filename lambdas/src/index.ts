@@ -217,7 +217,8 @@ const UNAUTHORIZED_REASON = (message: string): string =>
         ? 'revoked'
         : 'unknown';
 
-// 405 non-GET → 401 no/unknown token (no 'local' fallback, any stage) → 429 at the daily cap → 422 a
+// 405 non-GET → 401 no/unknown token, or one its user's pointer no longer names (revoked/rotated out —
+// resolvePlaceRead; no 'local' fallback, any stage) → 429 at the daily cap → 422 a
 // malformed path or an unknown slug, only once authenticated (no unauthenticated slug probing) → 200 the
 // digest + lens link. Never 404: CloudFront turns an origin 403/404 into the app's index.html (a 200 the
 // Shortcut would read as an empty list). Every body carries `text` (the digest's, or PLACE_READ_TEXT), so

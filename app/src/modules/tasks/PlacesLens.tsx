@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { partsOf, partsSummary } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -8,12 +9,12 @@ import { Text } from '../../components/Text';
 import { CheckIcon } from '../../components/icons';
 import { useRowAction } from '../../lib/useRowAction';
 import { usePlaces } from '../../data/hooks/usePlaces';
-import { useCheckOffErrand, useCreateTask } from '../../data/hooks/useTasks';
+import { useCheckOffErrand, useCreateTask, useTransitionTask } from '../../data/hooks/useTasks';
 import { CategoryTag } from './CategoryTag';
 import { GroupHeader } from './GroupHeader';
 import { TaskCard } from './TaskCard';
 import { TaskTitleButton } from './TaskTitleButton';
-import { COLLAPSE_AT, foldParts, placer } from './query';
+import { COLLAPSE_AT, errandsByPlace } from './query';
 import type { QueryCtx } from './query';
 import { useOpenTask } from './task-modal-context';
 import { useCollapsedGroups } from './useTaskQuery';
@@ -28,10 +29,12 @@ interface Group {
 }
 
 // The Places lens: the errands waiting on each store's list (query.ts placeOf's 'places' bucket), one group
-// per place in the order you added them (Settings › Places), each list oldest first — the order the
-// Shortcut's notification reads. One tap checks an errand off (started then finished: no actual, never a
-// calibration point), with a few seconds to Add it again. `focus` is the store a link named (?place=,
-// the Shortcut's tap-through): its group opens and scrolls into view.
+// per place in the order you added them (Settings › Places), each list oldest first — the items the
+// Shortcut's notification reads (errandsByPlace): a parent with open parts gives way to them, each part a
+// row of its own. One tap checks an errand or a part off (started then finished: no actual, never a
+// calibration point), with a few seconds to Add it again; a parent whose parts are all done is a row
+// again, with Mark done (parts.ts). `focus` is the store a link named (?place=, the Shortcut's
+// tap-through): its group opens and scrolls into view.
 export function PlacesLens({
   tasks,
   ctx,
@@ -53,6 +56,7 @@ export function PlacesLens({
   const rosterFailed = placesQ.isError && roster === undefined;
   const checkOff = useCheckOffErrand();
   const again = useCreateTask();
+  const transition = useTransitionTask();
   const collapsed = useCollapsedGroups();
   const listRef = useRef<HTMLDivElement>(null);
   const action = useRowAction(listRef);
@@ -70,20 +74,20 @@ export function PlacesLens({
     return () => clearTimeout(id);
   }, [receipt]);
 
-  const place = placer(tasks, ctx);
-  const errands = foldParts(tasks.filter((t) => place(t) === 'places')).sort(
-    (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1),
-  );
+  const lists = errandsByPlace(tasks, ctx);
   const known = roster ?? [];
   const knownSlugs = new Set(known.map((p) => p.slug));
   const groups: Group[] = known.map((p) => ({
     slug: p.slug,
     name: p.name,
-    tasks: errands.filter((t) => t.place === p.slug),
+    tasks: lists.get(p.slug) ?? [],
   }));
   // A slug the roster doesn't hold (it failed, or a stale cache) still gets its list.
-  for (const slug of new Set(errands.map((t) => t.place!).filter((s) => !knownSlugs.has(s))))
-    groups.push({ slug, name: `@${slug}`, tasks: errands.filter((t) => t.place === slug) });
+  for (const [slug, list] of lists)
+    if (!knownSlugs.has(slug)) groups.push({ slug, name: `@${slug}`, tasks: list });
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const unfinished = (t: Task | undefined) =>
+    !!t && t.status !== 'done' && t.status !== 'cancelled';
   // An emptied list stays while its receipt does (Add again lands back in it), and the linked one always.
   const shown = groups.filter(
     (g) => g.tasks.length > 0 || g.slug === focus || g.slug === receipt?.task.place,
@@ -106,10 +110,20 @@ export function PlacesLens({
       setReceipt({ task: done, at: Date.now() });
     });
   }
+  // A parent whose parts are all done: its one action, as on the other lenses. A refusal (a part reopened
+  // elsewhere) is said by name.
+  function markDone(task: Task) {
+    void action.run(task.id, () => transition.mutateAsync({ id: task.id, to: 'done' }), true);
+  }
   async function addAgain(task: Task) {
     try {
-      const { title, categoryId, estimateMin, bufferMin, notes, place } = task;
-      await again.mutateAsync({ title, categoryId, estimateMin, bufferMin, notes, place });
+      const { title, categoryId, estimateMin, bufferMin, notes, place, parentId } = task;
+      const copy = { title, categoryId, estimateMin, bufferMin, notes };
+      // A part comes back as a part while its parent is open (it takes the parent's place); else it's a
+      // loose errand on the same list.
+      await again.mutateAsync(
+        parentId && unfinished(byId.get(parentId)) ? { ...copy, parentId } : { ...copy, place },
+      );
       setReceipt(null);
     } catch {
       setReceipt({ task, at: Date.now(), failed: true }); // stays until dismissed by the next action
@@ -155,7 +169,7 @@ export function PlacesLens({
       <div role="status">
         {action.failed && (
           <Text size="sm" tone="danger">
-            Couldn’t check that off — try again.
+            {action.message ?? 'Couldn’t check that off — try again.'}
           </Text>
         )}
       </div>
@@ -168,7 +182,7 @@ export function PlacesLens({
         const key = `places:${g.slug}`;
         const big = g.tasks.length >= COLLAPSE_AT;
         const linked = g.slug === focus;
-        const isOpen = linked || !collapsed.isCollapsed(key, big);
+        const open = linked || !collapsed.isCollapsed(key, big);
         return (
           <section
             key={g.slug}
@@ -179,28 +193,49 @@ export function PlacesLens({
             <GroupHeader
               label={g.name}
               count={g.tasks.length}
-              isOpen={isOpen}
+              isOpen={open}
               // The linked list stays open: it's the one you came for.
               onToggle={linked ? undefined : () => collapsed.toggle(key, big)}
             />
-            {isOpen && g.tasks.length === 0 && (
+            {open && g.tasks.length === 0 && (
               <Text size="sm" tone="muted">
                 Nothing on this list.
               </Text>
             )}
-            {isOpen &&
-              g.tasks.map((t) =>
-                tasks.some((x) => x.parentId === t.id) ? (
-                  <TaskCard key={t.id} task={t} showParts />
-                ) : (
+            {open &&
+              g.tasks.map((t) => {
+                const parts = partsOf(tasks, t.id);
+                // A parent here has no open parts left (else they'd stand in for it): Mark done once
+                // they're all done; every part dropped, the editor says to drop it too.
+                if (parts.length)
+                  return (
+                    <TaskCard
+                      key={t.id}
+                      task={t}
+                      showParts
+                      actions={
+                        partsSummary(parts).allDone ? (
+                          <Button
+                            size="sm"
+                            disabled={action.isBusy(t.id)}
+                            onClick={() => markDone(t)}
+                          >
+                            Mark done
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  );
+                return (
                   <ErrandRow
                     key={t.id}
                     task={t}
+                    parent={t.parentId ? byId.get(t.parentId) : undefined}
                     busy={action.isBusy(t.id)}
                     onCheck={() => check(t)}
                   />
-                ),
-              )}
+                );
+              })}
             {receipt?.task.place === g.slug && (
               <Receipt
                 task={receipt.task}
@@ -216,8 +251,19 @@ export function PlacesLens({
   );
 }
 
-// One errand: a thumb-sized check (44px) and the title, which opens the editor like any task row.
-function ErrandRow({ task, busy, onCheck }: { task: Task; busy: boolean; onCheck: () => void }) {
+// One errand (or an errand's part): a thumb-sized check (44px) and the title, which opens the editor like
+// any task row. A part says whose it is.
+function ErrandRow({
+  task,
+  parent,
+  busy,
+  onCheck,
+}: {
+  task: Task;
+  parent: Task | undefined;
+  busy: boolean;
+  onCheck: () => void;
+}) {
   const openTask = useOpenTask();
   const titleRef = useRef<HTMLButtonElement>(null);
   return (
@@ -240,6 +286,11 @@ function ErrandRow({ task, busy, onCheck }: { task: Task; busy: boolean; onCheck
           onOpen={() => openTask?.(task, 'view', titleRef.current)}
         />
         <div className="flex flex-wrap items-center gap-x-2">
+          {parent && (
+            <Text size="xs" tone="muted" className="min-w-0 truncate">
+              part of {parent.title}
+            </Text>
+          )}
           <CategoryTag categoryId={task.categoryId} />
         </div>
       </div>

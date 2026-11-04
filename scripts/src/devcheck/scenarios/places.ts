@@ -6,15 +6,17 @@
 // recorder.ts, or the API's), the token as `place-token:<run>` before any mint, and cleanup deletes the
 // places and revokes the token by those records. The token's plaintext lives in this module's memory only —
 // never in a log, an error, a screenshot or the ledger. The rows are the plan's dev-test matrix
-// (localNotes/plan.md §4 D) plus review round 1's additions (localNotes/decisions.md).
+// (localNotes/plan.md §4 D) plus review rounds 1 and 2 (localNotes/decisions.md) — round 2 the broken-down errand.
 import { randomBytes } from 'node:crypto';
 import { DEV_ORIGIN } from '../config';
 import type { DevPlace, DevPlaceTokenStatus, DevTask } from '../api';
-import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { hidingSecret, laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 // packages/shared/src/places.ts PLACE_READ_DAILY_CAP (scripts doesn't depend on shared): reads per token per
 // UTC day. If it moves, the cap step fails naming where the 429 came.
 const PLACE_READ_DAILY_CAP = 200;
+// packages/shared/src/places.ts PLACE_PART_ERROR: setTaskPlace on a part (a part follows its parent's place).
+const PLACE_PART_ERROR = "A part follows its parent's place — change the parent's";
 const TOKEN_RE = /^apl_[A-Za-z0-9_-]{43}$/;
 
 // slugify(name) for these names: the nonce is [A-Za-z0-9], so lowercasing it is the whole rule.
@@ -28,6 +30,9 @@ const renamedName = (ctx: Ctx) => `Devcheck ${ctx.nonce} C`;
 const renamedSlug = (ctx: Ctx) => `devcheck-${n(ctx)}-c`;
 const thirdName = (ctx: Ctx) => `Devcheck ${ctx.nonce} D`;
 const thirdSlug = (ctx: Ctx) => `devcheck-${n(ctx)}-d`;
+// The list an errand is broken down on — its own, so no other list's counts move.
+const partsName = (ctx: Ctx) => `Devcheck ${ctx.nonce} E`;
+const partsSlug = (ctx: Ctx) => `devcheck-${n(ctx)}-e`;
 const unknownSlug = (ctx: Ctx) => `nx-${n(ctx)}`; // never created
 const badSlug = (ctx: Ctx) => `bad_${n(ctx)}`; // outside the slug shape: the route's malformed path
 // Not "devcheck <nonce> …": the parts scenarios match their tasks by that prefix.
@@ -44,6 +49,10 @@ let strayId: string; // captured onto no list, then put on the second by the edi
 let nailsId: string;
 let syrupId: string;
 let soapId: string;
+let partsPlace: DevPlace; // the list the party errand is broken down on
+let partyId: string; // the errand broken down — a parent, so the lists leave it out
+let partIds: string[]; // its two parts, as the server orders the list's items
+let partTitles: string[];
 let placeToken: string; // the current token's plaintext — never logged
 let readsToday = 0; // the current token's count, as the server last said
 
@@ -132,19 +141,40 @@ async function firstListUntouched(ctx: Ctx) {
     throw new Error('the neighbouring errand left its list');
 }
 
-// The show-once screen: read the token, then close it at once, so no shot (a failure's included) holds it.
-async function takeRevealedToken(ctx: Ctx): Promise<string> {
-  const field = ctx.page.getByRole('textbox', { name: 'Shortcut token', exact: true });
-  await field.waitFor({ state: 'visible', timeout: 15_000 });
-  try {
-    return await field.inputValue();
-  } finally {
-    await ctx.page
-      .getByRole('button', { name: 'Done', exact: true })
-      .click({ timeout: 5_000 })
-      .catch(() => undefined);
+// The lens's group for the parts place reads `titles` — its header count, then its check rows in order — so
+// it says what the Shortcut says: items, never the parent beside its parts.
+async function lensAgrees(ctx: Ctx, titles: string[]) {
+  const list = region(ctx, partsPlace.name);
+  await list
+    .getByText(`${partsPlace.name} · ${titles.length}`, { exact: true })
+    .waitFor({ state: 'visible', timeout: 15_000 });
+  const checks = list.getByRole('button', { name: /^Check off / });
+  const n = await checks.count();
+  const rows: string[] = [];
+  for (let i = 0; i < n; i++) rows.push((await checks.nth(i).getAttribute('aria-label')) ?? '');
+  const want = titles.map((t) => `Check off ${t}`);
+  if (JSON.stringify(rows) !== JSON.stringify(want))
+    throw new Error(
+      `the lens’s rows are ${JSON.stringify(rows)}, the Shortcut’s ${JSON.stringify(want)}`,
+    );
+}
+
+// The show-once screen, from the click that mints the token: read it, then close it at once. Any throw on
+// the way — the reveal never came, came after the wait gave up, or wouldn't close — blanks the page before it
+// leaves (scenario.ts hidingSecret), so no shot, a failure's included, ever holds the token.
+export async function takeRevealedToken(
+  ctx: Pick<Ctx, 'page'>,
+  mint: () => Promise<void>,
+): Promise<string> {
+  return hidingSecret(ctx.page, async () => {
+    await mint();
+    const field = ctx.page.getByRole('textbox', { name: 'Shortcut token', exact: true });
+    await field.waitFor({ state: 'visible', timeout: 15_000 });
+    const token = await field.inputValue();
+    await ctx.page.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 5_000 });
     await field.waitFor({ state: 'hidden', timeout: 5_000 });
-  }
+    return token;
+  });
 }
 
 export const places: Scenario = {
@@ -198,7 +228,7 @@ export const places: Scenario = {
       id: 'recipe',
       entry: 'ui',
       kind: 'nominal',
-      what: 'The Shortcut recipe gives the full URL template, <origin>/api/places/[Shortcut Input]/tasks',
+      what: 'The Shortcut recipe gives the full URL template, <origin>/api/places/[Shortcut Input]/tasks, and says “Aperture didn’t answer” when no answer comes',
     },
     {
       id: 'rename',
@@ -361,6 +391,36 @@ export const places: Scenario = {
       entry: 'mcp',
       kind: 'edge',
       what: 'MCP complete_task on an errand without actualMin checks it off (done, still on its list’s word)',
+    },
+    {
+      id: 'break-down',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Break down… on an errand: its 2 parts take its place, each its own row (“part of …”, a 44px check); the parent leaves the list',
+    },
+    {
+      id: 'parts-digest',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'The Shortcut’s read of a broken-down errand lists its parts, not the parent — and a part checked off drops the count by one',
+    },
+    {
+      id: 'parts-agree',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The lens’s count and rows for that store are the Shortcut’s count and titles (items, not parent + parts)',
+    },
+    {
+      id: 'part-check-off',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'One tap checks one part off: it leaves the list, its sibling stays, and the count drops by one',
+    },
+    {
+      id: 'mcp-part-place',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'MCP update_task { place } on a part is refused (a part follows its parent’s place), and it stays put',
     },
     {
       id: 'arrive',
@@ -556,12 +616,15 @@ export const places: Scenario = {
       id: 'ui-recipe',
       entry: 'ui',
       proves: ['recipe'],
-      title: 'The Shortcut recipe’s URL is the full template on this origin',
+      title:
+        'The Shortcut recipe’s URL is the full template on this origin; its Otherwise branch is there',
       async run(ctx) {
         await ctx.ui.goto('/settings');
         await ctx.page.getByRole('button', { name: 'Set up the iPhone Shortcut' }).click();
         const want = `${DEV_ORIGIN}/api/places/[Shortcut Input]/tasks`;
         await ctx.ui.expectText(want);
+        // No `text` and no `count` (a CloudFront 5xx, a throttle) is a non-answer, never a quiet empty list.
+        await ctx.ui.expectText(/Aperture didn[’']t answer/);
         await ctx.shot('recipe');
       },
     },
@@ -908,6 +971,169 @@ export const places: Scenario = {
       },
     },
     {
+      id: 'ui-break-down',
+      entry: 'ui',
+      proves: ['break-down'],
+      title: 'Break down… an errand on its own list into 2 parts, from the lens’s editor',
+      async run(ctx) {
+        partsPlace = await ctx.api.writes.upsertPlace({ name: partsName(ctx) });
+        if (partsPlace.slug !== partsSlug(ctx))
+          throw new Error(`the parts place got ${partsPlace.slug}`);
+        // Ledgered as api:createTask; its parts as ui:createTasks, after it — cleanup goes newest first, so
+        // the parts are deleted before the parent and its delete never meets a part (no cascade).
+        partyId = (
+          await ctx.api.writes.createTask({ title: errand(ctx, 'party'), place: partsPlace.slug })
+        ).id;
+        await ctx.ui.goto(lensPath(partsPlace.slug));
+        await region(ctx, partsPlace.name)
+          .getByRole('button', { name: errand(ctx, 'party'), exact: true })
+          .click({ timeout: 15_000 });
+        const d = ctx.page.getByRole('dialog', { name: `Task: ${errand(ctx, 'party')}` });
+        await d.waitFor({ state: 'visible', timeout: 10_000 });
+        await d.getByRole('button', { name: 'Break down…', exact: true }).click();
+        await d.getByLabel(/Add parts/).fill(`${errand(ctx, 'cups')}\n${errand(ctx, 'plates')}`);
+        await d.getByText('2 parts', { exact: true }).waitFor({ timeout: 10_000 });
+        await ctx.shot('break-down');
+        await d.getByRole('button', { name: 'Add parts', exact: true }).click();
+        // The form closes once the parts landed; the parent's opener is "Add parts…" now.
+        await d
+          .getByRole('button', { name: 'Add parts…', exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
+        await ctx.page.keyboard.press('Escape');
+        await d.waitFor({ state: 'hidden', timeout: 5_000 });
+        const list = region(ctx, partsPlace.name);
+        for (const what of ['cups', 'plates']) {
+          const check = checkOff(ctx, partsPlace.name, what);
+          await check.waitFor({ state: 'visible', timeout: 15_000 });
+          const box = await check.boundingBox();
+          if (!box || box.width < 43.5 || box.height < 43.5)
+            throw new Error(`the check on ${what} is ${box?.width}×${box?.height} — not 44px`);
+        }
+        const partOf = await list
+          .getByText(`part of ${errand(ctx, 'party')}`, { exact: true })
+          .count();
+        if (partOf !== 2) throw new Error(`${partOf} rows say “part of” the parent, not 2`);
+        const parentRows =
+          (await list.getByRole('button', { name: errand(ctx, 'party'), exact: true }).count()) +
+          (await list
+            .getByRole('button', { name: `Check off ${errand(ctx, 'party')}`, exact: true })
+            .count());
+        if (parentRows) throw new Error('the parent is still a row on the list');
+        await ctx.shot('parts-lens');
+      },
+    },
+    {
+      id: 'server-parts',
+      entry: 'api',
+      proves: ['break-down'],
+      title: 'The server has 2 parts under the errand, both on its list, both in the ledger',
+      async run(ctx) {
+        const parts = (await ctx.api.reads.listTasks()).filter((t) => t.parentId === partyId);
+        const titles = parts.map((t) => t.title).sort();
+        if (JSON.stringify(titles) !== JSON.stringify([errand(ctx, 'cups'), errand(ctx, 'plates')]))
+          throw new Error(`the errand’s parts are ${JSON.stringify(titles)}`);
+        for (const t of parts) {
+          if (t.place !== partsPlace.slug)
+            throw new Error(`the part “${t.title}” is on ${t.place}, not its parent’s list`);
+          if (!ctx.createdIds().includes(t.id))
+            throw new Error(`the part “${t.title}” never reached the ledger`);
+        }
+        if ((await getTask(ctx, partyId)).place !== partsPlace.slug)
+          throw new Error('the parent left its list');
+      },
+    },
+    {
+      id: 'api-parts-read',
+      entry: 'api',
+      proves: ['parts-digest'],
+      title: 'The Shortcut’s read lists the 2 parts, not the parent',
+      async run(ctx) {
+        const body = await readCounted(ctx, partsPlace.slug, placeToken);
+        const titles = fieldsOf(body).titles;
+        const want = [errand(ctx, 'cups'), errand(ctx, 'plates')];
+        // The server orders them (created, then id); a batch's two may tie on created.
+        if (!Array.isArray(titles) || JSON.stringify([...titles].sort()) !== JSON.stringify(want))
+          throw new Error(`GET answered ${JSON.stringify(body)}`);
+        partTitles = titles as string[];
+        expectBody(body, {
+          place: partsPlace.name,
+          slug: partsPlace.slug,
+          count: 2,
+          titles: partTitles,
+          text: `${partsPlace.name} · 2 — ${partTitles.join(', ')}`,
+          url: `${DEV_ORIGIN}${lensPath(partsPlace.slug)}`,
+        });
+        const parts = (await ctx.api.reads.listTasks()).filter((t) => t.parentId === partyId);
+        partIds = partTitles.map((title) => parts.find((t) => t.title === title)!.id);
+      },
+    },
+    {
+      id: 'ui-parts-agree',
+      entry: 'ui',
+      proves: ['parts-agree'],
+      title: 'The lens’s count and rows for the store are the Shortcut’s count and titles',
+      async run(ctx) {
+        await ctx.ui.goto(lensPath(partsPlace.slug));
+        await lensAgrees(ctx, partTitles);
+        await ctx.shot('parts-agree');
+      },
+    },
+    {
+      id: 'ui-part-check-off',
+      entry: 'ui',
+      proves: ['part-check-off'],
+      title: 'One tap checks the first part off: it leaves, its sibling stays, the count is 1',
+      async run(ctx) {
+        const [first, second] = partTitles as [string, string];
+        const check = region(ctx, partsPlace.name).getByRole('button', {
+          name: `Check off ${first}`,
+          exact: true,
+        });
+        await check.click({ timeout: 15_000 });
+        await ctx.ui.expectText(`Checked off “${first}”.`, 15_000);
+        await check.waitFor({ state: 'hidden', timeout: 10_000 });
+        await lensAgrees(ctx, [second]);
+        await ctx.shot('part-checked-off');
+      },
+    },
+    {
+      id: 'api-part-check-off',
+      entry: 'api',
+      proves: ['parts-digest'],
+      title: 'The Shortcut’s count drops by one: the sibling alone, still not the parent',
+      async run(ctx) {
+        if ((await getTask(ctx, partIds[0]!)).status !== 'done')
+          throw new Error('the checked-off part isn’t done on the server');
+        const body = await readCounted(ctx, partsPlace.slug, placeToken);
+        expectBody(body, {
+          place: partsPlace.name,
+          slug: partsPlace.slug,
+          count: 1,
+          titles: [partTitles[1]],
+          text: `${partsPlace.name} · 1 — ${partTitles[1]}`,
+          url: `${DEV_ORIGIN}${lensPath(partsPlace.slug)}`,
+        });
+      },
+    },
+    {
+      id: 'mcp-part-place',
+      entry: 'mcp',
+      proves: ['mcp-part-place'],
+      title: 'MCP update_task { place } on the open part is refused, and it stays on its list',
+      async run(ctx) {
+        const part = partIds[1]!;
+        const err = await ctx.mcp.writes.updateTask(part, { place: place.slug }).then(
+          () => null,
+          (e: unknown) => (e instanceof Error ? e.message : String(e)),
+        );
+        if (err === null) throw new Error('update_task moved a part off its parent’s place');
+        if (!err.includes(PLACE_PART_ERROR)) throw new Error(`update_task refused with: ${err}`);
+        if ((await getTask(ctx, part)).place !== partsPlace.slug)
+          throw new Error('the refused part left its list');
+        await firstListUntouched(ctx);
+      },
+    },
+    {
       id: 'ui-bulk',
       entry: 'ui',
       proves: ['bulk-place'],
@@ -1066,9 +1292,10 @@ export const places: Scenario = {
         await ctx.ui.goto('/settings');
         await ctx.ui.expectText('No token yet', 15_000);
         ctx.api.writes.recordPlaceTokenMint(); // before the browser mints it
-        await ctx.page.getByRole('button', { name: 'Generate token', exact: true }).click();
         const revoked = placeToken;
-        const token = await takeRevealedToken(ctx);
+        const token = await takeRevealedToken(ctx, () =>
+          ctx.page.getByRole('button', { name: 'Generate token', exact: true }).click(),
+        );
         const s = await expectFresh(ctx, token, 'Generate');
         await ctx.ui.expectText(`Active · ends …${s.hint}`, 15_000);
         await ctx.shot('token-generated');
@@ -1088,9 +1315,10 @@ export const places: Scenario = {
           .getByRole('button', { name: 'Rotate…', exact: true })
           .click({ timeout: 15_000 });
         ctx.api.writes.recordPlaceTokenMint();
-        await ctx.page.getByRole('button', { name: 'Rotate', exact: true }).click();
         const old = placeToken;
-        const token = await takeRevealedToken(ctx);
+        const token = await takeRevealedToken(ctx, () =>
+          ctx.page.getByRole('button', { name: 'Rotate', exact: true }).click(),
+        );
         if (token === old) throw new Error('Rotate showed the same token');
         const s = await expectFresh(ctx, token, 'Rotate');
         await ctx.ui.expectText(`Active · ends …${s.hint}`, 15_000);

@@ -95,6 +95,7 @@ import {
   withEstimate,
   runQuickParse,
   PLACE_FINISHED_ERROR,
+  PLACE_PART_ERROR,
   PLACE_TOKEN_PREFIX,
   placeDigestOf,
   placeError,
@@ -185,6 +186,12 @@ const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null };
 const STORAGE_KEY = 'aperture.stub.v1';
 // Done or dropped: a finished task's place is history (places.ts PLACE_FINISHED_ERROR).
 const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
+// A part's place is its parent's: none given takes it, a different slug is refused (PLACE_PART_ERROR).
+function partPlace(given: string | null, parent: Task | undefined): string | null {
+  if (!parent) return given;
+  if (given !== null && given !== parent.place) throw new Error(PLACE_PART_ERROR);
+  return parent.place;
+}
 
 // The Shortcut's token, kept in plaintext here — hashing it is the backend's job (places.md). The stub has
 // no Shortcut route, so nothing ever reads with it: lastUsedAt stays null and readsToday 0.
@@ -427,6 +434,7 @@ class StubClient implements ApiClient {
   // Shared task literal for createTask + createTasks. A batch passes one `t` for every task so they
   // tie on createdAt and render as a block in ULID (paste) order (listTasks sorts createdAt desc, stable).
   private newTask(input: CreateTaskInput, t: number): Task {
+    const parent = input.parentId ? this.find(this.store.tasks, input.parentId) : undefined;
     return {
       ...this.baseAt(t),
       title: input.title,
@@ -440,7 +448,8 @@ class StubClient implements ApiClient {
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
       parentId: input.parentId || null, // '' is no parent, never a link to validate
-      place: this.knownPlace(input.place ?? null), // throws on an unknown slug, before createTasks writes
+      // Throws on an unknown slug, or a part's slug that isn't its parent's, before createTasks writes.
+      place: partPlace(this.knownPlace(input.place ?? null), parent),
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -816,7 +825,9 @@ class StubClient implements ApiClient {
     const all = this.alive(this.store.tasks);
     assertCanBePart(task, parent, all);
     const first = !hasParts(all, parent.id);
-    const part = this.writes.patch(this.store.tasks, id, { parentId });
+    // An open part takes its parent's place; a finished one's is history. A detach (above) keeps it.
+    const place = isFinished(task) ? task.place : parent.place;
+    const part = this.writes.patch(this.store.tasks, id, { parentId, place });
     if (first) this.adoptAsParent(parent);
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
     this.releaseParentState(task.parentId); // moved from another parent
@@ -1444,9 +1455,17 @@ class StubClient implements ApiClient {
       if (to !== null || !isFinished(t)) this.writes.patch(this.store.tasks, t.id, { place: to });
     this.writes.softDelete(this.store.places, id);
   }
+  // Open tasks only (PLACE_FINISHED_ERROR). A part follows its parent (PLACE_PART_ERROR); a parent carries
+  // its open parts along — finished parts keep theirs.
   async setTaskPlace(id: string, place: string | null): Promise<Task> {
-    if (isFinished(this.mustFind(this.store.tasks, id))) throw new Error(PLACE_FINISHED_ERROR);
-    return this.writes.patch(this.store.tasks, id, { place: this.knownPlace(place) });
+    const task = this.mustFind(this.store.tasks, id);
+    if (isFinished(task)) throw new Error(PLACE_FINISHED_ERROR);
+    if (task.parentId) throw new Error(PLACE_PART_ERROR);
+    const slug = this.knownPlace(place);
+    for (const p of this.alive(this.store.tasks))
+      if (p.parentId === id && !isFinished(p) && p.place !== slug)
+        this.writes.patch(this.store.tasks, p.id, { place: slug });
+    return this.writes.patch(this.store.tasks, id, { place: slug });
   }
   async listPlaceTasks(slug: string): Promise<PlaceDigest> {
     const place = this.alive(this.store.places).find((p) => p.slug === slug);

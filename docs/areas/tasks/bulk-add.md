@@ -130,6 +130,9 @@ bypass — the model never sees a grammar line.
 
 **This is a spec Claude reads before generating a bulk paste — treat it as the contract, not prose.**
 
+Matching is exact here (bulk add, Raycast, MCP `parse_task`). Only capture's one-line Task mode completes a
+half-typed `#adm` / `@saf`: one match is taken on Enter, several block the save with "could be … — pick one".
+
 ```
 One task per line. A line is:   <title>[ | <tokens>]
 

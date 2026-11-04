@@ -376,6 +376,51 @@ describe('handler place route', () => {
     expect((await read(bearer(second))).statusCode).toBe(401);
   });
 
+  // The pointer is the authority: a lookup row whose delete was cut short still exists, but the pointer
+  // no longer names it, so the old token is dead the moment revoke/rotate moved the pointer.
+  it('401s the old token when its row survives a failed delete mid-revoke', async () => {
+    const token = await seeded();
+    const hash = hashPlaceToken(token);
+    vi.spyOn(doc, 'delete').mockRejectedValueOnce(new Error('throttled'));
+    await expect(backend.revokePlaceToken()).rejects.toThrow('throttled');
+    expect(await new PlaceTokenStore(doc, liveWrites(doc)).get(hash)).not.toBeNull();
+    const res = await read(bearer(token));
+    expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body)).toEqual({
+      error: 'Unauthorized: place token revoked',
+      text: PLACE_READ_TEXT.unauthorized,
+    });
+    expect(logs.map((l) => JSON.parse(l))).toContainEqual({
+      event: 'place_read',
+      ok: false,
+      reason: 'revoked',
+    });
+  });
+
+  it('401s the old token when its row survives a failed delete mid-rotate; the next rotate cleans up', async () => {
+    const first = await seeded();
+    const store = new PlaceTokenStore(doc, liveWrites(doc));
+    vi.spyOn(doc, 'delete').mockRejectedValueOnce(new Error('throttled'));
+    await expect(backend.rotatePlaceToken()).rejects.toThrow('throttled');
+    expect(await store.get(hashPlaceToken(first))).not.toBeNull();
+    expect((await read(bearer(first))).statusCode).toBe(401);
+    const second = (await backend.rotatePlaceToken()).token;
+    expect(await store.get(hashPlaceToken(first))).toBeNull(); // the leftover, retried
+    expect((await read(bearer(first))).statusCode).toBe(401);
+    expect((await read(bearer(second))).statusCode).toBe(200);
+  });
+
+  it('a just-minted token reads at once — the lookup and pointer reads are consistent', async () => {
+    const old = await seeded();
+    const ptrItem = await doc.get('u#u1', 'ptoken', { consistent: true });
+    const token = (await backend.rotatePlaceToken()).token;
+    // An eventually consistent read would still miss the new row and see the old pointer.
+    doc.staleNextGets(placeTokenPk(hashPlaceToken(token)), PLACE_TOKEN_SK, null, 5);
+    doc.staleNextGets('u#u1', 'ptoken', ptrItem, 5);
+    expect((await read(bearer(token))).statusCode).toBe(200);
+    expect((await read(bearer(old))).statusCode).toBe(401);
+  });
+
   it('a place token opens nothing else: an RPC method 401s it', async () => {
     const token = await seeded();
     for (const method of ['listTasks', 'listPlaceTasks', 'rotatePlaceToken']) {

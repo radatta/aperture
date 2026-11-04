@@ -16,7 +16,7 @@ import { PlacesLens } from '../../modules/tasks/PlacesLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
 import { CalibrationSection } from '../../modules/calibration/CalibrationSection';
 import { BulkAddDialog } from '../../modules/tasks/BulkAddDialog';
-import { foldParts, normalize, placer } from '../../modules/tasks/query';
+import { errandsByPlace, foldParts, normalize, placer } from '../../modules/tasks/query';
 import type { QueryCtx } from '../../modules/tasks/query';
 import { useTaskQuery } from '../../modules/tasks/useTaskQuery';
 
@@ -52,12 +52,14 @@ export function TasksPage() {
     categories,
     dayStartHour,
   };
-  // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice.
+  // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice. Places
+  // counts the digest's items instead (errandsByPlace) — what its lens shows and the Shortcut reads out.
   const counts = { today: 0, week: 0, places: 0 };
   if (!pending) {
     const place = placer(tasks, ctx);
-    for (const p of ['today', 'week', 'places'] as const)
+    for (const p of ['today', 'week'] as const)
       counts[p] = foldParts(tasks.filter((t) => place(t) === p)).length;
+    for (const list of errandsByPlace(tasks, ctx).values()) counts.places += list.length;
   }
   const isList =
     lens === 'today' ||

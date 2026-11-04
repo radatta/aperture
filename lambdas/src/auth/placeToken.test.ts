@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { dayKey, PLACE_READ_DAILY_CAP, PLACE_TOKEN_PREFIX } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { liveWrites } from '../ddb/writes';
-import { PlaceTokenStore } from '../ddb/placeTokens';
+import { PlaceTokenPointerError, PlaceTokenStore } from '../ddb/placeTokens';
 import type { PlaceTokenRow } from '../ddb/placeTokens';
-import { PLACE_TOKEN_SK, placeTokenPk } from '../ddb/keys';
+import { pk, PLACE_TOKEN_SK, placeTokenPk, sk } from '../ddb/keys';
 import {
   bearerOf,
   countPlaceRead,
@@ -27,11 +27,29 @@ const row = (over: Partial<PlaceTokenRow> = {}): PlaceTokenRow => ({
   hint: 'abcd',
   ...over,
 });
+// The user's pointer row, as rotate writes it: naming `hash` as the live token.
+const pointTo = (doc: InMemoryDoc, userId: string, hash: string | null, over = {}) =>
+  doc.putNow({
+    PK: pk(userId),
+    SK: sk.ptoken(),
+    hash,
+    createdAt: 1,
+    hint: 'abcd',
+    retiring: [],
+    updatedAt: 1,
+    ...over,
+  });
 function env() {
   const doc = new InMemoryDoc();
   const store = new PlaceTokenStore(doc, liveWrites(doc));
   const token = mintPlaceToken();
-  return { doc, store, token, hash: hashPlaceToken(token) };
+  const hash = hashPlaceToken(token);
+  // A live token: its lookup row plus the pointer naming it.
+  const seed = async (r: PlaceTokenRow) => {
+    await store.create(hash, r);
+    pointTo(doc, r.userId, hash);
+  };
+  return { doc, store, token, hash, seed };
 }
 
 describe('place token', () => {
@@ -64,14 +82,57 @@ describe('place token', () => {
 });
 
 describe('resolvePlaceRead', () => {
-  it("resolves a known token to the row's user — one lookup, no write", async () => {
-    const { doc, store, token, hash } = env();
-    await store.create(hash, row({ userId: 'u7' }));
+  it("resolves a known token to the row's user — the lookup and the pointer, both consistent, no write", async () => {
+    const { doc, store, token, hash, seed } = env();
+    await seed(row({ userId: 'u7' }));
     const before = doc.snapshot();
     const auth = await resolvePlaceRead(store, `Bearer ${token}`, NOW);
     expect(auth).toMatchObject({ userId: 'u7', hash });
-    expect(doc.gets).toHaveLength(1);
+    expect(doc.gets).toEqual([
+      { key: `${placeTokenPk(hash)} ${PLACE_TOKEN_SK}`, consistent: true },
+      { key: `${pk('u7')} ${sk.ptoken()}`, consistent: true },
+    ]);
     expect(doc.snapshot()).toEqual(before);
+  });
+
+  it('the pointer is the authority: a lookup row it does not name is refused, even at the cap', async () => {
+    const { doc, store, token, hash } = env();
+    await store.create(hash, row());
+    // No pointer at all (a rotate that never landed its pointer write).
+    await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toThrow(
+      'Unauthorized: place token revoked',
+    );
+    // Revoked (hash null) or rotated past, with the old lookup row's delete cut short.
+    pointTo(doc, 'u1', null, { retiring: [hash] });
+    await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toThrow(
+      'Unauthorized: place token revoked',
+    );
+    pointTo(doc, 'u1', 'f'.repeat(64), { retiring: [hash] });
+    await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toThrow(
+      'Unauthorized: place token revoked',
+    );
+    // Another user's pointer naming this hash doesn't vouch for u1's row.
+    pointTo(doc, 'u2', hash);
+    await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toThrow(/revoked/);
+    // 401 before 429: a dead token at its cap is still a dead token.
+    doc.putNow({
+      PK: placeTokenPk(hash),
+      SK: PLACE_TOKEN_SK,
+      ...row({ readsDay: TODAY, readsCount: PLACE_READ_DAILY_CAP }),
+    });
+    await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toThrow(/revoked/);
+  });
+
+  it('a pointer with no numeric updatedAt is refused by name, never compared as NaN', async () => {
+    const { doc, store, token, hash } = env();
+    await store.create(hash, row());
+    pointTo(doc, 'u1', hash, { updatedAt: undefined });
+    await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toThrow(
+      new PlaceTokenPointerError('Corrupt place-token pointer: no updatedAt'),
+    );
+    await expect(store.pointer('u1')).rejects.toBeInstanceOf(PlaceTokenPointerError);
+    pointTo(doc, 'u1', hash, { updatedAt: '5' });
+    await expect(store.pointer('u1')).rejects.toThrow('Corrupt place-token pointer: no updatedAt');
   });
 
   it('refuses a missing or malformed token before any lookup — never a local fallback', async () => {
@@ -97,8 +158,8 @@ describe('resolvePlaceRead', () => {
   });
 
   it('refuses at the daily cap (429), and a new day starts the count over', async () => {
-    const { store, token, hash } = env();
-    await store.create(hash, row({ readsDay: TODAY, readsCount: PLACE_READ_DAILY_CAP }));
+    const { store, token, seed } = env();
+    await seed(row({ readsDay: TODAY, readsCount: PLACE_READ_DAILY_CAP }));
     await expect(resolvePlaceRead(store, `Bearer ${token}`, NOW)).rejects.toBeInstanceOf(
       PlaceReadCapError,
     );
@@ -115,29 +176,29 @@ describe('resolvePlaceRead', () => {
 
 describe('countPlaceRead', () => {
   it('bumps the count, the day and lastUsedAt in one conditional write', async () => {
-    const { doc, store, token, hash } = env();
-    await store.create(hash, row({ readsDay: '2000-01-01', readsCount: 50 }));
+    const { doc, store, token, hash, seed } = env();
+    await seed(row({ readsDay: '2000-01-01', readsCount: 50 }));
     const auth = await resolvePlaceRead(store, `Bearer ${token}`, NOW);
     const next = await countPlaceRead(store, auth, NOW);
     expect(next).toMatchObject({ readsDay: TODAY, readsCount: 1, lastUsedAt: NOW });
     expect(await store.get(hash)).toEqual(next);
-    expect(doc.size).toBe(1);
+    expect(doc.size).toBe(2); // the lookup row and the pointer
   });
 
   it('never writes a token revoked mid-read back to life', async () => {
-    const { doc, store, token, hash } = env();
-    await store.create(hash, row());
+    const { store, token, hash, seed } = env();
+    await seed(row());
     const auth = await resolvePlaceRead(store, `Bearer ${token}`, NOW);
     await store.delete(hash); // the revoke lands between the read and its count
     await expect(countPlaceRead(store, auth, NOW)).rejects.toThrow(
       'Unauthorized: place token revoked',
     );
-    expect(doc.size).toBe(0);
+    expect(await store.get(hash, { consistent: true })).toBeNull();
   });
 
   it('retries a lost race on the fresh count, and stops at the cap', async () => {
-    const { doc, store, token, hash } = env();
-    await store.create(hash, row({ readsDay: TODAY, readsCount: 3 }));
+    const { doc, store, token, hash, seed } = env();
+    await seed(row({ readsDay: TODAY, readsCount: 3 }));
     const auth = await resolvePlaceRead(store, `Bearer ${token}`, NOW);
     // A concurrent read counted first.
     doc.putNow({

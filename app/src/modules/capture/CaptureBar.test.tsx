@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
@@ -201,6 +201,32 @@ describe('CaptureBar', () => {
       expect((await api.listTasks()).every((t) => t.estimateMin === null)).toBe(true);
     });
 
+    it('an empty token region waits while the caret sits after " | ", and refuses a save visibly', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'milk | ');
+      // About to type a token: no red mid-thought.
+      expect(screen.queryByText(/nothing after/)).toBeNull();
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      // The preview row's red line shows again, not only the refusal's reason.
+      const said = screen.getAllByText(/nothing after ' \| '/);
+      expect(said.some((el) => el.className.includes('text-danger'))).toBe(true);
+      expect(box().value).toBe('milk | ');
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('an empty token region shows its error once the caret leaves it, or the field', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'milk | ');
+      expect(screen.queryByText(/nothing after/)).toBeNull();
+      await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}');
+      expect(await screen.findByText(/nothing after ' \| '/)).toBeTruthy();
+      await user.keyboard('{End}');
+      await waitFor(() => expect(screen.queryByText(/nothing after/)).toBeNull());
+      act(() => box().blur());
+      expect(await screen.findByText(/nothing after ' \| '/)).toBeTruthy();
+    });
+
     it('a red error refuses Enter and Send, keeps the text, and says so', async () => {
       const { api, user, box } = await taskBar();
       await user.type(box(), 'x | ~30m');
@@ -214,10 +240,13 @@ describe('CaptureBar', () => {
       expect(await api.listTasks()).toHaveLength(0);
     });
 
-    it('an unknown label warns before submit, then saves uncategorised', async () => {
+    it('an unknown label warns once the caret leaves it, then saves uncategorised', async () => {
       const { api, user, box } = await taskBar();
       await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
       await user.type(box(), 'x | #Nope');
+      // Still being typed: the next letter might make it a match, so no gold warning yet.
+      expect(screen.queryByText(/no category/)).toBeNull();
+      await user.type(box(), ' ');
       expect(await screen.findByText(/no category 'Nope'/)).toBeTruthy();
       await user.keyboard('{Enter}');
 
@@ -954,10 +983,13 @@ describe('CaptureBar — places', () => {
     expect(await api.listTasks()).toHaveLength(0);
   });
 
-  it('an @word that starts no place warns, and saves off any list', async () => {
+  it('an @word that starts no place warns once you leave it, and saves off any list', async () => {
     const { api, user, box } = await placeBar();
     await user.type(box(), 'milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull(); // still being typed at the caret
+    act(() => box().blur());
     expect(await screen.findByText(/no place '@zz'/)).toBeTruthy();
+    await user.click(box());
     await user.keyboard('{Enter}');
     await waitFor(async () =>
       expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),

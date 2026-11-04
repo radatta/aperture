@@ -10,7 +10,7 @@ import type { Item } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import type { Writes } from './ddb/writes';
-import { PlaceTokenStore } from './ddb/placeTokens';
+import { PlaceTokenPointerError, PlaceTokenStore } from './ddb/placeTokens';
 import { pk, PLACE_TOKEN_SK, placeTokenPk, sk } from './ddb/keys';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
@@ -100,6 +100,23 @@ describe('place token storage', () => {
     });
   });
 
+  it('a pointer with no numeric updatedAt is refused by name — status, rotate and revoke write nothing', async () => {
+    const { doc, log, make } = env();
+    const b = make('u1');
+    doc.putNow({ PK: pk('u1'), SK: sk.ptoken(), hash: null, retiring: [] });
+    const before = doc.snapshot();
+    for (const call of [
+      () => b.getPlaceTokenStatus(),
+      () => b.rotatePlaceToken(),
+      () => b.revokePlaceToken(),
+    ])
+      await expect(call()).rejects.toThrow(
+        new PlaceTokenPointerError('Corrupt place-token pointer: no updatedAt'),
+      );
+    expect(log).toEqual([]);
+    expect(doc.snapshot()).toEqual(before);
+  });
+
   it('revoke empties the pointer (conditional), deletes the lookup row, and reads inactive after', async () => {
     const { doc, log, tokens, make } = env();
     const b = make('u1');
@@ -132,7 +149,7 @@ describe('place token storage', () => {
     expect((await b.getPlaceTokenStatus()).active).toBe(false);
   });
 
-  it('a delete cut short mid-rotate fails the rotate, and the next rotate or revoke kills the old token', async () => {
+  it('a delete cut short mid-rotate fails the rotate, the old token is dead at once, and the next rotate or revoke deletes its row', async () => {
     for (const next of ['rotate', 'revoke'] as const) {
       const { doc, tokens, make, failDeleteOnce } = env();
       const b = make('u1');
@@ -140,11 +157,15 @@ describe('place token storage', () => {
       const h1 = hashPlaceToken(first);
       failDeleteOnce.add(placeTokenPk(h1));
       await expect(b.rotatePlaceToken()).rejects.toThrow('ProvisionedThroughputExceeded');
-      // The pointer moved on but still owes the old row's delete: the old token works until retried.
+      // The pointer moved on but still owes the old row's delete. The row survives, yet the old token is
+      // already dead: the pointer no longer names it (resolvePlaceRead) — retiring is cleanup only.
       const ptr = pointer(doc, 'u1')!;
       expect(ptr.retiring).toEqual([h1]);
       const unseen = ptr.hash as string; // the cut-short rotate's token, never shown to anyone
-      await expect(resolvePlaceRead(tokens, `Bearer ${first}`, NOW)).resolves.toBeDefined();
+      expect(await tokens.get(h1)).not.toBeNull();
+      await expect(resolvePlaceRead(tokens, `Bearer ${first}`, NOW)).rejects.toThrow(
+        'Unauthorized: place token revoked',
+      );
 
       if (next === 'rotate') {
         const third = (await b.rotatePlaceToken()).token;

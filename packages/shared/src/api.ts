@@ -63,7 +63,9 @@ export interface CreateTaskInput {
   dueTime?: string | null; // "HH:MM" on dueDay; requires dueDay (normalizeDue). A timed task auto-syncs to gcal
   notes?: string | null; // normalized like setTaskNotes; createTasks rejects the whole batch if any is over the cap
   parentId?: string | null; // a part of that task (parts.ts); createTasks validates every one before any write
-  place?: string | null; // a Place slug (places.ts); an unknown slug is refused — createTasks before any write
+  // A Place slug (places.ts); an unknown slug is refused — createTasks before any write. A part takes its
+  // parent's place: omitted/null inherits it, a different slug is refused (PLACE_PART_ERROR).
+  place?: string | null;
 }
 
 // The deadline as one write. Object-shaped (not positional) so an OMITTED dueTime survives JSON: absent
@@ -447,8 +449,10 @@ export interface ApiClient {
   // change on upsert rewrites all that place's tasks; delete moves its alive tasks to `reassignToSlug`
   // (another place — finished ones too) or takes its open ones off any list (null — a finished task keeps
   // the old slug, so its calibration never flips), then tombstones it. setTaskPlace refuses a finished task
-  // (PLACE_FINISHED_ERROR) and an unknown slug (placeUnknownError). listPlaceTasks is the Shortcut's digest
-  // as a pure read (no heartbeat).
+  // (PLACE_FINISHED_ERROR), a part (PLACE_PART_ERROR — a part's place is always its parent's) and an
+  // unknown slug (placeUnknownError); on a parent it moves its open parts too (finished parts keep theirs).
+  // setTaskParent's attach gives an open part its parent's place; a detach keeps it. listPlaceTasks is the
+  // Shortcut's digest as a pure read (no heartbeat) — it lists items (placeTasks).
   listPlaces(): Promise<Place[]>;
   upsertPlace(input: UpsertPlaceInput): Promise<Place>;
   deletePlace(id: string, reassignToSlug: string | null): Promise<void>;

@@ -124,6 +124,38 @@ describe('Settings › Places: the list', () => {
     );
   });
 
+  it('the row’s saves run in order — a slow rename can’t land after the link-word edit and undo it', async () => {
+    const { api, corner } = await twoPlaces();
+    const real = api.upsertPlace.bind(api);
+    const log: string[] = [];
+    let calls = 0;
+    // The first save (the rename) is slow, the second (the link word) quick: unordered, the rename's copy
+    // of the old link word would land last.
+    vi.spyOn(api, 'upsertPlace').mockImplementation(async (input) => {
+      const n = ++calls;
+      log.push(`start ${n}`);
+      await new Promise((r) => setTimeout(r, n === 1 ? 60 : 0));
+      const out = await real(input);
+      log.push(`end ${n}`);
+      return out;
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    const name = await screen.findByLabelText('Rename Corner Shop');
+    await user.clear(name);
+    await user.type(name, 'Corner Store');
+    const slug = screen.getByLabelText('Link word for Corner Shop');
+    await user.click(slug); // the rename goes out with the old link word
+    await user.clear(slug);
+    await user.type(slug, 'cs');
+    await user.tab();
+    await waitFor(() => expect(log).toEqual(['start 1', 'end 1', 'start 2', 'end 2']));
+    expect((await api.listPlaces()).find((p) => p.id === corner.id)).toMatchObject({
+      name: 'Corner Store',
+      slug: 'cs',
+    });
+  });
+
   it('a row error clears once the field is put back, and sits on its own line', async () => {
     const { api } = await twoPlaces();
     const user = userEvent.setup();
@@ -155,6 +187,21 @@ describe('Settings › Places: the list', () => {
     await api.createTask({ title: 'milk', place: 'corner' });
     renderWithProviders(<PlacesSection />, { api });
     await screen.findByText('1 open errand · Shortcut never called');
+  });
+
+  it('counts errands as the Shortcut does — a parent with open parts gives way to them', async () => {
+    const { api } = await twoPlaces();
+    const party = await api.createTask({ title: 'party', place: 'corner' });
+    await api.createTasks([
+      { title: 'cups', parentId: party.id },
+      { title: 'ice', parentId: party.id },
+    ]);
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await screen.findByText('2 open errands · Shortcut never called');
+    expect((await api.listPlaceTasks('corner')).count).toBe(2);
+    await user.click(screen.getByRole('button', { name: 'Delete Corner Shop' }));
+    expect(screen.getByLabelText('Move its 2 errands to')).toBeTruthy();
   });
 
   it('Test shows what the notification would say, and says so when the list is empty', async () => {
@@ -326,12 +373,16 @@ describe('Settings › Places: the setup recipe', () => {
     await user.click(screen.getByRole('button', { name: 'Copy URL' }));
     expect(writeText).toHaveBeenCalledWith(url);
     expect(screen.getByLabelText('Header key').textContent).toBe(AUTH_HEADER);
-    // One rule: show `text` whenever it has a value — errors carry one too.
+    // Show `text` whenever it has a value — errors carry one too.
     expect(screen.getByText('has any value')).toBeTruthy();
-    expect(screen.queryByText('count')).toBeNull();
     // Every step keeps its number: no <li> is itself a flex box (that drops the list marker).
     const steps = shown.closest('ol')!.querySelectorAll(':scope > li');
-    expect(steps).toHaveLength(5);
+    expect(steps).toHaveLength(6);
+    // Otherwise, an answer with no count either (a CloudFront 5xx/throttle has no body) still says so;
+    // an empty list (count 0) stays quiet.
+    expect(steps[3]!.textContent).toMatch(/^Under Otherwise: Get Dictionary Value count from/);
+    expect(steps[3]!.textContent).toContain('does not have any value');
+    expect(steps[3]!.textContent).toContain('Show Notification “Aperture didn’t answer”');
     steps.forEach((li) => expect(li.className).not.toMatch(/\bflex\b/));
     expect(screen.getAllByText('Aperture list', { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getByText('corner')).toBeTruthy();

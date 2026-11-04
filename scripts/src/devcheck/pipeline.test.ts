@@ -12,7 +12,7 @@ import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
 import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
-import type { Ctx, Scenario } from './scenario';
+import { hidingSecret, type Ctx, type Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
 const shell = (sha: string) => `<meta name="aperture-build" content="${sha}" />`;
@@ -46,6 +46,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   type Handler = (r: PwRoute) => Promise<void> | void;
   const routes: { match: Match; handler: Handler }[] = [];
   const inPage = [...(opts.inPage ?? [SHA])];
+  const gotos: string[] = [];
   let n = 0;
   const page = {
     on: (ev: string, fn: (r: never) => void) =>
@@ -62,6 +63,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     evaluate: async (expr: string) =>
       expr.includes('aperture-build') ? (inPage.length > 1 ? inPage.shift() : inPage[0]) : null,
     reload: async () => undefined,
+    goto: async (url: string) => void gotos.push(url),
     screenshot: async () => undefined,
     locator: () => ({}),
     getByRole: () => ({}),
@@ -260,6 +262,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     consoleError,
     call,
     routes,
+    gotos,
     api,
     mcp,
     browser,
@@ -353,6 +356,30 @@ describe('runPipeline', () => {
     expect(r.codes).toEqual(['STEP_FAILED']);
     expect(w.deleted).toEqual(['t1']);
     expect(exitCode(r)).toBe(1);
+  });
+
+  it('a failed step is shot — unless it failed with a secret on screen (hidingSecret): blanked, no shot', async () => {
+    const w = world();
+    const plain = scenario(async () => {
+      throw new Error('boom');
+    })(w);
+    const secret = {
+      ...scenario(async (_x, ctx) =>
+        hidingSecret(ctx.page, async () => {
+          throw new Error('the reveal never closed');
+        }),
+      )(w),
+      id: 'sc2',
+    };
+    const r = await runPipeline(deps(w, [plain, secret]));
+    expect(r.steps.map((s) => [s.scenario, s.status, s.error])).toEqual([
+      ['sc', 'fail', 'boom'],
+      ['sc2', 'fail', 'the reveal never closed'],
+    ]);
+    expect(r.steps[0]!.shot).toBe('sc-s0-fail-light.png');
+    expect(r.steps[1]!.shot).toBeUndefined();
+    expect(r.shots.filter((f) => f.startsWith('sc2-'))).toEqual([]);
+    expect(w.gotos).toEqual(['about:blank']);
   });
 
   it('a task gone before cleanup (deleted with its parent) is "gone", not a leftover', async () => {
@@ -563,6 +590,91 @@ describe('runPipeline', () => {
       { id: 'place-token:run1', via: PLACE_TOKEN_VIA, title: undefined, final: 'gone' },
     ]);
     expect(r.status).toBe('PASS');
+  });
+
+  it('a removal that throws (a revoke racing another device) never stops cleanup: the rest go, LEFTOVERS', async () => {
+    const w = world();
+    const race = 'The Shortcut token changed on another device — try again';
+    w.api.writes.revokePlaceToken = async () => {
+      throw new Error(race);
+    };
+    const ledger = memLedger();
+    const sc = scenario(
+      async (x) => void x.uiPlace('Shop'),
+      async (x) => {
+        ledger.append({ run: 'run1', op: 'created', id: 'place-token:run1', via: PLACE_TOKEN_VIA });
+        x.placeToken.active = true;
+        x.uiCreate('errand');
+      },
+    )(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    // Newest first: the task, the token (throws), then the place — still deleted after the throw.
+    expect(w.deleted).toEqual(['t2']);
+    expect(w.placesDeleted).toEqual(['p1']);
+    expect(r.failedDeletes).toEqual([`place-token:run1: ${race}`]);
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['p1', 'deleted'],
+      ['place-token:run1', 'left'],
+      ['t2', 'deleted'],
+    ]);
+    expect(r.status).toBe('FAIL'); // reported, not a crash
+    expect(r.codes).toContain('LEFTOVERS');
+    // Still pending, so the next run's sweep retries it.
+    expect(ledger.entries.some((e) => e.id === 'place-token:run1' && e.op !== 'created')).toBe(
+      false,
+    );
+  });
+
+  it('a sweep delete that throws is reported and the sweep goes on to the next id', async () => {
+    const w = world({ existing: ['old1', 'old2'] });
+    const del = w.api.writes.deleteTask;
+    w.api.writes.deleteTask = async (id) => {
+      if (id === 'old1') throw new Error('HTTP 500 on deleteTask');
+      await del(id);
+    };
+    const ledger = memLedger([
+      { run: 'run0', op: 'created', id: 'old1' },
+      { run: 'run0', op: 'created', id: 'old2' },
+    ]);
+    const ran: string[] = [];
+    const sc = scenario(async () => void ran.push('step'))(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.deleted).toEqual(['old2']);
+    expect(r.swept).toEqual(['old2']);
+    expect(r.failedDeletes).toEqual(['old1: HTTP 500 on deleteTask']);
+    expect(ran).toEqual(['step']); // the run went on
+    expect(r.status).toBe('FAIL');
+    expect(r.codes).toContain('LEFTOVERS');
+  });
+
+  it('a guard refusal during cleanup keeps its own code beside LEFTOVERS', async () => {
+    const w = world();
+    w.api.writes.deleteTask = async (id) => {
+      throw new DevcheckError('LEDGER_GUARD', `refusing to touch ${id}`);
+    };
+    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    expect(r.failedDeletes).toEqual(['t1: LEDGER_GUARD: refusing to touch t1']);
+    expect(r.codes).toEqual(expect.arrayContaining(['LEDGER_GUARD', 'LEFTOVERS']));
+    expect(r.status).toBe('FAIL');
+  });
+
+  it('a read-back that throws proves nothing: the id stays left, the error reported', async () => {
+    const w = world();
+    const get = w.api.reads.getTask;
+    let deletedOnce = false;
+    w.api.writes.deleteTask = async (id) => {
+      deletedOnce = true;
+      w.tasks.delete(id);
+    };
+    w.api.reads.getTask = async (id) => {
+      if (deletedOnce) throw new Error('HTTP 502 on getTask');
+      return get(id);
+    };
+    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    expect(r.created[0]!.final).toBe('left');
+    expect(r.failedDeletes).toEqual(['t1: read-back: HTTP 502 on getTask']);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(r.status).toBe('FAIL');
   });
 
   it('reloads until the page shows the expected build; BUILD_MISMATCH_IN_PAGE if it never does', async () => {

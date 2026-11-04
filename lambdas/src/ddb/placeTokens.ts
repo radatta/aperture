@@ -1,18 +1,20 @@
 import type { DocClient, Item } from './DocClient';
 import type { Writes } from './writes';
-import { PLACE_TOKEN_SK, placeTokenPk } from './keys';
+import { PLACE_TOKEN_SK, pk, placeTokenPk, sk } from './keys';
 import { toEntity } from './mapping';
 
 // The Shortcut token's storage (places.md → Token). Two rows, neither holding the token itself:
-//   u#<uid> / ptoken                       — the pointer: which hash is this user's live token, and
-//                                            which old ones are still to delete (Repo)
+//   u#<uid> / ptoken                       — the pointer: which hash is this user's live token (the
+//                                            authority — a read is refused unless it names its hash),
+//                                            and which old ones are still to delete (Repo writes it)
 //   placetoken#<sha256hex> / placetoken    — the lookup row (here): who the token belongs to, plus its
-//                                            daily read counter — one GetItem is auth + cap check
+//                                            daily read counter — finds the user and the cap
 // The lookup row lives outside every user partition, so it isn't on Repo. Writes go through `writes`.
 
 // Rotate/revoke write it with putIf on the updatedAt they read, so two devices can't both win; the
 // loser undoes its own lookup row. `retiring` = hashes whose lookup rows are still to delete — a delete
-// cut short leaves them here, and the next rotate/revoke deletes them, so an old token can't survive.
+// cut short leaves them here, and the next rotate/revoke deletes them. Cleanup only: a retiring row that
+// outlives its delete still can't read, because the pointer no longer names it (resolvePlaceRead).
 export interface PlaceTokenPointer {
   hash: string | null; // null: no live token (revoked)
   createdAt: number | null;
@@ -29,6 +31,27 @@ export interface PlaceTokenRow {
   readsDay: string | null; // the UTC day readsCount counts (dayKey(now, 0))
   readsCount: number;
   hint: string;
+}
+
+// A pointer whose cursor isn't a number can't be written back conditionally (rotate/revoke would compare
+// against NaN/undefined) — refuse it by name rather than guess.
+export class PlaceTokenPointerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlaceTokenPointerError';
+  }
+}
+export function pointerOf(item: Item): PlaceTokenPointer {
+  const r = toEntity<PlaceTokenPointer>(item);
+  if (typeof r.updatedAt !== 'number' || !Number.isFinite(r.updatedAt))
+    throw new PlaceTokenPointerError('Corrupt place-token pointer: no updatedAt');
+  return {
+    hash: r.hash ?? null,
+    createdAt: r.createdAt ?? null,
+    hint: r.hint ?? null,
+    retiring: r.retiring ?? [],
+    updatedAt: r.updatedAt,
+  };
 }
 
 const toRow = (item: Item): PlaceTokenRow => {
@@ -58,6 +81,12 @@ export class PlaceTokenStore {
   async get(hash: string, opts?: { consistent?: boolean }): Promise<PlaceTokenRow | null> {
     const it = await this.doc.get(placeTokenPk(hash), PLACE_TOKEN_SK, opts);
     return it ? toRow(it) : null;
+  }
+  // The lookup row's user's pointer — the Shortcut read's authority check, before any userId-scoped Repo
+  // exists. Consistent: a rotate/revoke a moment ago must already refuse the old hash.
+  async pointer(userId: string): Promise<PlaceTokenPointer | null> {
+    const it = await this.doc.get(pk(userId), sk.ptoken(), { consistent: true });
+    return it ? pointerOf(it) : null;
   }
   // A freshly minted token: written only if absent.
   async create(hash: string, row: PlaceTokenRow): Promise<void> {

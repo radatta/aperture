@@ -27,6 +27,7 @@ import type {
 import { ConditionFailedError } from './DocClient';
 import type { DocClient, Item } from './DocClient';
 import type { Writes } from './writes';
+import { pointerOf } from './placeTokens';
 import type { PlaceTokenPointer } from './placeTokens';
 import { gsi1, pk, sk } from './keys';
 import {
@@ -419,15 +420,7 @@ export class Repo {
   // Consistent: rotate/revoke write it back conditionally on the version read here.
   async getPlaceTokenPointer(): Promise<PlaceTokenPointer | null> {
     const it = await this.doc.get(this.p(), sk.ptoken(), { consistent: true });
-    if (!it) return null;
-    const r = toEntity<PlaceTokenPointer>(it);
-    return {
-      hash: r.hash ?? null,
-      createdAt: r.createdAt ?? null,
-      hint: r.hint ?? null,
-      retiring: r.retiring ?? [],
-      updatedAt: r.updatedAt,
-    };
+    return it ? pointerOf(it) : null; // PlaceTokenPointerError on a row with no numeric updatedAt
   }
   // Lands only while the stored pointer is still at `expectedUpdatedAt` (null: none yet) —
   // ConditionFailedError otherwise.

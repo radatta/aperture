@@ -107,6 +107,27 @@ export const noConsoleErrors: Step = {
   },
 };
 
+// A stretch of a step that may put a secret on screen (the place token's show-once reveal). On any throw the
+// page goes to about:blank before the error leaves — the pipeline's failure shot comes after — so not even a
+// reveal that appeared once a wait had given up is shot; and the error is marked so the pipeline takes no
+// failure shot at all (a page that wouldn't navigate is the case that needs it).
+const withheld = new WeakSet<object>();
+export const shotWithheld = (err: unknown): boolean =>
+  typeof err === 'object' && err !== null && withheld.has(err);
+export async function hidingSecret<T>(
+  page: Pick<PwPage, 'goto'>,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    withheld.add(e);
+    await page.goto('about:blank').catch(() => undefined);
+    throw e;
+  }
+}
+
 // Resolves once every finite CSS transition/animation on the page has finished — a theme flip animates the
 // palette, and a shot taken mid-way mixes both themes. Infinite ones (spinners) are left out.
 const SETTLE = `Promise.all(document.getAnimations()

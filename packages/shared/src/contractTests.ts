@@ -4,7 +4,12 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from '.
 import { TASK_NOTES_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
-import { PLACE_FINISHED_ERROR, PLACE_TOKEN_PREFIX, placeUnknownError } from './places';
+import {
+  PLACE_FINISHED_ERROR,
+  PLACE_PART_ERROR,
+  PLACE_TOKEN_PREFIX,
+  placeUnknownError,
+} from './places';
 import {
   deriveFinanceView,
   FINANCE_REFRESH_COOLDOWN_MS,
@@ -2156,6 +2161,104 @@ export function runApiContract(
       ).rejects.toThrow(/already uses/);
       expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['safeway', 'target']);
       expect((await api.getTask(a.id))!.place).toBe('safeway');
+    });
+
+    it("places: a part is created on its parent's place, and refuses a different one", async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      await api.upsertPlace({ name: 'Target' });
+      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      const cups = await api.createTask({ title: 'cups', parentId: party.id });
+      expect(cups.place).toBe('safeway');
+      const same = await api.createTask({ title: 'ice', parentId: party.id, place: 'safeway' });
+      expect(same.place).toBe('safeway');
+      await expect(
+        api.createTask({ title: 'x', parentId: party.id, place: 'target' }),
+      ).rejects.toThrow(PLACE_PART_ERROR);
+      const before = (await api.listTasks()).length;
+      await expect(
+        api.createTasks([
+          { title: 'ok', parentId: party.id },
+          { title: 'bad', parentId: party.id, place: 'target' },
+        ]),
+      ).rejects.toThrow(PLACE_PART_ERROR);
+      expect(await api.listTasks()).toHaveLength(before); // the batch wrote nothing
+      const [bulk] = await api.createTasks([{ title: 'napkins', parentId: party.id }]);
+      expect(bulk!.place).toBe('safeway');
+      // An unplaced parent's parts are unplaced: a slug on one is refused too.
+      const plain = await api.createTask({ title: 'pset' });
+      expect((await api.createTask({ title: 'q1', parentId: plain.id })).place).toBeNull();
+      await expect(
+        api.createTask({ title: 'q2', parentId: plain.id, place: 'safeway' }),
+      ).rejects.toThrow(PLACE_PART_ERROR);
+    });
+
+    it('places: a part follows its parent — refused on its own, carried when the parent moves', async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      await api.upsertPlace({ name: 'Target' });
+      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      const cups = await api.createTask({ title: 'cups', parentId: party.id });
+      const ice = await api.createTask({ title: 'ice', parentId: party.id });
+      await api.transitionTask(ice.id, 'in_progress');
+      await api.transitionTask(ice.id, 'done');
+      await expect(api.setTaskPlace(cups.id, 'target')).rejects.toThrow(PLACE_PART_ERROR);
+      await expect(api.setTaskPlace(cups.id, null)).rejects.toThrow(PLACE_PART_ERROR);
+      expect((await api.setTaskPlace(party.id, 'target')).place).toBe('target');
+      expect((await api.getTask(cups.id))!.place).toBe('target'); // open: carried along
+      expect((await api.getTask(ice.id))!.place).toBe('safeway'); // finished: history
+      await api.setTaskPlace(party.id, null);
+      expect((await api.getTask(cups.id))!.place).toBeNull();
+      expect((await api.getTask(ice.id))!.place).toBe('safeway');
+    });
+
+    it("places: attaching an open task gives it the parent's place; detaching keeps it", async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      await api.upsertPlace({ name: 'Target' });
+      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      await api.createTask({ title: 'cups', parentId: party.id });
+      const loose = await api.createTask({ title: 'ice', place: 'target' });
+      expect((await api.setTaskParent(loose.id, party.id)).place).toBe('safeway');
+      expect((await api.setTaskParent(loose.id, null)).place).toBe('safeway');
+      const unplaced = await api.createTask({ title: 'plates' });
+      expect((await api.setTaskParent(unplaced.id, party.id)).place).toBe('safeway');
+      const plain = await api.createTask({ title: 'pset' });
+      expect((await api.setTaskParent(loose.id, plain.id)).place).toBeNull(); // an unplaced parent's
+    });
+
+    it("places: a split keeps every part on the parent's place", async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      const big = await api.createTask({ title: 'big shop', place: 'safeway', estimateMin: 30 });
+      const { parent, original, followUp } = await api.splitTask(big.id, {
+        finish: 'keep',
+        followUp: { title: 'rest of the shop', estimateMin: 10 },
+      });
+      expect([parent.place, original.place, followUp.place]).toEqual([
+        'safeway',
+        'safeway',
+        'safeway',
+      ]);
+      const again = await api.splitTask(followUp.id, {
+        finish: 'keep',
+        followUp: { title: 'last bits', estimateMin: 5 },
+      });
+      expect(again.followUp.place).toBe('safeway');
+    });
+
+    it('places: the digest lists items — a parent with open parts gives way to them', async () => {
+      await api.upsertPlace({ name: 'Safeway' });
+      const party = await api.createTask({ title: 'party', place: 'safeway' });
+      clock += 1000;
+      await api.createTask({ title: 'cups', parentId: party.id });
+      clock += 1000;
+      await api.createTask({ title: 'ice', parentId: party.id });
+      clock += 1000;
+      await api.createTask({ title: 'shampoo', place: 'safeway' });
+      expect((await api.listPlaceTasks('safeway')).titles).toEqual(['cups', 'ice', 'shampoo']);
+      for (const p of (await api.listTasks()).filter((t) => t.parentId === party.id)) {
+        await api.transitionTask(p.id, 'in_progress');
+        await api.transitionTask(p.id, 'done');
+      }
+      // Every part finished: the parent is the item again.
+      expect((await api.listPlaceTasks('safeway')).titles).toEqual(['party', 'shampoo']);
     });
 
     it("places: listPlaceTasks is the Shortcut's digest of open errands, oldest first", async () => {

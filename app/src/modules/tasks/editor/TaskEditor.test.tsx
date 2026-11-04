@@ -1203,11 +1203,31 @@ describe('the task’s place', () => {
     t = await client.transitionTask(t.id, 'in_progress');
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
-    const select = await screen.findByLabelText<HTMLSelectElement>('Place');
-    await waitFor(() => expect(select.value).toBe('market'));
-    expect(select.disabled).toBe(true);
-    expect(screen.getByText('Finished — its place is history, like its estimate.')).toBeTruthy();
+    // Plain text, like the other finished fields — never a select that looks editable.
+    expect(await screen.findByText('@Market')).toBeTruthy();
+    expect(screen.queryByLabelText('Place')).toBeNull();
     expect(screen.getByText('Done')).toBeTruthy(); // the header keeps the status once it's finished
+  });
+
+  it('a finished task off every list reads "No place"', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    let t = await client.createTask({ title: 'pset' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    t = await client.transitionTask(t.id, 'done');
+    renderEditor(client, t);
+    expect(await screen.findByText('No place')).toBeTruthy();
+    expect(screen.queryByLabelText('Place')).toBeNull();
+  });
+
+  it('a part has no picker — it follows its parent’s place, and says so', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    const p = await client.createTask({ title: 'party', place: 'market' });
+    const [part] = await client.createTasks([{ title: 'cups', parentId: p.id }]);
+    renderEditor(client, part!);
+    expect(await screen.findByText('On @Market — a part follows its parent’s place.')).toBeTruthy();
+    expect(screen.queryByLabelText('Place')).toBeNull();
   });
 
   it('the header says Places for a waiting errand, not Backlog', async () => {

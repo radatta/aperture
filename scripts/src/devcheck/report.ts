@@ -56,6 +56,7 @@ export interface RunResult {
   appeared?: string[]; // appeared DURING the run, unknown to the ledger — a missed create path; fails the run
   orphanIntents: string[]; // API creates that may have landed without their id — check by hand
   blockedDeletes: string[]; // ledger ids NOT deleted because the server showed parts the ledger doesn't know
+  failedDeletes: string[]; // `<id>: <error>` — a removal (still pending, the sweep retries) or read-back that threw; the loop went on
   consoleErrors: string[];
   throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
   injected: string[]; // failures the harness itself served (ctx.intercept): `/api/<method> → 429|dropped`
@@ -224,6 +225,10 @@ export function renderReport(r: RunResult): string {
   if (r.blockedDeletes.length)
     lines.push(
       `- **Not deleted — it has parts the ledger doesn't know** (a delete would cascade into them): ${r.blockedDeletes.join('; ')}`,
+    );
+  if (r.failedDeletes.length)
+    lines.push(
+      `- **Removal or read-back threw** (the rest were still cleaned; a failed removal stays pending for the next run's sweep): ${r.failedDeletes.join('; ')}`,
     );
   if (r.orphanIntents.length)
     lines.push(

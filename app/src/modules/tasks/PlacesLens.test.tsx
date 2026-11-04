@@ -155,6 +155,56 @@ describe('Places lens', () => {
     expect(screen.getByText(/“milk \| @corner”/)).toBeTruthy();
   });
 
+  it('an errand’s parts are its rows, each a one-tap check — the counts are the digest’s items', async () => {
+    const { api } = await errands();
+    const party = await api.createTask({ title: 'party', place: 'corner' });
+    await api.createTasks([
+      { title: 'cups', parentId: party.id },
+      { title: 'ice', parentId: party.id },
+    ]);
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=places' });
+    await screen.findByRole('button', { name: 'Check off cups' });
+    // The parent gives way to its open parts, as the Shortcut's digest lists them.
+    expect(groupTitles('Corner Shop')).toEqual(['bread', 'cups', 'ice']);
+    expect(screen.queryByRole('button', { name: 'Check off party' })).toBeNull();
+    expect((await api.listPlaceTasks('corner')).count).toBe(3);
+    expect(screen.getByRole('button', { name: 'Places · 5' })).toBeTruthy();
+    const header = within(screen.getByRole('region', { name: 'Corner Shop' })).getByRole('button', {
+      name: /Corner Shop/,
+    });
+    expect(header.textContent).toMatch(/3/);
+    expect(screen.getAllByText('part of party')).toHaveLength(2);
+    const check = screen.getByRole('button', { name: 'Check off ice' });
+    expect(check.className).toMatch(/\bh-11\b/);
+    expect(screen.queryByRole('button', { name: /to today/ })).toBeNull(); // not the Add-to-today +
+
+    await user.click(screen.getByRole('button', { name: 'Check off cups' }));
+    await screen.findByText('Checked off “cups”.');
+    await user.click(screen.getByRole('button', { name: 'Check off ice' }));
+    await screen.findByText('Checked off “ice”.');
+    // Every part done: the parent is the item again, finished the usual way.
+    await user.click(await screen.findByRole('button', { name: 'Mark done' }));
+    await waitFor(async () => expect((await api.getTask(party.id))!.status).toBe('done'));
+  });
+
+  it('Add again on a part puts it back under its open parent', async () => {
+    const { api } = await errands();
+    const party = await api.createTask({ title: 'party', place: 'corner' });
+    await api.createTasks([
+      { title: 'cups', parentId: party.id },
+      { title: 'ice', parentId: party.id },
+    ]);
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=places' });
+    await user.click(await screen.findByRole('button', { name: 'Check off cups' }));
+    await screen.findByText('Checked off “cups”.');
+    await user.click(screen.getByRole('button', { name: 'Add again' }));
+    await waitFor(() => expect(groupTitles('Corner Shop')).toEqual(['bread', 'ice', 'cups']));
+    const copy = (await api.listTasks()).find((t) => t.title === 'cups' && t.status === 'backlog');
+    expect(copy).toMatchObject({ parentId: party.id, place: 'corner' });
+  });
+
   it('a search from Places looks across every open task', async () => {
     const { api } = await errands();
     const user = userEvent.setup();

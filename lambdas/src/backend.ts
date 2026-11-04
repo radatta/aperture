@@ -72,6 +72,7 @@ import {
   placeError,
   placeUnknownError,
   PLACE_FINISHED_ERROR,
+  PLACE_PART_ERROR,
   PLACE_TOKEN_RACE_ERROR,
   slugify,
 } from '@aperture/shared';
@@ -242,6 +243,12 @@ function knownPlace(slug: unknown, places: ReadonlySet<string>): string | null {
 }
 const byAdded = (a: Place, b: Place) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1);
 const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
+// A part's place is its parent's: none given takes it, a different slug is refused. Not a part → as given.
+function partPlace(given: string | null, parent: Task | undefined): string | null {
+  if (!parent) return given;
+  if (given !== null && given !== parent.place) throw new Error(PLACE_PART_ERROR);
+  return parent.place;
+}
 // Every hash a new pointer must retire: the live one it replaces, plus any a cut-short delete left.
 const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
   prev ? [...new Set([...(prev.hash ? [prev.hash] : []), ...prev.retiring])] : [];
@@ -290,8 +297,15 @@ export class BackendClient implements ApiClient {
   }
   // The task literal, shared by createTask and createTasks. `t` is the createdAt stamp — a batch passes
   // one value for every task so they tie on createdAt and render as a block in ULID (paste) order.
-  // `places` = the alive slugs (placeSlugsFor); an unknown one throws here, before any write.
-  private newTask(input: CreateTaskInput, t: number, places: ReadonlySet<string>): Task {
+  // `places` = the alive slugs (placeSlugsFor); an unknown one throws here, before any write. `tasks` =
+  // the alive tasks when some input is a part (its parent's place is the part's — partPlace).
+  private newTask(
+    input: CreateTaskInput,
+    t: number,
+    places: ReadonlySet<string>,
+    tasks: readonly Task[],
+  ): Task {
+    const parent = input.parentId ? tasks.find((x) => x.id === input.parentId) : undefined;
     return {
       ...this.baseAt(t),
       title: input.title,
@@ -305,7 +319,7 @@ export class BackendClient implements ApiClient {
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
       parentId: input.parentId || null, // '' is no parent, never a link to validate
-      place: knownPlace(input.place, places),
+      place: partPlace(knownPlace(input.place, places), parent),
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -751,7 +765,7 @@ export class BackendClient implements ApiClient {
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
     if (input.parentId) return (await this.createTasks([input]))[0]!; // the parts rules live once
-    const task = this.newTask(input, this.now(), await this.placeSlugsFor([input]));
+    const task = this.newTask(input, this.now(), await this.placeSlugsFor([input]), []);
     return this.syncCalendar(null, await this.repo.putTask(task));
   }
   // The alive place slugs — read only when some input names a place. Consistent, like placeSlugs: a
@@ -768,7 +782,7 @@ export class BackendClient implements ApiClient {
     const [settings, all, alivePlaces] = await Promise.all([
       this.ensureSettings(),
       this.repo.listCategories(),
-      this.repo.listPlaces(),
+      this.repo.listPlaces({ consistent: true }), // a place added a moment ago resolves its @slug
     ]);
     const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
     const places = alivePlaces.map(({ slug, name }) => ({ slug, name }));
@@ -781,16 +795,16 @@ export class BackendClient implements ApiClient {
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     if (inputs.length === 0) return [];
     const t = this.now();
-    const places = await this.placeSlugsFor(inputs);
-    const tasks = inputs.map((input) => this.newTask(input, t, places)); // normalizes all first: one bad input writes nothing
-    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     // Parts (parts.ts): every parent is checked before any write. A planned task taking its first part
     // hands its spot on the plan to that part (the batch's first for it) — an untimed one: a timed part
-    // is on its own day by its time (option 3).
+    // is on its own day by its time (option 3). A part takes its parent's place (partPlace).
     // Consistent: a parent is written back from this copy (adoptAsParent), and a part made a moment
     // ago must count — else a rename just saved is lost, or the parent is adopted twice.
-    const parentIds = [...new Set(tasks.map((x) => x.parentId).filter((x): x is string => !!x))];
+    const parentIds = [...new Set(inputs.map((x) => x?.parentId).filter((x): x is string => !!x))];
     const all = parentIds.length ? await this.repo.listTasks({ consistent: true }) : [];
+    const places = await this.placeSlugsFor(inputs);
+    const tasks = inputs.map((input) => this.newTask(input, t, places, all)); // normalizes all first: one bad input writes nothing
+    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
     if (parentIds.length) {
       const plans = await this.repo.listAllPlans({ consistent: true });
@@ -876,7 +890,10 @@ export class BackendClient implements ApiClient {
     const all = await this.repo.listTasks();
     assertCanBePart(task, parent, all);
     const first = !hasParts(all, parentId);
-    const part = await this.repo.putTask({ ...task, parentId, updatedAt: this.now() });
+    // An open part takes its parent's place (PLACE_PART_ERROR); a finished one's is history. A detach
+    // (above) keeps whatever it had.
+    const place = isFinished(task) ? task.place : parent.place;
+    const part = await this.repo.putTask({ ...task, parentId, place, updatedAt: this.now() });
     if (first) await this.adoptAsParent(parent);
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
     await this.releaseParentState(task.parentId); // moved from another parent
@@ -1500,8 +1517,9 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Places (errand lists — places.ts) ---
+  // Consistent (N is tiny): Settings reads it straight after a rename or an add.
   async listPlaces(): Promise<Place[]> {
-    return (await this.repo.listPlaces()).sort(byAdded);
+    return (await this.repo.listPlaces({ consistent: true })).sort(byAdded);
   }
   // Consistent: an update decides on (and writes back) this row, and a just-deleted place must read gone.
   private async mustPlace(id: string): Promise<Place> {
@@ -1553,11 +1571,20 @@ export class BackendClient implements ApiClient {
         await this.repo.putTask({ ...t, place: to, updatedAt: this.now() });
     await this.repo.putPlace({ ...place, deletedAt: this.now(), updatedAt: this.now() });
   }
-  // Open tasks only: a finished task's place is history, like its estimate (PLACE_FINISHED_ERROR).
+  // Open tasks only: a finished task's place is history, like its estimate (PLACE_FINISHED_ERROR). A part
+  // follows its parent (PLACE_PART_ERROR); a parent carries its open parts along — finished parts keep
+  // theirs. Parts first, so a cut-short move is finished by re-running it (each part whose place differs).
   async setTaskPlace(id: string, place: string | null): Promise<Task> {
     const t = await this.mustTask(id);
     if (isFinished(t)) throw new Error(PLACE_FINISHED_ERROR);
+    if (t.parentId) throw new Error(PLACE_PART_ERROR);
     const slug = knownPlace(place, place ? await this.placeSlugs() : new Set());
+    // Consistent: each part is written back from this copy.
+    const parts = (await this.repo.listTasks({ consistent: true })).filter(
+      (p) => p.parentId === id && !isFinished(p) && p.place !== slug,
+    );
+    if (parts.length)
+      await this.repo.putTasks(parts.map((p) => ({ ...p, place: slug, updatedAt: this.now() })));
     return this.repo.putTask({ ...t, place: slug, updatedAt: this.now() });
   }
   // The Shortcut's digest as a pure read (Settings' Test, MCP) — no heartbeat, no count.
@@ -1606,7 +1633,8 @@ export class BackendClient implements ApiClient {
   // Pointer P (consistent) → new lookup row N → pointer {N, retiring: P's hash + P's leftovers}, written
   // only on P's version → every retiring row deleted → retiring cleared. Two devices racing: one pointer
   // write wins, the loser deletes its own N and throws (PLACE_TOKEN_RACE_ERROR) — no orphan token works.
-  // A crash after the pointer moved leaves the old hashes in `retiring`, deleted by the next rotate/revoke.
+  // A crash after the pointer moved leaves the old hashes in `retiring`, deleted by the next rotate/revoke;
+  // they're already dead — a read is refused unless the pointer names its hash (resolvePlaceRead).
   // The plaintext leaves here once and is never stored or logged.
   async rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }> {
     const now = this.now();

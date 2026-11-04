@@ -18,6 +18,7 @@ import {
   createUi,
   datesFor,
   makeShot,
+  shotWithheld,
   type Ctx,
   type InterceptOpts,
   type Interception,
@@ -77,6 +78,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     unrecorded: [],
     orphanIntents: [],
     blockedDeletes: [],
+    failedDeletes: [],
     consoleErrors: [],
     throttled: [],
     injected: [],
@@ -149,8 +151,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
 
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
     for (const id of pendingIds(d.ledger.read())) {
-      if (!(await exists(api, id))) d.ledger.append({ run: d.runId, op: 'gone', id });
-      else if (await removeRecorded(api, id)) {
+      const out = await clean(api, id);
+      if (out === 'gone') d.ledger.append({ run: d.runId, op: 'gone', id });
+      else if (out === 'removed') {
         d.ledger.append({ run: d.runId, op: 'swept', id });
         r.swept.push(id);
       }
@@ -215,12 +218,14 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           res.status = 'fail';
           res.error = err instanceof Error ? err.message : String(err);
           fail('STEP_FAILED');
-          try {
-            await shot('fail');
-            res.shot = r.shots.at(-2); // the light one
-          } catch {
-            // a dead page can't be shot; the error text stands alone
-          }
+          // A secret may have been on screen (scenario.ts hidingSecret): the error text stands alone.
+          if (!shotWithheld(err))
+            try {
+              await shot('fail');
+              res.shot = r.shots.at(-2); // the light one
+            } catch {
+              // a dead page can't be shot; the error text stands alone
+            }
         }
         res.ms = d.now() - s0;
       }
@@ -366,6 +371,22 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
   }
 
+  // One id's read-back and removal. A throw (a revoke racing another device, any delete's error) is caught
+  // here, so the loop goes on to the rest: the id stays pending (the next run's sweep retries it), the error
+  // is reported, and the run fails LEFTOVERS.
+  async function clean(client: ApiClient, id: string): Promise<'gone' | 'removed' | 'kept'> {
+    try {
+      if (!(await exists(client, id))) return 'gone';
+      return (await removeRecorded(client, id)) ? 'removed' : 'kept';
+    } catch (err) {
+      r.failedDeletes.push(`${id}: ${err instanceof Error ? err.message : String(err)}`);
+      const code = codeOf(err); // a guard's refusal (LEDGER_GUARD…) keeps its own code too
+      if (code && code !== 'LEFTOVERS') fail(code);
+      fail('LEFTOVERS');
+      return 'kept';
+    }
+  }
+
   async function cleanup(): Promise<void> {
     const entries = d.ledger.read();
     r.orphanIntents.push(
@@ -398,20 +419,25 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       const rec: CreatedRecord = { id, via: e.via ?? '?', title: e.title, final: 'left' };
       r.created.unshift(rec);
       if (!pending.has(id)) continue;
-      if (!(await exists(api, id))) {
-        d.ledger.append({ run: d.runId, op: 'gone', id });
-        continue;
-      }
-      if (await removeRecorded(api, id)) d.ledger.append({ run: d.runId, op: 'deleted', id });
+      const out = await clean(api, id);
+      if (out === 'gone') d.ledger.append({ run: d.runId, op: 'gone', id });
+      else if (out === 'removed') d.ledger.append({ run: d.runId, op: 'deleted', id });
     }
-    // Verify by reading back, not by trusting the deletes.
+    // Verify by reading back, not by trusting the deletes. A read-back that throws proves nothing: 'left'.
     const after = d.ledger.read();
+    const stillThere = (id: string) =>
+      exists(api!, id).catch((err: unknown) => {
+        r.failedDeletes.push(
+          `${id}: read-back: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return true;
+      });
     for (const rec of r.created) {
-      if (await exists(api, rec.id)) continue; // stays 'left'
+      if (await stillThere(rec.id)) continue; // stays 'left'
       rec.final = after.some((e) => e.id === rec.id && e.op === 'gone') ? 'gone' : 'deleted';
     }
     for (const id of r.swept)
-      if (await exists(api, id)) r.created.push({ id, via: 'swept', final: 'left' });
+      if (await stillThere(id)) r.created.push({ id, via: 'swept', final: 'left' });
     if (r.created.some((c) => c.final === 'left')) fail('LEFTOVERS');
 
     // A task the ledger doesn't know is never deleted. One that was there before the run is reported; one

@@ -42,8 +42,11 @@ export interface PlaceReadAuth {
   row: PlaceTokenRow;
 }
 
-// Header → the token's owner, or throw: `Unauthorized: …` (401) or PlaceReadCapError (429). At most one
-// GetItem, and none for a missing or malformed token. Writes nothing.
+// Header → the token's owner, or throw: `Unauthorized: …` (401) or PlaceReadCapError (429). Two consistent
+// GetItems — the lookup row (consistent: a token minted a moment ago reads at once), then its user's
+// pointer, the authority: a lookup row the pointer doesn't name is a retiring token whose delete was cut
+// short (mid-rotate, mid-revoke) and is refused. None for a missing or malformed token. Writes nothing.
+// The pointer comes before the cap, so a revoked token at its cap still answers 401, not 429.
 export async function resolvePlaceRead(
   store: PlaceTokenStore,
   header: string | undefined,
@@ -54,8 +57,10 @@ export async function resolvePlaceRead(
   if (!token) throw new Error('Unauthorized: missing place token');
   if (!TOKEN_RE.test(token)) throw new Error('Unauthorized: not a place token');
   const hash = hashPlaceToken(token);
-  const row = await store.get(hash);
+  const row = await store.get(hash, { consistent: true });
   if (!row) throw new Error('Unauthorized: unknown place token');
+  const ptr = await store.pointer(row.userId);
+  if (ptr?.hash !== hash) throw new Error('Unauthorized: place token revoked');
   if (readsToday(row, now) >= cap) throw new PlaceReadCapError();
   return { userId: row.userId, hash, row };
 }

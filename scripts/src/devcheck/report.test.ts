@@ -17,6 +17,7 @@ const base: RunResult = {
   unrecorded: [],
   orphanIntents: [],
   blockedDeletes: [],
+  failedDeletes: [],
   consoleErrors: [],
   injected: [],
   throttled: [],

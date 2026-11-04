@@ -33,6 +33,9 @@ export const placeUnknownError = (slug: string): string =>
 // A finished (done/cancelled) task's place is history, like its estimate: moving it on or off a list
 // would flip whether it counts in calibration after the fact (contributesCalibration).
 export const PLACE_FINISHED_ERROR = "A finished task's place is history — it can't move lists";
+// A part's place is always its parent's (it's bought on the same trip): parts are created with it, attach
+// takes it, and moving the parent carries its open parts along — so a part is never placed on its own.
+export const PLACE_PART_ERROR = "A part follows its parent's place — change the parent's";
 // Rotate/revoke lost the race to the same call on another device (the pointer changed since it was read).
 export const PLACE_TOKEN_RACE_ERROR = 'The Shortcut token changed on another device — try again';
 
@@ -90,12 +93,19 @@ export function placeDigestText(name: string, titles: readonly string[]): string
 }
 
 const OPEN = new Set<Task['status']>(['backlog', 'planned', 'in_progress']);
+const isOpen = (t: Task) => t.deletedAt === null && OPEN.has(t.status);
 
-// The open errands on one list: alive, not done/cancelled, oldest first.
-export const placeTasks = (slug: string, tasks: readonly Task[]): Task[] =>
-  tasks
-    .filter((t) => t.place === slug && t.deletedAt === null && OPEN.has(t.status))
+// The open errands on one list: alive, not done/cancelled, oldest first. It lists the ITEMS, like the lens:
+// a parent with open parts is left out and its open parts stand in (they carry its place), so the Shortcut,
+// Settings' count and the Places lens agree. A parent whose parts are all finished is an item again.
+export function placeTasks(slug: string, tasks: readonly Task[]): Task[] {
+  const withOpenParts = new Set(
+    tasks.filter((t) => t.parentId && isOpen(t)).map((t) => t.parentId),
+  );
+  return tasks
+    .filter((t) => t.place === slug && isOpen(t) && !withOpenParts.has(t.id))
     .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+}
 
 export function placeDigestOf(
   place: Pick<Place, 'name' | 'slug'>,

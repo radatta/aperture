@@ -1,4 +1,4 @@
-import { addDays, deadlineOf, isTimed, placedByTime, timedDay } from '@aperture/shared';
+import { addDays, deadlineOf, isTimed, placedByTime, placeTasks, timedDay } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import { byDueHint } from './taskMath';
 import { byDeadline } from './todayRows';
@@ -85,6 +85,18 @@ export function placer(tasks: Task[], ctx: PlaceCtx) {
   const parents = new Set(tasks.map((t) => t.parentId).filter((id): id is string => !!id));
   return (t: Task): Place =>
     placeOf(t, ctx, t.parentId ? byId.get(t.parentId) : undefined, parents.has(t.id));
+}
+
+// The Places lens's rows, store by store: the Shortcut digest's items (places.ts placeTasks — a parent with
+// open parts gives way to them) that the 'places' bucket holds, so the lens, its pill, Settings' counts and
+// the notification count the same things. Keyed by slug, each list oldest first.
+export function errandsByPlace(tasks: Task[], ctx: PlaceCtx): Map<string, Task[]> {
+  const place = placer(tasks, ctx);
+  const slugs = new Set<string>();
+  for (const t of tasks) if (t.place && place(t) === 'places') slugs.add(t.place);
+  return new Map(
+    [...slugs].map((s) => [s, placeTasks(s, tasks).filter((t) => place(t) === 'places')]),
+  );
 }
 
 // Outside a search, a part whose parent is in the same list is drawn inside the parent's card, not as a
