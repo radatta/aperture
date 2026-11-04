@@ -516,14 +516,16 @@ export const places: Scenario = {
         });
         // On a throttled dev the place list can still be loading: that Enter is refused too ("Loading
         // places…") and the notice clears once the list lands — so press until the held warning answers.
+        // Never on a cleared field: that would mean it saved, and a second press could save another.
         for (let i = 0; ; i++) {
           await field.press('Enter');
-          await ctx.ui.expectText(/Not saved/);
           const held = await again.waitFor({ state: 'visible', timeout: 5_000 }).then(
             () => true,
             () => false,
           );
           if (held) break;
+          if ((await field.inputValue()) === '')
+            throw new Error('the first Enter saved an unknown @word without the held refusal');
           if (i === 4) throw new Error('Enter never got the held “no place” refusal');
         }
         await ctx.page
