@@ -153,7 +153,21 @@ export function createUi(page: PwPage): Ui {
       await page.getByRole('button', { name: 'Task', exact: true }).click();
       const field = page.locator('textarea[aria-label="Capture task"]');
       await field.fill(line);
-      await field.press('Enter');
+      // A save clears the field at once. A refusal keeps the text: on a throttled dev the category or place
+      // list can still be loading ("Loading places…" — the notice goes once it lands), so press again then.
+      // Only while the text is still there — a press after the field cleared could save it twice.
+      const added = page.getByText(/Task added/).first();
+      for (let i = 0; ; i++) {
+        await field.press('Enter');
+        if (
+          await added.waitFor({ state: 'visible', timeout: 3_000 }).then(
+            () => true,
+            () => false,
+          )
+        )
+          return;
+        if ((await field.inputValue()) !== line || i === 4) break;
+      }
       await ui.expectText(/Task added/, 15_000);
     },
     async expectText(text, timeoutMs = 10_000) {
