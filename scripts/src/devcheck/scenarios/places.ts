@@ -914,7 +914,8 @@ export const places: Scenario = {
           .click({ timeout: 15_000 });
         const d = ctx.page.getByRole('dialog', { name: `Task: ${errand(ctx, 'stray')}` });
         await d.waitFor({ state: 'visible', timeout: 10_000 });
-        await d.getByLabel('Place', { exact: true }).selectOption({ label: other.name });
+        // The <label> wraps the select, so its name is "Place" + the selected option ("Place No place").
+        await d.getByRole('combobox', { name: /^Place\b/ }).selectOption({ label: other.name });
         await d.getByRole('button', { name: 'Save', exact: true }).click();
         await d.getByText('Saved', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 });
         await ctx.shot('editor-place');
@@ -1225,7 +1226,7 @@ export const places: Scenario = {
         await ctx.ui.goto('/settings');
         await ctx.page.getByRole('button', { name: `Delete ${third.name}`, exact: true }).click();
         await ctx.page
-          .getByLabel('Move its 1 errand to', { exact: true })
+          .getByRole('combobox', { name: /^Move its 1 errand to\b/ })
           .selectOption({ label: other.name }, { timeout: 15_000 });
         await ctx.shot('delete-move');
         await ctx.page.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -1256,7 +1257,7 @@ export const places: Scenario = {
         await ctx.page.getByRole('button', { name: `Delete ${other.name}`, exact: true }).click();
         // Open: nails, stray (the editor's), soap (the move's) — the done syrup isn't counted.
         await ctx.page
-          .getByLabel('Move its 3 errands to', { exact: true })
+          .getByRole('combobox', { name: /^Move its 3 errands to\b/ })
           .selectOption({ label: 'No place' }, { timeout: 15_000 });
         await ctx.page.getByRole('button', { name: 'Delete', exact: true }).click();
         await ctx.page
