@@ -50,12 +50,48 @@ describe('Places lens', () => {
     expect(screen.getByRole('button', { name: 'Places · 3' })).toBeTruthy();
   });
 
-  it('an errand due this week lives on Week, not here — each task in exactly one lens', async () => {
+  it('every open errand shows here: one due tomorrow on Week too, an undated one only here', async () => {
     const { api } = await errands();
     await api.createTask({ title: 'stamps', place: 'corner', dueDay: addDays(todayKey(4), 1) });
+    const user = userEvent.setup();
     renderApp({ api, path: '/tasks?lens=places' });
     await screen.findByRole('region', { name: 'Corner Shop' });
-    expect(groupTitles('Corner Shop')).toEqual(['bread']);
+    expect(groupTitles('Corner Shop')).toEqual(['bread', 'stamps']);
+    // The pill, each group's header and the Shortcut's digest count the same errands.
+    const digest = (await api.listPlaceTasks('corner')).count;
+    expect(digest).toBe(2);
+    const header = within(screen.getByRole('region', { name: 'Corner Shop' })).getByRole('button', {
+      name: /Corner Shop/,
+    });
+    expect(header.textContent).toMatch(new RegExp(`\\b${digest}\\b`));
+    expect(screen.getByRole('button', { name: 'Places · 4' })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /^Week/ }));
+    expect(await screen.findByText('stamps')).toBeTruthy(); // dated: on Week as well
+    expect(screen.getByTitle('On the Corner Shop list').textContent).toBe('@Corner Shop'); // its tag
+    expect(screen.queryByText('bread')).toBeNull(); // undated: only on Places
+    await user.click(screen.getByRole('button', { name: /^Backlog/ }));
+    expect(await screen.findByText('not an errand')).toBeTruthy();
+    expect(screen.queryByText('bread')).toBeNull(); // never the Backlog
+    expect(screen.queryByText('stamps')).toBeNull();
+  });
+
+  it('an errand on today’s plan or started stays on Places too', async () => {
+    const { api } = await errands();
+    const stamps = await api.createTask({ title: 'stamps', place: 'corner' });
+    const tape = await api.createTask({ title: 'tape', place: 'corner' });
+    await api.upsertPlan({ taskId: stamps.id, day: todayKey(4), plannedMinutes: 10, order: 0 });
+    await api.transitionTask(tape.id, 'in_progress');
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=places' });
+    await screen.findByRole('region', { name: 'Corner Shop' });
+    expect(groupTitles('Corner Shop')).toEqual(['bread', 'stamps', 'tape']);
+    expect((await api.listPlaceTasks('corner')).count).toBe(3);
+    expect(screen.getByRole('button', { name: 'Places · 5' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /^Today/ }));
+    expect(await screen.findByText('stamps')).toBeTruthy();
+    expect(screen.getByText('tape')).toBeTruthy();
+    expect(screen.getAllByTitle('On the Corner Shop list')).toHaveLength(2); // tags kept on Today
   });
 
   it('check-offs are thumb-sized', async () => {

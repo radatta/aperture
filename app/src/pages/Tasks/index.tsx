@@ -23,8 +23,8 @@ import { useTaskQuery } from '../../modules/tasks/useTaskQuery';
 const RECEIPT_MS = 2400;
 
 // The tasks deep view (PRODUCT §4a) as lenses over one list: Today (the plan pass), Week (due in the
-// next 7 days), Places (errands by store), Backlog, Done — each open task lives in exactly one — plus
-// Recurring and Calibration.
+// next 7 days), Backlog, Done — each open task lives in exactly one — and Places (every open errand by
+// store, also on Today/Week when it's due or planned), plus Recurring and Calibration.
 // Typing in search looks across every open task. Bulk add lives in the header, visible on every lens.
 export function TasksPage() {
   const { lens, place, focusPlace, query, setQuery, setLens, today, dayStartHour } = useTaskQuery();
@@ -53,13 +53,14 @@ export function TasksPage() {
     dayStartHour,
   };
   // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice. Places
-  // counts the digest's items instead (errandsByPlace) — what its lens shows and the Shortcut reads out.
+  // counts every open errand as the digest's items (errandsByPlace) — what its lens shows, Settings counts
+  // and the Shortcut reads out.
   const counts = { today: 0, week: 0, places: 0 };
   if (!pending) {
     const place = placer(tasks, ctx);
     for (const p of ['today', 'week'] as const)
       counts[p] = foldParts(tasks.filter((t) => place(t) === p)).length;
-    for (const list of errandsByPlace(tasks, ctx).values()) counts.places += list.length;
+    for (const list of errandsByPlace(tasks).values()) counts.places += list.length;
   }
   const isList =
     lens === 'today' ||
@@ -111,7 +112,6 @@ export function TasksPage() {
         ) : lens === 'places' && !searching ? (
           <PlacesLens
             tasks={pending || error ? [] : tasks}
-            ctx={ctx}
             focus={focusPlace}
             pending={pending}
             error={error}

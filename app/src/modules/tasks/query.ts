@@ -6,8 +6,9 @@ import { byDeadline } from './todayRows';
 // The /tasks query engine: every list view is a preset lens over one task list. Pure — the page
 // feeds it tasks + today's plan and renders what comes back. See docs/areas/tasks/lenses.md.
 
-// Where an open task lives. Exactly one place per task, so lenses never show a task twice. ('places' is
-// the errand lists' bucket — a task on a store's list, places.ts — not to be confused with this type.)
+// Where an open task lives. Exactly one home per task, so Today, Week, Backlog and Done never show a task
+// twice. ('places' is the home of an errand nothing else claims — a task on a store's list, places.ts — not
+// to be confused with this type. The Places lens itself lists every open errand, errandsByPlace.)
 export type Place = 'today' | 'week' | 'places' | 'backlog' | 'done';
 export type LensId = Place | 'recurring' | 'calibration';
 export type DueBucket = 'any' | 'today' | 'week' | 'dated' | 'undated';
@@ -61,8 +62,8 @@ export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).inc
 // is on Today on the app day its deadline falls on, and a plan row on it places nothing (option 3,
 // lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day, as the
 // due chips and labels do ("due tonight 12:30am"). An errand (a task on a store's list) that nothing
-// above claimed waits on the Places lens instead of the Backlog — a part by its owner's place, so it
-// stays folded under its parent wherever that lands.
+// above claimed lives in 'places', never the Backlog — a part by its owner's place, so it stays folded
+// under its parent wherever that lands. (Every open errand also shows on the Places lens, whatever its home.)
 export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = false): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
   if (task.status === 'in_progress') return 'today';
@@ -87,16 +88,18 @@ export function placer(tasks: Task[], ctx: PlaceCtx) {
     placeOf(t, ctx, t.parentId ? byId.get(t.parentId) : undefined, parents.has(t.id));
 }
 
-// The Places lens's rows, store by store: the Shortcut digest's items (places.ts placeTasks — a parent with
-// open parts gives way to them) that the 'places' bucket holds, so the lens, its pill, Settings' counts and
-// the notification count the same things. Keyed by slug, each list oldest first.
-export function errandsByPlace(tasks: Task[], ctx: PlaceCtx): Map<string, Task[]> {
-  const place = placer(tasks, ctx);
-  const slugs = new Set<string>();
-  for (const t of tasks) if (t.place && place(t) === 'places') slugs.add(t.place);
-  return new Map(
-    [...slugs].map((s) => [s, placeTasks(s, tasks).filter((t) => place(t) === 'places')]),
-  );
+// The Places lens's rows, store by store: every open errand, as the Shortcut's digest lists them (places.ts
+// placeTasks — a parent with open parts gives way to them), whatever its home — one dated this week, on
+// today's plan or started shows on Week/Today too. So the lens, its pill, Settings' counts and the
+// notification count the same things. Keyed by slug, each list oldest first; empty lists are left out.
+export function errandsByPlace(tasks: Task[]): Map<string, Task[]> {
+  const slugs = new Set(tasks.flatMap((t) => (t.place ? [t.place] : [])));
+  const lists = new Map<string, Task[]>();
+  for (const s of slugs) {
+    const list = placeTasks(s, tasks);
+    if (list.length) lists.set(s, list);
+  }
+  return lists;
 }
 
 // Outside a search, a part whose parent is in the same list is drawn inside the parent's card, not as a
@@ -106,7 +109,8 @@ export function foldParts(tasks: Task[]): Task[] {
   return tasks.filter((t) => !(t.parentId && ids.has(t.parentId)));
 }
 
-// Presets carry only how a lens sorts and groups; which tasks it shows is placeOf's job.
+// Presets carry only how a lens sorts and groups; which tasks it shows is placeOf's job (errandsByPlace's,
+// on Places).
 const BLANK = { text: '', due: 'any' } as const;
 export const LENS_PRESET: Record<Place, TaskQuery> = {
   today: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },

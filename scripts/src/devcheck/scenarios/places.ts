@@ -420,7 +420,7 @@ export const places: Scenario = {
       id: 'mcp-part-place',
       entry: 'mcp',
       kind: 'edge',
-      what: 'MCP update_task { place } on a part is refused (a part follows its parent’s place), and it stays put',
+      what: 'MCP update_task { place } on a part is refused for another place (a part follows its parent’s place) and a no-op for its parent’s own, and it stays put',
     },
     {
       id: 'arrive',
@@ -1126,7 +1126,7 @@ export const places: Scenario = {
       id: 'mcp-part-place',
       entry: 'mcp',
       proves: ['mcp-part-place'],
-      title: 'MCP update_task { place } on the open part is refused, and it stays on its list',
+      title: 'MCP update_task { place } on the open part: another place refused, its own a no-op',
       async run(ctx) {
         const part = partIds[1]!;
         const err = await ctx.mcp.writes.updateTask(part, { place: place.slug }).then(
@@ -1137,6 +1137,12 @@ export const places: Scenario = {
         if (!err.includes(PLACE_PART_ERROR)) throw new Error(`update_task refused with: ${err}`);
         if ((await getTask(ctx, part)).place !== partsPlace.slug)
           throw new Error('the refused part left its list');
+        // Its parent's own place is a no-op, as create_task takes it.
+        const same = await ctx.mcp.writes.updateTask(part, { place: partsPlace.slug });
+        if (same.place !== partsPlace.slug)
+          throw new Error(`update_task with the parent’s own place returned ${same.place}`);
+        if ((await getTask(ctx, part)).place !== partsPlace.slug)
+          throw new Error('the no-op part left its list');
         await firstListUntouched(ctx);
       },
     },

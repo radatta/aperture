@@ -49,9 +49,10 @@ Shortcut "Aperture list"  ── GET /api/places/safeway/tasks ──▶  place 
 
 ## 3. The Places lens
 
-A fifth bucket beside Today · Week · Backlog · Done (`query.ts placeOf`): an open, untimed, unplanned errand not
-due this week lands in Places instead of Backlog; a dated or started errand still shows in Week/Today. Grouped by
-place, one tap checks an item off (chained `in_progress → done` — `backlog → done` isn't an edge) with a few
+A fifth lens beside Today · Week · Backlog · Done (`query.ts`): **every open errand, grouped by store** — the same
+items the Shortcut lists (`placeTasks`), so "Safeway · 3" taps through to three. An errand that's dated this week,
+planned or started also shows in Week/Today; Backlog never shows errands, so an undated one lives only here
+(Rahul, 2026-11-04 — the notification and the lens must agree). Grouped by place, one tap checks an item off (chained `in_progress → done` — `backlog → done` isn't an edge) with a few
 seconds of "Add again", since done is terminal. `/tasks?lens=places&place=<slug>` (`placeLensPath`) focuses one
 store — the notification's tap-through.
 
@@ -123,7 +124,8 @@ Answers from 2026-11-03 (branch `localNotes/decisions.md` has the full log).
   task's place is history (round 1, 2026-11-04): `setTaskPlace` refuses a done/cancelled task, and deleting a place
   "off any list" leaves finished errands on the old slug — otherwise clearing it would turn a checked-off errand
   (estimate locked, actual 0) into a calibration point. Moving to another place or renaming still rewrites them.
-- **D4 Places is a lens bucket**, not a Backlog filter: an errand is in exactly one lens.
+- **D4 Places is its own lens** listing every open errand per store (revised 2026-11-04 from "exactly one lens"):
+  it must match the Shortcut's list; a dated or started errand also shows in Week/Today, never in Backlog.
 - **D5 One-tap check-off with "Add again"**, not a confirm step.
 - **D6 Deleting a place asks where its tasks go** (another place or none), like deleting a category.
 - **D7 No default place.** You add your own; Settings starts empty.

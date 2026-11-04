@@ -120,13 +120,21 @@ export function CaptureBar({
     dest?: CaptureDest;
     failed?: boolean;
     blocked?: Blocked;
-    held?: string; // the warning a 'held' refusal revealed
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
     restored?: boolean; // an unsent capture from a closed session was parked
     parsed?: string; // a quick add's readback (savedSummary)
     unparsed?: string; // why a quick add saved as typed (parseFailText)
     at: number;
   } | null>(null);
+  // A 'held' refusal's promise — the next press saves — kept apart from the receipt, which a late one (an
+  // earlier capture's save, a parked failure, the outbox sweep) may replace at any moment. `text` is the
+  // field's value when it refused: while the field still holds exactly that, the warning stays shown and
+  // the next press saves. Editing the text, Put back or a mode change drops it.
+  const [heldAck, setHeldAck] = useState<{ text: string; warning: string } | null>(null);
+  const changeMode = (m: CaptureMode | ((m: CaptureMode) => CaptureMode)) => {
+    setMode(m);
+    setHeldAck(null);
+  };
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previewId = useId();
   const parseId = useId();
@@ -229,15 +237,18 @@ export function CaptureBar({
   const previewed = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
   const preview = previewed?.result?.ok && previewed.result.today !== today ? null : previewed;
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
-  // line fixed) it goes too, and its text always names the current cause. A 'held' one stays while the
-  // line still warns (editing the text clears it, in update).
-  const warns = !!line?.warnings.length;
+  // line fixed) it goes too, and its text always names the current cause. A 'held' one stays while its
+  // promise does (heldAck) and the line still warns.
+  const acked =
+    heldAck !== null &&
+    heldAck.text === text &&
+    !!line?.warnings.includes(heldAck.warning) &&
+    !block;
   const shown =
-    receipt?.blocked && !block && !(receipt.blocked === 'held' && warns) ? null : receipt;
-  const heldShown = shown?.blocked === 'held' && !block;
+    receipt?.blocked && !block && !(receipt.blocked === 'held' && acked) ? null : receipt;
   // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
   // shows once one is refused — or once the caret leaves it (or the field). Three cases:
-  const typing = focused && !shown?.blocked;
+  const typing = focused && !shown?.blocked && !acked;
   const tokenKind = token?.kind === 'category' || token?.kind === 'place' ? token.kind : null;
   // - the #/@ token speaks through its chips: its own refusal (a bare "@", a partial that starts several);
   const typingKind = typing && suggestions.length > 0 ? tokenKind : null;
@@ -256,8 +267,8 @@ export function CaptureBar({
     (typingWarn === 'place' && w.startsWith(UNKNOWN_PLACE)) ||
     (typingWarn === 'category' && w.startsWith(UNKNOWN_CATEGORY));
   useEffect(() => {
-    if (!block) setReceipt((r) => (r?.blocked && !(r.blocked === 'held' && warns) ? null : r));
-  }, [block, warns]);
+    if (!block) setReceipt((r) => (r?.blocked && !(r.blocked === 'held' && acked) ? null : r));
+  }, [block, acked]);
 
   useAutoGrow(inputRef, text);
 
@@ -323,11 +334,13 @@ export function CaptureBar({
     }
     // A warning still held back at the caret would save unseen — the receipt says only where it went. So
     // the first press refuses and shows it (typing ends with a refusal); the next one saves without it.
-    const held = line?.warnings.find(quietWarning);
+    const held = acked ? undefined : line?.warnings.find(quietWarning);
     if (held) {
-      setReceipt({ mode: submitted, blocked: 'held', held, at: Date.now() });
+      setHeldAck({ text, warning: held });
+      setReceipt({ mode: submitted, blocked: 'held', at: Date.now() });
       return;
     }
+    setHeldAck(null);
     const goesToday = submitted === 'task' && toToday;
     // The field clears optimistically so capture stays instant — which means a failed write would
     // otherwise destroy the thought outright: the creates roll back, the entry disappears from the
@@ -347,7 +360,7 @@ export function CaptureBar({
       textRef.current = value; // a second failure in the same tick must see the field as taken
       setText(value);
       setCaret(value.length);
-      setMode(submitted);
+      changeMode(submitted);
       setToToday(goesToday); // the retry goes where the first attempt was headed, and nowhere else
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
     };
@@ -458,8 +471,10 @@ export function CaptureBar({
     textRef.current = p.text;
     setText(p.text);
     setCaret(p.text.length);
-    setMode(p.mode);
+    changeMode(p.mode);
     setToToday(p.toToday);
+    // The field holds other text now: a refusal of what it held goes with it.
+    setReceipt((r) => (r?.blocked ? null : r));
     inputRef.current?.focus();
   }
 
@@ -482,6 +497,7 @@ export function CaptureBar({
 
   function update(value: string) {
     setText(value);
+    setHeldAck(null);
     if (receipt?.blocked) setReceipt(null);
   }
 
@@ -522,7 +538,7 @@ export function CaptureBar({
       // Tab takes the first chip while chips show; Shift+Tab always switches mode (the escape hatch).
       if (e.nativeEvent.isComposing) return; // don't replace text an IME is still composing
       if (!e.shiftKey && suggestions.length > 0) accept(suggestions[0]!);
-      else setMode((m) => cycleMode(m, e.shiftKey ? -1 : 1));
+      else changeMode((m) => cycleMode(m, e.shiftKey ? -1 : 1));
     } else if (e.key === 'Escape') {
       inputRef.current?.blur();
     }
@@ -544,7 +560,7 @@ export function CaptureBar({
               label: m[0]!.toUpperCase() + m.slice(1),
             }))}
             value={mode}
-            onChange={setMode}
+            onChange={changeMode}
           />
           {mode === 'task' && (
             <button
@@ -572,14 +588,23 @@ export function CaptureBar({
               <Receipt
                 key={shown.at}
                 receipt={shown}
-                reason={heldShown ? `${shown.held} — ${HELD_AGAIN}` : blockReason}
+                reason={
+                  shown.blocked === 'held' && acked && heldAck
+                    ? `${heldAck.warning} — ${HELD_AGAIN}`
+                    : blockReason
+                }
               />
             )}
           </div>
           {!shown && <Hint suggesting={suggestions.length > 0} task={mode === 'task'} />}
           {/* On a phone the row can't hold both, so it gives way to a receipt there (a failure
               notice stays until the next capture). Desktop has room for both. */}
-          <div className={cx('shrink-0', shown && 'max-sm:hidden')}>{trailing}</div>
+          <div
+            className={cx('shrink-0', shown && 'max-sm:hidden')}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            {trailing}
+          </div>
         </div>
       </div>
       <div className="flex items-end gap-2">
@@ -773,7 +798,7 @@ export function CaptureBar({
               ),
             )
           )}
-          {heldShown && (
+          {acked && (
             <Text size="xs" tone="gold" className="break-words">
               {HELD_AGAIN}.
             </Text>

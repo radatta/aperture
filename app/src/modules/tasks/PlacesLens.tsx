@@ -15,7 +15,6 @@ import { GroupHeader } from './GroupHeader';
 import { TaskCard } from './TaskCard';
 import { TaskTitleButton } from './TaskTitleButton';
 import { COLLAPSE_AT, errandsByPlace } from './query';
-import type { QueryCtx } from './query';
 import { useOpenTask } from './task-modal-context';
 import { useCollapsedGroups } from './useTaskQuery';
 
@@ -28,23 +27,22 @@ interface Group {
   tasks: Task[];
 }
 
-// The Places lens: the errands waiting on each store's list (query.ts placeOf's 'places' bucket), one group
-// per place in the order you added them (Settings › Places), each list oldest first — the items the
-// Shortcut's notification reads (errandsByPlace): a parent with open parts gives way to them, each part a
-// row of its own. One tap checks an errand or a part off (started then finished: no actual, never a
+// The Places lens: every open errand on each store's list, one group per place in the order you added them
+// (Settings › Places), each list oldest first — the items the Shortcut's notification reads
+// (errandsByPlace): a parent with open parts gives way to them, each part a row of its own. An errand dated
+// this week, on today's plan or started shows here and on Week/Today; one with none of those lives only
+// here (never the Backlog). One tap checks an errand or a part off (started then finished: no actual, never a
 // calibration point), with a few seconds to Add it again; a parent whose parts are all done is a row
 // again, with Mark done (parts.ts). `focus` is the store a link named (?place=, the Shortcut's
 // tap-through): its group opens and scrolls into view.
 export function PlacesLens({
   tasks,
-  ctx,
   focus,
   pending,
   error,
   onRetry,
 }: {
   tasks: Task[];
-  ctx: QueryCtx;
   focus: string | null;
   pending: boolean;
   error: boolean;
@@ -74,7 +72,7 @@ export function PlacesLens({
     return () => clearTimeout(id);
   }, [receipt]);
 
-  const lists = errandsByPlace(tasks, ctx);
+  const lists = errandsByPlace(tasks);
   const known = roster ?? [];
   const knownSlugs = new Set(known.map((p) => p.slug));
   const groups: Group[] = known.map((p) => ({

@@ -7,6 +7,8 @@ import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { STUB_FAIL_NEXT_PARSE_KEY } from '../../data/stubParse';
 import { CAPTURE_OUTBOX_KEY, CAPTURE_PARKED_KEY, OUTBOX_STALE_MS } from './captureOutbox';
+import { PomodoroProvider } from '../pomodoro/PomodoroProvider';
+import { IdleFocus } from '../pomodoro/TimerBar';
 import { CaptureBar } from './CaptureBar';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -946,13 +948,21 @@ describe('CaptureBar', () => {
 });
 
 describe('CaptureBar — places', () => {
-  async function placeBar(opts: { hangPlaces?: boolean; more?: string[] } = {}) {
+  async function placeBar(opts: { hangPlaces?: boolean; more?: string[]; focus?: boolean } = {}) {
     const api = createStubClient({ seed: false, storageKey: `cap-place-${Math.random()}` });
     await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
     for (const name of opts.more ?? []) await api.upsertPlace({ name });
     if (opts.hangPlaces) vi.spyOn(api, 'listPlaces').mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
-    renderWithProviders(<CaptureBar />, { api });
+    // AppShell docks the idle Focus button in the bar's trailing slot.
+    const bar = opts.focus ? (
+      <PomodoroProvider>
+        <CaptureBar trailing={<IdleFocus />} />
+      </PomodoroProvider>
+    ) : (
+      <CaptureBar />
+    );
+    renderWithProviders(bar, { api });
     await user.click(screen.getByRole('button', { name: 'Task' }));
     const box = () => screen.getByLabelText('Capture task') as HTMLTextAreaElement;
     return { api, user, box };
@@ -1046,19 +1056,152 @@ describe('CaptureBar — places', () => {
   });
 
   it('no other bar control takes focus from the field while a warning is held back', async () => {
-    const { user, box } = await placeBar();
+    const { user, box } = await placeBar({ focus: true });
+    await screen.findByRole('button', { name: /^Focus$/ });
     await user.type(box(), 'milk | @zz');
     const blurred = vi.fn();
     box().addEventListener('blur', blurred);
-    for (const name of [/today/, /^Log$/]) {
+    // Log last: Log mode drops the token warning by design.
+    for (const name of [/today/, /^Focus$/, /^Log$/]) {
       const control = screen.getByRole('button', { name });
       await user.pointer({ keys: '[MouseLeft>]', target: control });
       expect(document.activeElement).toBe(box());
       expect(screen.queryByText(/no place/)).toBeNull(); // nothing grew under the press
       await user.pointer({ keys: '[/MouseLeft]', target: control });
-      if (name.source === '^Log$') break; // Log mode drops the token warning by design
     }
     expect(blurred).not.toHaveBeenCalled();
+  });
+
+  it('Put back and × keep focus in the field: no blur, no warning grown under the press', async () => {
+    localStorage.setItem(
+      CAPTURE_PARKED_KEY,
+      JSON.stringify([
+        { id: 'a', text: 'stamps', mode: 'task', toToday: false, why: 'set-aside' },
+        { id: 'b', text: 'eggs', mode: 'task', toToday: false, why: 'set-aside' },
+      ]),
+    );
+    const { user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    const blurred = vi.fn();
+    box().addEventListener('blur', blurred);
+    const discard = screen.getAllByRole('button', { name: 'Discard' })[0]!;
+    await user.pointer({ keys: '[MouseLeft>]', target: discard });
+    expect(document.activeElement).toBe(box());
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.pointer({ keys: '[/MouseLeft]', target: discard });
+    expect(screen.queryByText('Set aside: “stamps”')).toBeNull();
+    const putBack = screen.getByRole('button', { name: 'Put back' });
+    await user.pointer({ keys: '[MouseLeft>]', target: putBack });
+    expect(document.activeElement).toBe(box());
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.pointer({ keys: '[/MouseLeft]', target: putBack });
+    expect(box().value).toBe('eggs');
+    expect(screen.getByText('Set aside: “milk | @zz”')).toBeTruthy();
+    expect(blurred).not.toHaveBeenCalled();
+  });
+
+  // The typing rule's three steps, deliberately: leaving the field shows the warning, coming back into the
+  // token holds it back again, and Enter there still refuses once before it saves.
+  it('blur shows a held warning, tapping back into the token hides it, and Enter refuses once more', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull();
+    act(() => box().blur());
+    expect(await screen.findByText("no place '@zz' — created without one")).toBeTruthy();
+    await user.click(box()); // the caret lands at the end: back in the token
+    expect(box().selectionStart).toBe('milk | @zz'.length);
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText("no place '@zz' — created without one")).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(0);
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),
+    );
+  });
+
+  // The refusal's promise isn't the receipt's: a late receipt landing in between (an earlier capture's save
+  // or its parked failure) must not hide the warning again or make the promised second press refuse.
+  it.each([
+    ['an earlier save', 'resolve', 'Task added → Corner Shop'],
+    ['an earlier failure parked', 'reject', "Couldn't save — kept below the box."],
+  ] as const)('a held refusal survives a late receipt from %s', async (_, how, late) => {
+    const { api, user, box } = await placeBar();
+    const real = api.createTask.bind(api);
+    let settle!: () => void;
+    api.createTask = vi
+      .fn()
+      .mockImplementationOnce(
+        (input: Parameters<typeof real>[0]) =>
+          new Promise((ok, fail) => {
+            settle = () => (how === 'resolve' ? ok(real(input)) : fail(new Error('offline')));
+          }),
+      )
+      .mockImplementation(real);
+    await user.type(box(), 'eggs | @corner');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+    await user.type(box(), 'milk | @zz');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    act(() => settle());
+    expect(await screen.findByText(late)).toBeTruthy();
+    expect(screen.queryByText(/Not saved/)).toBeNull(); // the slot is the late receipt's now
+    // …but the warning and the promise stay, with the caret still in the token.
+    expect(document.activeElement).toBe(box());
+    expect(screen.getByText("no place '@zz' — created without one")).toBeTruthy();
+    expect(screen.getByText('Enter or Save again to save without it.')).toBeTruthy();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks()).find((t) => t.title === 'milk')).toMatchObject({
+        place: null,
+      }),
+    );
+  });
+
+  it('Put back drops a refusal even when the line it brings back is refused too', async () => {
+    localStorage.setItem(
+      CAPTURE_PARKED_KEY,
+      JSON.stringify([
+        { id: 'a', text: 'y | ~45m', mode: 'task', toToday: false, why: 'set-aside' },
+      ]),
+    );
+    const { user, box } = await placeBar();
+    await user.type(box(), 'x | ~30m');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('y | ~45m');
+    expect(screen.getByText(/invalid estimate/)).toBeTruthy(); // its own error shows in the preview
+    expect(screen.queryByText(/Not saved/)).toBeNull(); // but nothing was refused for it yet
+  });
+
+  it('Put back and a mode switch drop a held refusal: the next press refuses afresh', async () => {
+    localStorage.setItem(
+      CAPTURE_PARKED_KEY,
+      JSON.stringify([{ id: 'a', text: 'eggs', mode: 'task', toToday: false, why: 'set-aside' }]),
+    );
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('eggs');
+    expect(screen.queryByText(/Not saved/)).toBeNull();
+    // The refused line comes back from the parked list: its earlier refusal doesn't carry over.
+    await user.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull(); // caret at its end: held back again
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Log' }));
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    expect(screen.queryByText(/Not saved/)).toBeNull();
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(0);
   });
 
   it('the Save button keeps focus in the field: no blur, no layout shift, a refusal then a save', async () => {
