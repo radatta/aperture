@@ -17,7 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "devcheck": "pnpm --filter @aperture/scripts devcheck",
-    "bot": "node scripts/src/bot/cli.ts"
+    "bot": "node scripts/src/bot/cli.ts",
+    "mailroom": "node scripts/src/mailroom/cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
