@@ -174,6 +174,17 @@ describe('bulk add', () => {
       expect(tasks.find((t) => t.title === 'milk')?.place).toBe('corner');
       expect(tasks.find((t) => t.title === 'nails')?.place).toBeNull();
     });
+    // The receipt says where they went: the errand to Places, not "to Backlog".
+    expect(await screen.findByText('Added 2 — 1 to Places')).toBeTruthy();
+  });
+
+  it('the textarea stays mono at the 16px base — smaller zooms iOS Safari on focus', async () => {
+    const api = await apiWithAdmin();
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks' });
+    await open(user);
+    expect(area().className).toMatch(/\bfont-mono\b/);
+    expect(area().className).not.toMatch(/\btext-(xs|sm)\b/);
   });
 
   it('blocks submit while places are still loading, if the paste uses @places', async () => {

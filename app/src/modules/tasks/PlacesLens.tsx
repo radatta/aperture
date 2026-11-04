@@ -108,7 +108,8 @@ export function PlacesLens({
   }
   async function addAgain(task: Task) {
     try {
-      await again.mutateAsync({ title: task.title, place: task.place });
+      const { title, categoryId, estimateMin, bufferMin, notes, place } = task;
+      await again.mutateAsync({ title, categoryId, estimateMin, bufferMin, notes, place });
       setReceipt(null);
     } catch {
       setReceipt({ task, at: Date.now(), failed: true }); // stays until dismissed by the next action

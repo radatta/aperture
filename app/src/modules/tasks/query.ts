@@ -61,7 +61,8 @@ export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).inc
 // is on Today on the app day its deadline falls on, and a plan row on it places nothing (option 3,
 // lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day, as the
 // due chips and labels do ("due tonight 12:30am"). An errand (a task on a store's list) that nothing
-// above claimed waits on the Places lens instead of the Backlog.
+// above claimed waits on the Places lens instead of the Backlog — a part by its owner's place, so it
+// stays folded under its parent wherever that lands.
 export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = false): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
   if (task.status === 'in_progress') return 'today';
@@ -75,7 +76,7 @@ export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = fal
   const owner = openParent ? parent : task;
   const due = timedDay(owner, dayStartHour) ?? owner.dueDay;
   if (due && due <= addDays(today, WEEK_DAYS)) return 'week';
-  return task.place ? 'places' : 'backlog';
+  return owner.place ? 'places' : 'backlog';
 }
 
 // placeOf over a list, each part looked up against its parent.

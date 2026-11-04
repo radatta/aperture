@@ -30,7 +30,9 @@ export function TasksPage() {
   const { lens, place, focusPlace, query, setQuery, setLens, today, dayStartHour } = useTaskQuery();
   const bulk = useDisclosure();
   // `at` is a nonce so two adds in a row re-arm the fade (same trick as the capture receipt).
-  const [receipt, setReceipt] = useState<{ count: number; at: number } | null>(null);
+  const [receipt, setReceipt] = useState<{ count: number; placed: number; at: number } | null>(
+    null,
+  );
 
   // Whichever lens opens first: getDay(today) materializes today's recurring occurrences and sweeps
   // stale planned tasks back to the backlog before any lens reads the list.
@@ -84,7 +86,7 @@ export function TasksPage() {
         <div className="flex items-center gap-3">
           {receipt && (
             <Text size="sm" tone="teal">
-              Added {receipt.count} to Backlog
+              {bulkReceipt(receipt)}
             </Text>
           )}
           <Button
@@ -132,8 +134,15 @@ export function TasksPage() {
       <BulkAddDialog
         open={bulk.open}
         onClose={bulk.onClose}
-        onAdded={(count) => setReceipt({ count, at: Date.now() })}
+        onAdded={(added) => setReceipt({ ...added, at: Date.now() })}
       />
     </div>
   );
+}
+
+// Where a bulk add went: errands wait on the Places lens, the rest in the Backlog.
+function bulkReceipt({ count, placed }: { count: number; placed: number }): string {
+  if (placed === 0) return `Added ${count} to Backlog`;
+  if (placed === count) return `Added ${count} to Places`;
+  return `Added ${count} — ${placed} to Places`;
 }

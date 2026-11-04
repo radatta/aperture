@@ -145,7 +145,7 @@ SK (type-prefixed range keys):
   habit#<id> · roll#<id> · cat#<id> · idea#<ulid> · series#<id> · story#<ulid> · settings
   fin#item#<id> · fin#sync#<itemId> · fin#acct#<id> · fin#txn#<id> · fin#rule#<ulid>   finances
   gcal#sync#<sub>               calendar two-way sync cursor, one per Google account
-  place#<id> · ptoken           errand places; the place token's pointer {hash, createdAt, hint}
+  place#<id> · ptoken           errand places; the place token's pointer {hash|null, createdAt, hint, retiring[], updatedAt}
 PK = placetoken#<sha256hex> / SK = placetoken
                                 the place token's lookup row {userId, …} — the one non-u# partition: the
                                 Shortcut route resolves a user from a token (tasks/places.md §4)
@@ -252,7 +252,7 @@ outlier, and two things make it worse than an ordinary bug:
 
 *(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day, and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
-`deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days.)*
+`deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)*
 
 - **No test can see it.** Both implementations return `[]` from `listHabitChecks` afterwards, and since
   `exportData` now excludes tombstones too, **no `ApiClient` method reveals the difference**. The

@@ -149,15 +149,16 @@ export function validateParsedTask(
 
 // A known `@slug` word in a natural-language line ("shampoo @safeway"): the place, and the line without it.
 // Deterministic, like the grammar — the model never guesses a place. An unknown `@word` stays in the line.
+// Trailing punctuation ("@safeway, nails") goes with the word.
 export function takePlaceWord(
   line: string,
   places: readonly PlaceRef[],
 ): { place: PlaceRef | null; rest: string } {
-  for (const m of line.matchAll(/(^|\s)@([A-Za-z0-9][A-Za-z0-9-]*)(?=\s|$)/g)) {
+  for (const m of line.matchAll(/(^|\s)@([A-Za-z0-9][A-Za-z0-9-]*)([,.;:!?]*)(?=\s|$)/g)) {
     const place = places.find((p) => p.slug === m[2]!.toLowerCase());
     if (!place) continue;
     const at = m.index + m[1]!.length;
-    const rest = (line.slice(0, at) + line.slice(at + m[2]!.length + 1))
+    const rest = (line.slice(0, at) + line.slice(at + 1 + m[2]!.length + m[3]!.length))
       .replace(/\s+/g, ' ')
       .trim();
     return { place, rest };

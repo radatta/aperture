@@ -7,10 +7,12 @@ import {
   APERTURE,
   AUTH_HEADER,
   ORIGIN_SECRET_HEADER,
+  PLACE_READ_TEXT,
   placeLensPath,
+  placeReadUnknownText,
   placeUnknownError,
 } from '@aperture/shared';
-import type { PlaceRead } from '@aperture/shared';
+import type { PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
 import { handleRpc } from './handler';
@@ -203,7 +205,8 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   }
 }
 
-const PLACE_ROUTE = /^\/api\/places\/([a-z0-9-]{1,32})\/tasks$/;
+// Case-insensitive, then lowercased: an automation passing `Safeway` finds `safeway`.
+const PLACE_ROUTE = /^\/api\/places\/([A-Za-z0-9-]{1,32})\/tasks$/;
 // A fixed code per 401 (so the log line can never echo anything a message might one day carry).
 const UNAUTHORIZED_REASON = (message: string): string =>
   /missing/.test(message)
@@ -214,26 +217,35 @@ const UNAUTHORIZED_REASON = (message: string): string =>
         ? 'revoked'
         : 'unknown';
 
-// 405 non-GET → 401 no/unknown token (no 'local' fallback, any stage) → 429 at the daily cap → 404 an
-// unknown slug, only once authenticated (no unauthenticated slug probing) → 200 the digest + lens link.
-// Only a 200 writes (the count + the place's heartbeat — BackendClient.readPlaceForShortcut). The log
-// line carries the outcome only — never the header, token or hash.
+// 405 non-GET → 401 no/unknown token (no 'local' fallback, any stage) → 429 at the daily cap → 422 a
+// malformed path or an unknown slug, only once authenticated (no unauthenticated slug probing) → 200 the
+// digest + lens link. Never 404: CloudFront turns an origin 403/404 into the app's index.html (a 200 the
+// Shortcut would read as an empty list). Every body carries `text` (the digest's, or PLACE_READ_TEXT), so
+// no failure is silent on the phone. Only a 200 writes (the count + the place's heartbeat —
+// BackendClient.readPlaceForShortcut). The log line carries the outcome only — never the header, token,
+// hash or an error message.
 async function placeRead(event: HttpEvent, path: string): Promise<HttpResult> {
-  const reply = (statusCode: number, reason: string, body: unknown): HttpResult => {
-    console.log(JSON.stringify({ event: 'place_read', ok: statusCode === 200, reason }));
+  const reply = (
+    statusCode: number,
+    reason: string,
+    body: PlaceRead | PlaceReadError,
+    extra: Record<string, string> = {},
+  ): HttpResult => {
+    console.log(JSON.stringify({ event: 'place_read', ok: statusCode === 200, reason, ...extra }));
     return { statusCode, headers: CORS, body: JSON.stringify(body) };
   };
   if (event.requestContext?.http?.method !== 'GET') {
-    const res = reply(405, 'method', { error: 'Method Not Allowed' });
+    const res = reply(405, 'method', { error: 'Method Not Allowed', text: PLACE_READ_TEXT.method });
     return { ...res, headers: { ...res.headers, allow: 'GET' } };
   }
   const now = Date.now();
-  const slug = PLACE_ROUTE.exec(path)?.[1];
-  const store = new PlaceTokenStore(doc, liveWrites(doc));
+  const slug = PLACE_ROUTE.exec(path)?.[1]?.toLowerCase();
+  const writes = liveWrites(doc); // one per request: the token store and the Repo share it
+  const store = new PlaceTokenStore(doc, writes);
   try {
     const auth = await resolvePlaceRead(store, event.headers?.[AUTH_HEADER], now);
-    if (!slug) return reply(404, 'path', { error: 'Not found' });
-    const backend = new BackendClient(new Repo(doc, liveWrites(doc), auth.userId), {
+    if (!slug) return reply(422, 'path', { error: 'Not a place list', text: PLACE_READ_TEXT.path });
+    const backend = new BackendClient(new Repo(doc, writes, auth.userId), {
       userId: auth.userId,
       placeTokens: store,
     });
@@ -242,10 +254,16 @@ async function placeRead(event: HttpEvent, path: string): Promise<HttpResult> {
     return reply(200, 'ok', read);
   } catch (err) {
     const message = err instanceof Error ? err.message : '';
-    if (err instanceof PlaceReadCapError) return reply(429, 'cap', { error: message });
+    if (err instanceof PlaceReadCapError)
+      return reply(429, 'cap', { error: message, text: PLACE_READ_TEXT.cap });
     if (message.startsWith('Unauthorized'))
-      return reply(401, UNAUTHORIZED_REASON(message), { error: message });
-    if (slug && message === placeUnknownError(slug)) return reply(404, 'place', { error: message });
-    return reply(500, 'error', { error: 'Internal error' });
+      return reply(401, UNAUTHORIZED_REASON(message), {
+        error: message,
+        text: PLACE_READ_TEXT.unauthorized,
+      });
+    if (slug && message === placeUnknownError(slug))
+      return reply(422, 'place', { error: message, text: placeReadUnknownText(slug) });
+    const name = err instanceof Error ? err.name : 'unknown';
+    return reply(500, 'error', { error: 'Internal error', text: PLACE_READ_TEXT.error }, { name });
   }
 }

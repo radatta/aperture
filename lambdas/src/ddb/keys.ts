@@ -63,8 +63,8 @@ export const sk = {
   catPrefix: () => `cat#`,
 
   // Places (errand lists) — id-keyed, a `place#` begins-with list (tiny N; slug unique per user). The
-  // token pointer is a singleton: which lookup row is this user's live token (rotate/revoke find the old
-  // one through it). A credential's pointer — never exported.
+  // token pointer is a singleton: which lookup row is this user's live token, and which old ones are still
+  // to delete (rotate/revoke find them through it). A credential's pointer — never exported.
   place: (id: string) => `place#${id}`,
   placePrefix: () => `place#`,
   ptoken: () => `ptoken`,

@@ -115,7 +115,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   `list_tasks` does **not** pull, so it shows what the app last pulled; a task Google changed carries
   `gcalPulled` (`{at, note}` — what changed, or what Google changed that Aperture kept).
 - **Places** ([tasks/places.md](../tasks/places.md)): `place` (a slug — `Safeway` or `@safeway` is normalised —
-  or `null`) rides on `create_task`, `create_tasks` and `update_task`; an unknown place is refused. An errand
+  or `null`) rides on `create_task`, `create_tasks` and `update_task`; an unknown place is refused, and so is a
+  place change on a finished task (its place is history — places.md D3). An errand
   isn't calibration, so `complete_task` takes `actualMin` as optional there (recorded if given). Voice: "add
   shampoo to my Safeway list" → `list_places` → `create_task {place}`.
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`

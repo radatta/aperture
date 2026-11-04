@@ -29,6 +29,9 @@ export interface PwLocator {
   count(): Promise<number>;
   getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
+  getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
+  // A <select>: by an option's visible label (what the user picks), never its value.
+  selectOption(option: { label: string }, opts?: { timeout?: number }): Promise<string[]>;
 }
 
 export interface PwPage {

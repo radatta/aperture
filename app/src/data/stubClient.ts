@@ -94,6 +94,7 @@ import {
   UPLOAD_URL_TTL_MS,
   withEstimate,
   runQuickParse,
+  PLACE_FINISHED_ERROR,
   PLACE_TOKEN_PREFIX,
   placeDigestOf,
   placeError,
@@ -182,6 +183,8 @@ const FINANCE_SETTINGS_DEFAULTS = {
 };
 const FLUX_SETTINGS_DEFAULTS = { fluxRollId: null, fluxDisclaimerAckAt: null };
 const STORAGE_KEY = 'aperture.stub.v1';
+// Done or dropped: a finished task's place is history (places.ts PLACE_FINISHED_ERROR).
+const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
 
 // The Shortcut's token, kept in plaintext here — hashing it is the backend's job (places.md). The stub has
 // no Shortcut route, so nothing ever reads with it: lastUsedAt stays null and readsToday 0.
@@ -1435,12 +1438,14 @@ class StubClient implements ApiClient {
     if (reassignToSlug === place.slug)
       throw new Error('Move its errands to another place, or to no place');
     const to = this.knownPlace(reassignToSlug);
+    // Off any list (null) takes only the open errands off; a finished one keeps the old slug as history,
+    // so its calibration never flips. A move to another place takes them all — they stay placed.
     for (const t of this.alive(this.store.tasks).filter((x) => x.place === place.slug))
-      this.writes.patch(this.store.tasks, t.id, { place: to });
+      if (to !== null || !isFinished(t)) this.writes.patch(this.store.tasks, t.id, { place: to });
     this.writes.softDelete(this.store.places, id);
   }
   async setTaskPlace(id: string, place: string | null): Promise<Task> {
-    this.mustFind(this.store.tasks, id);
+    if (isFinished(this.mustFind(this.store.tasks, id))) throw new Error(PLACE_FINISHED_ERROR);
     return this.writes.patch(this.store.tasks, id, { place: this.knownPlace(place) });
   }
   async listPlaceTasks(slug: string): Promise<PlaceDigest> {

@@ -112,10 +112,12 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 - **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
   A place is recorded from the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's
   request has no `id` — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is
-  deleted with `deletePlace(id, null)`. The token is recorded as `place-token:<run>` _before_ `rotatePlaceToken`
-  (never the token itself), and `revokePlaceToken` is refused unless a run-minted token is still unresolved;
-  cleanup revokes it. `ledgerKind()` tells task, Flux, place and token apart by `via`, so a task delete refuses a
+  deleted with `deletePlace(id, null)` (finished errands keep the old slug — harmless, tasks are cleaned by id). The
+  token is recorded as `place-token:<run>` _before_ `rotatePlaceToken` (never the token itself), and
+  `revokePlaceToken` is refused unless a run-minted token is still unresolved — a Settings Generate/Rotate click records the same id first (`recordPlaceTokenMint`), so a browser-minted token is cleaned too; cleanup revokes it, which leaves the
+  test user an inactive `ptoken` pointer (never deleted), and a revoke racing another device throws and is retried. `ledgerKind()` tells task, Flux, place and token apart by `via`, so a task delete refuses a
   place id and vice versa. An unrecorded place that appears during the run is a `LEFTOVERS` failure, like a task.
+  The scenario drives the daily read cap on dev (sequential GETs to the server's own 429, ~40–60 s).
   Every run, smoke included, lists places after the sweep — so this harness needs a dev build with the places
   methods.
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).

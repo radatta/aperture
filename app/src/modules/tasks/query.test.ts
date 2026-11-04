@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Category, Task } from '@aperture/shared';
 import {
   applyQuery,
+  foldParts,
   groupTasks,
   inDueBucket,
   isNarrowing,
@@ -130,6 +131,21 @@ describe('placeOf', () => {
     expect(placeOf(part, pctx(new Map([['a', 0]])), parent)).toBe('today');
     expect(placeOf(part, pctx(), { ...parent, status: 'done' })).toBe('backlog'); // its own
     expect(placer([parent, part], pctx())(part)).toBe('week');
+  });
+
+  it('a part follows its owner’s place: in Places with a placed parent, Backlog with an unplaced one', () => {
+    const parent = task({ id: 'p', place: 'market' });
+    const part = task({ id: 'a', parentId: 'p' });
+    expect(placer([parent, part], pctx())(parent)).toBe('places');
+    expect(placer([parent, part], pctx())(part)).toBe('places');
+    expect(foldParts([parent, part])).toEqual([parent]); // drawn inside the parent's card
+
+    const plain = task({ id: 'q' });
+    const placedPart = task({ id: 'b', parentId: 'q', place: 'market' });
+    expect(placer([plain, placedPart], pctx())(plain)).toBe('backlog');
+    expect(placer([plain, placedPart], pctx())(placedPart)).toBe('backlog');
+    // A finished parent hands the part back its own place.
+    expect(placeOf(placedPart, pctx(), { ...plain, status: 'done' })).toBe('places');
   });
 
   it('option 3: a timed task is on Today on its day, by its time — a plan row never places it', () => {

@@ -32,5 +32,20 @@ describe('→ today', () => {
     expect(receiptFor('task', { today: true, planned: false }).label).toBe(
       'backlog (couldn’t plan it)',
     );
+    // An errand waits on its store's list, not the backlog.
+    expect(receiptFor('task', { today: false, planned: false, placeName: 'Safeway' }).label).toBe(
+      'Safeway',
+    );
+    expect(receiptFor('task', { today: true, planned: false, placeName: 'Safeway' }).label).toBe(
+      'Safeway (couldn’t plan it)',
+    );
+    expect(
+      receiptFor('task', {
+        today: false,
+        planned: false,
+        placeName: 'Safeway',
+        timedOn: 'due Fri 4pm',
+      }).label,
+    ).toBe('due Fri 4pm, by its time');
   });
 });

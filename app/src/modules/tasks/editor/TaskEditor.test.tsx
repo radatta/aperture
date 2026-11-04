@@ -694,7 +694,9 @@ describe('TaskEditor', () => {
       try {
         await user.click(await screen.findByRole('button', { name: 'Mark done' }));
         const alert = await screen.findByRole('alert');
-        expect(alert.textContent).toMatch(/Part 2 isn’t finished — complete, drop or delete it first/);
+        expect(alert.textContent).toMatch(
+          /Part 2 isn’t finished — complete, drop or delete it first/,
+        );
         // It lands below a phone's fold, so it's brought into view — and again on the next refusal.
         await waitFor(() => expect(scrolled.mock.contexts).toContain(alert));
         const before = scrolled.mock.calls.length;
@@ -741,7 +743,7 @@ describe('TaskEditor', () => {
       expect(document.activeElement).toBe(screen.getByLabelText(/Add parts — one per line/));
     });
 
-        it('Delete names how many parts go with it', async () => {
+    it('Delete names how many parts go with it', async () => {
       const client = api();
       const { p } = await withParts(client, ['open', 'open', 'open']);
       const { user } = renderEditor(client, p);
@@ -1194,7 +1196,7 @@ describe('the task’s place', () => {
     await waitFor(async () => expect((await client.getTask(t.id))!.place).toBeNull());
   });
 
-  it('works on a finished task too', async () => {
+  it('is locked on a finished task — its place is history, like its estimate', async () => {
     const client = api();
     await client.upsertPlace({ name: 'Market' });
     let t = await client.createTask({ title: 'milk', place: 'market' });
@@ -1203,7 +1205,18 @@ describe('the task’s place', () => {
     renderEditor(client, t);
     const select = await screen.findByLabelText<HTMLSelectElement>('Place');
     await waitFor(() => expect(select.value).toBe('market'));
-    expect(select.disabled).toBe(false);
+    expect(select.disabled).toBe(true);
+    expect(screen.getByText('Finished — its place is history, like its estimate.')).toBeTruthy();
+    expect(screen.getByText('Done')).toBeTruthy(); // the header keeps the status once it's finished
+  });
+
+  it('the header says Places for a waiting errand, not Backlog', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    const t = await client.createTask({ title: 'milk', place: 'market' });
+    renderEditor(client, t);
+    expect(await screen.findByText('Places')).toBeTruthy();
+    expect(screen.queryByText('Backlog')).toBeNull();
   });
 
   it('has no picker when there are no places and the task has none', async () => {

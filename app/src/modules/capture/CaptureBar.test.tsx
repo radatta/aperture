@@ -227,6 +227,30 @@ describe('CaptureBar', () => {
       });
     });
 
+    it('Enter on a half-typed #label with one match takes it, as Tab would', async () => {
+      const { api, user, box } = await taskBar();
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
+      await user.type(box(), 'x | #Adm');
+      await screen.findByRole('group', { name: 'Suggestions' });
+      expect(screen.queryByText(/no category/)).toBeNull();
+      await user.keyboard('{Enter}');
+      const [admin] = await api.listCategories();
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'x', categoryId: admin!.id }),
+      );
+    });
+
+    it('a half-typed #label that starts several refuses the save and says which', async () => {
+      const { api, user, box } = await taskBar({ categories: ['Admin', 'Admissions'] });
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(2));
+      await user.type(box(), 'x | #Adm');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(screen.getByText('#Adm could be Admin or Admissions — pick one')).toBeTruthy();
+      expect(box().value).toBe('x | #Adm');
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
     it('"→ today" with an estimate plans that many minutes', async () => {
       const { api, user, box } = await taskBar();
       await user.click(screen.getByRole('button', { name: 'today' }));
@@ -869,9 +893,10 @@ describe('CaptureBar', () => {
 });
 
 describe('CaptureBar — places', () => {
-  async function placeBar(opts: { hangPlaces?: boolean } = {}) {
+  async function placeBar(opts: { hangPlaces?: boolean; more?: string[] } = {}) {
     const api = createStubClient({ seed: false, storageKey: `cap-place-${Math.random()}` });
     await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    for (const name of opts.more ?? []) await api.upsertPlace({ name });
     if (opts.hangPlaces) vi.spyOn(api, 'listPlaces').mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderWithProviders(<CaptureBar />, { api });
@@ -897,6 +922,49 @@ describe('CaptureBar — places', () => {
     );
   });
 
+  it('the receipt names the store an errand went to, not the backlog', async () => {
+    const { user, box } = await placeBar();
+    await user.type(box(), 'milk | @corner');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('Task added → Corner Shop')).toBeTruthy();
+  });
+
+  it('Enter on a half-typed @place with one match takes it — never a quiet drop off the list', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @cor');
+    await screen.findByRole('group', { name: 'Suggestions' });
+    // Still being typed at the caret: no "no place" warning flashes while the chip shows.
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+    expect(await screen.findByText('Task added → Corner Shop')).toBeTruthy();
+  });
+
+  it('a half-typed @place that starts several refuses the save and says which', async () => {
+    const { api, user, box } = await placeBar({ more: ['Costco'] });
+    await user.type(box(), 'milk | @co');
+    await screen.findByRole('group', { name: 'Suggestions' });
+    expect(screen.queryByText(/could be/)).toBeNull(); // mid-word: the chips speak
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText('@co could be Corner Shop or Costco — pick one')).toBeTruthy();
+    expect(box().value).toBe('milk | @co');
+    expect(await api.listTasks()).toHaveLength(0);
+  });
+
+  it('an @word that starts no place warns, and saves off any list', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    expect(await screen.findByText(/no place '@zz'/)).toBeTruthy();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),
+    );
+    expect(await screen.findByText('Task added → backlog')).toBeTruthy();
+  });
+
   it('waits for places before an @place line can save', async () => {
     const { api, user, box } = await placeBar({ hangPlaces: true });
     await user.type(box(), 'milk | @corner');
@@ -915,5 +983,6 @@ describe('CaptureBar — places', () => {
       expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
     );
     expect(await screen.findByText('milk · no category · @Corner Shop')).toBeTruthy();
+    expect(screen.getByText(/Task added → Corner Shop/)).toBeTruthy();
   });
 });

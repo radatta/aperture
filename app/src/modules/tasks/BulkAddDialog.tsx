@@ -27,7 +27,7 @@ export function BulkAddDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onAdded: (count: number) => void;
+  onAdded: (added: { count: number; placed: number }) => void; // placed: how many went on a store's list
 }) {
   const categoriesQ = useActiveCategories();
   const tasksQ = useAllTasks();
@@ -90,8 +90,8 @@ export function BulkAddDialog({
     const inputs = toCreateInputs(parse);
     setFailed(false);
     createTasks.mutate(inputs, {
-      onSuccess: () => {
-        onAdded(inputs.length);
+      onSuccess: (tasks) => {
+        onAdded({ count: tasks.length, placed: tasks.filter((t) => t.place).length });
         onClose();
       },
       // Keep the dialog + text; on refetch the "already exists" warnings mark exactly what did land.
@@ -136,7 +136,8 @@ export function BulkAddDialog({
           aria-label="Tasks, one per line"
           aria-describedby="bulk-add-summary"
           onChange={(e) => setText(e.target.value)}
-          className="font-mono text-sm"
+          // Mono at the 16px base: anything smaller zooms iOS Safari on focus.
+          className="font-mono"
         />
 
         {n > 0 && (

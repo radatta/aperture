@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { placeUnknownError } from '@aperture/shared';
+import { PLACE_FINISHED_ERROR, placeUnknownError } from '@aperture/shared';
 import type { ApiMethod, Place, Task } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
@@ -102,16 +102,21 @@ describe('place on the task tools', () => {
     );
   });
 
-  it('update_task sets and clears the place, at any status', async () => {
+  it("update_task sets and clears an open task's place; a finished task's is history", async () => {
     const t = (await call('create_task', { title: 'shampoo' })) as Task;
     expect(((await call('update_task', { id: t.id, place: 'safeway' })) as Task).place).toBe(
       'safeway',
     );
-    await call('complete_task', { id: t.id });
     expect(((await call('update_task', { id: t.id, place: null })) as Task).place).toBeNull();
     await expect(call('update_task', { id: t.id, place: 'target' })).rejects.toThrow(
       /No place "target".*already applied: none/,
     );
+    await call('update_task', { id: t.id, place: 'safeway' });
+    await call('complete_task', { id: t.id });
+    await expect(call('update_task', { id: t.id, place: null })).rejects.toThrow(
+      PLACE_FINISHED_ERROR,
+    );
+    expect((await setup.getTask(t.id))!.place).toBe('safeway');
   });
 
   it('complete_task checks off an errand without actualMin — and no calibration point', async () => {

@@ -30,6 +30,24 @@ export const slugify = (name: string): string =>
 
 export const placeUnknownError = (slug: string): string =>
   `No place "${slug}" — add it in Settings › Places`;
+// A finished (done/cancelled) task's place is history, like its estimate: moving it on or off a list
+// would flip whether it counts in calibration after the fact (contributesCalibration).
+export const PLACE_FINISHED_ERROR = "A finished task's place is history — it can't move lists";
+// Rotate/revoke lost the race to the same call on another device (the pointer changed since it was read).
+export const PLACE_TOKEN_RACE_ERROR = 'The Shortcut token changed on another device — try again';
+
+// What the Shortcut route's body carries as `text` on a failure — every answer has a `text`, so the
+// recipe's one rule is "show `text` if it isn't empty" and no failure is silent. CloudFront turns an origin
+// 403/404 into the app's index.html (200), so the route never answers 404: an unknown place is a 422.
+export const PLACE_READ_TEXT = {
+  unauthorized: "Aperture: the Shortcut's token isn't valid — make a new one in Settings › Places",
+  method: "Aperture: the Shortcut's Get Contents of URL must use GET",
+  path: "Aperture: the Shortcut's URL isn't a place list — check its input or Settings › Places",
+  cap: 'Aperture: the Shortcut hit its daily limit — try tomorrow',
+  error: "Aperture couldn't read the list — try again",
+} as const;
+export const placeReadUnknownText = (slug: string): string =>
+  `Aperture: no place "${slug}" — check the Shortcut's input or Settings › Places`;
 
 // Why a place can't be saved as given, or null. `others` = the user's other alive places.
 export function placeError(
@@ -57,6 +75,11 @@ export interface PlaceDigest {
 // What the Shortcut route returns: the digest plus the tap-through link to the Places lens.
 export interface PlaceRead extends PlaceDigest {
   url: string;
+}
+// Any non-200 answer: `error` for logs/tools, `text` (PLACE_READ_TEXT) for the notification.
+export interface PlaceReadError {
+  error: string;
+  text: string;
 }
 
 export function placeDigestText(name: string, titles: readonly string[]): string {

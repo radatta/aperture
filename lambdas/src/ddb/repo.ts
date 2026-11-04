@@ -385,8 +385,8 @@ export class Repo {
     );
   }
   // getStory-style (re-filter tombstones → null): a deleted place can't be renamed or deleted again.
-  async getPlace(id: string): Promise<Place | null> {
-    const it = await this.doc.get(this.p(), sk.place(id));
+  async getPlace(id: string, opts?: { consistent?: boolean }): Promise<Place | null> {
+    const it = await this.doc.get(this.p(), sk.place(id), opts);
     const p = it ? toEntity<Place>(it) : null;
     return p && p.deletedAt === null ? p : null;
   }
@@ -416,17 +416,26 @@ export class Repo {
   }
 
   // --- Place token pointer (the user's live Shortcut token: its hash, never the token) ---
+  // Consistent: rotate/revoke write it back conditionally on the version read here.
   async getPlaceTokenPointer(): Promise<PlaceTokenPointer | null> {
     const it = await this.doc.get(this.p(), sk.ptoken(), { consistent: true });
     if (!it) return null;
-    const { hash, createdAt, hint } = toEntity<PlaceTokenPointer>(it);
-    return { hash, createdAt, hint };
+    const r = toEntity<PlaceTokenPointer>(it);
+    return {
+      hash: r.hash ?? null,
+      createdAt: r.createdAt ?? null,
+      hint: r.hint ?? null,
+      retiring: r.retiring ?? [],
+      updatedAt: r.updatedAt,
+    };
   }
-  async putPlaceTokenPointer(ptr: PlaceTokenPointer): Promise<void> {
-    await this.writes.put({ PK: this.p(), SK: sk.ptoken(), ...ptr });
-  }
-  async deletePlaceTokenPointer(): Promise<void> {
-    await this.writes.delete(this.p(), sk.ptoken());
+  // Lands only while the stored pointer is still at `expectedUpdatedAt` (null: none yet) —
+  // ConditionFailedError otherwise.
+  async putPlaceTokenPointer(
+    ptr: PlaceTokenPointer,
+    expectedUpdatedAt: number | null,
+  ): Promise<void> {
+    await this.writes.putIf({ PK: this.p(), SK: sk.ptoken(), ...ptr }, expectedUpdatedAt);
   }
 
   // --- Finances ---

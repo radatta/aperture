@@ -444,16 +444,19 @@ export interface ApiClient {
   deleteCategory(id: string, reassignToId: string | null): Promise<void>;
 
   // Places (errand lists — places.ts). list is alive, oldest first (the order you added them). A slug
-  // change on upsert rewrites that place's tasks; delete moves its alive tasks to `reassignToSlug` (another
-  // place) or off any list (null), then tombstones it. setTaskPlace works at any status and refuses an
-  // unknown slug (placeUnknownError). listPlaceTasks is the Shortcut's digest as a pure read (no heartbeat).
+  // change on upsert rewrites all that place's tasks; delete moves its alive tasks to `reassignToSlug`
+  // (another place — finished ones too) or takes its open ones off any list (null — a finished task keeps
+  // the old slug, so its calibration never flips), then tombstones it. setTaskPlace refuses a finished task
+  // (PLACE_FINISHED_ERROR) and an unknown slug (placeUnknownError). listPlaceTasks is the Shortcut's digest
+  // as a pure read (no heartbeat).
   listPlaces(): Promise<Place[]>;
   upsertPlace(input: UpsertPlaceInput): Promise<Place>;
   deletePlace(id: string, reassignToSlug: string | null): Promise<void>;
   setTaskPlace(id: string, place: string | null): Promise<Task>;
   listPlaceTasks(slug: string): Promise<PlaceDigest>;
   // The Shortcut's token: one per user. rotate mints a new one (the old stops working) and returns the
-  // plaintext exactly once; the server keeps only its hash. revoke deletes it.
+  // plaintext exactly once; the server keeps only its hash. revoke kills it. Either refuses when the
+  // other ran meanwhile on another device (PLACE_TOKEN_RACE_ERROR) — the caller retries.
   getPlaceTokenStatus(): Promise<PlaceTokenStatus>;
   rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }>;
   revokePlaceToken(): Promise<void>;

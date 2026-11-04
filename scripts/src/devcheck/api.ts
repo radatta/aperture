@@ -206,6 +206,13 @@ export function createApiClient({
       );
   }
   const assertLedgerTask = (id: string) => assertLedger(id, 'task');
+  // `place-token:<run>`, once a run, before any mint (API or browser): a crash mid-call still leaves it
+  // for the next run's sweep to revoke.
+  function recordTokenMint(): void {
+    const id = placeTokenId(run);
+    if (!pendingIds(ledger.read()).includes(id))
+      ledger.append({ run, op: 'created', id, via: PLACE_TOKEN_VIA, title: 'place token' });
+  }
   // Attachments this client created; deleteAttachment refuses any other id.
   const attachmentIds = new Set<string>();
 
@@ -241,8 +248,9 @@ export function createApiClient({
     // The iPhone Shortcut's route, raw: GET /api/places/<slug>/tasks with the place token (never the session
     // JWT) in the BFF header, or none — the status and parsed body, whatever they are, so a step can assert a
     // refusal. A 200 bumps the token's count and the place's lastReadAt server-side, as the Shortcut does;
-    // every other answer writes nothing (lambdas/src/index.ts). `method` is GET but for proving the 405. A
-    // 429 carrying the BFF's own `{error}` is the daily cap, returned as is; any other 429 is Lambda throttling
+    // every other answer writes nothing (lambdas/src/index.ts) and carries `{error, text}` — never a 404,
+    // which CloudFront would rewrite to the app shell. `method` is GET but for proving the 405. A 429
+    // carrying the BFF's own `{error}` is the daily cap, returned as is; any other 429 is Lambda throttling
     // and is backed off like call()'s.
     async placeDigestRaw(
       slug: string,
@@ -349,11 +357,12 @@ export function createApiClient({
     },
     // The plaintext comes back once; it lives in the step's memory only — never logged, never ledgered.
     async rotatePlaceToken(): Promise<{ token: string; status: DevPlaceTokenStatus }> {
-      const id = placeTokenId(run);
-      if (!pendingIds(ledger.read()).includes(id))
-        ledger.append({ run, op: 'created', id, via: PLACE_TOKEN_VIA, title: 'place token' });
+      recordTokenMint();
       return call<{ token: string; status: DevPlaceTokenStatus }>('rotatePlaceToken', []);
     },
+    // The ledger half alone, for Settings' Generate / Rotate: called before the click, so a token the
+    // browser mints is recorded like one rotated here. Writes nothing to dev.
+    recordPlaceTokenMint: (): void => recordTokenMint(),
     // Only while the ledger holds a token a run minted and nothing has resolved yet: the test user's token
     // is the harness's to revoke only when the harness made it.
     async revokePlaceToken(): Promise<void> {

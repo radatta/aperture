@@ -4,15 +4,21 @@ import { PLACE_TOKEN_SK, placeTokenPk } from './keys';
 import { toEntity } from './mapping';
 
 // The Shortcut token's storage (places.md → Token). Two rows, neither holding the token itself:
-//   u#<uid> / ptoken                       — the pointer: which hash is this user's live token (Repo)
+//   u#<uid> / ptoken                       — the pointer: which hash is this user's live token, and
+//                                            which old ones are still to delete (Repo)
 //   placetoken#<sha256hex> / placetoken    — the lookup row (here): who the token belongs to, plus its
 //                                            daily read counter — one GetItem is auth + cap check
 // The lookup row lives outside every user partition, so it isn't on Repo. Writes go through `writes`.
 
+// Rotate/revoke write it with putIf on the updatedAt they read, so two devices can't both win; the
+// loser undoes its own lookup row. `retiring` = hashes whose lookup rows are still to delete — a delete
+// cut short leaves them here, and the next rotate/revoke deletes them, so an old token can't survive.
 export interface PlaceTokenPointer {
-  hash: string;
-  createdAt: number;
-  hint: string; // the token's last 4, for Settings
+  hash: string | null; // null: no live token (revoked)
+  createdAt: number | null;
+  hint: string | null; // the token's last 4, for Settings
+  retiring: string[];
+  updatedAt: number;
 }
 
 export interface PlaceTokenRow {

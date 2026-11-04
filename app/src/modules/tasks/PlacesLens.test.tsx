@@ -18,7 +18,14 @@ async function errands() {
   });
   await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
   await api.upsertPlace({ name: 'Market' });
-  const milk = await api.createTask({ title: 'milk', place: 'market' });
+  const cat = await api.upsertCategory({ label: 'Home', isWork: false });
+  const milk = await api.createTask({
+    title: 'milk',
+    place: 'market',
+    categoryId: cat.id,
+    estimateMin: 5,
+    notes: '2% only',
+  });
   await api.createTask({ title: 'bread', place: 'corner' });
   await api.createTask({ title: 'eggs', place: 'market' });
   await api.createTask({ title: 'not an errand' });
@@ -75,7 +82,13 @@ describe('Places lens', () => {
     await user.click(screen.getByRole('button', { name: 'Add again' }));
     await waitFor(() => expect(groupTitles('Market')).toEqual(['eggs', 'milk']));
     const copy = (await api.listTasks()).find((t) => t.title === 'milk' && t.status === 'backlog');
-    expect(copy).toMatchObject({ place: 'market' });
+    // A copy of the errand, not just its title: same list, category, estimate and notes.
+    expect(copy).toMatchObject({
+      place: 'market',
+      categoryId: milk.categoryId,
+      estimateMin: 5,
+      notes: '2% only',
+    });
     expect(screen.queryByText('Checked off “milk”.')).toBeNull();
   });
 

@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach, afterAll, beforeEach, vi } from 'vitest';
-import { dayKey, PLACE_READ_DAILY_CAP } from '@aperture/shared';
+import {
+  dayKey,
+  PLACE_READ_DAILY_CAP,
+  PLACE_READ_TEXT,
+  placeReadUnknownText,
+} from '@aperture/shared';
 import type { DocClient } from './ddb/DocClient';
 
 // The edge builds its verifier and reads APP_URL at import, so both are set before it loads: a JWT pool
@@ -8,7 +13,15 @@ import type { DocClient } from './ddb/DocClient';
 const h = vi.hoisted(() => {
   process.env.USER_POOL_ID = 'pool-test';
   process.env.APP_URL = 'https://app.test';
-  return { doc: null as unknown as DocClient };
+  return { doc: null as unknown as DocClient, liveWritesCalls: 0 };
+});
+// Counts the edge's liveWrites builds (one per place read — the token store and the Repo share it).
+vi.mock('./ddb/writes', async (importActual) => {
+  const actual = await importActual<typeof import('./ddb/writes')>();
+  return {
+    ...actual,
+    liveWrites: (d: DocClient) => (h.liveWritesCalls++, actual.liveWrites(d)),
+  };
 });
 vi.mock('./auth/verify', async (importActual) => {
   const actual = await importActual<typeof import('./auth/verify')>();
@@ -203,6 +216,10 @@ describe('handler place route', () => {
       );
       expect(res.statusCode).toBe(405);
       expect(res.headers.allow).toBe('GET');
+      expect(JSON.parse(res.body)).toEqual({
+        error: 'Method Not Allowed',
+        text: PLACE_READ_TEXT.method,
+      });
     }
     expect((await read(bearer(token), { method: 'POST', body: '{not json' })).statusCode).toBe(405);
     expect(doc.snapshot()).toEqual(before);
@@ -213,6 +230,10 @@ describe('handler place route', () => {
     const gets = doc.gets.length;
     const res = await read({});
     expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body)).toEqual({
+      error: 'Unauthorized: missing place token',
+      text: PLACE_READ_TEXT.unauthorized,
+    });
     expect(doc.gets.length).toBe(gets);
   });
 
@@ -227,6 +248,7 @@ describe('handler place route', () => {
     const unknown = `apl_${'A'.repeat(43)}`;
     const res = await read(bearer(unknown));
     expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body).text).toBe(PLACE_READ_TEXT.unauthorized);
     expect(doc.gets.length).toBe(gets + 1); // the one lookup
     expect(doc.snapshot()).toEqual(before); // and no write
   });
@@ -241,20 +263,82 @@ describe('handler place route', () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it('404s an unknown slug only after auth, writing nothing', async () => {
+  // Never 404: CloudFront serves index.html as a 200 for an origin 403/404 (cdk app-stack errorResponses),
+  // which the Shortcut would read as an empty list.
+  it('422s an unknown slug only after auth, writing nothing, with text for the notification', async () => {
     const token = await seeded();
     const before = doc.snapshot();
     const path = '/api/places/target/tasks';
     expect((await read({}, { path })).statusCode).toBe(401); // no probing without a token
     const res = await read(bearer(token), { path });
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(422);
     expect(JSON.parse(res.body)).toEqual({
       error: 'No place "target" — add it in Settings › Places',
+      text: placeReadUnknownText('target'),
     });
-    // A path the route regex refuses is the route's too — never the RPC dispatch.
-    expect((await read(bearer(token), { path: '/api/places/Safeway/tasks' })).statusCode).toBe(404);
-    expect((await read({}, { path: '/api/places/x' })).statusCode).toBe(401);
+    expect(placeReadUnknownText('target')).toBe(
+      'Aperture: no place "target" — check the Shortcut\'s input or Settings › Places',
+    );
+    // A path the route regex refuses is the route's too — never the RPC dispatch, never a 404.
+    for (const bad of ['/api/places/x', '/api/places//tasks', '/api/places/a%20b/tasks']) {
+      expect((await read({}, { path: bad })).statusCode).toBe(401);
+      const r = await read(bearer(token), { path: bad });
+      expect(r.statusCode).toBe(422);
+      expect(JSON.parse(r.body)).toEqual({ error: 'Not a place list', text: PLACE_READ_TEXT.path });
+    }
     expect(doc.snapshot()).toEqual(before);
+  });
+
+  it('matches the slug case-insensitively: an automation passing "Safeway" reads safeway', async () => {
+    const token = await seeded();
+    const res = await read(bearer(token), { path: '/api/places/SafeWay/tasks' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ slug: 'safeway', count: 1 });
+  });
+
+  it('an empty list is a 200 with text "" — the one case the Shortcut shows nothing', async () => {
+    await backend.upsertPlace({ name: 'Target' });
+    const token = (await backend.rotatePlaceToken()).token;
+    const res = await read(bearer(token), { path: '/api/places/target/tasks' });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ count: 0, titles: [], text: '' });
+  });
+
+  it('builds one writes per read, shared by the token count and the heartbeat', async () => {
+    const token = await seeded();
+    h.liveWritesCalls = 0;
+    expect((await read(bearer(token))).statusCode).toBe(200);
+    expect(h.liveWritesCalls).toBe(1);
+  });
+
+  it('a 500 has text too, and logs a fixed code plus the error name — never the message', async () => {
+    const token = await seeded();
+    const boom = Object.assign(new Error('secret detail'), { name: 'InternalServerError' });
+    vi.spyOn(doc, 'query').mockRejectedValueOnce(boom);
+    const res = await read(bearer(token));
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body)).toEqual({ error: 'Internal error', text: PLACE_READ_TEXT.error });
+    expect(logs.filter((l) => l.includes('place_read')).map((l) => JSON.parse(l))).toEqual([
+      { event: 'place_read', ok: false, reason: 'error', name: 'InternalServerError' },
+    ]);
+    expect(logs.join('\n')).not.toContain('secret detail');
+  });
+
+  it('a failed heartbeat after the count still answers 200 with the digest', async () => {
+    const token = await seeded();
+    const [place] = await backend.listPlaces();
+    const key = { pk: 'u#u1', sk: `place#${place!.id}` };
+    const putIf = doc.putIf.bind(doc);
+    vi.spyOn(doc, 'putIf').mockImplementation(async (item, expected) => {
+      if (item.PK === key.pk && item.SK === key.sk) throw new Error('throttled');
+      return putIf(item, expected);
+    });
+    const res = await read(bearer(token));
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({ count: 1, text: 'Safeway · 1 — shampoo' });
+    expect(logs.some((l) => l.includes('place_heartbeat_failed'))).toBe(true);
+    const row = await new PlaceTokenStore(doc, liveWrites(doc)).get(hashPlaceToken(token));
+    expect(row!.readsCount).toBe(1);
   });
 
   it('429s at the daily cap with no task read and no write', async () => {
@@ -273,7 +357,10 @@ describe('handler place route', () => {
     const query = vi.spyOn(doc, 'query');
     const res = await read(bearer(token));
     expect(res.statusCode).toBe(429);
-    expect(JSON.parse(res.body)).toEqual({ error: 'Daily read cap reached' });
+    expect(JSON.parse(res.body)).toEqual({
+      error: 'Daily read cap reached',
+      text: PLACE_READ_TEXT.cap,
+    });
     expect(query).not.toHaveBeenCalled();
     expect(doc.snapshot()).toEqual(before);
   });
@@ -281,7 +368,9 @@ describe('handler place route', () => {
   it('401s a rotated-out or revoked token', async () => {
     const first = await seeded();
     const second = (await backend.rotatePlaceToken()).token;
-    expect((await read(bearer(first))).statusCode).toBe(401);
+    const stale = await read(bearer(first));
+    expect(stale.statusCode).toBe(401);
+    expect(JSON.parse(stale.body).text).toBe(PLACE_READ_TEXT.unauthorized);
     expect((await read(bearer(second))).statusCode).toBe(200);
     await backend.revokePlaceToken();
     expect((await read(bearer(second))).statusCode).toBe(401);

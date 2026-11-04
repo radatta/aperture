@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { AUTH_HEADER, PLACE_TOKEN_PREFIX } from '@aperture/shared';
+import { AUTH_HEADER, PLACE_TOKEN_PREFIX, PLACE_TOKEN_RACE_ERROR } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderWithProviders } from '../../test/utils';
 import { PlacesSection } from './PlacesSection';
@@ -97,6 +97,47 @@ describe('Settings › Places: the list', () => {
     await user.tab();
     expect(await screen.findByText('Another place already uses "market"')).toBeTruthy();
     expect((slug as HTMLInputElement).value).toBe('market');
+  });
+
+  it('a rename and a link-word edit back to back both land — neither blur sends a stale copy', async () => {
+    const { api, corner } = await twoPlaces();
+    // The first save is still on its way when the second field blurs.
+    const real = api.upsertPlace.bind(api);
+    vi.spyOn(api, 'upsertPlace').mockImplementation(
+      (input) => new Promise((r) => setTimeout(() => r(real(input)), 30)),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    const name = await screen.findByLabelText('Rename Corner Shop');
+    await user.clear(name);
+    await user.type(name, 'Corner Store');
+    const slug = screen.getByLabelText('Link word for Corner Shop');
+    await user.click(slug); // blurs the name: its save goes out
+    await user.clear(slug);
+    await user.type(slug, 'cs');
+    await user.tab();
+    await waitFor(async () =>
+      expect((await api.listPlaces()).find((p) => p.id === corner.id)).toMatchObject({
+        name: 'Corner Store',
+        slug: 'cs',
+      }),
+    );
+  });
+
+  it('a row error clears once the field is put back, and sits on its own line', async () => {
+    const { api } = await twoPlaces();
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    const slug = await screen.findByLabelText('Link word for Corner Shop');
+    await user.clear(slug);
+    await user.type(slug, 'market');
+    await user.tab();
+    const error = await screen.findByText('Another place already uses "market"');
+    expect(error.tagName).toBe('P'); // a block, under the status line — not run on after it
+    await user.clear(slug);
+    await user.type(slug, 'corner');
+    await user.tab();
+    await waitFor(() => expect(screen.queryByText(/already uses/)).toBeNull());
   });
 
   it('an emptied name says it needs one instead of quietly not saving', async () => {
@@ -234,6 +275,9 @@ describe('Settings › Places: the Shortcut token', () => {
     renderWithProviders(<PlacesSection />, { api });
     await user.click(await screen.findByRole('button', { name: 'Rotate…' }));
     expect(screen.getByText(/stops working until you paste the new token/)).toBeTruthy();
+    // The confirm's own buttons are the choice: the triggers step aside while it's open.
+    expect(screen.queryByRole('button', { name: 'Rotate…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revoke…' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Rotate' }));
     const field = await screen.findByLabelText<HTMLInputElement>('Shortcut token');
     expect(field.value).not.toBe(first.token);
@@ -243,6 +287,17 @@ describe('Settings › Places: the Shortcut token', () => {
     await screen.findByText(/No token yet/);
     expect((await api.getPlaceTokenStatus()).active).toBe(false);
     expect(screen.queryByLabelText('Shortcut token')).toBeNull();
+  });
+
+  it('a revoke that lost to another device says so, not a generic failure', async () => {
+    const api = stub();
+    await api.rotatePlaceToken();
+    vi.spyOn(api, 'revokePlaceToken').mockRejectedValueOnce(new Error(PLACE_TOKEN_RACE_ERROR));
+    const user = userEvent.setup();
+    renderWithProviders(<PlacesSection />, { api });
+    await user.click(await screen.findByRole('button', { name: 'Revoke…' }));
+    await user.click(screen.getByRole('button', { name: 'Revoke' }));
+    expect(await screen.findByText(PLACE_TOKEN_RACE_ERROR)).toBeTruthy();
   });
 
   it('a failed rotate says so', async () => {
@@ -258,13 +313,26 @@ describe('Settings › Places: the Shortcut token', () => {
 describe('Settings › Places: the setup recipe', () => {
   it('opens to one Shortcut with this origin’s URL and the header, and one automation per store', async () => {
     const { api } = await twoPlaces();
-    const user = userEvent.setup();
+    const user = userEvent.setup(); // installs its own clipboard — stub ours after it
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     renderWithProviders(<PlacesSection />, { api });
     await user.click(await screen.findByRole('button', { name: 'Set up the iPhone Shortcut' }));
-    expect(screen.getByLabelText<HTMLInputElement>('URL (before Shortcut Input)').value).toBe(
-      `${window.location.origin}/api/places/`,
-    );
-    expect(screen.getByLabelText<HTMLInputElement>('Header key').value).toBe(AUTH_HEADER);
+    // The whole template, /tasks included — the Shortcut Input variable goes where the brackets are.
+    const url = `${window.location.origin}/api/places/[Shortcut Input]/tasks`;
+    const shown = screen.getByLabelText('URL');
+    expect(shown.textContent).toBe(url);
+    expect(shown.className).toMatch(/\bbreak-all\b/); // wraps whole at phone width, never truncated
+    await user.click(screen.getByRole('button', { name: 'Copy URL' }));
+    expect(writeText).toHaveBeenCalledWith(url);
+    expect(screen.getByLabelText('Header key').textContent).toBe(AUTH_HEADER);
+    // One rule: show `text` whenever it has a value — errors carry one too.
+    expect(screen.getByText('has any value')).toBeTruthy();
+    expect(screen.queryByText('count')).toBeNull();
+    // Every step keeps its number: no <li> is itself a flex box (that drops the list marker).
+    const steps = shown.closest('ol')!.querySelectorAll(':scope > li');
+    expect(steps).toHaveLength(5);
+    steps.forEach((li) => expect(li.className).not.toMatch(/\bflex\b/));
     expect(screen.getAllByText('Aperture list', { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getByText('corner')).toBeTruthy();
     expect(screen.getByText('market')).toBeTruthy();

@@ -292,6 +292,25 @@ describe('runQuickParse', () => {
     });
   });
 
+  it('takes a known @place followed by punctuation, stripping the punctuation with it', async () => {
+    for (const [line, rest] of [
+      ['shampoo @safeway, nails', 'shampoo nails'],
+      ['shampoo @safeway.', 'shampoo'],
+      ['shampoo @Safeway!?', 'shampoo'],
+      ['@safeway: shampoo', 'shampoo'],
+      ['shampoo @safeway;', 'shampoo'],
+    ]) {
+      const model = ok(fields({ title: rest }));
+      const r = await runQuickParse(line!, ctx, model);
+      expect(model).toHaveBeenCalledWith(rest);
+      expect(r).toMatchObject({ ok: true, input: { place: 'safeway' }, placeName: 'Safeway' });
+    }
+    // Punctuation inside the word isn't trailing: an unknown word stays in the line.
+    const model = ok(fields());
+    await runQuickParse('ask @safeway,target', ctx, model);
+    expect(model).toHaveBeenCalledWith('ask @safeway,target');
+  });
+
   it('leaves an unknown @word in the line, and a lone @place is an empty title', async () => {
     const model = ok(fields());
     await runQuickParse('email bob @target', ctx, model);

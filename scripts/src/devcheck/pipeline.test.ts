@@ -192,6 +192,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       recordFluxSet: async () => {
         throw new Error('unused');
       },
+      recordPlaceTokenMint: () => {
+        throw new Error('unused');
+      },
       createAttachment: async () => {
         throw new Error('unused');
       },

@@ -10,7 +10,7 @@ import {
   todayKey,
   tokenAtCaret,
 } from '@aperture/shared';
-import type { CreateTaskInput } from '@aperture/shared';
+import type { CreateTaskInput, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
 import { ModeToggle } from '../../components/ModeToggle';
@@ -25,9 +25,16 @@ import { usePlaces } from '../../data/hooks/usePlaces';
 import { isTypingTarget } from '../../lib/keys';
 import { TaskTokenChips } from '../tasks/TaskTokenChips';
 import { useAutoGrow } from './useAutoGrow';
-import { applySuggestion, suggestionsFor, type Suggestion } from './suggestions';
+import { applySuggestion, completeTokens, suggestionsFor, type Suggestion } from './suggestions';
 import { TokenSuggestions } from './TokenSuggestions';
-import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode } from './mode';
+import {
+  CAPTURE_MODES,
+  cycleMode,
+  placeholderFor,
+  receiptFor,
+  type CaptureDest,
+  type CaptureMode,
+} from './mode';
 import { useQuickParse } from './useQuickParse';
 import {
   newCaptureId,
@@ -101,7 +108,7 @@ export function CaptureBar({
   // confirmation would vanish after the FIRST timer's remainder.
   const [receipt, setReceipt] = useState<{
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean; timedOn?: string };
+    dest?: CaptureDest;
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
@@ -156,11 +163,16 @@ export function CaptureBar({
   );
 
   // Trailing whitespace holding a newline is dropped (invisible, so a "single line" error would
-  // confuse); a bare trailing space is kept so "milk | " reads as an empty token region.
+  // confuse); a bare trailing space is kept so "milk | " reads as an empty token region. A half-typed
+  // #label / @place is completed to its one match, or refused while it has several (completeTokens).
   const line = useMemo(
     () =>
       mode === 'task' && hasTaskTokens(text)
-        ? parseTaskLine(text.replace(/\s*\n\s*$/, ''), catRefs, placeRefs)
+        ? completeTokens(
+            parseTaskLine(text.replace(/\s*\n\s*$/, ''), catRefs, placeRefs),
+            catRefs,
+            placeRefs,
+          )
         : null,
     [mode, text, catRefs, placeRefs],
   );
@@ -209,6 +221,15 @@ export function CaptureBar({
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
   // line fixed) it goes too, and its text always names the current cause.
   const shown = receipt?.blocked && !block ? null : receipt;
+  // The #/@ token being typed at the caret speaks through its chips: its own refusal (a bare "@", a
+  // partial that starts several) doesn't flash red mid-word. It still blocks a save, and shows once one
+  // is refused — or once you move off it.
+  const typingKind =
+    suggestions.length > 0 &&
+    !shown?.blocked &&
+    (token?.kind === 'category' || token?.kind === 'place')
+      ? token.kind
+      : null;
   useEffect(() => {
     if (!block) setReceipt((r) => (r?.blocked ? null : r));
   }, [block]);
@@ -350,6 +371,9 @@ export function CaptureBar({
     settled: (() => void) | null,
     note: { parsed?: string; unparsed?: string },
   ) {
+    // An errand's receipt names its store: the roster's name, else the slug as typed (never "backlog").
+    const placeName = (t: Task) =>
+      t.place ? (placeData?.find((p) => p.slug === t.place)?.name ?? `@${t.place}`) : undefined;
     const saved = goesToday
       ? createToday(input).then(
           (r) =>
@@ -361,6 +385,7 @@ export function CaptureBar({
                 ...(r.timed && r.task.dueDay
                   ? { timedOn: fmtDueDay(r.task.dueDay, today, r.task.dueTime, { dayStartHour }) }
                   : {}),
+                placeName: placeName(r.task),
               },
               ...note,
               at: Date.now(),
@@ -372,13 +397,14 @@ export function CaptureBar({
           (t) =>
             setReceipt({
               mode: 'task',
-              ...(isTimed(t) && {
-                dest: {
-                  today: false,
-                  planned: false,
+              dest: {
+                today: false,
+                planned: false,
+                ...(isTimed(t) && {
                   timedOn: fmtDueDay(t.dueDay!, today, t.dueTime, { dayStartHour }),
-                },
-              }),
+                }),
+                placeName: placeName(t),
+              },
               ...note,
               at: Date.now(),
             }),
@@ -677,11 +703,13 @@ export function CaptureBar({
           <div className="flex flex-wrap items-baseline gap-2">
             <TaskTokenChips line={line} />
           </div>
-          {line.errors.map((e, i) => (
-            <Text key={`e${i}`} size="xs" tone="danger" className="break-words">
-              {e}
-            </Text>
-          ))}
+          {line.errors.map((e, i) =>
+            line.errorKinds[i]?.kind === typingKind ? null : (
+              <Text key={`e${i}`} size="xs" tone="danger" className="break-words">
+                {e}
+              </Text>
+            ),
+          )}
           {/* While categories (or places) load, the "no category" warning would be a lie — say what's
               happening. */}
           {awaiting ? (
@@ -725,7 +753,7 @@ function Receipt({
   reason: string;
   receipt: {
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean; timedOn?: string };
+    dest?: CaptureDest;
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean;

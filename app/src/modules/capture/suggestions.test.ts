@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { tokenAtCaret } from '@aperture/shared';
+import { parseTaskLine, tokenAtCaret } from '@aperture/shared';
 import {
   applySuggestion,
   categorySuggestions,
+  completeTokens,
   dueSuggestions,
   estimateSuggestions,
   placeSuggestions,
@@ -104,5 +105,50 @@ describe('applySuggestion', () => {
       text: 'memo | due:2026-09-30 ~30',
       caret: 21,
     });
+  });
+});
+
+describe('completeTokens — a half-typed token never drops quietly', () => {
+  const places = [
+    { slug: 'safeway', name: 'Safeway' },
+    { slug: 'tj', name: "Trader Joe's" },
+    { slug: 'target', name: 'Target' },
+  ];
+  const done = (text: string) => completeTokens(parseTaskLine(text, CATS, places), CATS, places);
+
+  it('takes the one match, as Tab would, and drops the "created without one" warning', () => {
+    expect(done('x | #adm')).toMatchObject({
+      categoryId: 'a',
+      categoryLabel: 'Admin',
+      warnings: [],
+    });
+    expect(done('x | #work')).toMatchObject({ categoryId: 'd' }); // a word of the label, like the chip
+    expect(done('x | @saf')).toMatchObject({
+      place: 'safeway',
+      placeSlug: 'safeway',
+      warnings: [],
+    });
+    expect(done('x | @trader')).toMatchObject({ place: 'tj' }); // a word of the name
+  });
+
+  it('several matches are a red error naming them', () => {
+    const l = done('x | @t');
+    expect(l.place).toBeNull();
+    expect(l.errors).toEqual(["@t could be Trader Joe's or Target — pick one"]);
+    expect(l.errorKinds).toEqual([{ kind: 'place' }]);
+  });
+
+  it('a token that starts nothing keeps its warning; a whole one is untouched', () => {
+    expect(done('x | @zz')).toMatchObject({
+      place: null,
+      warnings: ["no place '@zz' — created without one"],
+    });
+    expect(done('x | #Nope').warnings).toEqual(["no category 'Nope' — created without one"]);
+    expect(done('x | @tj')).toEqual(parseTaskLine('x | @tj', CATS, places));
+  });
+
+  it('completes nothing while the lists are still loading (empty)', () => {
+    const raw = parseTaskLine('x | @saf #adm', [], []);
+    expect(completeTokens(raw, [], [])).toEqual(raw);
   });
 });

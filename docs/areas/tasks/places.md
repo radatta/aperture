@@ -28,14 +28,15 @@ Arrive at Safeway (Main St)  ── automation ──┐
 Arrive at Safeway (Elm St)   ── automation ──┤ Run Shortcut "Aperture list", input "safeway"
                                              ▼
 Shortcut "Aperture list"  ── GET /api/places/safeway/tasks ──▶  place token → user → open errands
-   if count > 0 → Show Notification  ◀── { count, titles, text, url } ──┘
+   if text → Show Notification       ◀── { count, titles, text, url } ──┘
 ```
 
 - **Place** (`types.ts`): `{ name, slug, lastReadAt }`, one per store you name; a short list edited in Settings ›
   Places. No address — the geofence lives only in the Shortcuts automation, never in Aperture.
 - **`Task.place`**: the place's slug, or null. A placed task is an **errand**: it shows in the **Places** lens
   (§3), and it is **never a calibration point**, even with an estimate typed (`contributesCalibration`). A slug
-  edit rewrites the place's tasks; deleting a place asks where its tasks go (another place, or off any list).
+  edit rewrites the place's tasks; deleting a place asks where its tasks go (another place, or off any list — finished errands keep the old slug,
+  D3).
 - **Grammar**: `shampoo | @safeway` (bulk add + capture's token line, `bulkTasks.ts`); in a natural-language quick
   add, a known `@slug` word is taken before the model call (`takePlaceWord`) — the model never guesses a place.
 - **Digest** (`places.ts placeDigestOf`): open errands oldest first; `text` = `Safeway · 3 — shampoo, nails, syrup`
@@ -59,10 +60,20 @@ store — the notification's tap-through.
   user. It rides the existing auth header because CloudFront forwards only that header on `/api/*` — a new
   header or a `?token=` would be stripped. A place token can't call any RPC method (not a JWT), and a JWT can't
   call this route (hash miss → 401). No local fallback: a missing or unknown token is always 401.
-- **Answers**: 200 `PlaceRead`; 401 bad/missing token; 404 unknown slug (only after auth); 405 non-GET; 429 past
-  `PLACE_READ_DAILY_CAP` (200 reads per token per UTC day — a hidden guard, not a user-facing cap).
-- **Writes** (200 only, through the handler's `writes`): the token row's daily read count + `lastUsedAt`, and the
-  place's `lastReadAt` — Settings' "last called", the proof the automation fires.
+- **Answers**: 200 `PlaceRead`; 401 bad/missing token; 422 unknown place or path (only after auth); 405 non-GET;
+  429 past `PLACE_READ_DAILY_CAP` (200 reads per token per UTC day — a hidden guard, not a user-facing cap); 500.
+  **Never 404**: CloudFront turns any origin 403/404 into a 200 `index.html` for the whole distribution (the SPA
+  fallback, `app-stack.ts`), so a 404 would reach the Shortcut as a web page. The path's slug is lowercased.
+- **No silent failure**: every answer, errors included, carries a `text` the Shortcut shows ("Aperture: the
+  Shortcut's token isn't valid — …", "Aperture: no place …"). Only an empty list is `''`, so the Shortcut's one
+  rule is "show `text` if it has any value".
+- **Token lifecycle**: the user's pointer `{hash | null, retiring[]}` is written with a condition on the version
+  read, so a rotate racing a revoke on another device loses cleanly (it deletes its own new row and asks to try
+  again). Old hashes sit in `retiring` until their lookup rows are deleted; a failed delete is retried by the next
+  rotate or revoke, so a rotated-out token can't stay valid. Revoke leaves the pointer inactive (`hash: null`).
+- **Writes** (200 only, through the handler's `writes`): the token row's daily read count + `lastUsedAt`, then the
+  place's `lastReadAt` — Settings' "last called", the proof the automation fires. The heartbeat is best-effort: if
+  it fails after the count landed, the failure is logged (`place_heartbeat_failed`) and the digest still returns.
 - **Cost**: a read is 1 GetItem + 2 Queries + 2 PutItems; past the cap, 1 GetItem and nothing else. A leaked token
   scripted at 1 req/s for a month is a few dollars of Lambda/CloudFront request floor (the counter can't cap
   invocations without reserved concurrency, which would hurt the app); the Monitoring alarms are the tripwire.
@@ -76,8 +87,8 @@ Once (Settings › Places shows these with the URL and token filled in):
 
 1. Settings › Places → add a place (e.g. Safeway) → **Generate token** → Copy.
 2. Shortcuts → **+** → name it **Aperture list** → _Get Contents of URL_ `https://<app>/api/places/[Shortcut Input]/tasks`,
-   Method GET, header `x-aperture-authorization` = `Bearer apl_…` → _Get Dictionary Value_ `count` → _If_ count > 0 →
-   _Get Dictionary Value_ `text` → _Show Notification_ → _End If_.
+   Method GET, header `x-aperture-authorization` = `Bearer apl_…` → _Get Dictionary Value_ `text` → _If_ `text` has any
+   value → _Show Notification_ `text` → _End If_.
 
 Per store (about a minute each, only for stores you actually go to):
 
@@ -97,7 +108,10 @@ Answers from 2026-11-03 (branch `localNotes/decisions.md` has the full log).
   ran _Get Contents of URL_ → _Show Notification_ with **no confirmation tap**; iOS adds its own "automation ran"
   banner unless Notify When Run is off.
 - **D2 The task stores the slug**, not the place id — the slug is what `@slug`, the URL and the lens use.
-- **D3 Errands never count in calibration** — `place` set ⇒ excluded, by the one shared predicate.
+- **D3 Errands never count in calibration** — `place` set ⇒ excluded, by the one shared predicate. So a finished
+  task's place is history (round 1, 2026-11-04): `setTaskPlace` refuses a done/cancelled task, and deleting a place
+  "off any list" leaves finished errands on the old slug — otherwise clearing it would turn a checked-off errand
+  (estimate locked, actual 0) into a calibration point. Moving to another place or renaming still rewrites them.
 - **D4 Places is a lens bucket**, not a Backlog filter: an errand is in exactly one lens.
 - **D5 One-tap check-off with "Add again"**, not a confirm step.
 - **D6 Deleting a place asks where its tasks go** (another place or none), like deleting a category.

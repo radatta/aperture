@@ -118,6 +118,20 @@ export function createMcpClient({
       ledger.append({ run, op: 'created', id: task.id, via: MCP_CREATE_VIA, title: input.title });
       return task;
     },
+    // Patch fields on a task this run created (update_task: place moves it between errand lists).
+    async updateTask(id: string, patch: { place?: string | null }): Promise<DevTask> {
+      assertLedgerTask(id);
+      return data<DevTask>('update_task', { id, ...patch });
+    },
+    // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
+    // a parent) — omitted here, it is left out of the call, never sent as null.
+    async completeTask(
+      id: string,
+      actualMin?: number,
+    ): Promise<{ task: DevTask; previousActualMin: number | null }> {
+      assertLedgerTask(id);
+      return data('complete_task', actualMin === undefined ? { id } : { id, actualMin });
+    },
     // Deleting a parent deletes its parts, so a recorded parent with a part the ledger doesn't know is
     // refused, as the pipeline's cleanup does. A task already gone answers Not found — returned, not thrown.
     async deleteTask(

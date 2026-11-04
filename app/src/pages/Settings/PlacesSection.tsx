@@ -1,5 +1,11 @@
-import { useState } from 'react';
-import { AUTH_HEADER, placeError, placeTasks, slugify } from '@aperture/shared';
+import { useId, useState } from 'react';
+import {
+  AUTH_HEADER,
+  PLACE_TOKEN_RACE_ERROR,
+  placeError,
+  placeTasks,
+  slugify,
+} from '@aperture/shared';
 import type { Place, PlaceTokenStatus } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -112,12 +118,12 @@ function AddPlace({ places, loaded }: { places: Place[]; loaded: boolean }) {
         </Button>
       </div>
       {(problem || error) && (
-        <Text size="xs" tone="danger" className="mt-2">
+        <Text as="p" size="xs" tone="danger" className="mt-2">
           {error ?? problem}
         </Text>
       )}
       {trimmed && !problem && !error && (
-        <Text size="xs" tone="muted" className="mt-2">
+        <Text as="p" size="xs" tone="muted" className="mt-2">
           Link word: @{slug}
         </Text>
       )}
@@ -147,9 +153,13 @@ function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
     if (slug === prev.slug) setSlug(place.slug);
   }
 
-  async function save(next: { name: string; slug: string }) {
-    if (next.name === place.name && next.slug === place.slug) return;
+  // Either field's blur sends both as they stand now, so a rename and a link-word edit made back to back
+  // never race each other's stale copy. The error is the last attempt's: unchanged (put back) or saved
+  // clears it.
+  async function save() {
+    const next = { name: name.trim(), slug: slug.trim() };
     setError(null);
+    if (next.name === place.name && next.slug === place.slug) return;
     try {
       await upsert.mutateAsync({ id: place.id, name: next.name, slug: next.slug });
     } catch (e) {
@@ -165,7 +175,7 @@ function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             // An emptied name goes through too: the refusal ("needs a name") shows, never a quiet no-op.
-            onBlur={() => void save({ name: name.trim(), slug: place.slug })}
+            onBlur={() => void save()}
             aria-label={`Rename ${place.name}`}
             className={cx(ROW_INPUT, 'w-40')}
           />
@@ -175,7 +185,7 @@ function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
               value={slug}
               // Link words are lowercase; typing "TJ" means tj.
               onChange={(e) => setSlug(e.target.value.toLowerCase())}
-              onBlur={() => void save({ name: place.name, slug: slug.trim() })}
+              onBlur={() => void save()}
               aria-label={`Link word for ${place.name}`}
               autoCapitalize="none"
               autoCorrect="off"
@@ -204,14 +214,14 @@ function PlaceRow({ place, places }: { place: Place; places: Place[] }) {
           </Button>
         </div>
       </div>
-      <Text size="xs" tone="muted" className="mt-1.5">
+      <Text as="p" size="xs" tone="muted" className="mt-1.5">
         {open === null ? '' : `${open} open ${open === 1 ? 'errand' : 'errands'} · `}
         {place.lastReadAt
           ? `Shortcut last called ${fmtDateTime(place.lastReadAt)}`
           : 'Shortcut never called'}
       </Text>
       {error && (
-        <Text size="xs" tone="danger" className="mt-1.5">
+        <Text as="p" size="xs" tone="danger" className="mt-1.5">
           {error}
         </Text>
       )}
@@ -343,6 +353,8 @@ function TokenCard() {
   const s = statusQ.data;
   const failed = statusQ.isError && !s;
   const busy = rotate.isPending || revoke.isPending;
+  const failure = rotate.error ?? revoke.error;
+  const raced = failure instanceof Error && failure.message.includes(PLACE_TOKEN_RACE_ERROR);
 
   function mint() {
     setConfirm(null);
@@ -402,7 +414,8 @@ function TokenCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        {s?.active ? (
+        {/* While a confirm is open its own buttons are the choice; the triggers step aside. */}
+        {confirm ? null : s?.active ? (
           <>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirm('rotate')}>
               Rotate…
@@ -419,9 +432,12 @@ function TokenCard() {
         <span role="alert">
           {(rotate.isError || revoke.isError) && (
             <Text size="xs" tone="danger">
-              {rotate.isError
-                ? 'Couldn’t make a token — try again.'
-                : 'Couldn’t revoke — try again.'}
+              {/* Lost to the same call on another device: the status above has refetched — say why. */}
+              {raced
+                ? PLACE_TOKEN_RACE_ERROR
+                : rotate.isError
+                  ? 'Couldn’t make a token — try again.'
+                  : 'Couldn’t revoke — try again.'}
             </Text>
           )}
         </span>
@@ -476,10 +492,14 @@ function TokenReveal({ token, onDone }: { token: string; onDone: () => void }) {
 }
 
 // One generic Shortcut holds the URL and the token and takes the store's link word as its input; each
-// store's Arrive automation only runs it. A rotated token is pasted once, into that one Shortcut.
+// store's Arrive automation only runs it. A rotated token is pasted once, into that one Shortcut. Every
+// answer the route gives carries `text` — the list, or what went wrong, '' when there's nothing to buy — so
+// the Shortcut's one rule is "show text if it has any value": no failure is ever silent on the phone.
+const SHORTCUT_INPUT = '[Shortcut Input]';
+const shortcutUrlTemplate = (origin: string) => `${origin}/api/places/${SHORTCUT_INPUT}/tasks`;
+
 function ShortcutRecipe({ places }: { places: Place[] }) {
   const recipe = useDisclosure();
-  const base = `${window.location.origin}/api/places/`;
   return (
     <Card className="flex flex-col gap-3">
       <button
@@ -492,44 +512,54 @@ function ShortcutRecipe({ places }: { places: Place[] }) {
         <ChevronRightIcon size={14} className={cx('transition', recipe.open && 'rotate-90')} />
         <Text weight="medium">Set up the iPhone Shortcut</Text>
       </button>
+      {/* Each step's body is a div inside the <li>: a flex <li> stops being a list item and loses its
+          number. */}
       {recipe.open && (
         <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-ink">
           <li>
             In Shortcuts, tap + and name the shortcut <b>Aperture list</b>. Tap ⓘ and let it receive{' '}
             <b>Text</b> input — each store’s automation hands it that store’s link word.
           </li>
-          <li className="flex flex-col gap-1.5">
-            <span>
-              Add <b>Get Contents of URL</b>. URL: this address followed by the{' '}
-              <b>Shortcut Input</b> variable. Method <b>GET</b>.
-            </span>
-            <CopyField label="URL (before Shortcut Input)" value={base} />
-            <span>
-              Under Headers, add one: the key below, and the value <b>Bearer</b>, a space, then your
-              token (from the card above).
-            </span>
-            <CopyField label="Header key" value={AUTH_HEADER} />
+          <li>
+            <div className="flex flex-col gap-1.5">
+              <span>
+                Add <b>Get Contents of URL</b> with the URL below, Method <b>GET</b>. Where it says{' '}
+                <b>{SHORTCUT_INPUT}</b>, put the <b>Shortcut Input</b> variable instead (delete that
+                part, then pick Shortcut Input from the variables above the keyboard) — that’s where
+                the store’s link word goes.
+              </span>
+              <CopyField label="URL" value={shortcutUrlTemplate(window.location.origin)} />
+              <span>
+                Under Headers, add one: the key below, and the value <b>Bearer</b>, a space, then
+                your token (from the card above).
+              </span>
+              <CopyField label="Header key" value={AUTH_HEADER} />
+            </div>
           </li>
           <li>
-            Add <b>Get Dictionary Value</b>: <b>count</b> from Contents of URL. Then <b>If</b> it’s
-            greater than 0: <b>Get Dictionary Value</b> <b>text</b> from Contents of URL, then{' '}
-            <b>Show Notification</b> with it. End If.
+            Add <b>Get Dictionary Value</b>: <b>text</b> from Contents of URL. Then <b>If</b>{' '}
+            Dictionary Value <b>has any value</b>: <b>Show Notification</b> with Dictionary Value.
+            End If. The text is the list — or, if something’s wrong (a revoked token, a deleted
+            place), what to fix — and it’s empty when there’s nothing to buy, so the Shortcut stays
+            quiet.
           </li>
-          <li className="flex flex-col gap-1.5">
-            <span>
-              For each store: Automation → + → <b>Arrive</b> → pick the store’s location. Choose{' '}
-              <b>Run Immediately</b> and turn <b>Notify When Run</b> off. Its one action:{' '}
-              <b>Run Shortcut</b> → Aperture list, with the store’s link word as the input.
-            </span>
-            {places.length > 0 && (
-              <ul className="flex flex-col gap-0.5 pl-1">
-                {places.map((p) => (
-                  <li key={p.id} className="text-ink-muted">
-                    {p.name} → <code>{p.slug}</code>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <li>
+            <div className="flex flex-col gap-1.5">
+              <span>
+                For each store: Automation → + → <b>Arrive</b> → pick the store’s location. Choose{' '}
+                <b>Run Immediately</b> and turn <b>Notify When Run</b> off. Its one action:{' '}
+                <b>Run Shortcut</b> → Aperture list, with the store’s link word as the input.
+              </span>
+              {places.length > 0 && (
+                <ul className="flex flex-col gap-0.5 pl-1">
+                  {places.map((p) => (
+                    <li key={p.id} className="text-ink-muted">
+                      {p.name} → <code>{p.slug}</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </li>
           <li className="text-ink-muted">
             Rotated the token? Paste the new one into Aperture list’s header — the automations stay
@@ -541,8 +571,12 @@ function ShortcutRecipe({ places }: { places: Place[] }) {
   );
 }
 
+// A value to paste into the Shortcut, shown whole — it wraps rather than scroll or truncate, so the URL's
+// tail ("…/tasks") is readable on a phone. Copy goes through the clipboard; where that's refused, the text
+// selects in one tap.
 function CopyField({ label, value }: { label: string; value: string }) {
   const [copy, setCopy] = useState<null | 'copied' | 'failed'>(null);
+  const id = useId();
   async function onCopy() {
     try {
       await navigator.clipboard.writeText(value);
@@ -552,18 +586,26 @@ function CopyField({ label, value }: { label: string; value: string }) {
     }
   }
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <input
-        readOnly
-        value={value}
-        aria-label={label}
-        onFocus={(e) => e.currentTarget.select()}
-        // text-base: the list around it is text-sm, and a field under 16px zooms iOS Safari on focus.
-        className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2 py-1 font-mono text-base text-ink outline-none focus:border-teal"
-      />
-      <Button variant="ghost" size="sm" aria-label={`Copy ${label}`} onClick={() => void onCopy()}>
-        Copy
-      </Button>
+    <div className="flex flex-col gap-1">
+      <Text size="xs" tone="muted" id={id}>
+        {label}
+      </Text>
+      <div className="flex items-start gap-2">
+        <code
+          aria-labelledby={id}
+          className="min-w-0 flex-1 select-all break-all rounded-lg border border-line bg-panel px-2 py-1 font-mono text-ink"
+        >
+          {value}
+        </code>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={`Copy ${label}`}
+          onClick={() => void onCopy()}
+        >
+          Copy
+        </Button>
+      </div>
       <span role="status">
         {copy && (
           <Text size="xs" tone={copy === 'copied' ? 'teal' : 'danger'}>

@@ -4,7 +4,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from '.
 import { TASK_NOTES_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
-import { PLACE_TOKEN_PREFIX, placeUnknownError } from './places';
+import { PLACE_FINISHED_ERROR, PLACE_TOKEN_PREFIX, placeUnknownError } from './places';
 import {
   deriveFinanceView,
   FINANCE_REFRESH_COOLDOWN_MS,
@@ -2039,7 +2039,7 @@ export function runApiContract(
       expect(renamed).toMatchObject({ name: 'TJs', slug: 'tj' }); // omitted slug is kept
     });
 
-    it('places: tasks carry a known slug at create, any status, and refuse an unknown one', async () => {
+    it('places: tasks carry a known slug, refuse an unknown one, and a finished task keeps its place', async () => {
       await api.upsertPlace({ name: 'Safeway' });
       const t = await api.createTask({ title: 'shampoo', place: 'safeway' });
       expect(t.place).toBe('safeway');
@@ -2060,9 +2060,18 @@ export function runApiContract(
 
       expect((await api.setTaskPlace(t.id, null)).place).toBeNull();
       await expect(api.setTaskPlace(t.id, 'target')).rejects.toThrow(placeUnknownError('target'));
+      expect((await api.setTaskPlace(t.id, 'safeway')).place).toBe('safeway'); // open: any time
+      // A finished task's place is history — on or off a list would flip its calibration after the fact.
       await api.transitionTask(bulk!.id, 'in_progress');
       await api.transitionTask(bulk!.id, 'done');
-      expect((await api.setTaskPlace(bulk!.id, null)).place).toBeNull(); // done is fine
+      await api.upsertPlace({ name: 'Target' });
+      await expect(api.setTaskPlace(bulk!.id, null)).rejects.toThrow(PLACE_FINISHED_ERROR);
+      await expect(api.setTaskPlace(bulk!.id, 'target')).rejects.toThrow(PLACE_FINISHED_ERROR);
+      const plain = await api.createTask({ title: 'plain, cancelled' });
+      await api.transitionTask(plain.id, 'cancelled');
+      await expect(api.setTaskPlace(plain.id, 'safeway')).rejects.toThrow(PLACE_FINISHED_ERROR);
+      expect((await api.getTask(bulk!.id))!.place).toBe('safeway');
+      expect((await api.getTask(plain.id))!.place).toBeNull();
     });
 
     it('places: a slug change follows its tasks; delete moves them to a place or off any list', async () => {
@@ -2083,6 +2092,70 @@ export function runApiContract(
       await api.deletePlace(target.id, null);
       expect((await api.getTask(a.id))!.place).toBeNull();
       expect(await api.listPlaces()).toEqual([]);
+    });
+
+    it("places: delete touches only that place's tasks", async () => {
+      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      await api.upsertPlace({ name: 'Target' });
+      await api.upsertPlace({ name: 'Costco' });
+      const s = await api.createTask({ title: 's', place: 'safeway' });
+      const t = await api.createTask({ title: 't', place: 'target' });
+      const c = await api.createTask({ title: 'c', place: 'costco' });
+      const none = await api.createTask({ title: 'none' });
+      await api.deletePlace(safeway.id, 'target');
+      expect((await api.getTask(s.id))!.place).toBe('target');
+      expect((await api.getTask(t.id))!.place).toBe('target');
+      expect((await api.getTask(c.id))!.place).toBe('costco');
+      expect((await api.getTask(none.id))!.place).toBeNull();
+    });
+
+    it('places: a finished errand stays placed through a rename, a move and a delete to none', async () => {
+      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      const target = await api.upsertPlace({ name: 'Target' });
+      const open = await api.createTask({ title: 'open', place: 'safeway' });
+      const done = await api.createTask({ title: 'done', place: 'safeway', estimateMin: 5 });
+      await api.transitionTask(done.id, 'in_progress');
+      await api.transitionTask(done.id, 'done');
+      const gone = await api.createTask({ title: 'gone', place: 'safeway' });
+      await api.transitionTask(gone.id, 'cancelled');
+      const points = async () =>
+        (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map((p) => p.taskId);
+      expect(await points()).not.toContain(done.id);
+
+      // A slug rename and a move to another place rewrite finished tasks too — they stay placed.
+      await api.upsertPlace({ id: safeway.id, name: 'Safeway', slug: 'sw' });
+      expect((await api.getTask(done.id))!.place).toBe('sw');
+      await api.deletePlace(safeway.id, 'target');
+      expect((await api.getTask(done.id))!.place).toBe('target');
+      expect((await api.getTask(gone.id))!.place).toBe('target');
+      expect((await api.getTask(open.id))!.place).toBe('target');
+
+      // Off any list: the open errand leaves it; the finished ones keep the old slug as history.
+      await api.deletePlace(target.id, null);
+      expect((await api.getTask(open.id))!.place).toBeNull();
+      expect((await api.getTask(done.id))!.place).toBe('target');
+      expect((await api.getTask(gone.id))!.place).toBe('target');
+      expect(await points()).not.toContain(done.id); // calibration never flipped
+    });
+
+    it('places: a deleted place can be neither updated nor deleted again', async () => {
+      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      await api.deletePlace(safeway.id, null);
+      await expect(api.upsertPlace({ id: safeway.id, name: 'Back' })).rejects.toThrow();
+      await expect(api.deletePlace(safeway.id, null)).rejects.toThrow();
+      expect(await api.listPlaces()).toEqual([]);
+    });
+
+    it('places: a rename onto a slug in use is refused, and changes nothing', async () => {
+      const safeway = await api.upsertPlace({ name: 'Safeway' });
+      advance(1); // add order is createdAt (see above)
+      await api.upsertPlace({ name: 'Target' });
+      const a = await api.createTask({ title: 'a', place: 'safeway' });
+      await expect(
+        api.upsertPlace({ id: safeway.id, name: 'Safeway', slug: 'target' }),
+      ).rejects.toThrow(/already uses/);
+      expect((await api.listPlaces()).map((p) => p.slug)).toEqual(['safeway', 'target']);
+      expect((await api.getTask(a.id))!.place).toBe('safeway');
     });
 
     it("places: listPlaceTasks is the Shortcut's digest of open errands, oldest first", async () => {

@@ -37,8 +37,9 @@ import type { EditSlots } from './editState';
 // Estimate + buffer (the working estimate) edit at any open status — rescoping mid-task is fine, since
 // calibration is measured against the baseline frozen at start, which never moves; a finished task's
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
-// due locks once finished. Notes and the place (the store's errand list) edit at any status too. Save writes only what changed and keeps the modal open
-// (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
+// due and the place (the store's errand list) lock once finished — a finished errand's place is what
+// kept it out of calibration, so it's history too. Notes edit at any status. Save writes only what
+// changed and keeps the modal open (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
 // (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts),
 // with a quiet note when that's after its parent's deadline.
 export function TaskDetailsForm({
@@ -125,7 +126,7 @@ export function TaskDetailsForm({
   // must never read as a change (or be saved back over a newer note).
   const notesDirty = editingNotes && notesTrimmed !== (task.notes ?? '');
   const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
-  const placeDirty = (task.place ?? '') !== place;
+  const placeDirty = !isTerminal && (task.place ?? '') !== place;
   const dirty =
     titleDirty ||
     estimateDirty ||
@@ -304,7 +305,7 @@ export function TaskDetailsForm({
           <Select
             label="Place"
             placeholder="No place"
-            value={place}
+            value={isTerminal ? (task.place ?? '') : place}
             onChange={(e) => setPlace_(e.target.value)}
             options={[
               ...placeOptions.places.map((p) => ({ value: p.slug, label: p.name })),
@@ -313,9 +314,14 @@ export function TaskDetailsForm({
                 ? [{ value: task.place, label: `@${task.place}` }]
                 : []),
             ]}
-            disabled={!placeOptions.loaded}
+            disabled={!placeOptions.loaded || isTerminal}
             className="w-40"
           />
+        )}
+        {isTerminal && (placeOptions.places.length > 0 || task.place) && (
+          <Text size="xs" tone="muted">
+            Finished — its place is history, like its estimate.
+          </Text>
         )}
         {placeOptions.failed && (
           <LoadError size="xs" onRetry={placeOptions.retry}>

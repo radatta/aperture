@@ -72,6 +72,7 @@ describe('createApiClient', () => {
       'deletePlace',
       'deleteTask',
       'recordFluxSet',
+      'recordPlaceTokenMint',
       'revokePlaceToken',
       'rotatePlaceToken',
       'upsertPlace',
@@ -291,12 +292,10 @@ describe('createApiClient', () => {
     });
 
     it('returns a refusal as its status and body; a slug is kept inside the path', async () => {
-      const fetch = vi.fn<FetchLike>(async () => reply(404, { error: 'No place "x"' }));
+      const refusal = { error: 'No place "x"', text: 'No place "x"' };
+      const fetch = vi.fn<FetchLike>(async () => reply(422, refusal));
       const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
-      expect(await api.reads.placeDigestRaw('x', SECRET)).toEqual({
-        status: 404,
-        body: { error: 'No place "x"' },
-      });
+      expect(await api.reads.placeDigestRaw('x', SECRET)).toEqual({ status: 422, body: refusal });
       await api.reads.placeDigestRaw('../../listTasks', SECRET);
       expect(fetch.mock.calls.at(-1)![0]).toBe(
         `${DEV_ORIGIN}/api/places/..%2F..%2FlistTasks/tasks`,
@@ -379,6 +378,26 @@ describe('createApiClient', () => {
         },
       ]);
       expect(JSON.stringify(ledger.entries)).not.toContain(SECRET);
+    });
+
+    it('records a browser mint (Settings’ Generate / Rotate) under the same id, with no request', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { token: SECRET, status: {} }));
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      api.writes.recordPlaceTokenMint();
+      expect(fetch).not.toHaveBeenCalled();
+      await api.writes.rotatePlaceToken();
+      api.writes.recordPlaceTokenMint();
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'place-token:r1',
+          via: PLACE_TOKEN_VIA,
+          title: 'place token',
+        },
+      ]);
+      await api.writes.revokePlaceToken(); // the recorded mint is what lets cleanup revoke it
     });
 
     it('revokes only while a run’s minted token is unresolved in the ledger', async () => {
