@@ -110,11 +110,12 @@ export function TasksPage() {
         {lens === 'today' && !searching ? (
           <TodayLens tasks={tasks} onOpenWeek={() => setLens('week')} />
         ) : lens === 'places' && !searching ? (
+          // Places needs no plan: every open errand shows, so only the tasks read gates it.
           <PlacesLens
-            tasks={pending || error ? [] : tasks}
+            tasks={tasksQ.isPending || (tasksQ.isError && !tasksQ.data) ? [] : tasks}
             focus={focusPlace}
-            pending={pending}
-            error={error}
+            pending={tasksQ.isPending}
+            error={tasksQ.isError && !tasksQ.data}
             onRetry={retry}
           />
         ) : isList ? (

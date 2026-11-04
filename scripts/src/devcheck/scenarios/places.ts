@@ -411,6 +411,12 @@ export const places: Scenario = {
       what: 'The lens’s count and rows for that store are the Shortcut’s count and titles (items, not parent + parts)',
     },
     {
+      id: 'places-all-errands',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Places lists every open errand: one due tomorrow shows on Places and Week, never Backlog, and the store still agrees with the Shortcut',
+    },
+    {
       id: 'part-check-off',
       entry: 'ui',
       kind: 'nominal',
@@ -1144,6 +1150,36 @@ export const places: Scenario = {
         if ((await getTask(ctx, part)).place !== partsPlace.slug)
           throw new Error('the no-op part left its list');
         await firstListUntouched(ctx);
+      },
+    },
+    {
+      id: 'ui-all-errands',
+      entry: 'ui',
+      proves: ['places-all-errands'],
+      title:
+        'An errand due tomorrow shows on Places and Week, never Backlog; the store agrees with the Shortcut',
+      async run(ctx) {
+        const dated = await ctx.api.writes.createTask({
+          title: errand(ctx, 'dated'),
+          place: partsPlace.slug,
+          dueDay: ctx.dates.tomorrow,
+        });
+        const digest = await ctx.api.reads.listPlaceTasks(partsPlace.slug);
+        if (!digest.titles.includes(dated.title))
+          throw new Error(`the Shortcut's list is ${JSON.stringify(digest.titles)}`);
+        await ctx.ui.goto(lensPath(partsPlace.slug));
+        await lensAgrees(ctx, digest.titles);
+        await ctx.shot('all-errands');
+        await ctx.ui.goto('/tasks?lens=week');
+        await ctx.ui.expectText(dated.title, 15_000);
+        // Same loaded list, one tap over: the Backlog filter runs on the tasks Week just showed.
+        await ctx.page.getByRole('button', { name: 'Backlog', exact: true }).click();
+        await ctx.page
+          .getByText(dated.title, { exact: true })
+          .waitFor({ state: 'hidden', timeout: 10_000 })
+          .catch(() => {
+            throw new Error('an errand showed on Backlog');
+          });
       },
     },
     {
