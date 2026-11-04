@@ -76,15 +76,17 @@ store — the notification's tap-through.
   again). **The pointer is the authority**: every read also does a consistent GetItem of the user's pointer and
   401s unless its `hash` is this token's (round 2) — so a rotated-out or revoked token stops working the moment
   the pointer moves, even if deleting its lookup row failed. Old hashes sit in `retiring` only as cleanup, retried
-  by the next rotate or revoke. Revoke leaves the pointer inactive (`hash: null`).
+  by the next rotate or revoke. Revoke leaves the pointer inactive (`hash: null`). A rotate that dies between creating the new lookup row and writing the pointer leaves an orphan row no pointer names: it can never authenticate, and nothing cleans it (harmless).
 - **Writes** (200 only, through the handler's `writes`): the token row's daily read count + `lastUsedAt`, then the
   place's `lastReadAt` — Settings' "last called", the proof the automation fires. The heartbeat is best-effort: if
   it fails after the count landed, the failure is logged (`place_heartbeat_failed`) and the digest still returns.
-- **Cost**: a read is 2 GetItems (lookup + pointer) + 2 Queries + 2 PutItems; past the cap, 2 consistent GetItems and nothing
-  else. A leaked token
-  scripted at 1 req/s for a month is a few dollars of Lambda/CloudFront request floor (the counter can't cap
-  invocations without reserved concurrency, which would hurt the app); the Monitoring alarms are the tripwire.
-  Realistic use is cents. Revoke or rotate in Settings to kill a leaked token at once.
+- **Cost**: a read is 2 consistent GetItems (lookup + pointer) + 2 Queries + 2 PutItems; past the cap, 2 GetItems and
+  nothing else. Not everything is capped: a missing/malformed header costs nothing, an unknown token 1 GetItem, and
+  a 422 (unknown place or path, valid token) is never counted — 2 GetItems + a places Query each. A concurrent
+  burst under the cap runs the full tasks Query before its conditional count write; the losers retry and can 500.
+  So a leaked token scripted at 1 req/s for a month is a few dollars, almost all of it the Lambda/CloudFront request
+  floor (the counter can't cap invocations without reserved concurrency, which would hurt the app); the Monitoring
+  alarms are the tripwire, and revoking in Settings stops it at once. Realistic use is cents.
 - **Privacy**: Aperture never receives a location. It does learn _when_ the Shortcut called (`lastReadAt`,
   `lastUsedAt`) — which roughly means when you arrived at that store. Your own data, in your own table.
 

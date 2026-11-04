@@ -130,6 +130,17 @@ describe('place on the task tools', () => {
     await expect(call('update_task', { id: cups.id, place: 'target' })).rejects.toThrow(
       PLACE_PART_ERROR,
     );
+    // Its parent's own place is a no-op, as create_task takes it — alone or with the attach.
+    expect(((await call('update_task', { id: cups.id, place: 'safeway' })) as Task).place).toBe(
+      'safeway',
+    );
+    const lid = (await call('create_task', { title: 'lid' })) as Task;
+    const attached = (await call('update_task', {
+      id: lid.id,
+      parentId: party.id,
+      place: 'safeway',
+    })) as Task;
+    expect(attached).toMatchObject({ parentId: party.id, place: 'safeway' });
     // An attach with a place: attached, then the place refused — never silently the parent's.
     const loose = (await call('create_task', { title: 'ice' })) as Task;
     await expect(

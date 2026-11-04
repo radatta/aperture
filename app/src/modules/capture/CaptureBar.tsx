@@ -69,7 +69,9 @@ const UNKNOWN_CATEGORY = "no category '";
 
 // Why a submit was refused. Each keeps the text and says so — a refused capture is never silent. The
 // visible notice is just "Not saved" (the mode row is ~375px on a phone); the reason is in the preview row.
-type Blocked = 'invalid' | 'categories' | 'categories-failed' | 'places' | 'places-failed';
+// 'held': a warning the typing rule was still holding back — the first press shows it, the next saves.
+type Blocked = 'invalid' | 'categories' | 'categories-failed' | 'places' | 'places-failed' | 'held';
+const HELD_AGAIN = 'Enter or Save again to save without it';
 
 // The global capture bar — PRODUCT's #1 mechanic. Always present, bottom-docked for thumb reach.
 // Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
@@ -118,6 +120,7 @@ export function CaptureBar({
     dest?: CaptureDest;
     failed?: boolean;
     blocked?: Blocked;
+    held?: string; // the warning a 'held' refusal revealed
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
     restored?: boolean; // an unsent capture from a closed session was parked
     parsed?: string; // a quick add's readback (savedSummary)
@@ -226,8 +229,12 @@ export function CaptureBar({
   const previewed = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
   const preview = previewed?.result?.ok && previewed.result.today !== today ? null : previewed;
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
-  // line fixed) it goes too, and its text always names the current cause.
-  const shown = receipt?.blocked && !block ? null : receipt;
+  // line fixed) it goes too, and its text always names the current cause. A 'held' one stays while the
+  // line still warns (editing the text clears it, in update).
+  const warns = !!line?.warnings.length;
+  const shown =
+    receipt?.blocked && !block && !(receipt.blocked === 'held' && warns) ? null : receipt;
+  const heldShown = shown?.blocked === 'held' && !block;
   // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
   // shows once one is refused — or once the caret leaves it (or the field). Three cases:
   const typing = focused && !shown?.blocked;
@@ -249,8 +256,8 @@ export function CaptureBar({
     (typingWarn === 'place' && w.startsWith(UNKNOWN_PLACE)) ||
     (typingWarn === 'category' && w.startsWith(UNKNOWN_CATEGORY));
   useEffect(() => {
-    if (!block) setReceipt((r) => (r?.blocked ? null : r));
-  }, [block]);
+    if (!block) setReceipt((r) => (r?.blocked && !(r.blocked === 'held' && warns) ? null : r));
+  }, [block, warns]);
 
   useAutoGrow(inputRef, text);
 
@@ -312,6 +319,13 @@ export function CaptureBar({
     const submitted = mode;
     if (block) {
       setReceipt({ mode: submitted, blocked: block, at: Date.now() });
+      return;
+    }
+    // A warning still held back at the caret would save unseen — the receipt says only where it went. So
+    // the first press refuses and shows it (typing ends with a refusal); the next one saves without it.
+    const held = line?.warnings.find(quietWarning);
+    if (held) {
+      setReceipt({ mode: submitted, blocked: 'held', held, at: Date.now() });
       return;
     }
     const goesToday = submitted === 'task' && toToday;
@@ -552,7 +566,13 @@ export function CaptureBar({
             read aloud 1.8s later. */}
         <div className="flex min-w-0 items-center gap-1">
           <div aria-live="polite" role="status" className="min-w-0">
-            {shown && <Receipt key={shown.at} receipt={shown} reason={blockReason} />}
+            {shown && (
+              <Receipt
+                key={shown.at}
+                receipt={shown}
+                reason={heldShown ? `${shown.held} — ${HELD_AGAIN}` : blockReason}
+              />
+            )}
           </div>
           {!shown && <Hint suggesting={suggestions.length > 0} task={mode === 'task'} />}
           {/* On a phone the row can't hold both, so it gives way to a receipt there (a failure
@@ -607,6 +627,10 @@ export function CaptureBar({
         )}
         <button
           type="button"
+          // Keep focus in the field: a blur here would show a held-back warning mid-press, the bar would
+          // grow under the finger, and the click would land elsewhere. It's still a plain button for keys.
+          // mousedown, not pointerdown: cancelling pointerdown drops the click of a WebKit touch tap.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={submit}
           disabled={!text.trim()}
           // Refused, not disabled: a tap must still say why (a dead button on iPhone is silent).
@@ -744,6 +768,11 @@ export function CaptureBar({
                 </Text>
               ),
             )
+          )}
+          {heldShown && (
+            <Text size="xs" tone="gold" className="break-words">
+              {HELD_AGAIN}.
+            </Text>
           )}
         </div>
       )}

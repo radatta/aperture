@@ -361,12 +361,20 @@ export const TOOLS: Tool[] = [
         }
         // parentId before place: a detach then frees the place, and a place given with an attach is
         // refused (a part follows its parent) rather than silently overwritten by the parent's.
+        let current: Task | null = null;
         if (present(args, 'parentId')) {
-          await ctx.dispatch('setTaskParent', [id, nullableStr(args, 'parentId')]);
+          current = (await ctx.dispatch('setTaskParent', [
+            id,
+            nullableStr(args, 'parentId'),
+          ])) as Task;
           applied.push('parentId');
         }
         if (place !== undefined) {
-          await ctx.dispatch('setTaskPlace', [id, place]);
+          // A part already on that place (its parent's) is a no-op, as create_task takes it — only a
+          // DIFFERENT place on a part is refused.
+          current ??= (await ctx.dispatch('getTask', [id])) as Task | null;
+          if (!(current?.parentId && current.place === place))
+            await ctx.dispatch('setTaskPlace', [id, place]);
           applied.push('place');
         }
         if (dueDay !== undefined || dueTime !== undefined) {

@@ -208,6 +208,7 @@ const unconfiguredPlaceTokens = {
   create: noPlaceTokens,
   replace: noPlaceTokens,
   delete: noPlaceTokens,
+  pointer: noPlaceTokens,
 } as unknown as PlaceTokenStore;
 const INACTIVE_TOKEN: PlaceTokenStatus = {
   active: false,

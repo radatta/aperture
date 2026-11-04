@@ -117,8 +117,9 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 - **Places** ([tasks/places.md](../tasks/places.md)): `place` (a slug — `Safeway` or `@safeway` is normalised —
   or `null`) rides on `create_task`, `create_tasks` and `update_task`; an unknown place is refused, and so is a
   place change on a finished task (its place is history — places.md D3) and a `place` on a part that isn't its
-  parent's (a part follows its parent). `update_task` applies `parentId` before `place`, so attaching a part
-  and naming a different place is refused after the attach ("already applied: parentId"). An errand
+  parent's (a part follows its parent; naming the parent's own place is a no-op). `update_task` applies
+  `parentId` before `place`, so attaching a part and naming a different place is refused after the attach
+  ("already applied: parentId"). An errand
   isn't calibration, so `complete_task` takes `actualMin` as optional there (recorded if given). Voice: "add
   shampoo to my Safeway list" → `list_places` → `create_task {place}`.
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`

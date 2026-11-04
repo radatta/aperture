@@ -111,9 +111,17 @@ export function PlacesLens({
     });
   }
   // A parent whose parts are all done: its one action, as on the other lenses. A refusal (a part reopened
-  // elsewhere) is said by name.
+  // elsewhere) is said by name. Done, it takes a part's "Add again" with it — that would bring the part
+  // back loose, not as a part.
   function markDone(task: Task) {
-    void action.run(task.id, () => transition.mutateAsync({ id: task.id, to: 'done' }), true);
+    void action.run(
+      task.id,
+      async () => {
+        await transition.mutateAsync({ id: task.id, to: 'done' });
+        setReceipt((r) => (r?.task.parentId === task.id ? null : r));
+      },
+      true,
+    );
   }
   async function addAgain(task: Task) {
     try {
@@ -215,8 +223,10 @@ export function PlacesLens({
                       showParts
                       actions={
                         partsSummary(parts).allDone ? (
+                          // min-h-11: as thumb-sized as the checks beside it (44px).
                           <Button
                             size="sm"
+                            className="min-h-11"
                             disabled={action.isBusy(t.id)}
                             onClick={() => markDone(t)}
                           >

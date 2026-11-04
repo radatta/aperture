@@ -183,9 +183,14 @@ describe('Places lens', () => {
     await screen.findByText('Checked off “cups”.');
     await user.click(screen.getByRole('button', { name: 'Check off ice' }));
     await screen.findByText('Checked off “ice”.');
-    // Every part done: the parent is the item again, finished the usual way.
-    await user.click(await screen.findByRole('button', { name: 'Mark done' }));
+    // Every part done: the parent is the item again, finished the usual way — as thumb-sized as a check.
+    const markDone = await screen.findByRole('button', { name: 'Mark done' });
+    expect(markDone.className).toMatch(/\bmin-h-11\b/);
+    await user.click(markDone);
     await waitFor(async () => expect((await api.getTask(party.id))!.status).toBe('done'));
+    // The part's Add again goes with it: it would bring "ice" back loose, not as a part.
+    await waitFor(() => expect(screen.queryByText('Checked off “ice”.')).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Add again' })).toBeNull();
   });
 
   it('Add again on a part puts it back under its open parent', async () => {
