@@ -510,13 +510,25 @@ export const places: Scenario = {
         const field = ctx.page.locator('textarea[aria-label="Capture task"]');
         // fill() leaves the caret in the @word, so the warning is held back until the first Enter.
         await field.fill(`${errand(ctx, 'stray')} | @${unknownSlug(ctx)}`);
-        await field.press('Enter');
-        await ctx.ui.expectText(/Not saved/);
         // Exact: a screen-reader-only span in the refusal repeats these words.
-        const exact = (text: string) =>
-          ctx.page.getByText(text, { exact: true }).waitFor({ state: 'visible' });
-        await exact(`no place '@${unknownSlug(ctx)}' — created without one`);
-        await exact('Enter or Save again to save without it.');
+        const again = ctx.page.getByText('Enter or Save again to save without it.', {
+          exact: true,
+        });
+        // On a throttled dev the place list can still be loading: that Enter is refused too ("Loading
+        // places…") and the notice clears once the list lands — so press until the held warning answers.
+        for (let i = 0; ; i++) {
+          await field.press('Enter');
+          await ctx.ui.expectText(/Not saved/);
+          const held = await again.waitFor({ state: 'visible', timeout: 5_000 }).then(
+            () => true,
+            () => false,
+          );
+          if (held) break;
+          if (i === 4) throw new Error('Enter never got the held “no place” refusal');
+        }
+        await ctx.page
+          .getByText(`no place '@${unknownSlug(ctx)}' — created without one`, { exact: true })
+          .waitFor({ state: 'visible' });
         await ctx.shot('unknown-warning');
         await field.press('Enter');
         await ctx.ui.expectText(/Task added/, 15_000);
