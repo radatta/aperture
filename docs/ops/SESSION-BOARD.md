@@ -167,7 +167,8 @@ longer Bash timeout or run them in the background.) Slots whose wrapper died are
   `git ls-remote origin refs/locks/dev`, then `gh api …/git/tags/<sha>` for the holder — each call under
   `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
   the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
-  `failedAt`; a peek that finds the bot wrote while it was asking keeps the bot's write. No bot key, no token
+  `failedAt`, and the next peek waits a minute after it; a peek that finds the bot wrote while it was asking keeps
+  the bot's write. No bot key, no token
   mint, no node.
 - **The bot** (`scripts/src/bot/lock-cache.ts`) writes it on every `pnpm bot lock …`, `lock wait` poll and
   `deploy-dev` lock change.
@@ -326,8 +327,8 @@ carry the same list.
 - The first sampler started wins the lock; after this lands, `board.sh sampler restart` from the main checkout
   so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
   overwriting a file in place under the running sampler has killed it once.
-- On the Mac there is no `timeout` (coreutils), so `devlock.sh refresh` fails there and `board.sh status` shows
-  the container's last cache, marked stale once it's 5 min old.
+- On the Mac there is no `timeout` (coreutils), so `devlock.sh refresh` doesn't peek there and `board.sh status`
+  shows the container's last cache, marked stale once it's 5 min old.
 - The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4
   wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes only the case where 4 wrapped suites already run.
 - `edge.sh` maps the throttle regime; pids exhaustion is container-wide, so other live sessions can abort —

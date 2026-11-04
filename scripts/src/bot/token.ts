@@ -12,6 +12,7 @@ export type Permissions = Partial<Record<'contents' | 'actions', 'read' | 'write
 export const PERMS = {
   push: { contents: 'write' },
   lock: { contents: 'write' },
+  lockRead: { contents: 'read' }, // lock status / lock wait
   deployDev: { contents: 'write', actions: 'write' },
   logs: { actions: 'write' },
 } as const satisfies Record<string, Permissions>;

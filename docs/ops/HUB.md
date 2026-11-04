@@ -7,7 +7,8 @@ about to collide, and passes the user's words along. It never approves anything.
 
 **Its name** is in `scripts/board/hub.json` (`dispatch` today). That name is also the hub's tmux window name, which
 is what the board shows and what `SendMessage` addresses (`board.sh` `me_ident`). To rename the hub, edit that line
-and rename the window. `board.sh hub` prints the name and whether a live session by that name is on the board. The
+and rename the window. `hub.json` is committed and each session reads its own checkout's copy, so a rename is a PR,
+and a worktree keeps the old name until it rebases. `board.sh hub` prints the name and whether a live session by that name is on the board. The
 SessionStart hook injects that line into every session; in the hub's own session it injects
 "You are the hub — read /workspace/localNotes/roadmap.md before anything else" instead (also after a compaction).
 
@@ -20,7 +21,7 @@ preview the user sees, so the tag and branch go first.
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Mode: collab\|auto.`                               |
 | Phase 8, after `deploy-dev`                           | `[lock] <branch> — taken until <HH:MM>, ETA <n> min.`                                                                                         |
-| Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait running.` (the refusal prints it ready to send)                              |
+| Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait next.` (the refusal prints it ready to send)                                 |
 | Phase 10, `pnpm bot lock release`                     | `[lock] <branch> — released.`                                                                                                                 |
 | _Blocked anyway_                                      | `[blocked] <branch> — <what>; needs <the user \| resource>.`                                                                                  |
 | Phase 10, after `pnpm mailroom open-pr`               | `[pr-open] <branch> — "<title>" <url>. Devcheck: <n proven / n off dev / n needs you \| no feature rows>. Needs the user: <list \| nothing>.` |

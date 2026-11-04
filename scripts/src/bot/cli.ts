@@ -15,6 +15,7 @@ import {
   LockHeld,
   acquire,
   formatStatus,
+  holderLine,
   parseWaitMax,
   queueNotes,
   readLock,
@@ -92,42 +93,56 @@ async function lockWait(
       `dev lock: ${r.holder?.branch ?? 'an unreadable holder'}'s lock expired — \`pnpm bot deploy-dev\` takes it over`,
     );
   else {
+    const held = r.holder
+      ? holderLine(r.holder, clock.now(), holderSession(dir, r.holder.branch))
+      : 'dev locked';
     console.log(
-      `dev lock: still held by ${r.holder?.branch ?? '?'} after ${maxMs / 60_000} min — tell the user who holds it and until when`,
+      `${held} — still held after ${maxMs / 60_000} min; tell the user who holds it and until when`,
     );
     return 75;
   }
   return 0;
 }
 
+export interface TellContext {
+  dir: string | null; // the board
+  branch: () => string;
+  hub: () => string | undefined;
+  log: (s: string) => void;
+  now: () => number;
+}
+
 // A refused acquire (deploy-dev, lock acquire) runs in the foreground, so that's where the session learns whom to
-// tell: the notes print before the error line (docs/ops/HUB.md → Lock etiquette).
-async function tellingWhoToTell<T>(dir: string | null, f: () => Promise<T>): Promise<T> {
+// tell: the notes print before the error line (docs/ops/HUB.md → Lock etiquette). The error is rethrown as is.
+export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>): Promise<T> {
   try {
     return await f();
   } catch (err) {
     if (err instanceof LockHeld && err.holder) {
-      writeLockCache(dir, err.holder, clock.now());
-      let branch = '';
+      writeLockCache(ctx.dir, err.holder, ctx.now());
+      let branch = '<your branch>';
       try {
-        branch = featureBranch(run);
+        branch = ctx.branch();
       } catch {
         // only the notes' wording needs it
       }
-      console.log(
+      ctx.log(
         'dev is locked — send these now, once each, then `pnpm bot lock wait` in the background:',
       );
-      for (const l of queueNotes(
-        branch,
-        err.holder,
-        hubName(),
-        holderSession(dir, err.holder.branch),
-      ))
-        console.log(`  ${l}`);
+      const session = holderSession(ctx.dir, err.holder.branch);
+      for (const l of queueNotes(branch, err.holder, ctx.hub(), session)) ctx.log(`  ${l}`);
     }
     throw err;
   }
 }
+
+const tellCtx = (dir: string | null): TellContext => ({
+  dir,
+  branch: () => featureBranch(run),
+  hub: hubName,
+  log: console.log,
+  now: clock.now,
+});
 
 export async function main(argv: string[]): Promise<number> {
   const { positional, flags } = parseArgs(argv);
@@ -139,13 +154,16 @@ export async function main(argv: string[]): Promise<number> {
     case 'deploy-dev': {
       const dir = boardDir(run);
       const api = makeApi(await token(PERMS.deployDev));
-      const r = await tellingWhoToTell(dir, () =>
+      const r = await tellingWhoToTell(tellCtx(dir), () =>
         deployDev(run, api, clock, console.log, (h) => writeLockCache(dir, h, clock.now())),
       );
       return r.conclusion === 'success' ? 0 : 1;
     }
     case 'lock': {
-      const api = makeApi(await token(PERMS.lock));
+      // status and wait only read: a read-only token, which a 55-minute background wait holds
+      const api = makeApi(
+        await token(sub === 'status' || sub === 'wait' ? PERMS.lockRead : PERMS.lock),
+      );
       const dir = boardDir(run);
       const cache = (h: Holder | null) => writeLockCache(dir, h, clock.now());
       if (sub === 'status') {
@@ -153,7 +171,7 @@ export async function main(argv: string[]): Promise<number> {
         cache(cur?.holder ?? null);
         console.log(formatStatus(cur, clock.now()));
       } else if (sub === 'acquire') {
-        const h = await tellingWhoToTell(dir, () =>
+        const h = await tellingWhoToTell(tellCtx(dir), () =>
           acquire(api, featureBranch(run), requirePushed(run, featureBranch(run)), clock.now()),
         );
         cache(h);

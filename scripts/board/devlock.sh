@@ -13,7 +13,7 @@ CACHE="$BOARD_DIR/devlock.json"
 STALE_SEC=300
 
 # → the holder JSON (or null: no ref, or an unreadable holder — both mean the next acquire takes it) on stdout;
-# non-zero when GitHub couldn't be asked. Each network call is bounded by $1 seconds. The repo is spelled out here
+# 1 when GitHub couldn't be asked, 2 when this machine can't ask (no `timeout`: the Mac). Each network call is bounded by $1 seconds. The repo is spelled out here
 # because this is shell-only (no node): it's config.ts's OWNER/REPO.
 _peek() {
   local to="$1" src="${APERTURE_DEVLOCK_SOURCE:-}" ref msg
@@ -21,6 +21,7 @@ _peek() {
     [ -f "${src#file:}" ] || return 1
     msg=$(cat "${src#file:}")
   else
+    command -v timeout >/dev/null || return 2  # the Mac has none: no peek there, and the container's cache stands
     ref=$(timeout "$to" git -C "$SB_REPO" ls-remote origin refs/locks/dev 2>/dev/null) || return 1
     msg=
     [ -z "$ref" ] || msg=$(timeout "$to" gh api "repos/radatta/aperture/git/tags/${ref%%[[:space:]]*}" --jq .message 2>/dev/null) || return 1
@@ -31,11 +32,11 @@ _peek() {
 }
 
 cmd_refresh() {
-  local max=60 to=4 t h before
+  local max=60 to=4 t h before f rc
   while [ $# -gt 0 ]; do
     case "$1" in
-      --max-age) max="$2"; shift 2 ;;
-      --timeout) to="$2"; shift 2 ;;
+      --max-age) max="${2:-$max}"; shift 2 2>/dev/null || shift ;;
+      --timeout) to="${2:-$to}"; shift 2 2>/dev/null || shift ;;
       *) shift ;;
     esac
   done
@@ -43,11 +44,16 @@ cmd_refresh() {
   before=$(jq -r '.t // empty' "$CACHE" 2>/dev/null)
   t=$(jq -r '.t | sub("\\.[0-9]+"; "") | fromdate' "$CACHE" 2>/dev/null)
   [ -n "$t" ] && [ $(( $(sb_epoch) - t )) -lt "$max" ] && return 0
-  if h=$(_peek "$to"); then
+  # A peek that failed under a minute ago: don't make every caller wait on GitHub again.
+  f=$(jq -r '.failedAt // empty | fromdate' "$CACHE" 2>/dev/null)
+  [ -n "$f" ] && [ $(( $(sb_epoch) - f )) -lt 60 ] && return 0
+  h=$(_peek "$to"); rc=$?
+  [ "$rc" = 2 ] && return 0
+  if [ "$rc" = 0 ]; then
     # The bot wrote while we were asking GitHub: its write is newer than our answer, so keep it.
     [ "$(jq -r '.t // empty' "$CACHE" 2>/dev/null)" = "$before" ] || return 0
     jq -nc --argjson h "$h" --arg t "$(sb_now)" '{v: 1, t: $t, source: "peek", holder: $h}' | sb_write "$CACHE"
-  elif [ -f "$CACHE" ]; then
+  elif [ -f "$CACHE" ] && [ "$(jq -r '.t // empty' "$CACHE" 2>/dev/null)" = "$before" ]; then
     jq -c --arg f "$(sb_now)" '.failedAt = $f' "$CACHE" 2>/dev/null | sb_write "$CACHE"
   fi
   return 0

@@ -224,7 +224,7 @@ export function parseWaitMax(v: string | undefined): number {
 export function queueNotes(branch: string, h: Holder, hub?: string, session?: string): string[] {
   const who = session ? `${h.branch} (${session})` : h.branch;
   return [
-    `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}; lock wait running."`,
+    `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}; lock wait next."`,
     ...(session
       ? [
           `SendMessage ${session}: "Queued behind you for the dev lock (${branch}) — release at phase 10 rather than letting the TTL run; no rush."`,

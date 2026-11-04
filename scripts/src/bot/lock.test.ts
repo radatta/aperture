@@ -322,7 +322,7 @@ describe('lock wait', () => {
   it('writes the hub note always and the holder note only for a known session', () => {
     const h = until('flux', 30 * MIN);
     expect(queueNotes('ci-bot', h, 'dispatch')).toEqual([
-      'SendMessage dispatch: "[lock] ci-bot — queued behind flux; lock wait running."',
+      'SendMessage dispatch: "[lock] ci-bot — queued behind flux; lock wait next."',
     ]);
     const both = queueNotes('ci-bot', h, 'dispatch', 'flux-session');
     expect(both).toHaveLength(2);

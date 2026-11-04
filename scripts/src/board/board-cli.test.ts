@@ -203,6 +203,19 @@ describe('devlock.sh', () => {
     );
   });
 
+  it('waits a minute after a failed peek before asking GitHub again', () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const holder = { branch: 'flux', sha: SHA, expiresAt: iso(20 * 60_000) };
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: old, source: 'peek', holder }),
+    );
+    devlock(['refresh'], `file:${join(tmp, 'missing')}`); // fails: failedAt set
+    ghLock(''); // GitHub is back and says free
+    devlock(['refresh']);
+    expect(cache().holder).toEqual(holder); // within the minute: not asked again
+  });
+
   it('skips the fetch while the cache is fresh', () => {
     ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(30 * 60_000) });
     devlock(['refresh']);
