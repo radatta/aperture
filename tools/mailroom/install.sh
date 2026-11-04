@@ -100,8 +100,9 @@ main() {
 
   echo "== installing $REPO_SLUG@${ref:0:12} — changes against what is installed:"
   mkdir -p "$APP/bin/jobs" "$APP/state" "$(dirname "$LOG")" "$(dirname "$PLIST")"
-  diff -ru "$APP/bin" "$stage/bin" || true
-  diff -u "$PLIST" "$stage/$LABEL.plist" 2>/dev/null || true
+  # -N shows a fresh install's files in full, so the prompt below always has real content to check.
+  diff -ruN "$APP/bin" "$stage/bin" || true
+  if [ -f "$PLIST" ]; then diff -u "$PLIST" "$stage/$LABEL.plist" || true; else diff -u /dev/null "$stage/$LABEL.plist" || true; fi
   if [ "$ref" != "$main_sha" ]; then
     echo "!! $ref is NOT main's head — an unmerged commit nobody has approved. Read tools/mailroom/ at that commit on"
     echo "!! github.com first (MAILROOM.md → Trial), and re-run without --ref once it merges."
@@ -133,7 +134,7 @@ main() {
     sleep 1
   done
   echo "installed $LABEL (mode $mode, runner ${version:0:12}, $REPO_SLUG@${ref:0:12}) watching $HJ/inbox"
-  echo "check: launchctl print $DOMAIN/$LABEL | head -20   ·   log: $LOG"
+  echo "check: launchctl print $DOMAIN/$LABEL | grep -A8 'event triggers'   ·   log: $LOG"
 }
 
 main "$@" # last line: a truncated download defines nothing and runs nothing

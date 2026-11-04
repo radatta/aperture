@@ -250,11 +250,11 @@ Residual risks:
 
 ## Trial
 
-The trial runs at dev test with the real install. A Claude session on the Mac does it, and writes its findings to the worktree's `localNotes/trial/findings.md`. **It runs nothing from the shared folder.** Everything it runs runs as the user, and the user can read the Keychain token, so a container-writable script would get that token. Every script it runs comes from GitHub at the reviewed commit.
+The trial runs at dev test with the real install. A Claude session on the Mac does it, and writes its findings to the worktree's `localNotes/trial/findings.md`. That session is **started outside the repo** (`cd ~ && claude`): Claude Code started in a project runs that project's `.claude/hooks/*.sh`, which are container-writable. **It runs nothing from the shared folder.** Everything it runs runs as the user, and the user can read the Keychain token, so a container-writable script would get that token. Every script it runs comes from GitHub at the reviewed commit.
 
 1. **Review:** read `tools/mailroom/` at the branch's sha on github.com: `install.sh`, `runner.sh`, `jobs/`, `run-fixtures.sh` and `testdata/`.
 2. **Fixtures, from GitHub, outside the mount.** Fetch the tarball at that sha with the mailroom token (Contents: read) into a fresh Mac temp dir, then run `/bin/bash tools/mailroom/run-fixtures.sh` there. On Darwin it pins `/bin/bash` 3.2 and the system `PATH`, as launchd would. Want `0 failed`. The trial runbook has the exact line.
-3. **Install:** the branch's commit, with the `--ref` form under _Install_. Answer `y` only if the diff matches what step 1 read. `launchctl print` should show the label and the inbox path, with no error.
+3. **Install:** the branch's commit, with the `--ref` form under _Install_. Answer `y` only if the diff matches what step 1 read. A fresh install shows the files in full (`diff -ruN`) and the rendered plist. `launchctl print … | grep -A8 'event triggers'` should show the label and the inbox path, with no error.
 4. **Probe:** the container runs `pnpm mailroom probe`. Want `probe ok`, a latency, and the token expiry.
    - No result in time: re-install with `--mode poll` and re-probe. That's a logged design change, not a kill.
    - `TOKEN_MISSING`: run `security find-generic-password -s aperture-mailroom-gh -w >/dev/null` once from Terminal, click Always Allow, and re-probe.
@@ -268,10 +268,19 @@ The trial runs at dev test with the real install. A Claude session on the Mac do
 7. **End to end:** the branch's own phase-10 `pnpm mailroom open-pr`. Want a PR authored by `radatta`, with a matching `bodySha256`.
 8. **After merge:** re-install from `main` with the plain command under _Install_.
 
-Still UNVERIFIED until the trial runs:
+**Trial run 2026-11-04 UTC, at commit `567213a`: steps 1–6 passed.** It settled two things that were unverified until then:
 
-- Does QueueDirectories fire on a file written through the VM's virtiofs share? Inference: the write is made on the Mac by the VM's file-sharing process, so kqueue should see it.
-- Do launchd's Keychain reads work without a dialog?
+- **QueueDirectories fires** on a file written through the VM's virtiofs share. Pickup took under 1 s, the probe answered in 778 ms, and `--mode poll` wasn't needed.
+- **launchd's Keychain read works with no dialog**, for this item, created with `-T /usr/bin/security`.
+
+The rest of the run:
+
+- Fixtures: 117/117 under the Mac's `/bin/bash` 3.2.
+- Junk file: `BAD_JSON` in 28 ms, with one log line and no loop.
+- Token wall: `403`. A follow-up read found no branch.
+- Result files are written `0600`/`0700` (the runner's `umask 077`). The container reads them through the share as the same user.
+
+Findings are in the worktree's `localNotes/trial/findings.md`, archived at Cleanup.
 
 ## Tests
 
