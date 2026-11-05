@@ -1086,6 +1086,40 @@ export function runApiContract(
       void a;
     });
 
+    it('sessions: a stop onto a finished task completes with its minutes but adds none to the task', async () => {
+      // Mark done from the editor stops the timer first; this is the server's half for MCP and other devices.
+      const task = await api.createTask({ title: 'Finished while timed', estimateMin: 30 });
+      await api.transitionTask(task.id, 'in_progress');
+      const s = await api.startSession({
+        taskId: task.id,
+        categoryId: null,
+        kind: 'work',
+        day: '2026-08-04',
+      });
+      await api.setTaskActual(task.id, 10);
+      await api.transitionTask(task.id, 'done');
+      advance(5 * 60_000);
+      const stopped = await api.stopSession(s.id, 'completed');
+      expect(stopped.status).toBe('completed');
+      expect(stopped.activeMinutes).toBe(5); // history keeps the time
+      expect((await api.getTask(task.id))?.actualAccruedMin).toBe(10); // the typed actual stands
+
+      // Cancelled is finished too; keep on a stale timer takes the same guard.
+      const dropped = await api.createTask({ title: 'Dropped while timed' });
+      await api.transitionTask(dropped.id, 'in_progress');
+      const s2 = await api.startSession({
+        taskId: dropped.id,
+        categoryId: null,
+        kind: 'work',
+        day: '2026-08-04',
+      });
+      await api.transitionTask(dropped.id, 'cancelled');
+      advance(3 * 60_000);
+      await api.heartbeatSession(s2.id);
+      expect((await api.resolveStaleSession(s2.id, 'keep')).status).toBe('completed');
+      expect((await api.getTask(dropped.id))?.actualAccruedMin).toBe(0);
+    });
+
     it('plans: soft-delete removes them from the day', async () => {
       const task = await api.createTask({ title: 'Planned' });
       const plan = await api.upsertPlan({

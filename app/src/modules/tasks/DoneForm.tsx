@@ -7,6 +7,8 @@ import { Field } from '../../components/Field';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
 import { useSetActual, useTransitionTask } from '../../data/hooks/useTasks';
+import { liveElapsedMin } from '../home/rightNow';
+import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { useEditSlot } from './editor/editState';
 import type { EditSlots } from './editor/editState';
 import { NotesField } from './notes/NotesField';
@@ -15,7 +17,11 @@ import { notesValue } from './notes/parseNotes';
 
 // "Done" captures the actual — prefilled from tracked pomodoro time, but editable (works with no
 // timer). This is what the estimate is measured against. `initialActualMin` lets a caller prefill the
-// LIVE elapsed (accrued + a running timer) that isn't on the task yet; defaults to the persisted value.
+// live elapsed it captured itself (Right now stops the hero's timer before opening this); by default it's
+// the live elapsed as the form opens — accrued plus any timer still running on the task.
+// Mark done stops that timer first, so its minutes land and the typed actual then replaces them; done,
+// the task takes no more session time (accruesTime), so a timer anywhere else can't double-count it.
+// A stop that doesn't land keeps the form and the timer, and the error below says so.
 // `actualRef` lets the task editor's finish-intent focus the Actual field when the dialog opens.
 // Nothing tracked starts EMPTY, not "0" (you'd type over it), and an empty field can't be submitted —
 // a quiet 0 would land in calibration as a real actual.
@@ -44,8 +50,9 @@ export function DoneForm({
 } & DoneProps) {
   const setActual = useSetActual();
   const transition = useTransitionTask();
+  const { timers, stop } = usePomodoro();
   const [actual, setActual_] = useState<string>(() => {
-    const tracked = Math.round(initialActualMin ?? task.actualAccruedMin);
+    const tracked = Math.round(initialActualMin ?? liveElapsedMin(task, timers));
     return tracked > 0 ? String(tracked) : '';
   });
   const [seed] = useState(() => task.reflection ?? '');
@@ -56,12 +63,20 @@ export function DoneForm({
   // One submit per tap, set before the first await: transition.isPending is false during setActual's,
   // and arrives a tick late anyway.
   const [busy, setBusy] = useState(false);
+  const [stopFailed, setStopFailed] = useState(false);
   // Mid-submit it's on its way, and leaving then never waits on the finish (it closes nothing later).
   useEditSlot(edits, 'finish', reflectionChanged && !busy ? 'dirty' : 'clean');
   async function submit() {
     if (busy) return;
     setBusy(true);
+    setStopFailed(false);
     try {
+      for (const t of timers)
+        if (t.session.kind === 'work' && t.session.taskId === task.id)
+          await stop(t.session.id).catch((e: unknown) => {
+            setStopFailed(true);
+            throw e;
+          });
       await setActual.mutateAsync({
         id: task.id,
         actualMin: Number(actual),
@@ -119,7 +134,7 @@ export function DoneForm({
           Cancel
         </Button>
       </div>
-      {(setActual.isError || transition.isError) && (
+      {(stopFailed || setActual.isError || transition.isError) && (
         <div role="alert">
           <Text size="sm" tone="danger">
             Couldn’t mark it done — try again.

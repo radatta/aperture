@@ -38,6 +38,7 @@ import {
   syncedFieldsChanged,
   AUTO_PLACED_ERROR,
   autoSyncOn,
+  accruesTime,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -1180,7 +1181,7 @@ class StubClient implements ApiClient {
   private accrueToTask(session: PomodoroSession): void {
     if (session.kind !== 'work' || !session.taskId) return;
     const task = this.find(this.store.tasks, session.taskId);
-    if (!task) return;
+    if (!task || !accruesTime(task)) return; // finished meanwhile: the session keeps its minutes, the task doesn't
     this.writes.put(this.store.tasks, {
       ...task,
       actualAccruedMin: task.actualAccruedMin + session.activeMinutes,

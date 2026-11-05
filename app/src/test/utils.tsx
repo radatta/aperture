@@ -14,6 +14,7 @@ import { routes } from '../routes';
 // Render a component with a fresh QueryClient and an injected (isolated) ApiClient.
 // A router is part of the baseline: in the real app nothing renders outside one, so any component
 // reaching for router context (a NavLink, a ButtonLink) works here the same way it does in the app.
+// So is the timer engine (PomodoroProvider): the Done and Split forms read its running timers.
 export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }): RenderResult {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
@@ -26,7 +27,9 @@ export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }):
     return (
       <QueryClientProvider client={client}>
         <ApiContext value={opts.api}>
-          <RouterProvider router={router} />
+          <PomodoroProvider>
+            <RouterProvider router={router} />
+          </PomodoroProvider>
         </ApiContext>
       </QueryClientProvider>
     );

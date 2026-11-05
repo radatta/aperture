@@ -7,6 +7,7 @@ import type { ApiClient, Task } from '@aperture/shared';
 import { renderWithProviders } from '../../../test/utils';
 import { createStubClient } from '../../../data/stubClient';
 import { TaskDetailsForm } from './TaskDetailsForm';
+import { usePomodoro } from '../../pomodoro/pomodoro-context';
 import { editState } from './editState';
 import type { EditSlots } from './editState';
 import { TaskEditor } from './TaskEditor';
@@ -511,6 +512,75 @@ describe('TaskEditor', () => {
       status: 'done',
       actualAccruedMin: 20,
     });
+  });
+
+  it('a done split stops this task’s running timer first; the follow-up starts at zero', async () => {
+    // The stub's clock sits 7 minutes behind while the timer starts; a heartbeat at real time banks the gap
+    // (and keeps the timer fresh enough to adopt), so the split's Actual prefills with 7.
+    let behindMs = 7 * 60_000;
+    const client = createStubClient({
+      seed: false,
+      storageKey: `editor-${Math.random()}`,
+      now: () => Date.now() - behindMs,
+    });
+    let t = await client.createTask({ title: 'Pset', estimateMin: 45 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const session = await client.startSession({
+      taskId: t.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    behindMs = 0;
+    await client.heartbeatSession(session.id);
+    const order: string[] = [];
+    const stopSession = client.stopSession.bind(client);
+    const splitTask = client.splitTask.bind(client);
+    vi.spyOn(client, 'stopSession').mockImplementation((...a) => {
+      order.push('stop');
+      return stopSession(...a);
+    });
+    vi.spyOn(client, 'splitTask').mockImplementation((...a) => {
+      order.push('split');
+      return splitTask(...a);
+    });
+    // Mounted once the engine has adopted the timer, as the real app has long before a modal opens.
+    function WhenAdopted() {
+      const { timers } = usePomodoro();
+      return timers.length ? (
+        <TaskEditor
+          task={t}
+          intent="view"
+          edits={slots()}
+          onFinished={onFinished}
+          onRequestClose={vi.fn()}
+          onLeaveReveal={(go) => go()}
+        />
+      ) : null;
+    }
+    const onFinished = vi.fn();
+    renderWithProviders(<WhenAdopted />, { api: client });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /^Split/ }));
+    const actual = screen.getByLabelText<HTMLInputElement>("This part's actual (min)");
+    expect(actual.value).toBe('7'); // the live timer, not the task's persisted 0
+    await user.clear(actual);
+    await user.type(actual, '20');
+    await user.click(screen.getByRole('button', { name: 'Split' }));
+    await waitFor(() =>
+      expect(onFinished).toHaveBeenCalledWith(
+        expect.objectContaining({ id: t.id, status: 'done' }),
+        true,
+      ),
+    );
+    expect(order).toEqual(['stop', 'split']);
+    expect(await client.listRunningSessions()).toEqual([]);
+    const stopped = (await client.listSessionsForDay('2026-08-04')).find((s) => s.id === session.id);
+    expect(stopped?.status).toBe('completed');
+    expect(stopped?.activeMinutes).toBeCloseTo(7, 0);
+    expect(await client.getTask(t.id)).toMatchObject({ status: 'done', actualAccruedMin: 20 });
+    const all = await client.listTasks();
+    expect(all.find((x) => x.title === 'Part 2')).toMatchObject({ actualAccruedMin: 0 });
   });
 
   it('a keep split stays open, stores the typed titles, and returns focus to Split…', async () => {

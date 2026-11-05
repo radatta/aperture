@@ -7,6 +7,7 @@ import {
   calendarSyncPlan,
   seenAfter,
   syncedFieldsChanged,
+  accruesTime,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -1261,7 +1262,7 @@ export class BackendClient implements ApiClient {
   private async accrueToTask(session: PomodoroSession): Promise<void> {
     if (session.kind !== 'work' || !session.taskId) return;
     const task = await this.repo.getTask(session.taskId, { consistent: true }); // written back below
-    if (!task) return;
+    if (!task || !accruesTime(task)) return; // finished meanwhile: the session keeps its minutes, the task doesn't
     await this.repo.putTask({
       ...task,
       actualAccruedMin: task.actualAccruedMin + session.activeMinutes,

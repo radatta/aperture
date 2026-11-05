@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  accruesTime,
   canTransitionTask,
   contributesCalibration,
   heartbeatSession,
@@ -96,6 +97,14 @@ describe('taskTransition — estimate freeze', () => {
   it('an errand (a placed task) never contributes, even with a lock', () => {
     const errand = baseTask({ status: 'done', estimateLockedMin: 5, place: 'safeway' });
     expect(contributesCalibration(errand)).toBe(false);
+  });
+
+  it('a work session accrues only to an open task — an errand included, never a done or cancelled one', () => {
+    for (const status of ['backlog', 'planned', 'in_progress'] as const)
+      expect(accruesTime(baseTask({ status }))).toBe(true);
+    expect(accruesTime(baseTask({ status: 'in_progress', place: 'safeway' }))).toBe(true);
+    expect(accruesTime(baseTask({ status: 'done', estimateLockedMin: 60 }))).toBe(false);
+    expect(accruesTime(baseTask({ status: 'cancelled' }))).toBe(false);
   });
 });
 

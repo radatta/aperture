@@ -117,6 +117,13 @@ export function contributesCalibration(task: Task): boolean {
   return task.status === 'done' && task.estimateLockedMin !== null && !task.place;
 }
 
+// A closing work session adds its minutes only to a task still open. A done task's actual is the one typed
+// at Mark done (or complete_task); a timer stopped after that would count the same time twice, straight into
+// calibration. Kept apart from contributesCalibration: a placed task's timer still accrues while it's open.
+export function accruesTime(task: Task): boolean {
+  return task.status !== 'done' && task.status !== 'cancelled';
+}
+
 // --- Sessions --------------------------------------------------------------
 
 // Heartbeat accrues only the elapsed time since the last beat, and only while running.
