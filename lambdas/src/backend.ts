@@ -1198,7 +1198,7 @@ export class BackendClient implements ApiClient {
     return this.repo.putSeries({ ...existing, active: false, updatedAt: this.now() });
   }
   async deleteSeries(id: string): Promise<void> {
-    const existing = await this.repo.getSeries(id);
+    const existing = await this.repo.getSeries(id, { consistent: true }); // written back: the tombstone
     if (!existing) return; // idempotent — already tombstoned or never existed
     await this.repo.putSeries({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }
