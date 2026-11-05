@@ -204,8 +204,8 @@ measured edge or a full cap (recording a `denied` barrier event, pointing at thi
 path — other worktrees have none until merge — which waits). Only a command that actually starts a runner counts:
 some `&&` / `;` / `|` segment begins (after env assignments, `env`, `timeout N`) with `pnpm`, `vitest`, `tsc`,
 `node`, … — `cat vitest.config.ts`, `rg -n "vitest|pnpm test"` (quoted spans are text), a heredoc body, or `pnpm add vitest` is
-text, not a run — and the class comes only from the segments that run. A `bash -c "…"` / `sh -c '…'` body is
-unwrapped first, so the run inside it counts; `pnpm rm` / `uninstall` is package management. It misses `make` (no
+text, not a run — and the class comes only from the segments that run. A `bash -c "…"` / `sh -c '…'` body (a path
+or `-lc` too) is unwrapped first, so the run inside it counts; `pnpm rm` / `uninstall` is package management. It misses `make` (no
 Makefile here), which only costs the offer: the hook fails open;
 SessionEnd marks the session gone.
 

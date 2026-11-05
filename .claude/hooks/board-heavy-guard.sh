@@ -36,10 +36,11 @@ run_segments() {
     if [[ $line =~ \<\<-?[[:space:]]*[\'\"]?([A-Za-z_][A-Za-z0-9_]*) ]]; then end=${BASH_REMATCH[1]}; fi
   done <<<"$c"
   c=$body
-  wrap="(^|[[:space:]])(bash|sh|dash|zsh)[[:space:]]+-c[[:space:]]+($dq|$sq)"
+  # `bash -c`, `/bin/bash -c`, `bash -lc` …; a `"bash -c …"` inside a quoted span has no space before it, so it stays text.
+  wrap="(^|[[:space:]])([^[:space:]]*/)?(bash|sh|dash|zsh)[[:space:]]+-[a-z]*c[[:space:]]+($dq|$sq)"
   # The replacement is quoted: bash 5.2's patsub_replacement would turn a body's `&&` into the match itself.
   while [[ $c =~ $wrap ]]; do
-    rep=$'\n'${BASH_REMATCH[4]}${BASH_REMATCH[5]}$'\n'
+    rep=$'\n'${BASH_REMATCH[5]}${BASH_REMATCH[6]}$'\n'
     c=${c/"${BASH_REMATCH[0]}"/"$rep"}
   done
   while [[ $c =~ $re ]]; do c=${c/"${BASH_REMATCH[0]}"/ Q }; done

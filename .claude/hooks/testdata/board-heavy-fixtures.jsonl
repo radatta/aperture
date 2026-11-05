@@ -46,3 +46,5 @@
 {"expect":"allow","why":"pnpm rm is package management, not a run","cmd":"pnpm rm vitest","running":4,"runningClass":"test"}
 {"expect":"allow","why":"a dead slot (its wrapper gone) is not a running job: no repeat offer","cmd":"pnpm test","nudged":["test"],"runningDead":1}
 {"expect":"nudge","why":"enforce on, 3 live suites and a dead slot: the cap counts 3, so only the offer","cmd":"pnpm test","limits":{"enforce":true},"running":3,"runningDead":1}
+{"expect":"nudge","why":"a shell by path, and -lc: still a wrapped run","cmd":"/bin/bash -lc \"pnpm lint\""}
+{"expect":"allow","why":"a quoted mention of bash -c is text (no space before the shell name)","cmd":"rg -n \"bash -c 'pnpm test'\" docs/","running":4,"runningClass":"test"}
