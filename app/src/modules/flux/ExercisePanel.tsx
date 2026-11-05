@@ -13,7 +13,7 @@ import { cx } from '../../lib/cx';
 import { romHoldDeg } from './engine/evaluate';
 import type { Sample } from './engine/protocol';
 import { HoldRing } from './HoldRing';
-import { liveReadout, repositionStep, romShort } from './readout';
+import { liveReadout, repositionStep, restLine, romShort, type RestInfo } from './readout';
 
 // Live, per-kind exercise feedback derived from definition + evaluator state — flux-track's panel, with
 // its strings, restyled to Aperture's tokens. Aperture adds a finished state + Again to the two kinds
@@ -26,6 +26,7 @@ export function ExercisePanel({
   def,
   sample,
   state,
+  rest = null,
   idle = false,
   calibrated = false,
   onControl,
@@ -33,6 +34,7 @@ export function ExercisePanel({
   def: ExerciseDefinition;
   sample: Sample;
   state: ExerciseState | null;
+  rest?: RestInfo | null; // the rest between sets, counted down under "Set complete" (D42)
   idle?: boolean; // camera not started: say so instead of "Getting ready…"
   calibrated?: boolean; // a timed kind's Start block then says it's starting, not waiting (D41)
   onControl: (c: EvalControl) => void;
@@ -48,6 +50,7 @@ export function ExercisePanel({
           def={def}
           sample={sample}
           state={state}
+          rest={rest}
           calibrated={calibrated}
           onControl={onControl}
         />
@@ -75,12 +78,14 @@ function Feedback({
   def,
   sample,
   state,
+  rest,
   calibrated,
   onControl,
 }: {
   def: ExerciseDefinition;
   sample: Sample;
   state: ExerciseState | null;
+  rest: RestInfo | null;
   calibrated: boolean;
   onControl: (c: EvalControl) => void;
 }) {
@@ -98,7 +103,7 @@ function Feedback({
       <div>
         <Metric big={`${live?.count?.n ?? 0}`} unit={`/ ${total} reps`} done={complete} />
         {complete ? (
-          <StartBlock done reps={total} onStart={() => onControl(start)} />
+          <StartBlock done rest={rest} reps={total} onStart={() => onControl(start)} />
         ) : (
           <>
             {ring && (
@@ -171,7 +176,7 @@ function Feedback({
     if (state.phase === 'complete')
       return (
         <div className="flex flex-col items-center">
-          <StartBlock done reps={def.reps} onStart={() => onControl(start)} />
+          <StartBlock done rest={rest} reps={def.reps} onStart={() => onControl(start)} />
           <Text size="sm" tone="muted">
             Hold {state.holdsDone} / {def.reps}
           </Text>
@@ -226,6 +231,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
+            rest={rest}
             auto={calibrated ? 'starting' : 'waiting'}
             reps={def.reps}
             onStart={() => onControl(start)}
@@ -266,6 +272,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
+            rest={rest}
             auto={calibrated ? 'starting' : 'waiting'}
             reps={def.reps}
             onStart={() => onControl(start)}
@@ -289,6 +296,7 @@ function Feedback({
         ) : (
           <StartBlock
             done={state.phase === 'complete'}
+            rest={rest}
             auto={calibrated ? 'starting' : 'waiting'}
             reps={0}
             label={`${def.durationSec}s`}
@@ -336,6 +344,7 @@ function SideStat({ label, n, target }: { label: string; n: number; target: numb
 // already counting down to the start. The button is the override.
 function StartBlock({
   done,
+  rest = null,
   auto,
   reps,
   label,
@@ -343,6 +352,7 @@ function StartBlock({
   onStart,
 }: {
   done: boolean;
+  rest?: RestInfo | null;
   auto?: 'waiting' | 'starting';
   reps: number;
   label?: string;
@@ -360,6 +370,11 @@ function StartBlock({
           {avgError != null && (
             <Text as="p" size="xs" tone="muted">
               avg error {avgError.toFixed(1)}°
+            </Text>
+          )}
+          {rest && (
+            <Text as="p" size="xs" tone="muted" tabular>
+              {restLine(rest)}
             </Text>
           )}
         </div>

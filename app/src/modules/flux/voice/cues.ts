@@ -63,7 +63,7 @@ const NUMBERS = (
   'One Two Three Four Five Six Seven Eight Nine Ten Eleven Twelve Thirteen Fourteen Fifteen ' +
   'Sixteen Seventeen Eighteen Nineteen Twenty'
 ).split(' ');
-const countWord = (n: number) => NUMBERS[n - 1] ?? String(n);
+export const countWord = (n: number) => NUMBERS[n - 1] ?? String(n);
 
 // "more"/"less" is relative to the target's own sign, so it's right on either side and whichever way
 // the device's yaw/roll signs run; pitch is verified on-device (+ = chin down), so it names the way.

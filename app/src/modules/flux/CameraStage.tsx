@@ -159,7 +159,7 @@ export function CameraStage({
           >
             {voice.on ? <VolumeIcon /> : <VolumeOffIcon className="text-ink-muted" />}
           </button>
-          <StageReadout def={def} state={engine.exState} />
+          <StageReadout def={def} state={engine.exState} rest={engine.rest} />
           {(engine.notice || engine.lastCue) && (
             // Left of the live readout's column (right-24), so a long cue never covers the ring.
             <div

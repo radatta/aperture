@@ -120,6 +120,33 @@ describe('ExercisePanel', () => {
     expect(screen.getByRole('button', { name: 'Again' })).toBeTruthy();
   });
 
+  it('between sets, the done block counts the rest down: "Rest · 23 s · Set two next"', () => {
+    const def = getExercise('chin-tuck');
+    const done = { ...initialState(def), phase: 'complete', holdsDone: 6 } as ExerciseState;
+    const rest = { remainingSec: 23, next: 2 };
+    const { rerender } = render(
+      <ExercisePanel def={def} sample={IDLE_SAMPLE} state={done} rest={rest} onControl={vi.fn()} />,
+    );
+    expect(screen.getByText('Set complete')).toBeTruthy();
+    expect(screen.getByText('Rest · 23 s · Set two next')).toBeTruthy();
+    // A timed kind's done block carries it too; the rest gone (Again, or the next set started), no line.
+    const guided = getExercise('deep-neck-flexor');
+    rerender(
+      <ExercisePanel
+        def={guided}
+        sample={IDLE_SAMPLE}
+        state={{ ...initialState(guided), phase: 'complete', holdsDone: 10 } as ExerciseState}
+        rest={{ remainingSec: 4, next: 3 }}
+        onControl={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Rest · 4 s · Set three next')).toBeTruthy();
+    rerender(
+      <ExercisePanel def={def} sample={IDLE_SAMPLE} state={done} rest={null} onControl={vi.fn()} />,
+    );
+    expect(screen.queryByText(/^Rest · /)).toBeNull();
+  });
+
   it('guidedHold: Start block, then HOLD / rest ring, rep count, drift warning', async () => {
     const def = getExercise('deep-neck-flexor');
     const onControl = panel(def, initialState(def));

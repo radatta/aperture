@@ -48,6 +48,17 @@ const RECAL_MAX_SHIFT_DEG = 10;
 // dropped face frame isn't a new pause, so a still rest re-sets once, not on every jitter.
 const RECAL_REARM_DEG = 2;
 
+// How far from the set's neutral a still rest may re-set it: 0 for a hold whose target is itself within
+// that shift (chin tuck's 5° nod), since the tuck held still in the rest would become the neutral and the
+// next set would need a 10° tuck — a false neutral on a rehab hold costs more than a missed slouch (D60).
+// The limit stays for every other exercise; Re-calibrate is the way for those holds.
+export function recalLimitFor(def: ExerciseDefinition | null): number {
+  if (def?.kind !== 'holdAtTarget') return RECAL_MAX_SHIFT_DEG;
+  const t = def.target;
+  const mag = magnitude({ pitch: t.pitch ?? 0, yaw: t.yaw ?? 0, roll: t.roll ?? 0 });
+  return mag <= RECAL_MAX_SHIFT_DEG ? 0 : RECAL_MAX_SHIFT_DEG;
+}
+
 export interface FrameResult {
   readonly sample: Sample;
   readonly events: readonly ExerciseEvent[];
@@ -75,6 +86,7 @@ export class FluxCore {
   private stillSec = 0; // a visible, frontal face held still — with no neutral, or between sets
   private restNeutral: Euler | null = null; // the neutral the finished set ended on — re-sets stay near it
   private pauseRecal = false; // this pause has re-set already; moving off it clears it
+  private recalLimit = RECAL_MAX_SHIFT_DEG; // how far a rest may re-set the neutral for this exercise (D60)
   private def: ExerciseDefinition | null = null;
   private exerciseState: ExerciseState | null = null;
   private readonly filters = {
@@ -127,8 +139,9 @@ export class FluxCore {
     this.lastFrameSec = tSec;
 
     // No neutral yet: hold still facing the camera and it sets itself (D40, D45). Between sets, each
-    // fresh pause near the set's neutral re-sets it (D46).
-    const resting = this.exerciseState?.phase === 'complete' && this.neutral !== null;
+    // fresh pause near the set's neutral re-sets it (D46) — not for a small-target hold (D60).
+    const resting =
+      this.exerciseState?.phase === 'complete' && this.neutral !== null && this.recalLimit > 0;
     if (!resting) {
       this.restNeutral = null;
       this.pauseRecal = false;
@@ -137,8 +150,7 @@ export class FluxCore {
     if (!this.neutral || resting) {
       const stillDt = Math.min(dt, MAX_STILL_DT);
       const anchor = this.restNeutral;
-      const near =
-        !anchor || magnitude(relativeTo(this.lastSmoothed, anchor)) <= RECAL_MAX_SHIFT_DEG;
+      const near = !anchor || magnitude(relativeTo(this.lastSmoothed, anchor)) <= this.recalLimit;
       const still =
         hadFace &&
         this.faceVisible &&
@@ -213,6 +225,7 @@ export class FluxCore {
 
   selectExercise(id: ExerciseId | null, side: Side): ExerciseState | null {
     this.def = id ? mirrorForSide(getExercise(id), side) : null;
+    this.recalLimit = recalLimitFor(this.def);
     this.exerciseState = this.def ? initialState(this.def) : null;
     this.lastStatePostSec = 0;
     this.resetRom();

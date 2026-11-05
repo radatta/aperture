@@ -1,7 +1,8 @@
 // Flux history on dev (docs/areas/flux D47–D51): save one set through the guarded API, then prove the History
 // tab and the night home's Flux line show it. The headless browser has no camera, so the set is recorded
 // the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
-// records it before the call) — never through the UI, which can't tell this set from another.
+// records it before the call) — never through the UI, which can't tell this set from another. The Library
+// tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
 import { laDay, noConsoleErrors, type Scenario } from '../scenario';
 
@@ -35,10 +36,22 @@ export const fluxHistory: Scenario = {
       what: 'History lists both, the stopped one marked',
     },
     {
+      id: 'sparkline',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The rotation chip’s trend draws its sparkline across the whole tile, not a 240 px drawing centred in it',
+    },
+    {
       id: 'night-line',
       entry: 'ui',
       kind: 'nominal',
       what: 'The night home says "Flux · … chin tuck"',
+    },
+    {
+      id: 'library-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The Library’s note reads "link one in Settings." — the full stop flush against the link',
     },
     {
       id: 'on-screen',
@@ -48,51 +61,94 @@ export const fluxHistory: Scenario = {
       needsYou:
         'the harness has no recorded pose clip to feed Chromium’s fake camera; the set is recorded the way the stage would send it',
     },
+    {
+      id: 'rest-line',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'After "Set complete" the HUD and the panel count the rest down: "Rest · 23 s · Set two next", gone when set two starts',
+      needsYou:
+        'a finished set needs a camera (the fake engine is stub-only); off dev: useFluxEngine.test "the rest countdown: on screen at 1 Hz, frozen by a pause, back to 30 s with the re-armed rest" and ExercisePanel.test "between sets, the done block counts the rest down: "Rest · 23 s · Set two next""',
+    },
+    {
+      id: 'idle-after-session',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The last set ends the session: the panel reads "Start the camera to begin." every time, never "Set complete · Again"',
+      needsYou:
+        'a session run to its end needs a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel, until the next Start"',
+    },
+    {
+      id: 'chin-tuck-neutral',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Chin tuck: a tuck held still in the rest never flashes "Neutral reset"; rotation’s rest still does',
+      offDev: {
+        file: 'app/src/modules/flux/engine/core.test.ts',
+        test: "chin tuck's rest never re-sets the neutral; upper trap's still does (D60)",
+        why: 'needs a camera, and the decision is engine math — the test runs the real core on both exercises',
+      },
+    },
   ],
   steps: [
     {
       id: 'record',
       entry: 'api',
       proves: ['record'],
-      title: 'recordFluxSet as the test user — a finished set and one stopped early — read back',
+      title:
+        'recordFluxSet as the test user — a finished chin tuck, one stopped early, three rotation sets over five days — read back',
       async run(ctx) {
         // The app's day, not the calendar's: before the user's day start (4am) a set belongs to yesterday,
         // and History and the night line both read the app's today.
         const { dayStartHour } = await ctx.api.reads.getSettings();
-        const day = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
-        const record = async (count: number, stoppedEarly: boolean, completedAt: number) => {
-          const id = devUlid(completedAt);
+        const dayOf = (at: number) => laDay(new Date(at - dayStartHour * 3_600_000));
+        const record = async (set: {
+          exerciseId: 'chin-tuck' | 'cervical-rotation';
+          count: number;
+          avgPeakDeg: number | null;
+          stoppedEarly: boolean;
+          completedAt: number;
+        }) => {
+          const id = devUlid(set.completedAt);
+          const rotation = set.exerciseId === 'cervical-rotation';
           await ctx.api.writes.recordFluxSet({
             id,
-            day,
-            exerciseId: 'chin-tuck',
-            kind: 'holdAtTarget',
+            day: dayOf(set.completedAt),
+            exerciseId: set.exerciseId,
+            kind: rotation ? 'romReps' : 'holdAtTarget',
             side: null,
             condition: null,
-            count,
-            avgPeakDeg: null,
+            count: set.count,
+            avgPeakDeg: set.avgPeakDeg,
             avgErrorDeg: null,
-            rom: { pitch: 9, yaw: 2, roll: 2 },
+            rom: rotation ? { pitch: 4, yaw: 100, roll: 5 } : { pitch: 9, yaw: 2, roll: 2 },
             calibrated: true,
             delegate: 'CPU',
             durationSec: 150,
-            completedAt,
+            completedAt: set.completedAt,
             repTaskId: null,
-            stoppedEarly,
-            planned: 6,
+            stoppedEarly: set.stoppedEarly,
+            planned: rotation ? 10 : 6,
           });
           if (!(await ctx.api.reads.getFluxSet(id))) throw new Error(`the server has no set ${id}`);
         };
         const now = Date.now();
-        await record(6, false, now - 1000);
-        await record(2, true, now); // stopped after two holds (D55)
+        const DAY = 86_400_000;
+        const tuck = { exerciseId: 'chin-tuck', avgPeakDeg: null } as const;
+        await record({ ...tuck, count: 6, stoppedEarly: false, completedAt: now - 1000 });
+        await record({ ...tuck, count: 2, stoppedEarly: true, completedAt: now }); // stopped after two holds (D55)
+        // Three rotation sets with an angle: the trend (and its sparkline) shows from three sets up (D50).
+        const turn = { exerciseId: 'cervical-rotation', count: 10, stoppedEarly: false } as const;
+        await record({ ...turn, avgPeakDeg: 44, completedAt: now - 4 * DAY });
+        await record({ ...turn, avgPeakDeg: 48, completedAt: now - 2 * DAY });
+        await record({ ...turn, avgPeakDeg: 53, completedAt: now - 2000 });
       },
     },
     {
       id: 'history',
       entry: 'ui',
-      proves: ['history'],
-      title: 'History lists both, the stopped one marked',
+      proves: ['history', 'sparkline'],
+      title:
+        'History lists both, the stopped one marked; the rotation trend’s sparkline spans its tile',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
@@ -110,6 +166,41 @@ export const fluxHistory: Scenario = {
         await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
         await ctx.ui.expectText(/2 of 6 holds · stopped early/, 15_000);
         await ctx.shot('history');
+        // The rotation chip filters to its three sets and shows the trend tile; the sparkline measures its
+        // own width (viewBox = rendered width), so the line reaches the tile's edges instead of sitting in a
+        // 240 px drawing centred in it.
+        await ctx.page.getByRole('button', { name: 'rotation', exact: true }).click();
+        const spark = ctx.page.getByRole('img', { name: /rotation · avg peak, 3 sets/ });
+        await spark.waitFor({ state: 'visible', timeout: 15_000 });
+        const viewBoxW = Number((await spark.getAttribute('viewBox'))?.split(' ')[2]);
+        const width = (await spark.boundingBox())?.width ?? 0;
+        if (!(width > 0) || Math.abs(viewBoxW - width) > 1)
+          throw new Error(`the sparkline draws ${viewBoxW} px in a ${width.toFixed(1)} px tile`);
+        await ctx.shot('history-trend');
+      },
+    },
+    {
+      id: 'library-note',
+      entry: 'ui',
+      proves: ['library-note'],
+      title: 'Library: "link one in Settings." with no gap before the full stop',
+      async run(ctx) {
+        await ctx.ui.goto('/flux');
+        // The note shows only while no active Roll is linked — the test user's state, unless someone linked
+        // one; a missing note says so, loudly.
+        const link = ctx.page.getByRole('link', { name: 'link one in Settings', exact: true });
+        await link.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {
+          throw new Error(
+            'the Library shows no "link one in Settings" note — an active Roll linked under Settings → Flux hides it',
+          );
+        });
+        // The sentence as one paragraph, the full stop right after the link (getByText matches the <p>,
+        // whose text ends with the stop; the link's own text doesn't). The gap PR 65 saw was the link's
+        // padding, not a space — the link is plain inline text now, and the shot is the proof.
+        const note = ctx.page.getByText(/daily rep — link one in Settings\.$/);
+        if (!(await note.isVisible()))
+          throw new Error('the note does not end in "link one in Settings."');
+        await ctx.shot('library-note');
       },
     },
     {
