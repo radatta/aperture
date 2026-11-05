@@ -7,12 +7,14 @@ name: Deploy
 # Keyless via OIDC (prod's role from ApertureCicd; dev's from ApertureCicdDev in the dev account — a `main` push
 # deploys dev as dev-main's, in the freeze-exempt lane). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: check → classify
-# changes → deploy each stage at the resulting tier.
+# each stage against what it serves → deploy each stage at its own tier.
 on:
   push:
     branches: [main]
 
-# Serialize deploys per ref — never cancel a deploy mid-flight (a half-applied stack is worse than a queue).
+# Serialize deploys per ref — never cancel a deploy mid-flight (a half-applied stack is worse than a queue). A running
+# deploy is safe, but GitHub keeps one pending run per group and cancels the older one, jobs and all, when merges
+# cluster. Classification doesn't depend on those runs: each stage diffs from what it last deployed.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -24,41 +26,44 @@ jobs:
   check:
     uses: ./.github/workflows/ci.yml
 
-  # Classify the push once (docs / app-only / full). Runs in parallel with `check`; deploy-dev waits on both. Kept
-  # toolchain-free and short.
+  # Classify each stage (docs / app-only / full) against what that stage serves, from its deployment records. Runs in
+  # parallel with `check`; deploy-dev waits on both. Kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      deployments: read # each stage's deployment records
+      actions: read # the recorded job's steps: what that deployment actually deployed
     outputs:
-      mode: ${{ steps.detect.outputs.mode }}
+      mode_dev: ${{ steps.detect.outputs.mode_dev }}
+      mode_prod: ${{ steps.detect.outputs.mode_prod }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # need history to diff the push
+          fetch-depth: 0 # need history to diff from each stage's last deployment
       # docs-only → none (nothing is built or deployed; the deploy job still runs in its environment, so GitHub
-      # records a deployment that deploys nothing — a vestige of the retired required_deployments gate, INFRA §9).
-      # app/** only → app. Anything else, or an indeterminate base → full. The rule is a tested module, not an
-      # inline regex (see the classifier).
-      # No setup/install (~20s): the classifier imports only node:fs, and the runner image's default Node
+      # records a deployment that deploys nothing — a vestige of the retired required_deployments gate, INFRA §9; such a
+      # record is never a base). app/** only → app. Anything else, or an indeterminate base → full. The rules are tested
+      # modules, not inline shell: scripts/src/deploy-base.ts (what a stage serves) over classify-changes.ts (the tier).
+      # Never github.event.before: that is main's previous head, which a failed or cancelled run never deployed.
+      # No setup/install (~20s): both modules import only node: builtins, and the runner image's default Node
       # (22.23.2 on ubuntu-24.04 at the time, 22.23.3 by 2026-10-13) strips TypeScript types natively. This
       # job is outside the setup action's .nvmrc guard, but the same run's other jobs fail loudly on a major
-      # change. The constraints that puts on the classifier are in its header. `node --version` makes a
+      # change. The constraints that puts on the modules are in their headers. `node --version` makes a
       # runner-image Node change diagnosable.
-      - name: Classify deployable changes
+      - name: Classify each stage
         id: detect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           node --version
-          base="${{ github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "mode=full" >> "$GITHUB_OUTPUT"; echo "No usable base — full deploy."; exit 0
-          fi
-          changed=$(git diff --name-only "$base" "${{ github.sha }}")
-          echo "Changed files:"; echo "$changed"
-          mode=$(printf '%s\n' "$changed" | node scripts/src/classify-changes.ts)
-          case "$mode" in none|app|full) ;; *) echo "::error::classifier returned '$mode'"; exit 1 ;; esac
-          echo "Deploy mode: $mode"
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA")
+          mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")
+          for mode in "$mode_dev" "$mode_prod"; do
+            case "$mode" in none|app|full) ;; *) echo "::error::classifier returned '$mode'"; exit 1 ;; esac
+          done
+          echo "Deploy modes: dev-main=$mode_dev prod=$mode_prod"
+          { echo "mode_dev=$mode_dev"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"
 
   deploy-dev:
     needs: [check, changes]
@@ -69,7 +74,7 @@ jobs:
     uses: ./.github/workflows/deploy-stage.yml
     with:
       stage: dev
-      mode: ${{ needs.changes.outputs.mode }}
+      mode: ${{ needs.changes.outputs.mode_dev }}
       # Two lanes into the dev account (docs/ops/CI-BOT.md → Two lanes): a `main` push is merged, reviewed code, so it
       # deploys through the freeze-exempt devmain lane and its main-only `dev-main` environment. Main is this file's
       # only trigger; the conditionals stay so a trigger ever added here lands in the frozen lane, never the exempt one.
@@ -84,7 +89,7 @@ jobs:
       agent_token: ${{ secrets.AGENT_TOKEN_DEV }}
 
   deploy-prod:
-    needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode` output
+    needs: [deploy-dev, changes] # `changes` listed so this job can read its `mode_prod` output
     if: github.ref == 'refs/heads/main' # main is the only trigger; kept so a trigger ever added here stops at dev
     permissions:
       id-token: write
@@ -93,7 +98,7 @@ jobs:
     uses: ./.github/workflows/deploy-stage.yml
     with:
       stage: prod
-      mode: ${{ needs.changes.outputs.mode }}
+      mode: ${{ needs.changes.outputs.mode_prod }}
       role_arn: ${{ vars.AWS_DEPLOY_ROLE_PROD }}
       aws_region: ${{ vars.AWS_REGION }}
       cert_arn: ${{ vars.CERT_ARN_PROD }}
@@ -120,12 +125,14 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           DEV_RESULT: ${{ needs.deploy-dev.result }}
           PROD_RESULT: ${{ needs.deploy-prod.result }}
+          MODE_DEV: ${{ needs.changes.outputs.mode_dev }}
+          MODE_PROD: ${{ needs.changes.outputs.mode_prod }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then echo "NTFY_TOPIC unset — skipping notification."; exit 0; fi
-          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  $SHA"
+          body="check=$CHECK_RESULT changes=$CHANGES_RESULT dev=$DEV_RESULT prod=$PROD_RESULT  modes=dev:$MODE_DEV prod:$MODE_PROD  $SHA"
           # Fail if any pipeline job failed or was cancelled. `skipped` is fine — prod's `if:` can skip it; a
           # docs-only job still reports success (steps just no-op). `changes` is watched too: its failure (the
           # classifier) must not slip through as a success just because the deploy jobs got skipped.
