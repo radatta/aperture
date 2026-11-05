@@ -35,6 +35,28 @@ export interface CreateTaskInput {
   place?: string | null; // a place slug (the places scenario)
 }
 
+// The slices of a category, a plan row and the day row the check reads (the parts-v2b-reads scenario:
+// a write-back straight after another keeps both).
+export interface DevCategory {
+  id: string;
+  label: string;
+  isWork: boolean;
+  order: number;
+  active: boolean;
+}
+export interface DevPlan {
+  id: string;
+  taskId: string;
+  day: string;
+  plannedMinutes: number;
+  order: number;
+}
+export interface DevDay {
+  date: string;
+  capacityHours: number | null;
+  intent: string | null;
+}
+
 // The slices of @aperture/shared's places contract the check reads (packages/shared/src/places.ts).
 export interface DevPlace {
   id: string;
@@ -131,6 +153,8 @@ export const FLUX_SET_VIA = 'api:recordFluxSet';
 // A place this harness created (through the API, or the browser's upsertPlace create — recorder.ts).
 export const PLACE_VIA = 'api:upsertPlace';
 export const UI_PLACE_VIA = 'ui:upsertPlace';
+// A category this harness created, recorded from the create response like a place.
+export const CATEGORY_VIA = 'api:upsertCategory';
 // The test user's Shortcut token. It has no id, so a rotate records `place-token:<run>` — before the call, like
 // a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
@@ -150,11 +174,19 @@ export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':')
 
 // What a ledger id names, by the `via` it was created with — each kind is read and deleted its own way.
 export type LedgerKind =
-  'task' | 'flux' | 'place' | 'placeToken' | 'financeBucket' | 'financeLink' | 'financeRule';
+  | 'task'
+  | 'flux'
+  | 'place'
+  | 'placeToken'
+  | 'category'
+  | 'financeBucket'
+  | 'financeLink'
+  | 'financeRule';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
+  if (via === CATEGORY_VIA) return 'category';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
@@ -260,8 +292,10 @@ export function createApiClient({
     listTasks: () => call<DevTask[]>('listTasks', []),
     listBacklog: () => call<DevTask[]>('listBacklog', []),
     getTask: (id: string) => call<DevTask | null>('getTask', [id]),
-    listCategories: () =>
-      call<{ id: string; label: string; active: boolean; order: number }[]>('listCategories', []),
+    listCategories: () => call<DevCategory[]>('listCategories', []),
+    listPlansForDay: (day: string) => call<DevPlan[]>('listPlansForDay', [day]),
+    // The app's own day read (it materializes due series and sweeps the day) — today only, as the app.
+    getDay: (day: string) => call<DevDay>('getDay', [day]),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
     getSettings: () => call<{ dayStartHour: number }>('getSettings', []),
     listRunningSessions: () => call<{ id: string }[]>('listRunningSessions', []),
@@ -363,6 +397,47 @@ export function createApiClient({
     async deleteTask(id: string): Promise<void> {
       assertLedgerTask(id);
       await call<null>('deleteTask', [id]);
+    },
+    // A plan row on a task this harness created; deleting the task removes its plans.
+    async upsertPlan(input: {
+      id?: string;
+      taskId: string;
+      day: string;
+      plannedMinutes: number;
+      order: number;
+    }): Promise<DevPlan> {
+      assertLedgerTask(input.taskId);
+      return call<DevPlan>('upsertPlan', [input]);
+    },
+    // The test user's own day row — a singleton, nothing to ledger; a step that sets it puts the prior
+    // values back (parts-v2b-reads).
+    setDayCapacity: (day: string, capacityHours: number | null) =>
+      call<DevDay>('setDayCapacity', [day, capacityHours]),
+    setDayIntent: (day: string, intent: string) => call<DevDay>('setDayIntent', [day, intent]),
+    // Create (no id) is ledgered like a place — intent, then the server's id; an update must name a
+    // category the ledger recorded.
+    async upsertCategory(input: {
+      id?: string;
+      label: string;
+      isWork: boolean;
+      order?: number;
+      active?: boolean;
+    }): Promise<DevCategory> {
+      if (input.id) {
+        assertLedger(input.id, 'category');
+        return call<DevCategory>('upsertCategory', [input]);
+      }
+      ledger.append({ run, op: 'intent', via: CATEGORY_VIA, title: input.label });
+      const cat = await call<DevCategory>('upsertCategory', [input]);
+      ledger.append({ run, op: 'created', id: cat.id, via: CATEGORY_VIA, title: input.label });
+      return cat;
+    },
+    // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null. Cleanup runs
+    // newest-first, so a run's category (made after its tasks) goes before them: a run task on a run
+    // category would make the delete refuse, so no scenario puts one there.
+    async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
+      assertLedger(id, 'category');
+      await call<null>('deleteCategory', [id, reassignToId]);
     },
     // Mint an upload URL, PUT the bytes to S3 as the app does, then confirm — or leave it pending
     // (confirm: false), as an abandoned upload would.

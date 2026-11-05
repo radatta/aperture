@@ -371,6 +371,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.getFluxSet(id)) !== null;
       case 'place':
         return (await client.reads.listPlaces()).some((p) => p.id === id);
+      case 'category':
+        return (await client.reads.listCategories()).some((c) => c.id === id);
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
@@ -390,6 +392,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'place':
         await client.writes.deletePlace(id, null); // any task still on it just leaves the list
+        return true;
+      case 'category':
+        await client.writes.deleteCategory(id, null); // newest-first: it goes before the run's tasks, so none may sit on it
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

@@ -175,6 +175,10 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [],
+      listPlansForDay: async () => [],
+      getDay: async () => {
+        throw new Error('unused');
+      },
       listFluxSets: async () => [...fluxSets.values()],
       getFluxSet: async (id) => fluxSets.get(id) ?? null,
       listAttachments: async () => [],
@@ -229,6 +233,21 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       deleteTask: async (id) => {
         deleted.push(id);
         tasks.delete(id);
+      },
+      upsertPlan: async () => {
+        throw new Error('unused');
+      },
+      setDayCapacity: async () => {
+        throw new Error('unused');
+      },
+      setDayIntent: async () => {
+        throw new Error('unused');
+      },
+      upsertCategory: async () => {
+        throw new Error('unused');
+      },
+      deleteCategory: async () => {
+        throw new Error('unused');
       },
       upsertPlace: async () => {
         throw new Error('unused');

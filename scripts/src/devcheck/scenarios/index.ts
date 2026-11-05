@@ -10,6 +10,7 @@ import { fluxHistory } from './flux-history';
 import { inflightCap } from './inflight-cap';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
+import { partsV2bReads } from './parts-v2b-reads';
 import { phoneNits } from './phone-nits';
 import { places } from './places';
 import { reflectionLine } from './reflection-line';
@@ -20,6 +21,7 @@ export const SCENARIOS: Scenario[] = [
   captureTask,
   partsV2,
   partsV2b,
+  partsV2bReads,
   fluxHistory,
   attachmentDelete,
   places,
