@@ -20,6 +20,7 @@ function mkTask(id: string, dueOffset: number | null, status: TaskStatus = 'back
     dueDay: dueOffset === null ? null : addDays(TODAY, dueOffset),
     dueTime: null,
     notes: null,
+    reflection: null,
     estimateMin: null,
     bufferMin: null,
     estimateLockedMin: null,

@@ -192,3 +192,14 @@ export function parseNotes(src: string): Block[] {
   }
   return blocks;
 }
+
+// The note as one line of plain text — markers dropped, lines and items joined by a space — for a
+// truncated one-line preview (the night review's reflection line).
+export function notesPlainText(src: string): string {
+  const inline = (xs: Inline[]): string =>
+    xs.map((x) => ('children' in x ? inline(x.children) : x.text)).join('');
+  return parseNotes(src)
+    .flatMap((b) => (b.kind === 'p' ? b.lines : b.items))
+    .map(inline)
+    .join(' ');
+}

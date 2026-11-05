@@ -673,3 +673,26 @@ describe('backend decisions under a lagging task list', () => {
     expect((await backend.getTask(p.id))?.estimateLockedMin).toBeNull();
   });
 });
+
+// An older app shell (or any caller without a reflection) sends setTaskActual as a two-element params array
+// (the http client drops a trailing undefined), so over the wire a missing reflection keeps the saved one.
+describe('setTaskActual over RPC', () => {
+  it('a two-element call keeps the reflection; an explicit null clears it; over the cap lands nothing', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const rpc = (
+      method: 'createTask' | 'transitionTask' | 'setTaskActual' | 'getTask',
+      args: unknown[],
+    ) => handleRpc(doc, { userId: 'local', method, args, now }, { presigner: fakePresigner() });
+    const t = (await rpc('createTask', [{ title: 'pset', estimateMin: 30 }])) as Task;
+    await rpc('transitionTask', [t.id, 'in_progress']);
+    await rpc('setTaskActual', [t.id, 40, 'went long']);
+    const kept = (await rpc('setTaskActual', [t.id, 45])) as Task;
+    expect(kept).toMatchObject({ actualAccruedMin: 45, reflection: 'went long' });
+    const cleared = (await rpc('setTaskActual', [t.id, 45, null])) as Task;
+    expect(cleared.reflection).toBeNull();
+    await expect(rpc('setTaskActual', [t.id, 99, 'x'.repeat(1001)])).rejects.toThrow(/1,000/);
+    const after = (await rpc('getTask', [t.id])) as Task;
+    expect(after).toMatchObject({ actualAccruedMin: 45, reflection: null }); // the 99 never landed
+  });
+});

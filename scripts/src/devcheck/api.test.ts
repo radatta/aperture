@@ -75,6 +75,7 @@ describe('createApiClient', () => {
       'recordPlaceTokenMint',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'setTaskActual',
       'upsertPlace',
     ]);
   });
@@ -132,6 +133,15 @@ describe('createApiClient', () => {
     const fetch = vi.fn<FetchLike>();
     const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
     await expect(api.writes.deleteTask('someone-elses')).rejects.toThrow(/LEDGER_GUARD/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses setTaskActual on an id the ledger never recorded — without a request', async () => {
+    const fetch = vi.fn<FetchLike>();
+    const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+    await expect(api.writes.setTaskActual('someone-elses', 10, 'x')).rejects.toThrow(
+      /LEDGER_GUARD/,
+    );
     expect(fetch).not.toHaveBeenCalled();
   });
 

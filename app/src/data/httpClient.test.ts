@@ -29,6 +29,22 @@ describe('createHttpClient (RPC transport)', () => {
     expect(JSON.parse(sent)).toEqual({ args: [{ title: 'hi', estimateMin: 30, bufferMin: null }] });
   });
 
+  it('drops a trailing undefined (an omitted optional), never sends it as null; an explicit null goes', async () => {
+    const sent: string[] = [];
+    const api = createHttpClient('', async (_url, init) => {
+      sent.push(init.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: 't1' }) };
+    });
+    await api.setTaskActual('t1', 30, undefined);
+    await api.setTaskActual('t1', 30, null);
+    await api.setTaskActual('t1', 30, 'went fine');
+    expect(sent.map((b) => JSON.parse(b))).toEqual([
+      { args: ['t1', 30] }, // keeps the reflection server-side
+      { args: ['t1', 30, null] }, // clears it
+      { args: ['t1', 30, 'went fine'] },
+    ]);
+  });
+
   it('throws on a non-ok response', async () => {
     const api = createHttpClient('', async () => ({
       ok: false,

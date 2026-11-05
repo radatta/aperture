@@ -6,6 +6,7 @@ import {
   fmtClock12,
   fmtMonthDayYear,
   TASK_NOTES_MAX,
+  TASK_REFLECTION_MAX,
   timeKeyOfInput,
 } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -23,10 +24,12 @@ import {
   useSetEstimate,
   useSetTaskNotes,
   useSetTaskPlace,
+  useSetTaskReflection,
   useSetTaskTitle,
 } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 import { NotesField } from '../notes/NotesField';
+import { REFLECTION_FIELD } from '../notes/reflectionField';
 import { notesValue } from '../notes/parseNotes';
 import { scopeLabel, suggestedBuffer } from '../taskMath';
 import { useEditSlot } from './editState';
@@ -39,8 +42,8 @@ import type { EditSlots } from './editState';
 // estimate is history, so it shows read-only (canEditEstimate). Category stays editable at any status;
 // due and the place (the store's errand list) lock once finished — a finished errand's place is what
 // kept it out of calibration, so it's history too. A part's place is its parent's (places.ts), so a part
-// has no picker, only a quiet line. Notes edit at any status. Save writes only what
-// changed and keeps the modal open (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
+// has no picker, only a quiet line. Notes edit at any status, and so does a done task's reflection. Save
+// writes only what changed and keeps the modal open (showing "Saved"); the modal's own Close is the way out. A parent's estimate is the sum of its parts
 // (read-only); a part's own time is when its block ends, so its due fields read Ends / Ends at (parts.ts),
 // with a quiet note when that's after its parent's deadline.
 export function TaskDetailsForm({
@@ -72,6 +75,7 @@ export function TaskDetailsForm({
   // The roster's name for a slug; one it doesn't know reads as the slug itself.
   const placeName = (slug: string) =>
     placeOptions.places.find((p) => p.slug === slug)?.name ?? slug;
+  const setReflection = useSetTaskReflection();
 
   const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
@@ -88,6 +92,12 @@ export function TaskDetailsForm({
   const [notes, setNotes_] = useState<string>(task.notes ?? '');
   const [place, setPlace_] = useState<string>(task.place ?? '');
   const [editingNotes, setEditingNotes] = useState(false);
+  // The reflection: the look back written at Mark done, edited here like notes. A done task shows it,
+  // and so does any other with one — except one in progress, whose Done form already holds it.
+  const [reflection, setReflection_] = useState<string>(task.reflection ?? '');
+  const [editingReflection, setEditingReflection] = useState(false);
+  const showReflection =
+    task.status === 'done' || (!!task.reflection && task.status !== 'in_progress');
   // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
   // Google), another device, the MCP — reseeds every field the user hasn't touched (still showing the
   // previous value); edits in progress stay, so a Save can't write stale values back over the change.
@@ -112,6 +122,7 @@ export function TaskDetailsForm({
     }
     reseed(setNotes_, prevTask.notes ?? '', task.notes ?? '');
     reseed(setPlace_, prevTask.place ?? '', task.place ?? '');
+    reseed(setReflection_, prevTask.reflection ?? '', task.reflection ?? '');
   }
   // One flag for the whole sequence of writes (the mutations' own isPending gaps between them).
   const [saving, setSaving] = useState(false);
@@ -131,13 +142,17 @@ export function TaskDetailsForm({
   const notesDirty = editingNotes && notesTrimmed !== (task.notes ?? '');
   const notesOver = notesTrimmed.length > TASK_NOTES_MAX;
   const placeDirty = !isTerminal && !isPart && (task.place ?? '') !== place;
+  const reflectionTrimmed = notesValue(reflection);
+  const reflectionDirty = editingReflection && reflectionTrimmed !== (task.reflection ?? '');
+  const reflectionOver = reflectionTrimmed.length > TASK_REFLECTION_MAX;
   const dirty =
     titleDirty ||
     estimateDirty ||
     (task.categoryId ?? '') !== categoryId ||
     dueDirty ||
     notesDirty ||
-    placeDirty;
+    placeDirty ||
+    reflectionDirty;
 
   // What the modal's exit paths (Esc/backdrop/Close, opening another task) act on: 'dirty' confirms
   // before discarding; 'saving' waits for the write — those edits are on their way, so "Discard" would
@@ -145,7 +160,17 @@ export function TaskDetailsForm({
   useEditSlot(edits, 'details', saving ? 'saving' : dirty ? 'dirty' : 'clean');
 
   // The fields as they are right now, readable after the save's awaits (the closure's are stale).
-  const fields = { title, estimate, buffer, categoryId, dueDay, dueTime, notes, place };
+  const fields = {
+    title,
+    estimate,
+    buffer,
+    categoryId,
+    dueDay,
+    dueTime,
+    notes,
+    place,
+    reflection,
+  };
   const current = useRef(fields);
   useEffect(() => {
     current.current = fields;
@@ -180,6 +205,11 @@ export function TaskDetailsForm({
       if (notesDirty)
         next = await setNotes.mutateAsync({ id: task.id, notes: notesTrimmed || null });
       if (placeDirty) next = await setPlace.mutateAsync({ id: task.id, place: place || null });
+      if (reflectionDirty)
+        next = await setReflection.mutateAsync({
+          id: task.id,
+          reflection: reflectionTrimmed || null,
+        });
       const now = current.current;
       const untouched = (k: keyof typeof sent) => now[k] === sent[k];
       if (untouched('title')) setTitle_(next.title);
@@ -192,6 +222,10 @@ export function TaskDetailsForm({
       if (untouched('notes')) {
         setNotes_(next.notes ?? '');
         setEditingNotes(false);
+      }
+      if (untouched('reflection')) {
+        setReflection_(next.reflection ?? '');
+        setEditingReflection(false);
       }
       setSaved(next);
     } catch {
@@ -401,6 +435,20 @@ export function TaskDetailsForm({
         }}
         onChange={setNotes_}
       />
+      {showReflection && (
+        <NotesField
+          {...REFLECTION_FIELD}
+          placeholder="How did it go? What would you do differently?"
+          saved={task.reflection}
+          value={reflection}
+          editing={editingReflection}
+          onEdit={() => {
+            setReflection_(task.reflection ?? '');
+            setEditingReflection(true);
+          }}
+          onChange={setReflection_}
+        />
+      )}
       <div className="flex items-center gap-2">
         {/* Nothing to save (or mid-save) is aria-disabled, not disabled: a keyboard user who pressed
             Save keeps focus on it instead of dropping to <body> as it disables itself. Invalid input
@@ -409,7 +457,7 @@ export function TaskDetailsForm({
           size="sm"
           onClick={save}
           aria-disabled={saving || !dirty}
-          disabled={!titleTrimmed || notesOver}
+          disabled={!titleTrimmed || notesOver || reflectionOver}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >
           Save

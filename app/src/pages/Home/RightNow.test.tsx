@@ -109,6 +109,7 @@ describe('Right now card', () => {
     await user.click(screen.getByRole('button', { name: 'Done' }));
     // Nothing tracked: the Actual starts empty (no "0" to type over) and can't be submitted empty.
     const actual = await screen.findByLabelText<HTMLInputElement>('Actual (min)');
+    expect(document.activeElement).toBe(actual); // Done focuses Actual, as the task modal does
     expect(actual.value).toBe('');
     expect(screen.getByRole('button', { name: 'Mark done' }).hasAttribute('disabled')).toBe(true);
     await user.type(actual, '18');

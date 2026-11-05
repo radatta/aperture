@@ -647,6 +647,30 @@ describe('parent + parts', () => {
     expect(d.getByLabelText<HTMLInputElement>('Title').value).toBe('draft 2');
   });
 
+  it('a reflection typed in the Mark done box makes Esc ask; Mark done with it closes without asking', async () => {
+    const { api, b } = await seeded(false);
+    await api.transitionTask(b.id, 'in_progress');
+    renderApp({ api, path: '/tasks?lens=week' });
+    const user = userEvent.setup();
+    const row = await waitFor(() => rowOf('P2'));
+    await user.click(within(row).getByRole('button', { name: 'draft' }));
+    const taskDialog = await screen.findByRole('dialog', { name: 'Task: draft' });
+    const d = within(taskDialog);
+    await user.type(d.getByLabelText(/^Reflection/), 'ran long');
+    // jsdom doesn't map Escape to <dialog>'s cancel event; fire it the way the browser does.
+    fireEvent(taskDialog, new Event('cancel', { cancelable: true }));
+    const confirm = within(await screen.findByRole('dialog', { name: 'Discard unsaved changes?' }));
+    await user.click(confirm.getByRole('button', { name: 'Keep editing' }));
+    expect(d.getByLabelText<HTMLTextAreaElement>(/^Reflection/).value).toBe('ran long');
+
+    await user.type(d.getByLabelText('Actual (min)'), '20');
+    await user.click(d.getByRole('button', { name: 'Mark done' }));
+    await waitFor(async () => expect((await api.getTask(b.id))?.status).toBe('done'));
+    expect((await api.getTask(b.id))?.reflection).toBe('ran long');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: draft' })).toBeNull());
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).toBeNull();
+  });
+
   it('Mark done with an unsaved title asks; Keep editing stays on the done task, and Save still works', async () => {
     const { api, p } = await seeded(true);
     renderApp({ api, path: '/tasks?lens=week' });

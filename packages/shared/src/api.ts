@@ -366,8 +366,12 @@ export interface ApiClient {
   // Notes (light markdown). Like the title, settable at ANY status and never touches the estimate lock.
   // Trims; empty/whitespace or null clears to null; over TASK_NOTES_MAX rejects and writes nothing.
   setTaskNotes(id: string, notes: string | null): Promise<Task>;
+  // The reflection (taskNotes.ts), at ANY status, never the lock. Missing is an error; null clears.
+  setTaskReflection(id: string, reflection: string | null): Promise<Task>;
   transitionTask(id: string, to: TaskStatus): Promise<Task>;
-  setTaskActual(id: string, actualMin: number): Promise<Task>;
+  // reflection rides the same write: undefined KEEPS the current one (an older caller sends two params),
+  // null clears, a string is normalized — over the cap rejects and writes nothing, the actual included.
+  setTaskActual(id: string, actualMin: number, reflection?: string | null): Promise<Task>;
   // Split always yields parent + parts (split.ts): the original finishes or keeps going, the rest becomes a
   // new part on the original's plan day (else backlog). A standalone original becomes Part 1 under a NEW
   // parent that takes its title, deadline and lock; a part gains a sibling. Never cancels, never edits a lock.

@@ -64,6 +64,7 @@ describe('createMcpClient', () => {
     const c = client(server({}));
     expect(Object.keys(c.reads).sort()).toEqual([
       'getAttachmentDownloadUrl',
+      'getCalibration',
       'listAttachments',
       'listBacklog',
       'listPlaceTasks',
@@ -158,6 +159,26 @@ describe('createMcpClient', () => {
     const fetch = server({});
     await expect(client(fetch).writes.deleteTask('NOPE')).rejects.toThrow(/LEDGER_GUARD/);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('passes a reflection on complete_task and update_task; an omitted one is left out', async () => {
+    const fetch = server({
+      update_task: json({ id: 'T1', title: 'a', reflection: 'kept' }),
+      complete_task: json({ task: { id: 'T1', title: 'a', status: 'done' }, previousActualMin: 0 }),
+    });
+    const c = client(fetch);
+    await c.writes.updateTask('T1', { reflection: 'kept' });
+    await c.writes.completeTask('T1', 10, 'went fine');
+    await c.writes.completeTask('T1', 10);
+    const args = fetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse(init.body as string) as { params: { arguments: unknown } }).params.arguments,
+    );
+    expect(args).toEqual([
+      { id: 'T1', reflection: 'kept' },
+      { id: 'T1', actualMin: 10, reflection: 'went fine' },
+      { id: 'T1', actualMin: 10 },
+    ]);
   });
 
   it('refuses delete_task on a recorded parent with a part the ledger never recorded', async () => {

@@ -96,6 +96,8 @@ export function createMcpClient({
       (await rpc<{ tools: { name: string }[] }>('tools/list', {})).tools.map((t) => t.name),
     listTasks: () => data<DevTask[]>('list_tasks'),
     listBacklog: () => data<DevTask[]>('list_backlog'),
+    getCalibration: (range: { from: string; to: string }) =>
+      data<{ taskId: string; reflection?: string | null }[]>('get_calibration', range),
     listAttachments: (taskId: string) => data<DevAttachment[]>('list_attachments', { taskId }),
     getAttachmentDownloadUrl: (id: string) => data<string>('get_attachment_download_url', { id }),
     listPlaces: () => data<DevPlace[]>('list_places'),
@@ -118,19 +120,28 @@ export function createMcpClient({
       ledger.append({ run, op: 'created', id: task.id, via: MCP_CREATE_VIA, title: input.title });
       return task;
     },
-    // Patch fields on a task this run created (update_task: place moves it between errand lists).
-    async updateTask(id: string, patch: { place?: string | null }): Promise<DevTask> {
+    // Patch fields on a task this run created (update_task: place moves it between errand lists; the
+    // reflection scenario sets one up for complete_task to keep).
+    async updateTask(
+      id: string,
+      patch: { place?: string | null; reflection?: string | null },
+    ): Promise<DevTask> {
       assertLedgerTask(id);
       return data<DevTask>('update_task', { id, ...patch });
     },
     // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
-    // a parent) — omitted here, it is left out of the call, never sent as null.
+    // a parent) — omitted here, it is left out of the call, never sent as null; so is an omitted reflection.
     async completeTask(
       id: string,
       actualMin?: number,
+      reflection?: string | null,
     ): Promise<{ task: DevTask; previousActualMin: number | null }> {
       assertLedgerTask(id);
-      return data('complete_task', actualMin === undefined ? { id } : { id, actualMin });
+      return data('complete_task', {
+        id,
+        ...(actualMin === undefined ? {} : { actualMin }),
+        ...(reflection === undefined ? {} : { reflection }),
+      });
     },
     // Deleting a parent deletes its parts, so a recorded parent with a part the ledger doesn't know is
     // refused, as the pipeline's cleanup does. A task already gone answers Not found — returned, not thrown.

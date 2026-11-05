@@ -138,6 +138,17 @@ export function useSetTaskTitle() {
   });
 }
 
+// The reflection (reflection.md): settable at any status, never part of the estimate lock.
+export function useSetTaskReflection() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; reflection: string | null }) =>
+      api.setTaskReflection(v.id, v.reflection),
+    ...written(qc),
+  });
+}
+
 // Notes. Like the title, settable at any status and never part of the estimate lock (see setTaskNotes).
 export function useSetTaskNotes() {
   const api = useApi();
@@ -164,7 +175,9 @@ export function useSetActual() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { id: string; actualMin: number }) => api.setTaskActual(v.id, v.actualMin),
+    // reflection undefined keeps the task's current one; null clears it.
+    mutationFn: (v: { id: string; actualMin: number; reflection?: string | null }) =>
+      api.setTaskActual(v.id, v.actualMin, v.reflection),
     ...written(qc),
   });
 }

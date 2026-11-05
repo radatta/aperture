@@ -8,6 +8,7 @@ const pt = (estimateLockedMin: number, actualAccruedMin: number): CalibrationPoi
   estimateLockedMin,
   actualAccruedMin,
   categoryId: null,
+  reflection: null,
   parts: 0,
 });
 
@@ -58,6 +59,7 @@ describe('recentPoints', () => {
     estimateLockedMin: 30,
     actualAccruedMin: 30,
     categoryId: null,
+    reflection: null,
     parts: 0,
   });
   it('newest day first; within a day, the later completion first', () => {

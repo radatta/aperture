@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -29,6 +30,26 @@ describe('home mode switch', () => {
     expect(screen.getByText('Right now')).toBeTruthy();
     expect(screen.getByText('Coming up')).toBeTruthy();
     expect(screen.getByText('Time budget')).toBeTruthy();
+  });
+});
+
+describe('night review', () => {
+  it('shows a done task’s reflection under its delta, as plain text; none adds nothing', async () => {
+    const api = createStubClient({ seed: false, storageKey: `night-${Math.random()}` });
+    const finish = async (title: string, reflection: string | null) => {
+      const t = await api.createTask({ title, estimateMin: 30 });
+      await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 45, reflection);
+      await api.transitionTask(t.id, 'done');
+    };
+    await finish('Pset 4', 'Should have **outlined** first');
+    await finish('Lab prep', null);
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Night' }));
+    expect(await screen.findByText('Should have outlined first')).toBeTruthy(); // markers dropped
+    expect(screen.getByText('Lab prep')).toBeTruthy();
+    expect(screen.queryByText(/\*\*/)).toBeNull();
   });
 });
 

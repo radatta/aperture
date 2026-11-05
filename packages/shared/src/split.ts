@@ -112,6 +112,7 @@ export function newParentFrom(original: Task, input: SplitTaskInput): Omit<Task,
     dueDay: original.dueDay,
     dueTime: original.dueTime ?? null,
     notes: original.notes ?? null,
+    reflection: null, // a look back at the finished work stays on the original
     seriesId: null,
     rollId: null,
     estimateMin: null,
@@ -148,6 +149,7 @@ export function splitFollowUp(
     dueDay: original.dueTime ? original.dueDay : null,
     dueTime: original.dueTime ?? null,
     notes: original.notes ?? null, // the remaining scope keeps its context
+    reflection: null, // new work; the original keeps its own
     seriesId: null,
     rollId: null, // a rep is never split (splitOriginal), so a part never carries a roll
     estimateMin: followUp.estimateMin,

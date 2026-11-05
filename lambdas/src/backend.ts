@@ -24,6 +24,7 @@ import {
   normalizeContentType,
   normalizeDue,
   normalizeNotes,
+  normalizeReflection,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
@@ -32,6 +33,7 @@ import {
   sanitizeFilename,
   seriesDueOn,
   setNotesArg,
+  setReflectionArg,
   followUpPlanDay,
   followUpPlanMinutes,
   assertCanBePart,
@@ -314,6 +316,7 @@ export class BackendClient implements ApiClient {
       categoryId: input.categoryId ?? null,
       ...normalizeDue(input.dueDay ?? null, input.dueTime ?? null),
       notes: normalizeNotes(input.notes),
+      reflection: null,
       seriesId: null,
       rollId: null,
       estimateMin: input.estimateMin ?? null,
@@ -940,6 +943,11 @@ export class BackendClient implements ApiClient {
     const t = await this.mustTask(id);
     return this.repo.putTask({ ...t, notes: normalized, updatedAt: this.now() });
   }
+  async setTaskReflection(id: string, reflection: string | null): Promise<Task> {
+    const normalized = setReflectionArg(reflection); // throws (missing, over the cap) before any read or write
+    const t = await this.mustTask(id);
+    return this.repo.putTask({ ...t, reflection: normalized, updatedAt: this.now() });
+  }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = await this.mustTask(id);
     // Consistent: completeParent writes the sum of the parts' actuals, often a tap after the last part's.
@@ -985,10 +993,12 @@ export class BackendClient implements ApiClient {
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
     return next;
   }
-  async setTaskActual(id: string, actualMin: number): Promise<Task> {
+  async setTaskActual(id: string, actualMin: number, reflection?: string | null): Promise<Task> {
+    // Normalized before any read or write: an over-cap reflection lands nothing. undefined keeps the current one.
+    const note = reflection === undefined ? {} : { reflection: normalizeReflection(reflection) };
     const t = await this.mustTask(id);
     if (hasParts(await this.repo.listTasks(), id)) throw new Error(PARENT_NO_ACTUAL_ERROR);
-    return this.repo.putTask({ ...t, actualAccruedMin: actualMin, updatedAt: this.now() });
+    return this.repo.putTask({ ...t, actualAccruedMin: actualMin, ...note, updatedAt: this.now() });
   }
   async splitTask(
     id: string,
@@ -1385,6 +1395,7 @@ export class BackendClient implements ApiClient {
         dueDay: null,
         dueTime: null,
         notes: null,
+        reflection: null,
         seriesId: series.id,
         rollId: null,
         estimateMin: series.defaultEstimateMin,
@@ -2043,6 +2054,7 @@ export class BackendClient implements ApiClient {
         estimateLockedMin: t.estimateLockedMin as number,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
+        reflection: t.reflection ?? null,
         parts: rollupParts(tasks, t.id),
       }))
       .filter((p) => p.day >= range.from && p.day <= range.to)

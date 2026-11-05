@@ -53,7 +53,15 @@ export function createHttpClient(
     }
   }
 
+  // A trailing undefined is an omitted optional param, as it is in-process: JSON would turn it into null in
+  // the args array, and null means something else (setTaskActual's reflection: undefined keeps, null clears).
+  const omitTrailing = (args: unknown[]) => {
+    let n = args.length;
+    while (n > 0 && args[n - 1] === undefined) n--;
+    return args.slice(0, n);
+  };
   const client: Record<string, unknown> = {};
-  for (const method of API_METHODS) client[method] = (...args: unknown[]) => rpc(method, args);
+  for (const method of API_METHODS)
+    client[method] = (...args: unknown[]) => rpc(method, omitTrailing(args));
   return client as unknown as ApiClient;
 }

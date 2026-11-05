@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   deadlineOf,
@@ -131,6 +131,9 @@ export function RightNowCard() {
   const transition = useTransitionTask();
   const upsertPlan = useUpsertPlan();
   const [doneInitial, setDoneInitial] = useState<number | null>(null);
+  // Done opens the form with Actual focused, as the task modal's finish intent does — you tapped Done to
+  // enter the number. Stable, so it focuses once on mount, not on every render.
+  const focusActual = useCallback((el: HTMLInputElement | null) => el?.focus(), []);
 
   const rn = rightNow(rows, allTasks);
   const hero = rn.hero;
@@ -228,6 +231,7 @@ export function RightNowCard() {
               <DoneForm
                 task={hero}
                 initialActualMin={doneInitial}
+                actualRef={focusActual}
                 onDone={() => setDoneInitial(null)}
               />
             )}

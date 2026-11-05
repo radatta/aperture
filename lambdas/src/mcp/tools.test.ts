@@ -284,6 +284,83 @@ describe('mcp tools — tasks', () => {
     await expect(call('update_task', { id: t.id, notes: 42 })).rejects.toThrow(/string or null/);
   });
 
+  it('complete_task saves a reflection with the actual, and on a parent after the rollup', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'pset', estimateMin: 30 })) as Task;
+    const { task } = (await call('complete_task', {
+      id: t.id,
+      actualMin: 45,
+      reflection: '  Should have outlined first  ',
+    })) as { task: Task };
+    expect(task).toMatchObject({
+      status: 'done',
+      actualAccruedMin: 45,
+      reflection: 'Should have outlined first',
+    });
+    expect(((await call('list_tasks')) as Task[]).find((x) => x.id === t.id)?.reflection).toBe(
+      'Should have outlined first',
+    );
+    const points = (await call('get_calibration', { from: '2000-01-01', to: '2100-01-01' })) as {
+      taskId: string;
+      reflection: string | null;
+    }[];
+    expect(points.find((x) => x.taskId === t.id)?.reflection).toBe('Should have outlined first');
+    // Without one, nothing is cleared or invented.
+    const plain = (await call('create_task', { title: 'plain', estimateMin: 10 })) as Task;
+    const { task: noNote } = (await call('complete_task', { id: plain.id, actualMin: 10 })) as {
+      task: Task;
+    };
+    expect(noNote.reflection).toBeNull();
+
+    const p = (await call('create_task', { title: 'Essay' })) as Task;
+    const [a] = (await call('create_tasks', {
+      tasks: [{ title: 'Draft', estimateMin: 60, parentId: p.id }],
+    })) as Task[];
+    await call('complete_task', { id: a!.id, actualMin: 70 });
+    const { task: parent } = (await call('complete_task', {
+      id: p.id,
+      reflection: 'The draft ran long',
+    })) as { task: Task };
+    expect(parent).toMatchObject({
+      status: 'done',
+      actualAccruedMin: 70,
+      reflection: 'The draft ran long',
+    });
+  });
+
+  it('complete_task with a reflection over the cap is a param error that applies nothing', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'orig', estimateMin: 20 })) as Task;
+    await expect(
+      call('complete_task', { id: t.id, actualMin: 30, reflection: 'x'.repeat(1001) }),
+    ).rejects.toThrow(/"reflection": Reflection is limited to 1,000 characters/);
+    await expect(
+      call('complete_task', { id: t.id, actualMin: 30, reflection: 42 }),
+    ).rejects.toThrow(/string or null/);
+    const after = ((await call('list_tasks')) as Task[])[0]!;
+    expect(after).toMatchObject({ status: 'backlog', actualAccruedMin: 0, reflection: null });
+  });
+
+  it('update_task sets and clears reflection, after notes in the fan-out', async () => {
+    const { call } = makeEnv();
+    const t = (await call('create_task', { title: 'lab', estimateMin: 20 })) as Task;
+    await call('complete_task', { id: t.id, actualMin: 25 });
+    const set = (await call('update_task', {
+      id: t.id,
+      notes: 'ctx',
+      reflection: 'went fine',
+    })) as Task;
+    expect(set).toMatchObject({ notes: 'ctx', reflection: 'went fine', estimateLockedMin: 20 });
+    expect(
+      ((await call('update_task', { id: t.id, reflection: null })) as Task).reflection,
+    ).toBeNull();
+    // Over the cap: nothing in the patch lands, the notes before it included.
+    await expect(
+      call('update_task', { id: t.id, notes: 'new', reflection: 'x'.repeat(1001) }),
+    ).rejects.toThrow(/1,000/);
+    expect(((await call('list_tasks')) as Task[])[0]!.notes).toBe('ctx');
+  });
+
   it('update_task with no fields is a param error', async () => {
     const { call } = makeEnv();
     const t = (await call('create_task', { title: 'x' })) as Task;

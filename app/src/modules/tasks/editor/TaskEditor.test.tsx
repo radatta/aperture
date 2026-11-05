@@ -17,7 +17,12 @@ function api(): ApiClient {
 }
 
 // What the modal reads: each form's slot, folded.
-const slots = (): EditSlots => ({ details: 'clean', reveal: 'clean', changed: vi.fn() });
+const slots = (): EditSlots => ({
+  details: 'clean',
+  reveal: 'clean',
+  finish: 'clean',
+  changed: vi.fn(),
+});
 
 function renderEditor(client: ApiClient, task: Task, intent: TaskEditorIntent = 'view') {
   const onFinished = vi.fn();
@@ -49,6 +54,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   dueDay: null,
   dueTime: null,
   notes: null,
+  reflection: null,
   seriesId: null,
   rollId: null,
   estimateMin: null,
@@ -1172,6 +1178,105 @@ describe('TaskEditor', () => {
       expect(screen.getByText(/5,100 \/ 5,000/)).toBeTruthy();
       expect(field.getAttribute('aria-invalid')).toBe('true');
       expect((field as HTMLTextAreaElement).value).toHaveLength(5100); // never silently truncated
+      expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
+    });
+  });
+
+  describe('reflection', () => {
+    async function doneTask(client: ApiClient, reflection?: string): Promise<Task> {
+      const t = await client.createTask({ title: 'Pset', estimateMin: 30 });
+      await client.transitionTask(t.id, 'in_progress');
+      await client.setTaskActual(t.id, 40, reflection ?? null);
+      return client.transitionTask(t.id, 'done');
+    }
+
+    it('a done task shows its reflection with Edit; Save writes it and stays open', async () => {
+      const client = api();
+      const t = await doneTask(client, 'Should have **outlined** first');
+      const setReflection = vi.spyOn(client, 'setTaskReflection');
+      const { onFinished, edits, user } = renderEditor(client, t);
+      expect(screen.getByText('outlined').tagName).toBe('STRONG'); // rendered, same subset as notes
+
+      await user.click(screen.getByRole('button', { name: 'Edit reflection' }));
+      const field = screen.getByLabelText('Reflection');
+      expect(document.activeElement).toBe(field);
+      await user.clear(field);
+      await user.type(field, '  Outline first next time  ');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      expect(setReflection).toHaveBeenCalledWith(t.id, 'Outline first next time');
+      await waitFor(async () =>
+        expect((await client.getTask(t.id))?.reflection).toBe('Outline first next time'),
+      );
+      expect(await screen.findByText('Saved')).toBeTruthy();
+      expect(screen.queryByLabelText('Reflection')).toBeNull(); // back on the rendered view
+      expect(screen.getByText('Outline first next time')).toBeTruthy();
+      expect(editState(edits)).toBe('clean');
+      expect(onFinished).not.toHaveBeenCalled();
+    });
+
+    it('clearing the reflection saves null', async () => {
+      const client = api();
+      const t = await doneTask(client, 'drop me');
+      const setReflection = vi.spyOn(client, 'setTaskReflection');
+      const { user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Edit reflection' }));
+      await user.clear(screen.getByLabelText('Reflection'));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      expect(setReflection).toHaveBeenCalledWith(t.id, null);
+      expect(await screen.findByRole('button', { name: 'Add a reflection…' })).toBeTruthy();
+    });
+
+    it('an unsaved reflection edit trips the dirty guard; other edits leave it alone', async () => {
+      const client = api();
+      const t = await doneTask(client, 'keep');
+      const setReflection = vi.spyOn(client, 'setTaskReflection');
+      const { edits, user } = renderEditor(client, t);
+      await user.click(screen.getByRole('button', { name: 'Edit reflection' }));
+      expect(editState(edits)).toBe('clean'); // opening the editor alone changes nothing
+      await user.type(screen.getByLabelText('Reflection'), ' more');
+      expect(editState(edits)).toBe('dirty');
+      await user.clear(screen.getByLabelText('Reflection'));
+      await user.type(screen.getByLabelText('Reflection'), 'keep');
+      expect(editState(edits)).toBe('clean');
+
+      const title = screen.getByLabelText('Title');
+      await user.type(title, '!');
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText('Saved')).toBeTruthy();
+      expect(setReflection).not.toHaveBeenCalled();
+    });
+
+    it('a reflection typed in the finish intent’s Done form makes leaving ask first', async () => {
+      const client = api();
+      let t = await client.createTask({ title: 'Pset', estimateMin: 30 });
+      t = await client.transitionTask(t.id, 'in_progress');
+      const { edits, user } = renderEditor(client, t, 'finish');
+      expect(editState(edits)).toBe('clean');
+      await user.type(screen.getByLabelText(/^Reflection/), 'ran long');
+      expect(editState(edits)).toBe('dirty'); // Esc / backdrop / Cancel now confirm
+      // In progress, the details form shows no second Reflection field — the Done form holds it.
+      expect(screen.getAllByLabelText(/^Reflection/)).toHaveLength(1);
+    });
+
+    it('an open task without a reflection shows no Reflection block; a done one offers to add', async () => {
+      const client = api();
+      renderEditor(client, await client.createTask({ title: 'Open' }));
+      expect(screen.queryByText('Reflection')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Add a reflection…' })).toBeNull();
+      cleanup();
+      renderEditor(client, await doneTask(client));
+      expect(screen.getByRole('button', { name: 'Add a reflection…' })).toBeTruthy();
+    });
+
+    it('over the cap the reflection disables Save, without truncating', async () => {
+      const client = api();
+      const { user } = renderEditor(client, await doneTask(client));
+      await user.click(screen.getByRole('button', { name: 'Add a reflection…' }));
+      const field = screen.getByLabelText('Reflection');
+      fireEvent.change(field, { target: { value: 'x'.repeat(1001) } });
+      expect(screen.getByText(/1,001 \/ 1,000/)).toBeTruthy();
+      expect((field as HTMLTextAreaElement).value).toHaveLength(1001);
       expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
     });
   });

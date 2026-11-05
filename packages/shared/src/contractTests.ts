@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient } from './api';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
-import { TASK_NOTES_MAX } from './taskNotes';
+import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
 import {
@@ -970,6 +970,75 @@ export function runApiContract(
       expect(followUp.notes).toBe('links + context');
       const data = await api.exportData();
       expect(data.tasks.find((x) => x.id === t.id)?.notes).toBe('links + context');
+    });
+
+    it('tasks: reflection saves with the actual, edits and clears at any status, never touches the lock, and rides export and the calibration point', async () => {
+      const t = await api.createTask({ title: 'Pset', estimateMin: 30, bufferMin: 0 });
+      expect(t.reflection).toBeNull();
+      await api.transitionTask(t.id, 'in_progress');
+      const saved = await api.setTaskActual(t.id, 45, '  Should have **outlined first**\r\n  ');
+      expect(saved.actualAccruedMin).toBe(45);
+      expect(saved.reflection).toBe('Should have **outlined first**'); // trimmed, CRLF → LF
+      const done = await api.transitionTask(t.id, 'done');
+      expect(done.reflection).toBe('Should have **outlined first**');
+      expect(done.estimateLockedMin).toBe(30);
+
+      const edited = await api.setTaskReflection(t.id, 'Outline first next time');
+      expect(edited.reflection).toBe('Outline first next time');
+      expect(edited.estimateLockedMin).toBe(30); // a reflection ≠ scope change
+      expect((await api.getTask(t.id))?.reflection).toBe('Outline first next time');
+      expect((await api.listTasks()).find((x) => x.id === t.id)?.reflection).toBe(
+        'Outline first next time',
+      );
+      const point = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).find(
+        (p) => p.taskId === t.id,
+      );
+      expect(point?.reflection).toBe('Outline first next time');
+      expect((await api.exportData()).tasks.find((x) => x.id === t.id)?.reflection).toBe(
+        'Outline first next time',
+      );
+
+      // An open task takes one too (any status), and a missing argument is an error, never a clear.
+      const open = await api.createTask({ title: 'open' });
+      expect((await api.setTaskReflection(open.id, 'early thought')).reflection).toBe(
+        'early thought',
+      );
+      const setMissing = api.setTaskReflection as (id: string) => Promise<unknown>;
+      await expect(setMissing(t.id)).rejects.toThrow();
+      expect((await api.getTask(t.id))?.reflection).toBe('Outline first next time');
+
+      // Over the cap rejects and writes nothing — on the edit, and on the actual it rides with.
+      const max = 'x'.repeat(TASK_REFLECTION_MAX);
+      expect((await api.setTaskReflection(t.id, max)).reflection).toHaveLength(TASK_REFLECTION_MAX);
+      await api.setTaskReflection(t.id, 'keep me');
+      await expect(api.setTaskReflection(t.id, `${max}y`)).rejects.toThrow();
+      await expect(api.setTaskActual(t.id, 99, `${max}y`)).rejects.toThrow();
+      const after = await api.getTask(t.id);
+      expect(after?.reflection).toBe('keep me');
+      expect(after?.actualAccruedMin).toBe(45); // the rejected actual changed nothing
+
+      expect((await api.setTaskReflection(t.id, null)).reflection).toBeNull();
+      await api.setTaskReflection(t.id, 'back');
+      expect((await api.setTaskReflection(t.id, '  ')).reflection).toBeNull();
+    });
+
+    it('tasks: a two-argument setTaskActual keeps the reflection, null clears it, and split starts the new rows null', async () => {
+      const t = await api.createTask({ title: 'Lab', estimateMin: 20, bufferMin: 0 });
+      await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 20, 'went fine');
+      expect((await api.setTaskActual(t.id, 25)).reflection).toBe('went fine'); // older caller: kept
+      expect((await api.setTaskActual(t.id, 25, null)).reflection).toBeNull();
+
+      const big = await api.createTask({ title: 'Essay', estimateMin: 60, bufferMin: 0 });
+      await api.transitionTask(big.id, 'in_progress');
+      await api.setTaskActual(big.id, 40, 'the intro took forever');
+      const { parent, original, followUp } = await api.splitTask(big.id, {
+        finish: 'done',
+        followUp: { title: 'Essay, part 2', estimateMin: 30 },
+      });
+      expect(original.reflection).toBe('the intro took forever'); // the finished work keeps its own
+      expect(followUp.reflection).toBeNull(); // new work
+      expect(parent.reflection).toBeNull();
     });
 
     it('sessions: several run at once, a task dedups, and work time accrues to the task', async () => {

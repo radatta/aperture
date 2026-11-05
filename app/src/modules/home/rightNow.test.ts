@@ -18,6 +18,7 @@ function mkTask(id: string, status: TaskStatus, over: Partial<Task> = {}): Task 
     dueDay: null,
     dueTime: null,
     notes: null,
+    reflection: null,
     estimateMin: 30,
     bufferMin: null,
     estimateLockedMin: null,

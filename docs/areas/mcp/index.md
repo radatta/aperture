@@ -70,7 +70,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 | group            | tools                                                                                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?, reflection?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
 | places           | `list_places`, `list_place_tasks {place}` (the Shortcut's digest + `tasks[]` ids, no heartbeat — [tasks/places](../tasks/places.md)) |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
@@ -127,6 +127,12 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of
   it in an `update_task`, and every task in a `create_tasks` batch. `list_tasks` / `list_backlog` return
   full notes (up to 5 KB each); trimming them in the list tools is a deferred option if that gets heavy.
+- **Reflection** ([tasks/reflection.md](../tasks/reflection.md)) — the user's look back at a finished task —
+  rides on `complete_task` (saved in the same write as `actualMin`; on a parent, after its rollup; on an errand
+  checked off without one, after the check-off — a failure there says the task is done) and
+  `update_task` (replaces; `null` or `""` clears). Checked before any dispatch like notes, so an over-cap one
+  (1,000 chars) applies nothing. `list_tasks`, `list_backlog` and `get_calibration` return it. The tool text
+  says to record it only in the user's own words — never invented or summarised.
 - **`update_category`** (rename / reorder / `isWork` / retire) merges `label` + `isWork` over the current
   row, since `upsertCategory` requires both; `order` and `active` are patch-style in the contract (omitted
   keeps the current value), so they're sent only when given. `active:false` **retires** the category —

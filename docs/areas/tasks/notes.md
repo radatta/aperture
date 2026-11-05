@@ -55,6 +55,8 @@ Rendered by `modules/tasks/notes/` — `parseNotes.ts` (pure) and `NotesView.tsx
   title, and notes hits would crowd that.
 - **Bulk add** ([bulk-add.md](bulk-add.md)): a `notes:"…"` token, with `\n` and `\\` as its only escapes.
 - **MCP** ([mcp/index.md](../mcp/index.md)): `notes` on `create_task`, `create_tasks` and `update_task`.
+- **Reflection** ([reflection.md](reflection.md)): the done task's look back is the same field and renderer
+  with its own label, cap (1,000) and copy.
 
 ## 4. Decisions
 
