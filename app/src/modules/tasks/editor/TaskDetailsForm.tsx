@@ -348,12 +348,13 @@ export function TaskDetailsForm({
           />
           {suggestion && suggestedLabel && (
             <Button
-              variant="ghost"
+              variant="quiet"
               size="sm"
               onClick={() => setCategoryId(suggestion.categoryId)}
               aria-label={`Use suggested category ${suggestedLabel}`}
+              aria-description="From your other tasks — tap to use"
               title="From your other tasks — tap to use"
-              className="border border-dashed border-line text-ink-muted"
+              className="border border-dashed border-line"
             >
               {suggestedLabel}?
             </Button>

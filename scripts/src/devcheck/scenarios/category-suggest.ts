@@ -109,7 +109,7 @@ export const categorySuggest: Scenario = {
       offDev: {
         file: 'packages/shared/src/categorySuggest.test.ts',
         test: 'no suggestion from a one-category history',
-        why: 'dev history can’t be varied cheaply; the scorer is pure and the accept row runs its only UI path',
+        why: 'same path as no-match (proven on dev): only the scorer’s pure decision differs, run entirely in the named test',
       },
     },
     {
@@ -120,7 +120,7 @@ export const categorySuggest: Scenario = {
       offDev: {
         file: 'packages/shared/src/categorySuggest.test.ts',
         test: 'needs 20 categorised tasks',
-        why: 'dev history can’t be varied cheaply; the scorer is pure and the accept row runs its only UI path',
+        why: 'same path as no-match (proven on dev): only the scorer’s pure decision differs, run entirely in the named test',
       },
     },
     {
@@ -131,7 +131,7 @@ export const categorySuggest: Scenario = {
       offDev: {
         file: 'packages/shared/src/categorySuggest.test.ts',
         test: 'never a retired category — its tasks leave the evidence too',
-        why: 'dev history can’t be varied cheaply; the scorer is pure and the accept row runs its only UI path',
+        why: 'same path as no-match (proven on dev): only the scorer’s pure decision differs, run entirely in the named test',
       },
     },
     {
@@ -142,7 +142,7 @@ export const categorySuggest: Scenario = {
       offDev: {
         file: 'packages/shared/src/categorySuggest.test.ts',
         test: 'excludes the task itself from its own evidence',
-        why: 'dev history can’t be varied cheaply; the scorer is pure and the accept row runs its only UI path',
+        why: 'same path as no-match (proven on dev): only the scorer’s pure decision differs, run entirely in the named test',
       },
     },
     {

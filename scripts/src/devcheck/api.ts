@@ -53,7 +53,6 @@ export interface CreateSeriesInput {
 }
 
 export interface CreateTaskInput {
-  categoryId?: string | null; // the category-suggest scenario seeds categorised history
   title: string;
   estimateMin?: number | null;
   dueDay?: string | null;
@@ -61,7 +60,7 @@ export interface CreateTaskInput {
   notes?: string | null;
   parentId?: string | null; // a part of that task (the parts scenario)
   place?: string | null; // a place slug (the places scenario)
-  categoryId?: string | null; // one of this run's categories (the areas scenario)
+  categoryId?: string | null; // one of this run's categories (the areas and category-suggest scenarios)
 }
 
 // The slices of a category, a plan row and the day row the check reads (the parts-v2b-reads scenario:
