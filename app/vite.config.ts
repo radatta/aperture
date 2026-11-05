@@ -16,13 +16,24 @@ const DEV_PORT = hostname().startsWith('coi-') ? 6173 : 5173;
 // sets the deployed commit; any other build says 'local' rather than shipping the literal placeholder.
 process.env.VITE_BUILD_SHA ||= 'local';
 
+// The deployed wasm is brotli-encoded (scripts/aws/publish-frontend.mjs). Its hash is of bytes that never
+// change between builds, so the suffix gives the encoded body a key the uncompressed one never had: an edge
+// keeps the old key for a year (immutable, no invalidation — INFRA §7), and an old shell still fetching it
+// gets the body it was built for (docs/areas/flux D63).
+const assetFileNames = (info: { names: string[] }) =>
+  info.names.some((n) => n.endsWith('.wasm'))
+    ? 'assets/[name]-[hash].br.wasm'
+    : 'assets/[name]-[hash][extname]';
+
 // https://vite.dev/config/
 export default defineConfig({
   server: { port: DEV_PORT },
   preview: { port: DEV_PORT },
   // Flux's tracking worker is a module worker: MediaPipe's module glue sets ModuleFactory via ESM, and
   // Vite's default IIFE worker would make it silently no-op ("ModuleFactory not set").
-  worker: { format: 'es' },
+  // The worker imports the wasm, so its emit goes through the worker build's rollup options, not `build`'s.
+  worker: { format: 'es', rollupOptions: { output: { assetFileNames } } },
+  build: { rollupOptions: { output: { assetFileNames } } },
   plugins: [
     react(),
     tailwindcss(),

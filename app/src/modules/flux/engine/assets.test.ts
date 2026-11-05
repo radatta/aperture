@@ -49,6 +49,47 @@ describe('loadFluxAssets', () => {
       expect(seen[i]?.[0]).toBeGreaterThanOrEqual(seen[i - 1]?.[0] ?? 0);
   });
 
+  it('a decoded body never exceeds the raw-length total', async () => {
+    // The edge serves the wasm brotli-encoded: content-length is the wire size, the stream is decoded,
+    // and x-amz-meta-raw-length is the size the bar should count to.
+    const encoded = (raw: number, wire: number) =>
+      new Response(new Uint8Array(raw).fill(7), {
+        headers: {
+          'content-type': 'application/wasm',
+          'content-encoding': 'br',
+          'content-length': String(wire),
+          'x-amz-meta-raw-length': String(raw),
+        },
+      });
+    const fetch = vi.fn(async (url: RequestInfo | URL) =>
+      String(url).endsWith('.wasm') ? encoded(300, 60) : bytes(100),
+    );
+    const seen: [number, number][] = [];
+    const assets = await loadFluxAssets((l, t) => seen.push([l, t]), {
+      fetch: fetch as AssetDeps['fetch'],
+      caches: undefined,
+    });
+    expect(assets.modelBytes.byteLength).toBe(100);
+    expect(seen.at(-1)).toEqual([400, 400]);
+    for (const [l, t] of seen) expect(l).toBeLessThanOrEqual(t);
+  });
+
+  it('a wrong raw-length still never shows more than 100%', async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array(120), {
+          headers: { 'content-length': '20', 'x-amz-meta-raw-length': '100' },
+        }),
+    );
+    const seen: [number, number][] = [];
+    await loadFluxAssets((l, t) => seen.push([l, t]), {
+      fetch: fetch as AssetDeps['fetch'],
+      caches: undefined,
+    });
+    for (const [l, t] of seen) expect(l).toBeLessThanOrEqual(t);
+    expect(seen.at(-1)).toEqual([200, 200]);
+  });
+
   it('serves the second load from the cache without touching the network', async () => {
     const { caches } = memoryCaches();
     const fetch = vi.fn(async () => bytes(50));

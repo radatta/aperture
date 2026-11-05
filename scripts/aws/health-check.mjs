@@ -10,6 +10,7 @@
 // that build's app/dist/index.html. A missing, stale or other-stage build fails it as "edge still stale".
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { assertBrWasmHeaders } from './flux-wasm.mjs';
 
 const stage = process.argv[2] ?? 'dev';
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -87,7 +88,9 @@ await check(`edge serves the new shell (${expectedRefs.length} asset refs)`, asy
 
 // The build marker publish-frontend stamped, read from this build's own index.html (not the environment, so a
 // step-scoped APERTURE_BUILD_SHA can't make it compare against the wrong commit). A local build says 'local'.
-const buildSha = readFileSync(shellPath, 'utf8').match(/<meta name="aperture-build" content="([^"]*)"/)?.[1];
+const buildSha = readFileSync(shellPath, 'utf8').match(
+  /<meta name="aperture-build" content="([^"]*)"/,
+)?.[1];
 // In CI a missing or 'local' marker is itself a failure — the check must not pass by skipping.
 if (process.env.CI && (!buildSha || buildSha === 'local'))
   await check('build marker stamped', async () => {
@@ -109,16 +112,23 @@ await check('manifest served as application/manifest+json', async () => {
 });
 
 // Flux's tracking wasm + model: a missing asset would come back as the SPA fallback (200 text/html),
-// and a guessed Content-Type breaks Safari's streaming compile — so assert both status and type.
+// and a guessed Content-Type breaks Safari's streaming compile — so assert both status and type. The wasm
+// is published brotli-encoded with its decoded size as metadata (publish-frontend.mjs, flux-wasm.mjs); the
+// edge must answer exactly that, or the first Start downloads 13 MB and the bar overshoots.
 const fluxAsset = (ext) => readdirSync(`${root}/app/dist/assets`).find((f) => f.endsWith(ext));
-await check('Flux wasm served as application/wasm', async () => {
-  const wasm = fluxAsset('.wasm');
-  expect(wasm, 'no .wasm in app/dist/assets — was the app built?');
-  const r = await fetch(`${appUrl}/assets/${wasm}`, { method: 'HEAD' });
-  expect(r.status === 200, `expected 200, got ${r.status}`);
-  const ct = r.headers.get('content-type') ?? '';
-  expect(ct.startsWith('application/wasm'), `content-type was "${ct}"`);
-});
+await check(
+  'Flux wasm served as application/wasm, brotli-encoded, with its raw length',
+  async () => {
+    const wasm = fluxAsset('.br.wasm');
+    expect(wasm, 'no .br.wasm in app/dist/assets — was the app built?');
+    const r = await fetch(`${appUrl}/assets/${wasm}`, {
+      method: 'HEAD',
+      headers: { 'accept-encoding': 'br' },
+    });
+    expect(r.status === 200, `expected 200, got ${r.status}`);
+    assertBrWasmHeaders((name) => r.headers.get(name));
+  },
+);
 
 await check('Flux model served (not the SPA fallback)', async () => {
   const model = fluxAsset('.task');

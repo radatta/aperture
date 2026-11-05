@@ -34,7 +34,7 @@ export async function loadFluxAssets(
   const cache = await deps.caches?.open(CACHE).catch(() => undefined);
   const urls = [wasmBinaryUrl, modelUrl];
   const responses = await Promise.all(urls.map((url) => cachedOrFetched(url, cache, deps)));
-  const totals = responses.map((r) => Number(r.headers.get('content-length')) || 0);
+  const totals = responses.map(rawLength);
   const loaded = urls.map(() => 0);
   const report = () =>
     onProgress(
@@ -44,7 +44,9 @@ export async function loadFluxAssets(
   const [wasm, model] = await Promise.all(
     responses.map((r, i) =>
       readAll(r, (n) => {
-        loaded[i] = n;
+        // The bytes counted are decoded; a total that came from a wrong or missing header must not let
+        // the bar pass 100% (the final report is the real size either way).
+        loaded[i] = totals[i] ? Math.min(n, totals[i]) : n;
         report();
       }),
     ),
@@ -78,6 +80,15 @@ async function cachedOrFetched(
   // progress bar at 0 until the whole download landed). A failed put only costs a re-download.
   if (cache) void cache.put(url, res.clone()).catch(() => undefined);
   return res;
+}
+
+// The download's size in decoded bytes. The wasm is published brotli-encoded, so its content-length is the
+// wire size (about a fifth) while the stream below yields decoded bytes; publish-frontend.mjs stamps the
+// raw size as x-amz-meta-raw-length (D63). Anything else (the model, a local preview) is served as-is.
+function rawLength(res: Response): number {
+  const raw = Number(res.headers.get('x-amz-meta-raw-length'));
+  if (Number.isInteger(raw) && raw > 0) return raw;
+  return Number(res.headers.get('content-length')) || 0;
 }
 
 async function readAll(

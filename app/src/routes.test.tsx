@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest';
+import { screen } from '@testing-library/react';
+import { AppShell } from './components/AppShell';
+import { lazyPage } from './lib/lazyPage';
+import { renderApp } from './test/utils';
+
+// The Flux pages are the one lazy chunk (routes.tsx → lib/lazyPage). The Suspense sits inside the route
+// element, so a deep link shows the shell with "Loading…" in the outlet while the chunk loads — never a blank
+// page (docs/areas/flux D64). The app's own chunk resolves once per worker (the suite shares a module
+// registry), so the moment under test is built here: the same shell, the same helper, a chunk this test holds.
+describe('routes', () => {
+  it('a deep link to /flux/history keeps the shell up, with "Loading…" in the outlet, until the Flux chunk lands', async () => {
+    let land = () => {};
+    const chunk = new Promise<{ History: () => React.JSX.Element }>((r) => {
+      land = () => r({ History: () => <h1>Flux history landed</h1> });
+    });
+    renderApp({
+      path: '/flux/history',
+      routes: [
+        {
+          path: '/',
+          element: <AppShell />,
+          children: [
+            {
+              path: 'flux/history',
+              element: lazyPage(
+                () => chunk,
+                (m) => m.History,
+              ),
+            },
+          ],
+        },
+      ],
+    });
+    expect(screen.getByRole('link', { name: 'Flux' })).toBeTruthy(); // the shell, at once
+    expect(screen.getByText('Loading…')).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole('heading', { name: 'Flux history landed' })).toBeNull(); // still held
+    expect(screen.getByText('Loading…')).toBeTruthy();
+    land();
+    expect(await screen.findByRole('heading', { name: 'Flux history landed' })).toBeTruthy();
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Flux' })).toBeTruthy();
+  });
+});

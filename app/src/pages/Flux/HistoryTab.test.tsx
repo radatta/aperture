@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, ulid, type RecordFluxSetInput } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_FAIL_FLUX_SAVE_KEY } from '../../data/stubClient';
 import { FLUX_OUTBOX_KEY } from '../../modules/flux/fluxOutbox';
+
+// The Flux pages are a lazy chunk (routes.tsx): load it once here, so the first render in this file
+// isn't a cold import inside a findBy's timeout.
+beforeAll(() => import('./flux-pages'));
 
 // /flux/history over the stub (D50, D53): rows by day, the per-kind number, Right/Left, the trend, delete.
 

@@ -7,6 +7,7 @@ import { captureTask } from './capture-task';
 import { failedReads } from './failed-reads';
 import { finance } from './finance';
 import { fluxHistory } from './flux-history';
+import { fluxPerf } from './flux-perf';
 import { inflightCap } from './inflight-cap';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
@@ -21,6 +22,7 @@ export const SCENARIOS: Scenario[] = [
   partsV2,
   partsV2b,
   fluxHistory,
+  fluxPerf,
   attachmentDelete,
   places,
   reflectionLine,
