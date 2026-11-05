@@ -249,7 +249,9 @@ transport. See `lambdas/src/mcp/protocol.ts`.
   behavior + origin-request policy (forwards `x-aperture-agent-token`) + the `McpCachePolicy` that forwards
   `authorization`, the three well-known behaviors, the `aperture-claude-<stage>` app client + MCP resource
   server, the shared `grantBackendData` / `ackLambdaIam` helpers (MCP gets SSM read-only), and the `McpUrl`
-  / `McpClientId` outputs.
+  / `McpClientId` outputs. Prod alarms (`cdk/src/lib/monitoring.ts`): `McpDurationOverBudget` (p99 ≥ 12 s, 80%
+  of the 15 s timeout) plus the account-wide `Errors` / `Throttles` alarms — the handler answers JSON-RPC errors
+  and 401s itself, so a Lambda error here is a crash or a timeout (`docs/arch/CICD_HARDENING.md` → Item 5).
 - `cdk/src/config/claudeConnector.ts` — claude.ai's connector callback URLs (committed constants).
 - `cdk/src/bin/aperture.ts` — `agentTokenFor(stage)` (cloned from `deviceTokenFor`).
 - `scripts/aws/health-check.mjs` — the post-deploy `/mcp` probe (401 without a token, 405 on GET, the
@@ -458,4 +460,3 @@ Decisions (2026-10-09):
   server-side (reject an unknown/deleted id), which also covers any other caller.
 - No raw `call_rpc` escape hatch (the small typed surface is deliberate; `*` at the auth layer already
   makes adding a tool free).
-- Prod CloudWatch alarms on the MCP function (the BFF has them; the MCP function does not yet).

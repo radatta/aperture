@@ -445,7 +445,7 @@ export class ApertureAppStack extends Stack {
     new CfnOutput(this, 'McpUrl', { value: `${appUrl}/mcp` }); // the URL to register in Claude Code / claude.ai
     new CfnOutput(this, 'McpClientId', { value: claudeClient.userPoolClientId }); // paste into claude.ai's connector OAuth Client ID
 
-    // Runtime watch on the BFF, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
+    // Runtime watch on the Lambdas, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
     // worth it, and the synthetic check already proves the edge wiring at deploy time).
     if (stage === 'prod')
@@ -455,6 +455,14 @@ export class ApertureAppStack extends Stack {
             id: '',
             label: 'BFF',
             fn,
+            durationAlarm: { statistic: 'p99', thresholdMs: fnTimeout.toMilliseconds() * 0.8 },
+          },
+          // Same timeout and rule as the BFF. The MCP handler answers JSON-RPC errors and 401s itself, so its
+          // Lambda Errors (on the account-wide alarm) are crashes and timeouts only.
+          {
+            id: 'Mcp',
+            label: 'MCP',
+            fn: mcpFn,
             durationAlarm: { statistic: 'p99', thresholdMs: fnTimeout.toMilliseconds() * 0.8 },
           },
           // Maximum ≥ 295 s: a run that ate most of its 10 s safety margin (a real timeout also lands in
