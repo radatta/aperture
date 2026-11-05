@@ -63,11 +63,21 @@ describe('deploy.yml classifies per stage', () => {
     expect(deploy).not.toContain('outputs.mode }}');
   });
 
-  it('assigns each mode before writing it, so a crash fails the job instead of emptying an output', () => {
+  it('assigns and validates both modes before writing, so a crash fails the job instead of emptying an output', () => {
     const changes = job(deploy, 'changes');
+    const lines = changes.split('\n').map((l) => l.trim());
+    expect(lines).toContain('for mode in "$mode_dev" "$mode_prod"; do');
+    expect(lines).toContain(
+      'timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full` well inside this',
+    );
+    expect(lines).toContain(
+      "fetch-depth: 0 # need history to diff from each stage's last deployment",
+    );
     expect(changes).toContain('case "$mode" in none|app|full) ;; *)');
-    expect(changes).toContain('timeout-minutes: 5');
-    expect(changes).toContain('fetch-depth: 0');
+    expect(changes.indexOf('mode_prod=$(')).toBeLessThan(changes.indexOf('for mode in'));
+    expect(changes.indexOf('for mode in')).toBeLessThan(changes.indexOf('>> "$GITHUB_OUTPUT"'));
+    for (const unsafe of ['set +e', 'continue-on-error', '||'])
+      expect(changes).not.toContain(unsafe);
   });
 
   it('grants the token what the lookup reads, and nothing to write', () => {

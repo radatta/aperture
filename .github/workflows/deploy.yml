@@ -30,7 +30,7 @@ jobs:
   # parallel with `check`; deploy-dev waits on both. Kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # a checkout and a few API reads; a request that hangs times out to `full` well inside this
+    timeout-minutes: 5 # a checkout and a few API reads; a walk that stalls times out to `full` well inside this
     permissions:
       contents: read
       deployments: read # each stage's deployment records

@@ -1,10 +1,20 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Diff } from './deploy-base';
-import { deployedTier, gitDiff, jobIdOf, modeFor, outcome, servedBy } from './deploy-base';
+import {
+  deployedTier,
+  gitDiff,
+  jobIdOf,
+  modeFor,
+  outcome,
+  run,
+  servedBy,
+  withTimeout,
+} from './deploy-base';
 import { fakeApi, ghError } from './bot/fakes';
 
 type Tier = 'full' | 'app' | 'none';
@@ -55,6 +65,9 @@ describe('outcome', () => {
     expect(outcome([{ state: 'queued' }, { state: 'success' }])).toBe('running');
     expect(outcome([{ state: 'in_progress' }, { state: 'queued' }])).toBe('running');
     expect(outcome([{ state: 'inactive' }])).toBe('running');
+    expect(outcome([{ state: 'inactive' }, { state: 'failure' }, { state: 'success' }])).toBe(
+      'failure',
+    );
     expect(outcome([])).toBe('running');
   });
 });
@@ -229,14 +242,35 @@ describe('modeFor, on a diff failure', () => {
 });
 
 describe('gitDiff, against a real repo', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-base-'));
+  // Isolated from the machine: a GIT_DIR from a hook or `rebase --exec` would aim these at the real repo, and global
+  // signing or hooks would change what a commit does.
+  const saved = Object.entries(process.env).filter(([k]) => k.startsWith('GIT_'));
+  let dir = '';
   const git = (...args: string[]) =>
-    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
-      cwd: dir,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    }).trim();
-  afterAll(() => rmSync(dir, { recursive: true }));
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@t',
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'core.hooksPath=/dev/null',
+        ...args,
+      ],
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe' },
+    ).trim();
+  beforeAll(() => {
+    for (const [k] of saved) delete process.env[k];
+    dir = mkdtempSync(join(tmpdir(), 'deploy-base-'));
+    git('init', '-q', '-b', 'fixture');
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true });
+    Object.assign(process.env, Object.fromEntries(saved));
+  });
   const commit = () => {
     git('add', '-A');
     git('commit', '-qm', 'x');
@@ -244,7 +278,6 @@ describe('gitDiff, against a real repo', () => {
   };
 
   it('classifies a move out of lambdas/ into docs/ by where it came from', () => {
-    git('init', '-q', '-b', 'fixture');
     mkdirSync(join(dir, 'lambdas'));
     mkdirSync(join(dir, 'docs'));
     writeFileSync(
@@ -261,7 +294,7 @@ describe('gitDiff, against a real repo', () => {
 
   it('throws on a base git does not have, which modeFor turns into full', () => {
     const missing = 'a'.repeat(40);
-    expect(() => gitDiff(dir)(missing, 'HEAD')).toThrow();
+    expect(() => gitDiff(dir)(missing, 'HEAD')).toThrow(/bad object/);
     expect(modeFor({ infra: missing, front: missing }, 'HEAD', gitDiff(dir))).toBe('full');
   });
 });
@@ -338,9 +371,116 @@ describe('the shapes that used to ship a skew', () => {
   });
 });
 
+// What `x=$(node deploy-base.ts …)` sees: one word on stdout, exit 0, whatever the API does.
+describe('run', () => {
+  const HEAD = 'a'.repeat(40);
+  const go = async (
+    fetchImpl: typeof fetch,
+    opts: { requestMs?: number; walkMs?: number } = {},
+  ) => {
+    const writes: string[] = [];
+    const lines: string[] = [];
+    const code = await run({
+      argv: ['prod', HEAD],
+      env: { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r' },
+      fetchImpl,
+      diff: () => ['app/x.tsx'],
+      write: (m) => writes.push(m),
+      log: (l) => lines.push(l),
+      ...opts,
+    });
+    return { code, writes, lines: lines.join('\n') };
+  };
+  const json = (body: unknown) => new Response(JSON.stringify(body));
+  // Never answers, and rejects when its signal aborts, as real fetch does.
+  const hanging: typeof fetch = (_url, init) =>
+    new Promise((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason as Error));
+    });
+
+  it('writes the classified tier once on a good walk', async () => {
+    const fetchImpl: typeof fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('/statuses'))
+        return json([{ state: 'success', log_url: 'https://github.com/o/r/actions/runs/1/job/7' }]);
+      if (u.includes('/actions/jobs/7')) return json({ steps: stepsFor('full') });
+      return json([{ id: 1, sha: 'f' }]);
+    };
+    expect(await go(fetchImpl)).toMatchObject({ code: 0, writes: ['app'] });
+  });
+
+  it('writes full, exit 0, when fetch rejects, and annotates why', async () => {
+    const { code, writes, lines } = await go(() => Promise.reject(new Error('socket hang up')));
+    expect({ code, writes }).toEqual({ code: 0, writes: ['full'] });
+    expect(lines).toContain('::warning::prod: unknown, so full — socket hang up');
+  });
+
+  it('writes full on an HTTP error, and on a body that is not JSON', async () => {
+    expect(await go(async () => new Response('nope', { status: 500 }))).toMatchObject({
+      code: 0,
+      writes: ['full'],
+    });
+    expect(await go(async () => new Response('<html>'))).toMatchObject({
+      code: 0,
+      writes: ['full'],
+    });
+  });
+
+  it('writes full when a request hangs, once its timeout fires', async () => {
+    expect(await go(hanging, { requestMs: 5 })).toMatchObject({ code: 0, writes: ['full'] });
+  });
+
+  it('writes full when a body hangs after the headers came', async () => {
+    const stalled: typeof fetch = async (_url, init) =>
+      new Response(
+        new ReadableStream({
+          start(c) {
+            init?.signal?.addEventListener('abort', () => c.error(init.signal?.reason));
+          },
+        }),
+      );
+    expect(await go(stalled, { requestMs: 5 })).toMatchObject({ code: 0, writes: ['full'] });
+  });
+
+  it('writes nothing and exits 1 on misuse', async () => {
+    const writes: string[] = [];
+    const base = {
+      fetchImpl: fetch,
+      diff: () => [],
+      write: (m: string) => writes.push(m),
+      log: () => undefined,
+    };
+    const good = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r' };
+    expect(await run({ ...base, argv: ['prod', 'nope'], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['Prod!', HEAD], env: good })).toBe(1);
+    expect(await run({ ...base, argv: ['prod', HEAD], env: { GITHUB_REPOSITORY: 'o/r' } })).toBe(1);
+    expect(await run({ ...base, argv: ['prod', HEAD], env: { GITHUB_TOKEN: 't' } })).toBe(1);
+    expect(writes).toEqual([]);
+  });
+});
+
+describe('withTimeout', () => {
+  it('shares one walk deadline across requests, so a slow walk ends even when each request is quick', async () => {
+    const quick: typeof fetch = (_url, init) =>
+      new Promise((resolve, reject) => {
+        const t = setTimeout(() => resolve(new Response('[]')), 4);
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(init.signal?.reason as Error);
+        });
+      });
+    const timed = withTimeout(quick, 1000, 20);
+    await expect(
+      (async () => {
+        for (let i = 0; i < 100; i++) await timed('https://x.test');
+      })(),
+    ).rejects.toThrow();
+  });
+});
+
 // CI runs this with stock Node and no install: a real import past node: builtins, or syntax Node can't strip, dies here.
 describe('the CLI under plain node', () => {
-  const cli = new URL('./deploy-base.ts', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('./deploy-base.ts', import.meta.url));
 
   it('loads, and refuses misuse with a non-zero exit', () => {
     let status = 0;

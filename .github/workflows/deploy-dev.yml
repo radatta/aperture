@@ -40,7 +40,7 @@ jobs:
   # main-ref dispatch, by the branch's own on a branch-ref one.
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # a checkout, a few git checks and the preview's API reads (a request that hangs times out to `full`)
+    timeout-minutes: 5 # a checkout, a few git checks and the preview's API reads (a walk that stalls times out to `full`)
     permissions:
       contents: read
       deployments: read # the merge preview: each stage's deployment records
@@ -103,7 +103,8 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           # A preview, not this dispatch's mode. It says whether a merge would run CDK (read the cdk diff first, INFRA §9),
           # and it is the only run of deploy-base.ts against the real API before a merge: main-push classification runs
-          # only on main. API trouble prints `full`; a crash fails here, on purpose. Assigned, so a crash can't be masked.
+          # only on main. Read the log lines above this one for that proof, not the modes: a broken walk also prints `full`. API
+          # trouble prints `full` with a ::warning; a crash fails here, on purpose. Assigned, so a crash can't be masked.
           merged_dev=$(node scripts/src/deploy-base.ts dev-main "$SHA")
           merged_prod=$(node scripts/src/deploy-base.ts prod "$SHA")
           echo "If merged now: dev-main=$merged_dev prod=$merged_prod"
