@@ -116,21 +116,22 @@ storage — a different risk class from a JWT. A device token sent to any other 
 | `lambdas/src/auth/verify.ts` | `resolveDeviceUserId` |
 | `lambdas/src/backend.ts` | `recordLeetcodeAttempt` / `listLeetcodeAttempts` |
 | `lambdas/src/ddb/keys.ts` | `lc#<day>#<id>` sort keys |
-| `cdk/src/bin/aperture.ts` | `deviceTokenFor` / `deviceUserIdFor` |
+| `cdk/src/config/ciSecrets.ts`, `cdk/src/bin/aperture.ts` | `stageSecret('DEVICE_TOKEN', stage)` / `deviceUserIdFor` |
 
 ## Operator setup
 
 ### 1. GitHub secrets + vars (do this before the first deploy)
 
 - [ ] **secret** `DEVICE_TOKEN_DEV` — any long random hex string (`openssl rand -hex 24`).
-- [ ] **secret** `DEVICE_TOKEN_PROD` — a *different* one.
+- [ ] **secret** `DEVICE_TOKEN_PROD` — a *different* one, in the `prod` GitHub environment (`gh secret set DEVICE_TOKEN_PROD --env prod`), not repo-level.
 - [ ] **var** `DEVICE_USER_ID_DEV` — your **dev** Cognito `sub`.
 - [ ] **var** `DEVICE_USER_ID_PROD` — your **prod** Cognito `sub`.
 
 Both pairs are load-bearing, and they fail in different ways:
 
-- `DEVICE_TOKEN_*` unset → `deviceTokenFor()` mints a **fresh random token on every CI deploy**, so the
-  token saved in your extension options silently stops matching after any deploy. (A *local* `cdk synth`
+- `DEVICE_TOKEN_*` unset or misnamed → the CI synth **fails, naming the secret** (`stageSecret`, since
+  prod-secrets). Before that guard, each CI deploy minted a fresh random token, so the token saved in your
+  extension options silently stopped matching after any deploy. (A *local* `cdk synth`
   reuses the gitignored `cdk/.secrets/device-token.<stage>` file, so it's stable there — which is
   exactly why this is easy to miss until CI runs.)
 - `DEVICE_USER_ID_*` unset → the handler falls back to userId `'local'`, so attempts are written under

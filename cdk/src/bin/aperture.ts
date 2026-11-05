@@ -1,6 +1,4 @@
-import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
 import { App, Validations } from 'aws-cdk-lib';
 import type { IConstruct } from 'constructs';
 import { AwsSolutionsChecks } from 'cdk-nag';
@@ -12,56 +10,7 @@ import { ApertureDevGuardStack } from '../lib/dev-guard-stack';
 import { ApertureOrgStack } from '../lib/org-stack';
 import { domainConfigFor } from '../config/domains';
 import { laneFor, synthesizerFor } from '../config/lane';
-
-// CloudFront→Lambda origin-lockdown secret, one per stage. In CI it comes from a GitHub secret via
-// APERTURE_ORIGIN_SECRET (stable across runs); locally it's generated once into a gitignored file and
-// reused so CloudFront + the Lambda always agree. Never committed. Anti-abuse only.
-function originSecretFor(stage: string): string {
-  const fromEnv = process.env.APERTURE_ORIGIN_SECRET;
-  if (fromEnv) return fromEnv.trim();
-  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url)); // cdk/.secrets/
-  const file = `${dir}/origin-secret.${stage}`;
-  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
-  mkdirSync(dir, { recursive: true });
-  const secret = randomBytes(24).toString('hex');
-  writeFileSync(file, `${secret}\n`);
-  return secret;
-}
-
-// Device token for the LeetCode-capture browser extension → the ingest endpoint. Same class of
-// credential as the origin secret (single-user, tiny blast radius), so it follows the SAME pattern — a
-// plain Lambda env var from a gitignored file (or APERTURE_DEVICE_TOKEN in CI), NOT Secrets Manager.
-// Generated once per stage; `cat cdk/.secrets/device-token.<stage>` to paste into the extension options.
-// NB: CI MUST set the DEVICE_TOKEN_<STAGE> secret, else each CI deploy rotates it and the extension's
-// stored token stops matching (a local deploy reuses the file, so it's stable there).
-function deviceTokenFor(stage: string): string {
-  const fromEnv = process.env.APERTURE_DEVICE_TOKEN;
-  if (fromEnv) return fromEnv.trim();
-  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
-  const file = `${dir}/device-token.${stage}`;
-  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
-  mkdirSync(dir, { recursive: true });
-  const token = randomBytes(24).toString('hex');
-  writeFileSync(file, `${token}\n`);
-  return token;
-}
-
-// The MCP server's static agent token (Claude Code / claude.ai → /mcp). Same pattern as the device token
-// above (INFRA §10): APERTURE_AGENT_TOKEN in CI, else a gitignored file generated once per stage;
-// `cat cdk/.secrets/agent-token.<stage>` to register it in Claude Code. Kept DISTINCT from the device
-// token so the two revoke independently. NB: CI MUST set the AGENT_TOKEN_<STAGE> secret, else each
-// deploy rotates it and the registered client stops matching.
-function agentTokenFor(stage: string): string {
-  const fromEnv = process.env.APERTURE_AGENT_TOKEN;
-  if (fromEnv) return fromEnv.trim();
-  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
-  const file = `${dir}/agent-token.${stage}`;
-  if (existsSync(file)) return readFileSync(file, 'utf8').trim();
-  mkdirSync(dir, { recursive: true });
-  const token = randomBytes(24).toString('hex');
-  writeFileSync(file, `${token}\n`);
-  return token;
-}
+import { SECRETS_DIR, stageSecret } from '../config/ciSecrets';
 
 // The Cognito `sub` device-token writes are attributed to, so captured attempts show under the
 // signed-in user. Not a secret, but account-specific → not committed: APERTURE_DEVICE_USER_ID (CI), else
@@ -69,8 +18,7 @@ function agentTokenFor(stage: string): string {
 function deviceUserIdFor(stage: string): string | undefined {
   const fromEnv = process.env.APERTURE_DEVICE_USER_ID;
   if (fromEnv) return fromEnv.trim();
-  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
-  const file = `${dir}/device-user-id.${stage}`;
+  const file = `${SECRETS_DIR}/device-user-id.${stage}`;
   if (existsSync(file)) return readFileSync(file, 'utf8').trim();
   return undefined;
 }
@@ -107,11 +55,13 @@ const appStack = new ApertureAppStack(app, `ApertureApp-${stage}`, {
   userPool: data.userPool,
   filesBucket: data.filesBucket,
   cognitoDomain: data.cognitoDomain,
-  originSecret: originSecretFor(stage),
+  // The three env-var credentials (config/ciSecrets.ts): the GitHub secret in CI — empty there fails the synth — else
+  // a gitignored file generated once per stage.
+  originSecret: stageSecret('ORIGIN_SECRET', stage),
   ...(domain ? { domainName: domain.domainName, certificateArn: domain.certificateArn } : {}),
-  deviceToken: deviceTokenFor(stage),
+  deviceToken: stageSecret('DEVICE_TOKEN', stage),
   deviceUserId: deviceUserIdFor(stage),
-  agentToken: agentTokenFor(stage),
+  agentToken: stageSecret('AGENT_TOKEN', stage),
 });
 
 // The dev account's id, for the hand-deployed stacks that live in or point at it (INFRA §2). Context, never
