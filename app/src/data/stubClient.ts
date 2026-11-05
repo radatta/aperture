@@ -1600,8 +1600,9 @@ class StubClient implements ApiClient {
 
   // --- Reminders (Web Push) ------------------------------------------------
   // Devices are keyed by endpoint (id = a sha256 prefix, the backend's shape), so re-subscribing the same
-  // endpoint is an upsert. The stub has no poller: Send test stamps the heartbeat and each device's last
-  // delivery itself, so the Settings health line moves as it would on a stage.
+  // endpoint is an upsert — one removed (a tombstone, listed in removedDeviceIds so that device stops
+  // re-adding itself) comes back under the same id. The stub has no poller: Send test stamps the heartbeat
+  // and each device's last delivery itself, so the Settings health line moves as it would on a stage.
   private pushDevice = (s: PushSub): PushDevice => ({
     id: s.id,
     label: s.label,
@@ -1636,8 +1637,18 @@ class StubClient implements ApiClient {
       }),
     );
   }
+  // A tombstone, so the removal sticks; its keys go — nothing will push to it again.
   async unsubscribePush(id: string): Promise<void> {
-    this.writes.softDelete(this.store.pushSubs, id);
+    const s = this.find(this.store.pushSubs, id);
+    if (!s) return; // removing twice, or an unknown id
+    const t = this.now();
+    this.writes.put(this.store.pushSubs, {
+      ...s,
+      p256dh: '',
+      auth: '',
+      deletedAt: t,
+      updatedAt: t,
+    });
   }
   async getPushStatus(): Promise<PushStatus> {
     return {
@@ -1646,6 +1657,7 @@ class StubClient implements ApiClient {
       devices: this.alive(this.store.pushSubs)
         .sort((a, b) => a.createdAt - b.createdAt)
         .map(this.pushDevice),
+      removedDeviceIds: this.store.pushSubs.filter((s) => s.deletedAt !== null).map((s) => s.id),
       poller: this.store.pushHealth,
     };
   }

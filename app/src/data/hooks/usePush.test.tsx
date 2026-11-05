@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
 import { createStubClient } from '../stubClient';
 import { renderWithProviders } from '../../test/utils';
-import { rememberHere, syncErrorHere } from '../../modules/push/browserPush';
+import {
+  deviceIdHere,
+  rememberHere,
+  removedElsewhereHere,
+  syncErrorHere,
+} from '../../modules/push/browserPush';
 import { usePushSync } from './usePush';
 
 const stub = () => createStubClient({ seed: false, storageKey: `push-sync-${Math.random()}` });
@@ -66,6 +71,25 @@ describe('usePushSync (D7)', () => {
     renderWithProviders(<Sync on={false} />, { api });
     await new Promise((r) => setTimeout(r, 20));
     expect(status).not.toHaveBeenCalled();
+  });
+
+  it('a device removed elsewhere stays removed: no re-subscribe, no upsert, the opt-in goes', async () => {
+    const pm = grantedSafari();
+    const api = stub();
+    const d = await api.subscribePush({
+      endpoint: 'https://web.push.apple.com/QGsync',
+      keys: { p256dh: 'pk', auth: 'au' },
+      label: 'iPhone · Safari',
+    });
+    rememberHere(d, Date.now() - DAY);
+    await api.unsubscribePush(d.id);
+    const upsert = vi.spyOn(api, 'subscribePush');
+    renderWithProviders(<Sync on />, { api });
+    await waitFor(() => expect(removedElsewhereHere()).toBe(true));
+    expect(deviceIdHere()).toBeNull();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(pm.subscribe).not.toHaveBeenCalled();
+    expect((await api.getPushStatus()).removedDeviceIds).toEqual([d.id]);
   });
 
   it('keeps a failure on the device for Settings, never throwing at the shell', async () => {

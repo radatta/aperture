@@ -5,8 +5,14 @@ import { PUSH_NO_DEVICE_ERROR, PUSH_UNCONFIGURED_ERROR } from '@aperture/shared'
 import type { PushStatus } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderWithProviders } from '../../test/utils';
-import { PUSH_INSTALL_COPY, PUSH_UNSUPPORTED_COPY } from '../../modules/push/browserPush';
-import { NotificationsSection } from './NotificationsSection';
+import {
+  deviceIdHere,
+  PUSH_INSTALL_COPY,
+  PUSH_UNSUPPORTED_COPY,
+  rememberHere,
+  removedElsewhereHere,
+} from '../../modules/push/browserPush';
+import { NotificationsSection, REMOVED_ELSEWHERE_COPY } from './NotificationsSection';
 
 const IPHONE =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';
@@ -146,6 +152,7 @@ describe('Settings › Notifications: health and devices', () => {
       configured: true,
       vapidPublicKey: 'BAAA',
       devices: [],
+      removedDeviceIds: [],
       poller: { lastRunAt: null, lastSentAt: null, lastError: null, lastErrorAt: null },
       ...over,
     });
@@ -256,5 +263,57 @@ describe('Settings › Notifications: health and devices', () => {
     expect(
       await screen.findByText(/Couldn’t send a test: sendTestPush failed \(503\)/),
     ).toBeTruthy();
+  });
+});
+
+describe('Settings › Notifications: removed on another device', () => {
+  it('a removal seen while Settings is open sticks here: the opt-in goes, and a note says why', async () => {
+    ua(IPHONE);
+    safari({ permission: 'granted' });
+    const api = stub();
+    const d = await api.subscribePush(sub());
+    rememberHere(d, Date.now());
+    await api.unsubscribePush(d.id); // from the Mac
+    const upsert = vi.spyOn(api, 'subscribePush');
+    renderWithProviders(<NotificationsSection />, { api });
+    expect(await screen.findByText(REMOVED_ELSEWHERE_COPY)).toBeTruthy();
+    expect(deviceIdHere()).toBeNull();
+    expect(screen.getByRole('button', { name: 'Enable on this device' })).toBeTruthy();
+    expect(upsert).not.toHaveBeenCalled();
+    expect((await api.getPushStatus()).removedDeviceIds).toEqual([d.id]);
+  });
+
+  it('the note survives a reload, Dismiss clears it for good', async () => {
+    ua(IPHONE);
+    safari();
+    localStorage.setItem('aperture.push.removedElsewhere', '1');
+    const user = userEvent.setup();
+    const { unmount } = renderWithProviders(<NotificationsSection />, { api: stub() });
+    expect(await screen.findByText(REMOVED_ELSEWHERE_COPY)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(REMOVED_ELSEWHERE_COPY)).toBeNull();
+    unmount();
+    renderWithProviders(<NotificationsSection />, { api: stub() });
+    await screen.findByRole('button', { name: 'Enable on this device' });
+    expect(screen.queryByText(REMOVED_ELSEWHERE_COPY)).toBeNull();
+  });
+
+  it('tapping Enable clears the note and revives the device under its id', async () => {
+    ua(IPHONE);
+    safari();
+    const api = stub();
+    const d = await api.subscribePush(sub('https://web.push.apple.com/QGhere'));
+    await api.unsubscribePush(d.id);
+    localStorage.setItem('aperture.push.removedElsewhere', '1');
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsSection />, { api });
+    await screen.findByText(REMOVED_ELSEWHERE_COPY);
+    await user.click(screen.getByRole('button', { name: 'Enable on this device' }));
+    expect(screen.queryByText(REMOVED_ELSEWHERE_COPY)).toBeNull();
+    expect(await screen.findByText('iPhone · Safari (this device)')).toBeTruthy();
+    expect(removedElsewhereHere()).toBe(false);
+    const status = await api.getPushStatus();
+    expect(status.devices.map((x) => x.id)).toEqual([d.id]);
+    expect(status.removedDeviceIds).toEqual([]);
   });
 });

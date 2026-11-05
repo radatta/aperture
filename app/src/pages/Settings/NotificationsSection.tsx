@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useReducer, useState } from 'react';
 import {
   DAY_REMINDER_TIME,
   fmtClock12,
@@ -21,15 +21,20 @@ import {
 import {
   deniedCopy,
   deviceIdHere,
+  dismissRemovedElsewhere,
   notificationPermission,
   PUSH_INSTALL_COPY,
   PUSH_UNSUPPORTED_COPY,
   pushSupport,
+  removedElsewhereHere,
   subscribeHere,
   syncErrorHere,
 } from '../../modules/push/browserPush';
 import { deviceLines, pollerLines } from '../../modules/push/health';
 import type { HealthLine } from '../../modules/push/health';
+
+export const REMOVED_ELSEWHERE_COPY =
+  'Removed from another device — tap Enable to turn reminders back on here.';
 
 const errText = (e: unknown) =>
   e instanceof Error ? e.message : 'Something went wrong — try again.';
@@ -147,10 +152,15 @@ function ThisDevice({ status }: { status: PushStatus }) {
   const hereId = deviceIdHere();
   const onHere = hereId !== null && status.devices.some((d) => d.id === hereId);
   const syncError = syncErrorHere();
+  // Set when a status read found this device removed on another one (usePushStatus): the removal sticks,
+  // and the note says so until Enable or Dismiss. It lives in localStorage — Dismiss re-renders by hand.
+  const removedElsewhere = removedElsewhereHere();
+  const [, restamp] = useReducer((n: number) => n + 1, 0);
 
   // Run straight from the tap: subscribeHere asks for permission before it awaits anything.
   function enable() {
     if (!status.vapidPublicKey) return;
+    dismissRemovedElsewhere();
     setError(null);
     setAsking(true);
     subscribeHere(status.vapidPublicKey)
@@ -173,6 +183,23 @@ function ThisDevice({ status }: { status: PushStatus }) {
     );
   return (
     <div className="flex flex-col gap-1.5">
+      {removedElsewhere && !onHere && (
+        <div role="status" className="flex flex-wrap items-center gap-2">
+          <Text size="sm" tone="gold">
+            {REMOVED_ELSEWHERE_COPY}
+          </Text>
+          <Button
+            variant="quiet"
+            size="sm"
+            onClick={() => {
+              dismissRemovedElsewhere();
+              restamp();
+            }}
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
       {onHere ? (
         <Text as="p" size="sm" tone="teal">
           On for this device.

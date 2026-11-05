@@ -19,6 +19,8 @@ const SW_READY_MS = 5000;
 const ENABLED_KEY = 'aperture.push.enabled'; // this device's id, set when it opted in here
 const SYNCED_KEY = 'aperture.push.syncedDay'; // the day a launch last confirmed the subscription
 const SYNC_ERROR_KEY = 'aperture.push.syncError'; // why the last launch couldn't re-subscribe
+const REMOVED_KEY = 'aperture.push.removedElsewhere'; // the opt-in was dropped: removed on another device
+const ENABLED_AT_KEY = 'aperture.push.enabledAt'; // when the opt-in was last made, epoch ms
 
 // iPadOS reports a Mac UA; its touch points give it away.
 const isIOS = (ua: string, touchPoints = 0) =>
@@ -181,27 +183,55 @@ function write(key: string, value: string | null): void {
 // The id this device's subscription has on the server, when it turned reminders on here.
 export const deviceIdHere = (): string | null => read(ENABLED_KEY);
 export const syncErrorHere = (): string | null => read(SYNC_ERROR_KEY);
+// Settings' one-time note after a removal from another device — kept across the reload it may happen on,
+// until Enable is tapped or it's dismissed.
+export const removedElsewhereHere = (): boolean => read(REMOVED_KEY) !== null;
+export const dismissRemovedElsewhere = (): void => write(REMOVED_KEY, null);
 
 export function rememberHere(device: PushDevice, now: number): void {
   write(ENABLED_KEY, device.id);
+  write(ENABLED_AT_KEY, String(now));
   write(SYNCED_KEY, dayKey(now, 0));
   write(SYNC_ERROR_KEY, null);
+  write(REMOVED_KEY, null);
 }
 export function forgetHere(): void {
-  for (const k of [ENABLED_KEY, SYNCED_KEY, SYNC_ERROR_KEY]) write(k, null);
+  for (const k of [ENABLED_KEY, ENABLED_AT_KEY, SYNCED_KEY, SYNC_ERROR_KEY]) write(k, null);
+}
+
+// Removed from another device (status.removedDeviceIds): the removal sticks — this device drops its opt-in
+// and its browser subscription, writes nothing to the server, and leaves Settings a note. Resolves true
+// when it did. `askedAt`: when that status was requested — one asked for before this device last opted in
+// (a poll in flight across a re-Enable) can't speak for the new opt-in.
+export async function dropIfRemovedHere(status: PushStatus, askedAt?: number): Promise<boolean> {
+  const id = deviceIdHere();
+  if (!id || !status.removedDeviceIds.includes(id)) return false;
+  if (askedAt !== undefined && Number(read(ENABLED_AT_KEY) ?? 0) > askedAt) return false;
+  forgetHere();
+  write(REMOVED_KEY, '1');
+  try {
+    await (await currentSubscription())?.unsubscribe();
+  } catch {
+    // The server row is a tombstone, so nothing pushes to it; a browser that won't let go is harmless.
+  }
+  return true;
 }
 
 // D7, on launch: when this device turned reminders on and still has permission, make sure the server and
-// the browser agree — re-subscribe when iOS dropped the subscription or the stage's key changed, and
-// re-upsert when the server lost the device (a 410 cleanup) or once a day. A healthy launch writes
-// nothing else. Resolves true when it wrote. A failure is remembered for Settings to show, then rethrown.
+// the browser agree — stop if it was removed on another device (dropIfRemovedHere), re-subscribe when
+// iOS dropped the subscription or the stage's key changed, and re-upsert when the server lost the device
+// (the poller deletes a 404/410 subscription outright, so it isn't "removed") or once a day. A healthy
+// launch writes nothing else. Resolves true when it changed something. A failure is remembered for
+// Settings to show, then rethrown.
 export async function resyncHere(
   status: PushStatus,
   now: number,
   upsert: (input: SubscribePushInput) => Promise<PushDevice>,
 ): Promise<boolean> {
   const id = deviceIdHere();
-  if (!id || !status.configured || !status.vapidPublicKey) return false;
+  if (!id) return false;
+  if (await dropIfRemovedHere(status)) return true;
+  if (!status.configured || !status.vapidPublicKey) return false;
   if (notificationPermission() !== 'granted') return false;
   try {
     const pm = await pushManagerOf();

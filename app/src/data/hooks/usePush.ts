@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SubscribePushInput } from '@aperture/shared';
+import type { PushStatus, SubscribePushInput } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import {
   currentSubscription,
   deviceIdHere,
+  dropIfRemovedHere,
   forgetHere,
   notificationPermission,
   rememberHere,
@@ -15,12 +16,19 @@ import {
 // Reminders (Web Push, docs/areas/tasks/reminders.md): this user's devices and the poller's health, as
 // Settings › Notifications shows them, plus the launch-time re-subscribe (usePushSync).
 
-// `poll`: while Settings is open the health line keeps moving (a Send test lands within a minute).
+// `poll`: while Settings is open the health line keeps moving (a Send test lands within a minute). Each
+// fresh read also settles a removal from another device (dropIfRemovedHere) before anything renders it —
+// judged on the read itself, never a cached copy that predates a re-Enable.
 export function usePushStatus(opts: { poll?: boolean; enabled?: boolean } = {}) {
   const api = useApi();
   return useQuery({
     queryKey: qk.pushStatus(),
-    queryFn: () => api.getPushStatus(),
+    queryFn: async () => {
+      const askedAt = Date.now();
+      const status = await api.getPushStatus();
+      await dropIfRemovedHere(status, askedAt);
+      return status;
+    },
     refetchInterval: opts.poll ? 30_000 : false,
     enabled: opts.enabled ?? true,
   });
@@ -36,7 +44,20 @@ export function useSubscribePush() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: SubscribePushInput) => api.subscribePush(input),
-    onSuccess: (device) => rememberHere(device, Date.now()),
+    onSuccess: (device) => {
+      // The cached status goes first: until the refetch lands it still lists a revived id as removed,
+      // and Settings would read that as "removed elsewhere" and drop the opt-in just made.
+      qc.setQueryData<PushStatus>(
+        qk.pushStatus(),
+        (s) =>
+          s && {
+            ...s,
+            devices: [...s.devices.filter((d) => d.id !== device.id), device],
+            removedDeviceIds: s.removedDeviceIds.filter((id) => id !== device.id),
+          },
+      );
+      rememberHere(device, Date.now());
+    },
     onSettled: () => refresh(qc),
   });
 }

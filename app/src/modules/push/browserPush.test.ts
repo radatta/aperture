@@ -5,12 +5,15 @@ import { STUB_VAPID_PUBLIC_KEY } from '../../data/stubClient';
 import {
   deviceIdHere,
   deviceLabel,
+  dismissRemovedElsewhere,
+  dropIfRemovedHere,
   forgetHere,
   PUSH_INSTALL_COPY,
   PUSH_UNSUPPORTED_COPY,
   pushManagerOf,
   pushSupport,
   rememberHere,
+  removedElsewhereHere,
   resyncHere,
   subscribeHere,
   syncErrorHere,
@@ -36,6 +39,7 @@ const status = (over: Partial<PushStatus> = {}): PushStatus => ({
   configured: true,
   vapidPublicKey: STUB_VAPID_PUBLIC_KEY,
   devices: [],
+  removedDeviceIds: [],
   poller: { lastRunAt: null, lastSentAt: null, lastError: null, lastErrorAt: null },
   ...over,
 });
@@ -256,6 +260,49 @@ describe('resyncHere (D7)', () => {
     const upsert = vi.fn(async () => device('d1'));
     expect(await resyncHere(status(), NOW, upsert)).toBe(true);
     expect(pm.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('removed on another device: the removal sticks — drops the opt-in, writes nothing, leaves a note', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    const sub = fakeSub('https://web.push.apple.com/a');
+    pm.set(sub);
+    rememberHere(device('d1'), NOW - 86_400_000);
+    const upsert = vi.fn();
+    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, upsert)).toBe(true);
+    expect(upsert).not.toHaveBeenCalled();
+    expect(pm.subscribe).not.toHaveBeenCalled();
+    expect(sub.unsubscribe).toHaveBeenCalled();
+    expect(deviceIdHere()).toBeNull();
+    expect(localStorage.getItem('aperture.push.syncedDay')).toBeNull();
+    expect(removedElsewhereHere()).toBe(true);
+    // The next launch has no opt-in, so it stays out entirely.
+    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, upsert)).toBe(false);
+    expect(removedElsewhereHere()).toBe(true); // until dismissed or re-enabled
+    dismissRemovedElsewhere();
+    expect(removedElsewhereHere()).toBe(false);
+  });
+
+  it('a read asked for before this device re-enabled can’t drop the new opt-in', async () => {
+    safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const removed = status({ removedDeviceIds: ['d1'] });
+    expect(await dropIfRemovedHere(removed, NOW - 1)).toBe(false);
+    expect(deviceIdHere()).toBe('d1');
+    expect(await dropIfRemovedHere(removed, NOW + 1)).toBe(true);
+    expect(deviceIdHere()).toBeNull();
+  });
+
+  it('another device’s removal leaves this one alone; enabling again clears the note', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    pm.set(fakeSub('https://web.push.apple.com/a'));
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn();
+    const s = status({ devices: [device('d1')], removedDeviceIds: ['d9'] });
+    expect(await resyncHere(s, NOW, upsert)).toBe(false);
+    expect(deviceIdHere()).toBe('d1');
+    localStorage.setItem('aperture.push.removedElsewhere', '1');
+    rememberHere(device('d1'), NOW);
+    expect(removedElsewhereHere()).toBe(false);
   });
 
   it('stays out when permission went away or the stage has no key', async () => {

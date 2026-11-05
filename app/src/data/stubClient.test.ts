@@ -155,6 +155,23 @@ describe('stub — reminders', () => {
       expect(exported).not.toContain(leak);
   });
 
+  it('a removal is a tombstone without its keys, listed until the same endpoint subscribes again', async () => {
+    const key = `push-removed.${FIXED}`;
+    const api = createStubClient({ now: () => FIXED, storageKey: key, seed: false });
+    const a = await api.subscribePush(sub());
+    await api.unsubscribePush(a.id);
+    const stored = localStorage.getItem(key)!;
+    expect(stored).not.toContain('p256dh-secret');
+    expect(stored).not.toContain('auth-secret');
+    const reloaded = createStubClient({ now: () => FIXED, storageKey: key });
+    expect((await reloaded.getPushStatus()).removedDeviceIds).toEqual([a.id]);
+    expect((await reloaded.subscribePush(sub())).id).toBe(a.id);
+    expect(await reloaded.getPushStatus()).toMatchObject({
+      devices: [expect.objectContaining({ id: a.id })],
+      removedDeviceIds: [],
+    });
+  });
+
   it('Send test stamps the heartbeat and each device, so the health line moves', async () => {
     let t = FIXED;
     const api = createStubClient({ now: () => t, storageKey: `push-test.${FIXED}`, seed: false });
