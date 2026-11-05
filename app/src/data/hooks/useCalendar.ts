@@ -111,7 +111,11 @@ export function useCalendarPull(): void {
       api
         .pullCalendar()
         .then((res) => {
-          if (res.changedTaskIds.length > 0) invalidateTaskData(qc);
+          // The day too: a pulled edit can give a planned task a time, which getDay's sweep settles.
+          if (res.changedTaskIds.length > 0) {
+            void invalidateTaskData(qc);
+            void qc.invalidateQueries({ queryKey: ['day'] });
+          }
           if (res.pulled) qc.invalidateQueries({ queryKey: qk.googleStatus() });
         })
         .catch(() => {

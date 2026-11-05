@@ -25,7 +25,7 @@ export function usePlaceOptions() {
 
 const placesChanged = (qc: ReturnType<typeof useQueryClient>) => {
   void qc.invalidateQueries({ queryKey: qk.places() });
-  invalidateTaskData(qc);
+  void invalidateTaskData(qc);
 };
 
 export function useUpsertPlace() {

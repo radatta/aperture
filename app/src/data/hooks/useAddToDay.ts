@@ -5,6 +5,7 @@ import type { CreateTaskInput, Task, TaskPlan } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { plannedDefault } from '../../modules/tasks/taskMath';
+import { invalidateTaskData } from './invalidate';
 import { useRemovePlan, useUpsertPlan } from './usePlans';
 import { useSettings } from './useSettings';
 import { useCreateTask, useTransitionTask } from './useTasks';
@@ -15,6 +16,9 @@ export type AddResult = 'added' | 'already' | 'timed';
 // The one way a task lands on (or leaves) a day's plan — the tasks page, Home "+ Add", capture
 // "→ today", the night "Tomorrow". It owns the write order and the dedupe so no surface re-derives
 // them. `day` defaults to today; never pass it to getDay (other days are read via listPlansForDay).
+// Each write's hook refetches what it changed and resolves only once the lists are new, so a caller
+// acting on "done" (moving focus off a row that just left its list) sees the new lists — one tasks
+// read and no day read per add (useAddToDay.test.tsx counts them; lenses.md D5).
 export function useAddToDay(day?: string) {
   const api = useApi();
   const qc = useQueryClient();
@@ -22,7 +26,7 @@ export function useAddToDay(day?: string) {
   const target = day ?? todayKey(settings?.dayStartHour ?? 4);
   const upsertPlan = useUpsertPlan();
   const removePlan = useRemovePlan();
-  const transition = useTransitionTask();
+  const transition = useTransitionTask({ settled: true }); // the row leaves its list before we resolve
   const createTask = useCreateTask();
   // upsertPlan dedupes per (task, day) server-side; the set still guards the status step from a
   // double tap, and the pre-read below still sets `order` and `already`.
@@ -38,14 +42,6 @@ export function useAddToDay(day?: string) {
     });
     return todayKey(s.dayStartHour);
   }
-
-  // Resolve only once the lists have refetched, so a caller acting on "done" (moving focus off a row
-  // that just left its list) sees the new lists, not the old ones.
-  const settled = () =>
-    Promise.all([
-      qc.invalidateQueries({ queryKey: qk.tasks() }),
-      qc.invalidateQueries({ queryKey: ['plans'] }),
-    ]);
 
   async function addToDay(task: Task): Promise<AddResult> {
     if (isTimed(task)) return 'timed';
@@ -74,7 +70,6 @@ export function useAddToDay(day?: string) {
       // lost) instead of leaving a backlog task sitting on the day's plan.
       const fresh = (await api.getTask(task.id)) ?? task;
       if (fresh.status === 'backlog') await transition.mutateAsync({ id: task.id, to: 'planned' });
-      await settled();
       return exists ? 'already' : 'added';
     } finally {
       inFlight.current.delete(key);
@@ -95,22 +90,23 @@ export function useAddToDay(day?: string) {
       if (opts.fromInProgress && fresh.status === 'in_progress')
         await transition.mutateAsync({ id: task.id, to: 'backlog' });
       if (plan.day === (await resolveDay())) {
-        await removePlan.mutateAsync(plan.id);
+        await removePlan.mutateAsync({ id: plan.id, day: plan.day });
         // getDay(today) sweeps a planned task with no row today or later to backlog, and leaves one
-        // that's planned ahead alone.
+        // that's planned ahead alone. Fetched with its own queryFn, so useDay's cascade doesn't run;
+        // the one refetch after it is for what the sweep moved.
         await qc.fetchQuery({
           queryKey: qk.day(plan.day),
           queryFn: () => api.getDay(plan.day),
           staleTime: 0,
         });
+        await invalidateTaskData(qc);
       } else {
-        // Not today's row, so no sweep to lean on: status first, since removing the row refetches
-        // today's getDay, whose sweep could move the task ahead of us (backlog → backlog throws).
+        // Not today's row, so no sweep to lean on: the status move is explicit. Status first — a task
+        // planned on two days keeps its status once its other row is gone (backlog → backlog throws).
         if (fresh.status === 'planned')
           await transition.mutateAsync({ id: task.id, to: 'backlog' });
-        await removePlan.mutateAsync(plan.id);
+        await removePlan.mutateAsync({ id: plan.id, day: plan.day });
       }
-      await settled();
     } finally {
       inFlight.current.delete(plan.id);
     }

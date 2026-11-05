@@ -29,7 +29,7 @@ export function usePickRollToday() {
     mutationFn: (v: { rollId: string; day: string }) => api.pickRollToday(v.rollId, v.day),
     onSuccess: ({ task }: { task: Task }) => putTasks(qc, [task]),
     onSettled: () => {
-      invalidateTaskData(qc);
+      void invalidateTaskData(qc);
       qc.invalidateQueries({ queryKey: qk.rolls() });
     },
   });

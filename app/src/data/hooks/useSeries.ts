@@ -14,10 +14,13 @@ export function useUpsertSeries() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: UpsertSeriesInput) => api.upsertSeries(input),
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: qk.series() });
-      invalidateTaskData(qc);
-    },
+    // The day too: a new series' occurrence due today materializes on the next getDay (lazy recurrence).
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.series() }),
+        qc.invalidateQueries({ queryKey: ['day'] }),
+        invalidateTaskData(qc),
+      ]),
   });
 }
 

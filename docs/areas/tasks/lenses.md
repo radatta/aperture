@@ -67,6 +67,17 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
     in_progress.
   - Row buttons disable while their write runs, a failure shows "Couldn't save that", and focus moves
     to the list (not `<body>`) when the row leaves it.
+  - **One write path, one refetch (2026-11).** Each write's hook refetches what it changed and resolves
+    once the lists are new: a plan write lands in its day's list at once and refetches the plans keys
+    only; a task write refetches tasks, plans and calibration — never the day singleton, whose own
+    refetch cascades into tasks and plans again (`useDay`). The one task write that needs the day's
+    sweep, a planned task gaining a time (D13), asks for it itself (`useSetDue`); so does a new series
+    (its occurrence materializes on `getDay`) and a calendar pull that changed tasks. Measured with the
+    Tasks page's three queries mounted (`useAddToDay.test.tsx`): a "+ Today" went from 5 `listTasks`,
+    6 `listPlansForDay`, 2 `getDay` to 1 / 3 / 0 (the pre-read, the row write's refetch, the status
+    write's); an Unplan from 3 / 3 / 1 to 1 / 2 / 1. A page load is untouched (Home: 19 reads before
+    and after). Task-write hooks don't wait for their refetch (the modal closes on the write's own
+    answer, PR 77); `useTransitionTask({ settled: true })` does, for the row that leaves its list.
   - `createToday` = create + add, not atomic: on a planning failure the task stays in the backlog and
     the caller says so.
   - A timed task is never added (D13): `addToDay` returns `'timed'` and writes nothing, and the server's

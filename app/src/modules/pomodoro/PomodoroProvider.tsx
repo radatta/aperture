@@ -202,7 +202,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
         .then(
           (s) => {
             setStartError(null);
-            invalidateTaskData(qc);
+            void invalidateTaskData(qc);
             upsert(s);
             setPausedIds((p) => withDeleted(p, s.id)); // re-focusing a dedup'd task clears any stale pause
           },
@@ -309,7 +309,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       const capMin =
         status === 'completed' && timer ? stopCapMin(timer, tf(timer.session)) : undefined;
       const settled = () => {
-        invalidateTaskData(qc);
+        void invalidateTaskData(qc);
         remove(id);
       };
       return api
@@ -329,7 +329,7 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
       clear(id);
       api.resolveStaleSession(id, 'keep').then(
         () => {
-          invalidateTaskData(qc);
+          void invalidateTaskData(qc);
           setStale((cur) => cur.filter((s) => s.id !== id));
         },
         () => fail(id, 'Couldn’t save — try again.'),
