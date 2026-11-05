@@ -17,9 +17,11 @@ afterEach(() => {
 });
 
 describe('stageSecret', () => {
-  it('uses the CI env var, trimmed', () => {
+  it('uses the CI env var, trimmed, and writes nothing', () => {
+    const dir = tmp();
     const env = { APERTURE_AGENT_TOKEN: '  abc123\n', GITHUB_ACTIONS: 'true' };
-    expect(stageSecret('AGENT_TOKEN', 'prod', { env, dir: tmp() })).toBe('abc123');
+    expect(stageSecret('AGENT_TOKEN', 'prod', { env, dir })).toBe('abc123');
+    expect(readdirSync(dir)).toEqual([]);
   });
 
   it('in CI, an empty secret fails the synth naming the GitHub secret to set, never a fresh token', () => {
@@ -33,8 +35,8 @@ describe('stageSecret', () => {
     expect(readdirSync(dir)).toEqual([]); // nothing minted on the way out
   });
 
-  it('outside CI, generates a file once per stage and kind, and reuses it', () => {
-    const dir = tmp();
+  it('outside CI, generates a file once per stage and kind, creating the dir, and reuses it', () => {
+    const dir = join(tmp(), 'nested'); // not pre-created: the first call makes it
     const first = stageSecret('ORIGIN_SECRET', 'dev', { env: {}, dir });
     expect(first).toMatch(/^[0-9a-f]{48}$/);
     expect(stageSecret('ORIGIN_SECRET', 'dev', { env: {}, dir })).toBe(first);

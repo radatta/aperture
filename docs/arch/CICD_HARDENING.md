@@ -51,7 +51,7 @@ _As found at planning time (2026-08-10); items 2–4 were resolved by item 6._
 - [ ] Flip the AWS **root**-user "IAM access to Billing and Cost Management" toggle **before** deploying the billing stack (item 7). Independent of IAM policy — the OIDC roles cannot do this.
 - [ ] Hand-deploy the billing stack once: `cdk deploy ApertureBilling -c billing=true` (mirrors the one-off `ApertureCicd` deploy; the pipeline never touches it).
 
-**Unrelated to the seven, same by-hand list:** the LeetCode-capture extension needs GitHub **secrets** `DEVICE_TOKEN_DEV` / `DEVICE_TOKEN_PROD` (the `_PROD` one in the `prod` environment) and **vars** `DEVICE_USER_ID_DEV` / `DEVICE_USER_ID_PROD` — why, and how each fails silently when unset: **[recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup)**.
+**Unrelated to the seven, same by-hand list:** the LeetCode-capture extension needs GitHub **secrets** `DEVICE_TOKEN_DEV` / `DEVICE_TOKEN_PROD` (the `_PROD` one in the `prod` environment) and **vars** `DEVICE_USER_ID_DEV` / `DEVICE_USER_ID_PROD` — why, and how each fails when unset (the secret loudly at synth, the var silently): **[recruiting/ → Operator setup](../areas/recruiting/index.md#operator-setup)**.
 
 ## Implementation order
 
