@@ -1,6 +1,7 @@
-import { Duration } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cw_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
@@ -32,6 +33,23 @@ export class Monitoring extends Construct {
     super(scope, id);
 
     const topic = new sns.Topic(this, 'AlarmTopic', { displayName: 'Aperture prod alarms', enforceSSL: true });
+    // enforceSSL writes a TopicPolicy, which replaces SNS's default policy — so CloudWatch's publish needs its own
+    // Allow (without it the alarms never emailed: alarm history read "not authorized to perform: SNS:Publish").
+    // The SSL Deny stays: aws:SecureTransport is always in the request context, and a service publishes over TLS
+    // (the KillAlerts topic in org-stack.ts carries the same Deny and EventBridge's publish emails through it).
+    const { account, region, partition } = Stack.of(this);
+    topic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudWatchAlarmsPublish',
+        principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+        actions: ['sns:Publish'],
+        resources: [topic.topicArn],
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': account },
+          ArnLike: { 'aws:SourceArn': `arn:${partition}:cloudwatch:${region}:${account}:alarm:*` },
+        },
+      }),
+    );
     topic.addSubscription(new subscriptions.EmailSubscription(ALERT_EMAIL));
     const action = new cw_actions.SnsAction(topic);
 

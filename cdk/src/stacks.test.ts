@@ -466,10 +466,46 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     expect(r?.Properties.Dimensions).toBeUndefined();
   });
 
+  // enforceSSL's TopicPolicy replaces SNS's default policy, so CloudWatch needs its own Allow or no alarm ever emails.
+  it('lets CloudWatch alarms publish to the email topic, with the SSL-only deny kept', () => {
+    const t = build('prod');
+    t.resourceCountIs('AWS::SNS::TopicPolicy', 1);
+    const [topicId = ''] = Object.keys(t.findResources('AWS::SNS::Topic'));
+    t.hasResourceProperties('AWS::SNS::TopicPolicy', {
+      Topics: [{ Ref: topicId }],
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          // arrayWith matches in order: CDK's SSL deny is statement 0, the Allow follows it
+          Match.objectLike({
+            Sid: 'AllowPublishThroughSSLOnly',
+            Effect: 'Deny',
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+          }),
+          Match.objectLike({
+            Sid: 'AllowCloudWatchAlarmsPublish',
+            Effect: 'Allow',
+            Principal: { Service: 'cloudwatch.amazonaws.com' },
+            Action: 'sns:Publish',
+            Resource: { Ref: topicId },
+            Condition: {
+              StringEquals: { 'aws:SourceAccount': '111111111111' },
+              ArnLike: {
+                'aws:SourceArn': {
+                  'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-west-1:111111111111:alarm:*']],
+                },
+              },
+            },
+          }),
+        ]),
+      },
+    });
+  });
+
   it('adds no alarms or SNS topic in dev (prod-only)', () => {
     const t = build('dev');
     t.resourceCountIs('AWS::CloudWatch::Alarm', 0);
     t.resourceCountIs('AWS::SNS::Topic', 0);
+    t.resourceCountIs('AWS::SNS::TopicPolicy', 0);
   });
 });
 
