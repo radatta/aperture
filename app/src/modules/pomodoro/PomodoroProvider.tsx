@@ -189,9 +189,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   }, [doneKey, chimedIds]);
 
   const startFocus = useCallback(
-    (input?: StartFocusInput) => {
+    (input?: StartFocusInput): Promise<boolean> => {
       setStartError(null);
-      api
+      return api
         .startSession({
           taskId: input?.taskId ?? null,
           categoryId: null,
@@ -205,8 +205,12 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
             void invalidateTaskData(qc);
             upsert(s);
             setPausedIds((p) => withDeleted(p, s.id)); // re-focusing a dedup'd task clears any stale pause
+            return true;
           },
-          () => setStartError('Couldn’t start the timer — try again.'),
+          () => {
+            setStartError('Couldn’t start the timer — try again.');
+            return false;
+          },
         );
     },
     [api, qc, upsert, settings],

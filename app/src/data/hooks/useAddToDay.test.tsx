@@ -116,6 +116,25 @@ describe('useAddToDay', () => {
     expect(await plansFor(api, day)).toHaveLength(0);
   });
 
+  it('a failed unplan puts the status back: the task is where it was, still on the plan', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const day = todayKey(4);
+    const t = await api.createTask({ title: 'b' });
+    const row = await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+    const started = await api.transitionTask(t.id, 'in_progress');
+    api.removePlan = () => Promise.reject(new Error('offline'));
+
+    await act(async () => {
+      await expect(
+        hook.result.current.unplan(row, started, { fromInProgress: true }),
+      ).rejects.toThrow('offline');
+    });
+
+    expect((await api.getTask(t.id))?.status).toBe('in_progress');
+    expect(await plansFor(api, day)).toHaveLength(1);
+  });
+
   it('a retry repairs a half-done add: row written, transition lost', async () => {
     const { api, hook } = setup();
     await ready(hook);

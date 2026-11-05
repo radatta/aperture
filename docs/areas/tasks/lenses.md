@@ -91,7 +91,8 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
 - **D8 — night "Still open — when?"** Inside "Today in review": each unfinished task on today's plan
   with no row tomorrow. **Tomorrow** adds a row for tomorrow (today's stays as history; a started task
   stays started). **Backlog** takes it off today, started or not (the locked estimate and logged time
-  stay; a running focus timer on it is stopped first). **Leave** hides it for the session; the next
+  stay; a running focus timer on it is stopped first — if the unplan then fails, the timer is restarted,
+  the status put back, and the row says so; the stopped minutes stay on the task). **Leave** hides it for the session; the next
   morning's stale sweep handles it. No count, no red. A **timed** row (D13) shows its time and offers
   Tomorrow — the same clock a day on (`setTaskDue`, so its calendar block moves with it) — and Leave;
   no Backlog, since a timed task isn't planned. A timed part whose Tomorrow would end it after its

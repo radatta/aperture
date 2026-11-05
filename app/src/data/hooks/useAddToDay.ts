@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { isTimed, todayKey } from '@aperture/shared';
-import type { CreateTaskInput, Task, TaskPlan } from '@aperture/shared';
+import type { CreateTaskInput, Task, TaskPlan, TaskStatus } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import { plannedDefault } from '../../modules/tasks/taskMath';
@@ -79,18 +79,32 @@ export function useAddToDay(day?: string) {
   // Take a row off its day. A planned task goes back to backlog unless it's still planned for a later
   // day (the night "Tomorrow", or a row the MCP wrote) — the stale sweep owns that rule, so today's
   // rows let it decide rather than re-deriving it here. With `fromInProgress` (the night "Backlog") a
-  // started task goes back too; its accrued time stays.
+  // started task goes back too; its accrued time stays. A status moved here before the row's removal
+  // is put back when that removal fails: a failed unplan leaves the task where it found it, so a retry
+  // — or the night row's restarted timer — meets the same task, not a backlog one still on the plan.
   async function unplan(plan: TaskPlan, task: Task, opts: { fromInProgress?: boolean } = {}) {
     if (inFlight.current.has(plan.id)) return;
     inFlight.current.add(plan.id);
+    let moved: TaskStatus | null = null; // the status before our move, to restore
+    const move = async (fresh: Task, to: TaskStatus) => {
+      await transition.mutateAsync({ id: task.id, to });
+      moved = fresh.status;
+    };
+    const remove = async () => {
+      try {
+        await removePlan.mutateAsync({ id: plan.id, day: plan.day });
+      } catch (err) {
+        if (moved) await transition.mutateAsync({ id: task.id, to: moved }).catch(() => undefined);
+        throw err;
+      }
+    };
     try {
       // Fresh, not cached: a stale status could send a task started elsewhere back to the backlog.
       const fresh = (await api.getTask(task.id)) ?? task;
       // The sweep never touches in_progress, so that move is explicit (and safe to do first).
-      if (opts.fromInProgress && fresh.status === 'in_progress')
-        await transition.mutateAsync({ id: task.id, to: 'backlog' });
+      if (opts.fromInProgress && fresh.status === 'in_progress') await move(fresh, 'backlog');
       if (plan.day === (await resolveDay())) {
-        await removePlan.mutateAsync({ id: plan.id, day: plan.day });
+        await remove();
         // getDay(today) sweeps a planned task with no row today or later to backlog, and leaves one
         // that's planned ahead alone. Fetched with its own queryFn, so useDay's cascade doesn't run;
         // the one refetch after it is for what the sweep moved.
@@ -103,9 +117,8 @@ export function useAddToDay(day?: string) {
       } else {
         // Not today's row, so no sweep to lean on: the status move is explicit. Status first — a task
         // planned on two days keeps its status once its other row is gone (backlog → backlog throws).
-        if (fresh.status === 'planned')
-          await transition.mutateAsync({ id: task.id, to: 'backlog' });
-        await removePlan.mutateAsync({ id: plan.id, day: plan.day });
+        if (fresh.status === 'planned') await move(fresh, 'backlog');
+        await remove();
       }
     } finally {
       inFlight.current.delete(plan.id);
