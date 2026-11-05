@@ -1080,6 +1080,20 @@ describe('stopSession over RPC onto a finished task', () => {
     expect((await rpc('getTask', [dropped.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
   });
 
+  it('a negative capMin is refused over RPC and the session keeps running', async () => {
+    const doc = new InMemoryDoc();
+    const now = () => 1_700_000_000_000;
+    const rpc = (method: 'startSession' | 'stopSession' | 'listRunningSessions', args: unknown[]) =>
+      handleRpc(doc, { userId: 'local', method, args, now }, { presigner: fakePresigner() });
+    const s = (await rpc('startSession', [
+      { taskId: null, categoryId: null, kind: 'work', day: '2026-08-04' },
+    ])) as PomodoroSession;
+    await expect(rpc('stopSession', [s.id, 'completed', { capMin: -1 }])).rejects.toThrow(/capMin/);
+    expect(((await rpc('listRunningSessions', [])) as PomodoroSession[]).map((x) => x.id)).toEqual([
+      s.id,
+    ]);
+  });
+
   it('keeping a stale timer onto a finished task completes it with its minutes but adds none', async () => {
     const doc = new InMemoryDoc();
     let clock = 1_700_000_000_000;

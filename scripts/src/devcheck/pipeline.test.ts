@@ -182,7 +182,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     reads: {
       listTasks: async () => [...tasks.values()],
       listBacklog: async () => [],
-      getSettings: async () => ({ dayStartHour: 4 }),
+      getSettings: async () => ({ dayStartHour: 4, pomodoroWorkMin: 25 }),
       listRunningSessions: async () => [],
       listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
@@ -223,6 +223,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listFinanceRules: async () => [...finance.rules.values()],
     },
     writes: {
+      updateSettings: async () => {
+        throw new Error('unused');
+      },
       createTask: async () => {
         throw new Error('unused');
       },

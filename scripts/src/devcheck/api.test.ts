@@ -111,6 +111,7 @@ describe('createApiClient', () => {
       'uncheckHabit',
       'unlinkFinanceRefund',
       'unsetFinanceBucket',
+      'updateSettings',
       'upsertCategory',
       'upsertFinanceRule',
       'upsertHabit',

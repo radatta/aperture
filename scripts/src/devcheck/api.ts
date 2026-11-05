@@ -181,6 +181,12 @@ export interface DevAttachment {
   status: string;
 }
 
+// The settings the check reads and, for one row, writes back.
+export interface DevSettings {
+  dayStartHour: number;
+  pomodoroWorkMin: number;
+}
+
 // The slice of a Pomodoro session the check reads. Sessions are never written by the harness's API client.
 export interface DevSession {
   id: string;
@@ -362,7 +368,7 @@ export function createApiClient({
     // The app's own day read (it materializes due series and sweeps the day) — today only, as the app.
     getDay: (day: string) => call<DevDay>('getDay', [day]),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
-    getSettings: () => call<{ dayStartHour: number }>('getSettings', []),
+    getSettings: () => call<DevSettings>('getSettings', []),
     listRunningSessions: () => call<{ id: string }[]>('listRunningSessions', []),
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
@@ -425,6 +431,9 @@ export function createApiClient({
   };
 
   const writes = {
+    // The test user's own settings row — not ledgered; a step that changes it puts it back in its `finally`
+    // (a 1-minute block for the capped-stop row, 25 again after).
+    updateSettings: (patch: Partial<DevSettings>) => call<DevSettings>('updateSettings', [patch]),
     async createTask(input: CreateTaskInput): Promise<DevTask> {
       ledger.append({ run, op: 'intent', via: 'api:createTask', title: input.title });
       const task = await call<DevTask>('createTask', [input]);
