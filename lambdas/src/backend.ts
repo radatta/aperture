@@ -1512,7 +1512,7 @@ export class BackendClient implements ApiClient {
   }
   async setCategoryArea(id: string, area: Area | null): Promise<Category> {
     assertArea(area); // before any read: a bad value never reaches the table
-    const existing = await this.repo.getCategory(id);
+    const existing = await this.repo.getCategory(id, { consistent: true });
     if (!existing) throw new Error(`Not found: ${id}`);
     return this.repo.putCategory({ ...existing, area, updatedAt: this.now() });
   }
