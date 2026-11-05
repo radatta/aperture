@@ -199,9 +199,6 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       placeDigestRaw: async () => {
         throw new Error('unused');
       },
-      getFinanceOverview: async () => {
-        throw new Error('unused');
-      },
       listFinanceTransactions: async () => [...finance.rows.values()],
       getFinanceTransaction: async (id) => finance.rows.get(id) ?? null,
       listFinanceRules: async () => [...finance.rules.values()],

@@ -52,7 +52,6 @@ describe('createApiClient', () => {
     expect(Object.keys(api.reads).sort()).toEqual([
       'getAttachmentDownloadUrl',
       'getCalibration',
-      'getFinanceOverview',
       'getFinanceTransaction',
       'getFluxSet',
       'getPlaceTokenStatus',
@@ -522,7 +521,7 @@ describe('createApiClient', () => {
         },
       ]);
       expect(financeRowOf('finance-bucket:r1:tx1')).toBe('tx1');
-      expect(financeRowOf('finance-link:r1:a:b')).toBe('a:b');
+      expect(financeRowOf('finance-link:r1:01HZZ')).toBe('01HZZ');
     });
 
     it('clears only a recorded bucket / link, by the row the id names, through the row’s own method', async () => {

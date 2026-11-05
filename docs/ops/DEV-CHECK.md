@@ -73,7 +73,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 3. **Fixture bank** (the `finance` scenario). Once, as the test user, from Safari on the Mac: read
    `DEVCHECK_EMAIL` / `DEVCHECK_PASSWORD` from `.secrets/devcheck.dev.env`, sign in to dev in a private window,
    Finances → **Connect a bank** → _First Platypus Bank_ (non-OAuth; an OAuth institution may drop custom
-   fields) → username `user_custom`, password = the JSON in `localNotes/archive/finance-followups/plaid-fixture.json`
+   fields) → username `user_custom`, password = the JSON in `scripts/src/devcheck/fixtures/plaid-fixture.json`
    (a Plaid Sandbox `user_custom` config: a card and a checking account with fixed `DEVCHECK …` rows,
    `roll_dates_forward` so the newest row lands on the link day) → tick both accounts → Continue. The rows
    then stand still; the All tab lists this period and last, so they age off it in about six weeks — the

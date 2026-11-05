@@ -98,8 +98,9 @@ export interface Ui {
 // A step that can't run here through no fault of the build — a fixture bank not linked yet or aged out of
 // the lookback, the Mac asleep — says so instead of failing: `needsYou(reason)` marks the step `needs-you`,
 // the rows its scenario's steps prove read "needs you: <reason>" in the report (matrix.ts), the scenario's
-// later steps are left unrun (they build on it), and the run stays green. Never for a bug — a real throw
-// still fails the step — and never recorded under the run's own failures (those are the harness's).
+// later steps are left unrun (they build on it — its noConsoleErrors too, so a needs-you scenario checks no
+// console), and the run stays green. Never for a bug — a real throw still fails the step — and never
+// recorded under the run's own failures (those are the harness's).
 export class NeedsYou extends Error {
   readonly reason: string;
   constructor(reason: string) {

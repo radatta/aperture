@@ -101,11 +101,6 @@ export interface DevFinanceTransaction {
   bucket: string | null;
   refundOfId: string | null;
 }
-export interface DevFinanceOverview {
-  period: { start: string; end: string; previous: { start: string; end: string } };
-  accounts: { id: string; name: string; type: string }[];
-  items: { id: string; status: string }[];
-}
 export interface DevFinanceRule {
   id: string;
   pattern: string;
@@ -150,8 +145,8 @@ export const FINANCE_LINK_VIA = 'ui:linkFinanceRefund';
 export const FINANCE_RULE_VIA = 'api:upsertFinanceRule';
 export const financeBucketId = (run: string, row: string): string => `finance-bucket:${run}:${row}`;
 export const financeLinkId = (run: string, row: string): string => `finance-link:${run}:${row}`;
-// The row a finance-bucket / finance-link ledger id names.
-export const financeRowOf = (id: string): string => id.split(':').slice(2).join(':');
+// The row a finance-bucket / finance-link ledger id names — after the last colon (a ULID has none).
+export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':') + 1);
 
 // What a ledger id names, by the `via` it was created with — each kind is read and deleted its own way.
 export type LedgerKind =
@@ -290,8 +285,6 @@ export function createApiClient({
     getPlaceTokenStatus: () => call<DevPlaceTokenStatus>('getPlaceTokenStatus', []),
     getCalibration: (range: { from: string; to: string }) =>
       call<DevCalibrationPoint[]>('getCalibration', [range]),
-    getFinanceOverview: (today: string) =>
-      call<DevFinanceOverview>('getFinanceOverview', [{ today }]),
     listFinanceTransactions: (range: { from: string; to: string }) =>
       call<DevFinanceTransaction[]>('listFinanceTransactions', [range]),
     // One row by id, anywhere the server keeps it (there is no get-by-id RPC) — null when gone.

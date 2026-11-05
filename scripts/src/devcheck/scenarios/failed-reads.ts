@@ -10,7 +10,7 @@ import { laDay, noConsoleErrors, type Ctx, type Row, type Scenario } from '../sc
 // Counted on /settings: task cards each mount a categories reader, and React Query refetches a failed query
 // when a new reader mounts — on /tasks the injected count would depend on how fast listTasks is.
 const SETTINGS_CATEGORIES = 'Couldn’t load categories.';
-const FOCUS = '[title="Start a 25-minute focus block"]';
+export const FOCUS = '[title="Start a 25-minute focus block"]';
 const title = (nonce: string) => `devcheck-fr ${nonce}`;
 // The app gets an injected response a moment after the route counts it, then React renders: wait that out
 // before asserting something is NOT on screen.

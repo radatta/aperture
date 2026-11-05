@@ -8,10 +8,10 @@
 // Bucket option, bucket + "already refunded" on their own line in refund rows, two fields at 16px.
 import { PHONE } from '../browser';
 import { needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
-import { clearTimers } from './failed-reads';
+import { FOCUS, clearTimers } from './failed-reads';
 
-// The fixture's rows, by the start of their bank text (localNotes/plaid-fixture.json in the branch that
-// built it; the JSON is pasted into Link, never synced from the repo).
+// The fixture's rows, by the start of their bank text (fixtures/plaid-fixture.json — pasted into Plaid
+// Link as the user_custom password once, never synced from the repo).
 const REBATE = /devcheck rebate/i; // a card credit no charge fits: no suggestions
 const BOOKS_CHARGE = /devcheck books/i; // a card charge the search can link the rebate to
 const GROCER = /devcheck grocer/i; // a long merchant, for the row's truncation
@@ -57,7 +57,7 @@ const fontSizeOf = (ctx: Ctx, selector: string) =>
     `parseFloat(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).fontSize)`,
   );
 
-// The fixture's rows on the server, by bank text; `fixtureRow` throws needs-you when one is missing.
+// The fixture's rows on the server, by bank text; `find` is undefined for one that's missing.
 async function fixtureRows(ctx: Ctx) {
   const rows = await ctx.api.reads.listFinanceTransactions({
     from: '2000-01-01',
@@ -285,7 +285,7 @@ export const finance: Scenario = {
         // (a leftover one cleared first, as failed-reads does), open the row, measure, Cancel it, Stop the
         // timer. Like failed-reads, this leaves a seconds-long completed session in the test user's history.
         await clearTimers(ctx);
-        await ctx.page.getByRole('button', { name: 'Focus', exact: true }).first().click();
+        await ctx.page.locator(FOCUS).first().click();
         const open = ctx.page.getByRole('button', { name: '+ New focus', exact: true });
         await open.waitFor({ timeout: 15_000 });
         await open.click();
