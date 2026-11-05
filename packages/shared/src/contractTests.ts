@@ -1304,6 +1304,7 @@ export function runApiContract(
         rule: { kind: 'daily' },
         anchorDate: '2026-08-01',
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       const [plan] = await api.listPlansForDay('2026-08-04');
       const occurrences = async () => (await api.listTasks()).filter((t) => t.seriesId);
@@ -1357,6 +1358,7 @@ export function runApiContract(
         anchorDate: '2026-08-01',
       });
       expect(legacy).toMatchObject({ dueOffsetDays: null, until: null });
+      at('2026-08-31');
       await api.getDay('2026-08-31');
       const byTitle = Object.fromEntries((await api.listTasks()).map((t) => [t.title, t]));
       expect(byTitle['Pre-lab']).toMatchObject({
@@ -1382,6 +1384,7 @@ export function runApiContract(
         anchorDate: '2026-08-01',
         dueOffsetDays: 1,
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       const [plan] = await api.listPlansForDay('2026-08-04');
       await api.removePlan(plan!.id);
@@ -1391,6 +1394,7 @@ export function runApiContract(
         plannedMinutes: 60,
         order: 1,
       });
+      at('2026-08-05');
       await api.getDay('2026-08-05');
       const rows = await api.listPlansForDay('2026-08-05');
       expect(rows).toHaveLength(2);
@@ -1410,8 +1414,10 @@ export function runApiContract(
         anchorDate: '2026-08-01',
         until: '2026-08-04',
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       expect(await api.listPlansForDay('2026-08-04')).toHaveLength(1);
+      at('2026-08-05');
       await api.getDay('2026-08-05');
       expect(await api.listPlansForDay('2026-08-05')).toHaveLength(0);
       expect((await api.listTasks()).filter((t) => t.seriesId === s.id)).toHaveLength(1);
@@ -1451,12 +1457,14 @@ export function runApiContract(
         rule: { kind: 'daily' },
         anchorDate: '2026-08-01',
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       await api.deleteSeries(s.id);
       await api.deleteSeries(s.id);
       await api.deleteSeries('nope');
       expect(await api.listSeries()).toHaveLength(0);
       await expect(api.deactivateSeries(s.id)).rejects.toThrow(/Not found/);
+      at('2026-08-05');
       await api.getDay('2026-08-05');
       const occurrences = (await api.listTasks()).filter((t) => t.seriesId === s.id);
       expect(occurrences).toHaveLength(1);

@@ -9,16 +9,21 @@ import { TOOLS } from './tools';
 import { RpcParamError } from './types';
 import type { ToolContext } from './types';
 
-// Series over MCP (recurring.md D5): list / create / stop through the real handleRpc path. The clock is
-// 2023-11-14 14:13 in America/Los_Angeles, so the user's today is 2023-11-14 (a Tuesday).
+// Series over MCP (recurring.md D5): list / create / stop through the real handleRpc path. The clock starts
+// at 2023-11-14 14:13 in America/Los_Angeles, so the user's today is 2023-11-14 (a Tuesday); a case that
+// reads the next day moves it first (getDay refuses a day after the user's today).
 const U = 'local';
-const now = () => 1_700_000_000_000;
+const START = 1_700_000_000_000;
+let clock = START;
+const now = () => clock;
 const TODAY = '2023-11-14';
+const DAY_MS = 86_400_000;
 let doc: InMemoryDoc;
 let setup: BackendClient;
 let ctx: ToolContext;
 
 beforeEach(() => {
+  clock = START;
   doc = new InMemoryDoc();
   setup = new BackendClient(new Repo(doc, liveWrites(doc), U), { userId: U, now });
   ctx = {
@@ -118,6 +123,7 @@ describe('stop_series', () => {
     expect(((await call('list_series', { includeStopped: true })) as TaskSeries[])[0]?.id).toBe(
       s.id,
     );
+    clock += DAY_MS;
     await setup.getDay('2023-11-15');
     const mine = (await setup.listTasks()).filter((t: Task) => t.seriesId === s.id);
     expect(mine.map((t) => t.seriesDay)).toEqual([TODAY]);

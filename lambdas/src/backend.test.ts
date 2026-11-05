@@ -55,7 +55,7 @@ describe('backend recurrence', () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
       userId: 'local',
-      now: () => 1_700_000_000_000,
+      now: () => AUG_4_NOON, // reads 2026-08-04, which getDay refuses from a 2023 clock
     });
     const series = await backend.upsertSeries({
       title: 'Pre-lab',
