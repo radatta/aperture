@@ -6,7 +6,7 @@
 // commands (vite has its own --profile CPU-profiling flag, so never let it leak into the build). You can
 // equivalently `export AWS_PROFILE=<name>` and drop the flag; the aws CLI honors it natively.
 import { execSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +63,7 @@ for (const name of readdirSync(`${root}/app/dist/assets`).filter((f) => f.endsWi
     `aws s3 cp "${join(brDir, name)}" "s3://${bucket}/assets/${name}" --content-type "application/wasm" --content-encoding br --metadata ${RAW_LENGTH_META}=${rawLength} --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
   );
 }
+rmSync(brDir, { recursive: true, force: true });
 // Everything else (index.html, icons, …) must revalidate so a client never holds a stale shell.
 // --exclude assets/* leaves the immutable pass above untouched and means old hashes are never deleted, so
 // in-flight clients can still load old chunks. sw.js and the manifest are excluded here (and so from

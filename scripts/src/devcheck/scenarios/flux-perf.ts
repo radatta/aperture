@@ -9,7 +9,7 @@ import { DEV_ORIGIN, assertDevOrigin } from '../config';
 import { noConsoleErrors, type Scenario } from '../scenario';
 
 const CHUNK = /\/assets\/flux-pages-[\w-]+\.js$/;
-const WORKER = /\/assets\/flux\.worker-[\w-]+\.js/;
+const WORKER = /\/?assets\/flux\.worker-[\w-]+\.js/; // the precache manifest writes it without the slash
 const WASM = /\/assets\/vision_wasm_module_internal-[\w-]+\.br\.wasm/;
 
 // Every resource the page has loaded so far (the SW-served ones included), by URL.
@@ -68,7 +68,7 @@ export const fluxPerf: Scenario = {
       offDev: {
         file: 'app/src/routes.test.tsx',
         test: 'a deep link to /flux/history keeps the shell up, with "Loading…" in the outlet, until the Flux chunk lands',
-        why: 'dev serves the precached chunk from the service worker in a few ms and a Playwright route cannot hold a SW-served request; the test renders the real route table and the real lazy import',
+        why: 'dev serves the precached chunk from the service worker in a few ms and a Playwright route cannot hold a SW-served request; the test renders the real AppShell and the same lazyPage helper routes.tsx uses, over a chunk it holds — the deep-link row proves the real route table’s rendered result on dev',
       },
     },
     {
@@ -85,7 +85,7 @@ export const fluxPerf: Scenario = {
       offDev: {
         file: 'app/src/modules/flux/engine/assets.test.ts',
         test: 'a decoded body never exceeds the raw-length total',
-        why: 'the bar shows only after Start, which needs a camera the harness has not got; the test feeds the loader a br-shaped response',
+        why: 'the bar shows only after Start, which needs a camera the harness has not got — a needs-you row would leave the clamp unproven, so the named test (the real loader fed a br-shaped response) is the proof instead',
       },
     },
     {
@@ -96,7 +96,7 @@ export const fluxPerf: Scenario = {
       offDev: {
         file: 'app/src/modules/flux/engine/assets.test.ts',
         test: 'serves the second load from the cache without touching the network',
-        why: 'needs a camera to reach the loader on dev; the test runs the real loader against an in-memory Cache API',
+        why: 'reaching the loader on dev needs a camera — a needs-you row would leave the cache path unproven, so the named test (the real loader against an in-memory Cache API) is the proof instead',
       },
     },
     {
@@ -162,8 +162,9 @@ export const fluxPerf: Scenario = {
         'The edge serves the deployed wasm brotli-encoded, with its raw length, and the body decodes',
       async run(ctx) {
         const sw = await (await fetchDev('/sw.js')).text();
-        const worker = WORKER.exec(sw)?.[0];
-        if (!worker) throw new Error('sw.js names no flux.worker chunk in its precache');
+        const named = WORKER.exec(sw)?.[0];
+        if (!named) throw new Error('sw.js names no flux.worker chunk in its precache');
+        const worker = '/' + named.replace(/^\//, '');
         const wasm = WASM.exec(await (await fetchDev(worker)).text())?.[0];
         if (!wasm) throw new Error(`${worker} names no *.br.wasm`);
         ctx.log(`wasm ${wasm}`);

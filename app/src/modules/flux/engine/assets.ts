@@ -45,7 +45,7 @@ export async function loadFluxAssets(
     responses.map((r, i) =>
       readAll(r, (n) => {
         // The bytes counted are decoded; a total that came from a wrong or missing header must not let
-        // the bar pass 100% (the final report is the real size either way).
+        // the bar pass 100%.
         loaded[i] = totals[i] ? Math.min(n, totals[i]) : n;
         report();
       }),
