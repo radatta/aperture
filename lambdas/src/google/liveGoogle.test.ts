@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SSMClient } from '@aws-sdk/client-ssm';
 import { EventGoneError, PullIncompleteError } from './gateway';
-import { LiveGoogle } from './liveGoogle';
+import { LiveGoogle, POPUP_AT_START } from './liveGoogle';
 
 // patchEvent's response handling, over a stubbed fetch (no network, no SSM). Every SSM read returns a
 // value, and the token endpoint a fresh access token, so only the events call varies.
@@ -30,9 +30,13 @@ describe('LiveGoogle.patchEvent', () => {
       summary: 'pset',
       start: { date: null, dateTime: '1970-01-01T00:00:00.000Z' },
       end: { date: null, dateTime: '1970-01-01T00:30:00.000Z' },
+      reminders: POPUP_AT_START,
     });
     await g.patchEvent({ ...input, title: 'renamed' });
-    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({ summary: 'renamed' });
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({
+      summary: 'renamed',
+      reminders: POPUP_AT_START,
+    });
   });
 
   it('a due marker is free + graphite; false turns it back into a busy block with its own colour', async () => {
@@ -48,7 +52,10 @@ describe('LiveGoogle.patchEvent', () => {
       colorId: null, // null deletes the override in a patch
     });
     await g.patchEvent({ ...input, title: 'x' });
-    expect(Object.keys(JSON.parse(calls[2]!.init.body as string))).toEqual(['summary']);
+    expect(Object.keys(JSON.parse(calls[2]!.init.body as string))).toEqual([
+      'reminders',
+      'summary',
+    ]);
   });
 
   it("returns Google's `updated` for the write (Google's clock, not ours)", async () => {
@@ -184,6 +191,20 @@ describe('LiveGoogle.insertEvent', () => {
       private: { apertureTaskId: 'T1' },
     });
     expect(res).toEqual({ eventId: 'new', updatedMs: Date.UTC(2026, 9, 5, 10) });
+  });
+
+  // D9: an alert at the block's start (its end is the due time, where the Web Push lands) — on every
+  // insert and every patch, so existing events pick it up on their next edit.
+  it('asks Google for a popup at the event start, never the calendar default', async () => {
+    const { g, calls } = gateway(() => Response.json({ id: 'new' }));
+    const base = { sub: 'A', calendarId: 'me@example.com', title: 't', startMs: 0, endMs: 900_000 };
+    await g.insertEvent(base);
+    await g.insertEvent({ ...base, marker: true });
+    for (const c of calls)
+      expect(JSON.parse(c.init.body as string).reminders).toEqual({
+        useDefault: false,
+        overrides: [{ method: 'popup', minutes: 0 }],
+      });
   });
 
   it('a due marker is inserted free + graphite; a block carries neither', async () => {

@@ -20,7 +20,7 @@ export interface LedgerEntry {
   run: string;
   op: LedgerOp;
   id?: string;
-  via?: string; // 'api:createTask', 'ui:createTask', 'ui:splitTask', …
+  via?: string; // 'api:createTask', 'ui:createTask', 'ui:splitTask', 'api:subscribePush' (a push device), …
   title?: string; // for the human report only — never matched on
   status?: string; // run-end: PASS / FAIL / CRASH
 }

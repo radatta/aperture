@@ -15,6 +15,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
+import { PUSH_DISPATCH_TIMEOUT, PushDispatch } from './push-dispatch';
 import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
 
 export interface AppStackProps extends StackProps {
@@ -242,6 +243,12 @@ export class ApertureAppStack extends Stack {
     fn.addToRolePolicy(
       new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [anthropicKeyArn] }),
     );
+    // Reminders (docs/areas/tasks/reminders.md): the BFF reads the VAPID PUBLIC key only (Settings hands it
+    // to the browser); the private one is the poller's alone (below). The operator writes both.
+    const pushSsmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/push`;
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${pushSsmBase}/vapid_public_key`] }),
+    );
     ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true, plaid: true });
 
     // Public Function URL (auth NONE) — the origin-secret header, not IAM, is what gates it (see class doc).
@@ -434,6 +441,15 @@ export class ApertureAppStack extends Stack {
     // NB: the Lambda deliberately does NOT take the client id — verifying against the pool is enough
     // for a single-client pool, and consuming it here would form a client→CloudFront→Lambda→client cycle.
 
+    // The reminder poller — after the distribution, since its links (and VAPID `sub`) need appUrl, and
+    // nothing refers back to it, so CloudFront's domain token forms no cycle here.
+    const pushDispatch = new PushDispatch(this, 'PushDispatch', {
+      stage,
+      table,
+      appUrl,
+      vapidPrivateKeyArn: `${pushSsmBase}/vapid_private_key`,
+    });
+
     new CfnOutput(this, 'AppUrl', { value: appUrl }); // custom domain if set, else CloudFront; also the API base (/api/* same origin)
     new CfnOutput(this, 'CloudFrontDomain', { value: distribution.distributionDomainName }); // alias-CNAME target for the custom domain
     new CfnOutput(this, 'SiteBucket', { value: bucket.bucketName });
@@ -476,6 +492,17 @@ export class ApertureAppStack extends Stack {
             durationAlarm: {
               statistic: 'Maximum',
               thresholdMs: FINANCE_SYNC_TIMEOUT.toMilliseconds() - 5_000,
+            },
+          },
+          // Maximum ≥ 15 s: a tick near its 20 s timeout (a stuck SSM read or push service); a timeout also
+          // lands in Errors. Every minute, so a stuck poller emails within 5 min (the cost bound's cap).
+          {
+            id: 'PushDispatch',
+            label: 'Push dispatch',
+            fn: pushDispatch.fn,
+            durationAlarm: {
+              statistic: 'Maximum',
+              thresholdMs: PUSH_DISPATCH_TIMEOUT.toMilliseconds() - 5_000,
             },
           },
         ],

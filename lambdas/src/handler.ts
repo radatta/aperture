@@ -3,6 +3,9 @@ import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
 import { PlaceTokenStore } from './ddb/placeTokens';
+import { PushRegistry } from './ddb/pushRegistry';
+import { noPublicKey } from './push/publicKey';
+import type { PublicKeyReader } from './push/publicKey';
 import { noopGoogle } from './google/gateway';
 import type { GoogleGateway } from './google/gateway';
 import { BackendClient } from './backend';
@@ -34,6 +37,7 @@ export interface RpcDeps {
   plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
   financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
   anthropic?: AnthropicGateway; // live Claude API seam (index.ts, mcp/index.ts); ignored in testMode
+  pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM read, index.ts); ignored in testMode
 }
 
 // Transport-agnostic RPC core: validate the method against the shared allowlist, build a BackendClient
@@ -61,6 +65,8 @@ export async function handleRpc(
     financeInvoker: call.testMode ? noopInvoker() : (deps.financeInvoker ?? noopInvoker()),
     anthropic: call.testMode ? noopAnthropic() : (deps.anthropic ?? noopAnthropic()),
     placeTokens: new PlaceTokenStore(doc, writes), // the same writes: a smoke run mints nothing
+    pushRegistry: new PushRegistry(doc, writes), // likewise: a smoke subscribe registers no one
+    pushPublicKey: call.testMode ? noPublicKey : (deps.pushPublicKey ?? noPublicKey),
   });
   const fn = (
     backend as unknown as Record<string, ((...a: unknown[]) => Promise<unknown>) | undefined>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SK_END } from './DocClient';
-import { gsi1, pk, placeTokenPk, PLACE_TOKEN_SK, sk } from './keys';
+import { gsi1, pk, placeTokenPk, PLACE_TOKEN_SK, PUSH_PK, pushSk, sk } from './keys';
 
 describe('single-table keys', () => {
   it('partitions per user', () => {
@@ -62,5 +62,37 @@ describe('single-table keys', () => {
   it('keys the calibration GSI on done + raw completion time', () => {
     expect(gsi1.donePk('user-1')).toBe('u#user-1#done');
     expect(gsi1.doneSk(1700)).toBe(1700);
+  });
+
+  it('keys reminders: devices, dedup, the guard, Send test — and the poller partition outside every user', () => {
+    expect(sk.pushSub('ab')).toBe('pushsub#ab');
+    expect(sk.pushSub('ab').startsWith(sk.pushSubPrefix())).toBe(true);
+    expect(sk.pushCount('2026-11-04')).toBe('pcount#2026-11-04');
+    expect(sk.pushTest('01X')).toBe('ptest#01X');
+    expect(sk.pushTest('01X').startsWith(sk.pushTestPrefix())).toBe(true);
+    // The fire time is zero-padded to 13 digits, so lexical SK order is numeric order.
+    expect(sk.pushSent(1_700_000_000_000, 'T1')).toBe('psent#1700000000000#T1');
+    expect(sk.pushSent(5, 'T1')).toBe('psent#0000000000005#T1');
+    expect(sk.pushSent(999, 'a') < sk.pushSent(1000, 'a')).toBe(true);
+    // None of the new prefixes pulls another kind's rows.
+    for (const key of [
+      sk.pushSub('a'),
+      sk.pushSent(1, 'a'),
+      sk.pushCount('d'),
+      sk.pushTest('a'),
+      sk.pushHealth(),
+    ])
+      for (const prefix of [sk.placePrefix(), sk.planAllPrefix(), sk.ptoken()])
+        expect(key.startsWith(prefix)).toBe(false);
+    expect(sk.pushHealth().startsWith(sk.pushSubPrefix())).toBe(false);
+    expect(PUSH_PK.startsWith(pk(''))).toBe(false);
+    expect(pushSk.user('u1')).toBe('user#u1');
+    expect(pushSk.user('u1').startsWith(pushSk.userPrefix())).toBe(true);
+    expect(pushSk.health()).toBe('health');
+  });
+
+  it('keys the remind GSI space on the raw fire time — a Number, like the done space', () => {
+    expect(gsi1.remindPk('user-1')).toBe('u#user-1#remind');
+    expect(gsi1.remindSk(1700)).toBe(1700);
   });
 });

@@ -122,6 +122,40 @@ export interface DevPlaceTokenStatus {
   hint: string | null;
   readsToday: number;
 }
+// The slices of @aperture/shared's reminders contract the check reads (packages/shared/src/reminders.ts).
+// A device never carries its endpoint or keys back; the check's own subscription input is the only place
+// they exist, in the step's memory.
+export interface DevPushDevice {
+  id: string;
+  label: string;
+  createdAt: number;
+  lastOkAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+export interface DevPushStatus {
+  configured: boolean;
+  vapidPublicKey: string | null;
+  devices: DevPushDevice[];
+  removedDeviceIds: string[];
+  poller: {
+    lastRunAt: number | null;
+    lastSentAt: number | null;
+    lastError: string | null;
+    lastErrorAt: number | null;
+  };
+}
+export interface DevSubscribePushInput {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  label: string;
+}
+// The three reminder toggles — the only settings the check may write, so a restore can't touch the rest.
+export type DevReminderSettings = Partial<
+  Record<'remindTimed' | 'remindDueDay' | 'remindPlanned', boolean>
+>;
+const REMINDER_SETTING_KEYS = new Set(['remindTimed', 'remindDueDay', 'remindPlanned']);
+
 export interface DevCalibrationPoint {
   taskId: string;
   day: string;
@@ -188,7 +222,7 @@ export interface DevAttachment {
 }
 
 // The settings the check reads and, for one row, writes back.
-export interface DevSettings {
+export interface DevSettings extends Required<DevReminderSettings> {
   dayStartHour: number;
   pomodoroWorkMin: number;
   fluxSets: Record<string, number>;
@@ -236,6 +270,9 @@ export const MCP_SERIES_VIA = 'mcp:create_series';
 const SERIES_VIAS: readonly string[] = [SERIES_VIA, UI_SERIES_VIA, MCP_SERIES_VIA];
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
 export const placeTokenId = (run: string): string => `place-token:${run}`;
+// A push device this harness subscribed — by the id the server answered with (a sha256(endpoint) prefix).
+export const PUSH_SUB_VIA = 'api:subscribePush';
+
 // A bucket set or a refund link on a fixture bank row. Neither has an id of its own, so, like the token, a run
 // records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` — before the click that sets it (the
 // browser does the write), run-scoped so two runs on the same row never resolve each other's entry. Cleanup
@@ -260,6 +297,7 @@ export type LedgerKind =
   | 'financeBucket'
   | 'financeLink'
   | 'financeRule'
+  | 'pushsub'
   | 'series';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
@@ -272,6 +310,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
+  if (via === PUSH_SUB_VIA) return 'pushsub';
   return via === PLACE_TOKEN_VIA ? 'placeToken' : 'task';
 }
 
@@ -408,6 +447,8 @@ export function createApiClient({
     // The digest as an RPC read — no heartbeat, no count (the Shortcut route below is the one that counts).
     listPlaceTasks: (slug: string) => call<DevPlaceDigest>('listPlaceTasks', [slug]),
     getPlaceTokenStatus: () => call<DevPlaceTokenStatus>('getPlaceTokenStatus', []),
+    // Devices (never their endpoint or keys), the removed list, and the poller's health line.
+    getPushStatus: () => call<DevPushStatus>('getPushStatus', []),
     getCalibration: (range: { from: string; to: string }) =>
       call<DevCalibrationPoint[]>('getCalibration', [range]),
     listFinanceTransactions: (range: { from: string; to: string }) =>
@@ -730,6 +771,30 @@ export function createApiClient({
           'refusing to revoke the place token — no run recorded minting it',
         );
       await call<null>('revokePlaceToken', []);
+    },
+    // Reminders. A subscribe is ledgered like createTask — intent, then the server's id — so cleanup removes
+    // the device by id; a device the poller already dropped (a 404/410 from the push service) reads as gone.
+    async subscribePush(input: DevSubscribePushInput): Promise<DevPushDevice> {
+      ledger.append({ run, op: 'intent', via: PUSH_SUB_VIA, title: input.label });
+      const device = await call<DevPushDevice>('subscribePush', [input]);
+      ledger.append({ run, op: 'created', id: device.id, via: PUSH_SUB_VIA, title: input.label });
+      return device;
+    },
+    async unsubscribePush(id: string): Promise<void> {
+      assertLedger(id, 'pushsub');
+      await call<null>('unsubscribePush', [id]);
+    },
+    // Queues a test on the test user's devices — all of them this harness's (the test user has no phone).
+    sendTestPush: () => call<null>('sendTestPush', []),
+    // Only the three reminder toggles: a scenario flips them and restores what it read.
+    async setReminderSettings(patch: DevReminderSettings): Promise<void> {
+      for (const k of Object.keys(patch))
+        if (!REMINDER_SETTING_KEYS.has(k))
+          throw new DevcheckError(
+            'LEDGER_GUARD',
+            `refusing to write setting ${k} — reminder toggles only`,
+          );
+      await call<unknown>('updateSettings', [patch]);
     },
   };
 

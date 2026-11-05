@@ -333,6 +333,7 @@ export class LiveGoogle implements GoogleGateway {
           ...(input.taskId && {
             extendedProperties: { private: { apertureTaskId: input.taskId } },
           }),
+          reminders: POPUP_AT_START,
         }),
       },
     );
@@ -354,7 +355,8 @@ export class LiveGoogle implements GoogleGateway {
   }
 
   async patchEvent(input: PatchEventInput): Promise<{ updatedMs: number }> {
-    const body: Record<string, unknown> = {};
+    // Every patch carries the popup, so events made before it pick it up on their next edit (no backfill).
+    const body: Record<string, unknown> = { reminders: POPUP_AT_START };
     if (input.title !== undefined) body.summary = input.title;
     // `date: null` because a patch MERGES nested objects: on an event made all-day in Google, a bare
     // dateTime would sit beside its `date` (Google rejects both). Null deletes a field in a patch.
@@ -405,6 +407,10 @@ export function createLiveGoogle(cfg: LiveGoogleConfig): LiveGoogle {
 }
 
 export const MARKER_COLOR_ID = '8'; // graphite
+// Google's alert at the event's start (reminders.md → D9): a timed task's block ends at its due time, so
+// this is "start working", and the Web Push at the due time is the other half. Overrides are relative to
+// start only. Constant, no toggle — reverting is this line.
+export const POPUP_AT_START = { useDefault: false, overrides: [{ method: 'popup', minutes: 0 }] };
 // How an event shows: a marker is free + graphite; back to a block is busy with the calendar's own
 // colour (`colorId: null` deletes the override in a patch).
 const markerLook = (marker: boolean) =>

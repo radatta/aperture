@@ -9,6 +9,7 @@ import {
   HABIT_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
+  PUSH_SUB_VIA,
   SERIES_VIA,
   UI_CATEGORY_VIA,
   UI_PLACE_VIA,
@@ -64,6 +65,7 @@ describe('createApiClient', () => {
       'getFluxSet',
       'getFluxWeekNote',
       'getPlaceTokenStatus',
+      'getPushStatus',
       'getSettings',
       'getTask',
       'listAttachments',
@@ -104,16 +106,20 @@ describe('createApiClient', () => {
       'removePlan',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'sendTestPush',
       'setCategoryArea',
       'setDayCapacity',
       'setDayIntent',
+      'setReminderSettings',
       'setTaskActual',
       'startSession',
       'stopSession',
+      'subscribePush',
       'transitionTask',
       'uncheckHabit',
       'unlinkFinanceRefund',
       'unsetFinanceBucket',
+      'unsubscribePush',
       'updateSettings',
       'upsertCategory',
       'upsertFinanceRule',
@@ -633,6 +639,72 @@ describe('createApiClient', () => {
         `${DEV_ORIGIN}/api/listFinanceTransactions`,
         expect.objectContaining({ body: '{"args":[{"from":"2000-01-01","to":"2100-01-01"}]}' }),
       );
+    });
+  });
+
+  describe('reminders', () => {
+    const input = {
+      endpoint: 'https://web.push.apple.com/devcheck-n1',
+      keys: { p256dh: 'BPk', auth: 'au' },
+      label: 'devcheck',
+    };
+
+    it('ledgers a subscribe (intent, then the server id) and removes only a device it recorded', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'D1', label: 'devcheck' }));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      expect(await api.writes.subscribePush(input)).toMatchObject({ id: 'D1' });
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/subscribePush`,
+        expect.objectContaining({ body: JSON.stringify({ args: [input] }) }),
+      );
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'intent', via: PUSH_SUB_VIA, title: 'devcheck' },
+        { run: 'r1', op: 'created', id: 'D1', via: PUSH_SUB_VIA, title: 'devcheck' },
+      ]);
+      expect(ledgerKind(ledger.read(), 'D1')).toBe('pushsub');
+      // The ledger never holds the endpoint or keys.
+      expect(JSON.stringify(ledger.entries)).not.toMatch(/devcheck-n1|BPk|"au"/);
+      await api.writes.unsubscribePush('D1');
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/unsubscribePush`,
+        expect.objectContaining({ body: '{"args":["D1"]}' }),
+      );
+      await expect(api.writes.unsubscribePush('D9')).rejects.toThrow(
+        /never recorded it as a pushsub/,
+      );
+      ledger.append({ run: 'r1', op: 'created', id: 'T1', via: 'api:createTask' });
+      await expect(api.writes.unsubscribePush('T1')).rejects.toThrow(
+        /never recorded it as a pushsub/,
+      );
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('reads status and queues a test through the BFF', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      await api.reads.getPushStatus();
+      await api.writes.sendTestPush();
+      expect(fetch.mock.calls.map((c) => c[0])).toEqual([
+        `${DEV_ORIGIN}/api/getPushStatus`,
+        `${DEV_ORIGIN}/api/sendTestPush`,
+      ]);
+    });
+
+    it('writes only the three reminder toggles to settings', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, {}));
+      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      await api.writes.setReminderSettings({ remindTimed: false, remindPlanned: true });
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/updateSettings`,
+        expect.objectContaining({
+          body: JSON.stringify({ args: [{ remindTimed: false, remindPlanned: true }] }),
+        }),
+      );
+      await expect(
+        api.writes.setReminderSettings({ dayStartHour: 0 } as unknown as { remindTimed: boolean }),
+      ).rejects.toThrow(/reminder toggles only/);
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 });

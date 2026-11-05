@@ -6,13 +6,25 @@
 // lookup row (places.md). The Shortcut route holds only the token, so the row has to be findable by its
 // hash before any userId is known — it carries the userId instead. Never read by a user's queries
 // (they all start `u#`), never exported.
+//
+// The second: `push`, the reminder poller's (reminders.md). `user#<uid>` lists who has a device to ping
+// (written on the first subscribe, removed with the last unsubscribe — the poller runs per user without a
+// fixed user id), and `health` is the poller's heartbeat. Derived, never client-set, never exported.
 
 export const pk = (userId: string) => `u#${userId}`;
 export const placeTokenPk = (hash: string) => `placetoken#${hash}`;
 export const PLACE_TOKEN_SK = 'placetoken';
+export const PUSH_PK = 'push';
+export const pushSk = {
+  user: (userId: string) => `user#${userId}`,
+  userPrefix: () => `user#`,
+  health: () => `health`,
+} as const;
 
 // Plan order and GSI completion time are numbers we sort lexically inside the SK — pad to fixed width.
 const padOrder = (order: number) => String(Math.max(0, Math.trunc(order))).padStart(6, '0');
+// An epoch ms inside an SK: 13 digits covers every date until 2286, so lexical order is numeric order.
+const padEpoch = (ms: number) => String(Math.max(0, Math.trunc(ms))).padStart(13, '0');
 
 export const sk = {
   log: (day: string, id: string) => `log#${day}#${id}`,
@@ -89,6 +101,21 @@ export const sk = {
 
   settings: () => `settings`,
 
+  // Reminders (reminders.md). A device's Web Push subscription, by a sha256(endpoint) prefix — it carries
+  // the device's keys, a credential, so it's never exported or returned. The rest are the poller's:
+  // `psent` dedup rows (one per reminder sent, written before the send, swept after 48 h), the hidden daily
+  // guard's counter per LA day, Settings' Send-test candidates (on the remind index at their queue time),
+  // and the user's last send / error.
+  pushSub: (id: string) => `pushsub#${id}`,
+  pushSubPrefix: () => `pushsub#`,
+  pushSent: (fireAt: number, key: string) => `psent#${padEpoch(fireAt)}#${key}`,
+  pushSentPrefix: () => `psent#`,
+  pushCount: (day: string) => `pcount#${day}`,
+  pushCountPrefix: () => `pcount#`,
+  pushTest: (id: string) => `ptest#${id}`,
+  pushTestPrefix: () => `ptest#`,
+  pushHealth: () => `pushhealth`,
+
   // Calendar two-way sync cursor, one per connected Google account (by `sub`).
   gcalSync: (sub: string) => `gcal#sync#${sub}`,
   gcalSyncPrefix: () => `gcal#sync#`,
@@ -107,11 +134,16 @@ export const sk = {
   finRulePrefix: () => `fin#rule#`,
 } as const;
 
-// GSI1 — done tasks by completion time, the one index (calibration reads by range instead of scanning
-// every task). GSI1SK is the raw epoch-ms number; DynamoDB sorts Number attributes numerically.
+// GSI1 — the one index, three key spaces. Done tasks by completion time (calibration reads by range
+// instead of scanning every task). GSI1SK is the raw epoch-ms number in every space; DynamoDB sorts Number
+// attributes numerically.
 export const gsi1 = {
   donePk: (userId: string) => `u#${userId}#done`,
   doneSk: (completedAt: number) => completedAt,
+  // What may ping, by when (reminders.md): an open task with a deadline, a plan, a Send-test row. The
+  // poller reads the last REMINDER_WINDOW_MS of it each minute; the SK prefix tells the rows apart.
+  remindPk: (userId: string) => `u#${userId}#remind`,
+  remindSk: (fireAtMs: number) => fireAtMs,
   // Finance transactions by date (the overview's window read). The sort key is the date's UTC-midnight
   // epoch ms — parsed from the YYYY-MM-DD string, never `new Date(str)` (local-time parsing).
   finTxnPk: (userId: string) => `u#${userId}#fintxn`,

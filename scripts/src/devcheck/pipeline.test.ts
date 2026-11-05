@@ -6,6 +6,7 @@ import {
   FLUX_SET_VIA,
   CATEGORY_VIA,
   PLACE_TOKEN_VIA,
+  PUSH_SUB_VIA,
   type ApiClient,
   type DevCategory,
   type DevFinanceRule,
@@ -45,7 +46,14 @@ function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & { entries: 
 // A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a request
 // whose response arrives when `respond` says (immediately by default).
 function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[] } = {}) {
-  let settings = { dayStartHour: 4, pomodoroWorkMin: 25, fluxSets: {} };
+  let settings = {
+    dayStartHour: 4,
+    pomodoroWorkMin: 25,
+    fluxSets: {},
+    remindTimed: true,
+    remindDueDay: true,
+    remindPlanned: true,
+  };
   const tasks = new Map<string, DevTask>(
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
   );
@@ -65,6 +73,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     unlinked: [] as string[],
     rulesDeleted: [] as string[],
   };
+  const pushDevices = new Set<string>();
+  const pushRemoved: string[] = [];
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
   const consoleListeners: ((m: { type(): string; text(): string }) => void)[] = [];
@@ -240,6 +250,20 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         hint: null,
         readsToday: 0,
       }),
+      getPushStatus: async () => ({
+        configured: true,
+        vapidPublicKey: 'B',
+        devices: [...pushDevices].map((id) => ({
+          id,
+          label: 'x',
+          createdAt: 0,
+          lastOkAt: null,
+          lastError: null,
+          lastErrorAt: null,
+        })),
+        removedDeviceIds: [...pushRemoved],
+        poller: { lastRunAt: null, lastSentAt: null, lastError: null, lastErrorAt: null },
+      }),
       getCalibration: async () => [],
       placeDigestRaw: async () => {
         throw new Error('unused');
@@ -365,6 +389,19 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         categoriesDeleted.push(id);
         categories.delete(id);
       },
+      subscribePush: async () => {
+        throw new Error('unused');
+      },
+      unsubscribePush: async (id) => {
+        pushDevices.delete(id);
+        pushRemoved.push(id);
+      },
+      sendTestPush: async () => {
+        throw new Error('unused');
+      },
+      setReminderSettings: async () => {
+        throw new Error('unused');
+      },
     },
   };
   const shells = [...(opts.shells ?? [shell(SHA)])];
@@ -399,6 +436,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     placesDeleted,
     placeToken,
     finance,
+    pushDevices,
+    pushRemoved,
     uiCreate,
     uiPlace,
     respond,
@@ -831,6 +870,23 @@ describe('runPipeline', () => {
     expect(w.placeToken).toEqual({ active: false, revokes: 1 });
     expect(r.created).toEqual([
       { id: 'place-token:run1', via: PLACE_TOKEN_VIA, title: undefined, final: 'deleted' },
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('removes a push device this run subscribed by its id; one the poller already dropped is "gone"', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'D1', via: PUSH_SUB_VIA, title: 'devcheck' });
+      ledger.append({ run: 'run1', op: 'created', id: 'D2', via: PUSH_SUB_VIA, title: 'devcheck' });
+      x.pushDevices.add('D1'); // D2: the push service answered 410 and the poller deleted it
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.pushRemoved).toEqual(['D1']);
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['D1', 'deleted'],
+      ['D2', 'gone'],
     ]);
     expect(r.status).toBe('PASS');
   });

@@ -11,6 +11,7 @@ import { noopObjectStore } from '../s3/objects';
 import { noopPlaid } from '../plaid/gateway';
 import { noopInvoker } from '../finance/invoker';
 import { noopAnthropic } from '../anthropic/gateway';
+import { noPublicKey } from '../push/publicKey';
 import type { BffDeps } from '../index';
 import type { McpDeps } from '../mcp/index';
 
@@ -38,7 +39,13 @@ export function localDeps(auth: LocalAuth): { bff: BffDeps; mcp: McpDeps; doc: I
   const mcpVerifier = createCognitoVerifier(auth.poolId, auth.claudeClientId, { jwks: auth.jwks });
   return {
     doc,
-    bff: { ...shared, verifier: bffVerifier, plaid: noopPlaid(), financeInvoker: noopInvoker() },
+    bff: {
+      ...shared,
+      verifier: bffVerifier,
+      plaid: noopPlaid(),
+      financeInvoker: noopInvoker(),
+      pushPublicKey: noPublicKey, // as a stage with no VAPID parameter; the push chain runs on dev
+    },
     mcp: {
       ...shared,
       mcpVerifier: () => mcpVerifier,

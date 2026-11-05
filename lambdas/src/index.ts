@@ -37,6 +37,8 @@ import { createLivePlaid } from './plaid/livePlaid';
 import { noopInvoker } from './finance/invoker';
 import { liveInvoker } from './finance/liveInvoker';
 import { createLiveAnthropic } from './anthropic/liveAnthropic';
+import { createPublicKeyReader } from './push/publicKey';
+import type { PublicKeyReader } from './push/publicKey';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
@@ -78,6 +80,10 @@ const financeInvoker = process.env.FINANCE_SYNC_FN
 // testMode swaps in noopAnthropic. No key on the stage → every parse says so and the line saves raw.
 const anthropic = createLiveAnthropic({ stage: STAGE });
 
+// Reminders: the VAPID public key only (the BFF never sends — the push-dispatch poller does). Read on
+// use, held a few minutes; testMode never reads it. No parameter → Settings says reminders aren't set up.
+const pushPublicKey = createPublicKeyReader({ stage: STAGE });
+
 // Everything the edge calls out to. The deployed handler is built from the live ones above; the local
 // devcheck server (local/serve.ts) builds one over InMemoryDoc and inert gateways (docs/ops/LOCAL-CHECK.md).
 export interface BffDeps {
@@ -89,6 +95,7 @@ export interface BffDeps {
   plaid: PlaidGateway;
   financeInvoker: FinanceSyncInvoker;
   anthropic: AnthropicGateway;
+  pushPublicKey: PublicKeyReader;
 }
 const live: BffDeps = {
   doc,
@@ -99,6 +106,7 @@ const live: BffDeps = {
   plaid,
   financeInvoker,
   anthropic,
+  pushPublicKey,
 };
 
 interface HttpEvent {
@@ -234,6 +242,7 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
         plaid: d.plaid,
         financeInvoker: d.financeInvoker,
         anthropic: d.anthropic,
+        pushPublicKey: d.pushPublicKey,
       },
     );
     return { statusCode: 200, headers: CORS, body: JSON.stringify(result ?? null) };

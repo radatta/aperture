@@ -19,7 +19,8 @@
     "devcheck": "pnpm --filter @aperture/scripts devcheck",
     "devcheck:local": "pnpm --filter @aperture/scripts devcheck:local",
     "bot": "node scripts/src/bot/cli.ts",
-    "mailroom": "node scripts/src/mailroom/cli.ts"
+    "mailroom": "node scripts/src/mailroom/cli.ts",
+    "vapid-keys": "node scripts/src/vapid-keys.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

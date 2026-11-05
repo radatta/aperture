@@ -16,6 +16,7 @@ import type {
   LogEntry,
   Place,
   PomodoroSession,
+  PushSub,
   Roll,
   GcalSyncState,
   Settings,
@@ -34,6 +35,7 @@ import { gsi1, pk, sk } from './keys';
 import {
   entityItem,
   financeTxnItem,
+  planItem,
   taskItem,
   toEntity,
   toFinanceSyncState,
@@ -54,6 +56,39 @@ export class ConflictError extends Error {
 }
 export const CAS_ATTEMPTS = 4;
 const FIN_CONCURRENCY = 25;
+
+// A row on the remind index (gsi1.remindPk), told apart by its SK: an open task at its deadline, a plan
+// at its day's reminder time, or a Send-test candidate. `fireAt` is the index's SK as written — the
+// poller re-reads the task and drops a row whose fire time has since moved.
+export type RemindRow =
+  | { kind: 'task'; fireAt: number; task: Task }
+  | { kind: 'plan'; fireAt: number; sk: string; plan: TaskPlan }
+  | { kind: 'test'; fireAt: number; id: string };
+
+// A Send-test candidate (sendTestPush): sent by the poller's next tick, then deleted.
+export interface PushTestRow {
+  id: string;
+  createdAt: number;
+}
+// One reminder sent (or, fail-closed, about to be): the dedup row, written before the send.
+export interface PushSentRow {
+  fireAt: number;
+  key: string; // the task id, or `test-<id>`
+  sentAt: number;
+}
+// The hidden daily guard's counter for one LA day; `updatedAt` is its conditional-write cursor.
+export interface PushCountRow {
+  day: string;
+  count: number;
+  updatedAt: number;
+}
+// This user's last send and last error, as Settings' health line shows them.
+export interface PushUserHealth {
+  lastSentAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+  updatedAt: number;
+}
 
 // One casUpdate target: how to read the row and how to write it back.
 interface CasShape<T> {
@@ -223,12 +258,20 @@ export class Repo {
   async putPlan(p: TaskPlan, previous?: TaskPlan): Promise<TaskPlan> {
     const row = previous ? { ...p, updatedAt: Math.max(p.updatedAt, previous.updatedAt + 1) } : p;
     const nextSk = sk.plan(row.day, row.order, row.id);
-    await this.writes.put(entityItem(this.userId, nextSk, row));
+    // planItem keys the row at nextSk (and on the remind index while it can still ping).
+    await this.writes.put(planItem(this.userId, row));
     if (previous) {
       const prevSk = sk.plan(previous.day, previous.order, previous.id);
       if (prevSk !== nextSk) await this.writes.delete(this.p(), prevSk);
     }
     return row;
+  }
+  // A plan row by its SK (a remind-index hit carries it), strongly consistent: a plan moved or deleted a
+  // moment ago must not ping.
+  async getPlanAt(skStr: string): Promise<TaskPlan | null> {
+    const it = await this.doc.get(this.p(), skStr, { consistent: true });
+    const p = it ? toEntity<TaskPlan>(it) : null;
+    return p && p.deletedAt === null ? p : null;
   }
 
   // --- Series ---
@@ -661,6 +704,140 @@ export class Repo {
     each: (u: U) => Promise<T>,
   ): Promise<T[]> {
     return mapLimit(items, FIN_CONCURRENCY, each);
+  }
+
+  // --- Reminders (reminders.md) ---
+  // Rows written before the remind index existed carry no keys: re-put one as read (same body, same
+  // updatedAt) so it lands on the index. Conditional on that updatedAt — a write since already keyed it,
+  // so a lost race is nothing to do. false = lost.
+  private async rekey(item: Item, updatedAt: number): Promise<boolean> {
+    try {
+      await this.writes.putIf(item, updatedAt);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async rekeyTask(t: Task): Promise<boolean> {
+    return this.rekey(taskItem(this.userId, t), t.updatedAt);
+  }
+  async rekeyPlan(p: TaskPlan): Promise<boolean> {
+    return this.rekey(planItem(this.userId, p), p.updatedAt);
+  }
+
+  // A device's subscription carries its keys (a credential): the BFF strips them before anything leaves.
+  // A device the user removed is a tombstone with its endpoint and keys cleared (removal sticks: its own
+  // launch-time resync reads it and stops) — alive ones only here, every row in listAllPushSubs.
+  async listPushSubs(opts?: { consistent?: boolean }): Promise<PushSub[]> {
+    return alive(await this.listAllPushSubs(opts));
+  }
+  async listAllPushSubs(opts?: { consistent?: boolean }): Promise<PushSub[]> {
+    return (await this.doc.query(this.p(), sk.pushSubPrefix(), opts)).map((i) =>
+      toEntity<PushSub>(i),
+    );
+  }
+  // Tombstones included: a re-subscribe revives one, a second remove finds it already gone.
+  async getPushSub(id: string): Promise<PushSub | null> {
+    const it = await this.doc.get(this.p(), sk.pushSub(id), { consistent: true });
+    return it ? toEntity<PushSub>(it) : null;
+  }
+  async putPushSub(s: PushSub): Promise<PushSub> {
+    await this.writes.put(entityItem(this.userId, sk.pushSub(s.id), s));
+    return s;
+  }
+  // The poller's stamp, only on the row it read: a re-subscribe that landed meanwhile wins. false = lost.
+  async putPushSubIf(s: PushSub, expectedUpdatedAt: number): Promise<boolean> {
+    try {
+      await this.writes.putIf(entityItem(this.userId, sk.pushSub(s.id), s), expectedUpdatedAt);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async deletePushSub(id: string): Promise<void> {
+    await this.writes.delete(this.p(), sk.pushSub(id));
+  }
+
+  // The remind index in [from, to], ascending by fire time. Eventually consistent (a GSI is never
+  // anything else), so the poller re-reads what it acts on.
+  async remindRowsInWindow(fromMs: number, toMs: number): Promise<RemindRow[]> {
+    const rows = await this.doc.queryIndex(gsi1.remindPk(this.userId), { from: fromMs, to: toMs });
+    const out: RemindRow[] = [];
+    for (const it of rows) {
+      const fireAt = it.GSI1SK as number;
+      if (it.SK.startsWith(sk.taskPrefix()))
+        out.push({ kind: 'task', fireAt, task: toEntity<Task>(it) });
+      else if (it.SK.startsWith(sk.planAllPrefix()))
+        out.push({ kind: 'plan', fireAt, sk: it.SK, plan: toEntity<TaskPlan>(it) });
+      else if (it.SK.startsWith(sk.pushTestPrefix()))
+        out.push({ kind: 'test', fireAt, id: toEntity<PushTestRow>(it).id });
+    }
+    return out;
+  }
+
+  // Send test: on the remind index at the moment it was queued, so the next tick finds it.
+  async putPushTest(t: PushTestRow): Promise<void> {
+    await this.writes.put({
+      ...entityItem(this.userId, sk.pushTest(t.id), t),
+      GSI1PK: gsi1.remindPk(this.userId),
+      GSI1SK: gsi1.remindSk(t.createdAt),
+    });
+  }
+  async listPushTests(): Promise<PushTestRow[]> {
+    return (await this.doc.query(this.p(), sk.pushTestPrefix())).map((i) =>
+      toEntity<PushTestRow>(i),
+    );
+  }
+  async deletePushTest(id: string): Promise<void> {
+    await this.writes.delete(this.p(), sk.pushTest(id));
+  }
+
+  // Dedup: written only if absent, before the send. false = this reminder already went (or is going).
+  async putPushSentIf(row: PushSentRow): Promise<boolean> {
+    try {
+      await this.writes.putIf(entityItem(this.userId, sk.pushSent(row.fireAt, row.key), row), null);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async listPushSent(): Promise<PushSentRow[]> {
+    return (await this.doc.query(this.p(), sk.pushSentPrefix())).map((i) =>
+      toEntity<PushSentRow>(i),
+    );
+  }
+  async deletePushSent(row: Pick<PushSentRow, 'fireAt' | 'key'>): Promise<void> {
+    await this.writes.delete(this.p(), sk.pushSent(row.fireAt, row.key));
+  }
+
+  // The guard's counter — consistent, since the conditional write that follows is on the version read.
+  async getPushCount(day: string): Promise<PushCountRow | null> {
+    const it = await this.doc.get(this.p(), sk.pushCount(day), { consistent: true });
+    return it ? toEntity<PushCountRow>(it) : null;
+  }
+  // Lands only while the stored row is still at `expectedUpdatedAt` (null: none yet) — ConditionFailedError
+  // otherwise.
+  async putPushCountIf(row: PushCountRow, expectedUpdatedAt: number | null): Promise<void> {
+    await this.writes.putIf(entityItem(this.userId, sk.pushCount(row.day), row), expectedUpdatedAt);
+  }
+  async listPushCounts(): Promise<PushCountRow[]> {
+    return (await this.doc.query(this.p(), sk.pushCountPrefix())).map((i) =>
+      toEntity<PushCountRow>(i),
+    );
+  }
+  async deletePushCount(day: string): Promise<void> {
+    await this.writes.delete(this.p(), sk.pushCount(day));
+  }
+
+  async getPushUserHealth(): Promise<PushUserHealth | null> {
+    const it = await this.doc.get(this.p(), sk.pushHealth());
+    return it ? toEntity<PushUserHealth>(it) : null;
+  }
+  async putPushUserHealth(h: PushUserHealth): Promise<void> {
+    await this.writes.put(entityItem(this.userId, sk.pushHealth(), h));
   }
 
   // --- Settings singleton ---
