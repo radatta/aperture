@@ -82,10 +82,10 @@ exit 0 silently outside the container (no cgroup `memory.stat` — Mac, CI), and
 | ---------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `board-session.sh`                 | SessionStart (every source) | registers the session, starts the sampler if none runs, injects headroom / the real dev lock / the hub (or the hub's roadmap reminder) / this branch's file overlaps|
 | `board-heartbeat.sh working\|idle` | UserPromptSubmit / Stop     | refreshes the session's state, branch and name (git + tmux, ~5 ms) in one jq write                                                                                 |
-| `board-heavy-guard.sh`             | PreToolUse Bash             | heavy command (a segment that starts a runner — not `cat`/`grep`/a heredoc that only mentions one) not under `heavy.sh` → allow + a one-line offer; **deny only** with `limits.json` `enforce:true` and the predicted load past the measured hard line or the class's concurrency cap full (records a `denied` barrier event) |
+| `board-heavy-guard.sh`             | PreToolUse Bash             | heavy command (a segment that starts a runner — a `bash -c` body counts; not `cat`/`grep`/a heredoc that only mentions one) not under `heavy.sh` → allow + a one-line offer; **deny only** with `limits.json` `enforce:true` and the predicted load past the measured hard line or the class's concurrency cap full (records a `denied` barrier event) |
 | `board-session-end.sh`             | SessionEnd                  | marks the session gone, drops its heavy slots                                                                                                                     |
 
 `board-heavy-fixtures.jsonl` covers the guard (offer / allow / deny / fail-open); a fixture may set `cgroup`
 (fake cgroup files; `null` = absent), `limits` (patched `limits.json`, e.g. `enforce` or `concurrency`) or `limitsRaw` (its literal text),
-`running` + `runningClass` (other sessions' live slots — default class `test`) and `nudged` (classes already offered this session) — the
-runner gives each case a fresh temp board. `"nudge"` in a fixture means allowed with `additionalContext`.
+`running` + `runningClass` (other sessions' live slots — default class `test`), `runningDead` (slots whose wrapper is gone — a running job to no
+reader) and `nudged` (classes already offered this session) — the runner gives each case a fresh temp board. `"nudge"` in a fixture means allowed with `additionalContext`.

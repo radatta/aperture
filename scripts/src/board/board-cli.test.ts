@@ -1,5 +1,5 @@
 // End-to-end over the bash layer: board.sh / heavy.sh against a temp board, a fake cgroup, and real pids.
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   mkdtempSync,
@@ -17,6 +17,9 @@ const boardDir = fileURLToPath(new URL('../../board/', import.meta.url));
 const GiB = 1073741824;
 const children: ChildProcess[] = [];
 afterAll(() => children.forEach((c) => c.kill()));
+// Each test here is several bash + node cold starts (cli.ts decide / barriers): 0.5–1 s idle, 5 s+ when the gate
+// runs beside the other packages at 9 cores — a timeout then is contention, not a bug (Rahul, 2026-11-05).
+vi.setConfig({ testTimeout: 20_000 });
 
 let tmp: string;
 let env: NodeJS.ProcessEnv;
@@ -56,6 +59,23 @@ function liveSession(): number {
   const c = spawn('sleep', ['300'], { stdio: 'ignore' });
   children.push(c);
   return c.pid!;
+}
+const statField = (pid: number, i: number) =>
+  readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[i]!;
+const stateOf = (pid: number) => statField(pid, 0);
+const startOf = (pid: number) => statField(pid, 19);
+// A process that exited but was never reaped: its parent (a wrapper that went `cmd & exec …`) never waits, so
+// /proc/<pid>/stat stays readable with state Z — the shape that kept a dead job's slot alive.
+async function zombie(): Promise<number> {
+  const c = spawn('sh', ['-c', 'sleep 0.1 & echo $!; exec sleep 300'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  children.push(c);
+  const pid = await new Promise<number>((r) =>
+    c.stdout!.once('data', (d) => r(Number(String(d).trim()))),
+  );
+  for (let i = 0; i < 50 && stateOf(pid) !== 'Z'; i++) await new Promise((r) => setTimeout(r, 50));
+  return pid;
 }
 
 function board(args: string[], cwd = tmp) {
@@ -310,6 +330,88 @@ describe('board.sh gc', () => {
     slot('reused', live, 'not-its-start-time');
     expect(board(['gc']).out).toMatch(/removed 2 stale entries/);
     expect(readdirSync(dir)).toEqual(['live.json']);
+  });
+
+  it('a zombie wrapper is dead: its slot goes too', async () => {
+    const z = await zombie();
+    expect(stateOf(z)).toBe('Z');
+    const dir = join(tmp, 'board/leases/heavy');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'z.json'),
+      JSON.stringify({ v: 1, pid: 1, class: 'test', wrapperPid: z, wrapperStart: startOf(z) }),
+    );
+    expect(board(['gc']).out).toMatch(/removed 1 stale entry/);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('live slots', () => {
+  it('status, json and the sampler count only slots whose wrapper is alive — and delete none', () => {
+    const live = liveSession();
+    const dir = join(tmp, 'board/leases/heavy');
+    mkdirSync(dir, { recursive: true });
+    const slot = (name: string, label: string, wrapperPid: number, wrapperStart: string) =>
+      writeFileSync(
+        join(dir, `${name}.json`),
+        JSON.stringify({
+          v: 1,
+          pid: 1,
+          class: 'test',
+          label,
+          wrapperPid,
+          wrapperStart,
+          startedAt: new Date().toISOString(),
+        }),
+      );
+    slot('live', 'suite', live, startOf(live));
+    slot('dead', 'gone', 4194303, '1');
+    const j = JSON.parse(board(['json']).out);
+    expect(j.heavy.map((h: { label: string }) => h.label)).toEqual(['suite']);
+    expect(j.sample.mix.heavy).toBe(1);
+    const status = spawnSync('bash', [join(boardDir, 'board.sh'), 'status'], {
+      env: { ...env, APERTURE_DEVLOCK_SOURCE: `file:${join(tmp, 'gh-lock')}` }, // no peek at GitHub
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    expect(status.stdout).toMatch(/heavy: 1 slot\(s\) · test 1\/4/);
+    expect(readdirSync(dir).sort()).toEqual(['dead.json', 'live.json']); // readers never delete
+  });
+});
+
+describe('board.sh sampler', () => {
+  it('starts under probe load — status/json probes take its lock for microseconds — three restarts in a row', async () => {
+    const lock = join(tmp, 'sampler.lock');
+    const senv = {
+      ...env,
+      APERTURE_SAMPLER_LOCK: lock,
+      APERTURE_SAMPLER_PID: join(tmp, 'sampler.pid'),
+      APERTURE_SAMPLER_PREV: join(tmp, 'sampler.prev'),
+      APERTURE_DEVLOCK_SOURCE: `file:${join(tmp, 'gh-lock')}`, // its devlock refresh never asks GitHub
+      SAMPLER_INTERVAL: '1',
+    };
+    const sampler = (...args: string[]) =>
+      spawnSync('bash', [join(boardDir, 'board.sh'), 'sampler', ...args], {
+        env: senv,
+        cwd: tmp,
+        encoding: 'utf8',
+      });
+    // `flock -n` in a tight loop: what status, json and SessionStart do, all at once.
+    const prober = spawn('bash', ['-c', 'while :; do flock -n "$1" true; done', '_', lock], {
+      stdio: 'ignore',
+    });
+    children.push(prober);
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = sampler('restart');
+        expect(r.stdout + r.stderr).toMatch(/sampler: started/);
+        expect(sampler('status').stdout).toMatch(/^sampler: running/);
+      }
+    } finally {
+      sampler('stop');
+      prober.kill();
+    }
+    expect(sampler('status').stdout).toMatch(/^sampler: stopped/);
   });
 });
 

@@ -39,3 +39,12 @@
 {"expect":"allow","why":"package management is not a test run","cmd":"pnpm add -D vitest@4","running":4,"runningClass":"test"}
 {"expect":"deny","why":"a test run inside a brace group and pipe is still a run","cmd":"{ pnpm test; } 2>&1 | tail -n 3","running":4,"runningClass":"test","reason":"cap is full"}
 {"expect":"nudge","why":"a heredoc body is dropped, but the command after it runs","cmd":"cat > x.md <<'EOF'\nRan pnpm test\nEOF\npnpm lint"}
+{"expect":"nudge","why":"bash -c runs its quoted body: the suite inside is a run","cmd":"bash -c \"pnpm test\""}
+{"expect":"nudge","why":"sh -c with single quotes, the same","cmd":"sh -c 'pnpm typecheck'"}
+{"expect":"deny","why":"an unwrapped body counts against the cap like any run","cmd":"bash -c \"cd app && pnpm test\"","running":4,"runningClass":"test","reason":"cap is full"}
+{"expect":"allow","why":"a bash -c body that only echoes a runner's name is text","cmd":"bash -c \"echo vitest\""}
+{"expect":"allow","why":"pnpm rm is package management, not a run","cmd":"pnpm rm vitest","running":4,"runningClass":"test"}
+{"expect":"allow","why":"a dead slot (its wrapper gone) is not a running job: no repeat offer","cmd":"pnpm test","nudged":["test"],"runningDead":1}
+{"expect":"nudge","why":"enforce on, 3 live suites and a dead slot: the cap counts 3, so only the offer","cmd":"pnpm test","limits":{"enforce":true},"running":3,"runningDead":1}
+{"expect":"nudge","why":"a shell by path, and -lc: still a wrapped run","cmd":"/bin/bash -lc \"pnpm lint\""}
+{"expect":"allow","why":"a quoted mention of bash -c is text (no space before the shell name)","cmd":"rg -n \"bash -c 'pnpm test'\" docs/","running":4,"runningClass":"test"}

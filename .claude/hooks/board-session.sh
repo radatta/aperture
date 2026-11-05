@@ -13,7 +13,7 @@ B="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/board" 2>/dev/null && pwd)
 IFS=$'\x1f' read -r SID CWD < <(printf '%s' "$INPUT" | jq -r '[.session_id // "", .cwd // ""] | join("\u001f")' 2>/dev/null)
 PID=$(sb_claude_pid "$PPID") || exit 0
 bash "$B/board.sh" register --pid "$PID" --sid "$SID" --cwd "${CWD:-$(pwd)}" >/dev/null 2>&1 || exit 0
-flock -n /tmp/aperture-sampler.lock true 2>/dev/null && bash "$B/board.sh" sampler start >/dev/null 2>&1
+flock -n "$SAMPLER_LOCK" true 2>/dev/null && bash "$B/board.sh" sampler start >/dev/null 2>&1
 
 branch=$(jq -r '.branch // empty' "$BOARD_DIR/sessions/$PID.json" 2>/dev/null)
 {
