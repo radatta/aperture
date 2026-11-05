@@ -276,12 +276,6 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setDayIntent: async () => {
         throw new Error('unused');
       },
-      upsertCategory: async () => {
-        throw new Error('unused');
-      },
-      deleteCategory: async () => {
-        throw new Error('unused');
-      },
       createSeries: async () => {
         throw new Error('unused');
       },
