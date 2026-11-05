@@ -109,7 +109,7 @@ Other uses:
 4. Submits the job and waits **75 s plus 30 s of grace**, counted from when the command started. That keeps it under the Bash tool's 120 s default timeout, because a killed caller would leave the job queued. If the pre-submit checks have left under 10 s of that budget, it queues nothing and exits 3.
 5. Checks that the result's `bodySha256` matches the file, and that the PR's head is the pushed sha. A push that landed mid-job fails loudly.
 
-Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire. The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
+Exit codes: 1 is a refusal or failure, printing the code and the renewal line for `TOKEN_*`. 2 is a usage error. **3 is `MAC_UNREACHABLE`**: no result in time, because the Mac is asleep, or the agent isn't installed or didn't fire — or it's busy: the runner drains one job at a time, so an `open-pr` queued behind a running `sim` job (up to 10 min, IOS-CHECK.md) waits it out and can read as unreachable. Rerun after the devcheck. The job is **withdrawn** from the inbox so it can't fire later. If the Mac already took it, the CLI waits out the grace period. If there's still no answer, it says the PR may yet open, and to check `gh pr list --head <branch>` before using the hand-off line. Otherwise it prints whether the Mac was ever installed and the age of the last result, plus the hand-off line:
 
 ```sh
 cd <Mac worktree> && gh pr create --title "…" --body-file localNotes/pr-<branch>.md
@@ -319,7 +319,7 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
 ## Adding a job
 
 1. Add one file `jobs/<name>.sh` (the installer and the CLI hash `jobs/*.sh` in name order, and a helper file's place in that order can differ by locale), defining `validate_<name> W` (prints a reason, or nothing) and `run_<name> W PREFIX RESULT_DIR` (prints `STATUS REASON EXTRA_JSON`; artifacts go under `RESULT_DIR`, written as in _The runner_ step 6).
-2. Add the name to `JOBS` in `runner.sh`, any new `error` reasons to `status_of`, and its cases to `gen-jobs.py`.
+2. Add the name to `JOBS` in `runner.sh`, any new `error` reasons its validator returns to `status_of` (a run's own status passes through as printed), and its cases to `gen-jobs.py`.
 3. On the container side, mirror the validator and wait for the result: `open-pr.ts` (one short wait) or `sim.ts` (pickup, then a heartbeat) are the two patterns.
 
 A second credential follows the same Keychain-only rule (the `sim` job's test-user password: IOS-CHECK.md).

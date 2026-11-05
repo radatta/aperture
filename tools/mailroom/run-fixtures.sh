@@ -60,7 +60,7 @@ security() {
     "find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com")
       [ -z "${MAILROOM_FIXTURE_NO_SIMPW:-}" ] || return 44
       printf 'keychain: item attributes\n' ;;
-    "find-generic-password -s aperture-devcheck-dev -w")
+    "find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com -w")
       [ -z "${MAILROOM_FIXTURE_NO_SIMPW:-}" ] || return 44
       printf 'read\n' >>"$MAILROOM_FIXTURE_SIMCALLS.pw"
       printf '%s\n' "$MAILROOM_FIXTURE_PW" ;;

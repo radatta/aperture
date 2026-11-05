@@ -19,6 +19,7 @@ import {
   createUi,
   datesFor,
   makeShot,
+  NeedsYou,
   needsYou,
   needsYouReason,
   shotWithheld,
@@ -246,7 +247,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           const reason = needsYouReason(err);
           if (reason !== null) {
             // Not a failure: the run stays green, the rows read needs-you with the reason (matrix.ts).
-            needs = reason;
+            if (!(err instanceof NeedsYou && err.stepOnly)) needs = reason;
             res.status = 'needs-you';
             res.note = reason;
             res.ms = d.now() - s0;

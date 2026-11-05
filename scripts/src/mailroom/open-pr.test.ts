@@ -167,7 +167,9 @@ describe('openPr: the iPhone-checks banner', () => {
         ios: { unavailable: { reason: 'x @octocat', rows: 1 } },
       }),
     );
-    expect(p.body.split('\n')[0]).toContain('(SIM_UNAVAILABLE, Mac asleep?): 1 iOS row untested');
+    expect(p.body.split('\n')[0]).toContain(
+      '(SIM_UNAVAILABLE): 1 iOS row untested. Rerun the devcheck once the sim is fixed',
+    );
   });
 });
 

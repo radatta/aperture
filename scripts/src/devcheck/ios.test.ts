@@ -3,7 +3,7 @@ import { fakeClock } from '../bot/fakes.ts';
 import { memFs } from '../mailroom/fakes.ts';
 import type { SimResult } from '../mailroom/sim.ts';
 import { IOS_NOTE, createIos } from './ios';
-import { needsYouReason } from './scenario';
+import { NeedsYou, needsYouReason } from './scenario';
 
 const HJ = '/repo/.hostjobs';
 const SHA = 'a'.repeat(40);
@@ -90,6 +90,7 @@ describe('ctx.ios', () => {
     const { client, submitted, ios } = mac(() => null);
     const first = await caught(client.run('launch', [{ op: 'launch' }]));
     expect(needsYouReason(first)).toBe(`${IOS_NOTE}: MAC_UNREACHABLE`);
+    expect((first as NeedsYou).stepOnly).toBe(false);
     const second = await caught(ios.forScenario('other').run('relaunch', [{ op: 'launch' }]));
     expect(needsYouReason(second)).toBe(`${IOS_NOTE}: MAC_UNREACHABLE`);
     expect(submitted).toHaveLength(1);
@@ -101,9 +102,9 @@ describe('ctx.ios', () => {
     const { client, submitted, ios } = mac(() =>
       ++n === 1 ? { status: 'error', reason: 'SIM_UNAVAILABLE', detail: 'KEYBOARD_SETUP' } : {},
     );
-    expect(needsYouReason(await caught(client.run('capture', [{ op: 'launch' }])))).toBe(
-      `${IOS_NOTE}: SIM_UNAVAILABLE/KEYBOARD_SETUP`,
-    );
+    const kb = await caught(client.run('capture', [{ op: 'launch' }]));
+    expect(needsYouReason(kb)).toBe(`${IOS_NOTE}: SIM_UNAVAILABLE/KEYBOARD_SETUP`);
+    expect((kb as NeedsYou).stepOnly).toBe(true); // the pipeline runs the scenario's later steps
     await client.run('relaunch', [{ op: 'launch' }]);
     expect(submitted).toHaveLength(2);
     expect(ios.unavailable()).toBeNull();

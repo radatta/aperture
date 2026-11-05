@@ -81,7 +81,8 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
 // naming it passed, fails when any failed, reads needs-you when a step said so at run time (scenario.ts
 // needsYou — the rest passed or were left unrun by it), and is skipped otherwise (a step that never ran
 // proves nothing). A slow step the run deferred drops out of that; a row whose proving steps were ALL
-// deferred is `deferred` (DEV-CHECK.md → Slow tier). `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven
+// deferred — or every one through the row's own entry point (a ui row never rests on its api step alone) — is
+// `deferred` (DEV-CHECK.md → Slow tier). `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven
 // another build.
 export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = false): RowResult[] {
   return sc.rows.map((row) => {
@@ -102,14 +103,15 @@ export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = fal
       (s): Pick<StepResult, 'status' | 'note'> =>
         steps.find((r) => r.scenario === sc.id && r.step === s.id) ?? { status: 'skipped' },
     );
-    if (all.length && all.every((x) => x.status === 'deferred'))
+    const ran = by.map((s, i) => ({ s, r: all[i]! })).filter((x) => x.r.status !== 'deferred');
+    const ownDeferred = ran.length < all.length && !ran.some((x) => x.s.entry === row.entry);
+    if (all.length && (all.every((x) => x.status === 'deferred') || ownDeferred))
       return {
         ...base,
         status: 'deferred',
         provenBy: `steps ${by.map((s) => `${s.id} (${s.entry})`).join(', ')}`,
-        note: all[0]?.note ?? 'slow tier',
+        note: all.find((x) => x.status === 'deferred')?.note ?? 'slow tier',
       };
-    const ran = by.map((s, i) => ({ s, r: all[i]! })).filter((x) => x.r.status !== 'deferred');
     const results = ran.map((x) => x.r);
     const statuses = results.map((r) => r.status);
     const status = statuses.includes('fail')

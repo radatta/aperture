@@ -52,7 +52,12 @@ export const TAP_DENY = [
   'save password',
   'not now',
   'return',
+  'add to today',
+  'add place',
 ];
+// sim.sh's device profile screen, in points: coordinates past it are refused (runner-fixtures.test.ts pins both).
+export const SIM_W = 402;
+export const SIM_H = 874;
 
 type Tab = (typeof TABS)[number];
 type Role = (typeof ROLES)[number];
@@ -101,9 +106,11 @@ export type SimReason = 'BAD_PARAM' | 'TOO_MANY_OPS' | 'BAD_OP' | 'DENIED_TAP';
 export interface SimRead {
   role: string;
   label: string;
-  value?: string;
+  value?: string; // dropped while the sign-in form is up
+  id: string; // AXUniqueId: native chrome only, never web content
   enabled: boolean;
   frame: { x: number; y: number; w: number; h: number };
+  at: { x: number; y: number }; // the point it was read at
 }
 export interface SimStep {
   i: number;
@@ -178,16 +185,16 @@ function where(o: Obj): boolean {
   if ('near' in o === 'scan' in o) return false;
   if ('near' in o) {
     const n = o.near;
-    if (!isObj(n) || !keysOk(n, ['x', 'y'], []) || !int(n.x, 0, 402) || !int(n.y, 0, 874))
+    if (!isObj(n) || !keysOk(n, ['x', 'y'], []) || !int(n.x, 0, SIM_W) || !int(n.y, 0, SIM_H))
       return false;
   } else {
     const s = o.scan;
     if (
       !isObj(s) ||
       !keysOk(s, ['x', 'from', 'to'], []) ||
-      !int(s.x, 0, 402) ||
-      !int(s.from, 0, 874) ||
-      !int(s.to, 0, 874) ||
+      !int(s.x, 0, SIM_W) ||
+      !int(s.from, 0, SIM_H) ||
+      !int(s.to, 0, SIM_H) ||
       Math.floor(Math.abs((s.to as number) - (s.from as number)) / 30) + 1 > 20
     )
       return false;
@@ -269,6 +276,7 @@ function crossOk(steps: Obj[]): boolean {
   for (const [i, s] of steps.entries()) {
     if (s.op === 'kill' && steps[i + 1]?.op !== 'launch') return false;
     if (s.op === 'shutdown' && i !== steps.length - 1) return false;
+    if (s.op === 'signIn' && !steps.slice(0, i).some((x) => x.op === 'launch')) return false;
   }
   const defs: string[] = [];
   for (const s of steps) {
@@ -305,7 +313,7 @@ export const SIM_REASON_HINT: Record<SimReason, string> = {
   BAD_PARAM: 'sim params: sha (40 hex), timeoutSec 60–600, shutdown (boolean), steps (1–80 ops)',
   TOO_MANY_OPS: `a sim plan holds at most ${MAX_OPS} ops`,
   BAD_OP:
-    'an op off the allowlist, a bad argument, an unknown `as`, a kill not followed by launch, or shutdown not last (docs/ops/IOS-CHECK.md → Ops)',
+    'an op off the allowlist, a bad argument, an unknown `as`, a kill not followed by launch, a signIn before any launch, or shutdown not last (docs/ops/IOS-CHECK.md → Ops)',
   DENIED_TAP: 'that label is one of the app’s write buttons — the sim never saves',
 };
 
@@ -351,6 +359,11 @@ function settle(r: SimResult): SimResult {
   if (r.status === 'rejected')
     throw new Error(
       `the Mac refused the sim plan: ${r.reason} — a harness bug (IOS-CHECK.md → Ops)`,
+    );
+  // runner.sh's fallback when run_sim itself died: a bug in the runner, not an unavailable Mac.
+  if (r.status === 'error' && r.reason === 'API_FAILED')
+    throw new Error(
+      'the Mac runner crashed in the sim job — a harness bug (the Mac’s agent.log, MAILROOM.md)',
     );
   const code = r.status === 'expired' ? 'MAC_UNREACHABLE' : (r.reason ?? 'SIM_UNAVAILABLE');
   throw new IosUnavailable(r.detail ? `${code}/${r.detail}` : code, failingNote(r));

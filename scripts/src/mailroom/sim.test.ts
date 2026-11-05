@@ -151,6 +151,10 @@ describe('runSimJob', () => {
     const rej = await run({ status: 'rejected', reason: 'BAD_OP' });
     expect(rej).not.toBeInstanceOf(IosUnavailable);
     expect((rej as Error).message).toMatch(/harness bug/);
+    // runner.sh's fallback when run_sim itself died: a runner bug fails, never reads as an unavailable Mac
+    const crash = await run({ status: 'error', reason: 'API_FAILED' });
+    expect(crash).not.toBeInstanceOf(IosUnavailable);
+    expect((crash as Error).message).toMatch(/runner crashed in the sim job/);
   });
 
   it('no mailroom at all is MAC_UNREACHABLE, not a crash', async () => {

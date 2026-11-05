@@ -239,6 +239,17 @@ describe('coverageOf: deferred slow steps', () => {
       ['broke', 'fail', ['f'], undefined],
     ]);
   });
+  it('a row whose own-entry steps were all deferred is deferred, never proven by another entry’s step alone', () => {
+    const m = sc(
+      [row('form', { entry: 'ios' }), row('saved', { entry: 'api' })],
+      [step('sim', 'ios', ['form', 'saved']), step('read', 'api', ['form', 'saved'])],
+    );
+    const c = coverageOf(m, [res('sim', 'deferred'), res('read', 'pass')]);
+    expect(c.map((x) => [x.row, x.status])).toEqual([
+      ['form', 'deferred'],
+      ['saved', 'pass'],
+    ]);
+  });
 });
 
 describe('coverageOf', () => {

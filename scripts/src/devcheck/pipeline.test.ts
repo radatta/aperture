@@ -1095,6 +1095,41 @@ describe('runPipeline', () => {
     ]);
   });
 
+  it('a step-only needs-you (the sim’s keyboard) leaves the rest of its scenario running', async () => {
+    const w = world();
+    let ran = 0;
+    const sc: Scenario = {
+      id: 'kb',
+      title: 'kb',
+      tiers: ['full'],
+      rows: [
+        { id: 'a', entry: 'api', kind: 'nominal', what: 'a' },
+        { id: 'b', entry: 'api', kind: 'nominal', what: 'b' },
+      ],
+      steps: [
+        {
+          id: 'typing',
+          title: 'typing',
+          entry: 'api',
+          proves: ['a'],
+          run: async () => needsYou('no soft keyboard', { stepOnly: true }),
+        },
+        { id: 'next', title: 'next', entry: 'api', proves: ['b'], run: async () => void ran++ },
+      ],
+    };
+    const r = await runPipeline(deps(w, [sc]));
+    expect(ran).toBe(1);
+    expect(r.status).toBe('PASS');
+    expect(r.steps.map((s) => [s.step, s.status])).toEqual([
+      ['typing', 'needs-you'],
+      ['next', 'pass'],
+    ]);
+    expect(r.coverage.map((x) => [x.row, x.status])).toEqual([
+      ['a', 'needs-you'],
+      ['b', 'pass'],
+    ]);
+  });
+
   describe('slow tier and the iOS sim', () => {
     const slowSc = (run: () => Promise<void>): Scenario => ({
       id: 'slw',

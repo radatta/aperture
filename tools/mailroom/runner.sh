@@ -110,7 +110,7 @@ result() {
 status_of() {
   case "$1" in
     EXPIRED) echo expired ;;
-    TOKEN_* | API_FAILED | RATE_LIMITED | TIMEOUT | WRONG_AUTHOR | SIM_UNAVAILABLE | PASSWORD_MISSING | SIGNIN_FAILED) echo error ;;
+    TOKEN_* | API_FAILED | RATE_LIMITED | TIMEOUT | WRONG_AUTHOR) echo error ;;
     *) echo rejected ;;
   esac
 }

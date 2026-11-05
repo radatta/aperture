@@ -72,6 +72,16 @@ const CAPTURE: IosOp[] = [
 const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'nav', tab: 'Tasks' },
   { op: 'tap', label: 'Search tasks', near: { x: 200, y: 332 }, radius: 40, role: 'AXTextField' },
+  { op: 'wait', s: 1 },
+  // a page field: the dock must not lift over it (re-found: the page may have scrolled it)
+  {
+    op: 'find',
+    label: 'Search tasks',
+    scan: { x: 200, from: 120, to: 540 },
+    role: 'AXTextField',
+    as: 'search',
+  },
+  { op: 'expect', as: 'search', aboveKeyboard: true },
   { op: 'keys', text: marker(ctx) },
   { op: 'blur' },
   { op: 'tap', label: title(ctx), scan: { x: 100, from: 390, to: 840 }, role: 'AXButton' },
@@ -238,26 +248,21 @@ export const iosStandalone: Scenario = {
       offDev: {
         file: 'app/src/lib/useKeyboardInset.test.tsx',
         test: "doesn't lift when pinch-zoomed",
-        why: 'the sim can’t pinch; same path as capture-above-keyboard (proven on dev): the same hook',
+        why: 'the sim can’t pinch, so dev can’t produce it',
       },
     },
     {
       id: 'page-field-no-lift',
       entry: 'ios',
       kind: 'edge',
-      what: 'A page field’s keyboard doesn’t lift the dock over it',
-      offDev: {
-        file: 'app/src/lib/useKeyboardInset.test.tsx',
-        test: "doesn't lift for a page field's keyboard — it would cover the field",
-        why: 'same path as capture-above-keyboard (proven on dev): the same hook',
-      },
+      what: 'A page field’s keyboard doesn’t lift the dock over it: Tasks search stays above the keyboard',
     },
   ],
   steps: [
     {
       id: 'setup',
       title: 'An in-progress task for the Done form (MCP; the sim never taps Start)',
-      entry: 'api',
+      entry: 'mcp',
       cost: 'slow',
       async run(ctx) {
         const t = await ctx.mcp.writes.createTask({ title: title(ctx), estimateMin: 15 });
@@ -301,6 +306,7 @@ export const iosStandalone: Scenario = {
         'done-form-no-zoom',
         'done-form-refocus',
         'done-form-draft-cleared',
+        'page-field-no-lift',
       ],
       async run(ctx) {
         await ctx.ios.run('done-form', doneForm(ctx));

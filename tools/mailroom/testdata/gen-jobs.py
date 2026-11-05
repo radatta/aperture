@@ -268,6 +268,10 @@ srej('sim: an unknown role is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x')
 srej('sim: wait 31 is BAD_OP', 'BAD_OP', [{'op': 'wait', 's': 31}])
 srej('sim: a capitalised shot name is BAD_OP', 'BAD_OP', [L, {'op': 'shot', 'name': 'Home'}])
 srej('sim: erase 0 is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 0}])
+srej('sim: a role given as an array is BAD_OP', 'BAD_OP', [L, F('Capture log', 200, 813, 'bar', role=['AXTextArea'])])
+srej('sim: signIn before any launch is BAD_OP', 'BAD_OP', [{'op': 'signIn'}, L])
+srej('sim: tapping Add to today is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Add to today', 'near': {'x': 200, 'y': 400}}])
+srej('sim: a point past the profile screen is BAD_OP', 'BAD_OP', [L, F('Capture log', 403, 813, 'bar')])
 srej('sim: erase 25 is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 25}])
 srej('sim: an unknown nav tab is BAD_OP', 'BAD_OP', [L, {'op': 'nav', 'tab': 'Admin'}])
 srej('sim: a kill method off the list is BAD_OP', 'BAD_OP', [L, {'op': 'kill', 'method': 'pkill'}])
@@ -296,13 +300,25 @@ serr('sim: describe-ui timing out twice is AX_TIMEOUT', 'AX_TIMEOUT', tape=[{'m'
 serr('sim: no Aperture icon is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False)}],
      simIncludes=['gesture scroll-left --screen-width 402 --screen-height 874'], simExcludes=['tap -x'])
 SIGNED_OUT = [pt(200, 813, {}), pt(200, 488, el('AXButton', 'Sign in', '', 164, 470, 74, 37))]
-COGNITO = pt(29, 87, el('AXGenericElement', 'Address', 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com', 10, 70, 300, 34))
+HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com'
+COGNITO = pt(29, 87, el('AXGenericElement', 'Address', HOST, 10, 70, 300, 34, AXUniqueId='URL'))
 FORM = [COGNITO, pt(200, 276, el('AXTextField', 'Email', PW, 41, 258, 320, 35)), pt(200, 366, el('AXSecureTextField', 'Password', PW, 41, 345, 320, 40)),
         pt(200, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47))]
 serr('sim: no Keychain password is PASSWORD_MISSING, nothing typed', None, [L, {'op': 'signIn'}], reason='PASSWORD_MISSING', tape=SIGNED_OUT, noSimPassword=True,
      simExcludes=['axe type', '--point 29,87'])
 serr('sim: a sign-in page off dev Cognito is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [pt(29, 87, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34))], simExcludes=['axe type'])
+     tape=SIGNED_OUT + [pt(29, 87, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL'))], simExcludes=['axe type'])
+serr('sim: page text that reads like dev Cognito (no native URL id) is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [pt(29, 87, el('AXStaticText', 'Address', HOST, 10, 70, 300, 34))], simExcludes=['axe type'])
+serr('sim: another account’s Cognito is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [pt(29, 87, el('AXGenericElement', 'Address', 'aperture-dev-111111111111.auth.us-west-1.amazoncognito.com', 10, 70, 300, 34, AXUniqueId='URL'))],
+     simExcludes=['axe type'])
+serr('sim: the host changing before the password is COGNITO_HOST, the password never read', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [{**COGNITO, 'n': 1}, pt(29, 87, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL'))] + FORM[1:],
+     pwTyped=0, simIncludes=['axe type rahul3datta+devcheck@gmail.com'])
+serr('sim: submit probes skip the filled password field (no read inside it)', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [COGNITO, FORM[1], pt(200, 386, el('AXSecureTextField', 'Password', PW, 41, 380, 320, 40))], pwTyped=1,
+     simIncludes=['--point 200,454', '--point 200,424'], simExcludes=['--point 200,414'])
 serr('sim: a rejected password is AUTH_REJECTED (typed once, never read back)', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
      tape=SIGNED_OUT + FORM, pwTyped=1, simIncludes=['axe type rahul3datta+devcheck@gmail.com', '<<<' + PW, 'tap -x 201 -y 453 --tap-style physical --pre-delay 2'])
 serr('sim: a missing Email field is FORM_CHANGED', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED', tape=SIGNED_OUT + [COGNITO], simExcludes=['axe type'])
@@ -317,6 +333,15 @@ serr('sim: no soft keyboard where one is due is KEYBOARD_SETUP (needs you, not a
      [L, F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}],
      tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36)), pt(201, 780, {})])
 serr('sim: keys with no soft keyboard is KEYBOARD_SETUP', 'KEYBOARD_SETUP', [L, {'op': 'keys', 'text': 'ab'}], tape=[pt(201, 780, {})], simExcludes=['tap -x 42'])
+serr('sim: a plan without launch on a shut-down sim is NOT_LAUNCHED (readiness still runs)', 'NOT_LAUNCHED', [F('Capture log', 200, 813, 'bar')],
+     tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}], simIncludes=['axe --version', 'bootstatus'], simExcludes=['--point'])
+serr('sim: an unreadable tree mid-plan is AX_TIMEOUT (needs you), not NOT_IN_APP', 'AX_TIMEOUT', [F('Capture log', 200, 813, 'bar')],
+     tape=[{'m': 'describe-ui --udid', 'n': 1, 'out': tree()}, {'m': 'describe-ui --udid', 'rc': 1}])
+SCAN = {'x': 200, 'from': 100, 'to': 670}  # 20 points; the label answers only at the last
+serr('sim: over 400 point reads is TIMEOUT/PROBES', 'PROBES', [L] + [{'op': 'find', 'label': 'Far', 'scan': SCAN, 'as': f'f{i}'} for i in range(21)],
+     reason='TIMEOUT', tape=[pt(200, 670, el('AXButton', 'Far', '', 180, 660, 40, 20))])
+spass('sim: a whole number written 2.0 still counts (erase taps delete twice)', [L, {'op': 'erase', 'n': 2.0}],
+      simIncludes=['tap -x 372 -y 726', 'tap -x 372 -y 726'])
 
 # --- the row's assertion didn't hold: fail ---
 sfail('sim: a label nowhere near is MISS', 'MISS', [L, F('Nonexistent', 100, 100, 'x')])

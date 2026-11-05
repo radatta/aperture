@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TOOLS_DIR } from './fixtures.ts';
+import { SIM_H, SIM_W } from './sim.ts';
 
 const runnerText = () =>
   [
@@ -60,7 +61,7 @@ describe('mailroom runner', () => {
     expect(src.match(/\bsecurity\b[^\n]*/g)).toEqual([
       'security find-generic-password -s "$MR_KEYCHAIN" -w 2>/dev/null || true)"',
       'security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \\',
-      `security find-generic-password -s "$SIM_KEYCHAIN" -w 2>/dev/null | tr -d '\\n' | ax type --stdin >/dev/null 2>&1; then`,
+      `security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" -w 2>/dev/null | tr -d '\\n' | ax type --stdin >/dev/null 2>&1; then`,
     ]);
     for (const banned of ['GH_TOKEN', 'GITHUB_TOKEN', '.hostjobs/', 'localNotes', 'eval ', 'sh -c'])
       expect(src).not.toContain(banned);
@@ -77,7 +78,9 @@ describe('mailroom runner', () => {
       'SIM_AXE_VERSION="1.8.0"',
       'SIM_TERMINATE_ID="com.apple.webapp"',
       'SIM_EMAIL="rahul3datta+devcheck@gmail.com"',
-      "SIM_COGNITO_RE='^aperture-dev-[0-9]{12}\\.auth\\.us-west-1\\.amazoncognito\\.com$'",
+      "SIM_COGNITO_RE='^aperture-dev-618015769091\\.auth\\.us-west-1\\.amazoncognito\\.com$'",
+      `SIM_W=${SIM_W}`, // the validators' bounds (sim.ts) follow the device profile
+      `SIM_H=${SIM_H}`,
     ])
       expect(sim).toContain(pin);
     const secretsDir = ['.sec', 'rets'].join(''); // spelled apart: the repo's hooks guard the literal
@@ -92,10 +95,17 @@ describe('mailroom runner', () => {
       'bash -',
     ])
       expect(sim).not.toContain(banned);
-    // The sign-in page's host is checked before anything is typed; the password reaches axe only on stdin.
-    const hostCheck = sim.indexOf('[[ "$addr" =~ $SIM_COGNITO_RE ]]');
-    expect(hostCheck).toBeGreaterThan(0);
-    expect(hostCheck).toBeLessThan(sim.indexOf('ax type "$SIM_EMAIL"'));
+    // The host is read from the native address bar (id URL), checked before the email and again just before
+    // the password; the password reaches axe only on stdin.
+    expect(sim).toContain(`jq -e '.id == "URL" and .label == "Address"'`);
+    expect(sim).toContain('[[ "$v" =~ $SIM_COGNITO_RE ]]');
+    const checks = [...sim.matchAll(/\bsim_on_cognito \|\|/g)].map((m) => m.index);
+    const email = sim.indexOf('ax type "$SIM_EMAIL"');
+    const password = sim.indexOf('ax type --stdin');
+    expect(checks).toHaveLength(2);
+    expect(checks[0]).toBeLessThan(email);
+    expect(checks[1]).toBeGreaterThan(email);
+    expect(checks[1]).toBeLessThan(password);
     expect(sim.match(/\bax type\b[^\n]*/g)?.map((l) => l.slice(0, 30))).toEqual([
       'ax type "$SIM_EMAIL" >/dev/nul',
       'ax type --stdin >/dev/null 2>&',

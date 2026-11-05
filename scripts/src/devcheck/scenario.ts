@@ -106,17 +106,20 @@ export interface Ui {
 // the rows its scenario's steps prove read "needs you: <reason>" in the report (matrix.ts), the scenario's
 // later steps are left unrun (they build on it — its noConsoleErrors too, so a needs-you scenario checks no
 // console), and the run stays green. Never for a bug — a real throw still fails the step — and never
-// recorded under the run's own failures (those are the harness's).
+// recorded under the run's own failures (those are the harness's). `stepOnly`: the cause is this step's alone
+// (the sim's soft keyboard) and the later steps don't build on it, so they still run.
 export class NeedsYou extends Error {
   readonly reason: string;
-  constructor(reason: string) {
+  readonly stepOnly: boolean;
+  constructor(reason: string, stepOnly = false) {
     super(`needs you: ${reason}`);
     this.name = 'NeedsYou';
     this.reason = reason;
+    this.stepOnly = stepOnly;
   }
 }
-export function needsYou(reason: string): never {
-  throw new NeedsYou(reason);
+export function needsYou(reason: string, opts: { stepOnly?: boolean } = {}): never {
+  throw new NeedsYou(reason, opts.stepOnly);
 }
 export const needsYouReason = (err: unknown): string | null =>
   err instanceof NeedsYou ? err.reason : null;

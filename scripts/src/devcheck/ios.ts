@@ -129,7 +129,7 @@ export function createIos(d: IosDeps): Ios {
               reason: err.reason,
               buildsSeen: [],
             });
-            needsYou(`${IOS_NOTE}: ${err.reason}`);
+            needsYou(`${IOS_NOTE}: ${err.reason}`, { stepOnly: !runWide(err.reason) });
           }
           throw err;
         }
