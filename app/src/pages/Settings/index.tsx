@@ -332,7 +332,9 @@ function CategoryRow({
         <div
           role="group"
           aria-label={`Area for ${cat.label}`}
-          className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
+          // gap-1.5 and px-2 chips: four chips are 276px, inside the 294px a 390 phone leaves (gap-2 and
+          // px-2.5 were 298 — Personal wrapped alone beside Close, round 2).
+          className="mt-3 flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface p-3"
         >
           {/* The question takes its own line, so the four chips sit together under it. */}
           <Text size="sm" tone="muted" className="basis-full">
@@ -346,7 +348,7 @@ function CategoryRow({
               aria-disabled={setAreaWrite.isPending || undefined}
               onClick={() => pickArea(a)}
               className={cx(
-                'rounded-lg border px-2.5 py-1 text-xs transition',
+                'rounded-lg border px-2 py-1 text-xs transition',
                 areaOf(cat) === a
                   ? 'border-teal bg-teal-soft text-ink'
                   : 'border-line text-ink-muted hover:text-ink',
@@ -355,9 +357,12 @@ function CategoryRow({
               {AREA_LABEL[a]}
             </button>
           ))}
-          <Button variant="ghost" size="sm" onClick={() => closePanel()}>
-            Close
-          </Button>
+          {/* Its own line: a Close beside the last chip reads as a fifth choice. */}
+          <div className="basis-full pt-1">
+            <Button variant="ghost" size="sm" onClick={() => closePanel()}>
+              Close
+            </Button>
+          </div>
         </div>
       )}
 

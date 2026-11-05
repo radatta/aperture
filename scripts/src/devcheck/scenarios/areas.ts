@@ -86,7 +86,7 @@ export const areas: Scenario = {
       id: 'settings-arrows-390',
       entry: 'ui',
       kind: 'edge',
-      what: 'Settings › Categories at 390 px: a row’s Move up / Move down arrows are on screen (before any typing)',
+      what: 'Settings › Categories at 390 px: a row’s Move up / Move down arrows are on screen (before any typing); the Area panel’s four chips share one line',
     },
     {
       id: 'backlog-hides',
@@ -248,6 +248,30 @@ export const areas: Scenario = {
                 );
             }
           }
+          // The Area panel at the floor: its four chips share one line (round 2 found Personal wrapping alone
+          // beside Close at 390), Close below them. Opened and closed again — no write.
+          await ctx.page
+            .getByRole('button', { name: `More actions for ${catLabel(ctx, 'A')}`, exact: true })
+            .click();
+          await ctx.page.getByRole('menuitem', { name: 'Area…', exact: true }).click();
+          const panel = ctx.page.getByRole('group', { name: `Area for ${catLabel(ctx, 'A')}` });
+          await panel.waitFor({ state: 'visible', timeout: 10_000 });
+          await ctx.ui.settle();
+          await ctx.shot('area-panel-390');
+          const ys = new Set<number>();
+          for (const label of ['School', 'Aperture', 'Recruiting', 'Personal']) {
+            const box = await panel.getByRole('button', { name: label, exact: true }).boundingBox();
+            if (!box) throw new Error(`${label} chip has no box at 390`);
+            ys.add(Math.round(box.y));
+          }
+          if (ys.size !== 1) throw new Error(`the area chips sit on ${ys.size} lines at 390`);
+          const close = await panel
+            .getByRole('button', { name: 'Close', exact: true })
+            .boundingBox();
+          if (!close || close.y <= [...ys][0]!)
+            throw new Error('Close is not under the chips at 390');
+          await panel.getByRole('button', { name: 'Close', exact: true }).click();
+          await panel.waitFor({ state: 'hidden', timeout: 10_000 });
         } finally {
           await ctx.page.setViewportSize(PHONE);
         }
