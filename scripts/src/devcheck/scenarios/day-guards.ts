@@ -266,9 +266,6 @@ export const dayGuards: Scenario = {
         'getDay(yesterday) → 200 (past days allowed); getDay(today) → 200; E (no rows), B (yesterday only), D (row removed) → backlog; C (tomorrow) and F (today) stay planned',
       async run(ctx) {
         const { today, yesterday } = await days(ctx);
-        // A past day is served; its sweep, relative to yesterday, moves nothing today's wouldn't.
-        if ((await ctx.api.reads.getDay(yesterday)).date !== yesterday)
-          throw new Error('yesterday was refused');
         const day = await ctx.api.reads.getDay(today);
         if (day.date !== today) throw new Error(`getDay returned ${JSON.stringify(day)}`);
         const want: Record<string, string> = {
@@ -283,6 +280,9 @@ export const dayGuards: Scenario = {
         for (const what of Object.keys(want)) got[what] = await statusOf(ctx, made[what]!);
         const wrong = Object.keys(want).filter((w) => got[w] !== want[w]);
         if (wrong.length) throw new Error(`after the sweep: ${JSON.stringify(got)}`);
+        // Then a past day: served (its sweep, relative to yesterday, moves nothing today's didn't).
+        if ((await ctx.api.reads.getDay(yesterday)).date !== yesterday)
+          throw new Error('yesterday was refused');
       },
     },
     {
@@ -304,8 +304,15 @@ export const dayGuards: Scenario = {
       title: 'Habits: tap → checked, tap → unchecked, reload → unchecked, tap → checked',
       async run(ctx) {
         await ctx.ui.goto('/habits');
+        // The page is a 4-week grid, one button per (habit, day) named "<habit> on <day>"; future days
+        // are disabled, so today's cell is the last enabled one in document order.
         const button = () =>
-          ctx.page.getByRole('button', { name: new RegExp(`^${name(ctx, 'habit')}`) });
+          ctx.page
+            .getByRole('button', {
+              name: new RegExp(`^${name(ctx, 'habit')} on `),
+              disabled: false,
+            })
+            .last();
         const pressed = async (want: string) => {
           for (let i = 0; (await button().getAttribute('aria-pressed')) !== want; i++) {
             if (i > 40)
@@ -349,6 +356,8 @@ export const dayGuards: Scenario = {
         await ctx.api.writes.uncheckHabit(habit!.id, '2026-01-01');
         const left = (await checks()).map((c) => c.date);
         if (left.join() !== yesterday) throw new Error(`after the unchecks: ${left.join(', ')}`);
+        await ctx.api.writes.uncheckHabit(habit!.id, yesterday); // leave only tombstones behind the archive
+        if ((await checks()).length) throw new Error('yesterday’s check did not uncheck');
       },
     },
     noConsoleErrors,

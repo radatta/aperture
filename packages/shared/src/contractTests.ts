@@ -71,7 +71,8 @@ export function runApiContract(
       clock += ms;
     };
     // getDay refuses a day after the user's app day: a case that reads a 2026-08 day sets the clock to
-    // that day first (noon LA — 20:00Z — so no day-start offset moves it).
+    // that day first (20:00Z = early afternoon LA, well past any day start). The stub compares against
+    // the runner's local day, so this suite assumes a runner at or west of UTC (CI is UTC, the container LA).
     const at = (day: string) => {
       clock = Date.parse(`${day}T20:00:00Z`);
     };

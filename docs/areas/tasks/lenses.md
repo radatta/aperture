@@ -15,13 +15,13 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 
 `placeOf(task, { today, planOrder, dayStartHour }, parent?, isParent?)`:
 
-| Task | Place |
-| --- | --- |
-| done or dropped | Done |
-| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
-| due today through today+6, or past due | Week |
-| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places |
-| everything else | Backlog |
+| Task                                                                                                                                                                | Place   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| done or dropped                                                                                                                                                     | Done    |
+| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress                                                             | Today   |
+| due today through today+6, or past due                                                                                                                              | Week    |
+| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places  |
+| everything else                                                                                                                                                     | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
 shows under Week or Backlog by its due day. That is deliberate and transient: tomorrow's `getDay` makes
@@ -146,7 +146,7 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
     (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
     back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its
     rows stay as history. The sweep is monotone, so `getDay` refuses a day after the user's app day
-    (`FUTURE_DAY_ERROR`, both impls, `day-guards` 2026-11) — a future call is a client bug surfaced
+    (`FUTURE_DAY_ERROR`, both impls, `day-guards` 2026-11; the Lambda's today is LA's, so a device whose own day is ahead of LA's — travelling east — sees that error on Home and Tasks until LA's day catches up, where before it silently swept today's plan) — a future call is a client bug surfaced
     loudly, never served unswept. That sweep is also the migration: zero Google writes, status only. The
     Lambda re-judges each move on a consistent re-read, and `upsertPlan` reads the list consistently
     (a time cleared a moment ago is honoured). A timed occurrence is never dropped as superseded — it

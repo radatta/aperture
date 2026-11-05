@@ -17,6 +17,7 @@ export interface PwRequest {
 
 export interface PwLocator {
   first(): PwLocator;
+  last(): PwLocator;
   click(opts?: { timeout?: number }): Promise<void>;
   fill(value: string, opts?: { timeout?: number }): Promise<void>;
   press(key: string, opts?: { timeout?: number }): Promise<void>;
@@ -34,7 +35,7 @@ export interface PwLocator {
   locator(selector: string): PwLocator; // a CSS or `xpath=` selector under this one (an ancestor row too)
   getByRole(
     role: string,
-    opts?: { name?: string | RegExp; exact?: boolean; checked?: boolean },
+    opts?: { name?: string | RegExp; exact?: boolean; checked?: boolean; disabled?: boolean },
   ): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
@@ -53,7 +54,7 @@ export interface PwPage {
   locator(selector: string): PwLocator;
   getByRole(
     role: string,
-    opts?: { name?: string | RegExp; exact?: boolean; checked?: boolean },
+    opts?: { name?: string | RegExp; exact?: boolean; checked?: boolean; disabled?: boolean },
   ): PwLocator;
   getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
