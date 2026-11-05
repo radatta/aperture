@@ -90,8 +90,14 @@ cmd_note() {
 # --- views ---
 
 # In the container: is the sampler holding its lock? Elsewhere (the Mac): did it write in the last 90 s?
+# Every other probe (status, json, SessionStart, the restart poll) takes the lock for microseconds: one busy try
+# may be a probe, three in a row is the sampler.
 sampler_running() {
-  if [ -r "$CG/memory.stat" ]; then ! flock -n /tmp/aperture-sampler.lock true 2>/dev/null; return; fi
+  if [ -r "$CG/memory.stat" ]; then
+    local i
+    for ((i = 0; i < 3; i++)); do flock -n "$SAMPLER_LOCK" true 2>/dev/null && return 1; done
+    return 0
+  fi
   local last; last=$(ls -t "$BOARD_DIR"/history/samples-*.jsonl 2>/dev/null | head -n 1)
   [ -n "$last" ] && [ -n "$(find "$last" -mtime -90s 2>/dev/null || find "$last" -mmin -2 2>/dev/null)" ]
 }
@@ -105,8 +111,10 @@ board_json() {
     [ -n "$sample" ] || { echo "board: no samples under $BOARD_DIR — is the container's sampler running?" >&2; return 1; }
     export SB_PIDS_MAX=$(jq -r '.cg.pidsMax' <<<"$sample") SB_MEM_HIGH=$(jq -r '.cg.highMiB * 1048576' <<<"$sample")
   fi
-  leases=$(jq -s '.' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null) || leases='[]'
-  [ -n "$leases" ] || leases='[]'
+  local -a live=()
+  mapfile -t live < <(sb_live_slots)  # a dead wrapper's slot is not a running job (lib.sh)
+  leases='[]'
+  [ "${#live[@]}" -eq 0 ] || leases=$(jq -s '.' "${live[@]}" 2>/dev/null) || leases='[]'
   bar=$(node "$SB_REPO/scripts/src/board/cli.ts" barriers "$BOARD_DIR/history" 7 2>/dev/null)  # none on a Mac without node
   jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" --arg bar "$bar" --arg cap "$(sb_limit '.concurrency.test')" \
     --slurpfile dev <( [ -f "$BOARD_DIR/devlock.json" ] && cat "$BOARD_DIR/devlock.json" ) \
@@ -164,22 +172,30 @@ cmd_hub() {
 cmd_sampler() {
   case "${1:-status}" in
     start)
-      sampler_running && { echo "sampler: already running (pid $(cat /tmp/aperture-sampler.pid 2>/dev/null))"; return 0; }
+      sampler_running && { echo "sampler: already running (pid $(cat "$SAMPLER_PID" 2>/dev/null))"; return 0; }
       sb_init_dirs
       # Detached background process, no tmux window (it has nothing to show); errors → sampler.log.
       setsid nohup bash "$SB_SCRIPTS/sampler.sh" </dev/null >>"$BOARD_DIR/sampler.log" 2>&1 &
-      echo "sampler: started (pid in /tmp/aperture-sampler.pid, log $BOARD_DIR/sampler.log)" ;;
+      # It holds its lock within a second (`flock -w 5` rides out the probes); not seen holding it = not running.
+      local i
+      for ((i = 0; i < 10; i++)); do
+        sampler_running && { echo "sampler: started (pid in $SAMPLER_PID, log $BOARD_DIR/sampler.log)"; return 0; }
+        sleep 0.1
+      done
+      echo "sampler: did not start — see $BOARD_DIR/sampler.log" >&2
+      return 1 ;;
     stop|restart)
-      local p
-      p=$(cat /tmp/aperture-sampler.pid 2>/dev/null)
+      local p i
+      p=$(cat "$SAMPLER_PID" 2>/dev/null)
       # Kill by the PID the holder recorded, never by name; only if it still holds the lock.
       if [ -n "$p" ] && sampler_running && [ "$(sb_comm "$p")" = bash ]; then kill "$p" && echo "sampler: stopped $p"; fi
-      for _ in 1 2 3 4 5 6 7 8 9 10; do sampler_running || break; sleep 0.2; done
+      # Up to 5 s: one mid-tick finishes the tick before its TERM trap runs.
+      for ((i = 0; i < 25; i++)); do sampler_running || break; sleep 0.2; done
       [ "$1" = restart ] && cmd_sampler start ;;
     status)
       local last
       last=$(tail -n 1 "$BOARD_DIR/history/samples-$(sb_today).jsonl" 2>/dev/null | jq -r '.t' 2>/dev/null)
-      if sampler_running; then echo "sampler: running (pid $(cat /tmp/aperture-sampler.pid 2>/dev/null)), last tick ${last:-none today}"
+      if sampler_running; then echo "sampler: running (pid $(cat "$SAMPLER_PID" 2>/dev/null)), last tick ${last:-none today}"
       else echo "sampler: stopped — board.sh sampler start"; return 1; fi ;;
     *) echo "usage: board.sh sampler start|restart|stop|status" >&2; return 2 ;;
   esac
@@ -188,7 +204,7 @@ cmd_sampler() {
 # --- housekeeping ---
 
 cmd_gc() {
-  local f pid start ps st wp n=0
+  local f pid start n=0
   # Sessions whose process is gone (or pid reused), kept 24 h after their last update.
   for f in "$BOARD_DIR"/sessions/*.json; do
     [ -e "$f" ] || continue
@@ -197,11 +213,10 @@ cmd_gc() {
       find "$f" -mmin +1440 -delete 2>/dev/null && [ ! -e "$f" ] && { rm -f "${f%.json}.tool" "${f%.json}.nudged"; n=$((n + 1)); }
     fi
   done
-  # Heavy slots whose wrapper died.
+  # Heavy slots whose wrapper died (or is a zombie) — the same rule every reader counts by (lib.sh sb_slot_live).
   for f in "$BOARD_DIR"/leases/heavy/*.json; do
     [ -e "$f" ] || continue
-    read -r wp st < <(jq -r '"\(.wrapperPid) \(.wrapperStart)"' "$f")
-    sb_alive "$wp" "$st" || { rm -f "$f"; n=$((n + 1)); }
+    sb_slot_live "$f" || { rm -f "$f"; n=$((n + 1)); }
   done
   # The retired board dev lease (refs/locks/dev is the only dev lock since session-comms).
   rm -f "$BOARD_DIR/leases/dev.json"

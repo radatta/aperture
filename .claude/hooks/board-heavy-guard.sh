@@ -26,15 +26,22 @@ esac
 # mentions one (`cat vitest.config.ts`, `rg -n "vitest|pnpm test" docs/`, a heredoc body). Quoted spans are text
 # (blanked before splitting on && || ; | & and parens); heredoc bodies (`<<WORD` … `WORD`) are dropped; leading
 # env assignments, wrappers (env, timeout -s SIG N, nice, nohup, setsid, command) and shell keywords are skipped;
-# package-management pnpm verbs (add, why, install, …) aren't runs. Builtins only. The class comes from these.
+# package-management pnpm verbs (add, why, install, …) aren't runs. A `bash -c "…"` / `sh -c '…'` body runs, so
+# it is unwrapped into the text first. Builtins only. The class comes from these.
 run_segments() {
-  local c="$1" line seg w end= body= re="\"[^\"]*\"|'[^']*'"
+  local c="$1" line seg w end= body= re="\"[^\"]*\"|'[^']*'" dq='"([^"]*)"' sq="'([^']*)'" wrap rep
   while IFS= read -r line; do  # drop heredoc bodies, keep the line that opens one
     if [ -n "$end" ]; then [ "${line//[[:space:]]/}" = "$end" ] && end=; continue; fi
     body+="$line"$'\n'
     if [[ $line =~ \<\<-?[[:space:]]*[\'\"]?([A-Za-z_][A-Za-z0-9_]*) ]]; then end=${BASH_REMATCH[1]}; fi
   done <<<"$c"
   c=$body
+  wrap="(^|[[:space:]])(bash|sh|dash|zsh)[[:space:]]+-c[[:space:]]+($dq|$sq)"
+  # The replacement is quoted: bash 5.2's patsub_replacement would turn a body's `&&` into the match itself.
+  while [[ $c =~ $wrap ]]; do
+    rep=$'\n'${BASH_REMATCH[4]}${BASH_REMATCH[5]}$'\n'
+    c=${c/"${BASH_REMATCH[0]}"/"$rep"}
+  done
   while [[ $c =~ $re ]]; do c=${c/"${BASH_REMATCH[0]}"/ Q }; done
   c=${c//&&/$'\n'}; c=${c//||/$'\n'}; c=${c//;/$'\n'}; c=${c//|/$'\n'}; c=${c//&/$'\n'}; c=${c//(/ }; c=${c//)/ }
   while IFS= read -r seg; do
@@ -46,7 +53,7 @@ run_segments() {
       esac
     done
     case "${w[0]:-}" in
-      pnpm) case "${w[1]:-}" in add|remove|why|install|i|list|ls|outdated|update|up|view|info) continue ;; esac
+      pnpm) case "${w[1]:-}" in add|remove|rm|uninstall|un|why|install|i|list|ls|outdated|update|up|view|info) continue ;; esac
             printf '%s\n' "${w[*]}" ;;
       npx|vitest|*/vitest|tsc|*/tsc|tsgo|eslint|*/eslint|vite|*/vite|node|bash|sh|xargs|scripts/*|./*) printf '%s\n' "${w[*]}" ;;
     esac
@@ -67,17 +74,23 @@ emit() {  # $1 decision (allow|deny), $2 message — message over stdin, never a
 }
 
 NOW=$(cat "$BOARD_DIR/status.line" 2>/dev/null)
-# Running heavy jobs, not counting dev servers — a long-lived one would make every command an offer.
-OTHERS=$(grep -L '"class":"dev"' "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | wc -l)
+# Running heavy jobs — live slots only (lib.sh sb_live_slots: a dead wrapper's slot is never a running job), not
+# counting dev servers — a long-lived one would make every command an offer. `same`: this class's, for its cap.
+OTHERS=0; same=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  s=$(<"$f")
+  [[ $s == *'"class":"dev"'* ]] || OTHERS=$((OTHERS + 1))
+  [[ $s == *"\"class\":\"$CLASS\""* ]] && same=$((same + 1))
+done < <(sb_live_slots)
 
 # The measured edge and the class's cap — only when enforcing, and only worth a node start once live load is
-# past soft or the class's slots reach its cap (a grep over the slot files; _heavy_try's gc drops dead ones
-# before the real count).
+# past soft or the class's live slots reach its cap (_heavy_try's gc then drops the dead files before the real
+# count).
 read -r ENF CAP < <(jq -r --arg c "$CLASS" '"\(.enforce) \(.concurrency[$c] // "")"' "$LIMITS_JSON" 2>/dev/null)
 if [ "$ENF" = true ]; then
   eval "$(sb_thresholds)"
   p=$(cg_pids); a=$(cg_anon)
-  same=$(grep -l "\"class\":\"$CLASS\"" "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | wc -l)
   if [ "${p:-0}" -gt "$PIDS_SOFT" ] || [ "${a:-0}" -gt "$ANON_SOFT" ] || { [ -n "$CAP" ] && [ "$same" -ge "$CAP" ]; }; then
     . "$B/lease.sh"
     dec=$(sb_locked _heavy_try "" 0 "$CLASS" guard 0 0 2>/dev/null)  # "" = decide only, no slot

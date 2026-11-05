@@ -16,12 +16,11 @@ lease_event() { sb_append events "$(jq -nc --arg t "$(sb_now)" --argjson e "$1" 
 
 # --- heavy slots ---
 
-_heavy_gc() {
-  local f wp ws
+_heavy_gc() {  # the same liveness rule every reader counts by (lib.sh sb_slot_live)
+  local f
   for f in "$BOARD_DIR"/leases/heavy/*.json; do
     [ -e "$f" ] || continue
-    read -r wp ws < <(jq -r '"\(.wrapperPid) \(.wrapperStart)"' "$f" 2>/dev/null)
-    sb_alive "$wp" "$ws" || rm -f "$f"
+    sb_slot_live "$f" || rm -f "$f"
   done
 }
 

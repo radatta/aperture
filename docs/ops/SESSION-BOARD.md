@@ -155,7 +155,10 @@ hard or at a full cap → with `enforce: false` run anyway and log `wouldWait`; 
 timeout, so the message reaches Claude), then exit **75** naming the jobs that hold the room: tell the user
 rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the background. (Room that frees
 late in the wait still starts the command inside the same call, so with `enforce: true` give long jobs a
-longer Bash timeout or run them in the background.) Slots whose wrapper died are dropped on the next acquire and by `gc`.
+longer Bash timeout or run them in the background.) A slot whose wrapper died — or is a zombie (`Z`: exited, never
+reaped) — is never a running job: every reader (`status`/`json`, the sampler's `heavy` count, the guard's offer and cap
+count) counts live slots only, through one rule (`lib.sh` `sb_slot_live` / `sb_live_slots`), and the file is dropped
+by the next acquire and by `gc`.
 
 ## Dev lock line
 
@@ -201,8 +204,9 @@ measured edge or a full cap (recording a `denied` barrier event, pointing at thi
 path — other worktrees have none until merge — which waits). Only a command that actually starts a runner counts:
 some `&&` / `;` / `|` segment begins (after env assignments, `env`, `timeout N`) with `pnpm`, `vitest`, `tsc`,
 `node`, … — `cat vitest.config.ts`, `rg -n "vitest|pnpm test"` (quoted spans are text), a heredoc body, or `pnpm add vitest` is
-text, not a run — and the class comes only from the segments that run. It misses some real runs (`bash -c "pnpm
-test"`, `make`), which only costs the offer: the hook fails open;
+text, not a run — and the class comes only from the segments that run. A `bash -c "…"` / `sh -c '…'` body is
+unwrapped first, so the run inside it counts; `pnpm rm` / `uninstall` is package management. It misses `make` (no
+Makefile here), which only costs the offer: the hook fails open;
 SessionEnd marks the session gone.
 
 ## Overlaps
@@ -326,7 +330,11 @@ carry the same list.
   falls back to walking `/proc` to the nearest `claude` ancestor; hooks always walk.
 - The first sampler started wins the lock; after this lands, `board.sh sampler restart` from the main checkout
   so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
-  overwriting a file in place under the running sampler has killed it once.
+  overwriting a file in place under the running sampler has killed it once. The lock is taken with `flock -w 5`,
+  so a `status` / `json` / SessionStart probe (a microsecond hold) never costs a `start`; `start` confirms the
+  lock within 1 s or says `sampler: did not start — see sampler.log` (exit 1), and `sampler_running` asks three
+  times before calling a busy lock the sampler. Tests point the lock and pid file elsewhere
+  (`APERTURE_SAMPLER_LOCK`, `APERTURE_SAMPLER_PID`).
 - On the Mac there is no `timeout` (coreutils), so `devlock.sh refresh` doesn't peek there and `board.sh status`
   shows the container's last cache, marked stale once it's 5 min old.
 - The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4

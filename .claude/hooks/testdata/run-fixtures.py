@@ -179,6 +179,11 @@ def board_env(case: dict, root: str) -> dict:
         slot = {"v": 1, "pid": 1, "class": cls, "label": cls, "wrapperPid": os.getpid(),
                 "wrapperStart": own_start(), "startedAt": "2026-10-29T00:00:00Z"}
         (tmp / f"board/leases/heavy/1-{i}.json").write_text(json.dumps(slot, separators=(",", ":")), encoding="utf-8")
+    # Dead slots: a wrapper that is gone (4194303 is past pid_max, never alive). A running job to no reader.
+    for i in range(case.get("runningDead", 0)):
+        slot = {"v": 1, "pid": 1, "class": cls, "label": cls, "wrapperPid": 4194303,
+                "wrapperStart": "1", "startedAt": "2026-10-29T00:00:00Z"}
+        (tmp / f"board/leases/heavy/1-dead-{i}.json").write_text(json.dumps(slot, separators=(",", ":")), encoding="utf-8")
     if "nudged" in case:  # classes this session was already offered heavy.sh for
         (tmp / "board/sessions").mkdir(parents=True)
         (tmp / f"board/sessions/{claude_ancestor()}.nudged").write_text(

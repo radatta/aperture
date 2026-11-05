@@ -16,6 +16,9 @@ else BOARD_DIR="$(cd "$(git -C "$SB_REPO" rev-parse --path-format=absolute --git
 BOARD_LOCK="${APERTURE_BOARD_LOCK:-/tmp/aperture-board.lock}"
 CG="${APERTURE_CGROUP_DIR:-/sys/fs/cgroup}"
 LIMITS_JSON="${APERTURE_LIMITS_JSON:-$SB_SCRIPTS/limits.json}"
+# The sampler singleton (one per container) and where it records its pid; tests point both elsewhere.
+SAMPLER_LOCK="${APERTURE_SAMPLER_LOCK:-/tmp/aperture-sampler.lock}"
+SAMPLER_PID="${APERTURE_SAMPLER_PID:-/tmp/aperture-sampler.pid}"
 
 sb_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 sb_today() { date -u +%Y-%m-%d; }
@@ -59,7 +62,32 @@ sb_stat() {
   printf '%s %s\n' "$2" "${20}"
 }
 sb_comm() { local c; read -r c 2>/dev/null <"/proc/$1/comm" && printf '%s' "$c"; }
-sb_alive() { local want="$2" ps st; read -r ps st < <(sb_stat "$1") || return 1; [ -z "$want" ] || [ "$st" = "$want" ]; }
+# $1 is alive — and, given $2, started at that tick (else the pid was reused). A zombie (`Z`, exited but never
+# reaped — a wrapper's `cmd & exec …` leaves one) or a dead process (`X`) still has a readable stat: not alive.
+sb_alive() {
+  local want="${2:-}" s r
+  read -r s 2>/dev/null <"/proc/${1:-0}/stat" || return 1
+  r=${s##*) }
+  set -- $r
+  case "$1" in Z|X) return 1 ;; esac
+  [ -z "$want" ] || [ "${20}" = "$want" ]
+}
+
+# --- heavy slots: one liveness rule, read-only ---
+# A slot file whose wrapper (heavy.sh's pid + start tick) is alive. Every count goes through this — board_json,
+# the sampler's tick, the guard, gc — so a dead job's slot is never a running job, whoever reads first. Nothing
+# here deletes: only gc and the acquire do.
+sb_slot_live() {
+  local wp ws
+  read -r wp ws < <(jq -r '"\(.wrapperPid) \(.wrapperStart)"' "$1" 2>/dev/null)
+  sb_alive "$wp" "$ws"
+}
+# The live slot files, one path per line.
+sb_live_slots() {
+  local f
+  for f in "$BOARD_DIR"/leases/heavy/*.json; do [ -e "$f" ] && sb_slot_live "$f" && printf '%s\n' "$f"; done
+  return 0
+}
 
 # One TSV line per process: pid ppid comm threads rssPages cpuTicks [args]. Builtins only — no fork per
 # process. `$1 = args` adds the first 3 cmdline args (≤200 chars); without it the column is empty.
