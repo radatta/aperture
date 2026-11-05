@@ -100,24 +100,28 @@ export function useAddToDay(day?: string) {
     };
     try {
       // Fresh, not cached: a stale status could send a task started elsewhere back to the backlog.
-      const fresh = (await api.getTask(task.id)) ?? task;
+      const [fresh, today] = await Promise.all([api.getTask(task.id), resolveDay()]);
       // The sweep never touches in_progress, so that move is explicit (and safe to do first).
-      if (opts.fromInProgress && fresh.status === 'in_progress') await move(fresh, 'backlog');
-      if (plan.day === (await resolveDay())) {
+      if (opts.fromInProgress && (fresh ?? task).status === 'in_progress')
+        await move(fresh ?? task, 'backlog');
+      if (plan.day === today) {
         await remove();
         // getDay(today) sweeps a planned task with no row today or later to backlog, and leaves one
         // that's planned ahead alone. Fetched with its own queryFn, so useDay's cascade doesn't run;
-        // the one refetch after it is for what the sweep moved.
-        await qc.fetchQuery({
-          queryKey: qk.day(plan.day),
-          queryFn: () => api.getDay(plan.day),
-          staleTime: 0,
-        });
+        // the one refetch after it is for what the sweep moved. Best effort: the row is gone, so a
+        // failed read is no failed unplan — the day query is marked stale and its next read sweeps.
+        await qc
+          .fetchQuery({
+            queryKey: qk.day(plan.day),
+            queryFn: () => api.getDay(plan.day),
+            staleTime: 0,
+          })
+          .catch(() => qc.invalidateQueries({ queryKey: qk.day(plan.day) }));
         await invalidateTaskData(qc);
       } else {
         // Not today's row, so no sweep to lean on: the status move is explicit. Status first — a task
         // planned on two days keeps its status once its other row is gone (backlog → backlog throws).
-        if (fresh.status === 'planned') await move(fresh, 'backlog');
+        if ((fresh ?? task).status === 'planned') await move(fresh ?? task, 'backlog');
         await remove();
       }
     } finally {

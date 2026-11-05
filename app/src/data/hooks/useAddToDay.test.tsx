@@ -135,6 +135,21 @@ describe('useAddToDay', () => {
     expect(await plansFor(api, day)).toHaveLength(1);
   });
 
+  it('a failed sweep read after the removal is no failed unplan: the row is gone, the day marked stale', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const day = todayKey(4);
+    const t = await api.createTask({ title: 'c' });
+    const row = await api.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+    const planned = await api.transitionTask(t.id, 'planned');
+    api.getDay = () => Promise.reject(new Error('blip'));
+
+    await act(async () => void (await hook.result.current.unplan(row, planned)));
+
+    expect(await plansFor(api, day)).toHaveLength(0);
+    expect((await api.getTask(t.id))?.status).toBe('planned'); // the next getDay sweeps it
+  });
+
   it('a retry repairs a half-done add: row written, transition lost', async () => {
     const { api, hook } = setup();
     await ready(hook);

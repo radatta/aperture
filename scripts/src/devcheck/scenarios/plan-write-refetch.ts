@@ -4,12 +4,11 @@
 // against the real server: the timer's stop lands first, and when the unplan then fails (removePlan 500,
 // injected by the harness) the stopped minutes stay, a fresh timer runs, and the row is back. The exact refetch
 // counts are the hook test's. Tasks come from the API (ledgered); the two timers are stopped by the rows
-// themselves, and a teardown stops one a failed step left running, then deletes the tasks so later scenarios
-// find the Backlog as they left it (day-guards does the same).
+// themselves. The last step deletes the tasks so later scenarios find the Backlog as they left it (day-guards
+// does the same); a failed step skips it, and a timer left running is then timer-credit's clearTimers to clear.
 import type { DevSession, DevTask } from '../api';
-import type { PwRequest } from '../pw-types';
+import type { PwRequest, PwResponse } from '../pw-types';
 import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
-import { clearTimers } from './failed-reads';
 
 const name = (ctx: Ctx, what: string) => `devcheck-pw ${ctx.nonce} ${what}`;
 const SAVE_FAILED = 'Couldn’t save that — try again.';
@@ -34,23 +33,43 @@ const statusOf = async (ctx: Ctx, task: DevTask) => (await ctx.api.reads.getTask
 const runningOn = async (ctx: Ctx, task: DevTask) =>
   (await ctx.api.reads.listRunningSessions()).filter((s) => s.taskId === task.id);
 
-// /api calls by method from now until the wire has been quiet for `quietMs`.
+// Served /api reads by method (200 responses, so a 429 the client retries counts once), from `arm()` until the
+// wire has been quiet for `quietMs`. The page's load burst — useDay's cascade refetches tasks and plans after
+// getDay lands — must be over before arming, so `quiet()` first, then `arm()`, then the tap.
 function countApi(ctx: Ctx) {
   const counts: Record<string, number> = {};
   let last = Date.now();
-  const on = (r: PwRequest) => {
-    const path = new URL(r.url()).pathname;
-    if (!path.startsWith('/api/')) return;
-    const method = path.slice('/api/'.length);
-    counts[method] = (counts[method] ?? 0) + 1;
-    last = Date.now();
+  let armed = false;
+  const methodOf = (url: string) => {
+    const path = new URL(url).pathname;
+    return path.startsWith('/api/') ? path.slice('/api/'.length) : null;
   };
-  ctx.page.on('request', on);
+  const requested = (r: PwRequest) => {
+    if (methodOf(r.url())) last = Date.now();
+  };
+  const responded = (res: PwResponse) => {
+    const method = methodOf(res.url());
+    if (!method) return;
+    last = Date.now();
+    if (armed && res.status() === 200) counts[method] = (counts[method] ?? 0) + 1;
+  };
+  ctx.page.on('request', requested);
+  ctx.page.on('response', responded);
+  const quiet = (quietMs: number) =>
+    until('the wire to go quiet', () => Date.now() - last > quietMs, 20_000);
   return {
+    quiet: (quietMs = 1_500) => quiet(quietMs),
+    arm() {
+      armed = true;
+    },
     async settle(quietMs = 1_500) {
-      await until('the wire to go quiet', () => Date.now() - last > quietMs, 20_000);
-      ctx.page.off('request', on);
-      ctx.log(`/api calls: ${JSON.stringify(counts)}`);
+      try {
+        await quiet(quietMs);
+      } finally {
+        ctx.page.off('request', requested);
+        ctx.page.off('response', responded);
+      }
+      ctx.log(`/api reads served: ${JSON.stringify(counts)}`);
       return (method: string) => counts[method] ?? 0;
     },
   };
@@ -125,6 +144,17 @@ export const planWriteRefetch: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'A second planned row keeps its order, minutes and status through the add and the unplan',
+    },
+    {
+      id: 'promote-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Focus on an “Also today” row promotes it: several plan rows written at once, each replaced in place in today’s list',
+      offDev: {
+        file: 'app/src/data/hooks/usePlans.test.tsx',
+        test: 'an upsert by id replaces the row in place; a remove drops it; each refetches once',
+        why: 'same path as add-once (proven on dev): the same upsertPlan write-through and plans refetch; what differs — several rows at once, each replaced by id — runs entirely in the named test',
+      },
     },
     {
       id: 'counts-exact',
@@ -221,6 +251,8 @@ export const planWriteRefetch: Scenario = {
         const add = addButton(ctx, made.A!);
         await add.waitFor({ state: 'visible', timeout: 15_000 });
         const counter = countApi(ctx);
+        await counter.quiet();
+        counter.arm();
         await add.click();
         const got = await counter.settle();
         const over = [
@@ -290,6 +322,8 @@ export const planWriteRefetch: Scenario = {
         const unplan = unplanButton(ctx, made.A!);
         await unplan.waitFor({ state: 'visible', timeout: 15_000 });
         const counter = countApi(ctx);
+        await counter.quiet();
+        counter.arm();
         await unplan.click();
         const got = await counter.settle();
         if (got('getDay') !== 1) throw new Error(`getDay ${got('getDay')} times, not once`);
@@ -454,9 +488,9 @@ export const planWriteRefetch: Scenario = {
     {
       id: 'teardown',
       entry: 'api',
-      title: 'A timer a failed step left running is stopped; the run’s tasks go (ledgered deletes)',
+      title:
+        'The run’s tasks go now (ledgered deletes), so the Backlog is as later scenarios expect',
       async run(ctx) {
-        await clearTimers(ctx);
         for (const task of Object.values(made)) await ctx.api.writes.deleteTask(task.id);
       },
     },

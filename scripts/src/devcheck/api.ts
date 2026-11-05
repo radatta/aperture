@@ -510,8 +510,9 @@ export function createApiClient({
       return call<DevTask>('transitionTask', [id, status]);
     },
     // A running work timer on a task this harness created, as the dock's Focus would start one. Sessions
-    // have no delete, so none is ledgered (failed-reads' ad-hoc timer, likewise): the scenario stops it
-    // through the UI, and its teardown clears one it left running (clearTimers), as every run's start does.
+    // have no delete, so none is ledgered (failed-reads' ad-hoc timer, likewise): the scenario's rows stop
+    // it through the UI; one a failed step leaves running is cleared through the dock by the next timer
+    // scenario's clearTimers (timer-credit, later in the run).
     async startSession(taskId: string, day: string): Promise<DevSession> {
       assertLedgerTask(taskId);
       return call<DevSession>('startSession', [

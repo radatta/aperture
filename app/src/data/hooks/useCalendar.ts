@@ -67,7 +67,7 @@ export function useInsertCalendarEvent() {
   return useMutation({
     mutationFn: (input: InsertCalendarEventInput) => api.insertCalendarEvent(input),
     onSuccess: (t: Task) => putTasks(qc, [t]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -78,7 +78,7 @@ export function useSyncCalendarEvent() {
   return useMutation({
     mutationFn: (taskId: string) => api.syncCalendarEvent(taskId),
     onSuccess: (t: Task) => putTasks(qc, [t]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
@@ -88,7 +88,7 @@ export function useDeleteCalendarEvent() {
   return useMutation({
     mutationFn: (taskId: string) => api.deleteCalendarEvent(taskId),
     onSuccess: (t: Task) => putTasks(qc, [t]),
-    onSettled: () => invalidateTaskData(qc),
+    onSettled: () => void invalidateTaskData(qc),
   });
 }
 
