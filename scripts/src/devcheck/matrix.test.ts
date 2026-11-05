@@ -224,6 +224,31 @@ describe('coverageOf', () => {
     expect(coverageOf(s, [res('d', 'pass'), res('v', 'skipped')])[0]!.status).toBe('skipped');
   });
 
+  it('a step that said needs-you makes its rows needs-you with the reason; a failed sibling still fails', () => {
+    const why = 'link the fixture bank';
+    const c = coverageOf(s, [
+      { ...res('d', 'needs-you'), note: why },
+      { ...res('v', 'needs-you'), note: why },
+    ]);
+    expect(c[0]).toMatchObject({
+      status: 'needs-you',
+      note: why,
+      provenBy: 'steps d (ui), v (api)',
+    });
+    expect(c[1]).toMatchObject({ status: 'needs-you', note: why });
+    // one proving step passed before another said so: still needs-you, not pass
+    expect(
+      coverageOf(s, [res('d', 'pass'), { ...res('v', 'needs-you'), note: why }])[0]!.status,
+    ).toBe('needs-you');
+    expect(
+      coverageOf(s, [res('d', 'fail'), { ...res('v', 'needs-you'), note: why }])[0]!.status,
+    ).toBe('fail');
+    // a step skipped for another reason (a failure earlier) leaves the row unproven, not needs-you
+    expect(
+      coverageOf(s, [res('d', 'skipped'), { ...res('v', 'needs-you'), note: why }])[0]!.status,
+    ).toBe('skipped');
+  });
+
   it('with no step results at all (setup failed) nothing is proven', () => {
     expect(coverageOf(s, []).map((x) => x.status)).toEqual([
       'skipped',

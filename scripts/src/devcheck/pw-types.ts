@@ -31,7 +31,11 @@ export interface PwLocator {
   inputValue(): Promise<string>;
   scrollIntoViewIfNeeded(opts?: { timeout?: number }): Promise<void>;
   count(): Promise<number>;
-  getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
+  locator(selector: string): PwLocator; // a CSS or `xpath=` selector under this one (an ancestor row too)
+  getByRole(
+    role: string,
+    opts?: { name?: string | RegExp; exact?: boolean; checked?: boolean },
+  ): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   // A <select>: by an option's visible label (what the user picks), never its value.
@@ -46,7 +50,10 @@ export interface PwPage {
   reload(opts?: { waitUntil?: 'load' | 'domcontentloaded' }): Promise<unknown>;
   url(): string;
   locator(selector: string): PwLocator;
-  getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
+  getByRole(
+    role: string,
+    opts?: { name?: string | RegExp; exact?: boolean; checked?: boolean },
+  ): PwLocator;
   getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   waitForURL(

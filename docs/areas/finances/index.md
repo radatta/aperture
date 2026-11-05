@@ -108,10 +108,16 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   closes the detail.
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
   loaded range reads as unlinked. Two refunds on one charge are fine; the cap applies across them.
+- A row in either list keeps the merchant (on a same-merchant suggestion, the bucket) on one line and puts the
+  bucket and "$X already refunded" on an xs line under it, so a phone cuts neither. After an **Unlink** that
+  leaves nothing else to focus (a card credit with no suggestions), focus goes to the Bucket group's checked
+  option — never the search box, which would raise the iPhone keyboard. Every app field is 16px or more
+  (`app/src/styles/fieldSize.test.ts` scans for one that isn't); the dev check proves the finance rows against
+  the fixture bank (`docs/ops/DEV-CHECK.md` → _One-time setup_ 3).
 
 ## 5. Rules
 
-"Always put *pattern* in *bucket*": a case-insensitive substring of the merchant; the longest active
+"Always put _pattern_ in _bucket_": a case-insensitive substring of the merchant; the longest active
 pattern wins (`applyRules`, also matched against the digit-stripped `merchantKey`). New rows get rules at
 sync time. Ticking **Always** while sorting saves the rule and sorts every currently-unsorted match (skipping
 linked refunds and period marks). A rule never re-sorts a charge you sorted by hand. A rule can target Not
@@ -144,6 +150,7 @@ Right after a link, a not-ready Plaid is polled until history arrives; never rea
 `PRODUCT_NOT_READY` rather than "synced with nothing".
 
 **Timing budget** (the one home for these numbers):
+
 - Lambda timeout 300 s − `RUN_SAFETY_MS` 10 s = the 290 s deadline, capped at `RUN_BUDGET_MS` 290 s, under
   the 300 s lock.
 - One Plaid call's worst case `PLAID_CALL_MAX_MS` = 3 × 10 s + backoff = 31.5 s → `STEP_MAX_MS` 35 s; no
@@ -214,6 +221,7 @@ overview in a mocked client), and a re-link reuses the fixture ids.
 ## 10. Plaid facts we rely on
 
 Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_by_id`.
+
 - **Trial:** 10 Production Items, `/item/remove` doesn't free one, no time limit, never auto-converts;
   compliance registration waived until upgrade. The account can be deactivated after 3 months unused —
   the schedule keeps it active. Production approved 2026-09-26.
@@ -272,9 +280,9 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **Disabling, least to most:**
   1. Flip a mis-signed account.
   2. Disable the schedule: `aws scheduler update-schedule --region us-west-1 --group-name
-     aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED --schedule-expression 'cron(15 5,15,20 * * ? *)'
-     --schedule-expression-timezone America/Los_Angeles --flexible-time-window Mode=OFF --target
-     '<Target JSON from get-schedule>'`. This drifts from CloudFormation — a later deploy that touches the
+aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED --schedule-expression 'cron(15 5,15,20 * * ? *)'
+--schedule-expression-timezone America/Los_Angeles --flexible-time-window Mode=OFF --target
+'<Target JSON from get-schedule>'`. This drifts from CloudFormation — a later deploy that touches the
      schedule may re-enable it.
   3. Delete the two credential parameters (warm Lambdas keep the cached ones until they recycle).
   4. Remove the bank in the app — revokes at Plaid, deletes the token, tombstones the rows; the slot stays
@@ -296,16 +304,16 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
 - **MCP** (`lambdas/src/mcp/financeTools.test.ts`, `index.test.ts`): the read-only tools match the page
   and never reach Plaid. See [mcp/](../mcp/index.md).
 
-| Where | What |
-| --- | --- |
-| `packages/shared/src/finance.ts`, `financeFixtures.ts`, `plaidTypes.ts` | types, the pure logic, fixtures |
-| `app/src/pages/Finances/`, `app/src/modules/finances/` | the page, tabs, detail, sync watch, Link |
-| `app/src/data/stubClient.ts`, `app/src/data/hooks/useFinances.ts` | the stub; queries + mutations |
-| `lambdas/src/finance/` (`service.ts`, `sync.ts`, invokers) | the RPC methods and the sync |
-| `lambdas/src/financeSync.ts` | the sync Lambda's entry |
-| `lambdas/src/plaid/` (`gateway.ts`, `livePlaid.ts`) | the Plaid seam |
-| `lambdas/src/mcp/financeTools.ts` | the read-only MCP tools |
-| `cdk/src/lib/finance-sync.ts`, `app-stack.ts`, `monitoring.ts` | the function, schedule, IAM, alarms |
+| Where                                                                   | What                                     |
+| ----------------------------------------------------------------------- | ---------------------------------------- |
+| `packages/shared/src/finance.ts`, `financeFixtures.ts`, `plaidTypes.ts` | types, the pure logic, fixtures          |
+| `app/src/pages/Finances/`, `app/src/modules/finances/`                  | the page, tabs, detail, sync watch, Link |
+| `app/src/data/stubClient.ts`, `app/src/data/hooks/useFinances.ts`       | the stub; queries + mutations            |
+| `lambdas/src/finance/` (`service.ts`, `sync.ts`, invokers)              | the RPC methods and the sync             |
+| `lambdas/src/financeSync.ts`                                            | the sync Lambda's entry                  |
+| `lambdas/src/plaid/` (`gateway.ts`, `livePlaid.ts`)                     | the Plaid seam                           |
+| `lambdas/src/mcp/financeTools.ts`                                       | the read-only MCP tools                  |
+| `cdk/src/lib/finance-sync.ts`, `app-stack.ts`, `monitoring.ts`          | the function, schedule, IAM, alarms      |
 
 ## 14. Known limits and deferred
 

@@ -267,7 +267,7 @@ function NewFocus({
         onKeyDown={(e) => e.key === 'Enter' && start()}
         placeholder="New focus…"
         aria-label="New focus label"
-        className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 py-1 text-sm text-ink outline-none focus:border-teal"
+        className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-2 py-1 text-ink outline-none focus:border-teal"
       />
       <Button size="sm" onClick={start}>
         Start

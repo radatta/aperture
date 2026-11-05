@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FINANCE_BUCKET_VIA,
+  FINANCE_LINK_VIA,
+  FINANCE_RULE_VIA,
   FLUX_SET_VIA,
   PLACE_TOKEN_VIA,
   type ApiClient,
+  type DevFinanceRule,
+  type DevFinanceTransaction,
   type DevFluxSet,
   type DevPlace,
   type DevTask,
@@ -12,7 +17,7 @@ import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
 import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
-import { hidingSecret, type Ctx, type Scenario } from './scenario';
+import { hidingSecret, needsYou, type Ctx, type Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
 const shell = (sha: string) => `<meta name="aperture-build" content="${sha}" />`;
@@ -39,6 +44,14 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const places = new Map<string, DevPlace>();
   const placesDeleted: string[] = [];
   const placeToken = { active: false, revokes: 0 };
+  // The fixture bank's rows and the run's rules: cleanup clears a bucket / a link, deletes a rule.
+  const finance = {
+    rows: new Map<string, DevFinanceTransaction>(),
+    rules: new Map<string, DevFinanceRule>(),
+    unset: [] as string[],
+    unlinked: [] as string[],
+    rulesDeleted: [] as string[],
+  };
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
   const consoleListeners: ((m: { type(): string; text(): string }) => void)[] = [];
@@ -186,6 +199,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       placeDigestRaw: async () => {
         throw new Error('unused');
       },
+      getFinanceOverview: async () => {
+        throw new Error('unused');
+      },
+      listFinanceTransactions: async () => [...finance.rows.values()],
+      getFinanceTransaction: async (id) => finance.rows.get(id) ?? null,
+      listFinanceRules: async () => [...finance.rules.values()],
     },
     writes: {
       createTask: async () => {
@@ -228,6 +247,29 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         placeToken.revokes++;
         placeToken.active = false;
       },
+      recordFinanceBucket: () => {
+        throw new Error('unused');
+      },
+      recordFinanceLink: () => {
+        throw new Error('unused');
+      },
+      unsetFinanceBucket: async (id) => {
+        finance.unset.push(id);
+        const row = finance.rows.get(id.split(':')[2]!);
+        if (row) row.bucket = null;
+      },
+      unlinkFinanceRefund: async (id) => {
+        finance.unlinked.push(id);
+        const row = finance.rows.get(id.split(':')[2]!);
+        if (row) row.refundOfId = null;
+      },
+      upsertFinanceRule: async () => {
+        throw new Error('unused');
+      },
+      deleteFinanceRule: async (id) => {
+        finance.rulesDeleted.push(id);
+        finance.rules.delete(id);
+      },
     },
   };
   const shells = [...(opts.shells ?? [shell(SHA)])];
@@ -259,6 +301,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     places,
     placesDeleted,
     placeToken,
+    finance,
     uiCreate,
     uiPlace,
     respond,
@@ -950,5 +993,107 @@ describe('runPipeline', () => {
     expect(next).toBe('real');
     expect(w.routes).toHaveLength(0);
     expect(r.steps.map((s) => s.status)).toEqual(['fail', 'pass']);
+  });
+
+  it('a step that says needs-you leaves the run green: it and the rest of its scenario read needs-you, the rows too', async () => {
+    const w = world();
+    let ran = 0;
+    const sc: Scenario = {
+      id: 'fin',
+      title: 'fin',
+      tiers: ['full'],
+      rows: [
+        { id: 'a', entry: 'api', kind: 'nominal', what: 'a' },
+        { id: 'b', entry: 'api', kind: 'nominal', what: 'b' },
+      ],
+      steps: [
+        { id: 'setup', title: 'setup', entry: 'api', run: async () => void ran++ },
+        {
+          id: 'fixture',
+          title: 'fixture',
+          entry: 'api',
+          proves: ['a'],
+          run: async () => needsYou('link the fixture bank'),
+        },
+        {
+          id: 'rows',
+          title: 'rows',
+          entry: 'api',
+          proves: ['a', 'b'],
+          run: async () => void ran++,
+        },
+      ],
+    };
+    const after = scenario(async () => void ran++)(w); // the next scenario still runs
+    const r = await runPipeline(deps(w, [sc, after]));
+    expect(ran).toBe(2);
+    expect(r.status).toBe('PASS');
+    expect(r.codes).toEqual([]);
+    expect(r.failures).toEqual([]);
+    expect(r.steps.map((s) => [s.step, s.status, s.note])).toEqual([
+      ['setup', 'pass', undefined],
+      ['fixture', 'needs-you', 'link the fixture bank'],
+      ['rows', 'needs-you', 'link the fixture bank'],
+      ['s0', 'pass', undefined],
+    ]);
+    expect(r.steps[1]!.error).toBeUndefined();
+    expect(r.steps[1]!.shot).toBeUndefined();
+    expect(r.coverage.map((x) => [x.row, x.status, x.note])).toEqual([
+      ['a', 'needs-you', 'link the fixture bank'],
+      ['b', 'needs-you', 'link the fixture bank'],
+    ]);
+  });
+
+  it('a bucket, a link and a rule in the ledger are cleared their own way, and an earlier run’s swept', async () => {
+    const w = world();
+    const row = (id: string, over: Partial<DevFinanceTransaction>): DevFinanceTransaction => ({
+      id,
+      accountId: 'acct',
+      date: '2026-11-01',
+      name: `DEVCHECK ${id}`,
+      merchantName: null,
+      rawAmountCents: 100,
+      bucket: null,
+      refundOfId: null,
+      ...over,
+    });
+    w.finance.rows.set('tx1', row('tx1', { bucket: 'budget' }));
+    w.finance.rows.set('tx2', row('tx2', { refundOfId: 'c' }));
+    w.finance.rows.set('tx3', row('tx3', { bucket: 'i_pay' }));
+    w.finance.rules.set('R1', { id: 'R1', pattern: 'devcheck', bucket: 'budget' });
+    const ledger = memLedger([
+      { run: 'run0', op: 'created', id: 'finance-bucket:run0:tx3', via: FINANCE_BUCKET_VIA },
+    ]);
+    const sc = scenario(async () => {
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-bucket:run1:tx1',
+        via: FINANCE_BUCKET_VIA,
+      });
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-link:run1:tx2',
+        via: FINANCE_LINK_VIA,
+      });
+      ledger.append({ run: 'run1', op: 'created', id: 'R1', via: FINANCE_RULE_VIA });
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.swept).toEqual(['finance-bucket:run0:tx3']);
+    expect(w.finance.unset).toEqual(['finance-bucket:run0:tx3', 'finance-bucket:run1:tx1']);
+    expect(w.finance.unlinked).toEqual(['finance-link:run1:tx2']);
+    expect(w.finance.rulesDeleted).toEqual(['R1']);
+    expect([...w.finance.rows.values()].map((t) => [t.bucket, t.refundOfId])).toEqual([
+      [null, null],
+      [null, null],
+      [null, null],
+    ]);
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['finance-bucket:run1:tx1', 'deleted'],
+      ['finance-link:run1:tx2', 'deleted'],
+      ['R1', 'deleted'],
+    ]);
+    expect(r.status).toBe('PASS');
   });
 });

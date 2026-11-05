@@ -148,7 +148,7 @@ function RuleRow({ rule }: { rule: FinanceRule }) {
             active: rule.active,
           })
         }
-        className="rounded-xl border border-line bg-surface px-2 py-1 text-sm text-ink outline-none focus:border-teal"
+        className="rounded-xl border border-line bg-surface px-2 py-1 text-ink outline-none focus:border-teal"
       >
         {BUCKET_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>
