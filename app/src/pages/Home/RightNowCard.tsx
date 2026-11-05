@@ -178,7 +178,8 @@ export function RightNowCard() {
       <div className="flex flex-col gap-3">
         {hero ? (
           <Hero task={hero}>
-            <Text size="lg" weight="semibold" className="truncate">
+            {/* Two lines, like a task card's title (PR 101): one line cut a phone-width hero short. */}
+            <Text size="lg" weight="semibold" className="line-clamp-2 break-words">
               {hero.title}
             </Text>
             <div className="flex flex-wrap items-center gap-2">
