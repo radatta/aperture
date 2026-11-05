@@ -28,6 +28,7 @@ export interface PwLocator {
   isDisabled(): Promise<boolean>;
   isChecked(): Promise<boolean>;
   nth(index: number): PwLocator;
+  filter(opts: { hasText?: string | RegExp }): PwLocator;
   getAttribute(name: string): Promise<string | null>;
   boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null>;
   or(other: PwLocator): PwLocator;

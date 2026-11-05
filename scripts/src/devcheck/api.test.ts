@@ -16,6 +16,8 @@ import {
   UI_PLACE_VIA,
   UI_PUSH_SUB_VIA,
   UI_SERIES_VIA,
+  harnessPushId,
+  isHarnessPushId,
   createApiClient,
   financeRowOf,
   isGone,
@@ -106,6 +108,7 @@ describe('createApiClient', () => {
       'recordFluxSet',
       'recordPlaceTokenMint',
       'recordReminderToggles',
+      'removeHarnessStray',
       'removePlan',
       'restoreReminderToggles',
       'revokePlaceToken',
@@ -116,6 +119,7 @@ describe('createApiClient', () => {
       'setDayIntent',
       'setReminderSettings',
       'setTaskActual',
+      'setTaskDue',
       'startSession',
       'stopSession',
       'subscribePush',
@@ -730,6 +734,44 @@ describe('createApiClient', () => {
         'pushsub',
         'reminderToggles',
       ]);
+    });
+
+    it('removes a harness device by its fixed-slot id — recorded first — and refuses any other', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      const id = harnessPushId('e2e');
+      expect(id).toMatch(/^[0-9a-f]{16}$/);
+      await api.writes.removeHarnessStray(id, 'Devcheck A x');
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'created', id, via: PUSH_SUB_VIA, title: 'stray Devcheck A x' },
+      ]);
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/unsubscribePush`,
+        expect.objectContaining({ body: JSON.stringify({ args: [id] }) }),
+      );
+      await expect(api.writes.removeHarnessStray('0123456789abcdef', 'iPhone')).rejects.toThrow(
+        /not one of the harness's fixed endpoints/,
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(isHarnessPushId(harnessPushId('banner'))).toBe(true);
+    });
+
+    it('re-dates only a task this harness created', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, { id: 'T1', title: 'x' }));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await expect(api.writes.setTaskDue('T9', { dueDay: '2026-11-05' })).rejects.toThrow(
+        /never recorded/,
+      );
+      await api.writes.createTask({ title: 'x' });
+      await api.writes.setTaskDue('T1', { dueDay: '2026-11-05', dueTime: '10:00' });
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/setTaskDue`,
+        expect.objectContaining({
+          body: JSON.stringify({ args: ['T1', { dueDay: '2026-11-05', dueTime: '10:00' }] }),
+        }),
+      );
     });
 
     it('restoring the toggles records nothing new, and needs some run to have flipped them', async () => {

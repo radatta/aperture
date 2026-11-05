@@ -151,6 +151,33 @@ describe('RFC 8292 VAPID', () => {
     expect(claims.exp).toBeLessThanOrEqual(NOW / 1000 + 24 * 3600);
   });
 
+  it('signs with a key whose first octet is zero (the JWK takes the validated 32 octets)', () => {
+    // A key whose first octet is zero (1 in 256): getPrivateKey may hand back 31 octets for it.
+    const zeroLed = (): string => {
+      for (;;) {
+        const e = createECDH('prime256v1');
+        e.generateKeys();
+        const raw = e.getPrivateKey();
+        const full = Buffer.concat([Buffer.alloc(32 - raw.length), raw]);
+        if (full[0] === 0) return full.toString('base64url');
+      }
+    };
+    const priv = zeroLed();
+    const v = parse(vapidAuthorization(endpoint, priv, 'https://aperture.example', NOW));
+    const pub = bytes(v.k);
+    const key = createPublicKey({
+      format: 'jwk',
+      key: {
+        kty: 'EC',
+        crv: 'P-256',
+        x: pub.subarray(1, 33).toString('base64url'),
+        y: pub.subarray(33, 65).toString('base64url'),
+      },
+    });
+    const signed = Buffer.from(`${v.h}.${v.c}`);
+    expect(verify('sha256', signed, { key, dsaEncoding: 'ieee-p1363' }, bytes(v.s))).toBe(true);
+  });
+
   it('derives the public key from a stored private key, refusing one that is not P-256', () => {
     const e = createECDH('prime256v1');
     e.generateKeys();

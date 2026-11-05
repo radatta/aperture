@@ -27,8 +27,9 @@ export interface PushDispatchProps {
 // The reminder poller (lambdas/src/pushDispatch.ts, reminders.md): every minute, EventBridge Scheduler
 // invokes it to send what's due as Web Push. No Function URL — it never serves HTTP — and no user id in
 // its input: it ticks over the push registry. The only holder of the VAPID private key. Cost bound
-// (INFRA §11): steady ≈ 43,200 × ~0.3 s × 0.25 GB a month; a tick stuck at its timeout every minute ≈
-// $0.12/day of compute, sends capped by the per-user daily guard.
+// (INFRA §11, reminders.md §5): steady ≈ 43,200 × ~0.3 s × 0.25 GB a month (free tier; ≈ $0.04/mo, mostly
+// DynamoDB); a tick stuck at its timeout every minute ≈ 7,200 GB-s ≈ $0.12/day of compute (≈ $0.15/day with
+// DynamoDB and logs), sends capped by the per-user daily guard.
 export class PushDispatch extends Construct {
   readonly fn: NodejsFunction;
 

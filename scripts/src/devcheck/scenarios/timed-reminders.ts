@@ -1,27 +1,35 @@
 // Timed reminders — Web Push from the push-dispatch poller (docs/areas/tasks/reminders.md). The deployed
 // schedule is the engine: nothing here invokes the poller, so every send this scenario sees came from a real
-// tick on dev. The end-to-end proof subscribes a device with a real P-256 key pair on an Apple endpoint that
-// was never issued (`devcheck-e2e`) and makes a task due at the next LA minute — armed before it fires, as the
-// poller requires (§3); the first tick past it encrypts, signs and POSTs it, and Apple's refusal comes back on
-// the health line — the one malformed POST to Apple a run makes (plan Q7, approved). Settings' Send test is
-// clicked between the last tick before that minute and the first after it, so both ride that one tick: one
-// notification, one POST (asserted). Every other device carries keys no push service could use, so the
-// poller drops it at encrypt time without a request (dispatch.ts — the keys outcome), and a device Enable
-// manages to subscribe here is removed in the same step. The cheap UI rows run first; the two waits for the
-// poller end the scenario, and nothing reads their results.
+// tick on dev. The cheap rows run first and depend on no tick. The two that do form one chain at the end,
+// each fuse lit where it's waited on, so the chain can defer as a whole:
+//   Send test → its tick drops C, a device whose keys no push service takes (no request at all) — then a
+//   task due at the minute after the next tick, and A, a device with a real P-256 key pair on an Apple
+//   endpoint that was never issued (`devcheck-e2e`), subscribed well before that minute so it's armed in time
+//   (§3); the reminder's tick encrypts, signs and POSTs to A — the one malformed POST to Apple a run makes
+//   (plan Q7, approved) — and Apple's refusal comes back on the health line. A goes the moment it's read.
+// Batching a reminder and a test into one notification is a unit test only (Rahul, review round 3).
 //
-// Devices use fixed endpoints (`devcheck-e2e`, `-b`, `-c`, `-r`), so their ids repeat run to run: a
-// re-subscribe revives last run's tombstone instead of adding one (the ledger reads an id created again as
-// pending again — ledger.ts pendingIds). They're ledgered from the server's answer (api.ts, or the browser's
-// subscribePush response via recorder.ts) and removed by id. The reminder toggles are recorded as
-// `reminder-toggles:<run>` before any flip, so cleanup switches them back on whatever happens. "Removed from
-// another device" is proven on a device subscribed and removed through the API, its id seeded as this
-// browser's opt-in (headless Chromium can't subscribe itself). Titles are `devcheck-rm <nonce> …` — the
-// parts scenarios sweep `devcheck <nonce>`. The rows are the plan's dev-test matrix (localNotes/plan.md §5 E),
-// with the removal rule (PushStatus.removedDeviceIds) and the armed-before-it-fires rule.
+// Devices sit on fixed endpoints (api.ts HARNESS_PUSH_SLOTS), so their ids repeat run to run: a re-subscribe
+// revives last run's tombstone instead of adding one (the ledger reads an id created again as pending again —
+// ledger.ts pendingIds), and a live one is known as the harness's even when the ledger missed it. They're
+// ledgered from the server's answer (api.ts, or the browser's subscribePush response via recorder.ts) and
+// removed by id. The reminder toggles are recorded as `reminder-toggles:<run>` before any flip, so cleanup
+// switches them back on whatever happens. This browser's opt-in and its launch-resync error are seeded in
+// localStorage where a row needs them (headless Chromium reads notification permission as denied, so it can't
+// subscribe itself, and the launch resync — which only runs when permission is granted — never touches
+// them). Titles are `devcheck-rm <nonce> …` — the parts scenarios sweep `devcheck <nonce>`. The rows are the
+// plan's dev-test matrix (localNotes/plan.md §5 E), with the removal rule and the armed-before-it-fires rule.
 import { createECDH, randomBytes } from 'node:crypto';
-import type { DevPushDevice, DevPushStatus, DevSubscribePushInput, DevTask } from '../api';
-import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import {
+  harnessPushEndpoint,
+  harnessPushId,
+  isHarnessPushId,
+  type DevPushDevice,
+  type DevPushStatus,
+  type DevSubscribePushInput,
+  type DevTask,
+} from '../api';
+import { laDay, needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 // packages/shared/src/reminders.ts PUSH_ENDPOINT_ERROR (scripts doesn't depend on shared).
 const PUSH_ENDPOINT_ERROR = "That push endpoint isn't a known push service";
@@ -30,15 +38,15 @@ const TICK_MS = 60_000;
 const TICK_WAIT_MS = 150_000;
 // Server and harness clocks differ by a little; a stamp this much before a moment still counts as after it.
 const CLOCK_SLACK_MS = 5_000;
-// Send test is clicked only this far ahead of the next tick, so the click's request lands before it.
-const CLICK_MARGIN_MS = 12_000;
-// The end-to-end task is due at a minute boundary at least this far ahead: created (armed) before it fires.
-const ARM_LEAD_MS = 10_000;
+// A is subscribed at least this long before the reminder's minute (it and the registry row arm it in time).
+const A_LEAD_MS = 10_000;
+// The reminder is due at a minute boundary at least this far past the tick that takes the test, so A has
+// time to subscribe between the two.
+const PING_LEAD_MS = 25_000;
 
 const title = (ctx: Ctx, what: string) => `devcheck-rm ${ctx.nonce} ${what}`;
 const label = (ctx: Ctx, which: string) => `Devcheck ${which} ${ctx.nonce}`;
-// Fixed per slot, so a device's id (a hash of its endpoint) repeats run to run (see the header).
-const endpoint = (slot: 'e2e' | 'b' | 'c' | 'r') => `https://web.push.apple.com/devcheck-${slot}`;
+const endpoint = harnessPushEndpoint;
 const linkTo = (id: string) => `/tasks?lens=today&task=${id}&n=${id}`;
 
 // "HH:MM" of `d` on the LA clock — with laDay, the deadline a task due this minute has.
@@ -113,27 +121,16 @@ export function e2eOutcome(
   if (kept) return { ok: true, how: `Apple answered ${kept[1]}: the device carries the error` };
   return { ok: false, why: `unexpected outcome: ${JSON.stringify({ device, poller: s.poller })}` };
 }
-// Both the end-to-end device's refusal and C's drop are entries of ONE health-line error: they came from one
-// tick, so the reminder and the test went as one notification — one POST to Apple.
-export function sameTick(s: DevPushStatus, deviceLabel: string, cLabel: string): boolean {
-  const errs = errorsOf(s);
-  return (
-    errs.some((e) => e.startsWith(droppedForKeys(cLabel))) &&
-    errs.some(
-      (e) => e.startsWith(`${deviceLabel} stopped accepting`) || e.startsWith(`${deviceLabel}: `),
-    )
-  );
-}
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Steps share what earlier ones made; a failed step skips the rest, so these are set when read.
-let fireAt = 0; // the end-to-end task's fire time: a minute boundary after it was made
+let fireAt = 0; // the reminder's fire time: a minute boundary past the tick that takes the test
 let ping: DevTask; // the end-to-end reminder
+let linked: DevTask; // the tap-through's task
 let deviceA: DevPushDevice; // the end-to-end device (real keys, Apple)
 let deviceB: DevPushDevice; // removed in Settings
 let deviceC: DevPushDevice; // the one device left for Send test
 let testAt = 0; // just before Send test was clicked
-let batched = false; // the click landed before the tick that sends the reminder
 let deviceR: DevPushDevice; // "this browser's" device, removed by the API as if from another device
 
 // The server (or the page) catches up: the poller's tick, a save the page already showed.
@@ -183,7 +180,7 @@ export const timedReminders: Scenario = {
       id: 'api-e2e',
       entry: 'api',
       kind: 'nominal',
-      what: 'A device with real keys and a task due at the next minute → the first tick past it encrypts, signs and POSTs it, and the push service’s answer lands on the health line (Apple refuses a never-issued endpoint: 404/410 drops the device, 400/403 marks it)',
+      what: 'A device with real keys and a task due in a couple of minutes → the first tick past it encrypts, signs and POSTs it, and the push service’s answer lands on the health line (Apple refuses a never-issued endpoint: 404/410 drops the device, 400/403 marks it)',
     },
     {
       id: 'api-ssrf',
@@ -231,7 +228,7 @@ export const timedReminders: Scenario = {
       id: 'ui-send-test',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Send test says “Sending within a minute…”, and the next tick acts on it — batched with a reminder due in that tick when there is one (one notification per device)',
+      what: 'Send test says “Sending within a minute…”, and the next tick sends it to the one device there',
     },
     {
       id: 'ui-enable',
@@ -282,6 +279,23 @@ export const timedReminders: Scenario = {
         test: 'never a done, cancelled or deleted task — the stale index row is re-read',
         why: 'dev could show it only by finishing a task and waiting out a tick for a silence; kept off dev to hold the run’s time (Rahul, review round 2)',
       },
+    },
+    {
+      id: 'batching',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Several reminders in one tick — a test among them — go as one notification to each device',
+      offDev: {
+        file: 'lambdas/src/push/dispatch.test.ts',
+        test: 'one notification per device: a batch goes to each of them once',
+        why: 'riding a reminder and a test on one dev tick needs a timed wait for the tick; a unit test only (Rahul, review round 3)',
+      },
+    },
+    {
+      id: 'ui-home-banner',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'When reminders couldn’t refresh on this device, Home says so with a link to Settings; Dismiss hides it, and it stays hidden after a reload',
     },
     {
       id: 'armed-late',
@@ -504,6 +518,41 @@ export const timedReminders: Scenario = {
       },
     },
     {
+      id: 'api-endpoints',
+      entry: 'api',
+      proves: ['api-ssrf', 'api-same-endpoint'],
+      title: 'evil.example is refused and writes nothing; the same endpoint twice is one device',
+      async run(ctx) {
+        const before = await status(ctx);
+        if (!before.configured) throw new Error('reminders aren’t set up on dev (no VAPID key)');
+        const refused = await ctx.api.writes.subscribePushExpectingRefusal({
+          endpoint: 'https://evil.example/x',
+          keys: pushKeys(),
+          label: label(ctx, 'evil'),
+        });
+        if (refused !== PUSH_ENDPOINT_ERROR) throw new Error(`refused with “${refused}”`);
+        if (JSON.stringify((await status(ctx)).devices) !== JSON.stringify(before.devices))
+          throw new Error('the refused subscribe changed the device list');
+        // Its own slot, with keys no push service takes: nothing can ever be sent to it.
+        const first = await ctx.api.writes.subscribePush({
+          endpoint: endpoint('dup'),
+          keys: UNUSABLE_KEYS,
+          label: `${label(ctx, 'D')} first`,
+        });
+        const again = await ctx.api.writes.subscribePush({
+          endpoint: endpoint('dup'),
+          keys: UNUSABLE_KEYS,
+          label: label(ctx, 'D'),
+        });
+        if (again.id !== first.id)
+          throw new Error(`two devices for one endpoint: ${first.id}, ${again.id}`);
+        const mine = (await status(ctx)).devices.filter((d) => d.id === first.id);
+        if (mine.length !== 1 || mine[0]!.label !== label(ctx, 'D'))
+          throw new Error(`the server lists ${JSON.stringify(mine)}`);
+        await ctx.api.writes.unsubscribePush(first.id);
+      },
+    },
+    {
       id: 'stage-remove',
       entry: 'api',
       title: 'A device no push service could use, to remove in Settings',
@@ -573,11 +622,7 @@ export const timedReminders: Scenario = {
            localStorage.setItem('aperture.push.enabledAt', String(Date.now() - 60000));`,
         );
         await ctx.page.reload({ waitUntil: 'domcontentloaded' });
-        const note = ctx.page
-          .getByRole('status')
-          .getByText('Removed from another device — tap Enable to turn reminders back on here.', {
-            exact: true,
-          });
+        const note = ctx.page.getByRole('status').getByText(/^Removed from another device —/); // worded for what this browser can do next
         await note.waitFor({ state: 'visible', timeout: 15_000 });
         const optIn = await ctx.page.evaluate<string | null>(
           `localStorage.getItem('aperture.push.enabled')`,
@@ -594,75 +639,76 @@ export const timedReminders: Scenario = {
       },
     },
     {
-      id: 'arm',
-      entry: 'api',
-      proves: ['api-e2e', 'api-ssrf', 'api-same-endpoint'],
+      id: 'ui-home-banner',
+      entry: 'ui',
+      proves: ['ui-home-banner'],
       title:
-        'Toggles on; evil.example refused; a task due at the next LA minute; a real-keyed Apple device subscribed twice is one; C for Send test',
+        'A failed launch resync: Home says so and links to Settings; Dismiss holds across a reload',
       async run(ctx) {
-        const st = await ctx.api.reads.getSettings();
-        if (!st.remindTimed || !st.remindDueDay || !st.remindPlanned)
-          throw new Error(`a reminder toggle is off before the run: ${JSON.stringify(st)}`);
-        const before = await status(ctx);
-        if (!before.configured) throw new Error('reminders aren’t set up on dev (no VAPID key)');
-        // No live device yet, so A's subscribe starts the user's reminders afresh (the registry's createdAt):
-        // nothing already due can ride along — A's one POST is this run's reminder (and Send test's).
-        if (before.devices.length)
-          throw new Error(
-            `the test user already has a live device (${before.devices.map((d) => d.label).join(', ')}) — a stray from a crashed run; remove it in Settings`,
+        // Seeded as browserPush.ts keeps them: an opt-in (a harness slot never subscribed, so no status read
+        // can call it removed) and a resync failure. The resync that would overwrite or clear them runs only
+        // with permission granted — headless reads denied.
+        await ctx.ui.goto('/');
+        const permission = await ctx.page.evaluate<string>(
+          `typeof Notification === 'undefined' ? 'unsupported' : Notification.permission`,
+        );
+        if (permission === 'granted')
+          needsYou(
+            'this browser grants notifications, so its launch resync would replace the seeded failure',
           );
-
-        const refused = await ctx.api.writes.subscribePushExpectingRefusal({
-          endpoint: 'https://evil.example/x',
-          keys: pushKeys(),
-          label: label(ctx, 'evil'),
-        });
-        if (refused !== PUSH_ENDPOINT_ERROR) throw new Error(`refused with “${refused}”`);
-        const afterRefusal = await status(ctx);
-        if (JSON.stringify(afterRefusal.devices) !== JSON.stringify(before.devices))
-          throw new Error('the refused subscribe changed the device list');
-
-        // Due at a minute boundary ahead, so it's armed before it fires (the poller skips one set after).
-        fireAt = Math.ceil((Date.now() + ARM_LEAD_MS) / TICK_MS) * TICK_MS;
-        const due = new Date(fireAt);
-        ping = await ctx.api.writes.createTask({
-          title: title(ctx, 'ping'),
-          dueDay: laDay(due),
-          dueTime: laClock(due),
-        });
-        ctx.log(`due ${laDay(due)} ${laClock(due)} (${due.toISOString()})`);
-
-        const keys = pushKeys();
-        const first = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('e2e'),
-          keys,
-          label: `${label(ctx, 'A')} first`,
-        });
-        deviceA = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('e2e'),
-          keys,
-          label: label(ctx, 'A'),
-        });
-        if (deviceA.id !== first.id)
-          throw new Error(`two devices for one endpoint: ${first.id}, ${deviceA.id}`);
-        const mine = (await status(ctx)).devices.filter((d) => d.id === deviceA.id);
-        if (mine.length !== 1 || mine[0]!.label !== label(ctx, 'A'))
-          throw new Error(`the server lists ${JSON.stringify(mine)}`);
-        deviceC = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('c'),
-          keys: UNUSABLE_KEYS,
-          label: label(ctx, 'C'),
-        });
+        const keys = ['enabled', 'enabledAt', 'syncError', 'syncErrorAt', 'syncErrorDismissed'].map(
+          (k) => `aperture.push.${k}`,
+        );
+        const seed = {
+          'aperture.push.enabled': harnessPushId('banner'),
+          'aperture.push.enabledAt': String(Date.now() - 3_600_000),
+          'aperture.push.syncError': 'Registration failed - devcheck',
+          'aperture.push.syncErrorAt': `${Date.now()}-devchk`,
+        };
+        await ctx.page.evaluate(
+          `Object.entries(${JSON.stringify(seed)}).forEach(([k, v]) => localStorage.setItem(k, v))`,
+        );
+        try {
+          await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+          const banner = ctx.page
+            .getByRole('alert')
+            .filter({ hasText: 'Reminders couldn’t refresh on this device' });
+          await banner.waitFor({ state: 'visible', timeout: 15_000 });
+          await ctx.shot('home-banner');
+          await banner.getByRole('link', { name: 'open Settings', exact: true }).click();
+          await ctx.page.waitForURL(
+            (u) => u.pathname === '/settings' && u.hash === '#notifications',
+            {
+              timeout: 15_000,
+            },
+          );
+          await ctx.ui.goto('/');
+          await banner.waitFor({ state: 'visible', timeout: 15_000 });
+          await banner.getByRole('button', { name: 'Dismiss', exact: true }).click();
+          await banner.waitFor({ state: 'hidden', timeout: 5_000 });
+          await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+          await ctx.ui.settle();
+          await ctx.page
+            .getByRole('button', { name: 'Task', exact: true })
+            .waitFor({ timeout: 15_000 });
+          if (await banner.isVisible())
+            throw new Error('the dismissed banner came back after a reload');
+        } finally {
+          await ctx.page.evaluate(
+            `${JSON.stringify(keys)}.forEach((k) => localStorage.removeItem(k))`,
+          );
+        }
       },
     },
     {
       id: 'ui-deep-link',
       entry: 'ui',
       proves: ['ui-deep-link'],
-      title: 'The tap-through to the reminder’s task opens its modal, and the link leaves the URL',
+      title: 'A reminder’s tap-through opens its task’s modal, and the link leaves the URL',
       async run(ctx) {
-        await ctx.ui.goto(linkTo(ping.id));
-        await dialogOf(ctx, ping.title).waitFor({ state: 'visible', timeout: 15_000 });
+        linked = await ctx.api.writes.createTask({ title: title(ctx, 'linked') });
+        await ctx.ui.goto(linkTo(linked.id));
+        await dialogOf(ctx, linked.title).waitFor({ state: 'visible', timeout: 15_000 });
         await linkStripped(ctx);
         await ctx.shot('deep-link');
       },
@@ -698,36 +744,28 @@ export const timedReminders: Scenario = {
       },
     },
     {
-      id: 'ui-send-test',
+      id: 'fuse-test',
       entry: 'ui',
       proves: ['ui-send-test'],
       title:
-        'Send test, clicked inside the tick that sends the reminder → “Sending within a minute…”',
+        'No real device on the test user; C (keys no service takes) subscribed; Send test → “Sending within a minute…”',
       async run(ctx) {
+        // A live device other than the harness's would get this chain's sends: refuse it, by name. The
+        // harness's own (a fixed-slot id) are removed through the guarded path.
+        for (const d of (await status(ctx)).devices) {
+          if (!isHarnessPushId(d.id))
+            throw new Error(`a real device is subscribed as the test user: ${d.label}`);
+          ctx.log(`removing the harness's own live device ${d.label}`);
+          await ctx.api.writes.removeHarnessStray(d.id, d.label);
+        }
+        deviceC = await ctx.api.writes.subscribePush({
+          endpoint: endpoint('c'),
+          keys: UNUSABLE_KEYS,
+          label: label(ctx, 'C'),
+        });
         await ctx.ui.goto('/settings');
         const send = ctx.page.getByRole('button', { name: 'Send test', exact: true });
         await send.waitFor({ state: 'visible', timeout: 15_000 });
-        // Click after the last tick before the reminder's minute and well before the first tick past it, so
-        // that tick carries both — one notification, one POST to A. If that tick has gone (or is too close),
-        // A had its POST alone: wait it out, take A off, and the test reaches C alone — still one POST.
-        const end = fireAt + TICK_WAIT_MS;
-        for (;;) {
-          const last = (await status(ctx)).poller.lastRunAt ?? 0;
-          if (last >= fireAt) break; // the reminder's tick is done
-          if (last >= fireAt - TICK_MS && Date.now() < last + TICK_MS - CLICK_MARGIN_MS) {
-            batched = true;
-            break;
-          }
-          if (Date.now() > end) throw new Error(`no tick past ${new Date(fireAt).toISOString()}`);
-          await new Promise((r) => setTimeout(r, 2_000));
-        }
-        if (!batched) {
-          ctx.log('missed the reminder’s tick: Send test goes alone, to C');
-          if ((await status(ctx)).devices.some((d) => d.id === deviceA.id))
-            await ctx.api.writes.unsubscribePush(deviceA.id);
-          await ctx.page.reload({ waitUntil: 'domcontentloaded' });
-          await send.waitFor({ state: 'visible', timeout: 15_000 });
-        }
         testAt = Date.now();
         await send.click({ timeout: 15_000 });
         await ctx.page
@@ -738,28 +776,22 @@ export const timedReminders: Scenario = {
       },
     },
     {
-      id: 'api-e2e-sent',
+      id: 'fuse-ping',
       entry: 'api',
       proves: ['api-e2e'],
-      title:
-        'The tick past the minute sent the reminder to Apple; its answer (404/410 dropped, or 400/403 marked) is on the health line — with the test, as one notification',
+      title: 'A task due at the first minute boundary well past the tick that takes the test',
       async run(ctx) {
-        let outcome: ReturnType<typeof e2eOutcome> = null;
-        const s = await until(
-          'the poller’s send',
-          () => status(ctx),
-          (v) => (outcome = e2eOutcome(v, deviceA.id, label(ctx, 'A'), fireAt)) !== null,
-          Math.max(fireAt + TICK_WAIT_MS - Date.now(), 10_000),
-          5_000,
-        );
-        const o = outcome as ReturnType<typeof e2eOutcome>;
-        if (!o || !o.ok) throw new Error(o ? o.why : 'no outcome');
-        ctx.log(o.how);
-        // Batched: the test's drop of C is in the same tick's error, so A got both in one POST.
-        if (batched && !sameTick(s, label(ctx, 'A'), label(ctx, 'C')))
-          throw new Error(
-            `the reminder and the test went in different ticks: ${s.poller.lastError}`,
-          );
+        // That tick is the next one: about a rate past the last heartbeat (or now, if none is fresh).
+        const last = (await status(ctx)).poller.lastRunAt ?? 0;
+        const nextTick = last + TICK_MS > Date.now() ? last + TICK_MS : Date.now() + TICK_MS;
+        fireAt = Math.ceil((nextTick + PING_LEAD_MS) / TICK_MS) * TICK_MS;
+        const due = new Date(fireAt);
+        ping = await ctx.api.writes.createTask({
+          title: title(ctx, 'ping'),
+          dueDay: laDay(due),
+          dueTime: laClock(due),
+        });
+        ctx.log(`reminder due ${laDay(due)} ${laClock(due)} (${due.toISOString()})`);
       },
     },
     {
@@ -767,8 +799,10 @@ export const timedReminders: Scenario = {
       entry: 'api',
       proves: ['ui-send-test'],
       title:
-        'Within a tick the poller acted on the test: C, whose keys no service takes, is dropped and named',
+        'The tick after the click took the test: C, whose keys no service takes, is dropped and named — before the reminder could fire',
       async run(ctx) {
+        // Only the test can reach C here: C is the user's one device, its first (so its registry row starts
+        // now, and nothing due before can fire), and the reminder isn't due until after this tick.
         const s = await until(
           'the test’s tick',
           () => status(ctx),
@@ -776,9 +810,60 @@ export const timedReminders: Scenario = {
             (v.poller.lastErrorAt ?? 0) >= testAt - CLOCK_SLACK_MS &&
             errorsOf(v).some((e) => e.startsWith(droppedForKeys(label(ctx, 'C')))),
           Math.max(testAt + TICK_WAIT_MS - Date.now(), 10_000),
-          5_000,
+          3_000,
         );
         if (s.devices.some((d) => d.id === deviceC.id)) throw new Error('C is still listed');
+        if ((s.poller.lastErrorAt ?? 0) >= fireAt)
+          throw new Error(
+            'C was dropped only after the reminder fell due — not provably by the test',
+          );
+      },
+    },
+    {
+      id: 'fuse-device',
+      entry: 'api',
+      proves: ['api-e2e'],
+      title:
+        'A — a real P-256 key pair on a never-issued Apple endpoint — subscribed well before the minute',
+      async run(ctx) {
+        // Late (a slow tick): move the reminder on a minute — re-dated still ahead of it, so armed in time.
+        if (fireAt - Date.now() < A_LEAD_MS) {
+          fireAt = Math.ceil((Date.now() + PING_LEAD_MS) / TICK_MS) * TICK_MS;
+          const due = new Date(fireAt);
+          await ctx.api.writes.setTaskDue(ping.id, { dueDay: laDay(due), dueTime: laClock(due) });
+          ctx.log(`reminder moved to ${due.toISOString()}`);
+        }
+        deviceA = await ctx.api.writes.subscribePush({
+          endpoint: endpoint('e2e'),
+          keys: pushKeys(),
+          label: label(ctx, 'A'),
+        });
+      },
+    },
+    {
+      id: 'api-e2e-sent',
+      entry: 'api',
+      proves: ['api-e2e'],
+      title:
+        'The tick past the minute sent the reminder to A, Apple’s answer (404/410 dropped, or 400/403 marked) is on the health line, and A goes',
+      async run(ctx) {
+        let outcome: ReturnType<typeof e2eOutcome> = null;
+        try {
+          await until(
+            'the poller’s send',
+            () => status(ctx),
+            (v) => (outcome = e2eOutcome(v, deviceA.id, label(ctx, 'A'), fireAt)) !== null,
+            Math.max(fireAt + TICK_WAIT_MS - Date.now(), 10_000),
+            3_000,
+          );
+        } finally {
+          // A goes the moment its outcome is read (or the wait gives up): no later tick sends to it.
+          if ((await status(ctx)).devices.some((d) => d.id === deviceA.id))
+            await ctx.api.writes.unsubscribePush(deviceA.id);
+        }
+        const o = outcome as ReturnType<typeof e2eOutcome>;
+        if (!o || !o.ok) throw new Error(o ? o.why : 'no outcome');
+        ctx.log(o.how);
       },
     },
     noConsoleErrors,

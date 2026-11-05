@@ -44,12 +44,12 @@ function p256(privateKeyB64: string) {
   } catch {
     throw new Error('VAPID private key is not a P-256 key'); // zero, or past the curve order
   }
-  return ecdh;
+  return { ecdh, raw };
 }
 
 // The 65-octet uncompressed public point (base64url) — what the browser takes as applicationServerKey.
 export const publicKeyOf = (privateKeyB64: string): string =>
-  b64u(p256(privateKeyB64).getPublicKey());
+  b64u(p256(privateKeyB64).ecdh.getPublicKey());
 
 export interface EncryptOpts {
   salt?: Uint8Array; // 16 random octets per message; fixed only by the RFC vector test
@@ -115,14 +115,14 @@ export function vapidAuthorization(
   sub: string,
   nowMs: number,
 ): string {
-  const ecdh = p256(privateKeyB64);
+  const { ecdh, raw } = p256(privateKeyB64);
   const pub = ecdh.getPublicKey();
   const key = createPrivateKey({
     format: 'jwk',
     key: {
       kty: 'EC',
       crv: 'P-256',
-      d: b64u(ecdh.getPrivateKey()),
+      d: b64u(raw), // the validated 32 octets (getPrivateKey may drop a leading zero)
       x: b64u(pub.subarray(1, 33)),
       y: b64u(pub.subarray(33, 65)),
     },

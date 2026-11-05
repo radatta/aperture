@@ -3,6 +3,7 @@
 // every write is declared in the one `writes` object below and nowhere else, and the only reads are the
 // `reads` object. Every request asserts the dev origin; a delete must name a ledger id. The one exception to
 // the origin is a presigned URL the dev BFF minted for an attachment, under assertPresignedDevUrl.
+import { createHash } from 'node:crypto';
 import { AUTH_HEADER, assertDevOrigin, assertPresignedDevUrl, targetOrigin } from './config';
 import { DevcheckError } from './errors';
 import { pendingIds, type Ledger, type LedgerEntry } from './ledger';
@@ -274,6 +275,17 @@ export const placeTokenId = (run: string): string => `place-token:${run}`;
 // through the API, or Settings' Enable (the browser's subscribePush response, recorder.ts).
 export const PUSH_SUB_VIA = 'api:subscribePush';
 export const UI_PUSH_SUB_VIA = 'ui:subscribePush';
+// The harness's push devices sit on fixed endpoints (one per slot, never issued by Apple), so a device's
+// id — the BFF's sha256(endpoint) prefix, lambdas/src/backend.ts pushDeviceId — repeats run to run and a
+// live one is known as the harness's own whatever the ledger says.
+export const HARNESS_PUSH_SLOTS = ['e2e', 'b', 'c', 'r', 'dup', 'banner'] as const;
+export type HarnessPushSlot = (typeof HARNESS_PUSH_SLOTS)[number];
+export const harnessPushEndpoint = (slot: HarnessPushSlot): string =>
+  `https://web.push.apple.com/devcheck-${slot}`;
+export const harnessPushId = (slot: HarnessPushSlot): string =>
+  createHash('sha256').update(harnessPushEndpoint(slot)).digest('hex').slice(0, 16);
+const HARNESS_PUSH_IDS = new Set(HARNESS_PUSH_SLOTS.map(harnessPushId));
+export const isHarnessPushId = (id: string): boolean => HARNESS_PUSH_IDS.has(id);
 // The test user's reminder toggles, flipped by a run: like the place token, no id of its own, so
 // `reminder-toggles:<run>` is recorded before the first flip (API or Settings) — a run that dies mid-way
 // still leaves the next run's sweep to switch them back on. It exists while any toggle reads off.
@@ -542,6 +554,14 @@ export function createApiClient({
       await call<null>('deleteFluxSet', [id]);
     },
     // The reflection scenario's direct BFF call (its over-cap refusal), on a task this harness created.
+    // A run's own task re-dated (timed-reminders moves its reminder on a minute when a tick ran late).
+    async setTaskDue(
+      id: string,
+      due: { dueDay: string | null; dueTime?: string | null },
+    ): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>('setTaskDue', [id, due]);
+    },
     async setTaskActual(
       id: string,
       actualMin: number,
@@ -823,6 +843,19 @@ export function createApiClient({
       if (status !== 400 || !bffError(text))
         throw new Error(`subscribePush → HTTP ${status}: ${text.slice(0, 200)}`);
       return (JSON.parse(text) as { error: string }).error;
+    },
+    // A harness device still live with no pending ledger entry (a run killed between the subscribe and its
+    // record, or a ledger lost): adopted by its fixed-slot id — recorded first, so cleanup knows it — then
+    // removed. Any id that isn't a harness slot's is refused.
+    async removeHarnessStray(id: string, label: string): Promise<void> {
+      if (!isHarnessPushId(id))
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          `refusing to remove device ${id} — not one of the harness's fixed endpoints`,
+        );
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: PUSH_SUB_VIA, title: `stray ${label}` });
+      await call<null>('unsubscribePush', [id]);
     },
     async unsubscribePush(id: string): Promise<void> {
       assertLedger(id, 'pushsub');

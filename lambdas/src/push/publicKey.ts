@@ -25,7 +25,7 @@ export function createPublicKeyReader(cfg: {
     if (cached && now() - cached.at < CACHE_MS) return cached.value;
     try {
       const res = await ssm.send(new GetParameterCommand({ Name: name }));
-      const value = res.Parameter?.Value || null;
+      const value = res.Parameter?.Value?.trim() || null; // a pasted newline is no part of the key
       cached = value ? { value, at: now() } : null;
       return value;
     } catch (err) {

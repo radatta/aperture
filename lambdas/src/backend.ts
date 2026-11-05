@@ -259,6 +259,8 @@ const unconfiguredPushRegistry = {
   hasUser: noPushRegistry,
   addUser: noPushRegistry,
   removeUser: noPushRegistry,
+  dropUser: noPushRegistry,
+  getUser: noPushRegistry,
   getPoller: noPushRegistry,
   putPoller: noPushRegistry,
 } as unknown as PushRegistry;
@@ -1928,7 +1930,8 @@ export class BackendClient implements ApiClient {
   async getPushStatus(): Promise<PushStatus> {
     const [key, rows, poller, mine] = await Promise.all([
       this.pushPublicKey(),
-      this.repo.listAllPushSubs(),
+      // Consistent: the self-heal below decides on it, and a device a moment old must count.
+      this.repo.listAllPushSubs({ consistent: true }),
       this.pushRegistry.getPoller(),
       this.repo.getPushUserHealth(),
     ]);

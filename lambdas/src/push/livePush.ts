@@ -38,7 +38,7 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
     let value: string | null = null;
     try {
       const res = await ssm.send(new GetParameterCommand({ Name: keyParam, WithDecryption: true }));
-      value = res.Parameter?.Value || null;
+      value = res.Parameter?.Value?.trim() || null; // a pasted newline is no part of the key
     } catch (err) {
       if (!(err instanceof Error && err.name === 'ParameterNotFound')) throw err;
     }
@@ -55,7 +55,7 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
 
   return {
     async readiness(): Promise<PushReadiness> {
-      if (!cfg.appUrl) return 'no-key';
+      if (!cfg.appUrl) return 'no-app-url';
       if ((await privateKey()) !== null) return 'ok';
       return bad ? 'bad-key' : 'no-key';
     },
@@ -64,7 +64,8 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
       // by hand, or before the check) still can't aim the poller anywhere else.
       if (!pushEndpointOk(target.endpoint)) throw new Error('Push endpoint off the allowlist');
       const k = await privateKey();
-      if (!k || !cfg.appUrl) throw new Error('Push is not configured on this stage');
+      if (!cfg.appUrl) throw new Error('Push has no APP_URL on this stage (the VAPID sub)');
+      if (!k) throw new Error('Push is not configured on this stage');
       let body: Buffer;
       try {
         body = encryptAes128Gcm(Buffer.from(payload), target.p256dh, target.auth);

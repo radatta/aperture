@@ -116,7 +116,8 @@ describe('live push gateway', () => {
 
   it('is not configured without the key parameter or an app URL; other SSM failures throw', async () => {
     expect(await live({ key: notFound }).gw.readiness()).toBe('no-key');
-    expect(await live({ appUrl: '' }).gw.readiness()).toBe('no-key');
+    expect(await live({ appUrl: '' }).gw.readiness()).toBe('no-app-url');
+    await expect(live({ appUrl: '' }).gw.send(target, '{}', opts)).rejects.toThrow(/no APP_URL/);
     await expect(live({ key: () => new Error('AccessDenied') }).gw.readiness()).rejects.toThrow(
       'AccessDenied',
     );
@@ -139,6 +140,14 @@ describe('live push gateway', () => {
     expect(await gw.readiness()).toBe('ok');
     expect(await gw.send(target, '{}', opts)).toEqual({ status: 201 });
     expect(ssmCalls).toHaveLength(4); // every read until it's good (the send's too), then held
+  });
+
+  it('trims the parameter: a pasted trailing newline is no part of the key', async () => {
+    const { gw } = live({ key: () => `${PRIVATE}\n` });
+    expect(await gw.readiness()).toBe('ok');
+    expect(await gw.send(target, '{}', opts)).toEqual({ status: 201 });
+    const { ssm } = ssmWith(() => ' BPUB\n');
+    expect(await createPublicKeyReader({ stage: 'dev', ssm })()).toBe('BPUB');
   });
 
   it('signs before the request: a signing fault throws, it is not a network error', async () => {

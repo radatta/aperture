@@ -13,6 +13,7 @@ import type { PushTarget } from './gateway';
 import {
   PSENT_KEEP_MS,
   PUSH_BAD_KEY_ERROR,
+  PUSH_NO_APP_URL_ERROR,
   PUSH_NO_KEY_ERROR,
   resetColdStart,
   runPushTick,
@@ -875,6 +876,14 @@ describe('push dispatch — what the health line says', () => {
     expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
       "Last reminder didn't reach this device (couldn't send: RangeError)",
     );
+  });
+
+  it('a stage with no APP_URL says so, not "no key"', async () => {
+    const w = world();
+    await w.device();
+    w.push.readyAs = 'no-app-url';
+    expect((await w.tick()).error).toBe(PUSH_NO_APP_URL_ERROR);
+    expect(w.events()).toEqual(['push_no_app_url']);
   });
 
   it('a malformed VAPID key is a stage fault: nothing consumed or sent, shown, logged once', async () => {

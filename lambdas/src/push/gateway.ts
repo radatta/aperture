@@ -24,10 +24,10 @@ export interface PushResult {
   reason?: 'timeout' | 'network' | 'keys';
 }
 
-// Whether this stage can send at all: its VAPID private key is present (`no-key` otherwise) and is a P-256
-// key (`bad-key` otherwise). Read before any dedup row is written, so a stage that can't sign consumes no
+// Whether this stage can send at all: it knows its app URL, the VAPID `sub` (`no-app-url` otherwise), and its
+// VAPID private key is present (`no-key` otherwise) and is a P-256 key (`bad-key` otherwise). Read before any dedup row is written, so a stage that can't sign consumes no
 // reminder.
-export type PushReadiness = 'ok' | 'no-key' | 'bad-key';
+export type PushReadiness = 'ok' | 'no-app-url' | 'no-key' | 'bad-key';
 
 export interface PushGateway {
   readiness(): Promise<PushReadiness>;

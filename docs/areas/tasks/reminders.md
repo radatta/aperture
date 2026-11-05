@@ -31,11 +31,16 @@ Notifications:
 - Times are the user's zone (`userDueEpoch`), DST-safe. Only open tasks ping: not done, not cancelled, not
   tombstoned. Errands and parts ping like any task.
 - A task that is both due and planned on the same day pings once (due wins).
-- **Armed before it fires.** A reminder pings only if it was set before its fire time. A task created,
-  re-dated or reopened after its fire time stays quiet, and so does a plan made after 09:00 for that day (the
-  09:00–09:30 planning case). So does anything that fell due while its kind's toggle was off, or before the
-  user's first device. The 30-minute window still catches up a reminder that existed in time and was missed by
-  a failed tick. Send test is exempt. How it's checked: §3.
+- **Armed before it fires.** A reminder pings only if it was set before its fire time. A task created or
+  re-dated after its fire time stays quiet, and so does a plan made after 09:00 for that day (the 09:00–09:30
+  planning case). So does anything that fell due while its kind's toggle was off, or before the user's first
+  device. The 30-minute window still catches up a reminder that existed in time and was missed by a failed
+  tick. Send test is exempt. How it's checked: §3.
+  - **Reopening:** done and cancelled are terminal (`machines.ts`), so no BFF path reopens a task, and a
+    finished task's plans can't fire again. If a reopen path is ever added, the task re-arms on its own write,
+    and that path must re-arm the task's plans too (`backend.push.test.ts` pins the terminal states).
+  - **Series:** a series' task and plan for a day are created on that day's first `getDay`, so a first open
+    after 09:00 means that plan was made after its fire time — no planned ping that day.
 - There is no user-facing cap and no quiet hours (both rejected).
 - **Same-tick batching:** several reminders in one minute become one notification ("3 reminders", titles joined).
 - **Tap-through:** `/tasks?lens=today&task=<id>&n=<tag>` opens the task's modal on Today. A batch opens Today.
@@ -73,7 +78,7 @@ EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
   - the row's `remindArmedAt`: when its current fire time was set. It's a table-only attribute beside the GSI
     keys, never on the entity, an API answer or the export. A write keeps the stored value while the row was
     already on the remind index at the same fire time (a rename, an estimate, a reorder within the day), and
-    otherwise stamps the write's `updatedAt`: created, re-dated, reopened, or planned on a new day. Deciding
+    otherwise stamps the write's `updatedAt`: created, re-dated, or planned on a new day. Deciding
     this costs one consistent read before writing a task or plan that can fire. `createdAt` alone would miss a
     re-date or a reopen; `updatedAt` alone would silence a missed reminder whose title was edited.
   - the kind's switch-on time (`u#<uid>/pusharm`, written when a toggle goes from off to on);
@@ -88,9 +93,11 @@ EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
   error loses that one ping (logged, and shown in Settings) rather than risking a double ping. A reminder older
   than the 30-minute window is missed, never fired late. Retrying is a logged follow-up (prod task
   `01M6MXRGEDXWQG5E1T5X95YM1Q`).
-- **Hidden guard:** 50 sends per user per day. Past it the poller refuses and stamps the health error.
-- **Stage faults** are checked before anything is consumed: no VAPID private key ("No VAPID key on this
-  stage") or one that isn't a 32-octet P-256 key ("VAPID private key is malformed"). The poller logs it once per
+- **Hidden guard:** 50 notifications (batches, not device POSTs) per user per LA day. Past it the poller
+  refuses and stamps the health error.
+- **Stage faults** are checked before anything is consumed: no `APP_URL` (the VAPID `sub`), no VAPID private
+  key ("No VAPID key on this stage") or one that isn't a 32-octet P-256 key ("VAPID private key is malformed").
+  Both SSM values are trimmed on read. The poller logs it once per
   container, writes it on the heartbeat, and sends nothing. A malformed key is never cached, so a fixed
   parameter works on the next tick.
 - **Crypto is hand-rolled** in `node:crypto` (`lambdas/src/push/webpush.ts`): VAPID ES256 (RFC 8292) and
@@ -125,15 +132,16 @@ different VAPID key, the app re-subscribes silently.
   - The VAPID private key lives in SSM `/aperture/<stage>/push/vapid_private_key` (SecureString) and is read by
     the poller's role only.
   - The public key is in `vapid_public_key` (String) and is read by the BFF only.
-- **Logs:** one JSON line per send or error (`push_sent | push_failed | push_guard_tripped | push_no_key |
-push_bad_key`). Each
-  line carries the status, the task id and a sub-id prefix — never the endpoint, the keys or the title.
+- **Logs:** one JSON line per send, error or skip: `push_sent`, `push_failed`, `push_guard_tripped`,
+  `push_deadline` (the tick ran out of time), `push_user_dropped` (a user with no live device left the
+  registry), and the once-per-container stage faults `push_no_key`, `push_bad_key`, `push_no_app_url`. A send
+  line carries the status, the task ids and a sub-id prefix — never the endpoint, the keys or the title.
 - **Cost bound:**
   - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
     tiers. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
     per stage, against CloudWatch's free 5 GB.
-  - Worst case is a tick stuck at the 20 s timeout every minute: about $0.15/day, with pushes capped by the
-    guard.
+  - Worst case is a tick stuck at the 20 s timeout every minute: 1,440 × 20 s × 0.25 GB = 7,200 GB-s, about
+    **$0.12/day of compute**, about $0.15/day with DynamoDB and logs, with pushes capped by the guard.
   - On prod, reserved concurrency 1. There is no alarm of its own, because a rule says no fixed monthly cost: the
     account-wide Lambda Errors alarm emails on a failing tick, and a stuck tick's 20 s timeout counts as an error.
   - On dev, reservations are impossible (quota 10, and the SCP denies it). Timeout < rate keeps ticks from
@@ -146,8 +154,9 @@ push_bad_key`). Each
   them the poller logs `push_no_key` and Settings says "Reminders aren't set up on this stage".
 - **Rotation** (rare, deliberate):
   1. Put both parameters with `--overwrite`.
-  2. Every existing subscription then fails. On a 404/410 the poller deletes it; on a 403 it marks the device
-     with the error and drops its cached key. Settings says to re-enable either way.
+  2. Every existing subscription then fails. On a 404/410 the poller deletes it, and Settings says to turn
+     reminders on again on that device. On a 403 it keeps the device, marked "Last reminder didn't reach this
+     device (push service answered 403)", and drops its cached key.
   3. The phone heals on its next launch (`usePushSync`).
 - **Dev deploys** of this stack's new function, roles and schedule need the dev freeze opened for the dispatch
   (`docs/ops/CI-BOT.md` → _Kill switch_ → _Opening the freeze_).

@@ -247,7 +247,10 @@ export class ApertureAppStack extends Stack {
     // to the browser); the private one is the poller's alone (below). The operator writes both.
     const pushSsmBase = `arn:${Stack.of(this).partition}:ssm:${Stack.of(this).region}:${Stack.of(this).account}:parameter/aperture/${stage}/push`;
     fn.addToRolePolicy(
-      new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [`${pushSsmBase}/vapid_public_key`] }),
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [`${pushSsmBase}/vapid_public_key`],
+      }),
     );
     ackLambdaIam(fn, stage, Stack.of(this).region, { ssmWrite: true, plaid: true });
 

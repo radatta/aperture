@@ -449,7 +449,31 @@ describe('armed before it fires, through the BFF', () => {
   });
 });
 
+describe('a reopen stays quiet', () => {
+  // Done and cancelled are terminal (machines.ts), so no BFF path reopens a task — a plan can't re-fire that
+  // way. Pinned here so a reopen path added later meets this test (and re-arms the task's plans).
+  it('a finished task can’t be reopened through the BFF', async () => {
+    const e = env();
+    const api = e.make();
+    const t = await api.createTask({ title: 'Finished' });
+    await api.transitionTask(t.id, 'cancelled');
+    for (const to of ['backlog', 'planned', 'in_progress'] as const)
+      await expect(api.transitionTask(t.id, to)).rejects.toThrow(/Invalid task transition/);
+  });
+});
+
 describe('the push registry under races', () => {
+  it('status reads devices strongly: a device a moment old is listed and keeps its user registered', async () => {
+    const e = env();
+    const api = e.make();
+    const a = await api.subscribePush(input());
+    await e.registry.removeUser('u1');
+    // An eventually consistent list wouldn't have it yet.
+    e.doc.staleNextQueries(pk('u1'), sk.pushSub(a.id), null, 5);
+    expect((await api.getPushStatus()).devices.map((d) => d.id)).toEqual([a.id]);
+    expect(await e.registry.hasUser('u1')).toBe(true);
+  });
+
   it("status puts a user with a live device back on the registry (a race's self-heal)", async () => {
     const e = env();
     const api = e.make();

@@ -416,6 +416,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       subscribePushExpectingRefusal: async () => {
         throw new Error('unused');
       },
+      removeHarnessStray: async () => {
+        throw new Error('unused');
+      },
+      setTaskDue: async () => {
+        throw new Error('unused');
+      },
     },
   };
   const shells = [...(opts.shells ?? [shell(SHA)])];

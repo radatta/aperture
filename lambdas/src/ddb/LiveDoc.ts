@@ -96,6 +96,8 @@ export function createLiveDoc(tableName: string): DocClient {
       await doc.delete({ TableName: tableName, Key: { PK: pk, SK: sk } });
     },
     async deleteIf(pk, sk, expectedUpdatedAt) {
+      // An unknown version can't be matched — and `updatedAt = :undefined` would be a malformed request.
+      if (typeof expectedUpdatedAt !== 'number') throw new ConditionFailedError();
       try {
         await doc.delete({
           TableName: tableName,

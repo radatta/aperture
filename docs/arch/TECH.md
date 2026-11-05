@@ -153,9 +153,12 @@ SK (type-prefixed range keys):
   place#<id> · ptoken           errand places; the place token's pointer {hash|null, createdAt, hint, retiring[], updatedAt}
   pushsub#<sha256(endpoint) prefix>  a device's Web Push subscription (a credential: never exported or returned;
                                 a user's Remove tombstones it keyless, a push-service 404/410 deletes it)
-  psent#<fireAt 13d>#<key> · pcount#<LA day> · ptest#<ulid> · pushhealth
+  psent#<fireAt 13d>#<key> · pcount#<LA day> · ptest#<ulid> · pushhealth · pusharm
                                 the reminder poller's dedup rows (swept after 48 h), daily guard counter,
-                                Send-test candidates, and this user's last send / error (tasks/reminders.md)
+                                Send-test candidates, this user's last send / error, and when each reminder
+                                toggle was last switched back on (tasks/reminders.md)
+  (task# / plan# rows on the remind index also carry remindArmedAt — table-only, never on the entity: when
+  their current fire time was set, for the armed-before-it-fires rule)
 PK = placetoken#<sha256hex> / SK = placetoken
                                 the place token's lookup row {userId, …}: the Shortcut route resolves a user
                                 from a token (tasks/places.md §4)

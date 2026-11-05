@@ -52,7 +52,7 @@ export const SCENARIOS: Scenario[] = [
   areas,
   categorySuggest, // after areas: its 27 seeded tasks would push areas' Home picker past its cap of 30
   finance,
-  timedReminders, // its two waits for the poller's tick overlap its UI steps
+  timedReminders, // its cheap rows first; its poller chain (two tick waits) last, so it can defer whole
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

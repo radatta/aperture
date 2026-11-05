@@ -1,7 +1,7 @@
 import { createECDH } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DevPushDevice, DevPushStatus } from '../api';
-import { droppedForKeys, e2eOutcome, laClock, pushKeys, sameTick } from './timed-reminders';
+import { droppedForKeys, e2eOutcome, laClock, pushKeys } from './timed-reminders';
 
 // The end-to-end step reads the poller's own words back (lambdas/src/push/dispatch.ts — scripts doesn't
 // depend on lambdas): the strings below are what it writes for each answer Apple can give a never-issued
@@ -146,22 +146,8 @@ describe('e2eOutcome', () => {
   });
 });
 
-describe('sameTick', () => {
-  it('holds when A’s refusal and C’s drop are entries of one tick’s error', () => {
-    expect(
-      sameTick(status({ poller: { lastError: `${goneError(410)} · ${cDropped}` } }), LABEL, C),
-    ).toBe(true);
-    expect(
-      sameTick(
-        status({ poller: { lastError: `${LABEL}: ${keptError(400)} · ${cDropped}` } }),
-        LABEL,
-        C,
-      ),
-    ).toBe(true);
-  });
-  it('fails when either went in another tick', () => {
-    expect(sameTick(status({ poller: { lastError: cDropped } }), LABEL, C)).toBe(false);
-    expect(sameTick(status({ poller: { lastError: goneError(410) } }), LABEL, C)).toBe(false);
+describe('droppedForKeys', () => {
+  it('is the head of the poller’s line for a device whose keys no service takes', () => {
     expect(droppedForKeys(C)).toBe(cDropped.split(' — ')[0]);
   });
 });

@@ -49,9 +49,12 @@ export const PSENT_KEEP_MS = 48 * 3600_000;
 // isn't a P-256 private key.
 export const PUSH_NO_KEY_ERROR = 'No VAPID key on this stage — reminders are off';
 export const PUSH_BAD_KEY_ERROR = 'VAPID private key is malformed — reminders are off';
+export const PUSH_NO_APP_URL_ERROR =
+  'This stage has no APP_URL (the VAPID sub) — reminders are off';
 const STAGE_ERROR: Record<Exclude<PushReadiness, 'ok'>, { message: string; event: string }> = {
   'no-key': { message: PUSH_NO_KEY_ERROR, event: 'push_no_key' },
   'bad-key': { message: PUSH_BAD_KEY_ERROR, event: 'push_bad_key' },
+  'no-app-url': { message: PUSH_NO_APP_URL_ERROR, event: 'push_no_app_url' },
 };
 
 type ReminderSettings = Partial<Pick<Settings, ReminderSettingKey>>;
