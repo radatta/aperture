@@ -1,4 +1,5 @@
 import type { PomodoroSession, SessionKind } from '@aperture/shared';
+import type { RunningTimer } from './pomodoro-context';
 
 // A running session with no heartbeat for this long means the app was closed mid-timer → stale,
 // prompt keep/discard rather than silently resuming a timer that "ran" while the tab was gone.
@@ -30,6 +31,18 @@ export function remainingSec(
   now: number,
 ): number {
   return Math.max(0, Math.round(targetSec - activeSec(session, paused, now)));
+}
+
+// What a stop may still credit beyond what's persisted (stopSession's capMin): a paused timer nothing (its
+// pause beat captured the worked time), a timer on "done" what's left to its target (the wait since isn't
+// work), a running one everything since its last beat (undefined = uncapped).
+export function stopCapMin(
+  timer: Pick<RunningTimer, 'session' | 'paused' | 'done'>,
+  targetSec: number,
+): number | undefined {
+  if (timer.paused) return 0;
+  if (timer.done) return Math.max(0, targetSec / 60 - timer.session.activeMinutes);
+  return undefined;
 }
 
 export function isStale(session: PomodoroSession, now: number): boolean {

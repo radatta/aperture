@@ -409,7 +409,13 @@ export interface ApiClient {
   startSession(input: StartSessionInput): Promise<PomodoroSession>;
   heartbeatSession(id: string): Promise<PomodoroSession>; // also used to capture time up to a pause
   resumeSession(id: string): Promise<PomodoroSession>; // reset the clock after a pause (no accrual)
-  stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession>;
+  // capMin caps what the final beat credits (a block that sat on "done": the target less what's already
+  // counted; a paused one: 0). Omitted = uncapped, as a phone on older JS sends.
+  stopSession(
+    id: string,
+    status: 'completed' | 'discarded',
+    opts?: { capMin?: number },
+  ): Promise<PomodoroSession>;
   listSessionsForDay(day: string): Promise<PomodoroSession[]>;
   findRunningSession(): Promise<PomodoroSession | null>; // first running (kept for single-session callers)
   listRunningSessions(): Promise<PomodoroSession[]>; // ALL concurrently-running timers

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   accruesTime,
   canTransitionTask,
+  completeSession,
   contributesCalibration,
   heartbeatSession,
   isTimed,
@@ -101,6 +102,18 @@ describe('taskTransition — estimate freeze', () => {
 });
 
 describe('sessions — heartbeat lifecycle', () => {
+  it('completeSession caps the final beat at capMin; 0 credits nothing more; a bad cap throws', () => {
+    const s = running({ activeMinutes: 2, lastHeartbeatAt: 2 * 60_000 });
+    const later = 32 * 60_000; // 30 min since the beat
+    expect(completeSession(s, later).activeMinutes).toBe(32);
+    expect(completeSession(s, later, 3).activeMinutes).toBe(5);
+    expect(completeSession(s, later, 0).activeMinutes).toBe(2);
+    expect(completeSession(s, later, 60).activeMinutes).toBe(32); // a cap above the delta changes nothing
+    expect(completeSession(s, later, 3)).toMatchObject({ status: 'completed', endedAt: later });
+    expect(() => completeSession(s, later, -1)).toThrow(/capMin/);
+    expect(() => completeSession(s, later, Number.NaN)).toThrow(/capMin/);
+  });
+
   it('a work session accrues only to an open task — an errand included, never a done or cancelled one', () => {
     for (const status of ['backlog', 'planned', 'in_progress'] as const)
       expect(accruesTime(baseTask({ status }))).toBe(true);

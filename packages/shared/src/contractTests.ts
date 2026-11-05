@@ -1130,6 +1130,35 @@ export function runApiContract(
       expect((await api.getTask(dropped.id))?.actualAccruedMin).toBe(0);
     });
 
+    it('sessions: a stop with capMin credits at most that much past the last beat; a bad cap is refused', async () => {
+      const task = await api.createTask({ title: 'Sat on done', estimateMin: 30 });
+      const start = () =>
+        api.startSession({ taskId: task.id, categoryId: null, kind: 'work', day: '2026-08-04' });
+      // Beat at 2 min, then 30 min of nothing (a block that reached its target, or a locked phone).
+      const s1 = await start();
+      advance(2 * 60_000);
+      await api.heartbeatSession(s1.id);
+      advance(30 * 60_000);
+      await expect(api.stopSession(s1.id, 'completed', { capMin: -1 })).rejects.toThrow(/capMin/);
+      expect((await api.listRunningSessions()).map((s) => s.id)).toContain(s1.id); // still running
+      expect((await api.stopSession(s1.id, 'completed', { capMin: 3 })).activeMinutes).toBe(5);
+      expect((await api.getTask(task.id))?.actualAccruedMin).toBe(5);
+
+      const s2 = await start(); // a paused stop: the pause beat already captured the work
+      advance(2 * 60_000);
+      await api.heartbeatSession(s2.id);
+      advance(30 * 60_000);
+      expect((await api.stopSession(s2.id, 'completed', { capMin: 0 })).activeMinutes).toBe(2);
+      expect((await api.getTask(task.id))?.actualAccruedMin).toBe(7);
+
+      const s3 = await start(); // no cap (older JS): everything since the beat, as before
+      advance(2 * 60_000);
+      await api.heartbeatSession(s3.id);
+      advance(30 * 60_000);
+      expect((await api.stopSession(s3.id, 'completed')).activeMinutes).toBe(32);
+      expect((await api.getTask(task.id))?.actualAccruedMin).toBe(39);
+    });
+
     it('plans: soft-delete removes them from the day', async () => {
       const task = await api.createTask({ title: 'Planned' });
       const plan = await api.upsertPlan({

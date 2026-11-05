@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { PomodoroSession } from '@aperture/shared';
-import { activeSec, isDone, isStale, remainingSec, targetSecFor, STALE_MS } from './pomodoro';
+import { activeSec, isDone, isStale, remainingSec, stopCapMin, targetSecFor, STALE_MS } from './pomodoro';
 
 const session = (over: Partial<PomodoroSession>): PomodoroSession => ({
   id: 's',
@@ -70,5 +70,32 @@ describe('isDone — the chime & hold trigger', () => {
     const s = session({ activeMinutes: 25, lastHeartbeatAt: 0 });
     expect(isDone(s, 1500, false, 0)).toBe(true); // 1 block
     expect(isDone(s, 3000, false, 0)).toBe(false); // extended to 2 blocks
+  });
+});
+
+describe('stopCapMin — what a stop may still credit', () => {
+  const session = (activeMinutes: number): PomodoroSession => ({
+    id: 's',
+    userId: 'u',
+    createdAt: 0,
+    updatedAt: 0,
+    deletedAt: null,
+    taskId: null,
+    categoryId: null,
+    wasWork: true,
+    kind: 'work',
+    label: null,
+    startedAt: 0,
+    endedAt: null,
+    day: '2026-01-01',
+    activeMinutes,
+    status: 'running',
+    lastHeartbeatAt: 0,
+  });
+  it('paused → 0, done → what is left to the target, running → uncapped', () => {
+    expect(stopCapMin({ session: session(10), paused: true, done: false }, 25 * 60)).toBe(0);
+    expect(stopCapMin({ session: session(24.5), paused: false, done: true }, 25 * 60)).toBeCloseTo(0.5);
+    expect(stopCapMin({ session: session(25.5), paused: false, done: true }, 25 * 60)).toBe(0); // never negative
+    expect(stopCapMin({ session: session(10), paused: false, done: false }, 25 * 60)).toBeUndefined();
   });
 });

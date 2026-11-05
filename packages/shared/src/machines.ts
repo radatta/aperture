@@ -151,9 +151,23 @@ export function resumeSession(session: PomodoroSession, now: number): PomodoroSe
   return { ...session, lastHeartbeatAt: now, updatedAt: now };
 }
 
-export function completeSession(session: PomodoroSession, now: number): PomodoroSession {
+// The final beat's credit is capped at `capMin` when given: a block that reached its target credits up to
+// the target however long it sat on "done" before Stop (the client knows the target; iOS freezes a locked
+// page's timers, so the last stretch before the lock is still real work and a client-side reset would drop
+// it), and a paused timer stops with 0 (its pause beat already captured the worked time). Undefined = uncapped.
+export function completeSession(
+  session: PomodoroSession,
+  now: number,
+  capMin?: number,
+): PomodoroSession {
+  if (capMin !== undefined && !(Number.isFinite(capMin) && capMin >= 0))
+    throw new Error(`capMin must be a non-negative number of minutes, got ${String(capMin)}`);
   const beat = heartbeatSession(session, now);
-  return { ...beat, status: 'completed', endedAt: now, updatedAt: now };
+  const activeMinutes =
+    capMin === undefined
+      ? beat.activeMinutes
+      : Math.min(beat.activeMinutes, session.activeMinutes + capMin);
+  return { ...beat, activeMinutes, status: 'completed', endedAt: now, updatedAt: now };
 }
 
 export function discardSession(session: PomodoroSession, now: number): PomodoroSession {

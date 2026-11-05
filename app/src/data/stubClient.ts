@@ -1158,11 +1158,15 @@ class StubClient implements ApiClient {
     const session = this.mustFind(this.store.sessions, id);
     return this.writes.put(this.store.sessions, resumeSession(session, this.now()));
   }
-  async stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession> {
+  async stopSession(
+    id: string,
+    status: 'completed' | 'discarded',
+    opts?: { capMin?: number },
+  ): Promise<PomodoroSession> {
     const session = this.mustFind(this.store.sessions, id);
     const next =
       status === 'completed'
-        ? completeSession(session, this.now())
+        ? completeSession(session, this.now(), opts?.capMin)
         : discardSession(session, this.now());
     this.writes.put(this.store.sessions, next);
     if (status === 'completed') this.accrueToTask(next);

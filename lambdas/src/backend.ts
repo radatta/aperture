@@ -1245,8 +1245,10 @@ export class BackendClient implements ApiClient {
     });
   }
   // Heartbeat/resume/stop/resolveStale only ever act on RUNNING sessions → a direct running-key read.
+  // Every caller writes the row back, so the read is consistent: a stop right after a pause's beat must
+  // see that beat, or it completes the pre-pause copy and counts the pause as work.
   private async mustSession(id: string): Promise<PomodoroSession> {
-    const s = await this.repo.getRunningSession(id);
+    const s = await this.repo.getRunningSession(id, { consistent: true });
     if (!s) throw new Error(`Not found: ${id}`);
     return s;
   }
@@ -1256,11 +1258,15 @@ export class BackendClient implements ApiClient {
   async resumeSession(id: string): Promise<PomodoroSession> {
     return this.repo.putSession(resumeSession(await this.mustSession(id), this.now()));
   }
-  async stopSession(id: string, status: 'completed' | 'discarded'): Promise<PomodoroSession> {
+  async stopSession(
+    id: string,
+    status: 'completed' | 'discarded',
+    opts?: { capMin?: number },
+  ): Promise<PomodoroSession> {
     const session = await this.mustSession(id);
     const next =
       status === 'completed'
-        ? completeSession(session, this.now())
+        ? completeSession(session, this.now(), opts?.capMin)
         : discardSession(session, this.now());
     await this.repo.putSession(next);
     if (status === 'completed') await this.accrueToTask(next);
