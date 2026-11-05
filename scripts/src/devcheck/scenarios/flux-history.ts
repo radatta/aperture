@@ -89,6 +89,53 @@ export const fluxHistory: Scenario = {
         'a session run to its end needs a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel, until the next Start"',
     },
     {
+      id: 'week-note',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'After the scenario’s sets, getFluxWeekNote is a line of at most 140 characters naming chin tuck; a second call keeps generatedAt',
+    },
+    {
+      id: 'night-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The night home shows the week’s note under "Flux · …", in the same link',
+    },
+    {
+      id: 'history-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'History shows the week’s note above the exercise chips',
+    },
+    {
+      id: 'note-under-two',
+      entry: 'api',
+      kind: 'edge',
+      what: 'One set this week → no note (null); last week’s sets count only as last week',
+      offDev: {
+        file: 'lambdas/src/backend.fluxNote.test.ts',
+        test: 'is null under two sets this week, and last week’s sets only count as last week',
+        why: 'dev’s test user keeps the scenario’s sets only during a run; the week’s count can’t be held at one without deleting what another step needs, and the test drives the real backend over the real week maths',
+      },
+    },
+    {
+      id: 'note-fallback',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A model failure, a bad answer or an invented number keeps the deterministic line',
+      offDev: {
+        file: 'lambdas/src/backend.fluxNote.test.ts',
+        test: 'keeps the deterministic line on a model failure, a bad answer, or an invented number — and stores that too',
+        why: 'dev can’t drop the API key or make Haiku misbehave on demand; the test runs the real backend over the Fake gateway',
+      },
+    },
+    {
+      id: 'note-earns-its-line',
+      entry: 'ios',
+      kind: 'nominal',
+      what: 'A real week’s note on the phone: does it earn its line, or read as a score? Cut it if so',
+      needsYou: 'a week of your own sets and your read of the line — a product call, not a check',
+    },
+    {
       id: 'sets-remembered',
       entry: 'ui',
       kind: 'nominal',
@@ -175,9 +222,28 @@ export const fluxHistory: Scenario = {
       },
     },
     {
+      id: 'week-note',
+      entry: 'api',
+      proves: ['week-note'],
+      title:
+        'getFluxWeekNote: at most 140 characters, names chin tuck, stable across a second call',
+      async run(ctx) {
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (!note)
+          throw new Error('no note after the scenario’s sets (expected at least two this week)');
+        if (note.text.length > 140)
+          throw new Error(`note is ${note.text.length} chars: ${note.text}`);
+        if (!/chin tuck/i.test(note.text)) throw new Error(`note names no chin tuck: ${note.text}`);
+        const again = await ctx.api.reads.getFluxWeekNote();
+        if (again?.generatedAt !== note.generatedAt || again.text !== note.text)
+          throw new Error('a second read rebuilt the note');
+        ctx.log(`note: ${note.text}`);
+      },
+    },
+    {
       id: 'history',
       entry: 'ui',
-      proves: ['history', 'sparkline', 'chip-order'],
+      proves: ['history', 'sparkline', 'history-note', 'chip-order'],
       title:
         'History lists both, the stopped one marked; deleting it holds the chips’ order; the rotation trend’s sparkline spans its tile',
       async run(ctx) {
@@ -196,10 +262,19 @@ export const fluxHistory: Scenario = {
         await ctx.ui.expectText(EXERCISE, 15_000);
         await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
         await ctx.ui.expectText(/2 of 6 holds · stopped early/, 15_000);
+        // The week's note sits above the chips — the same text the API handed back.
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (!note) throw new Error('no week note for History to show');
+        const chips = ctx.page.getByRole('group', { name: 'Exercise' });
+        const line = ctx.page.getByText(note.text, { exact: true });
+        await line.waitFor({ state: 'visible', timeout: 15_000 });
+        const lineBox = await line.boundingBox();
+        const chipsBox = await chips.boundingBox();
+        if (!lineBox || !chipsBox || lineBox.y >= chipsBox.y)
+          throw new Error('the week note is not above the exercise chips');
         await ctx.shot('history');
         // The stopped tuck is this run's own newest set: delete it from the screen, the chips hold still.
-        const chips = () => ctx.page.getByRole('group', { name: 'Exercise' }).textContent();
-        const before = await chips();
+        const before = await chips.textContent();
         const stopped = ctx.page.getByText(/2 of 6 holds · stopped early/);
         await stopped
           .locator('xpath=ancestor::*[.//button[starts-with(@aria-label, "Delete ")]][1]')
@@ -207,7 +282,7 @@ export const fluxHistory: Scenario = {
           .click();
         await ctx.page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
         await stopped.waitFor({ state: 'hidden', timeout: 15_000 });
-        const after = await chips();
+        const after = await chips.textContent();
         if (!before?.includes('rotation') || before !== after)
           throw new Error(`the chips moved: ${before} → ${after}`);
         await ctx.shot('history-after-delete');
@@ -306,12 +381,18 @@ export const fluxHistory: Scenario = {
     {
       id: 'night-line',
       entry: 'ui',
-      proves: ['night-line'],
-      title: 'Night home says "Flux · … chin tuck"',
+      proves: ['night-line', 'night-note'],
+      title: 'Night home says "Flux · … chin tuck", with the week’s note under it in the same link',
       async run(ctx) {
         await ctx.ui.goto('/');
         await ctx.page.getByRole('button', { name: 'Night', exact: true }).click();
         await ctx.ui.expectText(/^Flux · .*chin tuck/, 15_000);
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (!note) throw new Error('no week note for the night home to show');
+        const link = ctx.page.getByRole('link', { name: /^Flux · .*chin tuck/ });
+        await link
+          .getByText(note.text, { exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
         await ctx.shot('night');
       },
     },

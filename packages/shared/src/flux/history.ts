@@ -1,9 +1,9 @@
 // Saved Flux sets (docs/areas/flux, D47–D54): the helpers the History tab, the night line, both ApiClient
 // impls and the MCP tools share, so they label, validate and summarise a set the same way.
 
-import { isDayKey } from '../dates';
+import { addDays, isDayKey, weekdayOf } from '../dates';
 import { isUlid } from '../ulid';
-import type { FluxSet, FluxSide } from '../types';
+import type { FluxSet, FluxSide, FluxWeekNote, FluxWeekNoteRow } from '../types';
 import type { FluxSetFilter, RecordFluxSetInput } from '../api';
 import { CONDITION_LABELS } from './catalog';
 import { getExercise, isExerciseId, type ExerciseId } from './definitions';
@@ -225,3 +225,163 @@ export function summarizeSets(
     })
     .join(', ');
 }
+
+// --- The weekly note (D62) ---------------------------------------------------------------------------
+
+// Per exercise over a window: how many sets, and its number first → latest (oldest first). A stopped
+// set's angle counts, as in History's trend; its count doesn't — one hold of six would read as a
+// collapse (D55). How many were stopped early is counted beside it. The MCP's list_flux_sets `summary`
+// is this shape, and the weekly note builds on it.
+export interface FluxExerciseSummary {
+  exerciseId: string;
+  exercise: string;
+  sets: number;
+  stoppedEarly: number;
+  metric?: string;
+  unit?: string;
+  first?: number;
+  latest?: number;
+  betterWhen?: SetMetric['betterWhen'];
+  target?: number;
+}
+
+export function fluxExerciseSummary(sets: readonly FluxSet[]): FluxExerciseSummary[] {
+  const byId = new Map<string, FluxSet[]>();
+  for (const s of [...sets].sort((a, b) => a.completedAt - b.completedAt)) {
+    const list = byId.get(s.exerciseId) ?? [];
+    list.push(s);
+    byId.set(s.exerciseId, list);
+  }
+  return [...byId].map(([id, list]) => {
+    const def = isExerciseId(id) ? getExercise(id) : null;
+    const stopped = list.filter((s) => s.stoppedEarly).length;
+    const metrics = def
+      ? list.flatMap((s) => {
+          const m = setMetric(def, s);
+          return m && (!s.stoppedEarly || m.unit === '°') ? [m] : [];
+        })
+      : [];
+    const first = metrics[0];
+    const latest = metrics.at(-1);
+    return {
+      exerciseId: id,
+      exercise: def?.name ?? id,
+      sets: list.length,
+      stoppedEarly: stopped,
+      ...(first && latest
+        ? {
+            metric: latest.label,
+            unit: latest.unit,
+            first: first.value,
+            latest: latest.value,
+            betterWhen: latest.betterWhen,
+            ...(latest.target !== undefined ? { target: latest.target } : {}),
+          }
+        : {}),
+    };
+  });
+}
+
+// Weeks start on Monday (ISO), keyed by the user's day — so a late set before dayStartHour is Sunday's.
+export const fluxWeekStart = (day: string): string => addDays(day, -((weekdayOf(day) + 6) % 7));
+
+export interface FluxWeekExercise extends FluxExerciseSummary {
+  sides: { right: number; left: number } | null; // the three one-sided stretches
+  lastWeek: { sets: number; latest?: number } | null; // null: not done last week
+}
+
+export interface FluxWeekSummary {
+  weekStart: string; // Monday
+  weekEnd: string; // Sunday
+  totalSets: number;
+  lastWeekSets: number;
+  exercises: FluxWeekExercise[]; // most sets first, then as first done
+}
+
+const inWeek = (set: Pick<FluxSet, 'day'>, weekStart: string): boolean =>
+  set.day >= weekStart && set.day <= addDays(weekStart, 6);
+
+// This week against last, from alive sets (the caller filters deleted ones).
+export function fluxWeekSummary(sets: readonly FluxSet[], weekStart: string): FluxWeekSummary {
+  const week = sets.filter((s) => inWeek(s, weekStart));
+  const prev = sets.filter((s) => inWeek(s, addDays(weekStart, -7)));
+  const last = new Map(fluxExerciseSummary(prev).map((e) => [e.exerciseId, e]));
+  const exercises = fluxExerciseSummary(week)
+    .map((e): FluxWeekExercise => {
+      const def = isExerciseId(e.exerciseId) ? getExercise(e.exerciseId) : null;
+      const sided = def && hasSide(def);
+      const mine = week.filter((s) => s.exerciseId === e.exerciseId);
+      const before = last.get(e.exerciseId);
+      return {
+        ...e,
+        sides: sided
+          ? {
+              right: mine.filter((s) => s.side && sideLabel(def, s.side) === 'Right').length,
+              left: mine.filter((s) => s.side && sideLabel(def, s.side) === 'Left').length,
+            }
+          : null,
+        lastWeek: before
+          ? { sets: before.sets, ...(before.latest !== undefined ? { latest: before.latest } : {}) }
+          : null,
+      };
+    })
+    .sort((a, b) => b.sets - a.sets);
+  return {
+    weekStart,
+    weekEnd: addDays(weekStart, 6),
+    totalSets: week.length,
+    lastWeekSets: prev.length,
+    exercises,
+  };
+}
+
+export const FLUX_NOTE_MAX = 140;
+
+// The line the note is made from, and the note itself when the model can't be asked: descriptive only,
+// no judgement — counts, the angle first → latest, last week beside it. Always under FLUX_NOTE_MAX.
+export function fluxWeekLine(s: FluxWeekSummary): string {
+  const parts = s.exercises.map((e, i) => {
+    const name = isExerciseId(e.exerciseId) ? SHORT_NAMES[e.exerciseId] : e.exerciseId;
+    const n = i === 0 ? `${e.sets} ${e.sets === 1 ? 'set' : 'sets'} ${name}` : `${e.sets} ${name}`;
+    const angle =
+      e.unit === '°' && e.first !== undefined && e.latest !== undefined && e.sets > 1
+        ? ` ${Math.round(e.first)}° → ${Math.round(e.latest)}°`
+        : '';
+    return n + angle;
+  });
+  const tail = s.lastWeekSets ? `last week ${s.lastWeekSets}` : 'first week';
+  return clip(`This week: ${parts.join(', ')} · ${tail}`, FLUX_NOTE_MAX);
+}
+
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), max - 24))}…`;
+}
+
+// The cache key of a stored note: at most one model call per saved (or deleted) set — a note is rebuilt
+// only when this week's alive sets change.
+export const fluxNoteFingerprint = (
+  weekSets: readonly Pick<FluxSet, 'id' | 'completedAt'>[],
+): string =>
+  `${weekSets.length}:${[...weekSets].sort((a, b) => b.completedAt - a.completedAt)[0]?.id ?? ''}`;
+
+export const FLUX_NOTE_MIN_SETS = 2;
+
+// A note the server may hand back: a trimmed, non-empty line within the cap, carrying no number the
+// summary doesn't (the model is asked to describe, never to invent). Anything else → the line.
+export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): string | null {
+  if (typeof note !== 'string') return null;
+  const text = note.trim().replace(/\s+/g, ' ');
+  if (!text || text.length > FLUX_NOTE_MAX) return null;
+  const allowed = new Set((line + ' ' + JSON.stringify(s)).match(/\d+(?:\.\d+)?/g) ?? []);
+  for (const n of text.match(/\d+(?:\.\d+)?/g) ?? []) if (!allowed.has(n)) return null;
+  return text;
+}
+
+// The row minus its cache key — what the API hands back.
+export const fluxNoteOf = ({ weekStart, text, generatedAt }: FluxWeekNoteRow): FluxWeekNote => ({
+  weekStart,
+  text,
+  generatedAt,
+});

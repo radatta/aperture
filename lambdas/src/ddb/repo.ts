@@ -23,6 +23,7 @@ import type {
   Task,
   TaskPlan,
   TaskSeries,
+  FluxWeekNoteRow,
 } from '@aperture/shared';
 import { ConditionFailedError, SK_END } from './DocClient';
 import type { DocClient, Item, QueryOpts } from './DocClient';
@@ -148,6 +149,16 @@ export class Repo {
   async putFluxSet(f: FluxSet): Promise<FluxSet> {
     await this.writes.put(entityItem(this.userId, sk.flux(f.day, f.id), f));
     return f;
+  }
+
+  // --- Flux weekly note (D62) ---
+  async getFluxWeekNote(weekStart: string): Promise<FluxWeekNoteRow | null> {
+    const it = await this.doc.get(this.p(), sk.fluxNote(weekStart));
+    return it ? toEntity<FluxWeekNoteRow>(it) : null;
+  }
+  async putFluxWeekNote(n: FluxWeekNoteRow): Promise<FluxWeekNoteRow> {
+    await this.writes.put(entityItem(this.userId, sk.fluxNote(n.weekStart), n));
+    return n;
   }
 
   // --- Tasks ---

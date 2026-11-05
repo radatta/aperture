@@ -14,6 +14,7 @@ import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
 import { Text } from '../../components/Text';
+import { useFluxWeekNote } from '../../data/hooks/useFluxWeekNote';
 import { useFluxSets } from '../../data/hooks/useFluxSets';
 import { useSettings } from '../../data/hooks/useSettings';
 import { cx } from '../../lib/cx';
@@ -38,6 +39,7 @@ export function FluxHistoryTab() {
     keepPrevious: true, // the toggle below changes the window; the list stays up meanwhile
   });
   const loading = q.isPending || q.isPlaceholderData;
+  const note = useFluxWeekNote(); // the week's one line above the chips (D62)
   const sets = q.data ?? [];
   // Chips in the catalogue's order, not the sets': a list ordered by newest set would move a chip
   // whenever its latest set is deleted (or a newer set of another exercise lands).
@@ -80,6 +82,17 @@ export function FluxHistoryTab() {
           className={cx('flex flex-col gap-4', q.isPlaceholderData && 'opacity-60')}
           aria-busy={loading}
         >
+          {note.isError ? (
+            <Text as="p" size="sm" tone="danger">
+              Couldn’t load this week’s note
+            </Text>
+          ) : (
+            note.data && (
+              <Text as="p" size="sm" tone="muted">
+                {note.data.text}
+              </Text>
+            )
+          )}
           <div ref={chipsRef}>
             <Chips
               label="Exercise"

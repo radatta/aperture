@@ -282,6 +282,9 @@ describe('night: the Flux line (D51)', () => {
     await user.click(screen.getByRole('button', { name: 'Night' }));
     const line = await screen.findByText('Flux · 2 sets rotation, 1 upper trap');
     expect(line.closest('a')?.getAttribute('href')).toBe('/flux/history');
+    // The week's note (D62) rides under it, in the same link — the stub's note is the deterministic line.
+    const note = await screen.findByText(/^This week: .*rotation/);
+    expect(note.closest('a')).toBe(line.closest('a'));
     await user.click(screen.getByRole('button', { name: 'Morning' }));
     await waitFor(() => expect(screen.queryByText(/^Flux ·/)).toBeNull());
   });

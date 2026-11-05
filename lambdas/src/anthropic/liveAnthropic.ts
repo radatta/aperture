@@ -1,7 +1,13 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { ModelOutcome } from '@aperture/shared';
-import type { AnthropicGateway, ParseRequest } from './gateway';
+import type { AnthropicGateway, FluxNoteRequest } from './gateway';
 import { PARSE_MODEL, parseOutputSchema, parseSystemPrompt } from './parsePrompt';
+import {
+  fluxNoteOutputSchema,
+  fluxNoteSystemPrompt,
+  fluxNoteUserContent,
+  NOTE_MODEL,
+} from './fluxNotePrompt';
 
 // The live Claude API gateway: one raw fetch to /v1/messages (no SDK — a single fixed POST is neither
 // substantial logic nor subtle correctness, and matches the hand-rolled Google/Plaid gateways) plus the
@@ -51,7 +57,17 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
   };
   const isTimeout = (err: unknown) => ['TimeoutError', 'AbortError'].includes((err as Error).name);
 
-  async function call(req: ParseRequest): Promise<Called> {
+  // One structured-output call: a system prompt, one user message, a JSON schema for the answer.
+  interface Call {
+    model: string;
+    system: string;
+    user: string;
+    schema: Record<string, unknown>;
+    maxTokens: number;
+    timeoutMs: number;
+  }
+
+  async function call(req: Call): Promise<Called> {
     let k: string | null;
     try {
       k = await apiKey();
@@ -74,18 +90,15 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: PARSE_MODEL,
-          max_tokens: 2048,
+          model: req.model,
+          max_tokens: req.maxTokens,
           thinking: { type: 'disabled' },
           output_config: {
             effort: 'low',
-            format: {
-              type: 'json_schema',
-              schema: parseOutputSchema(req.categories.map((c) => c.id)),
-            },
+            format: { type: 'json_schema', schema: req.schema },
           },
-          system: parseSystemPrompt(req.today, req.categories),
-          messages: [{ role: 'user', content: req.text }],
+          system: req.system,
+          messages: [{ role: 'user', content: req.user }],
         }),
         signal: AbortSignal.timeout(req.timeoutMs),
       });
@@ -135,7 +148,14 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
   return {
     async parseTask(req) {
       const started = Date.now();
-      const { meta, ...out } = await call(req);
+      const { meta, ...out } = await call({
+        model: PARSE_MODEL,
+        system: parseSystemPrompt(req.today, req.categories),
+        user: req.text,
+        schema: parseOutputSchema(req.categories.map((c) => c.id)),
+        maxTokens: 2048,
+        timeoutMs: req.timeoutMs,
+      });
       // status + stop_reason tell a revoked key (401) from a rate limit (429), an overload (529), a
       // refusal or max_tokens — all `reason: 'api'` to the caller.
       log(
@@ -147,6 +167,31 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
           stop_reason: meta?.stop,
           ms: Date.now() - started,
           chars: req.text.length,
+          input_tokens: meta?.usage?.input_tokens,
+          output_tokens: meta?.usage?.output_tokens,
+        }),
+      );
+      return out;
+    },
+    async fluxWeekNote(req: FluxNoteRequest) {
+      const started = Date.now();
+      const { meta, ...out } = await call({
+        model: NOTE_MODEL,
+        system: fluxNoteSystemPrompt(),
+        user: fluxNoteUserContent(req.line, req.summary),
+        schema: fluxNoteOutputSchema(),
+        maxTokens: 256,
+        timeoutMs: req.timeoutMs,
+      });
+      log(
+        JSON.stringify({
+          event: 'flux_week_note',
+          ok: out.ok,
+          reason: out.ok ? undefined : out.reason,
+          status: meta?.status,
+          stop_reason: meta?.stop,
+          ms: Date.now() - started,
+          sets: req.summary.totalSets,
           input_tokens: meta?.usage?.input_tokens,
           output_tokens: meta?.usage?.output_tokens,
         }),

@@ -15,6 +15,7 @@ export const qk = {
   stories: () => ['stories'] as const,
   // Flux sets: one prefix, so a save or delete refreshes every History / night-line read.
   fluxSetsAll: () => ['fluxSets'] as const,
+  fluxWeekNote: () => ['fluxSets', 'weekNote'] as const, // under fluxSets: a saved or deleted set refreshes it
   fluxSets: (from = 'all', to = 'all', exerciseId = 'all') =>
     ['fluxSets', from, to, exerciseId] as const,
   attachments: () => ['attachments'] as const,

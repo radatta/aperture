@@ -186,6 +186,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listTasks: async () => [...tasks.values()],
       listBacklog: async () => [],
       getSettings: async () => settings,
+      getFluxWeekNote: async () => null,
       listRunningSessions: async () => [],
       listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,

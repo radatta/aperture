@@ -382,6 +382,9 @@ export function createApiClient({
     listRunningSessions: () => call<DevSession[]>('listRunningSessions', []),
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
+    // The weekly note (D62): a read that may write the cached row — the app's own read, not a scenario write.
+    getFluxWeekNote: () =>
+      call<{ weekStart: string; text: string; generatedAt: number } | null>('getFluxWeekNote', []),
     // Alive only — a deleted set reads as gone, like getTask.
     getFluxSet: async (id: string) =>
       (await call<DevFluxSet[]>('listFluxSets', [{}])).find((f) => f.id === id) ?? null,

@@ -112,6 +112,7 @@ export const API_METHODS = [
   'removePlaidItem',
   'requestFinanceSync',
   'exportData',
+  'getFluxWeekNote',
 ] as const;
 
 export type ApiMethod = (typeof API_METHODS)[number];

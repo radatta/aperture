@@ -31,6 +31,7 @@ import type {
   TaskPlan,
   TaskSeries,
   TaskStatus,
+  FluxWeekNote,
 } from './types';
 import type { Area } from './areas';
 import type { CompetencyTag } from './stories';
@@ -523,6 +524,9 @@ export interface ApiClient {
   recordFluxSet(input: RecordFluxSetInput): Promise<FluxSet>;
   listFluxSets(filter?: FluxSetFilter): Promise<FluxSet[]>;
   deleteFluxSet(id: string): Promise<void>;
+  // The weekly note (D62): this week's cached line, or null under two sets this week. A read that may
+  // write (the first call after a set changes rebuilds and stores it) — never a model call per request.
+  getFluxWeekNote(): Promise<FluxWeekNote | null>;
 
   // Behavioral story bank — STAR stories authored in-app, tagged by competency. list is alive-filtered,
   // updatedAt desc; delete is a soft-delete (tombstoned, filtered from list).

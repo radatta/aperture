@@ -4,6 +4,7 @@ import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, dayKeyInZone, USER_TIME_ZONE } from './dates';
+import { fluxWeekStart } from './flux/history';
 import { REP_NO_SPLIT_ERROR } from './split';
 import { FUTURE_DAY_ERROR } from './machines';
 import { SERIES_OFFSET_ERROR, SERIES_UNTIL_ERROR } from './recurrence';
@@ -2779,6 +2780,41 @@ export function runApiContract(
       expect((await api.exportData()).places.map((p) => p.slug)).toEqual(['safeway']);
       await api.revokePlaceToken();
       expect((await api.getPlaceTokenStatus()).active).toBe(false);
+    });
+
+    // --- Flux weekly note (D62) ----------------------------------------------
+    describe('flux week note', () => {
+      const week = (over: Partial<RecordFluxSetInput> = {}) =>
+        fluxSet({ day: dayKeyInZone(clock, USER_TIME_ZONE, 4), completedAt: clock, ...over }); // the user's day, as the Lambda reads it
+
+      it('is null under two sets this week, then a line within the cap naming the exercise, cached until a set changes', async () => {
+        expect(await api.getFluxWeekNote()).toBeNull();
+        await api.recordFluxSet(week({ completedAt: clock - 2000 }));
+        expect(await api.getFluxWeekNote()).toBeNull();
+        const second = await api.recordFluxSet(week({ completedAt: clock - 1000 }));
+        const note = await api.getFluxWeekNote();
+        expect(note).not.toBeNull();
+        expect(note!.weekStart).toBe(fluxWeekStart(dayKeyInZone(clock, USER_TIME_ZONE, 4)));
+        expect(note!.text.length).toBeLessThanOrEqual(140);
+        expect(note!.text).toContain('rotation');
+        expect(await api.getFluxWeekNote()).toEqual(note); // the same note until a set is saved or deleted
+        const third = await api.recordFluxSet(
+          week({
+            exerciseId: 'chin-tuck',
+            kind: 'holdAtTarget',
+            avgPeakDeg: null,
+            count: 6,
+            planned: 6,
+          }),
+        );
+        const next = await api.getFluxWeekNote();
+        expect(next!.text).toContain('chin tuck');
+        expect(next!.text).not.toBe(note!.text);
+        await api.deleteFluxSet(third.id);
+        expect((await api.getFluxWeekNote())!.text).toBe(note!.text);
+        await api.deleteFluxSet(second.id);
+        expect(await api.getFluxWeekNote()).toBeNull(); // one set this week again
+      });
     });
   });
 }

@@ -277,6 +277,18 @@ export interface Settings extends BaseEntity {
   fluxSets: Partial<Record<ExerciseId, number>>; // default {}
 }
 
+// Flux's weekly note (D62): one cached line per week, written by the model from this week's sets (or the
+// deterministic line when it can't be), rebuilt when the week's sets change. `fingerprint` is the
+// server's cache key; the API hands back the rest.
+export interface FluxWeekNote {
+  weekStart: string; // Monday, YYYY-MM-DD
+  text: string; // at most 140 characters
+  generatedAt: number; // epoch ms
+}
+export interface FluxWeekNoteRow extends FluxWeekNote {
+  fingerprint: string;
+}
+
 // --- Calibration (derived, read-only) -------------------------------------
 export interface CalibrationPoint {
   taskId: string;
