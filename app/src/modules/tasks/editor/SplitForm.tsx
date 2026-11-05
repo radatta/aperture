@@ -7,6 +7,8 @@ import { ModeToggle } from '../../../components/ModeToggle';
 import { Text } from '../../../components/Text';
 import { useSplitTask } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
+import { liveElapsedMin } from '../../home/rightNow';
+import { usePomodoro } from '../../pomodoro/pomodoro-context';
 import { SPLIT_TITLE_SUFFIX, splitDefaults } from '../taskMath';
 import { useEditSlot } from './editState';
 import type { EditSlots } from './editState';
@@ -21,7 +23,9 @@ const str = (n: number | null) => n?.toString() ?? '';
 // feeds calibration, like Mark done) or keeps going (rescoped), and the rest becomes a new part with its
 // own estimate. A standalone task becomes Part 1 under a new parent that keeps its deadline — all three
 // titles are editable here, so what's typed is what's stored; a part (`parentTitle` set) gains a sibling.
-// Never cancels. `onDone(finish)` lets the editor close on done and stay open on keep.
+// Never cancels. `onDone(finish)` lets the editor close on done and stay open on keep. A done split stops
+// this task's running timer first, like Mark done (DoneForm): the actual prefills from the live elapsed, and
+// the typed one replaces what the stop lands. A stop that doesn't land keeps the form and the timer.
 export function SplitForm({
   task,
   parentTitle,
@@ -37,15 +41,17 @@ export function SplitForm({
 }) {
   const standalone = !task.parentId;
   const split = useSplitTask();
+  const { timers, stop } = usePomodoro();
   // "Done" is only a legal finish once work has started — the state machine forbids backlog|planned →
   // done. An unstarted task can only keep going, so there's no choice to offer.
   const canFinishDone = canTransitionTask(task.status, 'done');
   const [finish, setFinish_] = useState<Finish>(canFinishDone ? 'done' : 'keep');
   const [deliverable, setDeliverable] = useState(task.title);
   const [title, setTitle] = useState(standalone ? STANDALONE_PART_TITLE : task.title);
-  const [actual, setActual] = useState(() =>
-    task.actualAccruedMin > 0 ? String(Math.round(task.actualAccruedMin)) : '',
-  );
+  const [actual, setActual] = useState(() => {
+    const tracked = Math.round(liveElapsedMin(task, timers));
+    return tracked > 0 ? String(tracked) : '';
+  });
   const [estimate, setEstimate] = useState(str(splitDefaults(task, 'keep').thisPart));
   const [restTitle, setRestTitle] = useState(
     standalone ? 'Part 2' : `${task.title}${SPLIT_TITLE_SUFFIX}`,
@@ -64,6 +70,7 @@ export function SplitForm({
   // Set here, not read from the mutation (TanStack's isPending lands a tick later): the modal reads the
   // slot on the very next event.
   const [splitting, setSplitting] = useState(false);
+  const [stopFailed, setStopFailed] = useState(false);
   // Typed but not split asks before an exit; a split on its way holds it. The mode toggle alone isn't
   // an edit, and neither is the rest's estimate it re-defaults.
   const [initial] = useState(() => ({ deliverable, title, actual, estimate, restTitle }));
@@ -102,7 +109,15 @@ export function SplitForm({
   async function submit() {
     if (!canSubmit || splitting) return;
     setSplitting(true);
+    setStopFailed(false);
     try {
+      if (done)
+        for (const t of timers)
+          if (t.session.kind === 'work' && t.session.taskId === task.id)
+            await stop(t.session.id).catch((e: unknown) => {
+              setStopFailed(true);
+              throw e;
+            });
       const { original } = await split.mutateAsync({
         id: task.id,
         input: {
@@ -252,7 +267,7 @@ export function SplitForm({
           Cancel
         </Button>
       </div>
-      {split.isError && (
+      {(stopFailed || split.isError) && (
         <div role="alert">
           <Text size="xs" tone="danger">
             Couldn&apos;t split this task. Please try again.

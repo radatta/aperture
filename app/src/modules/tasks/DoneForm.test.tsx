@@ -3,12 +3,39 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TASK_REFLECTION_MAX } from '@aperture/shared';
 import type { ApiClient, Task } from '@aperture/shared';
+import type { ReactNode } from 'react';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
+import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { DoneForm } from './DoneForm';
 
-function api(): ApiClient {
-  return createStubClient({ seed: false, storageKey: `done-${Math.random()}` });
+function api(now?: () => number): ApiClient {
+  return createStubClient({ seed: false, storageKey: `done-${Math.random()}`, now });
+}
+
+// Mounts its children once the timer engine has adopted a running session, as the real app has long before a
+// Done form opens — the form reads the running timers when it mounts.
+function WhenAdopted({ children }: { children: ReactNode }) {
+  const { timers } = usePomodoro();
+  return timers.length ? children : null;
+}
+
+// A task with a work timer that has already run `minutesAgo` minutes: the stub's clock sits that far behind
+// while the session starts, and a heartbeat at real time banks the gap (and keeps the timer fresh enough for
+// the engine to adopt it rather than hold it as stale).
+async function timed(minutesAgo: number) {
+  let behindMs = minutesAgo * 60_000;
+  const client = api(() => Date.now() - behindMs);
+  const task = await started(client);
+  const session = await client.startSession({
+    taskId: task.id,
+    categoryId: null,
+    kind: 'work',
+    day: '2026-08-04',
+  });
+  behindMs = 0;
+  await client.heartbeatSession(session.id);
+  return { client, task, session };
 }
 
 async function started(client: ApiClient): Promise<Task> {
@@ -87,6 +114,69 @@ describe('DoneForm', () => {
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Mark done' }).disabled).toBe(
       false,
     );
+  });
+
+  it('Mark done stops the running session first; its minutes land, the typed actual stands', async () => {
+    const { client, task, session } = await timed(7);
+    const order: string[] = [];
+    const stopSession = client.stopSession.bind(client);
+    const setTaskActual = client.setTaskActual.bind(client);
+    vi.spyOn(client, 'stopSession').mockImplementation((...a) => {
+      order.push('stop');
+      return stopSession(...a);
+    });
+    vi.spyOn(client, 'setTaskActual').mockImplementation((...a) => {
+      order.push('actual');
+      return setTaskActual(...a);
+    });
+    const onDone = vi.fn();
+    renderWithProviders(
+      <WhenAdopted>
+        <DoneForm task={task} onDone={onDone} />
+      </WhenAdopted>,
+      { api: client },
+    );
+    const user = userEvent.setup();
+    // Prefilled from the live timer, not the task's persisted 0.
+    const actual = await screen.findByLabelText<HTMLInputElement>('Actual (min)');
+    expect(actual.value).toBe('7');
+
+    await user.clear(actual);
+    await user.type(actual, '30');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+
+    expect(order).toEqual(['stop', 'actual']);
+    expect(await client.listRunningSessions()).toEqual([]);
+    const stopped = (await client.listSessionsForDay('2026-08-04')).find((s) => s.id === session.id);
+    expect(stopped?.status).toBe('completed');
+    expect(stopped?.activeMinutes).toBeCloseTo(7, 0); // history keeps the time
+    expect(await client.getTask(task.id)).toMatchObject({ status: 'done', actualAccruedMin: 30 });
+  });
+
+  it('a stop that fails keeps the form, the timer and the typed actual; the task stays in progress', async () => {
+    const { client, task, session } = await timed(2);
+    vi.spyOn(client, 'stopSession').mockRejectedValue(new Error('offline'));
+    const setActual = vi.spyOn(client, 'setTaskActual');
+    const onDone = vi.fn();
+    renderWithProviders(
+      <WhenAdopted>
+        <DoneForm task={task} onDone={onDone} />
+      </WhenAdopted>,
+      { api: client },
+    );
+    const user = userEvent.setup();
+    const actual = await screen.findByLabelText<HTMLInputElement>('Actual (min)');
+    await user.clear(actual);
+    await user.type(actual, '25');
+    await user.click(screen.getByRole('button', { name: 'Mark done' }));
+
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Couldn’t mark it done/);
+    expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('25');
+    expect(onDone).not.toHaveBeenCalled();
+    expect(setActual).not.toHaveBeenCalled(); // nothing after a stop that didn't land
+    expect((await client.listRunningSessions()).map((s) => s.id)).toEqual([session.id]);
+    expect((await client.getTask(task.id))?.status).toBe('in_progress');
   });
 
   it('a failed Mark done keeps the reflection text', async () => {

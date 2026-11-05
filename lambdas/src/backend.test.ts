@@ -9,7 +9,7 @@ import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
 import { fakeObjectStore } from './s3/objects';
 import type { Presigner } from './s3/presigner';
-import { ulid, type RecordFluxSetInput, type Task } from '@aperture/shared';
+import { ulid, type PomodoroSession, type RecordFluxSetInput, type Task } from '@aperture/shared';
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -841,5 +841,76 @@ describe('setTaskActual over RPC', () => {
     await expect(rpc('setTaskActual', [t.id, 99, 'x'.repeat(1001)])).rejects.toThrow(/1,000/);
     const after = (await rpc('getTask', [t.id])) as Task;
     expect(after).toMatchObject({ actualAccruedMin: 45, reflection: null }); // the 99 never landed
+  });
+});
+
+// The devcheck's timer-credit scenario names this as the off-dev proof for its api row (the harness never
+// writes sessions); the shared contract suite runs the same case against the stub for parity.
+describe('stopSession over RPC onto a finished task', () => {
+  it('a stop onto a finished task completes with its minutes but adds none to the task', async () => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const now = () => clock;
+    const rpc = (
+      method:
+        | 'createTask'
+        | 'transitionTask'
+        | 'startSession'
+        | 'stopSession'
+        | 'heartbeatSession'
+        | 'resolveStaleSession'
+        | 'setTaskActual'
+        | 'getTask',
+      args: unknown[],
+    ) => handleRpc(doc, { userId: 'local', method, args, now }, { presigner: fakePresigner() });
+    const t = (await rpc('createTask', [{ title: 'pset', estimateMin: 30 }])) as Task;
+    await rpc('transitionTask', [t.id, 'in_progress']);
+    const s = (await rpc('startSession', [
+      { taskId: t.id, categoryId: null, kind: 'work', day: '2026-08-04' },
+    ])) as PomodoroSession;
+    await rpc('setTaskActual', [t.id, 10]);
+    await rpc('transitionTask', [t.id, 'done']);
+    clock += 5 * 60_000;
+    const stopped = (await rpc('stopSession', [s.id, 'completed'])) as PomodoroSession;
+    expect(stopped).toMatchObject({ status: 'completed', activeMinutes: 5 });
+    expect((await rpc('getTask', [t.id])) as Task).toMatchObject({ actualAccruedMin: 10 });
+
+    const dropped = (await rpc('createTask', [{ title: 'dropped' }])) as Task;
+    await rpc('transitionTask', [dropped.id, 'in_progress']);
+    const s2 = (await rpc('startSession', [
+      { taskId: dropped.id, categoryId: null, kind: 'work', day: '2026-08-04' },
+    ])) as PomodoroSession;
+    await rpc('transitionTask', [dropped.id, 'cancelled']);
+    clock += 3 * 60_000;
+    await rpc('stopSession', [s2.id, 'completed']);
+    expect((await rpc('getTask', [dropped.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
+  });
+
+  it('keeping a stale timer onto a finished task completes it with its minutes but adds none', async () => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const now = () => clock;
+    const rpc = (
+      method:
+        | 'createTask'
+        | 'transitionTask'
+        | 'startSession'
+        | 'heartbeatSession'
+        | 'resolveStaleSession'
+        | 'getTask',
+      args: unknown[],
+    ) => handleRpc(doc, { userId: 'local', method, args, now }, { presigner: fakePresigner() });
+    const t = (await rpc('createTask', [{ title: 'left running' }])) as Task;
+    await rpc('transitionTask', [t.id, 'in_progress']);
+    const s = (await rpc('startSession', [
+      { taskId: t.id, categoryId: null, kind: 'work', day: '2026-08-04' },
+    ])) as PomodoroSession;
+    clock += 3 * 60_000;
+    await rpc('heartbeatSession', [s.id]);
+    await rpc('transitionTask', [t.id, 'cancelled']);
+    clock += 60 * 60_000; // the app was closed; found stale on the next open
+    const kept = (await rpc('resolveStaleSession', [s.id, 'keep'])) as PomodoroSession;
+    expect(kept).toMatchObject({ status: 'completed', activeMinutes: 3 });
+    expect((await rpc('getTask', [t.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
   });
 });

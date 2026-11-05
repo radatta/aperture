@@ -6,6 +6,7 @@ import { todayKey } from '@aperture/shared';
 import { useApi } from '../../data/api-context';
 import { useSettings } from '../../data/hooks/useSettings';
 import { invalidateTaskData } from '../../data/hooks/invalidate';
+import { isNotFound } from '../../data/retry';
 import { qk } from '../../data/queryKeys';
 import { PomodoroContext } from './pomodoro-context';
 import type { RunningTimer, StartFocusInput } from './pomodoro-context';
@@ -283,23 +284,25 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   // never counts. A timer sitting on "done" is NOT reset: if the block ended behind a locked phone, its last
   // stretch was never beaten either, and a reset would drop it. It over-credits the wait on "done" instead,
   // as before; capping that needs a capped heartbeat on the server (follow-up).
+  // Not found means the server has no running row by that id: the stop already landed (its response was
+  // lost, or another device stopped it), so it's settled here too — Mark done waits on this, and a row stuck
+  // on "Couldn't stop" would hold it until a reload re-adopted. The task's accrual is re-read either way.
   const stop = useCallback(
     (id: string, status: 'completed' | 'discarded' = 'completed') => {
       clear(id);
       const reset = status === 'completed' && beatRef.current.pausedIds.has(id);
+      const settled = () => {
+        invalidateTaskData(qc);
+        remove(id);
+      };
       return (reset ? api.resumeSession(id).then(() => undefined) : Promise.resolve())
         .then(() => api.stopSession(id, status))
-        .then(
-          () => {
-            invalidateTaskData(qc);
-            remove(id);
-          },
-          (e: unknown) => {
-            // The timer stays: a stop that didn't land never looks like it did.
-            fail(id, 'Couldn’t stop — try again.');
-            throw e;
-          },
-        );
+        .then(settled, (e: unknown) => {
+          if (isNotFound(e)) return settled();
+          // The timer stays: a stop that didn't land never looks like it did.
+          fail(id, 'Couldn’t stop — try again.');
+          throw e;
+        });
     },
     [api, qc, remove, fail, clear],
   );
