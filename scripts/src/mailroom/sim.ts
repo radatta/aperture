@@ -56,8 +56,8 @@ export const TAP_DENY = [
   'add place',
 ];
 // sim.sh's device profile screen, in points: coordinates past it are refused (runner-fixtures.test.ts pins both).
-export const SIM_W = 402;
-export const SIM_H = 874;
+export const SIM_W = 440;
+export const SIM_H = 956;
 
 type Tab = (typeof TABS)[number];
 type Role = (typeof ROLES)[number];

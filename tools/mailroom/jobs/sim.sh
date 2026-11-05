@@ -15,27 +15,27 @@ SIM_COGNITO_RE='^aperture-dev-618015769091\.auth\.us-west-1\.amazoncognito\.com$
 SIM_KB="com.apple.keyboard.preferences"
 # --- the device profile: every fixed point the recipes use, in points (SIM_W×SIM_H), measured on the device
 # type below (IOS-CHECK.md → Device profile). A sim of any other type is PROFILE_MISMATCH, never mis-aimed taps.
-SIM_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-17"
-SIM_W=402
-SIM_H=874
-SIM_X=200                                      # the probe column for centred controls
-SIM_Y_HOME=813                                 # Home's capture bar, no keyboard: the signed-in landmark
-SIM_Y_SIGNIN=488                               # the Sign in card's button: the signed-out landmark
-SIM_PT_ADDRESS="29 87"                         # the Cognito sheet's address bar
+SIM_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max" # measured 2026-11-05
+SIM_W=440
+SIM_H=956
+SIM_X=220                                      # the probe column for centred controls
+SIM_Y_HOME=895                                 # Home's capture bar, no keyboard: the signed-in landmark
+SIM_Y_SIGNIN=530                               # the Sign in card's button: the signed-out landmark
+SIM_PT_ADDRESS="228 85"                        # the Cognito sheet's address bar
 SIM_YS_EMAIL="276 266 286 256 296"             # the Email field, nearest first
 SIM_YS_PASSWORD="366 356 376 346 386 336 396 326" # the Password field, after the form zoomed on focus
 SIM_YS_SUBMIT="454 444 464 434 474 424 414"    # the form's submit button
-SIM_Y_NEVER=547                                # Save Password's "Never for This Website"
-SIM_PT_SPACE="201 780"                         # the soft keyboard's space bar
-SIM_X_DONE=361                                 # the keyboard accessory bar's Done
-SIM_YS_ACCESSORY="512 502 522 492 532 482 542" # that bar, nearest first
+SIM_Y_NEVER=588                                # Save Password's "Never for This Website"
+SIM_PT_SPACE="221 856"                         # the soft keyboard's space bar
+SIM_X_DONE=395                                 # the keyboard accessory bar's Done
+SIM_YS_ACCESSORY="575 565 585 555 595 545 605" # that bar, nearest first
 SIM_Y_NAV=168                                  # the nav row (page scrolled to the top)
-SIM_XS_NAV="20 60 100 140 180 220 260 300 340 380"
-SIM_X_BUILD=55                                 # Settings' build stamp, page scrolled to the bottom
-SIM_YS_BUILD="860 845 830 815 800 785 770 755 740 725 710 695 680 665 650 635 620 605 590 575 560"
-SIM_CARD_SWIPE="320 560 320 40"                # the app switcher: the app's card, swiped up
-SIM_PT_BACKGROUND="360 840"                    # the app switcher: empty background, to leave it
-SIM_SCROLL_X=201                               # where page swipes run
+SIM_XS_NAV="38 88 136 205 276 332 380 268 395" # tab centres: seven unscrolled, then Finances/Inbox/Settings swiped
+SIM_X_BUILD=57                                 # Settings' build stamp, page scrolled to the bottom
+SIM_YS_BUILD="935 920 905 890 875 860 845 830 815 800 785 770 755 740 725 710 695 680 665 650 635"
+SIM_CARD_SWIPE="340 560 340 40"                # the app switcher: the app's card, swiped up
+SIM_PT_BACKGROUND="400 880"                    # the app switcher: empty background, to leave it
+SIM_SCROLL_X=220                               # where page swipes run
 SIM_MAX_PROBES=400
 if [ "$(uname)" = Darwin ]; then SIM_MV_NOFOLLOW=-fh; else SIM_MV_NOFOLLOW=-fT; fi # mv onto a link: replace it
 SIM_TABS='["Home","Log","Tasks","Recruiting","Habits","Rolls","Flux","Finances","Inbox","Settings"]'
@@ -208,16 +208,20 @@ sim_match() {
 
 sim_label_is() { jq -e --arg l "$2" '((.label // "") | ascii_downcase) == ($l | ascii_downcase)' <<<"$1" >/dev/null 2>&1; }
 
-# The full tree's app: "Web" while the Home Screen web app is in front. First read after boot can time out: retry.
+# The full tree's app: "Web" while the Home Screen web app is in front. The first reads after a boot can time out
+# ("creating the simulator remote automation session": three in a row once): up to four tries.
 sim_tree() {
-  local t
-  t="$(ax describe-ui 2>/dev/null)" || t="$(ax describe-ui 2>/dev/null)" || return 1
-  printf '%s' "$t"
+  local t i
+  for i in 1 2 3 4; do
+    if t="$(ax describe-ui 2>/dev/null)"; then printf '%s' "$t"; return 0; fi
+    [ "$i" = 4 ] || sleep 2
+  done
+  return 1
 }
 # Not in front is the row's failure; an unreadable tree is the sim's (needs you).
 sim_in_app() {
   local t
-  t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out twice"; return 1; }
+  t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out four times"; return 1; }
   jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
     || { sim_fail NOT_IN_APP "the Aperture web app isn't in front"; return 1; }
 }
@@ -320,7 +324,7 @@ sim_ready() {
   if [ "$(sim_pref HardwareKeyboardLastSeen)" != 0 ] || [ "$(sim_pref AutomaticMinimizationEnabled)" != 0 ]; then
     sim_arm || return 1
   fi
-  sim_tree >/dev/null || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out twice"; return 1; }
+  sim_tree >/dev/null || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out four times"; return 1; }
   SIM_READY=1
 }
 
@@ -352,6 +356,13 @@ sim_icon() {
     | {role: "AXButton", label: "Aperture", frame: .}' <<<"$t" 2>/dev/null
 }
 
+sim_icon_here() {
+  local x y e
+  read -r x y < <(jq -r '.frame | "\(.x + (.w / 2) | floor) \(.y + (.h / 2) | floor)"' <<<"$1")
+  e="$(sim_point "$x" "$y")" || return 1
+  [ "$(jq -r .role <<<"$e")" = AXButton ] && sim_label_is "$e" "Aperture"
+}
+
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
   local icon i s
@@ -363,6 +374,8 @@ sim_op_launch() {
     icon="$(sim_icon)" || true
   fi
   [ -n "$icon" ] || { sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon (add dev to the sim's Home Screen)"; return 1; }
+  # The tree can lag a page change; page 1 has a widget where page 2 has the icon (profile.md surprise 13).
+  sim_icon_here "$icon" || { sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "the Aperture icon isn't under its frame (wrong Home Screen page?)"; return 1; }
   sim_tap_el "$icon" || return 1
   i=0
   while :; do
@@ -389,8 +402,22 @@ sim_on_cognito() {
   read -r x y <<<"$SIM_PT_ADDRESS"
   e="$(SIM_SENSITIVE=false && sim_point "$x" "$y")" || return 1
   jq -e '.id == "URL" and .label == "Address"' <<<"$e" >/dev/null 2>&1 || return 1
-  v="$(jq -r '.value // ""' <<<"$e")"
+  v="$(jq -r '.value // "" | gsub("^[\u200e\u200f\u202a-\u202e\u2066-\u2069]+"; "")' <<<"$e")" # a leading LRM
   [[ "$v" =~ $SIM_COGNITO_RE ]]
+}
+
+# Tap a sign-in field until it has focus: the form zooms when one does, so a moved frame is the proof. A tap can be
+# dropped silently (profile.md surprise 5), so one retap, then FORM_CHANGED.
+sim_focus_field() {
+  local e="$1" x y n i
+  read -r x y < <(jq -r '.at | "\(.x) \(.y)"' <<<"$e")
+  for i in 1 2; do
+    sim_tap_el "$e" || return 1
+    sleep 1
+    n="$(sim_point "$x" "$y")" || return 1
+    if sim_match "$n" "$2" "" && ! jq -e --argjson a "$e" '.frame == $a.frame' <<<"$n" >/dev/null 2>&1; then return 0; fi
+  done
+  sim_err SIGNIN_FAILED FORM_CHANGED "the $2 field never took focus"
 }
 
 # Sign in from Keychain when the app is signed out. The password goes Keychain → axe's stdin, nowhere else; from the
@@ -412,7 +439,7 @@ sim_op_signIn() {
     e=""
   done
   [ -n "$e" ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED FORM_CHANGED "no Email field"; return 1; }
-  sim_tap_el "$e" || { SIM_SENSITIVE=false; return 1; }
+  sim_focus_field "$e" Email || { SIM_SENSITIVE=false; return 1; }
   ax type "$SIM_EMAIL" >/dev/null 2>&1 || { SIM_SENSITIVE=false; sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
   # The form zooms on focus, so the password field is found again.
   for pt in $SIM_YS_PASSWORD; do
@@ -593,12 +620,12 @@ sim_op_expect() {
 # The soft keyboard's keys (part of the device profile).
 sim_key_xy() {
   case "$1" in
-    q) echo 23 618 ;; w) echo 62 618 ;; e) echo 102 618 ;; r) echo 141 618 ;; t) echo 181 618 ;;
-    y) echo 221 618 ;; u) echo 260 618 ;; i) echo 300 618 ;; o) echo 339 618 ;; p) echo 378 618 ;;
-    a) echo 42 672 ;; s) echo 82 672 ;; d) echo 121 672 ;; f) echo 161 672 ;; g) echo 200 672 ;;
-    h) echo 240 672 ;; j) echo 279 672 ;; k) echo 319 672 ;; l) echo 359 672 ;;
-    z) echo 82 726 ;; x) echo 121 726 ;; c) echo 161 726 ;; v) echo 200 726 ;; b) echo 240 726 ;;
-    n) echo 279 726 ;; m) echo 319 726 ;; delete) echo 372 726 ;; space) echo 201 780 ;;
+    q) echo 26 688 ;; w) echo 69 688 ;; e) echo 113 688 ;; r) echo 156 688 ;; t) echo 199 688 ;;
+    y) echo 243 688 ;; u) echo 286 688 ;; i) echo 329 688 ;; o) echo 373 688 ;; p) echo 416 688 ;;
+    a) echo 48 744 ;; s) echo 91 744 ;; d) echo 134 744 ;; f) echo 178 744 ;; g) echo 221 744 ;;
+    h) echo 264 744 ;; j) echo 308 744 ;; k) echo 351 744 ;; l) echo 394 744 ;;
+    z) echo 91 800 ;; x) echo 134 800 ;; c) echo 178 800 ;; v) echo 221 800 ;; b) echo 264 800 ;;
+    n) echo 308 800 ;; m) echo 351 800 ;; delete) echo 409 800 ;; space) echo 221 856 ;;
   esac
 }
 

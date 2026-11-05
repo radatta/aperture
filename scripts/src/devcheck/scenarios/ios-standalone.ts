@@ -3,8 +3,9 @@
 // Reflection box above the soft keyboard without zooming. Every step is slow (a sim run is minutes), so a full
 // run defers them unless the branch touches app/ or names this scenario (DEV-CHECK.md → Slow tier).
 // The sim never submits: the one task it opens is set up here through MCP, and the sim only focuses, types a
-// draft by key taps and erases it. Coordinates are points (402×874) from the 2026-11-04 trial; a MISS after an
-// app change means a plan needs new ones — read the step's screenshot.
+// draft by key taps and erases it. Coordinates are points on the iPhone 18 Pro Max (440×956), from the 2026-11-05
+// re-measure (keyboard up, the capture bar sits at y 462); a MISS after an app change means a plan needs new ones —
+// read the step's screenshot.
 import type { Ctx, Scenario } from '../scenario';
 import type { IosOp } from '../../mailroom/sim';
 
@@ -32,32 +33,32 @@ const CAPTURE: IosOp[] = [
   {
     op: 'find',
     label: 'Capture log',
-    near: { x: 200, y: 813 },
+    near: { x: 220, y: 895 },
     radius: 10,
     role: 'AXTextArea',
     as: 'bar0',
   },
-  { op: 'tap', label: 'Capture', near: { x: 200, y: 813 }, radius: 10 },
+  { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
   { op: 'wait', s: 2 },
   {
     op: 'find',
     label: 'Capture log',
-    near: { x: 200, y: 417 },
-    radius: 80,
+    near: { x: 200, y: 480 },
+    radius: 40,
     role: 'AXTextArea',
     as: 'bar',
   },
   { op: 'expect', as: 'bar', aboveKeyboard: true },
   { op: 'expect', as: 'bar', sameWidthAs: 'bar0' },
-  { op: 'find', label: 'Log', near: { x: 37, y: 382 }, radius: 40, role: 'AXCheckBox', as: 'mode' },
+  { op: 'find', label: 'Log', near: { x: 49, y: 437 }, radius: 40, role: 'AXCheckBox', as: 'mode' },
   { op: 'expect', as: 'mode', aboveKeyboard: true },
   { op: 'shot', name: 'capture-keyboard' },
   { op: 'keys', text: 'zzqx' },
-  { op: 'find', label: 'zzqx', near: { x: 60, y: 417 }, radius: 40, as: 'typed' },
+  { op: 'find', label: 'zzqx', near: { x: 60, y: 480 }, radius: 40, as: 'typed' },
   {
     op: 'find',
     label: 'Save log',
-    near: { x: 360, y: 417 },
+    near: { x: 395, y: 480 },
     radius: 40,
     role: 'AXButton',
     as: 'send',
