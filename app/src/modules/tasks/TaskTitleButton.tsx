@@ -3,10 +3,11 @@ import type { Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
 
-// The task title as the trigger that opens the editor. Truncates in the row, but its accessible name
-// is the FULL title (so it's findable and a screen reader gets the whole thing); the modal shows it
-// unclipped. Ref-forwarding so useDisclosure can return focus here on close. The seam other truncated
-// title spots (Home) can adopt later.
+// The task title as the trigger that opens the editor. Clamps to two lines in the row (one line cut
+// titles to ~14 characters beside the row's buttons at 390), but its accessible name is the FULL title
+// (so it's findable and a screen reader gets the whole thing); the modal shows it unclipped.
+// Ref-forwarding so useDisclosure can return focus here on close. The seam other truncated title spots
+// (Home) can adopt later.
 export function TaskTitleButton({
   task,
   onOpen,
@@ -30,7 +31,7 @@ export function TaskTitleButton({
       title={task.title}
       className={cx('min-w-0 max-w-full text-left hover:underline', className)}
     >
-      <Text as="span" weight={weight} className="block truncate">
+      <Text as="span" weight={weight} className="line-clamp-2 break-words">
         {task.title}
       </Text>
     </button>

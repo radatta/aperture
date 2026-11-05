@@ -139,3 +139,10 @@ The card keeps only the actions you press without thinking. No overflow menu.
 - Later (2026-10-30, parts v2a): the guard above — `editor/editState.ts` (slots), every exit through
   `TaskModal`'s `exit`, the finish closing from `onFinished(task)`, `Modal` `contentKey` (a switch
   scrolls to the top and refocuses).
+- Later (2026-11-05, phone nits): Due + Due time grouped in one `flex items-end` div, so the time never
+  wraps alone at 440/390 (`TaskDetailsForm`); `TaskTitleButton` clamps to two lines (`line-clamp-2`) instead
+  of truncating; the card's Scope button is gone — the meta line's "not scoped" is the button that opens on
+  Estimate (`TaskMeta` `onScope`); the Settings category row no longer wraps, its rename input shrinks
+  instead (`Settings/index.tsx`). Devcheck `scenarios/phone-nits.ts` measures the editor at 440/390/1512 and
+  the card at 390 (`pw-types.ts` gained `setViewportSize`); the Settings rows are the user's — the dev test
+  user has no categories.

@@ -203,8 +203,9 @@ function CategoryRow({
 
   return (
     <Card className="px-3.5 py-2.5">
-      <div ref={rowRef} className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
+      <div ref={rowRef} className="flex items-center justify-between gap-3">
+        {/* No wrap: at 390 the rename input gives way (min-w-0, ~128px) so the arrows stay on the row. */}
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
               form to fill in, but hover-only would leave the field unmarked on touch — and this is
               an installable phone app. */}
@@ -224,7 +225,7 @@ function CategoryRow({
               })
             }
             className={cx(
-              'w-40 rounded-lg border border-line/60 bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
+              'min-w-0 flex-1 rounded-lg border border-line/60 sm:w-40 sm:flex-none bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
               cat.active ? 'text-ink' : 'text-ink-muted',
             )}
           />

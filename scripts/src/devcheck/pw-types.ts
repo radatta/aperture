@@ -49,6 +49,7 @@ export interface PwPage {
   ): Promise<unknown>;
   reload(opts?: { waitUntil?: 'load' | 'domcontentloaded' }): Promise<unknown>;
   url(): string;
+  setViewportSize(size: { width: number; height: number }): Promise<void>;
   locator(selector: string): PwLocator;
   getByRole(
     role: string,
