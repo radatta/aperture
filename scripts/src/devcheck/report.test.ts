@@ -241,7 +241,7 @@ describe('report', () => {
         coverage: [row({ status: 'skipped', note: 'dev’s build changed mid-run' })],
       });
       expect(md).toContain('- ad: Delete — dev’s build changed mid-run');
-      expect(md).toContain('_This run is FAIL: these hold only if it counts as green');
+      expect(md).toContain('_This run is FAIL: these hold only once a run passes._');
       expect(renderReport({ ...feat, coverage: rows })).not.toContain('_This run is');
     });
 

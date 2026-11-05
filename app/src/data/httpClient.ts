@@ -10,6 +10,32 @@ export type FetchLike = (
   init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
+// At most this many /api calls on the wire at once, FIFO. Dev's account has a Lambda concurrency quota of
+// 10 (docs/ops/CI-BOT.md → Compute) and Home mounts ~10 RPCs on a cold BFF, so an uncapped burst gets 429s; 8
+// leaves two for the dev check's own calls. Prod has headroom and pays ~100 ms for Home's second wave.
+export const MAX_IN_FLIGHT = 8;
+
+// A FIFO slot limiter: acquire() resolves with the slot's release once one is free. A release hands the slot
+// straight to the next waiter, so the count never dips for a queued call to miss its turn.
+export function createLimiter(max: number) {
+  let inFlight = 0;
+  const waiting: ((release: () => void) => void)[] = [];
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next(release);
+    else inFlight--;
+  };
+  return {
+    acquire: (): Promise<() => void> => {
+      if (inFlight < max) return (inFlight++, Promise.resolve(release));
+      return new Promise((r) => waiting.push(r));
+    },
+    get inFlight() {
+      return inFlight;
+    },
+  };
+}
+
 // The HTTP implementation of ApiClient: each method is one RPC — POST /api/<method> with the positional
 // args as the JSON body, the JSON response as the return value. Built from the shared API_METHODS list
 // (the same list the handler validates against), so client and server can never drift.
@@ -21,13 +47,26 @@ export function createHttpClient(
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 ): ApiClient {
   const doFetch: FetchLike = fetchImpl ?? ((url, init) => fetch(url, init));
+  const slots = createLimiter(MAX_IN_FLIGHT);
 
   async function rpc(method: string, args: unknown[]): Promise<unknown> {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     const token = getToken(); // read per request — it refreshes under us
     if (token) headers[AUTH_HEADER] = `Bearer ${token}`; // custom header — survives CloudFront OAC signing
-    const send = () =>
-      doFetch(`${base}/api/${method}`, { method: 'POST', headers, body: JSON.stringify({ args }) });
+    // Each send holds a slot from request to response headers (a throw frees it too); a retry below waits out
+    // its backoff with no slot and then queues again, behind whoever is waiting.
+    const send = async () => {
+      const release = await slots.acquire();
+      try {
+        return await doFetch(`${base}/api/${method}`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ args }),
+        });
+      } finally {
+        release();
+      }
+    };
     let res = await send();
     // A 429 never ran (retry.ts → isThrottle), so every method retries it, writes included.
     for (let i = 0; res.status === 429 && i < MAX_RETRIES; i++) {

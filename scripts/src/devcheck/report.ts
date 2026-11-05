@@ -121,8 +121,8 @@ function notProven(rs: RowResult[], h: string): string[] {
     ),
   ];
 }
-// The two lists report-<branch>.md and the CC done notes paste. They stand on a FAIL too (a Known 429s run is
-// one), but never without the run's verdict beside them.
+// The two lists report-<branch>.md and the CC done notes paste. They stand on a FAIL too, but never without the
+// run's verdict beside them.
 function pasteLists(rs: RowResult[], h: string, status: RunResult['status']): string[] {
   const done = rs.filter((x) => x.status === 'pass' || x.status === 'off-dev');
   const you = rs.filter((x) => x.status === 'needs-you');
@@ -131,10 +131,7 @@ function pasteLists(rs: RowResult[], h: string, status: RunResult['status']): st
     `${h} You don't need to test`,
     '',
     ...(status !== 'PASS'
-      ? [
-          `_This run is ${status}: these hold only if it counts as green (DEV-CHECK.md → Known 429s)._`,
-          '',
-        ]
+      ? [`_This run is ${status}: these hold only once a run passes._`, '']
       : []),
     ...(done.length
       ? done.map((x) =>
@@ -258,7 +255,7 @@ export function renderReport(r: RunResult): string {
     '',
     ...(r.consoleErrors.length ? r.consoleErrors.map((e) => `- ${cell(e)}`) : ['None.']),
   );
-  // A 429 is Lambda refusing to start the function, so the call never ran (docs/ops/DEV-CHECK.md → Known 429s). Chromium's
+  // A 429 is Lambda refusing to start the function, so the call never ran (docs/ops/DEV-CHECK.md → Throttles (429)). Chromium's
   // console line for it carries no URL; this names each one.
   lines.push(
     '',

@@ -145,39 +145,18 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   `BUILD_MISMATCH_IN_PAGE`. If dev's build changes before the run ends, `DEV_CHANGED_MID_RUN`, and no row
   counts as proven — its steps may have driven another build.
 
-## Known 429s
+## Throttles (429)
 
-**A stopgap, decided 2026-11-01 (dev-cutover).** The dev account's Lambda concurrency quota is low for now
-([CI-BOT.md](CI-BOT.md) → _Dev deploy blast radius_ → Compute). A devcheck runs right after a deploy, so the BFF is
-cold, and Home mounts about 10 RPCs at once — the burst exceeds the quota and some get HTTP 429. The harness's own API
-calls back off on a 429 (five retries, 500 ms → 8 s), and so does the app (`app/src/data/retry.ts`), so most of
-the burst now recovers on screen. But Chromium logs every 429 response as a console
-error, retried or not, so they still surface: in the
-smoke scenario's _No console errors on the way_ step, and again in every later step that re-reads the run's cumulative
-console list (`pipeline.ts`). The report's _Throttled (429)_ section names each one (`/api/<method>`), which Chromium's
-console line doesn't; a call that was retried and recovered is still listed there. Failures a scenario injects on
-purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The run still
-reports FAIL — the test is not weakened. Only the workflow's verdict changes: **a
-full run counts as green (CLAUDE.md → _Feature workflow_, phases 8–9) when all of these hold in its `report.md`:**
-
-- the first line is exactly `# Dev check — FAIL: STEP_FAILED`, and `Leftovers: **0**`;
-- no step is `skipped`;
-- every `fail` step is a console-error check: smoke's _No console errors on the way_, reading `N console error(s): …`,
-  or a later scenario's (its last step, `noConsoleErrors`) reading `console errors: …` with exactly N `\|`-separated
-  entries — nothing new after the burst;
-- the _Console errors_ section lists exactly N lines, each containing `status of 429`, and N ≤ 16 (Chromium logs
-  one line per throttled attempt, and the app retries a 429 twice, so one call can log up to three; a refetch
-  loop or request storm, also all 429s, would exceed it);
-- the _Throttled (429)_ section names no BFF method the feature changed. A 429 means Lambda never started the
-  function, so that attempt was never tested — the app's retry may have recovered the call, but a listed method
-  isn't proven by this run; if it names one, rerun until it doesn't;
-- every _Feature coverage_ row — _This feature_ and _Other scenarios_ alike — is `pass`, `off dev` or `needs you`. This rule never makes a row green: a 429 that
-  fails a proving step leaves its row not proven — rerun until it passes.
-
-Anything else is a bug, as always. The burst is one too — a known defect with a dated fix (the in-flight cap below);
-this rule records it, it does not excuse it. Log each such run in the feature's `decisions.md` and its PR body. **The
-rule expires** when the quota reaches 30, or when the client in-flight cap ships (its own PR, due if no raise by
-2026-11-08) — then remove this section.
+The app keeps a page's burst under the dev account's Lambda concurrency quota of 10 ([CI-BOT.md](CI-BOT.md) →
+_Dev deploy blast radius_ → Compute): at most 8 `/api` calls in flight (`app/src/data/httpClient.ts` →
+`MAX_IN_FLIGHT`), leaving two for the harness's own calls, so Home's ~10 RPCs on a cold BFF no longer get HTTP 429
+(`inflight-cap`, 2026-11; before it, a dated _Known 429s_ rule here let a run count as green with them). A 429 means
+Lambda never started the function, so that attempt was never tested — the app's retry (`app/src/data/retry.ts`) may
+have recovered the call, but the method isn't proven by this run. Chromium logs every 429 as a console error, retried
+or not, so one fails the run like any other console error, and the report's _Throttled (429)_ section names each
+(`/api/<method>`), which Chromium's line doesn't. Treat one as a bug — a burst wider than the cap, a refetch storm, the
+harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run saw. Failures a
+scenario injects on purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here.
 
 ## Ledgers
 
@@ -337,7 +316,7 @@ test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<
 paste as they are — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,
 since those belong to their own features. Without `--feature` there are no paste lists: the table is every
 scenario's, and a branch with no scenario of its own reports "no feature rows". On a run that isn't PASS the lists
-carry its verdict: they hold only if the run counts as green (_Known 429s_).
+carry its verdict: they hold only once a run passes.
 Shared, in the main checkout: the two ledgers and `run.lock`. Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session and the Hosted UI cookie, mode 600 — re-saved after the MCP
 sign-in).

@@ -1314,7 +1314,7 @@ export const places: Scenario = {
         const start = (await tokenStatus(ctx)).readsToday;
         if (start !== readsToday) throw new Error(`the count is ${start}, expected ${readsToday}`);
         const day = new Date().toISOString().slice(0, 10); // the cap's day is UTC
-        // One at a time: never a burst against dev's concurrency quota (DEV-CHECK.md → Known 429s). A
+        // One at a time: never a burst against dev's concurrency quota (DEV-CHECK.md → Throttles (429)). A
         // Lambda throttle is backed off inside placeDigestRaw; only the BFF's own 429 comes back.
         for (let i = start + 1; i <= PLACE_READ_DAILY_CAP; i++) {
           const got = await ctx.api.reads.placeDigestRaw(place.slug, placeToken);
