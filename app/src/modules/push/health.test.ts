@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PUSH_STALE_MS } from '@aperture/shared';
-import { deviceLines, fmtWhen, pollerLines } from './health';
+import { deviceLines, fmtWhen, pollerLines, TEST_PENDING_MS, testPending } from './health';
 
 const NOW = new Date(2026, 10, 4, 14, 30).getTime(); // Nov 4, 2:30pm local
 const at = (h: number, m: number, day = 4) => new Date(2026, 10, day, h, m).getTime();
@@ -56,5 +56,14 @@ describe('reminder health lines', () => {
     expect(deviceLines({ ...d, lastOkAt: at(14, 10) }, NOW)).toEqual([
       { tone: 'muted', text: 'Added Nov 1 8am · last sent 2:10pm' },
     ]);
+  });
+});
+
+describe('testPending', () => {
+  it('holds until a send lands at or after the tap, or lapses', () => {
+    expect(testPending(NOW, null, NOW + 30_000)).toBe(true);
+    expect(testPending(NOW, NOW - 60_000, NOW + 30_000)).toBe(true); // an older send doesn't count
+    expect(testPending(NOW, NOW + 40_000, NOW + 45_000)).toBe(false);
+    expect(testPending(NOW, null, NOW + TEST_PENDING_MS)).toBe(false);
   });
 });

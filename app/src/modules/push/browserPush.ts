@@ -1,4 +1,4 @@
-import { dayKey, PUSH_LABEL_MAX } from '@aperture/shared';
+import { PUSH_LABEL_MAX } from '@aperture/shared';
 import type { PushDevice, PushStatus, SubscribePushInput } from '@aperture/shared';
 
 // The browser half of reminders (docs/areas/tasks/reminders.md): find this browser's push manager, ask
@@ -17,8 +17,9 @@ const NO_PERMISSION_COPY = 'Notifications weren’t allowed — tap Enable to be
 
 const SW_READY_MS = 5000;
 const ENABLED_KEY = 'aperture.push.enabled'; // this device's id, set when it opted in here
-const SYNCED_KEY = 'aperture.push.syncedDay'; // the day a launch last confirmed the subscription
 const SYNC_ERROR_KEY = 'aperture.push.syncError'; // why the last launch couldn't re-subscribe
+const SYNC_ERROR_AT_KEY = 'aperture.push.syncErrorAt'; // "<epoch ms>-<nonce>" — tells one failure from the next
+const SYNC_DISMISSED_KEY = 'aperture.push.syncErrorDismissed'; // the failure Home was told to drop
 const REMOVED_KEY = 'aperture.push.removedElsewhere'; // the opt-in was dropped: removed on another device
 const ENABLED_AT_KEY = 'aperture.push.enabledAt'; // when the opt-in was last made, epoch ms
 
@@ -133,23 +134,26 @@ function toInput(sub: PushSubscription): SubscribePushInput {
   };
 }
 
-// Subscribed with `key`, replacing one made with another (a rotated VAPID key: its pushes would be refused).
-async function subscribeWith(pm: PushManager, key: Uint8Array<ArrayBuffer>) {
+// Subscribed with `key`, replacing one made with another (a rotated VAPID key: its pushes would be
+// refused) — or any at all when `fresh`: an endpoint the server dropped as dead is never sent again.
+async function subscribeWith(pm: PushManager, key: Uint8Array<ArrayBuffer>, fresh = false) {
   const had = await pm.getSubscription();
-  if (had && sameKey(had.options.applicationServerKey, key)) return had;
+  if (had && !fresh && sameKey(had.options.applicationServerKey, key)) return had;
   await had?.unsubscribe();
   return pm.subscribe({ userVisibleOnly: true, applicationServerKey: key });
 }
 
-// Asks for permission and subscribes. Call it from the tap itself: on Safari the permission request is
-// the first thing it does, before any await, so the tap still counts as the gesture.
+// Asks for permission and subscribes. Call it from the tap itself: the permission request is the first
+// thing it does on every path, before any await, so the tap still counts as the gesture.
 export async function subscribeHere(publicKey: string): Promise<SubscribePushInput> {
   if (typeof Notification === 'undefined') throw new Error(unavailableCopy());
-  const own = windowPushManager();
-  const asked = own ? Notification.requestPermission() : null;
-  const pm = own ?? (await pushManagerOf());
-  if (!pm) throw new Error(unavailableCopy());
-  const permission = await (asked ?? Notification.requestPermission());
+  const asked = Notification.requestPermission();
+  const pm = await pushManagerOf();
+  if (!pm) {
+    asked.catch(() => {}); // the answer no longer matters
+    throw new Error(unavailableCopy());
+  }
+  const permission = await asked;
   if (permission === 'denied') throw new Error(deniedCopy());
   if (permission !== 'granted') throw new Error(NO_PERMISSION_COPY);
   return toInput(await subscribeWith(pm, urlBase64ToUint8Array(publicKey)));
@@ -164,6 +168,12 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 }
 
 // --- this device's stamps (localStorage; storage can throw — then nothing is remembered) ----------
+// Home and Settings render from them; a write tells them (usePushStamp).
+const stampListeners = new Set<() => void>();
+export function subscribeStamps(listener: () => void): () => void {
+  stampListeners.add(listener);
+  return () => void stampListeners.delete(listener);
+}
 function read(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -178,11 +188,21 @@ function write(key: string, value: string | null): void {
   } catch {
     // not remembered — the next launch just checks again
   }
+  stampListeners.forEach((l) => l());
 }
 
 // The id this device's subscription has on the server, when it turned reminders on here.
 export const deviceIdHere = (): string | null => read(ENABLED_KEY);
 export const syncErrorHere = (): string | null => read(SYNC_ERROR_KEY);
+// The launch failure Home still owes a note about: one it was told to dismiss holds until a new one.
+export const syncErrorUndismissed = (): string | null => {
+  const at = read(SYNC_ERROR_AT_KEY);
+  return at !== null && read(SYNC_DISMISSED_KEY) === at ? null : read(SYNC_ERROR_KEY);
+};
+export const dismissSyncError = (): void => write(SYNC_DISMISSED_KEY, read(SYNC_ERROR_AT_KEY));
+const clearSyncError = () => {
+  for (const k of [SYNC_ERROR_KEY, SYNC_ERROR_AT_KEY, SYNC_DISMISSED_KEY]) write(k, null);
+};
 // Settings' one-time note after a removal from another device — kept across the reload it may happen on,
 // until Enable is tapped or it's dismissed.
 export const removedElsewhereHere = (): boolean => read(REMOVED_KEY) !== null;
@@ -191,12 +211,13 @@ export const dismissRemovedElsewhere = (): void => write(REMOVED_KEY, null);
 export function rememberHere(device: PushDevice, now: number): void {
   write(ENABLED_KEY, device.id);
   write(ENABLED_AT_KEY, String(now));
-  write(SYNCED_KEY, dayKey(now, 0));
-  write(SYNC_ERROR_KEY, null);
+  clearSyncError();
   write(REMOVED_KEY, null);
 }
 export function forgetHere(): void {
-  for (const k of [ENABLED_KEY, ENABLED_AT_KEY, SYNCED_KEY, SYNC_ERROR_KEY]) write(k, null);
+  write(ENABLED_KEY, null);
+  write(ENABLED_AT_KEY, null);
+  clearSyncError();
 }
 
 // Removed from another device (status.removedDeviceIds): the removal sticks — this device drops its opt-in
@@ -217,35 +238,72 @@ export async function dropIfRemovedHere(status: PushStatus, askedAt?: number): P
   return true;
 }
 
+// One resync at a time, and a Remove on this device waits for it (afterResync) — so a Remove tapped
+// while the launch resync is mid-flight can't be undone by its upsert.
+let inflight: Promise<unknown> = Promise.resolve();
+export const afterResync = (): Promise<void> => inflight.then(() => undefined);
+export const resetPushSync = (): void => void (inflight = Promise.resolve());
+
 // D7, on launch: when this device turned reminders on and still has permission, make sure the server and
-// the browser agree — stop if it was removed on another device (dropIfRemovedHere), re-subscribe when
-// iOS dropped the subscription or the stage's key changed, and re-upsert when the server lost the device
-// (the poller deletes a 404/410 subscription outright, so it isn't "removed") or once a day. A healthy
-// launch writes nothing else. Resolves true when it changed something. A failure is remembered for
-// Settings to show, then rethrown.
-export async function resyncHere(
+// the browser agree. Subscribed with the stage's key and listed by the server → nothing to do (no daily
+// re-upsert: the cases below cover every way the two drift). iOS dropped the subscription or the key
+// changed → subscribe again. The server no longer lists the device (the poller deletes a subscription the
+// push service expired, 404/410, or whose keys it can't use) → that endpoint is dead: drop it and
+// subscribe fresh, never re-send it. Removed on another device → not healed; usePushStatus's read settles
+// that (dropIfRemovedHere). `askedAt`: when `status` was read — a read from before this device last opted
+// in can't speak for it. Resolves true when it wrote. A failure is remembered for Settings and Home, then
+// rethrown.
+export function resyncHere(
   status: PushStatus,
   now: number,
   upsert: (input: SubscribePushInput) => Promise<PushDevice>,
+  askedAt?: number,
+): Promise<boolean> {
+  const run = inflight.then(() => resync(status, now, upsert, askedAt));
+  inflight = run.catch(() => {});
+  return run;
+}
+
+async function resync(
+  status: PushStatus,
+  now: number,
+  upsert: (input: SubscribePushInput) => Promise<PushDevice>,
+  askedAt: number | undefined,
 ): Promise<boolean> {
   const id = deviceIdHere();
-  if (!id) return false;
-  if (await dropIfRemovedHere(status)) return true;
-  if (!status.configured || !status.vapidPublicKey) return false;
+  const stamp = read(ENABLED_AT_KEY);
+  if (!id || !status.configured || !status.vapidPublicKey) return false;
+  if (status.removedDeviceIds.includes(id)) return false;
+  if (askedAt !== undefined && Number(stamp ?? 0) > askedAt) return false;
   if (notificationPermission() !== 'granted') return false;
+  // Still the opt-in this run started from — not removed here meanwhile, nor replaced by a new Enable.
+  const ours = () => deviceIdHere() === id && read(ENABLED_AT_KEY) === stamp;
+  // Lost it mid-run: a subscription nobody opted into goes; one a new Enable owns stays.
+  const abandon = async (sub: PushSubscription) => {
+    if (deviceIdHere() === null) await sub.unsubscribe().catch(() => false);
+    return false;
+  };
   try {
     const pm = await pushManagerOf();
     if (!pm) return false;
     const key = urlBase64ToUint8Array(status.vapidPublicKey);
     const had = await pm.getSubscription();
-    const healthy = !!had && sameKey(had.options.applicationServerKey, key);
     const known = status.devices.some((d) => d.id === id);
-    if (healthy && known && read(SYNCED_KEY) === dayKey(now, 0)) return false;
-    const sub = healthy ? had : await subscribeWith(pm, key);
-    rememberHere(await upsert(toInput(sub)), now);
+    if (known && had && sameKey(had.options.applicationServerKey, key)) {
+      clearSyncError(); // a healthy launch is a successful resync
+      return false;
+    }
+    const sub = await subscribeWith(pm, key, !known);
+    if (!ours()) return abandon(sub);
+    const device = await upsert(toInput(sub));
+    // Removed while the upsert was out: its row is alive again on the server, pointing at a subscription
+    // dropped here — the poller's next send gets a 410 and deletes it.
+    if (!ours()) return abandon(sub);
+    rememberHere(device, now);
     return true;
   } catch (e) {
     write(SYNC_ERROR_KEY, e instanceof Error ? e.message : String(e));
+    write(SYNC_ERROR_AT_KEY, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     throw e;
   }
 }

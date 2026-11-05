@@ -1,4 +1,5 @@
-import { useId, useReducer, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import {
   DAY_REMINDER_TIME,
   fmtClock12,
@@ -13,6 +14,7 @@ import { Text } from '../../components/Text';
 import { useNow } from '../../lib/useNow';
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import {
+  usePushStamp,
   usePushStatus,
   useSendTestPush,
   useSubscribePush,
@@ -30,7 +32,7 @@ import {
   subscribeHere,
   syncErrorHere,
 } from '../../modules/push/browserPush';
-import { deviceLines, pollerLines } from '../../modules/push/health';
+import { deviceLines, pollerLines, testPending } from '../../modules/push/health';
 import type { HealthLine } from '../../modules/push/health';
 
 export const REMOVED_ELSEWHERE_COPY =
@@ -55,8 +57,17 @@ const KINDS: { key: ReminderSettingKey; label: string; hint: string }[] = [
 // Send test proves the whole chain: it queues a ping the poller sends on its next tick.
 export function NotificationsSection() {
   const { data: settings } = useSettings();
+  const { hash } = useLocation();
+  const sectionRef = useRef<HTMLElement>(null);
+  const loaded = !!settings;
+  // Home's "couldn't refresh" line links to /settings#notifications; the sections above load first and
+  // move it, so the browser's own anchor jump misses (as FluxSection's #flux).
+  useEffect(() => {
+    if (loaded && hash === '#notifications')
+      sectionRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [loaded, hash]);
   return (
-    <section id="notifications" className="flex flex-col gap-3">
+    <section ref={sectionRef} id="notifications" className="flex flex-col gap-3">
       <Text size="sm" tone="muted" weight="medium" className="uppercase tracking-wider">
         Notifications
       </Text>
@@ -94,9 +105,11 @@ function KindToggles({ settings }: { settings: Settings }) {
         </div>
       ))}
       {update.isError && (
-        <p role="alert" className="text-xs text-danger">
-          Couldn&apos;t save that — try again.
-        </p>
+        <div role="alert">
+          <Text size="xs" tone="danger">
+            Couldn&apos;t save that — try again.
+          </Text>
+        </div>
       )}
     </Card>
   );
@@ -116,6 +129,13 @@ function DevicesCard() {
   return (
     <Card className="flex flex-col gap-3">
       <Text weight="medium">Devices</Text>
+      {/* A refresh that fails after a good read: said here, so a page that can't read isn't taken for a
+          poller that stopped. */}
+      {statusQ.isError && s && (
+        <LoadError size="xs" onRetry={() => void statusQ.refetch()}>
+          Couldn’t refresh reminder status.
+        </LoadError>
+      )}
       {statusQ.isError && !s ? (
         <LoadError size="xs" onRetry={() => void statusQ.refetch()}>
           Couldn’t load reminder status.
@@ -135,7 +155,7 @@ function DevicesCard() {
           </div>
           <ThisDevice status={s} />
           <DeviceList devices={s.devices} now={now} />
-          <SendTest hasDevices={s.devices.length > 0} />
+          <SendTest hasDevices={s.devices.length > 0} lastSentAt={s.poller.lastSentAt} now={now} />
         </>
       )}
     </Card>
@@ -149,13 +169,13 @@ function ThisDevice({ status }: { status: PushStatus }) {
   const [error, setError] = useState<string | null>(null);
   const support = pushSupport();
   const permission = notificationPermission();
-  const hereId = deviceIdHere();
+  // This device's stamps (localStorage), re-read whenever the resync or a status read writes one.
+  const hereId = usePushStamp(deviceIdHere);
   const onHere = hereId !== null && status.devices.some((d) => d.id === hereId);
-  const syncError = syncErrorHere();
+  const syncError = usePushStamp(syncErrorHere);
   // Set when a status read found this device removed on another one (usePushStatus): the removal sticks,
-  // and the note says so until Enable or Dismiss. It lives in localStorage — Dismiss re-renders by hand.
-  const removedElsewhere = removedElsewhereHere();
-  const [, restamp] = useReducer((n: number) => n + 1, 0);
+  // and the note says so until Enable or Dismiss.
+  const removedElsewhere = usePushStamp(removedElsewhereHere);
 
   // Run straight from the tap: subscribeHere asks for permission before it awaits anything.
   function enable() {
@@ -169,37 +189,33 @@ function ThisDevice({ status }: { status: PushStatus }) {
       .finally(() => setAsking(false));
   }
 
-  if (support !== 'ok')
-    return (
-      <Text as="p" size="sm" tone="gold">
-        {support === 'install' ? PUSH_INSTALL_COPY : PUSH_UNSUPPORTED_COPY}
+  // Shown whatever this browser can do now — a removal elsewhere is news even where Enable can't run.
+  const removedNote = removedElsewhere && !onHere && (
+    <div role="status" className="flex flex-wrap items-center gap-2">
+      <Text size="sm" tone="gold">
+        {REMOVED_ELSEWHERE_COPY}
       </Text>
-    );
-  if (permission === 'denied')
+      <Button variant="quiet" size="sm" onClick={dismissRemovedElsewhere}>
+        Dismiss
+      </Button>
+    </div>
+  );
+  if (support !== 'ok' || permission === 'denied')
     return (
-      <Text as="p" size="sm" tone="gold">
-        {deniedCopy()}
-      </Text>
+      <div className="flex flex-col gap-1.5">
+        {removedNote}
+        <Text as="p" size="sm" tone="gold">
+          {support === 'install'
+            ? PUSH_INSTALL_COPY
+            : support === 'unsupported'
+              ? PUSH_UNSUPPORTED_COPY
+              : deniedCopy()}
+        </Text>
+      </div>
     );
   return (
     <div className="flex flex-col gap-1.5">
-      {removedElsewhere && !onHere && (
-        <div role="status" className="flex flex-wrap items-center gap-2">
-          <Text size="sm" tone="gold">
-            {REMOVED_ELSEWHERE_COPY}
-          </Text>
-          <Button
-            variant="quiet"
-            size="sm"
-            onClick={() => {
-              dismissRemovedElsewhere();
-              restamp();
-            }}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
+      {removedNote}
       {onHere ? (
         <Text as="p" size="sm" tone="teal">
           On for this device.
@@ -211,7 +227,7 @@ function ThisDevice({ status }: { status: PushStatus }) {
           </Button>
         </div>
       )}
-      <span role="alert">
+      <div role="alert">
         {error && (
           <Text as="p" size="xs" tone="danger" className="break-words">
             {error}
@@ -222,19 +238,19 @@ function ThisDevice({ status }: { status: PushStatus }) {
             Couldn’t refresh this device’s subscription on launch: {syncError}
           </Text>
         )}
-      </span>
+      </div>
     </div>
   );
 }
 
 function DeviceList({ devices, now }: { devices: PushDevice[]; now: number }) {
+  const hereId = usePushStamp(deviceIdHere);
   if (devices.length === 0)
     return (
       <Text as="p" size="sm" tone="muted">
         No devices yet — enable reminders on your iPhone from the Home Screen app.
       </Text>
     );
-  const hereId = deviceIdHere();
   return (
     <ul className="flex flex-col gap-2">
       {devices.map((d) => (
@@ -273,16 +289,25 @@ function DeviceRow({ device, here, now }: { device: PushDevice; here: boolean; n
   );
 }
 
-function SendTest({ hasDevices }: { hasDevices: boolean }) {
+function SendTest({
+  hasDevices,
+  lastSentAt,
+  now,
+}: {
+  hasDevices: boolean;
+  lastSentAt: number | null;
+  now: number;
+}) {
   const send = useSendTestPush();
+  // When the last queued test was tapped: "Sending…" holds until a send lands after it, or it lapses.
+  const [queuedAt, setQueuedAt] = useState<number | null>(null);
+  const queue = () => {
+    const at = Date.now();
+    send.mutate(undefined, { onSuccess: () => setQueuedAt(at) });
+  };
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled={!hasDevices || send.isPending}
-        onClick={() => send.mutate()}
-      >
+      <Button variant="ghost" size="sm" disabled={!hasDevices || send.isPending} onClick={queue}>
         Send test
       </Button>
       <span role="status">
@@ -294,7 +319,7 @@ function SendTest({ hasDevices }: { hasDevices: boolean }) {
           <Text size="xs" tone="danger" className="break-words">
             Couldn’t send a test: {errText(send.error)}
           </Text>
-        ) : send.isSuccess ? (
+        ) : queuedAt !== null && testPending(queuedAt, lastSentAt, now) ? (
           <Text size="xs" tone="teal">
             Sending within a minute…
           </Text>

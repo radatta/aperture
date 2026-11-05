@@ -50,8 +50,9 @@ export function isStored(s: Stored | null): s is Stored {
 }
 
 // /tasks view state. The lens lives in the URL (?lens=, so Home can deep-link to Week; with the Places
-// lens, ?place= opens one store's list; ?task= is a reminder's one-shot link); search and filters live in sessionStorage, sticky for the
-// session but reset each new day; which groups are collapsed lives in localStorage.
+// lens, ?place= opens one store's list; ?task= is a reminder's one-shot link); search and filters live
+// in sessionStorage, sticky for the session but reset each new day; which groups are collapsed lives in
+// localStorage.
 export function useTaskQuery() {
   const [params, setParams] = useSearchParams();
   const { data: settings } = useSettings();

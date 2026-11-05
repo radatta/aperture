@@ -95,8 +95,18 @@ export interface ReminderCandidate {
   dueTime: string | null; // timed only
 }
 
-const clip = (s: string, max: number): string =>
-  s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
+// By code points, so an emoji at the cut isn't split into half a surrogate pair.
+const clip = (s: string, max: number): string => {
+  const chars = Array.from(s);
+  return chars.length <= max
+    ? s
+    : `${chars
+        .slice(0, max - 1)
+        .join('')
+        .trimEnd()}…`;
+};
+const titleOf = (c: ReminderCandidate): string =>
+  c.kind === 'test' ? 'Aperture test' : c.title.trim() || 'Untitled task';
 
 const BODY_OF: Record<ReminderKind, (c: ReminderCandidate) => string> = {
   timed: (c) => `Due now · ${fmtClock12(c.dueTime ?? DAY_REMINDER_TIME)}`,
@@ -111,10 +121,9 @@ export function reminderCopy(cands: readonly ReminderCandidate[]): { title: stri
   if (cands.length === 0) throw new Error('reminderCopy needs a candidate');
   if (cands.length === 1) {
     const c = cands[0]!;
-    const title = c.kind === 'test' ? 'Aperture test' : c.title.trim() || 'Untitled task';
-    return { title: clip(title, PUSH_TITLE_MAX), body: BODY_OF[c.kind](c) };
+    return { title: clip(titleOf(c), PUSH_TITLE_MAX), body: BODY_OF[c.kind](c) };
   }
-  const titles = cands.map((c) => clip(c.title.trim() || 'Untitled task', PUSH_TITLE_MAX));
+  const titles = cands.map((c) => clip(titleOf(c), PUSH_TITLE_MAX));
   return { title: `${cands.length} reminders`, body: clip(titles.join(' · '), PUSH_BODY_MAX) };
 }
 
@@ -191,6 +200,38 @@ export interface SubscribePushInput {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   label: string;
+}
+
+// subscribePush's input is untrusted JSON, checked the same way by the stub and the BFF (parsePushInput).
+// The keys are opaque here (base64url, bounded): they're checked as a P-256 point + 16-octet secret only
+// when the poller encrypts to them, and a device whose keys can't work is dropped then (push/dispatch.ts).
+export const PUSH_ENDPOINT_MAX = 2048;
+export const PUSH_KEY_MAX = 256;
+export const PUSH_KEYS_ERROR = 'That push subscription is missing its keys';
+// unsubscribePush with no id at all; an id that matches nothing is a no-op, not this.
+export const PUSH_UNKNOWN_DEVICE_ERROR = 'Unknown device';
+export const pushKeyOk = (v: unknown): v is string =>
+  typeof v === 'string' && v.length <= PUSH_KEY_MAX && /^[A-Za-z0-9_-]+=*$/.test(v);
+// Whitespace collapsed, clipped to PUSH_LABEL_MAX; nothing usable reads "This device".
+export const pushLabel = (v: unknown): string => {
+  const label = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, PUSH_LABEL_MAX) : '';
+  return label || 'This device';
+};
+// The input as stored, or a refusal: PUSH_ENDPOINT_ERROR (not a string, too long, off the allowlist) or
+// PUSH_KEYS_ERROR (a key missing, empty, too long or not base64url).
+export function parsePushInput(input: unknown): SubscribePushInput {
+  const given = (input ?? {}) as Partial<SubscribePushInput>;
+  const endpoint = given.endpoint;
+  if (
+    typeof endpoint !== 'string' ||
+    endpoint.length > PUSH_ENDPOINT_MAX ||
+    !pushEndpointOk(endpoint)
+  )
+    throw new Error(PUSH_ENDPOINT_ERROR);
+  const p256dh = given.keys?.p256dh;
+  const auth = given.keys?.auth;
+  if (!pushKeyOk(p256dh) || !pushKeyOk(auth)) throw new Error(PUSH_KEYS_ERROR);
+  return { endpoint, keys: { p256dh, auth }, label: pushLabel(given.label) };
 }
 
 // A device as Settings sees it. Never carries the endpoint keys (p256dh/auth are credentials: anyone with

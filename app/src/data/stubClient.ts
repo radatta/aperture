@@ -111,9 +111,9 @@ import {
   PLACE_TOKEN_PREFIX,
   placeDigestOf,
   PUSH_DEVICE_ID_LEN,
-  PUSH_ENDPOINT_ERROR,
   PUSH_NO_DEVICE_ERROR,
-  pushEndpointOk,
+  PUSH_UNKNOWN_DEVICE_ERROR,
+  parsePushInput,
   REMINDER_SETTINGS_DEFAULTS,
   placeError,
   placeUnknownError,
@@ -1611,14 +1611,22 @@ class StubClient implements ApiClient {
     lastError: s.lastError,
     lastErrorAt: s.lastErrorAt,
   });
-  async subscribePush(input: SubscribePushInput): Promise<PushDevice> {
-    if (!pushEndpointOk(input.endpoint)) throw new Error(PUSH_ENDPOINT_ERROR);
+  // The backend's rules: parsePushInput's checks; createdAt / lastOkAt kept, even across a revive; the
+  // last error kept unless the endpoint or keys changed or the device is revived.
+  async subscribePush(given: SubscribePushInput): Promise<PushDevice> {
+    const input = parsePushInput(given);
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.endpoint));
     const id = [...new Uint8Array(digest)]
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('')
       .slice(0, PUSH_DEVICE_ID_LEN);
-    const prev = this.find(this.store.pushSubs, id);
+    const prev = this.store.pushSubs.find((x) => x.id === id);
+    const same =
+      !!prev &&
+      prev.deletedAt === null &&
+      prev.endpoint === input.endpoint &&
+      prev.p256dh === input.keys.p256dh &&
+      prev.auth === input.keys.auth;
     const t = this.now();
     return this.pushDevice(
       this.writes.put(this.store.pushSubs, {
@@ -1632,18 +1640,20 @@ class StubClient implements ApiClient {
         auth: input.keys.auth,
         label: input.label,
         lastOkAt: prev?.lastOkAt ?? null,
-        lastError: null,
-        lastErrorAt: null,
+        lastError: same ? (prev?.lastError ?? null) : null,
+        lastErrorAt: same ? (prev?.lastErrorAt ?? null) : null,
       }),
     );
   }
-  // A tombstone, so the removal sticks; its keys go — nothing will push to it again.
+  // A tombstone, so the removal sticks; its endpoint and keys go — nothing will push to it again.
   async unsubscribePush(id: string): Promise<void> {
+    if (typeof id !== 'string' || id === '') throw new Error(PUSH_UNKNOWN_DEVICE_ERROR);
     const s = this.find(this.store.pushSubs, id);
     if (!s) return; // removing twice, or an unknown id
     const t = this.now();
     this.writes.put(this.store.pushSubs, {
       ...s,
+      endpoint: '',
       p256dh: '',
       auth: '',
       deletedAt: t,
@@ -1655,9 +1665,12 @@ class StubClient implements ApiClient {
       configured: true,
       vapidPublicKey: STUB_VAPID_PUBLIC_KEY,
       devices: this.alive(this.store.pushSubs)
-        .sort((a, b) => a.createdAt - b.createdAt)
+        .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
         .map(this.pushDevice),
-      removedDeviceIds: this.store.pushSubs.filter((s) => s.deletedAt !== null).map((s) => s.id),
+      removedDeviceIds: this.store.pushSubs
+        .filter((s) => s.deletedAt !== null)
+        .map((s) => s.id)
+        .sort(),
       poller: this.store.pushHealth,
     };
   }

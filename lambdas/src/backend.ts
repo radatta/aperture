@@ -80,11 +80,10 @@ import {
   slugify,
   planFireAt,
   PUSH_DEVICE_ID_LEN,
-  PUSH_ENDPOINT_ERROR,
-  PUSH_LABEL_MAX,
   PUSH_NO_DEVICE_ERROR,
   PUSH_UNCONFIGURED_ERROR,
-  pushEndpointOk,
+  PUSH_UNKNOWN_DEVICE_ERROR,
+  parsePushInput,
   REMINDER_SETTINGS_DEFAULTS,
   REMINDER_WINDOW_MS,
   taskFireAt,
@@ -302,18 +301,6 @@ function partPlace(given: string | null, parent: Task | undefined): string | nul
   if (given !== null && given !== parent.place) throw new Error(PLACE_PART_ERROR);
   return parent.place;
 }
-// Reminders' subscribe input is untrusted JSON. The keys are opaque here (base64url, bounded): they're
-// checked as a P-256 point + 16-octet secret only when the poller encrypts to them, and a device whose keys
-// can't work is dropped then (push/dispatch.ts).
-const PUSH_ENDPOINT_MAX = 2048;
-const PUSH_KEY_MAX = 256;
-const PUSH_KEYS_ERROR = 'That push subscription is missing its keys';
-const pushKeyOk = (v: unknown): v is string =>
-  typeof v === 'string' && v.length <= PUSH_KEY_MAX && /^[A-Za-z0-9_-]+=*$/.test(v);
-const pushLabel = (v: unknown): string => {
-  const label = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, PUSH_LABEL_MAX) : '';
-  return label || 'This device';
-};
 // The device id: a sha256(endpoint) prefix, so re-subscribing the same endpoint is an upsert.
 const pushDeviceId = (endpoint: string): string =>
   createHash('sha256').update(endpoint).digest('hex').slice(0, PUSH_DEVICE_ID_LEN);
@@ -1859,27 +1846,28 @@ export class BackendClient implements ApiClient {
   // `writes`; a device's endpoint and keys never leave (deviceOf).
 
   // Upsert by endpoint. Refuses an endpoint off PUSH_ENDPOINT_HOSTS (the one SSRF gate — the poller POSTs
-  // only to stored endpoints) and a stage with no VAPID key. A re-subscribe keeps createdAt / lastOkAt and
-  // clears the device's last error (a fresh subscription); on a removed device's tombstone it revives it
-  // (same id, off removedDeviceIds). The first device puts the user in the poller's
+  // only to stored endpoints) and a stage with no VAPID key; parsePushInput (shared with the stub) checks
+  // the shape. A re-subscribe keeps createdAt / lastOkAt, and the device's last error unless the endpoint
+  // or keys changed (a new subscription) — the same keys re-sent can't have fixed it. On a removed
+  // device's tombstone it revives it (same id, off removedDeviceIds, error cleared). The first device puts the user in the poller's
   // registry — after re-keying their live deadlines and plans onto the remind index (rows written before
   // it existed have no keys), so a failure there fails the call and the next subscribe retries it.
   async subscribePush(input: SubscribePushInput): Promise<PushDevice> {
-    const given = (input ?? {}) as Partial<SubscribePushInput>;
-    const endpoint = given.endpoint;
-    if (
-      typeof endpoint !== 'string' ||
-      endpoint.length > PUSH_ENDPOINT_MAX ||
-      !pushEndpointOk(endpoint)
-    )
-      throw new Error(PUSH_ENDPOINT_ERROR);
-    const p256dh = given.keys?.p256dh;
-    const auth = given.keys?.auth;
-    if (!pushKeyOk(p256dh) || !pushKeyOk(auth)) throw new Error(PUSH_KEYS_ERROR);
+    const {
+      endpoint,
+      keys: { p256dh, auth },
+      label,
+    } = parsePushInput(input);
     if (!(await this.pushPublicKey())) throw new Error(PUSH_UNCONFIGURED_ERROR);
     const now = this.now();
     const id = pushDeviceId(endpoint);
     const prev = await this.repo.getPushSub(id);
+    const same =
+      !!prev &&
+      prev.deletedAt === null &&
+      prev.endpoint === endpoint &&
+      prev.p256dh === p256dh &&
+      prev.auth === auth;
     const sub: PushSub = {
       id,
       userId: this.userId,
@@ -1889,10 +1877,10 @@ export class BackendClient implements ApiClient {
       endpoint,
       p256dh,
       auth,
-      label: pushLabel(given.label),
+      label,
       lastOkAt: prev?.lastOkAt ?? null,
-      lastError: null,
-      lastErrorAt: null,
+      lastError: same ? (prev?.lastError ?? null) : null,
+      lastErrorAt: same ? (prev?.lastErrorAt ?? null) : null,
     };
     await this.repo.putPushSub(sub);
     await this.ensurePushUser(now);
@@ -1903,7 +1891,7 @@ export class BackendClient implements ApiClient {
   // with its endpoint and keys cleared (a revive re-sends them), so a tombstone holds no credential. An
   // unknown or already-removed id is a no-op. The last alive device out takes the user off the registry.
   async unsubscribePush(id: string): Promise<void> {
-    if (typeof id !== 'string' || id === '') throw new Error('Unknown device');
+    if (typeof id !== 'string' || id === '') throw new Error(PUSH_UNKNOWN_DEVICE_ERROR);
     const prev = await this.repo.getPushSub(id);
     if (!prev || prev.deletedAt !== null) return;
     const now = this.now();

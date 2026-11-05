@@ -13,6 +13,7 @@ import { QueryControls } from '../../modules/tasks/QueryControls';
 import { TaskListSection } from '../../modules/tasks/TaskListSection';
 import { TaskModalHost } from '../../modules/tasks/TaskModalHost';
 import { useOpenTask } from '../../modules/tasks/task-modal-context';
+import { useApi } from '../../data/api-context';
 import { TodayLens } from '../../modules/tasks/TodayLens';
 import { PlacesLens } from '../../modules/tasks/PlacesLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
@@ -48,8 +49,14 @@ export function TasksPage() {
     today,
     dayStartHour,
   } = useTaskQuery();
-  // A reminder linked a task that's gone (deleted since the ping): said, not a tap that opens nothing.
-  const [linkGone, setLinkGone] = useState(false);
+  // A reminder's link that opened nothing — the task is gone (deleted since the ping), or it couldn't be
+  // read: said, not a tap that opens nothing. A new link starts clean.
+  const [linkMiss, setLinkMiss] = useState<null | 'gone' | 'failed'>(null);
+  const [seenLink, setSeenLink] = useState(linkedTaskId);
+  if (linkedTaskId !== seenLink) {
+    setSeenLink(linkedTaskId); // derived state, updated during render
+    if (linkedTaskId !== null) setLinkMiss(null);
+  }
   const bulk = useDisclosure();
   // `at` is a nonce so two adds in a row re-arm the fade (same trick as the capture receipt).
   const [receipt, setReceipt] = useState<{ count: number; placed: number; at: number } | null>(
@@ -131,14 +138,16 @@ export function TasksPage() {
         lens={lens}
         counts={counts}
         onChange={(next) => {
-          setLinkGone(false);
+          setLinkMiss(null);
           setLens(next);
         }}
       />
-      {linkGone && (
+      {linkMiss && (
         <p role="status">
-          <Text size="sm" tone="muted">
-            That reminder’s task is gone — it was deleted after the reminder went out.
+          <Text size="sm" tone={linkMiss === 'gone' ? 'muted' : 'danger'}>
+            {linkMiss === 'gone'
+              ? 'That reminder’s task is gone — it was deleted after the reminder went out.'
+              : 'Couldn’t open that reminder’s task — it didn’t load. Find it in the list below.'}
           </Text>
         </p>
       )}
@@ -152,7 +161,7 @@ export function TasksPage() {
             id={linkedTaskId}
             tasks={tasksQ.data}
             onDone={clearLink}
-            onGone={() => setLinkGone(true)}
+            onMiss={setLinkMiss}
           />
         )}
         {lens === 'today' && !searching ? (
@@ -193,28 +202,39 @@ export function TasksPage() {
 
 // A reminder's tap-through: once the list is in, open the linked task in the page's modal and drop the
 // link from the URL. Inside TaskModalHost, whose context it opens through. A failed list read waits —
-// the list says why, and a Retry that lands still opens it.
+// the list says why, and a Retry that lands still opens it. A miss in the list is asked of the server
+// before it's called gone: a cached list can predate a task made since (on another device, by MCP).
 function OpenLinkedTask({
   id,
   tasks,
   onDone,
-  onGone,
+  onMiss,
 }: {
   id: string | null;
   tasks: Task[] | undefined;
   onDone: () => void;
-  onGone: () => void;
+  onMiss: (why: 'gone' | 'failed') => void;
 }) {
+  const api = useApi();
   const openTask = useOpenTask();
   const handled = useRef(false);
   useEffect(() => {
     if (!tasks || handled.current) return;
     handled.current = true;
-    const task = id ? tasks.find((t) => t.id === id) : undefined;
-    if (task) openTask?.(task, 'view', null);
-    else if (id) onGone();
-    onDone();
-  }, [id, tasks, openTask, onDone, onGone]);
+    const cached = id ? tasks.find((t) => t.id === id) : undefined;
+    if (!id || cached) {
+      if (cached) openTask?.(cached, 'view', null);
+      onDone();
+      return;
+    }
+    api
+      .getTask(id)
+      .then(
+        (task) => (task ? openTask?.(task, 'view', null) : onMiss('gone')),
+        () => onMiss('failed'),
+      )
+      .finally(onDone);
+  }, [id, tasks, api, openTask, onDone, onMiss]);
   return null;
 }
 

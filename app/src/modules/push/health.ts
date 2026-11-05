@@ -60,3 +60,9 @@ export function deviceLines(d: PushDevice, now: number): HealthLine[] {
     });
   return lines;
 }
+
+// How long "Sending within a minute…" may stand without a send landing — the poller runs every minute.
+export const TEST_PENDING_MS = 2 * 60_000;
+// A queued Send test is pending until a send lands at or after it was queued, or TEST_PENDING_MS passes.
+export const testPending = (queuedAt: number, lastSentAt: number | null, now: number): boolean =>
+  (lastSentAt === null || lastSentAt < queuedAt) && now - queuedAt < TEST_PENDING_MS;

@@ -9,7 +9,9 @@
 // could ping it. Devices are ledgered from the server's answer (api.ts, or the browser's subscribePush response
 // via recorder.ts) and removed by id; a removal is a keyless tombstone that stays. The reminder toggles are
 // recorded as `reminder-toggles:<run>` before any flip, so cleanup switches them back on whatever happens.
-// Titles are `devcheck-rm <nonce> …` — the parts scenarios sweep `devcheck <nonce>`. The rows are the plan's
+// "Removed from another device" is proven on a device subscribed and removed through the API, its id seeded as
+// this browser's opt-in (headless Chromium can't subscribe itself). Titles are `devcheck-rm <nonce> …` — the
+// parts scenarios sweep `devcheck <nonce>`. The rows are the plan's
 // dev-test matrix (localNotes/plan.md §5 E), with the removal rule (PushStatus.removedDeviceIds).
 import { createECDH, randomBytes } from 'node:crypto';
 import type { DevPushDevice, DevPushStatus, DevSubscribePushInput, DevTask } from '../api';
@@ -97,6 +99,7 @@ let deviceA: DevPushDevice; // the end-to-end device (real keys, Apple)
 let deviceB: DevPushDevice; // removed in Settings
 let deviceC: DevPushDevice; // the one device left for Send test
 let testAt = 0; // just before Send test was clicked
+let deviceR: DevPushDevice; // "this browser's" device, removed by the API as if from another device
 
 // The server (or the page) catches up: the poller's tick, a save the page already showed.
 async function until<T>(
@@ -357,11 +360,16 @@ export const timedReminders: Scenario = {
       needsYou: 'a real APNs delivery, twice',
     },
     {
-      id: 'ios-removed-elsewhere',
-      entry: 'ios',
+      id: 'ui-removed-elsewhere',
+      entry: 'ui',
       kind: 'edge',
-      what: 'The iPhone removed in Settings on the Mac → the phone stops re-adding itself and says it was removed from another device',
-      needsYou: 'two real devices and the phone’s launch-time resync',
+      what: 'This browser’s device removed from another one → Settings drops its opt-in instead of re-adding it, and says “Removed from another device”',
+    },
+    {
+      id: 'ui-removed-dismiss',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Dismiss on that note: it goes, and stays gone across a reload',
     },
   ],
   steps: [
@@ -610,6 +618,53 @@ export const timedReminders: Scenario = {
           5_000,
         );
         if (s.devices.some((d) => d.id === deviceC.id)) throw new Error('C is still listed');
+      },
+    },
+    {
+      id: 'ui-removed-elsewhere',
+      entry: 'ui',
+      proves: ['ui-removed-elsewhere', 'ui-removed-dismiss'],
+      title:
+        'This browser opted in as a device the API then removes: Settings drops the opt-in and says so; Dismiss holds across a reload',
+      async run(ctx) {
+        // Headless Chromium can't subscribe (its permission reads denied), so this browser's opt-in is
+        // seeded: a device subscribed and removed through the API — the BFF's own id for it — written where
+        // Enable keeps it (browserPush.ts, aperture.push.enabled / .enabledAt), stamped before the read.
+        deviceR = await ctx.api.writes.subscribePush({
+          endpoint: endpoint(ctx, '-r'),
+          keys: UNUSABLE_KEYS,
+          label: label(ctx, 'R'),
+        });
+        await ctx.api.writes.unsubscribePush(deviceR.id);
+        await until(
+          'R listed as removed',
+          () => status(ctx),
+          (v) => v.removedDeviceIds.includes(deviceR.id),
+        );
+        await ctx.ui.goto('/settings');
+        await ctx.page.evaluate(
+          `localStorage.setItem('aperture.push.enabled', ${JSON.stringify(deviceR.id)});
+           localStorage.setItem('aperture.push.enabledAt', String(Date.now() - 60000));`,
+        );
+        await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+        const note = ctx.page
+          .getByRole('status')
+          .getByText('Removed from another device — tap Enable to turn reminders back on here.', {
+            exact: true,
+          });
+        await note.waitFor({ state: 'visible', timeout: 15_000 });
+        const optIn = await ctx.page.evaluate<string | null>(
+          `localStorage.getItem('aperture.push.enabled')`,
+        );
+        if (optIn !== null) throw new Error(`the opt-in survived the removal: ${optIn}`);
+        if ((await status(ctx)).devices.some((d) => d.id === deviceR.id))
+          throw new Error('R came back alive');
+        await ctx.shot('removed-elsewhere');
+        await ctx.page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+        await note.waitFor({ state: 'hidden', timeout: 5_000 });
+        await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+        await health(ctx).waitFor({ state: 'visible', timeout: 15_000 });
+        if (await note.isVisible()) throw new Error('the dismissed note came back after a reload');
       },
     },
     {

@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PushStatus, SubscribePushInput } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 import {
+  afterResync,
   currentSubscription,
   deviceIdHere,
   dropIfRemovedHere,
@@ -11,6 +12,7 @@ import {
   notificationPermission,
   rememberHere,
   resyncHere,
+  subscribeStamps,
 } from '../../modules/push/browserPush';
 
 // Reminders (Web Push, docs/areas/tasks/reminders.md): this user's devices and the poller's health, as
@@ -62,15 +64,20 @@ export function useSubscribePush() {
   });
 }
 
-// Removing this device also drops the browser's subscription and its opt-in, so the next launch doesn't
-// put it back; another device's row returns when that device next launches (D7).
+// Removing this device also drops the browser's subscription and its opt-in. It waits out a launch resync
+// in flight first, so that resync can't revive it — and if the resync re-subscribed this device under a
+// new id meanwhile, that one goes too. Another device's removal sticks (removedDeviceIds).
 export function useUnsubscribePush() {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
+      const here = id === deviceIdHere();
+      await afterResync();
       await api.unsubscribePush(id);
-      if (id !== deviceIdHere()) return;
+      if (!here) return;
+      const renewed = deviceIdHere();
+      if (renewed !== null && renewed !== id) await api.unsubscribePush(renewed);
       forgetHere();
       try {
         await (await currentSubscription())?.unsubscribe();
@@ -93,19 +100,23 @@ export function useSendTestPush() {
 
 // D7: once per launch, on a device that turned reminders on and still has permission, heal the
 // subscription (resyncHere). Http mode only — the stub has no push service behind it. A failure is kept
-// on the device (browserPush.syncErrorHere) and shown in Settings, not thrown at the shell.
+// on the device (browserPush.syncErrorHere) and shown in Settings and on Home, not thrown at the shell.
+// The read's own time is the resync's askedAt: a read from before a newer opt-in can't speak for it.
 export function usePushSync(enabled: boolean) {
   const api = useApi();
   const qc = useQueryClient();
   const armed = enabled && deviceIdHere() !== null && notificationPermission() === 'granted';
-  const { data } = usePushStatus({ enabled: armed });
+  const { data, dataUpdatedAt } = usePushStatus({ enabled: armed });
   const ran = useRef(false);
   useEffect(() => {
     if (!armed || !data || ran.current) return;
     ran.current = true;
-    resyncHere(data, Date.now(), (input) => api.subscribePush(input)).then(
+    resyncHere(data, Date.now(), (input) => api.subscribePush(input), dataUpdatedAt).then(
       (wrote) => wrote && void refresh(qc),
       () => void refresh(qc),
     );
-  }, [armed, data, api, qc]);
+  }, [armed, data, dataUpdatedAt, api, qc]);
 }
+
+// One of this device's push stamps (browserPush's readers), re-read whenever one is written.
+export const usePushStamp = <T>(read: () => T): T => useSyncExternalStore(subscribeStamps, read);

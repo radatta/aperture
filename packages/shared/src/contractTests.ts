@@ -21,12 +21,19 @@ import {
   resolveRefundLinks,
 } from './finance';
 import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS } from './financeFixtures';
-import { PUSH_ENDPOINT_ERROR, PUSH_NO_DEVICE_ERROR } from './reminders';
+import {
+  PUSH_ENDPOINT_ERROR,
+  PUSH_ENDPOINT_MAX,
+  PUSH_KEY_MAX,
+  PUSH_KEYS_ERROR,
+  PUSH_LABEL_MAX,
+  PUSH_NO_DEVICE_ERROR,
+  PUSH_UNKNOWN_DEVICE_ERROR,
+} from './reminders';
 import type { SubscribePushInput } from './reminders';
 import type { RecordFluxSetInput } from './api';
 import { ulid } from './ulid';
 
-// A finished Flux set as the stage hands it over; override what a test is about.
 // A browser's push subscription as subscribePush receives it; override the endpoint per device.
 const pushSub = (endpoint = 'https://web.push.apple.com/QGdev-1'): SubscribePushInput => ({
   endpoint,
@@ -34,6 +41,7 @@ const pushSub = (endpoint = 'https://web.push.apple.com/QGdev-1'): SubscribePush
   label: 'iPhone · Safari',
 });
 
+// A finished Flux set as the stage hands it over; override what a test is about.
 const fluxSet = (over: Partial<RecordFluxSetInput> = {}): RecordFluxSetInput => ({
   id: ulid(),
   day: '2026-10-20',
@@ -2964,9 +2972,38 @@ export function runApiContract(
         'https://web.push.apple.com:8443/x',
         'https://web.push.apple.com.evil.example/x',
         'not a url',
+        `https://web.push.apple.com/${'a'.repeat(PUSH_ENDPOINT_MAX)}`, // over-long
       ])
         await expect(api.subscribePush(pushSub(bad))).rejects.toThrow(PUSH_ENDPOINT_ERROR);
       expect((await api.getPushStatus()).devices).toEqual([]);
+    });
+
+    it('reminders: refuses missing, empty or over-long keys; cleans and clips the label', async () => {
+      const keyless = [
+        undefined,
+        { p256dh: 'BPk-p256dh-sample', auth: '' },
+        { p256dh: '', auth: 'auth-sample' },
+        { p256dh: 'x'.repeat(PUSH_KEY_MAX + 1), auth: 'auth-sample' },
+      ];
+      for (const keys of keyless)
+        await expect(
+          api.subscribePush({ ...pushSub(), keys } as unknown as SubscribePushInput),
+        ).rejects.toThrow(PUSH_KEYS_ERROR);
+      expect((await api.getPushStatus()).devices).toEqual([]);
+      const messy = await api.subscribePush({ ...pushSub(), label: '  iPhone \n ·  Safari ' });
+      expect(messy.label).toBe('iPhone · Safari');
+      const long = await api.subscribePush({ ...pushSub(), label: 'x'.repeat(200) });
+      expect(long.label).toHaveLength(PUSH_LABEL_MAX);
+      expect((await api.subscribePush({ ...pushSub(), label: '   ' })).label).toBe('This device');
+    });
+
+    it('reminders: unsubscribing with no id refuses; removed ids read sorted', async () => {
+      await expect(api.unsubscribePush('')).rejects.toThrow(PUSH_UNKNOWN_DEVICE_ERROR);
+      const ids: string[] = [];
+      for (const n of [1, 2, 3])
+        ids.push((await api.subscribePush(pushSub(`https://web.push.apple.com/QGsort-${n}`))).id);
+      for (const id of [...ids].reverse()) await api.unsubscribePush(id);
+      expect((await api.getPushStatus()).removedDeviceIds).toEqual([...ids].sort());
     });
 
     it("reminders: a device's keys never leave — not in status, not in the export", async () => {

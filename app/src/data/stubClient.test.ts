@@ -161,14 +161,40 @@ describe('stub — reminders', () => {
     const a = await api.subscribePush(sub());
     await api.unsubscribePush(a.id);
     const stored = localStorage.getItem(key)!;
-    expect(stored).not.toContain('p256dh-secret');
-    expect(stored).not.toContain('auth-secret');
+    for (const leak of ['p256dh-secret', 'auth-secret', 'QGstub'])
+      expect(stored).not.toContain(leak);
     const reloaded = createStubClient({ now: () => FIXED, storageKey: key });
     expect((await reloaded.getPushStatus()).removedDeviceIds).toEqual([a.id]);
     expect((await reloaded.subscribePush(sub())).id).toBe(a.id);
     expect(await reloaded.getPushStatus()).toMatchObject({
       devices: [expect.objectContaining({ id: a.id })],
       removedDeviceIds: [],
+    });
+  });
+
+  it("re-sending the same keys keeps the poller's error; new keys or a revive clear it", async () => {
+    let t = FIXED;
+    const key = `push-err.${FIXED}`;
+    const api = createStubClient({ now: () => t, storageKey: key, seed: false });
+    const a = await api.subscribePush(sub());
+    // Only the poller sets an error: write one the way it would land in the store.
+    const raw = JSON.parse(localStorage.getItem(key)!) as { pushSubs: Record<string, unknown>[] };
+    Object.assign(raw.pushSubs[0]!, { lastError: '403 Forbidden', lastErrorAt: FIXED });
+    localStorage.setItem(key, JSON.stringify(raw));
+    const stub = createStubClient({ now: () => t, storageKey: key });
+    t += 1000;
+    expect(await stub.subscribePush(sub())).toMatchObject({
+      lastError: '403 Forbidden',
+      lastErrorAt: FIXED,
+    });
+    const rekeyed = { ...sub(), keys: { p256dh: 'p256dh-new', auth: 'auth-secret' } };
+    expect(await stub.subscribePush(rekeyed)).toMatchObject({ lastError: null, lastErrorAt: null });
+    await stub.unsubscribePush(a.id);
+    t += 1000;
+    expect(await stub.subscribePush(sub())).toMatchObject({
+      id: a.id,
+      createdAt: FIXED,
+      lastError: null,
     });
   });
 

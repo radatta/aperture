@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { dayKey, PUSH_LABEL_MAX } from '@aperture/shared';
+import { PUSH_LABEL_MAX } from '@aperture/shared';
 import type { PushStatus } from '@aperture/shared';
 import { STUB_VAPID_PUBLIC_KEY } from '../../data/stubClient';
 import {
+  afterResync,
   deviceIdHere,
   deviceLabel,
   dismissRemovedElsewhere,
+  dismissSyncError,
   dropIfRemovedHere,
   forgetHere,
   PUSH_INSTALL_COPY,
@@ -17,6 +19,7 @@ import {
   resyncHere,
   subscribeHere,
   syncErrorHere,
+  syncErrorUndismissed,
   urlBase64ToUint8Array,
 } from './browserPush';
 
@@ -155,6 +158,30 @@ describe('subscribeHere', () => {
     });
   });
 
+  it('asks first on the service-worker path too (no window manager), then subscribes there', async () => {
+    const requestPermission = vi.fn(async () => 'granted' as const);
+    vi.stubGlobal('Notification', { permission: 'default', requestPermission });
+    vi.stubGlobal('PushManager', class {});
+    const pm = {
+      getSubscription: vi.fn(async () => null),
+      subscribe: vi.fn(async () => fakeSub('https://fcm.googleapis.com/fcm/send/sw')),
+    };
+    const reg = { pushManager: pm };
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: { getRegistration: async () => reg, ready: Promise.resolve(reg) },
+      configurable: true,
+    });
+    ua(MAC_CHROME);
+    try {
+      const done = subscribeHere(STUB_VAPID_PUBLIC_KEY);
+      expect(requestPermission).toHaveBeenCalledTimes(1); // before any await
+      expect((await done).endpoint).toBe('https://fcm.googleapis.com/fcm/send/sw');
+      expect(pm.subscribe).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+    }
+  });
+
   it('a denial on iPhone says where to turn it back on', async () => {
     const { pm } = safari({ ask: 'denied' });
     ua(IPHONE);
@@ -203,6 +230,8 @@ describe('resyncHere (D7)', () => {
     lastError: null,
     lastErrorAt: null,
   });
+  const fresh = (pm: ReturnType<typeof safari>['pm']) =>
+    pm.subscribe.mock.results[0]!.value as Promise<ReturnType<typeof fakeSub>>;
 
   it('does nothing on a device that never turned reminders on', async () => {
     const { pm } = safari({ permission: 'granted' });
@@ -212,26 +241,16 @@ describe('resyncHere (D7)', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
-  it('a healthy launch already confirmed today writes nothing', async () => {
+  it('a healthy launch writes nothing — no daily re-upsert — and clears an old failure', async () => {
     const { pm } = safari({ permission: 'granted' });
     pm.set(fakeSub('https://web.push.apple.com/a'));
-    rememberHere(device('d1'), NOW);
+    rememberHere(device('d1'), NOW - 3 * 86_400_000);
+    localStorage.setItem('aperture.push.syncError', 'subscribePush failed (503)');
     const upsert = vi.fn();
-    expect(await resyncHere(status({ devices: [device('d1')] }), NOW + 60_000, upsert)).toBe(false);
+    expect(await resyncHere(status({ devices: [device('d1')] }), NOW, upsert)).toBe(false);
     expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it('re-upserts once on a new day, without re-subscribing', async () => {
-    const { pm } = safari({ permission: 'granted' });
-    pm.set(fakeSub('https://web.push.apple.com/a'));
-    rememberHere(device('d1'), NOW - 86_400_000);
-    const upsert = vi.fn(async () => device('d1'));
-    expect(await resyncHere(status({ devices: [device('d1')] }), NOW, upsert)).toBe(true);
     expect(pm.subscribe).not.toHaveBeenCalled();
-    expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ endpoint: 'https://web.push.apple.com/a' }),
-    );
-    expect(localStorage.getItem('aperture.push.syncedDay')).toBe(dayKey(NOW, 0));
+    expect(syncErrorHere()).toBeNull();
   });
 
   it('re-subscribes when iOS dropped the subscription, and remembers the new id', async () => {
@@ -253,31 +272,155 @@ describe('resyncHere (D7)', () => {
     expect(pm.subscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('re-upserts when the server lost the device', async () => {
+  it('the server dropped the device (a dead endpoint): drops it and subscribes fresh, never re-sending it', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    const dead = fakeSub('https://web.push.apple.com/a'); // made with this key, so it looks healthy
+    pm.set(dead);
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn(async () => device('d2'));
+    expect(await resyncHere(status(), NOW, upsert)).toBe(true);
+    expect(dead.unsubscribe).toHaveBeenCalled();
+    expect(pm.subscribe).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: 'https://web.push.apple.com/new' }),
+    );
+    expect(deviceIdHere()).toBe('d2');
+  });
+
+  it('a device removed elsewhere is left to the status read — the resync neither heals nor drops it', async () => {
     const { pm } = safari({ permission: 'granted' });
     pm.set(fakeSub('https://web.push.apple.com/a'));
     rememberHere(device('d1'), NOW);
-    const upsert = vi.fn(async () => device('d1'));
-    expect(await resyncHere(status(), NOW, upsert)).toBe(true);
+    const upsert = vi.fn();
+    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, upsert)).toBe(false);
+    expect(upsert).not.toHaveBeenCalled();
     expect(pm.subscribe).not.toHaveBeenCalled();
+    expect(deviceIdHere()).toBe('d1');
   });
 
-  it('removed on another device: the removal sticks — drops the opt-in, writes nothing, leaves a note', async () => {
+  it('a read from before this device last opted in can’t speak for it', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn();
+    expect(await resyncHere(status(), NOW, upsert, NOW - 1)).toBe(false);
+    expect(pm.getSubscription).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('removed here while it subscribed: the new subscription goes and nothing is upserted', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const subscribe = pm.subscribe.getMockImplementation()!;
+    pm.subscribe.mockImplementationOnce(async () => {
+      forgetHere(); // a Remove on this device lands meanwhile
+      return subscribe();
+    });
+    const upsert = vi.fn();
+    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(upsert).not.toHaveBeenCalled();
+    expect((await fresh(pm)).unsubscribe).toHaveBeenCalled();
+    expect(deviceIdHere()).toBeNull();
+  });
+
+  it('removed here while the upsert was out: not remembered, and the subscription goes', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn(async () => {
+      forgetHere();
+      return device('d2');
+    });
+    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(deviceIdHere()).toBeNull();
+    expect((await fresh(pm)).unsubscribe).toHaveBeenCalled();
+  });
+
+  it('a new Enable meanwhile owns the subscription: the resync stands down and leaves it', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn(async () => {
+      rememberHere(device('d3'), NOW + 5);
+      return device('d2');
+    });
+    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(deviceIdHere()).toBe('d3');
+    expect((await fresh(pm)).unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it('afterResync waits for the run in flight', async () => {
+    safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    let release!: () => void;
+    const upsert = vi.fn(
+      () => new Promise<ReturnType<typeof device>>((r) => (release = () => r(device('d1')))),
+    );
+    const run = resyncHere(status(), NOW, upsert);
+    let waited = false;
+    const after = afterResync().then(() => (waited = true));
+    await vi.waitFor(() => expect(upsert).toHaveBeenCalled());
+    expect(waited).toBe(false);
+    release();
+    await run;
+    await after;
+    expect(waited).toBe(true);
+  });
+
+  it('stays out when permission went away or the stage has no key', async () => {
+    safari({ permission: 'denied' });
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn();
+    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    expect(await resyncHere(status({ configured: false, vapidPublicKey: null }), NOW, upsert)).toBe(
+      false,
+    );
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('remembers a failure for Settings and Home; a dismissal holds until a new one; success clears it', async () => {
+    safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const failing = async () => {
+      throw new Error('subscribePush failed (503)');
+    };
+    await expect(resyncHere(status(), NOW, failing)).rejects.toThrow('503');
+    expect(syncErrorHere()).toBe('subscribePush failed (503)');
+    expect(syncErrorUndismissed()).toBe('subscribePush failed (503)');
+    dismissSyncError();
+    expect(syncErrorUndismissed()).toBeNull();
+    expect(syncErrorHere()).toBe('subscribePush failed (503)'); // Settings still says it
+    await expect(resyncHere(status(), NOW, failing)).rejects.toThrow('503');
+    expect(syncErrorUndismissed()).toBe('subscribePush failed (503)'); // a new failure shows again
+    await resyncHere(status(), NOW, async () => device('d1'));
+    expect(syncErrorHere()).toBeNull();
+    expect(syncErrorUndismissed()).toBeNull();
+    forgetHere();
+    expect(deviceIdHere()).toBeNull();
+  });
+});
+
+describe('dropIfRemovedHere', () => {
+  const device = (id: string) => ({
+    id,
+    label: 'iPhone · Safari',
+    createdAt: 0,
+    lastOkAt: null,
+    lastError: null,
+    lastErrorAt: null,
+  });
+
+  it('removed on another device: the removal sticks — drops the opt-in and subscription, leaves a note', async () => {
     const { pm } = safari({ permission: 'granted' });
     const sub = fakeSub('https://web.push.apple.com/a');
     pm.set(sub);
-    rememberHere(device('d1'), NOW - 86_400_000);
-    const upsert = vi.fn();
-    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, upsert)).toBe(true);
-    expect(upsert).not.toHaveBeenCalled();
+    rememberHere(device('d1'), NOW);
+    expect(await dropIfRemovedHere(status({ removedDeviceIds: ['d1'] }), NOW + 1)).toBe(true);
     expect(pm.subscribe).not.toHaveBeenCalled();
     expect(sub.unsubscribe).toHaveBeenCalled();
     expect(deviceIdHere()).toBeNull();
-    expect(localStorage.getItem('aperture.push.syncedDay')).toBeNull();
     expect(removedElsewhereHere()).toBe(true);
-    // The next launch has no opt-in, so it stays out entirely.
-    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, upsert)).toBe(false);
-    expect(removedElsewhereHere()).toBe(true); // until dismissed or re-enabled
+    // No opt-in left, so a later read changes nothing; the note stays until dismissed or re-enabled.
+    expect(await dropIfRemovedHere(status({ removedDeviceIds: ['d1'] }), NOW + 2)).toBe(false);
+    expect(removedElsewhereHere()).toBe(true);
     dismissRemovedElsewhere();
     expect(removedElsewhereHere()).toBe(false);
   });
@@ -293,42 +436,12 @@ describe('resyncHere (D7)', () => {
   });
 
   it('another device’s removal leaves this one alone; enabling again clears the note', async () => {
-    const { pm } = safari({ permission: 'granted' });
-    pm.set(fakeSub('https://web.push.apple.com/a'));
+    safari({ permission: 'granted' });
     rememberHere(device('d1'), NOW);
-    const upsert = vi.fn();
-    const s = status({ devices: [device('d1')], removedDeviceIds: ['d9'] });
-    expect(await resyncHere(s, NOW, upsert)).toBe(false);
+    expect(await dropIfRemovedHere(status({ removedDeviceIds: ['d9'] }), NOW + 1)).toBe(false);
     expect(deviceIdHere()).toBe('d1');
     localStorage.setItem('aperture.push.removedElsewhere', '1');
     rememberHere(device('d1'), NOW);
     expect(removedElsewhereHere()).toBe(false);
-  });
-
-  it('stays out when permission went away or the stage has no key', async () => {
-    safari({ permission: 'denied' });
-    rememberHere(device('d1'), NOW - 86_400_000);
-    const upsert = vi.fn();
-    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
-    vi.stubGlobal('Notification', { permission: 'granted' });
-    expect(await resyncHere(status({ configured: false, vapidPublicKey: null }), NOW, upsert)).toBe(
-      false,
-    );
-    expect(upsert).not.toHaveBeenCalled();
-  });
-
-  it('remembers a failure for Settings and rethrows; a later success clears it', async () => {
-    safari({ permission: 'granted' });
-    rememberHere(device('d1'), NOW);
-    await expect(
-      resyncHere(status(), NOW, async () => {
-        throw new Error('subscribePush failed (503)');
-      }),
-    ).rejects.toThrow('503');
-    expect(syncErrorHere()).toBe('subscribePush failed (503)');
-    await resyncHere(status(), NOW, async () => device('d1'));
-    expect(syncErrorHere()).toBeNull();
-    forgetHere();
-    expect(deviceIdHere()).toBeNull();
   });
 });

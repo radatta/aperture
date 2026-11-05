@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { userDueEpoch } from './dates';
 import {
   PUSH_BODY_MAX,
+  PUSH_ENDPOINT_ERROR,
+  PUSH_ENDPOINT_MAX,
+  PUSH_KEY_MAX,
+  PUSH_KEYS_ERROR,
+  PUSH_LABEL_MAX,
   PUSH_TITLE_MAX,
+  parsePushInput,
   planFireAt,
   pushEndpointOk,
   reminderCopy,
@@ -103,6 +109,10 @@ describe('reminderCopy', () => {
       cand({ title: 'Milk' }),
     ]);
     expect(copy).toEqual({ title: '3 reminders', body: 'Renew passport · Call mom · Milk' });
+    // A Send test caught in the same tick reads as itself, not as an untitled task.
+    expect(reminderCopy([cand(), cand({ kind: 'test', taskId: null, title: '' })]).body).toBe(
+      'Renew passport · Aperture test',
+    );
   });
 
   it('clips long titles and bodies', () => {
@@ -111,6 +121,11 @@ describe('reminderCopy', () => {
     const batch = reminderCopy(Array.from({ length: 20 }, () => cand({ title: long })));
     expect(batch.body.length).toBeLessThanOrEqual(PUSH_BODY_MAX);
     expect(batch.body.endsWith('…')).toBe(true);
+  });
+
+  it('clips by code points, never splitting an emoji in half', () => {
+    const title = reminderCopy([cand({ title: `${'x'.repeat(PUSH_TITLE_MAX - 2)}😀😀😀` })]).title;
+    expect(title).toBe(`${'x'.repeat(PUSH_TITLE_MAX - 2)}😀…`); // the old slice left half an emoji
   });
 
   it('refuses an empty tick', () => {
@@ -179,5 +194,45 @@ describe('pushEndpointOk', () => {
       'nope',
     ])
       expect(pushEndpointOk(bad), bad).toBe(false);
+  });
+});
+
+describe('parsePushInput', () => {
+  const ok = {
+    endpoint: 'https://web.push.apple.com/QGabc',
+    keys: { p256dh: 'BPk-1', auth: 'au_2' },
+  };
+
+  it('admits a browser subscription and cleans its label', () => {
+    expect(parsePushInput({ ...ok, label: '  iPhone \n ·   Safari ' })).toEqual({
+      ...ok,
+      label: 'iPhone · Safari',
+    });
+    expect(parsePushInput({ ...ok, label: 'x'.repeat(200) }).label).toHaveLength(PUSH_LABEL_MAX);
+    expect(parsePushInput({ ...ok, label: '   ' }).label).toBe('This device');
+    expect(parsePushInput({ ...ok, label: 7 }).label).toBe('This device');
+  });
+
+  it('refuses a bad endpoint, then bad keys', () => {
+    for (const endpoint of [
+      undefined,
+      7,
+      'https://evil.example/x',
+      `${ok.endpoint}${'a'.repeat(PUSH_ENDPOINT_MAX)}`,
+    ])
+      expect(() => parsePushInput({ ...ok, endpoint }), String(endpoint)).toThrow(
+        PUSH_ENDPOINT_ERROR,
+      );
+    expect(() => parsePushInput(null)).toThrow(PUSH_ENDPOINT_ERROR);
+    for (const keys of [
+      undefined,
+      {},
+      { p256dh: 'BPk', auth: '' },
+      { p256dh: '', auth: 'au' },
+      { p256dh: 'x'.repeat(PUSH_KEY_MAX + 1), auth: 'au' },
+      { p256dh: 'not base64!', auth: 'au' },
+      { p256dh: 'BPk', auth: 3 },
+    ])
+      expect(() => parsePushInput({ ...ok, keys }), JSON.stringify(keys)).toThrow(PUSH_KEYS_ERROR);
   });
 });

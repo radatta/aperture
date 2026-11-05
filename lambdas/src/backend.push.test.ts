@@ -92,7 +92,7 @@ describe('subscribePush', () => {
     expect(await e.registry.hasUser('u1')).toBe(false);
   });
 
-  it('a re-subscribe is an upsert: same id, createdAt and lastOkAt kept, the old error cleared', async () => {
+  it('a re-subscribe is an upsert: same id, createdAt and lastOkAt kept; the error clears only on new keys', async () => {
     const e = env();
     const api = e.make();
     const a = await api.subscribePush(input());
@@ -107,16 +107,28 @@ describe('subscribePush', () => {
     });
     e.advance(5000);
     const again = await api.subscribePush({ ...input(), label: '  iPhone\n  (again) ' });
+    // The same keys re-sent can't have fixed what the poller saw: the error stands.
     expect(again).toEqual({
       id: a.id,
       label: 'iPhone (again)',
       createdAt: NOW,
       lastOkAt: NOW + 1,
-      lastError: null,
-      lastErrorAt: null,
+      lastError: 'boom',
+      lastErrorAt: NOW + 1,
     });
     expect((await repo.getPushSub(a.id))?.updatedAt).toBe(NOW + 5000);
     expect((await api.subscribePush({ ...input(), label: '' })).label).toBe('This device');
+    // New keys are a new subscription: the old error goes.
+    const rekeyed = await api.subscribePush({
+      ...input(),
+      keys: { p256dh: P256DH, auth: 'AAAAAAAAAAAAAAAAAAAAAA' },
+    });
+    expect(rekeyed).toMatchObject({
+      id: a.id,
+      lastOkAt: NOW + 1,
+      lastError: null,
+      lastErrorAt: null,
+    });
   });
 
   it('removal sticks: a tombstone with no endpoint or keys, listed as removed, revived by a re-subscribe', async () => {

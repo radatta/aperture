@@ -239,18 +239,47 @@ describe('Settings › Notifications: health and devices', () => {
     expect(screen.getByText('iPhone · Safari')).toBeTruthy();
   });
 
-  it('Send test queues, says so, and the health line moves', async () => {
+  it('Send test queues and says so while the poller hasn’t sent it yet', async () => {
     const api = stub();
     await api.subscribePush(sub());
+    vi.spyOn(api, 'sendTestPush').mockResolvedValueOnce(undefined); // a stage: the poller sends later
     const user = userEvent.setup();
     renderWithProviders(<NotificationsSection />, { api });
     expect(await health()).toMatch(/haven’t run yet/);
     await user.click(screen.getByRole('button', { name: 'Send test' }));
     expect(await screen.findByText('Sending within a minute…')).toBeTruthy();
+  });
+
+  it('once a send lands after the tap, "Sending…" clears and the health line moves', async () => {
+    const api = stub(); // the stub's Send test stamps the send at once
+    await api.subscribePush(sub());
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsSection />, { api });
+    await health();
+    await user.click(screen.getByRole('button', { name: 'Send test' }));
     await waitFor(async () =>
       expect(await health()).toMatch(/^Reminders on · checked just now · last sent /),
     );
     expect(screen.getByText(/last sent/, { selector: 'li p' })).toBeTruthy();
+    expect(screen.queryByText('Sending within a minute…')).toBeNull();
+  });
+
+  it('a failed refresh after a good read says so above the health line, with a Retry', async () => {
+    const api = stub();
+    await api.subscribePush(sub());
+    const getStatus = vi.spyOn(api, 'getPushStatus');
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsSection />, { api });
+    const group = await screen.findByRole('group', { name: 'Reminder health' });
+    getStatus.mockRejectedValue(new Error('getPushStatus failed (503)'));
+    await user.click(screen.getByRole('button', { name: 'Send test' })); // its refresh is what fails
+    const alert = await screen.findByText('Couldn’t refresh reminder status.');
+    // Above the health line, and the last good read still shows.
+    expect(alert.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Reminder health' })).toBeTruthy();
+    getStatus.mockRestore();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText('Couldn’t refresh reminder status.')).toBeNull());
   });
 
   it('a refused Send test says why', async () => {
@@ -281,6 +310,15 @@ describe('Settings › Notifications: removed on another device', () => {
     expect(screen.getByRole('button', { name: 'Enable on this device' })).toBeTruthy();
     expect(upsert).not.toHaveBeenCalled();
     expect((await api.getPushStatus()).removedDeviceIds).toEqual([d.id]);
+  });
+
+  it('the note shows where this browser can’t take push too (headless Chromium reads denied)', async () => {
+    safari({ permission: 'denied' });
+    localStorage.setItem('aperture.push.removedElsewhere', '1');
+    renderWithProviders(<NotificationsSection />, { api: stub() });
+    expect(await screen.findByText(REMOVED_ELSEWHERE_COPY)).toBeTruthy();
+    expect(screen.getByText(/Notifications are blocked for Aperture/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
   });
 
   it('the note survives a reload, Dismiss clears it for good', async () => {
