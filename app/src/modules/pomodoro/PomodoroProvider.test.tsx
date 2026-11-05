@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ApiClient, PomodoroSession } from '@aperture/shared';
-import { renderApp } from '../../test/utils';
+import { renderApp, renderWithProviders } from '../../test/utils';
+import { usePomodoro, type RunningTimer } from './pomodoro-context';
 import { createStubClient } from '../../data/stubClient';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -199,8 +200,8 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await screen.findByRole('button', { name: 'Pause' });
   });
 
-  it('until the settings load a timer past the default target is not Done, and its stop is uncapped', async () => {
-    const user = userEvent.setup();
+  it('until the settings load a timer past the default target is not Done: it beats, its count is not held, and its stop is uncapped', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const api: ApiClient = stub();
     const s0 = await api.startSession({
       taskId: null,
@@ -213,12 +214,43 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     api.listRunningSessions = async () => [
       { ...s0, activeMinutes: 30, lastHeartbeatAt: Date.now() - 10_000 },
     ];
+    let beats = 0;
+    const beat = api.heartbeatSession.bind(api);
+    api.heartbeatSession = (id) => (beats++, beat(id));
     const calls = recordStops(api);
-    renderApp({ api, path: '/tasks' });
-    const stop = await screen.findByRole('button', { name: 'Stop' });
-    expect(screen.queryByRole('button', { name: 'Again' })).toBeNull();
-    await user.click(stop);
+    let seen: RunningTimer | undefined;
+    let stop: ((id: string) => unknown) | undefined;
+    function Probe() {
+      const p = usePomodoro();
+      seen = p.timers[0];
+      stop = p.stop;
+      return null;
+    }
+    renderWithProviders(<Probe />, { api });
+    await waitFor(() => expect(seen).toBeTruthy());
+    expect(seen?.done).toBe(false);
+    expect(seen!.activeSec).toBeGreaterThan(30 * 60); // live, past the default target
+    await act(async () => void vi.advanceTimersByTime(15_000));
+    await waitFor(() => expect(beats).toBeGreaterThan(0));
+    await act(async () => void stop!(s0.id));
     await waitFor(() => expect(calls).toEqual(['stop']));
+  });
+
+  it('until the settings load the row shows no clock, never a countdown on the default target', async () => {
+    const api: ApiClient = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    api.getSettings = () => new Promise(() => {});
+    api.listRunningSessions = async () => [
+      { ...s0, activeMinutes: 30, lastHeartbeatAt: Date.now() },
+    ];
+    renderApp({ api, path: '/tasks' });
+    await screen.findByText('–:––');
   });
 
   it('a timer given another block stays on it across a reload: the target comes from the row', async () => {

@@ -74,7 +74,8 @@ export function AppShell() {
         {settingsFailed && (
           <div className="pt-4">
             <LoadError onRetry={() => void settings.refetch()}>
-              Couldn’t load your settings — running on defaults.
+              Couldn’t load your settings — running on defaults, and timers won’t reach Done until
+              they load.
             </LoadError>
           </div>
         )}

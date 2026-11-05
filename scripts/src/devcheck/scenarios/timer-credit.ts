@@ -188,7 +188,18 @@ export const timerCredit: Scenario = {
       offDev: {
         file: 'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
         test: 'a failed Again stays on Done and says so; a double tap and a retry each give one block',
-        why: 'same path as stop-fails (proven on dev): the same client failure branch on a timer row (no retry, the row says so), injected the same way; what differs is the copy and the pending guard, which run entirely in the test',
+        why: 'same path as stop-fails (proven on dev): a Pomodoro write failing through the http client’s 429 loop; the row’s copy and the pending guard run entirely in the test',
+      },
+    },
+    {
+      id: 'settings-unknown',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Until the settings load a timer past the default target is not Done: it beats and stops uncapped',
+      offDev: {
+        file: 'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
+        test: 'until the settings load a timer past the default target is not Done: it beats, its count is not held, and its stop is uncapped',
+        why: 'same path as neighbour-full-credit (proven on dev): the same beats and uncapped stop; what differs is the decision that a timer with no known target is still running, pure client state the test runs',
       },
     },
     {
@@ -437,6 +448,10 @@ export const timerCredit: Scenario = {
           await ctx.page.reload();
           await pause().waitFor({ timeout: 15_000 }); // still its new block, not back on Done
           await runningOn(ctx, 'ext', 2);
+          // The clock too: settings still loading would read about 48:00, a lost block Done.
+          await timerRow(ctx, 'ext')
+            .getByText(/^[01]:\d\d$/)
+            .waitFor({ timeout: 15_000 });
           await ctx.shot('again-after-reload');
           const extended = await stopTimer(ctx, 'ext', 1);
           const newRun = (Date.now() - extendedAt) / 60_000;
