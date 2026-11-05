@@ -321,4 +321,4 @@ Verified 2026-09-24/26 against Plaid's docs and a Production `/institutions/get_
   - A fuzzier merchant match ("AMZN Mktp" vs "AMAZON MKTPL").
   - CSV import (`source` is reserved for it).
   - Finance writes over MCP (today read-only).
-  - The top nav clips "Finances" at 390 px; hidden-account polish.
+  - Hidden-account polish.
