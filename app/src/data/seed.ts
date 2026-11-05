@@ -10,6 +10,7 @@ import {
   FINANCE_DEFAULT_BUDGET_CENTS,
   FINANCE_DEFAULT_PAYMENT_DAY,
   localEpochFromDayTime,
+  REMINDER_SETTINGS_DEFAULTS,
   rollRepFields,
   syncWindow,
   weekdayOf,
@@ -88,6 +89,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     fluxRollId: null,
     fluxDisclaimerAckAt: null,
     fluxSets: {},
+    ...REMINDER_SETTINGS_DEFAULTS,
   };
 
   const estimates = [30, 45, 60, 90];

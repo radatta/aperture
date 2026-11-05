@@ -41,7 +41,7 @@ export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }):
 // Used for routing + home-mode integration tests.
 export function renderApp(
   opts: { api?: ApiClient; path?: string; seed?: boolean; routes?: RouteObject[] } = {},
-): RenderResult & { api: ApiClient } {
+): RenderResult & { api: ApiClient; router: ReturnType<typeof createMemoryRouter> } {
   const api =
     opts.api ??
     createStubClient({ seed: opts.seed ?? true, storageKey: `app-test-${Math.random()}` });
@@ -60,5 +60,5 @@ export function renderApp(
       </ApiContext>
     </QueryClientProvider>,
   );
-  return Object.assign(result, { api });
+  return Object.assign(result, { api, router });
 }

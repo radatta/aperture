@@ -6,7 +6,9 @@ import { CaptureBar } from '../modules/capture/CaptureBar';
 import { IdleFocus, TimerBar } from '../modules/pomodoro/TimerBar';
 import { useKeyboardInset } from '../lib/useKeyboardInset';
 import { useCalendarPull } from '../data/hooks/useCalendar';
+import { usePushSync } from '../data/hooks/usePush';
 import { useSettings } from '../data/hooks/useSettings';
+import { API_MODE } from '../shared/env';
 import { LoadError } from './LoadError';
 import { cx } from '../lib/cx';
 import { hidesCapture } from '../lib/routeHandle';
@@ -29,6 +31,9 @@ export function AppShell() {
   const hideCapture = hidesCapture(useMatches());
   // Edits made in Google Calendar come back onto their tasks on open/foreground.
   useCalendarPull();
+  // A device that turned reminders on re-subscribes if iOS dropped it (reminders D7). Http mode only —
+  // the stub has no push service behind it.
+  usePushSync(API_MODE === 'http');
   // Every `settings?.x ?? default` across the app quietly runs on defaults when this read fails — this one
   // line says so for all of them.
   const settings = useSettings();

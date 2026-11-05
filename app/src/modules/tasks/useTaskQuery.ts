@@ -50,7 +50,7 @@ export function isStored(s: Stored | null): s is Stored {
 }
 
 // /tasks view state. The lens lives in the URL (?lens=, so Home can deep-link to Week; with the Places
-// lens, ?place= opens one store's list); search and filters live in sessionStorage, sticky for the
+// lens, ?place= opens one store's list; ?task= is a reminder's one-shot link); search and filters live in sessionStorage, sticky for the
 // session but reset each new day; which groups are collapsed lives in localStorage.
 export function useTaskQuery() {
   const [params, setParams] = useSearchParams();
@@ -62,6 +62,24 @@ export function useTaskQuery() {
   const place: Place = isPlace(lens) ? lens : 'today';
   // The store a Places link points at (?place=<slug> — the Shortcut's tap-through, placeLensPath).
   const focusPlace = lens === 'places' ? params.get('place') : null;
+  // A reminder's tap-through (reminders.ts taskPushPath): ?task=<id> opens that task once; ?n= is the
+  // notification's tag (PR 3 reads it). Both leave the URL once handled — replaced, so Back doesn't
+  // reopen the task.
+  const linkedTaskId = params.get('task');
+  const hasLink = linkedTaskId !== null || params.has('n');
+  const clearLink = useCallback(
+    () =>
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('task');
+          next.delete('n');
+          return next;
+        },
+        { replace: true },
+      ),
+    [setParams],
+  );
 
   const [stored, setStored] = useState<Stored | null>(() => {
     const s = read<Stored>('session', QUERY_KEY);
@@ -99,7 +117,19 @@ export function useTaskQuery() {
     [today, query, setParams],
   );
 
-  return { lens, place, focusPlace, query, setQuery, setLens, today, dayStartHour };
+  return {
+    lens,
+    place,
+    focusPlace,
+    linkedTaskId,
+    hasLink,
+    clearLink,
+    query,
+    setQuery,
+    setLens,
+    today,
+    dayStartHour,
+  };
 }
 
 // Collapsed groups, remembered per lens:group. A group with no remembered choice takes the caller's

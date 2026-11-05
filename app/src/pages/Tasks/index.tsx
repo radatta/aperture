@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { Task } from '@aperture/shared';
 import { Text } from '../../components/Text';
 import { Button } from '../../components/Button';
 import { PlusIcon } from '../../components/icons';
@@ -11,6 +12,7 @@ import { LensStrip } from '../../modules/tasks/LensStrip';
 import { QueryControls } from '../../modules/tasks/QueryControls';
 import { TaskListSection } from '../../modules/tasks/TaskListSection';
 import { TaskModalHost } from '../../modules/tasks/TaskModalHost';
+import { useOpenTask } from '../../modules/tasks/task-modal-context';
 import { TodayLens } from '../../modules/tasks/TodayLens';
 import { PlacesLens } from '../../modules/tasks/PlacesLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
@@ -33,7 +35,21 @@ const RECEIPT_MS = 2400;
 // store, also on Today/Week when it's due or planned), plus Recurring and Calibration.
 // Typing in search looks across every open task. Bulk add lives in the header, visible on every lens.
 export function TasksPage() {
-  const { lens, place, focusPlace, query, setQuery, setLens, today, dayStartHour } = useTaskQuery();
+  const {
+    lens,
+    place,
+    focusPlace,
+    linkedTaskId,
+    hasLink,
+    clearLink,
+    query,
+    setQuery,
+    setLens,
+    today,
+    dayStartHour,
+  } = useTaskQuery();
+  // A reminder linked a task that's gone (deleted since the ping): said, not a tap that opens nothing.
+  const [linkGone, setLinkGone] = useState(false);
   const bulk = useDisclosure();
   // `at` is a nonce so two adds in a row re-arm the fade (same trick as the capture receipt).
   const [receipt, setReceipt] = useState<{ count: number; placed: number; at: number } | null>(
@@ -111,12 +127,34 @@ export function TasksPage() {
           </Button>
         </div>
       </div>
-      <LensStrip lens={lens} counts={counts} onChange={setLens} />
+      <LensStrip
+        lens={lens}
+        counts={counts}
+        onChange={(next) => {
+          setLinkGone(false);
+          setLens(next);
+        }}
+      />
+      {linkGone && (
+        <p role="status">
+          <Text size="sm" tone="muted">
+            That reminder’s task is gone — it was deleted after the reminder went out.
+          </Text>
+        </p>
+      )}
       {isList && (
         <QueryControls place={place} query={query} onChange={setQuery} areaCounts={areaCounts} />
       )}
       {/* The task modal lives here, above the rows, so Save can keep it open while a row moves. */}
       <TaskModalHost className="flex flex-col gap-4">
+        {hasLink && (
+          <OpenLinkedTask
+            id={linkedTaskId}
+            tasks={tasksQ.data}
+            onDone={clearLink}
+            onGone={() => setLinkGone(true)}
+          />
+        )}
         {lens === 'today' && !searching ? (
           <TodayLens tasks={tasks} onOpenWeek={() => setLens('week')} />
         ) : lens === 'places' && !searching ? (
@@ -151,6 +189,33 @@ export function TasksPage() {
       />
     </div>
   );
+}
+
+// A reminder's tap-through: once the list is in, open the linked task in the page's modal and drop the
+// link from the URL. Inside TaskModalHost, whose context it opens through. A failed list read waits —
+// the list says why, and a Retry that lands still opens it.
+function OpenLinkedTask({
+  id,
+  tasks,
+  onDone,
+  onGone,
+}: {
+  id: string | null;
+  tasks: Task[] | undefined;
+  onDone: () => void;
+  onGone: () => void;
+}) {
+  const openTask = useOpenTask();
+  const handled = useRef(false);
+  useEffect(() => {
+    if (!tasks || handled.current) return;
+    handled.current = true;
+    const task = id ? tasks.find((t) => t.id === id) : undefined;
+    if (task) openTask?.(task, 'view', null);
+    else if (id) onGone();
+    onDone();
+  }, [id, tasks, openTask, onDone, onGone]);
+  return null;
 }
 
 // Where a bulk add went: errands wait on the Places lens, the rest in the Backlog.
