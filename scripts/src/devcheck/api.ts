@@ -26,6 +26,7 @@ export interface DevTask {
   seriesId?: string | null; // the recurring scenario: an occurrence of that series
   seriesDay?: string | null;
   dueDay?: string | null;
+  dueTime?: string | null; // plan-write-refetch: a planned task given a time
 }
 
 // The slice of a recurring series the check reads and writes (packages/shared/src/types.ts TaskSeries).
@@ -190,7 +191,8 @@ export interface DevSettings {
 // The test user's work block. A step may shorten it; the step's `finally` and each run's start put it back.
 export const DEV_WORK_MIN = 25;
 
-// The slice of a Pomodoro session the check reads. The harness's API client writes one only with a stop it
+// The slice of a Pomodoro session the check reads. The harness's API client writes one only to stage a
+// running timer on a task it created (startSession, below; the app's UI stops it), or with a stop it
 // expects refused (stopSession, below).
 export interface DevSession {
   id: string;
@@ -500,9 +502,21 @@ export function createApiClient({
       assertLedgerTask(plan.taskId);
       await call<null>('removePlan', [plan.id]);
     },
-    async transitionTask(id: string, status: 'backlog' | 'planned'): Promise<DevTask> {
+    async transitionTask(
+      id: string,
+      status: 'backlog' | 'planned' | 'in_progress',
+    ): Promise<DevTask> {
       assertLedgerTask(id);
       return call<DevTask>('transitionTask', [id, status]);
+    },
+    // A running work timer on a task this harness created, as the dock's Focus would start one. Sessions
+    // have no delete, so none is ledgered (failed-reads' ad-hoc timer, likewise): the scenario stops it
+    // through the UI, and its teardown clears one it left running (clearTimers), as every run's start does.
+    async startSession(taskId: string, day: string): Promise<DevSession> {
+      assertLedgerTask(taskId);
+      return call<DevSession>('startSession', [
+        { taskId, categoryId: null, kind: 'work', label: null, day },
+      ]);
     },
     // Create (no id) is ledgered like a category; an update must name a habit the ledger recorded.
     async upsertHabit(input: {

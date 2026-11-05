@@ -20,6 +20,7 @@ import { partsV2b } from './parts-v2b';
 import { partsV2bReads } from './parts-v2b-reads';
 import { phoneNits } from './phone-nits';
 import { places } from './places';
+import { planWriteRefetch } from './plan-write-refetch';
 import { reflectionLine } from './reflection-line';
 import { recurring } from './recurring';
 import { smoke } from './smoke';
@@ -35,6 +36,7 @@ export const SCENARIOS: Scenario[] = [
   partsV2bReads,
   dayGuards,
   deadRows,
+  planWriteRefetch, // makes and tears down its own tasks, like day-guards; its timers stop before the next
   fluxHistory,
   fluxPerf,
   attachmentDelete,
