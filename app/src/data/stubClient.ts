@@ -1693,6 +1693,11 @@ class StubClient implements ApiClient {
       const err = fluxSetsError(patch.fluxSets);
       if (err) throw new Error(err);
     }
+    // As the BFF: a reminder toggle must be a real boolean — a string "false" would read as on.
+    for (const k of Object.keys(REMINDER_SETTINGS_DEFAULTS)) {
+      const v = (patch as Record<string, unknown>)[k];
+      if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
+    }
     const current = this.ensureSettings();
     const next: Settings = { ...current, ...patch, updatedAt: this.now() };
     this.store.settings = next;

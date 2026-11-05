@@ -70,6 +70,9 @@ function safari(opts: { permission?: NotificationPermission; ask?: NotificationP
   return { requestPermission, pm };
 }
 
+// The resync's server: a subscribePush stand-in, and an unsubscribePush that records retired ids.
+const srv = (subscribePush: unknown, unsubscribePush: unknown = vi.fn(async () => {})) =>
+  ({ subscribePush, unsubscribePush }) as Parameters<typeof resyncHere>[2];
 const ua = (s: string) => vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(s);
 
 afterEach(() => {
@@ -236,7 +239,7 @@ describe('resyncHere (D7)', () => {
   it('does nothing on a device that never turned reminders on', async () => {
     const { pm } = safari({ permission: 'granted' });
     const upsert = vi.fn();
-    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
     expect(pm.getSubscription).not.toHaveBeenCalled();
     expect(upsert).not.toHaveBeenCalled();
   });
@@ -247,29 +250,56 @@ describe('resyncHere (D7)', () => {
     rememberHere(device('d1'), NOW - 3 * 86_400_000);
     localStorage.setItem('aperture.push.syncError', 'subscribePush failed (503)');
     const upsert = vi.fn();
-    expect(await resyncHere(status({ devices: [device('d1')] }), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status({ devices: [device('d1')] }), NOW, srv(upsert))).toBe(false);
     expect(upsert).not.toHaveBeenCalled();
     expect(pm.subscribe).not.toHaveBeenCalled();
     expect(syncErrorHere()).toBeNull();
   });
 
-  it('re-subscribes when iOS dropped the subscription, and remembers the new id', async () => {
-    const { pm } = safari({ permission: 'granted' });
+  // A re-subscribe the server lists under a new id retires this device's old row — after the new id is
+  // remembered, so the old id's tombstone (in removedDeviceIds) can't read as a removal elsewhere.
+  async function retiresOldRow(pm: ReturnType<typeof safari>['pm']) {
     rememberHere(device('d1'), NOW);
+    const retire = vi.fn(async (gone: string) => {
+      expect(gone).toBe('d1');
+      expect(deviceIdHere()).toBe('d2'); // already this device's id when the tombstone lands
+    });
     const upsert = vi.fn(async () => device('d2'));
-    expect(await resyncHere(status({ devices: [device('d1')] }), NOW, upsert)).toBe(true);
+    expect(await resyncHere(status({ devices: [device('d1')] }), NOW, srv(upsert, retire))).toBe(
+      true,
+    );
     expect(pm.subscribe).toHaveBeenCalledTimes(1);
+    expect(retire).toHaveBeenCalledTimes(1);
     expect(deviceIdHere()).toBe('d2');
+    const after = status({ devices: [device('d2')], removedDeviceIds: ['d1'] });
+    expect(await dropIfRemovedHere(after, NOW + 1)).toBe(false);
+    expect(deviceIdHere()).toBe('d2');
+    expect(removedElsewhereHere()).toBe(false);
+  }
+
+  it('iOS dropped the subscription: re-subscribes, remembers the new id, retires the old row', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    await retiresOldRow(pm);
   });
 
-  it('re-subscribes when the stage’s key changed', async () => {
+  it('the stage’s key rotated: re-subscribes, remembers the new id, retires the old row', async () => {
     const { pm } = safari({ permission: 'granted' });
     const old = fakeSub('https://web.push.apple.com/old', OTHER_KEY);
     pm.set(old);
-    rememberHere(device('d1'), NOW);
-    await resyncHere(status({ devices: [device('d1')] }), NOW, async () => device('d2'));
+    await retiresOldRow(pm);
     expect(old.unsubscribe).toHaveBeenCalled();
-    expect(pm.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('a re-subscribe that keeps its id retires nothing', async () => {
+    safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const retire = vi.fn(async () => {});
+    await resyncHere(
+      status({ devices: [device('d1')] }),
+      NOW,
+      srv(async () => device('d1'), retire),
+    );
+    expect(retire).not.toHaveBeenCalled();
   });
 
   it('the server dropped the device (a dead endpoint): drops it and subscribes fresh, never re-sending it', async () => {
@@ -278,7 +308,9 @@ describe('resyncHere (D7)', () => {
     pm.set(dead);
     rememberHere(device('d1'), NOW);
     const upsert = vi.fn(async () => device('d2'));
-    expect(await resyncHere(status(), NOW, upsert)).toBe(true);
+    const retire = vi.fn(async () => {});
+    expect(await resyncHere(status(), NOW, srv(upsert, retire))).toBe(true);
+    expect(retire).not.toHaveBeenCalled(); // the poller already deleted the old row
     expect(dead.unsubscribe).toHaveBeenCalled();
     expect(pm.subscribe).toHaveBeenCalledTimes(1);
     expect(upsert).toHaveBeenCalledWith(
@@ -292,7 +324,7 @@ describe('resyncHere (D7)', () => {
     pm.set(fakeSub('https://web.push.apple.com/a'));
     rememberHere(device('d1'), NOW);
     const upsert = vi.fn();
-    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status({ removedDeviceIds: ['d1'] }), NOW, srv(upsert))).toBe(false);
     expect(upsert).not.toHaveBeenCalled();
     expect(pm.subscribe).not.toHaveBeenCalled();
     expect(deviceIdHere()).toBe('d1');
@@ -302,7 +334,7 @@ describe('resyncHere (D7)', () => {
     const { pm } = safari({ permission: 'granted' });
     rememberHere(device('d1'), NOW);
     const upsert = vi.fn();
-    expect(await resyncHere(status(), NOW, upsert, NOW - 1)).toBe(false);
+    expect(await resyncHere(status(), NOW, srv(upsert), NOW - 1)).toBe(false);
     expect(pm.getSubscription).not.toHaveBeenCalled();
     expect(upsert).not.toHaveBeenCalled();
   });
@@ -316,7 +348,7 @@ describe('resyncHere (D7)', () => {
       return subscribe();
     });
     const upsert = vi.fn();
-    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
     expect(upsert).not.toHaveBeenCalled();
     expect((await fresh(pm)).unsubscribe).toHaveBeenCalled();
     expect(deviceIdHere()).toBeNull();
@@ -329,7 +361,7 @@ describe('resyncHere (D7)', () => {
       forgetHere();
       return device('d2');
     });
-    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
     expect(deviceIdHere()).toBeNull();
     expect((await fresh(pm)).unsubscribe).toHaveBeenCalled();
   });
@@ -341,7 +373,7 @@ describe('resyncHere (D7)', () => {
       rememberHere(device('d3'), NOW + 5);
       return device('d2');
     });
-    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
     expect(deviceIdHere()).toBe('d3');
     expect((await fresh(pm)).unsubscribe).not.toHaveBeenCalled();
   });
@@ -353,7 +385,7 @@ describe('resyncHere (D7)', () => {
     const upsert = vi.fn(
       () => new Promise<ReturnType<typeof device>>((r) => (release = () => r(device('d1')))),
     );
-    const run = resyncHere(status(), NOW, upsert);
+    const run = resyncHere(status(), NOW, srv(upsert));
     let waited = false;
     const after = afterResync().then(() => (waited = true));
     await vi.waitFor(() => expect(upsert).toHaveBeenCalled());
@@ -368,11 +400,11 @@ describe('resyncHere (D7)', () => {
     safari({ permission: 'denied' });
     rememberHere(device('d1'), NOW);
     const upsert = vi.fn();
-    expect(await resyncHere(status(), NOW, upsert)).toBe(false);
+    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
     vi.stubGlobal('Notification', { permission: 'granted' });
-    expect(await resyncHere(status({ configured: false, vapidPublicKey: null }), NOW, upsert)).toBe(
-      false,
-    );
+    expect(
+      await resyncHere(status({ configured: false, vapidPublicKey: null }), NOW, srv(upsert)),
+    ).toBe(false);
     expect(upsert).not.toHaveBeenCalled();
   });
 
@@ -382,15 +414,19 @@ describe('resyncHere (D7)', () => {
     const failing = async () => {
       throw new Error('subscribePush failed (503)');
     };
-    await expect(resyncHere(status(), NOW, failing)).rejects.toThrow('503');
+    await expect(resyncHere(status(), NOW, srv(failing))).rejects.toThrow('503');
     expect(syncErrorHere()).toBe('subscribePush failed (503)');
     expect(syncErrorUndismissed()).toBe('subscribePush failed (503)');
     dismissSyncError();
     expect(syncErrorUndismissed()).toBeNull();
     expect(syncErrorHere()).toBe('subscribePush failed (503)'); // Settings still says it
-    await expect(resyncHere(status(), NOW, failing)).rejects.toThrow('503');
+    await expect(resyncHere(status(), NOW, srv(failing))).rejects.toThrow('503');
     expect(syncErrorUndismissed()).toBe('subscribePush failed (503)'); // a new failure shows again
-    await resyncHere(status(), NOW, async () => device('d1'));
+    await resyncHere(
+      status(),
+      NOW,
+      srv(async () => device('d1')),
+    );
     expect(syncErrorHere()).toBeNull();
     expect(syncErrorUndismissed()).toBeNull();
     forgetHere();

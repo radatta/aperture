@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ApiClient } from './api';
+import type { ApiClient, SettingsPatch } from './api';
 import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
@@ -1834,6 +1834,12 @@ export function runApiContract(
       const quiet = await api.updateSettings({ remindTimed: false, remindPlanned: false });
       expect(quiet).toMatchObject({ remindTimed: false, remindDueDay: true, remindPlanned: false });
       expect(await api.getSettings()).toMatchObject({ remindTimed: false, remindPlanned: false });
+      // A toggle off the wire must be a real boolean: a string "false" would read as on.
+      for (const bad of ['false', 0, null])
+        await expect(
+          api.updateSettings({ remindDueDay: bad } as unknown as SettingsPatch),
+        ).rejects.toThrow('remindDueDay must be true or false');
+      expect((await api.getSettings()).remindDueDay).toBe(true);
     });
 
     it('flux sets (D61): default {}, round-trips, refuses a bad count or an unknown exercise', async () => {

@@ -49,4 +49,28 @@ describe('Tasks: a reminder’s link', () => {
     expect(screen.queryByText(/is gone/)).toBeNull();
     await waitFor(() => expect(router.state.location.search).toBe('?lens=today'));
   });
+
+  it('a newer link that lands while an older one is still being read wins; the older answer is dropped', async () => {
+    const api = stub();
+    const newer = await api.createTask({ title: 'Newer reminder' });
+    const real = api.getTask.bind(api);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const getTask = vi.spyOn(api, 'getTask').mockImplementation(async (id) => {
+      await gate;
+      return real(id);
+    });
+    // The older link names a task the list doesn't hold, so it waits on its read — which, answered,
+    // would say "gone".
+    const { router } = renderApp({ api, path: taskPushPath('01ELSEWHERE', '01ELSEWHERE') });
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith('01ELSEWHERE'));
+    getTask.mockClear();
+    await act(() => router.navigate(taskPushPath(newer.id, newer.id)));
+    expect(await screen.findByRole('dialog', { name: 'Task: Newer reminder' })).toBeTruthy();
+    await waitFor(() => expect(router.state.location.search).toBe('?lens=today'));
+    release(); // the older read answers now: nothing of it shows
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByText(/That reminder’s task is gone/)).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Task: Newer reminder' })).toBeTruthy();
+  });
 });

@@ -23,6 +23,9 @@ const status: PushStatus = {
   removedDeviceIds: [],
   poller: { lastRunAt: null, lastSentAt: null, lastError: null, lastErrorAt: null },
 };
+// The resync's server: a subscribePush stand-in, and an unsubscribePush that records retired ids.
+const srv = (subscribePush: unknown, unsubscribePush: unknown = vi.fn(async () => {})) =>
+  ({ subscribePush, unsubscribePush }) as Parameters<typeof resyncHere>[2];
 const NOTICE = /Reminders couldn’t refresh on this device — open Settings/;
 
 // A granted Safari that hands out a fresh subscription.
@@ -42,9 +45,13 @@ function grantedSafari() {
 }
 const fail = () =>
   act(() =>
-    resyncHere(status, Date.now(), async () => {
-      throw new Error('subscribePush failed (503)');
-    }).catch(() => {}),
+    resyncHere(
+      status,
+      Date.now(),
+      srv(async () => {
+        throw new Error('subscribePush failed (503)');
+      }),
+    ).catch(() => {}),
   );
 
 afterEach(() => {
@@ -77,7 +84,13 @@ describe('Home: reminders couldn’t refresh', () => {
     renderWithProviders(<PushSyncNotice enabled />, { api: stub() });
     await fail();
     expect(screen.getByRole('alert')).toBeTruthy();
-    await act(() => resyncHere(status, Date.now(), async () => device));
+    await act(() =>
+      resyncHere(
+        status,
+        Date.now(),
+        srv(async () => device),
+      ),
+    );
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

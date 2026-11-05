@@ -12,7 +12,13 @@ import {
   rememberHere,
   removedElsewhereHere,
 } from '../../modules/push/browserPush';
-import { NotificationsSection, REMOVED_ELSEWHERE_COPY } from './NotificationsSection';
+import {
+  NotificationsSection,
+  REMOVED_ELSEWHERE_COPY,
+  REMOVED_ELSEWHERE_DENIED_COPY,
+  REMOVED_ELSEWHERE_INSTALL_COPY,
+  REMOVED_ELSEWHERE_UNSUPPORTED_COPY,
+} from './NotificationsSection';
 
 const IPHONE =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';
@@ -193,7 +199,10 @@ describe('Settings › Notifications: health and devices', () => {
         },
       }),
     });
-    expect(await health()).toMatch(/^Reminders paused since \d{1,2}(:\d\d)?(am|pm)/);
+    // Ten minutes back can be yesterday: then the time carries its date.
+    expect(await health()).toMatch(
+      /^Reminders paused since ([A-Z][a-z]{2} \d{1,2} )?\d{1,2}(:\d\d)?(am|pm)/,
+    );
     expect(await health()).toMatch(/Last problem: push_guard_tripped/);
     stale.unmount();
 
@@ -312,13 +321,26 @@ describe('Settings › Notifications: removed on another device', () => {
     expect((await api.getPushStatus()).removedDeviceIds).toEqual([d.id]);
   });
 
-  it('the note shows where this browser can’t take push too (headless Chromium reads denied)', async () => {
-    safari({ permission: 'denied' });
+  it('the note shows where this browser can’t take push too, worded for what it can do next', async () => {
+    safari({ permission: 'denied' }); // headless Chromium reads denied
     localStorage.setItem('aperture.push.removedElsewhere', '1');
-    renderWithProviders(<NotificationsSection />, { api: stub() });
-    expect(await screen.findByText(REMOVED_ELSEWHERE_COPY)).toBeTruthy();
+    const { unmount } = renderWithProviders(<NotificationsSection />, { api: stub() });
+    expect(await screen.findByText(REMOVED_ELSEWHERE_DENIED_COPY)).toBeTruthy();
     expect(screen.getByText(/Notifications are blocked for Aperture/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Enable on this device' })).toBeNull();
+    unmount();
+
+    vi.unstubAllGlobals();
+    delete (window as { pushManager?: unknown }).pushManager;
+    const plain = renderWithProviders(<NotificationsSection />, { api: stub() });
+    expect(await screen.findByText(REMOVED_ELSEWHERE_UNSUPPORTED_COPY)).toBeTruthy();
+    plain.unmount();
+
+    ua(IPHONE); // Safari, not from the Home Screen
+    renderWithProviders(<NotificationsSection />, { api: stub() });
+    expect(await screen.findByText(REMOVED_ELSEWHERE_INSTALL_COPY)).toBeTruthy();
+    expect(screen.queryByText(REMOVED_ELSEWHERE_COPY)).toBeNull();
   });
 
   it('the note survives a reload, Dismiss clears it for good', async () => {

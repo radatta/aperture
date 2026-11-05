@@ -132,6 +132,51 @@ describe('usePushSync (D7)', () => {
     expect(await api.getPushStatus()).toMatchObject({ devices: [], removedDeviceIds: [d.id] });
   });
 
+  it('a re-subscribe under a new endpoint retires the old row: one device, and no false removal', async () => {
+    const pm = grantedSafari(); // iOS dropped the old subscription; the browser hands out QGsync
+    const api = stub();
+    const old = await api.subscribePush({
+      endpoint: 'https://web.push.apple.com/QGold',
+      keys: { p256dh: 'pk', auth: 'au' },
+      label: 'iPhone · Safari',
+    });
+    rememberHere(old, Date.now() - DAY);
+    renderWithProviders(<Sync on />, { api });
+    await waitFor(() => expect(deviceIdHere()).not.toBe(old.id));
+    await afterResync();
+    const s = await api.getPushStatus();
+    expect(pm.subscribe).toHaveBeenCalledTimes(1);
+    expect(s.devices.map((d) => d.id)).toEqual([deviceIdHere()]);
+    expect(s.removedDeviceIds).toEqual([old.id]);
+    // The refresh after it reads the old id's tombstone — not taken for a removal elsewhere.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(removedElsewhereHere()).toBe(false);
+    expect(deviceIdHere()).toBe(s.devices[0]!.id);
+  });
+
+  it('a read requested before a newer opt-in can’t drive the resync, however late it answers', async () => {
+    const pm = grantedSafari();
+    rememberHere(device, Date.now() - DAY);
+    const api = stub(); // lists no device: a resync acting on this read would subscribe fresh
+    const real = api.getPushStatus.bind(api);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.spyOn(api, 'getPushStatus').mockImplementationOnce(async () => {
+      const s = await real();
+      await gate;
+      return s;
+    });
+    renderWithProviders(<Sync on />, { api });
+    await waitFor(() => expect(api.getPushStatus).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 5));
+    rememberHere(device, Date.now()); // a fresh Enable while the read is out
+    await new Promise((r) => setTimeout(r, 5));
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    await afterResync();
+    expect(pm.subscribe).not.toHaveBeenCalled();
+  });
+
   it('keeps a failure on the device for Settings, never throwing at the shell', async () => {
     grantedSafari();
     rememberHere(device, Date.now() - DAY);

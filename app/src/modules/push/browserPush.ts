@@ -1,5 +1,6 @@
 import { PUSH_LABEL_MAX } from '@aperture/shared';
-import type { PushDevice, PushStatus, SubscribePushInput } from '@aperture/shared';
+import type { ApiClient, PushStatus } from '@aperture/shared';
+import type { PushDevice, SubscribePushInput } from '@aperture/shared';
 
 // The browser half of reminders (docs/areas/tasks/reminders.md): find this browser's push manager, ask
 // for permission inside the tap, subscribe with the stage's VAPID key, and remember on this device that
@@ -251,15 +252,18 @@ export const resetPushSync = (): void => void (inflight = Promise.resolve());
 // push service expired, 404/410, or whose keys it can't use) → that endpoint is dead: drop it and
 // subscribe fresh, never re-send it. Removed on another device → not healed; usePushStatus's read settles
 // that (dropIfRemovedHere). `askedAt`: when `status` was read — a read from before this device last opted
-// in can't speak for it. Resolves true when it wrote. A failure is remembered for Settings and Home, then
-// rethrown.
+// in can't speak for it. A re-subscribe that the server lists under a new id (a new endpoint: iOS dropped
+// the old one, or the key rotated) retires the old row — this device's own — so it isn't left live as a
+// twin the poller would 410 and report as "stopped accepting". Resolves true when it wrote. A failure is
+// remembered for Settings and Home, then rethrown.
+type PushServer = Pick<ApiClient, 'subscribePush' | 'unsubscribePush'>;
 export function resyncHere(
   status: PushStatus,
   now: number,
-  upsert: (input: SubscribePushInput) => Promise<PushDevice>,
+  server: PushServer,
   askedAt?: number,
 ): Promise<boolean> {
-  const run = inflight.then(() => resync(status, now, upsert, askedAt));
+  const run = inflight.then(() => resync(status, now, server, askedAt));
   inflight = run.catch(() => {});
   return run;
 }
@@ -267,7 +271,7 @@ export function resyncHere(
 async function resync(
   status: PushStatus,
   now: number,
-  upsert: (input: SubscribePushInput) => Promise<PushDevice>,
+  server: PushServer,
   askedAt: number | undefined,
 ): Promise<boolean> {
   const id = deviceIdHere();
@@ -295,11 +299,15 @@ async function resync(
     }
     const sub = await subscribeWith(pm, key, !known);
     if (!ours()) return abandon(sub);
-    const device = await upsert(toInput(sub));
+    const device = await server.subscribePush(toInput(sub));
     // Removed while the upsert was out: its row is alive again on the server, pointing at a subscription
     // dropped here — the poller's next send gets a 410 and deletes it.
     if (!ours()) return abandon(sub);
+    // The new id first, then the old row goes: its tombstone lands in removedDeviceIds, and a read that
+    // sees it must already find this device under the new id, or dropIfRemovedHere would take it for a
+    // removal elsewhere. (A device the server had lost has no row to retire.)
     rememberHere(device, now);
+    if (known && device.id !== id) await server.unsubscribePush(id);
     return true;
   } catch (e) {
     write(SYNC_ERROR_KEY, e instanceof Error ? e.message : String(e));

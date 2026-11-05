@@ -217,10 +217,14 @@ function OpenLinkedTask({
 }) {
   const api = useApi();
   const openTask = useOpenTask();
-  const handled = useRef(false);
+  // Which link was taken up, and the newest one's turn: a link that arrives while an older one's read is
+  // out wins, and the older answer is dropped when it lands.
+  const handled = useRef<string | null | undefined>(undefined);
+  const turn = useRef(0);
   useEffect(() => {
-    if (!tasks || handled.current) return;
-    handled.current = true;
+    if (!tasks || handled.current === id) return;
+    handled.current = id;
+    const mine = ++turn.current;
     const cached = id ? tasks.find((t) => t.id === id) : undefined;
     if (!id || cached) {
       if (cached) openTask?.(cached, 'view', null);
@@ -230,10 +234,14 @@ function OpenLinkedTask({
     api
       .getTask(id)
       .then(
-        (task) => (task ? openTask?.(task, 'view', null) : onMiss('gone')),
-        () => onMiss('failed'),
+        (task) => {
+          if (mine !== turn.current) return;
+          if (task) openTask?.(task, 'view', null);
+          else onMiss('gone');
+        },
+        () => mine === turn.current && onMiss('failed'),
       )
-      .finally(onDone);
+      .finally(() => mine === turn.current && onDone());
   }, [id, tasks, api, openTask, onDone, onMiss]);
   return null;
 }

@@ -35,8 +35,16 @@ import {
 import { deviceLines, pollerLines, testPending } from '../../modules/push/health';
 import type { HealthLine } from '../../modules/push/health';
 
+// "Removed from another device", worded for what this browser can do next — never pointing at an Enable
+// button the state doesn't show.
 export const REMOVED_ELSEWHERE_COPY =
   'Removed from another device — tap Enable to turn reminders back on here.';
+export const REMOVED_ELSEWHERE_DENIED_COPY =
+  'Removed from another device — allow notifications for Aperture, then tap Enable to turn reminders back on here.';
+export const REMOVED_ELSEWHERE_INSTALL_COPY =
+  'Removed from another device — open Aperture from your Home Screen to turn reminders back on here.';
+export const REMOVED_ELSEWHERE_UNSUPPORTED_COPY =
+  'Removed from another device — reminders can’t be turned back on in this browser.';
 
 const errText = (e: unknown) =>
   e instanceof Error ? e.message : 'Something went wrong — try again.';
@@ -190,12 +198,19 @@ function ThisDevice({ status }: { status: PushStatus }) {
   }
 
   // Shown whatever this browser can do now — a removal elsewhere is news even where Enable can't run.
+  // Dismiss sits under the note, its label pulled onto the note's left edge (the button's own padding).
   const removedNote = removedElsewhere && !onHere && (
-    <div role="status" className="flex flex-wrap items-center gap-2">
+    <div role="status" className="flex flex-col items-start">
       <Text size="sm" tone="gold">
-        {REMOVED_ELSEWHERE_COPY}
+        {support === 'install'
+          ? REMOVED_ELSEWHERE_INSTALL_COPY
+          : support === 'unsupported'
+            ? REMOVED_ELSEWHERE_UNSUPPORTED_COPY
+            : permission === 'denied'
+              ? REMOVED_ELSEWHERE_DENIED_COPY
+              : REMOVED_ELSEWHERE_COPY}
       </Text>
-      <Button variant="quiet" size="sm" onClick={dismissRemovedElsewhere}>
+      <Button variant="quiet" size="sm" className="-ml-3" onClick={dismissRemovedElsewhere}>
         Dismiss
       </Button>
     </div>
