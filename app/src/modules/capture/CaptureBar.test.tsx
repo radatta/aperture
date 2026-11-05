@@ -325,6 +325,19 @@ describe('CaptureBar', () => {
       expect((await screen.findAllByText(/invalid estimate '~30m'/)).length).toBeGreaterThan(0);
     });
 
+    it('a bare due: speaks through its day chips the same way', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'x | due:');
+      expect(await screen.findByLabelText('Suggestions')).toBeTruthy();
+      expect(screen.queryByText(/invalid due date/)).toBeNull();
+
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(screen.getAllByText(/invalid due date 'due:'/).length).toBeGreaterThan(0);
+      expect(box().value).toBe('x | due:');
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
     it('an unknown label warns once the caret leaves it, then saves uncategorised', async () => {
       const { api, user, box } = await taskBar();
       await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));

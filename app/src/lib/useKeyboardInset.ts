@@ -13,7 +13,8 @@ import type { RefObject } from 'react';
 // the toolbars shown, so once they collapse the gap read short and the chips row sat behind the
 // keyboard. The standalone PWA has no toolbars and the two are equal there. `innerHeight` does count a
 // rendered horizontal scrollbar that the visual viewport leaves out, so a gap a scrollbar could explain
-// (under SCROLLBAR_MAX; the smallest keyboard-shaped one is iOS's ~44px form bar) is no lift at all.
+// (at or under SCROLLBAR_MAX; the smallest keyboard-shaped one is iOS's ~44px form bar) is no lift at
+// all.
 //
 // - Only while focus is in the dock: lifting for a page field's keyboard would put the dock over it.
 // - Not when pinch-zoomed: the same gap opens with no keyboard at all.
