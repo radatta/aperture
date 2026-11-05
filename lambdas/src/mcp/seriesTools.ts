@@ -65,7 +65,7 @@ export const SERIES_TOOLS: Tool[] = [
   {
     name: 'create_series',
     description:
-      "Create a recurring series. Each time the rule hits, the app spawns a planned task for that day (its own estimate and actual, so its own calibration point). dueOffsetDays is the cadence: the spawned task's due date is that many days after its day (0 = the same day, 1 = the next day; omit for no due date). until is the last day it recurs (ISO date YYYY-MM-DD, inclusive; omit for open-ended) — a course series ends with the quarter. A course is its category: categoryId from list_categories. defaultEstimateMin is minutes. Counts from the user's today. Never spawns a timed task.",
+      "Create a recurring series. Each time the rule hits, the app spawns a planned task for that day (its own estimate and actual, so its own calibration point). dueOffsetDays is the cadence: the spawned task's due date is that many days after its day (0 = the same day, 1 = the next day; omit for no due date). until is the last day it recurs (ISO date YYYY-MM-DD, inclusive; omit for open-ended) — a course series ends with the quarter. A course is its category: categoryId from list_categories. defaultEstimateMin is minutes. Counts from the user's today. Never spawns a timed task. The spawned task appears when the user next opens the app on that day — not at create time: list_tasks right after create_series shows none, and that is normal; never create the occurrence by hand.",
     inputSchema: {
       type: 'object',
       properties: {

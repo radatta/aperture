@@ -99,7 +99,7 @@ export const recurring: Scenario = {
       id: 'unplan',
       entry: 'ui',
       kind: 'edge',
-      what: 'Unplan sends the occurrence back to the backlog (listed under Week — it’s due tomorrow); Today shows no copy, and reloading spawns none',
+      what: 'Unplan sends the occurrence back to the backlog (listed under Week — it’s due tomorrow); after reloads the one row offers “+ Today”, not Unplan — no planned copy',
     },
     {
       id: 'replan',
@@ -247,7 +247,8 @@ export const recurring: Scenario = {
       id: 'unplan',
       entry: 'ui',
       proves: ['unplan'],
-      title: 'Unplan → backlog status, listed under Week; Today shows no copy after two reloads',
+      title:
+        'Unplan → backlog status; after two reloads the one row offers “+ Today”, never a planned copy',
       async run(ctx) {
         const title = name(ctx, 'prelab');
         await todaySearched(ctx, title);
@@ -261,21 +262,24 @@ export const recurring: Scenario = {
           if (i >= 40) throw new Error('Unplan never reached the server');
           await new Promise((r) => setTimeout(r, 250));
         }
+        // A search looks across every open task (lenses.md D1), so the unplanned occurrence still lists —
+        // under "This week" (due tomorrow), with "+ Today" where Unplan was. A respawned copy would be a
+        // second row, with Unplan.
+        const add = ctx.page.getByRole('button', { name: `Add ${title} to today` });
         for (const pass of [1, 2]) {
-          await todaySearched(ctx, title);
-          await ctx.ui.expectText(/Nothing matches/);
-          const rows = await occurrencesOf(ctx, prelab.id);
-          if (rows.length !== 1 || rows[0]!.status !== 'backlog')
+          await todaySearched(ctx, title); // each visit is another getDay(today)
+          await add.waitFor({ timeout: 15_000 });
+          const rows = await rowOf(ctx, title).count();
+          const unplans = await unplan.count();
+          if (rows !== 1 || unplans !== 0)
+            throw new Error(`reload ${pass}: ${rows} rows, ${unplans} Unplan buttons`);
+          const mine = await occurrencesOf(ctx, prelab.id);
+          if (mine.length !== 1 || mine[0]!.status !== 'backlog')
             throw new Error(
-              `reload ${pass}: ${rows.length} occurrences, ${rows.map((r) => r.status).join(',')}`,
+              `reload ${pass}: ${mine.length} occurrences, ${mine.map((r) => r.status).join(',')}`,
             );
         }
         await ctx.shot('today-after-unplan');
-        // Due tomorrow, so its home lens is Week, not Backlog (lenses.md §1) — the status is backlog.
-        await ctx.ui.goto('/tasks?lens=week');
-        await ctx.page.getByLabel('Search tasks').fill(title);
-        await rowOf(ctx, title).waitFor({ timeout: 15_000 });
-        await ctx.shot('week-after-unplan');
       },
     },
     {

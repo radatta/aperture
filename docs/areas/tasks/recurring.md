@@ -26,7 +26,7 @@ actual, its own calibration point. Three fields are new (`packages/shared/src/ty
 - `TaskSeries.dueOffsetDays: number | null` — the cadence. An occurrence spawns **planned on its day** with
   `dueDay = day + offset` (0 = the same day, 1 = the next day …), **untimed**. `null` = no due date.
 - `TaskSeries.until: string | null` — the last day it spawns (inclusive). `null` = open-ended.
-- `Task.seriesDay?: string` — the day the series spawned this occurrence for: its identity within the series.
+- `Task.seriesDay?: string | null` — the day the series spawned this occurrence for: its identity within the series.
 
 Rows from before read back `undefined` for all three → readers use `?? null` / `== null`. No migration.
 
@@ -112,8 +112,8 @@ recurrence_, the contract case).
 ## 6. Dev check
 
 `scripts/src/devcheck/scenarios/recurring.ts` — the matrix: the form's create and its row; Today "due
-tomorrow"; a reload keeps one; Unplan → backlog status (on Week, it's due tomorrow) with no copy after two
-reloads; "+ Today" brings the same one back; an Until of yesterday reads "ended" and spawns nothing; a series with no Due spawns undated; the
+tomorrow"; a reload keeps one; Unplan → backlog status (on Week, it's due tomorrow): after two reloads the
+searched list has one row offering "+ Today" and no Unplan — no planned copy; "+ Today" brings the same one back; an Until of yesterday reads "ended" and spawns nothing; a series with no Due spawns undated; the
 neighbour is untouched; `create_series` → `list_series` → Today; `create_series` with a past `until`
 refused with nothing written; `stop_series` (inactive, out of the list, occurrence kept); `stop_series` on
 no such id → Not found. Off dev: `getDay` twice after `removePlan` and `deleteSeries`'s tombstone (the
