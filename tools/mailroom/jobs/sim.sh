@@ -139,8 +139,25 @@ sim_cap() {
   return "$rc"
 }
 
-ax() { sim_cap 30 axe "$@" --udid "$SIM_U"; }
-sx() { local cap="$1"; shift; sim_cap "$cap" xcrun simctl "$@"; }
+# Every tool call refreshes the lock (runner.sh takes one older than 15 min as stale, and a second drain would drive this
+# sim) and stops at the job's deadline: .late becomes TIMEOUT in the run loop, however deep the op is.
+sim_late() {
+  [ -n "${SIM_DEADLINE:-}" ] || return 1
+  [ "$(date +%s)" -ge "$SIM_DEADLINE" ] || return 1
+  : >"$SIM_P.late"
+}
+sim_tick() { touch "${STATE:-.}/lock" 2>/dev/null || true; }
+ax() {
+  local cap=30 left
+  sim_tick
+  if sim_late; then return 124; fi
+  if [ -n "${SIM_DEADLINE:-}" ]; then
+    left=$((SIM_DEADLINE - $(date +%s)))
+    [ "$left" -ge "$cap" ] || cap="$left"
+  fi
+  sim_cap "$cap" axe "$@" --udid "$SIM_U"
+}
+sx() { local cap="$1"; shift; sim_tick; sim_cap "$cap" xcrun simctl "$@"; }
 sim_ms() { jq -nr 'now * 1000 | floor'; }
 
 # An op's outcome: fail = the row's assertion didn't hold; error = the sim couldn't run it (needs you).
@@ -181,14 +198,19 @@ sim_probe_budget() {
   n=$(($(cat "$SIM_P.probes" 2>/dev/null || echo 0) + 1))
   echo "$n" >"$SIM_P.probes"
   [ "$n" -le "$SIM_MAX_PROBES" ] || { : >"$SIM_P.over"; return 1; }
+  if sim_late; then return 1; fi
 }
 
 # One accessibility read at a point: {role,label,value,id,pid,enabled,frame{x,y,w,h},at{x,y}} or {}. While SIM_SENSITIVE
 # (the sign-in form) no value survives: a typed password lives in AXValue, never in a label.
 sim_point() {
-  local raw
+  local raw rc=0
   sim_probe_budget || return 1
-  raw="$(ax describe-ui --point "$1,$2" 2>/dev/null)" || raw=""
+  raw="$(ax describe-ui --point "$1,$2" 2>"$SIM_P.axerr")" || rc=$?
+  if [ "$rc" != 0 ]; then # an empty spot errors too ("No translation object"); a hung or lost session is no answer at all
+    raw=""
+    if [ "$rc" = 124 ] || grep -q -i -e 'timed out' -e 'remote automation' "$SIM_P.axerr" 2>/dev/null; then : >"$SIM_P.unread"; fi
+  fi
   [ -n "$raw" ] || raw='{}'
   jq -c --argjson sens "$SIM_SENSITIVE" --argjson x "$1" --argjson y "$2" '
     (if type == "array" then (.[0] // {}) else . end)
@@ -214,6 +236,7 @@ sim_label_is() { jq -e --arg l "$2" '((.label // "") | ascii_downcase) == ($l | 
 sim_tree() {
   local t i
   for i in 1 2 3 4 5 6 7 8; do
+    if sim_late; then return 1; fi
     if t="$(ax describe-ui 2>/dev/null)"; then printf '%s' "$t"; return 0; fi
     [ "$i" = 8 ] || sleep 2
   done
@@ -253,6 +276,7 @@ sim_find() {
   label="$(jq -r .label <<<"$op")"
   role="$(jq -r '.role // ""' <<<"$op")"
   sim_in_app || return 1
+  rm -f "$SIM_P.unread"
   while read -r x y; do
     e="$(sim_point "$x" "$y")" || return 1
     if sim_match "$e" "$label" "$role"; then
@@ -261,6 +285,7 @@ sim_find() {
     fi
     seen="$seen$(jq -r '(.label // "") | gsub("[^A-Za-z0-9 .,:;()/+_&?-]"; "") | .[0:24]' <<<"$e")|"
   done < <(sim_points "$op")
+  [ ! -e "$SIM_P.unread" ] || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "a point read timed out looking for \"$label\""; return 1; }
   seen="$(printf '%s' "$seen" | tr '|' '\n' | awk 'NF && !s[$0]++' | head -3 | paste -sd ',' -)"
   sim_fail MISS "no \"$label\" found (saw: ${seen:-nothing})"
 }
@@ -277,7 +302,7 @@ sim_device() {
   [ "$n" = 1 ] || { sim_err SIM_UNAVAILABLE SIM_AMBIGUOUS "$n sims named $SIM_NAME"; return 1; }
   read -r SIM_U SIM_STATE SIM_TYPE SIM_RUNTIME < <(jq -r --arg n "$SIM_NAME" '.devices | to_entries[] | .key as $rt | .value[]
     | select(.name == $n and .isAvailable == true)
-    | "\(.udid) \(.state) \(.deviceTypeIdentifier // "-") \($rt | sub(".*SimRuntime\\."; "") | sub("-"; " ") | gsub("-"; "."))"' <<<"$list")
+    | "\(.udid) \(.state | gsub(" "; "_")) \(.deviceTypeIdentifier // "-") \($rt | sub(".*SimRuntime\\."; "") | sub("-"; " ") | gsub("-"; "."))"' <<<"$list")
   [[ "$SIM_U" =~ ^[0-9A-F-]{36}$ ]] || { sim_err SIM_UNAVAILABLE SIM_MISSING "bad udid"; return 1; }
   [ "$SIM_TYPE" = "$SIM_DEVICE_TYPE" ] || {
     sim_err SIM_UNAVAILABLE PROFILE_MISMATCH "the sim is ${SIM_TYPE##*.}, the profile ${SIM_DEVICE_TYPE##*.} (IOS-CHECK.md -> Device profile)"
@@ -348,34 +373,52 @@ sim_landmark() {
   echo ""
 }
 
-# The icon from the full tree, and only on page 2: page 1 has a widget where page 2 has the icon, and --point can't
-# confirm it (it names a neighbouring icon inside this frame: profile.md, P12 finding 1).
-sim_icon() {
-  local t
-  t="$(sim_tree)" || return 1
-  jq -c --argjson w "$SIM_W" --argjson h "$SIM_H" 'select(any(.. | objects; .AXValue? == "Page 2 of 2"))
-    | [.. | objects | select(.AXLabel? == "Aperture" and .role? == "AXButton")
+# The icon from the full tree, and only with the pill reading page 2: page 1 has a widget where page 2 has the icon, and
+# --point can't confirm it (it names a neighbouring icon inside this frame: profile.md, P12 finding 1). Scrolls only on
+# an explicit page 1: past the last page is the App Library. No pill is a stale tree (root Safari after Safari ran, P12).
+sim_icon_in() {
+  jq -c --argjson w "$SIM_W" --argjson h "$SIM_H" '[.. | objects | select(.AXLabel? == "Aperture" and .role? == "AXButton")
     | (.frame // {}) | {x: ((.x // 0) | floor), y: ((.y // 0) | floor), w: ((.width // 0) | floor), h: ((.height // 0) | floor)}
     | select(.w > 0 and .h > 0 and .x >= 0 and .x + .w <= $w and .y >= 0 and .y + .h <= $h)][0] // empty
-    | {role: "AXButton", label: "Aperture", frame: .}' <<<"$t" 2>/dev/null
+    | {role: "AXButton", label: "Aperture", frame: .}' <<<"$1" 2>/dev/null
+}
+sim_find_icon() {
+  local t page i e prev="" scrolled=""
+  SIM_ICON=""
+  for i in 1 2 3 4 5 6; do
+    t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
+    page="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
+    case "$page" in
+      "Page 2 of 2")
+        e="$(sim_icon_in "$t")" || true
+        [ -n "$e" ] || break
+        if [ "$e" = "$prev" ]; then SIM_ICON="$e"; return 0; fi # two reads agree
+        prev="$e"
+        sleep 1
+        ;;
+      "Page 1 of 2")
+        prev=""
+        if [ -z "$scrolled" ]; then
+          ax gesture scroll-left --screen-width "$SIM_W" --screen-height "$SIM_H" >/dev/null 2>&1 || true
+          scrolled=1
+        fi
+        sleep 1
+        ;;
+      "") prev=""; sleep 2 ;;
+      *) break ;;
+    esac
+  done
+  if [ -z "$page" ]; then sim_err SIM_UNAVAILABLE HOME_TREE_STALE "the Home Screen's tree has no page pill; reboot the sim (IOS-CHECK.md -> Failures)"; return 1; fi
+  sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon on Home Screen page 2 (found: $page); add dev to the sim's Home Screen"
 }
 
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
-  local icon i s
+  local i s
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
-  icon="$(sim_icon)" || true
-  if [ -z "$icon" ]; then # after a boot the Home Screen opens on page 1; the icon lives on page 2
-    ax gesture scroll-left --screen-width "$SIM_W" --screen-height "$SIM_H" >/dev/null 2>&1 || true
-    for i in 1 2 3; do # the tree can lag the page change
-      icon="$(sim_icon)" || true
-      [ -z "$icon" ] || break
-      sleep 1
-    done
-  fi
-  [ -n "$icon" ] || { sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon on Home Screen page 2 (add dev to the sim's Home Screen)"; return 1; }
-  sim_tap_el "$icon" || return 1
+  sim_find_icon || return 1
+  sim_tap_el "$SIM_ICON" || return 1
   i=0
   while :; do
     s="$(sim_landmark)" || return 1
@@ -401,8 +444,10 @@ sim_on_cognito() {
   local e x y v
   read -r x y <<<"$SIM_PT_ADDRESS"
   e="$(SIM_SENSITIVE=false && sim_point "$x" "$y")" || return 1
-  jq -e --argjson app "${1:-null}" '.role == "AXGenericElement" and .id == "URL" and .label == "Address"
-    and $app != null and .pid != null and .pid != $app' <<<"$e" >/dev/null 2>&1 || return 1
+  jq -e --argjson app "${1:-null}" --argjson bar "${2:-null}" --argjson form "${3:-null}" '.role == "AXGenericElement" and .id == "URL" and .label == "Address"
+    and $app != null and .pid != null and .pid != $app
+    and ($bar == null or .pid == $bar) and ($form == null or .pid != $form)' <<<"$e" >/dev/null 2>&1 || return 1
+  SIM_BAR_PID="$(jq -c .pid <<<"$e")"
   v="$(jq -r '.value // "" | gsub("^[\u200e\u200f\u202a-\u202e\u2066-\u2069]+"; "")' <<<"$e")" # a leading LRM
   [[ "$v" =~ $SIM_COGNITO_RE ]]
 }
@@ -410,29 +455,72 @@ sim_on_cognito() {
 # Tap a sign-in field until it has focus: the form zooms when one does, so a moved frame is the proof. A tap can be
 # dropped silently (profile.md surprise 5), so one retap, then FORM_CHANGED.
 sim_focus_field() {
-  local e="$1" x y n i
-  read -r x y < <(jq -r '.at | "\(.x) \(.y)"' <<<"$e")
+  local e="$1" pt n i
   for i in 1 2; do
     sim_tap_el "$e" || return 1
     sleep 1
-    n="$(sim_point "$x" "$y")" || return 1
-    if sim_match "$n" "$2" "" && ! jq -e --argjson a "$e" '.frame == $a.frame' <<<"$n" >/dev/null 2>&1; then return 0; fi
+    for pt in $SIM_YS_EMAIL; do # the zoom moves the field off the point it was found at
+      n="$(sim_point "$SIM_X" "$pt")" || return 1
+      if sim_match "$n" "$2" "" && ! jq -e --argjson a "$e" '.frame == $a.frame' <<<"$n" >/dev/null 2>&1; then return 0; fi
+    done
   done
   sim_err SIGNIN_FAILED FORM_CHANGED "the $2 field never took focus"
 }
 
-# Sign in from Keychain when the app is signed out. The password goes Keychain → axe's stdin, nowhere else; from the
-# first tap to Home nothing is read back but roles and button/field labels, and nothing is screenshotted.
+# Prove the focus is in Password before any secret moves: the tree marks no focus between fields (profile.md, P12) and a
+# dropped tap would type the password into Email, in clear. One harmless key first: it must reach Password as a single
+# bullet with Email unchanged, and delete must empty the field again. These reads carry no secret: only the x was typed.
+sim_pw_focused() {
+  local pf="$1" ef="$2" px py ex ey p m i
+  read -r px py < <(jq -r '.at | "\(.x) \(.y)"' <<<"$pf")
+  read -r ex ey < <(jq -r '.at | "\(.x) \(.y)"' <<<"$ef")
+  for i in 1 2; do
+    sim_tap_el "$pf" || return 1
+    sleep 1
+    ax key 27 >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
+    sleep 1
+    p="$(SIM_SENSITIVE=false && sim_point "$px" "$py")" || return 1
+    m="$(SIM_SENSITIVE=false && sim_point "$ex" "$ey")" || return 1
+    if jq -e '.value == "•"' <<<"$p" >/dev/null 2>&1 && jq -e --arg v "$SIM_EMAIL" '.value == $v' <<<"$m" >/dev/null 2>&1; then
+      ax key 42 >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
+      sleep 1
+      p="$(SIM_SENSITIVE=false && sim_point "$px" "$py")" || return 1
+      jq -e '.value == "Password"' <<<"$p" >/dev/null 2>&1 && return 0
+      sim_err SIGNIN_FAILED FORM_CHANGED "the Password field didn't empty"
+      return 1
+    fi
+    if ! jq -e --arg v "$SIM_EMAIL" '.value == $v' <<<"$m" >/dev/null 2>&1; then ax key 42 >/dev/null 2>&1 || true; fi
+    sleep 1
+  done
+  sim_err SIGNIN_FAILED FORM_CHANGED "the Password field never took focus"
+}
+
+# A failure after the first tap leaves the sheet up, maybe the filled form: gone before the next op can read or shoot it.
 sim_op_signIn() {
-  local e pf pt i s app
+  local rc=0
+  SIM_SHEET=""
+  sim_sign_in "$@" || rc=$?
+  if [ "$rc" != 0 ] && [ -n "$SIM_SHEET" ]; then
+    SIM_SENSITIVE=false
+    sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || true
+  fi
+  return "$rc"
+}
+sim_sign_in() {
+  local e ef fp n pf pt i s app
   if [ "$SIM_SIGNED" != false ]; then SIM_NOTE="already signed in"; return 0; fi
   sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \
     || { sim_err PASSWORD_MISSING "" "no readable Keychain item $SIM_KEYCHAIN"; return 1; }
   e="$(sim_point "$SIM_X" "$SIM_Y_SIGNIN")" || return 1
   sim_label_is "$e" "Sign in" || { sim_err SIGNIN_FAILED FORM_CHANGED "no Sign in button"; return 1; }
   app="$(jq -c '.pid' <<<"$e")"
-  sim_tap_el "$e" || return 1
-  sleep 3
+  SIM_SHEET=1
+  for i in 1 2; do # a tap can drop silently (reported fine, the card still there 8 s later); tapping again is safe
+    sim_tap_el "$e" || return 1
+    sleep 3
+    n="$(sim_point "$SIM_X" "$SIM_Y_SIGNIN")" || return 1
+    sim_label_is "$n" "Sign in" && jq -e --argjson a "$app" '.pid == $a' <<<"$n" >/dev/null 2>&1 || break
+  done
   sim_on_cognito "$app" || { sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
   SIM_SENSITIVE=true
   for pt in $SIM_YS_EMAIL; do
@@ -443,22 +531,35 @@ sim_op_signIn() {
   [ -n "$e" ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED FORM_CHANGED "no Email field"; return 1; }
   sim_focus_field "$e" Email || { SIM_SENSITIVE=false; return 1; }
   ax type "$SIM_EMAIL" >/dev/null 2>&1 || { SIM_SENSITIVE=false; sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
-  # The form zooms on focus, so the password field is found again.
+  # The form zooms on focus, so both fields are found again.
+  for pt in $SIM_YS_EMAIL; do
+    ef="$(sim_point "$SIM_X" "$pt")" || return 1
+    sim_match "$ef" "Email" "AXTextField" && break
+    ef=""
+  done
+  [ -n "$ef" ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED FORM_CHANGED "no Email field"; return 1; }
   for pt in $SIM_YS_PASSWORD; do
     e="$(sim_point "$SIM_X" "$pt")" || return 1
     if jq -e '.role == "AXTextField" or .role == "AXSecureTextField"' <<<"$e" >/dev/null && sim_match "$e" "Password" ""; then break; fi
     e=""
   done
   [ -n "$e" ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED FORM_CHANGED "no Password field"; return 1; }
-  sim_tap_el "$e" || { SIM_SENSITIVE=false; return 1; }
   pf="$e"
+  sim_pw_focused "$pf" "$ef" || { SIM_SENSITIVE=false; return 1; }
   # Again just before the password: the form flow ran since the first check.
-  sim_on_cognito "$app" || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
+  # The same bar as before, and not the form's own process: a full page drawn at another origin has one pid for both.
+  fp="$(jq -c .pid <<<"$pf")"
+  if [ "$fp" = null ] || ! sim_on_cognito "$app" "$SIM_BAR_PID" "$fp"; then
+    SIM_SENSITIVE=false
+    sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"
+    return 1
+  fi
   if ! sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" -w 2>/dev/null | tr -d '\n' | ax type --stdin >/dev/null 2>&1; then
     SIM_SENSITIVE=false
     sim_err PASSWORD_MISSING "" "the Keychain read or the typing failed"
     return 1
   fi
+  e=""
   for pt in $SIM_YS_SUBMIT; do
     # never a read inside the filled password field (its value would carry the password's length)
     if jq -e --argjson y "$pt" '.frame.y <= $y and $y <= .frame.y + .frame.h' <<<"$pf" >/dev/null 2>&1; then continue; fi
@@ -473,7 +574,7 @@ sim_op_signIn() {
     s="$(sim_landmark)" || { SIM_SENSITIVE=false; return 1; }
     [ "$s" != already ] || break
     i=$((i + 1))
-    [ "$i" -lt 12 ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED AUTH_REJECTED "still not on Home 25 s after submit"; return 1; }
+    [ "$i" -lt 12 ] || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED AUTH_REJECTED "still not on Home after submit"; return 1; }
     sleep 2
   done
   SIM_SENSITIVE=false
@@ -750,12 +851,13 @@ run_sim() {
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"
   echo 0 >"$SIM_P.probes"
-  rm -f -- "$SIM_P.over"
+  rm -f -- "$SIM_P.over" "$SIM_P.late" "$SIM_P.unread" "$SIM_P.axerr"
   : >"$SIM_P.steps"
   : >"$SIM_P.builds"
   : >"$SIM_P.shots"
   started="$(date +%s)"
   budget="$(jq -r '.params.timeoutSec | floor' "$w")"
+  SIM_DEADLINE=$((started + budget))
   caffeinate -is -w "$$" >/dev/null 2>&1 &
   caf=$!
   n="$(jq '.params.steps | length' "$w")"
@@ -782,6 +884,7 @@ run_sim() {
         status=pass
       else
         [ ! -e "$SIM_P.over" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT=PROBES SIM_NOTE="over $SIM_MAX_PROBES point reads"; }
+        [ ! -e "$SIM_P.late" ] || { SIM_ST=error SIM_RS=TIMEOUT SIM_DT="" SIM_NOTE="over the ${budget} s budget"; }
         status="${SIM_ST:-error}"
       fi
     fi

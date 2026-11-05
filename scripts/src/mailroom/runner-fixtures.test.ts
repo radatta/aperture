@@ -100,13 +100,24 @@ describe('mailroom runner', () => {
     expect(sim).toContain(`'.role == "AXGenericElement" and .id == "URL" and .label == "Address"`);
     expect(sim).toContain('and $app != null and .pid != null and .pid != $app');
     expect(sim).toContain('[[ "$v" =~ $SIM_COGNITO_RE ]]');
-    const checks = [...sim.matchAll(/\bsim_on_cognito "\$app" \|\|/g)].map((m) => m.index);
+    expect(sim).toContain(
+      'and ($bar == null or .pid == $bar) and ($form == null or .pid != $form)',
+    );
+    // No read carries a value between the first form tap and Home, but the two that prove focus before the password.
+    expect(sim).toContain('| if $sens then del(.value) else . end');
+    expect(sim).toContain('SIM_SENSITIVE=true');
+    const checks = [...sim.matchAll(/\bsim_on_cognito "\$app"/g)].map((m) => m.index);
     const email = sim.indexOf('ax type "$SIM_EMAIL"');
     const password = sim.indexOf('ax type --stdin');
     expect(checks).toHaveLength(2);
     expect(checks[0]).toBeLessThan(email);
     expect(checks[1]).toBeGreaterThan(email);
     expect(checks[1]).toBeLessThan(password);
+    // The focus is proven with a harmless key before the password, and the host checked after that.
+    const focused = sim.indexOf('sim_pw_focused "$pf" "$ef" ||');
+    expect(sim).toContain('ax key 27');
+    expect(focused).toBeGreaterThan(email);
+    expect(focused).toBeLessThan(checks[1] ?? -1);
     expect(sim.match(/\bax type\b[^\n]*/g)?.map((l) => l.slice(0, 30))).toEqual([
       'ax type "$SIM_EMAIL" >/dev/nul',
       'ax type --stdin >/dev/null 2>&',
@@ -114,7 +125,7 @@ describe('mailroom runner', () => {
     // Tools by name only (no path a job could steer); axe only through the capped `ax`/`sim_cap` wrappers.
     expect(sim).not.toMatch(/(^|[\s;(|&])\/[a-z/]+\/(axe|xcrun|security|open)\b/m);
     expect(sim.match(/(?<!--arg |want |")\baxe\s[^\n]*/g)).toEqual([
-      'axe "$@" --udid "$SIM_U"; }',
+      'axe "$@" --udid "$SIM_U"',
       'axe --version 2>/dev/null | tr -d \'[:space:]\')" || v=""',
     ]);
   });

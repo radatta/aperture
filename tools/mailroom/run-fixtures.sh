@@ -62,6 +62,7 @@ security() {
       printf 'keychain: item attributes\n' ;;
     "find-generic-password -s aperture-devcheck-dev -a rahul3datta+devcheck@gmail.com -w")
       [ -z "${MAILROOM_FIXTURE_NO_SIMPW:-}" ] || return 44
+      [ -z "${MAILROOM_FIXTURE_NO_SIMPW_READ:-}" ] || return 44
       printf 'read\n' >>"$MAILROOM_FIXTURE_SIMCALLS.pw"
       printf '%s\n' "$MAILROOM_FIXTURE_PW" ;;
     *) echo "security stub: unexpected $*" >&2; return 2 ;;
@@ -181,6 +182,7 @@ while IFS= read -r c; do
   (
     [ "$(jq -r '.noToken // false' <<<"$c")" = true ] && export MAILROOM_FIXTURE_NO_TOKEN=1
     [ "$(jq -r '.noSimPassword // false' <<<"$c")" = true ] && export MAILROOM_FIXTURE_NO_SIMPW=1
+    [ "$(jq -r '.noSimPasswordRead // false' <<<"$c")" = true ] && export MAILROOM_FIXTURE_NO_SIMPW_READ=1
     MAILROOM_FIXTURE_API="$T/api.json" MAILROOM_FIXTURE_CALLS="$T/calls" MAILROOM_FIXTURE_TAPE="$T/tape" \
       MAILROOM_FIXTURE_SIMCALLS="$T/simcalls" bash "$HERE/runner.sh" "$hj" "$st"
   ) >"$T/out" 2>&1
@@ -239,13 +241,17 @@ while IFS= read -r c; do
       [ -z "$why" ] && [ -n "$nope" ] || continue
       if grep -q -F -- "$nope" "$T/simcalls"; then why="an unwanted call: \"$nope\""; fi
     done < <(jq -r '.simExcludes // [] | .[]' <<<"$c")
+    while IFS=$'\t' read -r want cnt; do
+      [ -z "$why" ] && [ -n "$want" ] || continue
+      [ "$(grep -c -F -- "$want" "$T/simcalls" || true)" = "$cnt" ] || why="\"$want\" not called $cnt times"
+    done < <(jq -r '.simCount // {} | to_entries[] | [.key, (.value | tostring)] | @tsv' <<<"$c")
     typed="$(grep -c -F -- "<<<$MAILROOM_FIXTURE_PW" "$T/simcalls" || true)"
     reads=0
     [ ! -f "$T/simcalls.pw" ] || reads="$(wc -l <"$T/simcalls.pw" | tr -d ' ')"
     want_pw="$(jq -r '.pwTyped // 0' <<<"$c")"
     [ -n "$why" ] || [ "$typed" = "$want_pw" ] || why="the password was typed $typed times, want $want_pw"
     [ -n "$why" ] || [ "${reads:-0}" = "$want_pw" ] || why="the password was read ${reads:-0} times, want $want_pw"
-    if [ -z "$why" ] && grep -v -F -- "<<<$MAILROOM_FIXTURE_PW" "$T/simcalls" | grep -q -F -- "$MAILROOM_FIXTURE_PW"; then
+    if [ -z "$why" ] && [ "$(grep -v -F -- "<<<$MAILROOM_FIXTURE_PW" "$T/simcalls" | grep -c -F -- "$MAILROOM_FIXTURE_PW")" != 0 ]; then
       why="the password reached a tool's argv"
     fi
     while IFS= read -r f; do

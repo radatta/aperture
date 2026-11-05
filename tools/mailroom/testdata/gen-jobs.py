@@ -305,11 +305,18 @@ serr('sim: an icon frame while the pill says page 1 (a stale tree, the widget un
      tape=[{'m': 'describe-ui --udid', 'out': tree(page=1)}], simExcludes=['tap -x 371'])
 serr('sim: no Aperture icon is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False)}],
      simIncludes=['gesture scroll-left --screen-width 440 --screen-height 956'], simExcludes=['tap -x'])
-SIGNED_OUT = [pt(220, 895, {}), pt(220, 530, el('AXButton', 'Sign in', '', 183, 511, 74, 37, pid=67251))]
+SIGNIN = el('AXButton', 'Sign in', '', 183, 511, 74, 37, pid=67251)
+SIGNED_OUT = [pt(220, 895, {}), pt(220, 530, SIGNIN, n=2), pt(220, 530, {})]  # the launch landmark, the signIn read; gone after one tap
 HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com'
 COGNITO = pt(228, 85, el('AXGenericElement', 'Address', '\u200e' + HOST, 10, 70, 300, 34, AXUniqueId='URL', pid=67016))
-EMAIL = [pt(220, 276, el('AXTextField', 'Email', PW, 60, 258, 320, 35), n=1), pt(220, 276, el('AXTextField', 'Email', PW, 36, 278, 366, 40))]  # zoomed once focused
-FORM = [COGNITO] + EMAIL + [ pt(220, 366, el('AXSecureTextField', 'Password', PW, 41, 345, 320, 40)),
+ADDR = 'rahul3datta+devcheck@gmail.com'
+FORMPID = 67300
+EMAIL = [pt(220, 276, el('AXTextField', 'Email', PW, 60, 258, 320, 35, pid=FORMPID), n=1), pt(220, 276, el('AXTextField', 'Email', ADDR, 36, 278, 366, 40, pid=FORMPID))]  # zoomed once focused
+def pwfield(y, fy, *vals):  # one read per value, then the password itself, which only a read after the focus check gets
+    f = lambda v: el('AXSecureTextField', 'Password', v, 41, fy, 320, 40, pid=FORMPID)
+    return [pt(220, y, f(v), n=1) for v in vals] + [pt(220, y, f(PW))]
+PWOK = ('Password', '•', 'Password')  # found empty, the x as one bullet, deleted
+FORM = [COGNITO] + EMAIL + pwfield(366, 345, *PWOK) + [
         pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47))]
 serr('sim: no Keychain password is PASSWORD_MISSING, nothing typed', None, [L, {'op': 'signIn'}], reason='PASSWORD_MISSING', tape=SIGNED_OUT, noSimPassword=True,
      simExcludes=['axe type', '--point 228,85'])
@@ -326,16 +333,47 @@ serr('sim: the host changing before the password is COGNITO_HOST, the password n
      tape=SIGNED_OUT + [{**COGNITO, 'n': 1}, pt(228, 85, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL', pid=67016))] + FORM[1:],
      pwTyped=0, simIncludes=['axe type rahul3datta+devcheck@gmail.com'])
 serr('sim: submit probes skip the filled password field (no read inside it)', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [COGNITO] + EMAIL + [pt(220, 386, el('AXSecureTextField', 'Password', PW, 41, 380, 320, 40))], pwTyped=1,
+     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(386, 380, *PWOK), pwTyped=1,
      simIncludes=['--point 220,454', '--point 220,424'], simExcludes=['--point 220,414'])
 serr('sim: a rejected password is AUTH_REJECTED (typed once, never read back)', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
      tape=SIGNED_OUT + FORM, pwTyped=1, simIncludes=['axe type rahul3datta+devcheck@gmail.com', '<<<' + PW, 'tap -x 201 -y 453 --tap-style physical --pre-delay 2'])
+spass('sim: a dropped Sign in tap is tapped again', [L, {'op': 'signIn'}],
+      tape=[pt(220, 895, {}, n=1)] + [pt(220, 530, SIGNIN, n=3), pt(220, 530, {})] + FORM + [pt(220, 588, {})], expect={'signedIn': 'fresh'}, pwTyped=1, simCount={'tap -x 220 -y 529': 2})
+spass('sim: a Sign in tap that lands is not repeated', [L, {'op': 'signIn'}],
+      tape=[pt(220, 895, {}, n=1)] + SIGNED_OUT[1:] + FORM + [pt(220, 588, {})], expect={'signedIn': 'fresh'}, pwTyped=1, simCount={'tap -x 220 -y 529': 1})
+serr('sim: a Sign in under another process is not tapped again', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=[pt(220, 895, {}), pt(220, 530, SIGNIN, n=2), pt(220, 530, el('AXButton', 'Sign in', '', 183, 511, 74, 37, pid=67999))] + FORM, pwTyped=1, simCount={'tap -x 220 -y 529': 1})
+serr('sim: an address bar sharing the form’s process (a full page drawn elsewhere) is COGNITO_HOST, the password never read', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [pt(228, 85, el('AXGenericElement', 'Address', HOST, 10, 70, 300, 34, AXUniqueId='URL', pid=FORMPID))] + FORM[1:], pwTyped=0,
+     simIncludes=['axe type rahul3datta+devcheck@gmail.com', 'simctl terminate'])
+serr('sim: an address bar that changed process before the password is COGNITO_HOST, the password never read', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [{**COGNITO, 'n': 1}, pt(228, 85, el('AXGenericElement', 'Address', HOST, 10, 70, 300, 34, AXUniqueId='URL', pid=67400))] + FORM[1:], pwTyped=0)
+serr('sim: a failed sign-in closes the sheet', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED', tape=SIGNED_OUT, simIncludes=['simctl terminate'], simExcludes=['axe type'])
+serr('sim: a denied Keychain read of the password is PASSWORD_MISSING, nothing submitted', None, [L, {'op': 'signIn'}], reason='PASSWORD_MISSING', tape=SIGNED_OUT + FORM,
+     noSimPasswordRead=True, pwTyped=0, simExcludes=['tap -x 201 -y 453'])
+sfail('sim: an empty spot read as an error is still a miss', 'MISS', [L, F('Nope', 100, 300, 'x')], tape=[{'m': '--point 100,300', 'rc': 1}])
+serr('sim: a point read that times out is AX_TIMEOUT, not a miss', 'AX_TIMEOUT', [L, F('Nope', 100, 300, 'x')], tape=[{'m': '--point 100,300', 'rc': 124}])
+serr('sim: absent with a timed-out read is AX_TIMEOUT, never a pass', 'AX_TIMEOUT', [L, {'op': 'absent', 'label': 'Nope', 'near': {'x': 100, 'y': 300}, 'radius': 10}], tape=[{'m': '--point 100,300', 'rc': 124}])
+serr('sim: a Home Screen tree with no page pill is HOME_TREE_STALE, no scroll, no tap', 'HOME_TREE_STALE',
+     tape=[{'m': 'describe-ui --udid', 'out': [{'role': 'AXApplication', 'AXLabel': 'Safari', 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': []}]}], simExcludes=['gesture scroll-left', 'tap -x'])
+spass('sim: page 2 in the tree does not scroll', [L], simExcludes=['gesture scroll-left'])
+serr('sim: Home Screen with a third page is WEBCLIP_MISSING, no tap', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(page=3)}], simExcludes=['gesture scroll-left', 'tap -x 371'])
+spass('sim: a sim still shutting down boots rather than failing the profile', [L], tape=[{'m': 'list devices -j', 'n': 2, 'out': dev('Shutting Down')}], simIncludes=['bootstatus'])
+serr('sim: the test key landing in Email is deleted and the password never typed', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [COGNITO, EMAIL[0], {**EMAIL[1], 'n': 2}, pt(220, 276, el('AXTextField', 'Email', ADDR + 'x', 36, 278, 366, 40))] + pwfield(366, 345, *['Password'] * 9),
+     pwTyped=0, simIncludes=['key 27', 'key 42'])
+serr('sim: a test key that lands nowhere means no password', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, *['Password'] * 9), pwTyped=0, simIncludes=['key 27'], simExcludes=['key 42'])
+serr('sim: an unmasked Password field (the x readable) means no password', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, 'Password', *['x'] * 9), pwTyped=0)
+serr('sim: a Password field that won’t empty after the test key means no password', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [COGNITO] + EMAIL + pwfield(366, 345, 'Password', *['•'] * 9), pwTyped=0, simIncludes=['key 42'])
 serr('sim: an Email field that never takes focus (no zoom after a retap) is FORM_CHANGED, nothing typed', 'FORM_CHANGED', [L, {'op': 'signIn'}],
      reason='SIGNIN_FAILED', tape=SIGNED_OUT + [COGNITO, pt(220, 276, el('AXTextField', 'Email', PW, 60, 258, 320, 35))], simExcludes=['axe type'])
 serr('sim: a missing Email field is FORM_CHANGED', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED', tape=SIGNED_OUT + [COGNITO], simExcludes=['axe type'])
 spass('sim: a fresh sign-in types the password once, dismisses Save Password and re-arms the keyboard', [L, {'op': 'signIn'}, {'op': 'expect', 'signedIn': True}],
       tape=[pt(220, 895, {}, n=1)] + SIGNED_OUT[1:] + FORM + [pt(220, 588, el('AXButton', 'Never for This Website', '', 76, 564, 288, 48))],
-      expect={'signedIn': 'fresh', 'booted': 'rebooted'}, pwTyped=1,
+      expect={'signedIn': 'fresh', 'booted': 'rebooted'}, pwTyped=1, simCount={'--point 220,366 ': 3},
       simIncludes=['--point 228,85', 'axe type rahul3datta+devcheck@gmail.com', '<<<' + PW, 'tap -x 220 -y 588',
                    'defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false',
                    'defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false', 'simctl shutdown', 'bootstatus'])
@@ -343,7 +381,7 @@ spass('sim: signIn when already signed in does nothing', [L, {'op': 'signIn'}], 
 serr('sim: no soft keyboard where one is due is KEYBOARD_SETUP (needs you, not a fail)', 'KEYBOARD_SETUP',
      [L, F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}],
      tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36)), pt(221, 856, {})])
-serr('sim: keys with no soft keyboard is KEYBOARD_SETUP', 'KEYBOARD_SETUP', [L, {'op': 'keys', 'text': 'ab'}], tape=[pt(221, 856, {})], simExcludes=['tap -x 42'])
+serr('sim: keys with no soft keyboard is KEYBOARD_SETUP', 'KEYBOARD_SETUP', [L, {'op': 'keys', 'text': 'ab'}], tape=[pt(221, 856, {})], simExcludes=['tap -x 48', 'tap -x 264'])
 serr('sim: a plan without launch on a shut-down sim is NOT_LAUNCHED (readiness still runs)', 'NOT_LAUNCHED', [F('Capture log', 220, 895, 'bar')],
      tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}], simIncludes=['axe --version', 'bootstatus'], simExcludes=['--point'])
 serr('sim: an unreadable tree mid-plan is AX_TIMEOUT (needs you), not NOT_IN_APP', 'AX_TIMEOUT', [F('Capture log', 220, 895, 'bar')],
