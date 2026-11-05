@@ -174,7 +174,7 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 
 ## 8. Deferred / out of scope
 
-- **Backfill pre-existing orphans** — a delete has removed the bytes since 2026-11-01 (D7), but objects under rows tombstoned before then are still in the bucket, and so are the bytes of an expired `pending` upload until its task is deleted, and of an upload (or MCP `attach_file`) whose PUT lands after its task was deleted. The sweep is §9 (operator, Mac). **Record:** runbook written 2026-11-04; not yet run — dev — · prod —.
+- **Backfill pre-existing orphans** — a delete has removed the bytes since 2026-11-01 (D7), but objects under rows tombstoned before then are still in the bucket, and so are the bytes of an expired `pending` upload until its task is deleted, and of an upload (or MCP `attach_file`) whose PUT lands after its task was deleted. The sweep is §9 (operator, Mac). **Record:** run 2026-11-05 (dry run, steps 1–4) — dev 0 orphans (no objects under the sub) · prod 0 orphans (2 objects, both live); nothing deleted; the devcheck user's sub not swept.
 - **Delete-marker tidy-up** — deleting a never-uploaded `pending` key leaves a free delete marker. An `expiredObjectDeleteMarker` lifecycle rule would tidy them, but lifecycle rules are frozen on dev's bot lane (`docs/ops/CI-BOT.md`), so it would need main's lane or an opened freeze.
 - **`deleteTask` cascade** — ✅ landed (D7), bytes included since 2026-11-01.
 - **HEAD-on-confirm** — `confirmAttachment` trusts the client that the PUT succeeded; a HEAD to verify the object exists would add an S3 call. Low value at single-user scale.
@@ -197,10 +197,10 @@ Each block is one shell session from `cd /Users/rahuldatta/Coding/Personal/apert
    B=$(O FilesBucket); T=$(O TableName); SUB=<sub>; echo "$B $T $SUB"
    ```
 
-2. **Keys older than 24 h** under the sub, with sizes (`date -v-24H` is BSD date — the Mac's):
+2. **Keys older than 24 h** under the sub, with sizes (`date -v-24H` is BSD date — the Mac's). An empty listing prints `None` in text output (it counted as one key on the first dev run), so keep only two-column lines:
 
    ```sh
-   A s3api list-objects-v2 --bucket $B --prefix u/$SUB/ --query "Contents[?LastModified<='$(date -u -v-24H +%FT%TZ)'].[Key,Size]" --output text | sort > keys.tsv
+   A s3api list-objects-v2 --bucket $B --prefix u/$SUB/ --query "Contents[?LastModified<='$(date -u -v-24H +%FT%TZ)'].[Key,Size]" --output text | awk 'NF == 2' | sort > keys.tsv
    cut -f1 keys.tsv > keys.txt; wc -l keys.txt
    ```
 
