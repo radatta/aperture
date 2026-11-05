@@ -475,7 +475,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       Topics: [{ Ref: topicId }],
       PolicyDocument: {
         Statement: Match.arrayWith([
-        // arrayWith matches in order: CDK's SSL deny is statement 0, the Allow follows it
+          // arrayWith matches in order: CDK's SSL deny is statement 0, the Allow follows it
           Match.objectLike({
             Sid: 'AllowPublishThroughSSLOnly',
             Effect: 'Deny',
@@ -489,16 +489,16 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
             Resource: { Ref: topicId },
             Condition: {
               StringEquals: { 'aws:SourceAccount': '111111111111' },
-              ArnLike: { 'aws:SourceArn': Match.anyValue() },
+              ArnLike: {
+                'aws:SourceArn': {
+                  'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':cloudwatch:us-west-1:111111111111:alarm:*']],
+                },
+              },
             },
           }),
         ]),
       },
     });
-    type Policy = { Properties: { PolicyDocument: { Statement: { Sid: string; Condition: unknown }[] } } };
-    const [policy] = Object.values(t.findResources('AWS::SNS::TopicPolicy')) as Policy[];
-    const allow = policy?.Properties.PolicyDocument.Statement.find((st) => st.Sid === 'AllowCloudWatchAlarmsPublish');
-    expect(JSON.stringify(allow?.Condition)).toContain(':cloudwatch:us-west-1:111111111111:alarm:*');
   });
 
   it('adds no alarms or SNS topic in dev (prod-only)', () => {
