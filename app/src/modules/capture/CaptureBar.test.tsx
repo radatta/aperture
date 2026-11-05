@@ -70,8 +70,8 @@ describe('CaptureBar', () => {
   });
 
   // userEvent can't compose, so these fire the keydown an IME produces. A composing Enter must fall
-  // through untouched (the IME commits on it); the proof that nothing saved is that one real Enter
-  // afterwards leaves exactly one entry.
+  // through untouched (the IME commits on it). The negative is the field keeping its text — a submit
+  // clears it at once — and the real Enter afterwards shows the guard didn't swallow the next one.
   describe('IME composition', () => {
     async function composed(storageKey: string) {
       const api = createStubClient({ seed: false, storageKey });
@@ -306,6 +306,23 @@ describe('CaptureBar', () => {
       await user.click(screen.getByLabelText('Save task'));
       expect(box().value).toBe('x | ~30m');
       expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('a bare ~ speaks through its chips: no red error until Enter refuses it', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'x | ~');
+      expect(await screen.findByLabelText('Suggestions')).toBeTruthy();
+      expect(screen.queryByText(/invalid estimate/)).toBeNull();
+
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      // In the preview row and the status region both.
+      expect(screen.getAllByText(/invalid estimate '~'/).length).toBeGreaterThan(0);
+      expect(box().value).toBe('x | ~');
+      expect(await api.listTasks()).toHaveLength(0);
+      // Still a red error once the chips can't help: ~30m matches no preset.
+      await user.type(box(), '30m');
+      expect((await screen.findAllByText(/invalid estimate '~30m'/)).length).toBeGreaterThan(0);
     });
 
     it('an unknown label warns once the caret leaves it, then saves uncategorised', async () => {

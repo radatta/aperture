@@ -37,7 +37,8 @@ bypass — the model never sees a grammar line.
     notice clears once its cause is gone (line fixed, categories arrived, mode switched). Gold warnings
     don't block, but since places (2026-11-04) they wait while the caret is still in the token (so `@n`
     doesn't flash "no place" mid-word), and the red "nothing after ' | '" waits while the caret sits right
-    after the separator; both show once the caret leaves or the field blurs. A warning still held back
+    after the separator; both show once the caret leaves or the field blurs. A bare `~`'s red "invalid
+    estimate" waits the same way while its chips show (2026-11; `#`/`@` already did). A warning still held back
     refuses the **first** Enter/Save once, showing it ("Enter or Save again to save without it"); the
     second press saves. Any edit, Put back or mode switch resets that. No control in the bar takes focus
     from the field (mousedown guard), so a revealed warning can't move a button out from under a tap.

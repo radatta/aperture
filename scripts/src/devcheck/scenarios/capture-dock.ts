@@ -88,6 +88,14 @@ export const captureDock: Scenario = {
         'only iOS Safari collapses its toolbars and anchors fixed elements to the viewable area',
     },
     {
+      id: 'iphone-ime',
+      entry: 'ios',
+      kind: 'edge',
+      what: 'iPhone with a Japanese kana keyboard: compose a word, confirm it with the return key — the text commits in place, nothing saves, no newline',
+      needsYou:
+        'only a real IME commits on Enter; CDP’s synthetic composition leaves the un-prevented Enter to insert a newline, which says nothing about iOS',
+    },
+    {
       id: 'iphone-send',
       entry: 'ios',
       kind: 'nominal',
@@ -103,12 +111,12 @@ export const captureDock: Scenario = {
       title: 'Home: the capture field carries enterkeyhint="send" in Log and Task mode',
       async run(ctx) {
         await ctx.ui.goto('/');
-        const field = ctx.page.locator('textarea[aria-label="Capture log"]');
+        const field = ctx.page.getByLabel('Capture log', { exact: true });
         await field.waitFor({ timeout: 15_000 });
         const hint = await field.getAttribute('enterkeyhint');
         if (hint !== 'send') throw new Error(`Log mode: enterkeyhint is ${JSON.stringify(hint)}`);
         await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
-        const task = ctx.page.locator('textarea[aria-label="Capture task"]');
+        const task = ctx.page.getByLabel('Capture task', { exact: true });
         await task.waitFor({ timeout: 10_000 });
         const taskHint = await task.getAttribute('enterkeyhint');
         if (taskHint !== 'send')

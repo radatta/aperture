@@ -249,11 +249,15 @@ export function CaptureBar({
   // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
   // shows once one is refused — or once the caret leaves it (or the field). Three cases:
   const typing = focused && !shown?.blocked && !acked;
-  const tokenKind = token?.kind === 'category' || token?.kind === 'place' ? token.kind : null;
-  // - the #/@ token speaks through its chips: its own refusal (a bare "@", a partial that starts several);
+  const tokenKind =
+    token?.kind === 'category' || token?.kind === 'place' || token?.kind === 'estimate'
+      ? token.kind
+      : null;
+  // - the #/@/~ token speaks through its chips: its own refusal (a bare "@" or "~", a partial that starts
+  //   several);
   const typingKind = typing && suggestions.length > 0 ? tokenKind : null;
   // - its gold "no category" / "no place" warning waits too — the next letter may make it a match;
-  const typingWarn = typing ? tokenKind : null;
+  const typingWarn = typing && tokenKind !== 'estimate' ? tokenKind : null;
   // - "milk | " with the caret right after the separator: the token is the next thing you type.
   const sepAt = text.indexOf(SEP);
   const typingAfterSep =

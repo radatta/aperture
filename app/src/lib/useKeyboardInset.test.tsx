@@ -126,6 +126,16 @@ describe('useKeyboardInset', () => {
     expect(dock.style.bottom).toBe('');
   });
 
+  // innerHeight counts a horizontal scrollbar; visualViewport doesn't. A desktop page that overflows
+  // sideways with classic scrollbars would otherwise lift the dock 15–17px on every capture focus.
+  it("ignores a desktop scrollbar's height — a gap no keyboard could make", () => {
+    const { dock, keyboard, getByLabelText } = setup();
+    act(() => getByLabelText('dock field').focus());
+    keyboard(827);
+    expect(dock.style.bottom).toBe('');
+    expect(dock.dataset.lifted).toBe('false');
+  });
+
   it('does nothing where visualViewport is missing', () => {
     delete (window as { visualViewport?: unknown }).visualViewport;
     const r = render(<Harness />);

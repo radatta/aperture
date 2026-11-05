@@ -111,7 +111,8 @@ keyboard, so a plain `bottom: 0` sits behind it and anything below the caret —
 and preview row — was hidden (seen 2026-10-04). `innerHeight`, not `documentElement.clientHeight`:
 in a Safari tab the latter is the static ICB with the toolbars shown, so once they collapsed the gap
 read short and the chips sat behind the keyboard (2026-11); the PWA has no toolbars and the two agree
-there. Only while the dock has focus (lifting for a page field's keyboard would cover that
+there. A gap a desktop scrollbar could explain (≤ 24px — `innerHeight` counts one, the visual viewport
+doesn't) is no lift. Only while the dock has focus (lifting for a page field's keyboard would cover that
 field), never when pinch-zoomed, and capped to the visible strip, clipping the dock's top (timers)
 in landscape.
 
