@@ -110,7 +110,10 @@ keyboard up **and focus in the dock**, `lib/useKeyboardInset` lifts it by the ga
 behind it and anything below the caret — capture's token chips and preview row — was hidden (seen
 2026-10-04). Only while the dock has focus (lifting for a page field's keyboard would cover that
 field), never when pinch-zoomed, and capped to the visible strip, clipping the dock's top (timers)
-in landscape.
+in landscape. The top edge has one rule too: the installed PWA draws under the status bar, so a
+top-pinned element or a top scroll margin adds `--safe-top` (`index.css`; `top-[var(--safe-top)]`,
+`scroll-mt-[calc(… + var(--safe-top))]`), never a raw `top-0` — the All tab's armed Sort-into bar sat
+under the clock that way (2026-11-05).
 
 **Text fields are 16px or larger.** iOS Safari zooms the page into any `input`, `textarea` or `select`
 under 16px the moment it's focused, and stays zoomed. So no `text-sm`/`text-xs` on a field (`Field`

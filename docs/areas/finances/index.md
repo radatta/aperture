@@ -24,7 +24,9 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   Tapping a row that already has the armed bucket sets it back to Unsorted. Only rows the Sort tab could
   sort take paint (`view.sortable`, minus refunds riding a charge); the rest go inert (`aria-disabled`)
   while armed. No rules from here — **Always** stays a Sort-tab thing. Esc, **Done**, or the armed key
-  again stops it.
+  again stops it. Armed, the bar sticks at the top of the list — below the status-bar inset in the
+  installed PWA (`--safe-top`), and a focused row keeps a scroll margin of the bar's height plus that
+  inset, so J/K and the sort queue's focus returns never land a row under either.
 - **Painted rows stay put** until you stop or change the Show chip or search, so the list never moves
   under your finger (a painted row may no longer match the chip). Each row saves through its own
   per-transaction queue; the refetch waits for the last row's save (`otherEditsInFlight`), so a quick run
