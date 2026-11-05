@@ -21,7 +21,13 @@ describe('ApertureDevGuardStack (the dev account half of the kill switch)', () =
     const alarms = of('AWS::CloudWatch::Alarm');
     expect(alarms).toHaveLength(5);
     expect(alarms.map((a) => a.Period)).toEqual([60, 3600, 10800, 60, 60]);
-    expect(alarms.map((a) => a.Threshold)).toEqual([600_000, 600_000, 1_800_000, 3_000, 100 * 1024 * 1024]);
+    expect(alarms.map((a) => a.Threshold)).toEqual([
+      600_000,
+      600_000,
+      1_800_000,
+      3_000,
+      100 * 1024 * 1024,
+    ]);
     expect(alarms.map((a) => a.AlarmName)).toEqual(KILL_ALARMS.map((a) => a.name));
     // The three-hour alarm's hourly rate never exceeds the hourly alarm's — raised past it, it would be dead weight.
     const [, hour, threeH] = alarms as { Threshold: number }[];
