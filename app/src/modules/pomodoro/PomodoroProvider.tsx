@@ -84,19 +84,22 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     () =>
       sessions.map((session) => {
         const paused = pausedIds.has(session.id);
+        // Until the settings load the target is only the default: never Done on it (a longer real block
+        // would stop beating, and its stop would be capped short), and the count isn't held at it.
+        const known = settings !== undefined;
         const target = targetFor(session);
         const remaining = remainingSec(session, target, paused, now);
         return {
           session,
           paused,
           remaining,
-          done: remaining <= 0,
-          activeSec: workedSec(session, target, paused, now),
+          done: known && remaining <= 0,
+          activeSec: workedSec(session, known ? target : Infinity, paused, now),
           error: errors[session.id] ?? null,
           syncFailed: (missed[session.id] ?? 0) >= MISSED_BEATS_WARN,
         };
       }),
-    [sessions, pausedIds, now, targetFor, errors, missed],
+    [sessions, pausedIds, now, targetFor, settings, errors, missed],
   );
 
   // Adopt sessions left running: fresh ones run live, long-silent ones go to the stale prompt.
@@ -149,17 +152,17 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Keep a live snapshot for the heartbeat loop so the interval itself stays stable (no reset per beat).
-  const beatRef = useRef({ sessions, pausedIds, targetFor, timers });
-  beatRef.current = { sessions, pausedIds, targetFor, timers };
+  const beatRef = useRef({ sessions, pausedIds, targetFor, timers, settings });
+  beatRef.current = { sessions, pausedIds, targetFor, timers, settings };
 
   // One heartbeat loop beats every timer that's genuinely running (not paused, not done).
   useEffect(() => {
     const id = setInterval(() => {
-      const { sessions: live, pausedIds: paused, targetFor: tf } = beatRef.current;
+      const { sessions: live, pausedIds: paused, targetFor: tf, settings: known } = beatRef.current;
       const t = Date.now();
       for (const s of live) {
         if (paused.has(s.id)) continue;
-        if (remainingSec(s, tf(s), false, t) <= 0) continue; // done → frozen
+        if (known && remainingSec(s, tf(s), false, t) <= 0) continue; // done → frozen
         api.heartbeatSession(s.id).then(
           (next) => {
             upsert(next);
@@ -265,21 +268,27 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   // Give a done timer one more block: the server credits the block's last stretch up to its target (the
   // same cap as a stop, so the wait isn't credited and a locked phone's stretch isn't lost), raises the
   // target on the row and restarts the clock; here, the chime latch clears.
+  const extending = useRef(new Set<string>()); // a second tap before the answer must not add a second block
   const extend = useCallback(
     (id: string) => {
+      if (extending.current.has(id)) return;
+      extending.current.add(id);
       clear(id);
       const { timers: live, targetFor: tf } = beatRef.current;
       const timer = live.find((t) => t.session.id === id);
       const capMin = timer ? stopCapMin(timer, tf(timer.session)) : undefined;
-      api.extendSession(id, capMin === undefined ? undefined : { capMin }).then(
-        (s) => {
-          setMissed((m) => without(m, id));
-          upsert(s);
-          setChimedIds((c) => withDeleted(c, id));
-          setPausedIds((p) => withDeleted(p, id));
-        },
-        () => fail(id, 'Couldn’t extend — try again.'),
-      );
+      api
+        .extendSession(id, capMin === undefined ? undefined : { capMin })
+        .then(
+          (s) => {
+            setMissed((m) => without(m, id));
+            upsert(s);
+            setChimedIds((c) => withDeleted(c, id));
+            setPausedIds((p) => withDeleted(p, id));
+          },
+          () => fail(id, 'Couldn’t extend — try again.'),
+        )
+        .finally(() => extending.current.delete(id));
     },
     [api, upsert, clear, fail],
   );

@@ -1,8 +1,10 @@
 // A task finished while its focus timer runs keeps the actual that was typed (01M4959BWYBF4KAAQ01ZZZEW4P):
 // Mark done and a done split stop this task's timer first, and the server adds a closing session's minutes
 // only to a task still open (accruesTime), so MCP's complete_task under a phone timer can't be double-counted
-// either. Titles use `devcheck-tc <nonce>` — the parts scenarios sweep `devcheck <nonce>`. One timer runs at a
-// time after the first step, so the bar's bare Stop is this run's. The capped-heartbeat task adds its rows here.
+// either. A block left on Done credits its length, not the wait, whether it stops or goes Again. Titles use
+// `devcheck-tc <nonce>` — the parts scenarios sweep `devcheck <nonce>` — and no task's word sits inside another's,
+// since the search matches substrings. A step with several timers scopes to the row (timerRow); elsewhere one
+// runs at a time, so the bar's bare Stop is this run's.
 import { DEV_WORK_MIN, type DevSession } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { clearTimers, isCompleted, sessionsAround } from './failed-reads';
@@ -73,11 +75,26 @@ const stopButton = (ctx: Ctx) => ctx.page.getByRole('button', { name: 'Stop', ex
 const completedAround = async (ctx: Ctx) => (await sessionsAround(ctx)).filter(isCompleted);
 // The one session a Stop just completed: new since `before`, newest first.
 async function justStopped(ctx: Ctx, before: Set<string>): Promise<DevSession> {
-  const mine = (await completedAround(ctx))
-    .filter((x) => !before.has(x.id))
-    .sort((a, b) => b.endedAt! - a.endedAt!)[0];
-  if (!mine) throw new Error('the stopped timer is not among the completed sessions');
-  return mine;
+  // Polled: the running row goes first, and the list reads lag the completed row's write.
+  for (let i = 0; i < 40; i++) {
+    const mine = (await completedAround(ctx))
+      .filter((x) => !before.has(x.id))
+      .sort((a, b) => b.endedAt! - a.endedAt!)[0];
+    if (mine) return mine;
+    await wait(250);
+  }
+  throw new Error('the stopped timer is not among the completed sessions');
+}
+
+// The task's running row once it has reached `blocks` (a list read, so it may lag the write just made).
+async function runningOn(ctx: Ctx, what: string, blocks: number): Promise<DevSession> {
+  const { id } = await mine(ctx, what);
+  for (let i = 0; i < 40; i++) {
+    const row = (await ctx.api.reads.listRunningSessions()).find((x) => x.taskId === id);
+    if (row?.blocks === blocks) return row;
+    await wait(250);
+  }
+  throw new Error(`${what}: the running row never showed ${blocks} blocks`);
 }
 
 // A timer's own row in the bar: Stop's row, narrowed to the task's title.
@@ -164,6 +181,17 @@ export const timerCredit: Scenario = {
       what: 'A reload after Again keeps the timer running on its new block, not back on Done',
     },
     {
+      id: 'extend-fails',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'An Again that fails says so and stays on Done; Again once more gives one block, not two',
+      offDev: {
+        file: 'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
+        test: 'a failed Again stays on Done and says so; a double tap and a retry each give one block',
+        why: 'same path as stop-fails (proven on dev): the same client failure branch on a timer row (no retry, the row says so), injected the same way; what differs is the copy and the pending guard, which run entirely in the test',
+      },
+    },
+    {
       id: 'done-prefill',
       entry: 'ui',
       kind: 'edge',
@@ -205,7 +233,7 @@ export const timerCredit: Scenario = {
           ['fail', 15],
           ['cap', 15],
           ['ext', 15],
-          ['nb2', 15],
+          ['other', 15],
         ] as const)
           await ctx.api.writes.createTask({ title: name(ctx, what), estimateMin });
         await ctx.mcp.writes.createTask({ title: name(ctx, 'mcp'), estimateMin: 10 });
@@ -341,13 +369,15 @@ export const timerCredit: Scenario = {
       async run(ctx) {
         const [running] = await ctx.api.reads.listRunningSessions();
         if (!running) throw new Error('no running timer to send a bad cap to');
-        const refused = await ctx.api.writes
+        const refusal = await ctx.api.writes
           .stopSession(running.id, 'completed', { capMin: -1 })
           .then(
-            () => false,
-            () => true,
+            () => null,
+            (e: unknown) => String(e),
           );
-        if (!refused) throw new Error('the server took a negative capMin');
+        if (!refusal) throw new Error('the server took a negative capMin');
+        // Any other failure (an expired token, a throttle) would prove nothing.
+        if (!refusal.includes('capMin')) throw new Error(`refused for another reason: ${refusal}`);
         const after = await ctx.api.reads.listRunningSessions();
         if (!after.some((x) => x.id === running.id))
           throw new Error('the refused stop still ended the timer');
@@ -384,7 +414,7 @@ export const timerCredit: Scenario = {
           const again = ctx.page.getByRole('button', { name: 'Again', exact: true });
           await again.nth(1).waitFor({ timeout: 90_000 }); // both blocks reached Done
           const doneAt = Date.now();
-          await startAndFocus(ctx, 'nb2');
+          await startAndFocus(ctx, 'other');
           const nbStartedAt = Date.now();
           await wait(Math.max(0, 15_000 - (Date.now() - doneAt))); // sit on Done 15 s in all
           await ctx.shot('done-held-and-neighbour');
@@ -394,6 +424,10 @@ export const timerCredit: Scenario = {
           const pause = () =>
             timerRow(ctx, 'ext').getByRole('button', { name: 'Pause', exact: true });
           await pause().waitFor();
+          const again1 = await runningOn(ctx, 'ext', 2); // on the row, its first block banked to its length
+          const sinceAgain = (Date.now() - extendedAt) / 60_000;
+          if (again1.activeMinutes < 0.98 || again1.activeMinutes > 1 + sinceAgain + 0.02)
+            throw new Error(`Again banked ${again1.activeMinutes} min, not the block's 1`);
 
           const capped = await stopTimer(ctx, 'cap', 2);
           if (capped.activeMinutes > 1.05 || capped.activeMinutes < 0.9)
@@ -402,6 +436,7 @@ export const timerCredit: Scenario = {
           await wait(3_000); // the new block counts
           await ctx.page.reload();
           await pause().waitFor({ timeout: 15_000 }); // still its new block, not back on Done
+          await runningOn(ctx, 'ext', 2);
           await ctx.shot('again-after-reload');
           const extended = await stopTimer(ctx, 'ext', 1);
           const newRun = (Date.now() - extendedAt) / 60_000;
@@ -412,7 +447,7 @@ export const timerCredit: Scenario = {
             );
 
           // The neighbour ran on: its stop credits its whole run, no cap.
-          const nb = await stopTimer(ctx, 'nb2', 0);
+          const nb = await stopTimer(ctx, 'other', 0);
           const ran = (Date.now() - nbStartedAt) / 60_000;
           if (nb.activeMinutes < ran - 0.1 || nb.activeMinutes > ran + 0.05)
             throw new Error(

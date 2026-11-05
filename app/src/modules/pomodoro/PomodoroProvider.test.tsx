@@ -16,6 +16,18 @@ async function startFocus(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole('button', { name: 'Pause' });
 }
 
+function recordStops(api: ApiClient) {
+  const calls: string[] = [];
+  const resume = api.resumeSession.bind(api);
+  const stopS = api.stopSession.bind(api);
+  api.resumeSession = (id) => (calls.push('resume'), resume(id));
+  api.stopSession = (id, st, opts) => (
+    calls.push(opts?.capMin === undefined ? 'stop' : `stop:${opts.capMin}`),
+    stopS(id, st, opts)
+  );
+  return calls;
+}
+
 describe('PomodoroProvider: failed calls never look like success', () => {
   it('a failed adopt-load shows an error row, never an empty dock', async () => {
     const api = stub();
@@ -151,6 +163,64 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await waitFor(() => expect(calls).toEqual(['extend:0.25', 'beat'])); // the new block counts
   });
 
+  it('a failed Again stays on Done and says so; a double tap and a retry each give one block', async () => {
+    const user = userEvent.setup();
+    const api: ApiClient = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    api.listRunningSessions = async () => [
+      { ...s0, activeMinutes: 25, lastHeartbeatAt: Date.now() - 30_000 },
+    ];
+    const real = api.extendSession.bind(api);
+    api.extendSession = boom('extendSession');
+    renderApp({ api, path: '/settings' });
+    await screen.findByText('Done');
+    await user.click(screen.getByRole('button', { name: 'Again' }));
+    await screen.findByText('Couldn’t extend — try again.');
+    expect(screen.getByText('Done')).toBeTruthy();
+
+    let calls = 0;
+    let answer = () => {};
+    api.extendSession = async (id, opts) => {
+      calls += 1;
+      await new Promise<void>((r) => (answer = r));
+      return real(id, opts);
+    };
+    const again = screen.getByRole('button', { name: 'Again' });
+    await user.click(again);
+    await user.click(again); // the second tap, before the answer
+    expect(calls).toBe(1);
+    answer();
+    await screen.findByRole('button', { name: 'Pause' });
+  });
+
+  it('until the settings load a timer past the default target is not Done, and its stop is uncapped', async () => {
+    const user = userEvent.setup();
+    const api: ApiClient = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    api.getSettings = () => new Promise(() => {}); // a 50-minute block, for all this page knows
+    api.listRunningSessions = async () => [
+      { ...s0, activeMinutes: 30, lastHeartbeatAt: Date.now() - 10_000 },
+    ];
+    const calls = recordStops(api);
+    renderApp({ api, path: '/tasks' });
+    const stop = await screen.findByRole('button', { name: 'Stop' });
+    expect(screen.queryByRole('button', { name: 'Again' })).toBeNull();
+    await user.click(stop);
+    await waitFor(() => expect(calls).toEqual(['stop']));
+  });
+
   it('a timer given another block stays on it across a reload: the target comes from the row', async () => {
     const api: ApiClient = stub();
     const s0 = await api.startSession({
@@ -199,18 +269,6 @@ describe('PomodoroProvider: failed calls never look like success', () => {
   });
 
   // The calls a stop makes, with the cap it sent: 'stop' uncapped, 'stop:0' for a paused timer, and so on.
-  function recordStops(api: ApiClient) {
-    const calls: string[] = [];
-    const resume = api.resumeSession.bind(api);
-    const stopS = api.stopSession.bind(api);
-    api.resumeSession = (id) => (calls.push('resume'), resume(id));
-    api.stopSession = (id, st, opts) => (
-      calls.push(opts?.capMin === undefined ? 'stop' : `stop:${opts.capMin}`),
-      stopS(id, st, opts)
-    );
-    return calls;
-  }
-
   it('stopping a paused timer sends capMin 0 and no resume first, so the pause is never credited', async () => {
     const user = userEvent.setup();
     const api = stub();
