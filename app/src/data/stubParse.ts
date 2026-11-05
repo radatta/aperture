@@ -66,7 +66,10 @@ export function heuristicParse(
     if (due[2] !== undefined || due[5] !== undefined) dueTime = clockFor(due, 2);
     rest = rest.replace(due[0], ' ');
   } else {
-    const clock = rest.match(new RegExp(String.raw`\b(?:at\s+)?(?:${CLOCK})\b`, 'i'));
+    // A bare clock, with or without a day word's "due"/"by" in front: "call due 9am" is "call" at 9.
+    const clock = rest.match(
+      new RegExp(String.raw`\b(?:(?:due|by)\s+)?(?:at\s+)?(?:${CLOCK})\b`, 'i'),
+    );
     if (clock && (clock[3] !== undefined || clock[4] !== undefined)) {
       dueTime = clockFor(clock, 1);
       rest = rest.replace(clock[0], ' ');

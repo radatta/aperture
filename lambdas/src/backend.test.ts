@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryDoc } from './ddb/DocClient';
+import { InMemoryDoc, type Item } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites, noopWrites } from './ddb/writes';
 import { sk } from './ddb/keys';
@@ -522,7 +522,7 @@ describe('backend read-then-write under lagging reads', () => {
     };
     const stored = async (id: string) =>
       toEntity<Task>((await doc.get('u#local', sk.task(id), { consistent: true }))!);
-    return { backend, snapshot, stored };
+    return { backend, snapshot, stored, doc };
   };
 
   it('a due set straight after a rename keeps the new title', async () => {
@@ -571,6 +571,138 @@ describe('backend read-then-write under lagging reads', () => {
     lag();
     await backend.deleteCategory(cat.id, to.id);
     expect(await stored(t.id)).toMatchObject({ title: 'new', categoryId: to.id });
+  });
+
+  // The other written-back rows — plans, the day row, categories, settings, stories, habits and their
+  // checks — the same way: a plain get (or list query) of the key keeps showing `snapshot`.
+  const lagKey = (doc: InMemoryDoc, key: string, snapshot: Item | null) => {
+    doc.staleNextGets('u#local', key, snapshot, 20);
+    doc.staleNextQueries('u#local', key, snapshot, 20);
+  };
+  const DAY = '2026-08-04';
+
+  it('a second reorder straight after the first leaves one live plan row', async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const plan = await backend.upsertPlan({ taskId: t.id, day: DAY, plannedMinutes: 30, order: 0 });
+    const at = (order: number) => ({ ...plan, order });
+    const first = await doc.get('u#local', sk.plan(DAY, 0, plan.id));
+    await backend.upsertPlan(at(1));
+    lagKey(doc, sk.plan(DAY, 0, plan.id), first); // the moved-from row still shows…
+    lagKey(doc, sk.plan(DAY, 1, plan.id), null); // …and the moved-to row doesn't yet
+    await backend.upsertPlan(at(2));
+    const rows = (await doc.query('u#local', sk.planPrefix(DAY), { consistent: true })).filter(
+      (r) => r.id === plan.id,
+    );
+    expect(rows.map((r) => r.SK)).toEqual([sk.plan(DAY, 2, plan.id)]);
+  });
+
+  it('a plan removed straight after a reorder is gone, not left at its new spot', async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const plan = await backend.upsertPlan({ taskId: t.id, day: DAY, plannedMinutes: 30, order: 0 });
+    const first = await doc.get('u#local', sk.plan(DAY, 0, plan.id));
+    await backend.upsertPlan({ ...plan, order: 1 });
+    lagKey(doc, sk.plan(DAY, 0, plan.id), first);
+    lagKey(doc, sk.plan(DAY, 1, plan.id), null);
+    await backend.removePlan(plan.id);
+    const live = (await doc.query('u#local', sk.planPrefix(DAY), { consistent: true })).filter(
+      (r) => r.id === plan.id && r.deletedAt === null,
+    );
+    expect(live).toEqual([]);
+  });
+
+  it('an intent typed straight after a capacity keeps both', async () => {
+    const { backend, doc } = setup();
+    await backend.getDay(DAY);
+    const before = await doc.get('u#local', sk.day(DAY));
+    await backend.setDayCapacity(DAY, 5);
+    lagKey(doc, sk.day(DAY), before);
+    const saved = await backend.setDayIntent(DAY, 'ship it');
+    expect(saved).toMatchObject({ capacityHours: 5, intent: 'ship it' });
+  });
+
+  it('a reflection straight after an intent keeps the intent', async () => {
+    const { backend, doc } = setup();
+    await backend.getDay(DAY);
+    const before = await doc.get('u#local', sk.day(DAY));
+    await backend.setDayIntent(DAY, 'ship it');
+    lagKey(doc, sk.day(DAY), before);
+    const saved = await backend.setDayReflection(DAY, 'How did it go?', 'fine');
+    expect(saved).toMatchObject({ intent: 'ship it', reflectionText: 'fine' });
+  });
+
+  it('a work flip straight after a category rename keeps the name', async () => {
+    const { backend, doc } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: false });
+    const before = await doc.get('u#local', sk.cat(cat.id));
+    await backend.upsertCategory({ ...cat, label: 'New' });
+    lagKey(doc, sk.cat(cat.id), before);
+    const { category } = await backend.setCategoryWork(cat.id, true, false);
+    expect(category).toMatchObject({ label: 'New', isWork: true });
+    lagKey(doc, sk.cat(cat.id), before);
+    await backend.upsertCategory({ ...cat, label: 'New', isWork: true, order: 3 });
+    expect(await doc.get('u#local', sk.cat(cat.id), { consistent: true })).toMatchObject({
+      label: 'New',
+      isWork: true,
+      order: 3,
+    });
+  });
+
+  it('deleting a category straight after a rename tombstones the renamed row', async () => {
+    const { backend, doc } = setup();
+    const cat = await backend.upsertCategory({ label: 'Old', isWork: false });
+    const before = await doc.get('u#local', sk.cat(cat.id));
+    await backend.upsertCategory({ ...cat, label: 'New' });
+    lagKey(doc, sk.cat(cat.id), before);
+    await backend.deleteCategory(cat.id, null);
+    const row = await doc.get('u#local', sk.cat(cat.id), { consistent: true });
+    expect(row).toMatchObject({ label: 'New' });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('a settings patch straight after another keeps both', async () => {
+    const { backend, doc } = setup();
+    await backend.getSettings();
+    const before = await doc.get('u#local', sk.settings());
+    await backend.updateSettings({ dayStartHour: 5 });
+    lagKey(doc, sk.settings(), before);
+    const saved = await backend.updateSettings({ pomodoroWorkMin: 50 });
+    expect(saved).toMatchObject({ dayStartHour: 5, pomodoroWorkMin: 50 });
+  });
+
+  it('a story patch straight after a rename keeps the title; a delete tombstones the renamed row', async () => {
+    const { backend, doc } = setup();
+    const story = await backend.createStory({ title: 'old' });
+    const before = await doc.get('u#local', sk.story(story.id));
+    await backend.updateStory(story.id, { title: 'new' });
+    lagKey(doc, sk.story(story.id), before);
+    expect(await backend.updateStory(story.id, { situation: 'S' })).toMatchObject({
+      title: 'new',
+      situation: 'S',
+    });
+    lagKey(doc, sk.story(story.id), before);
+    await backend.deleteStory(story.id);
+    const row = await doc.get('u#local', sk.story(story.id), { consistent: true });
+    expect(row).toMatchObject({ title: 'new', situation: 'S' });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('a habit unchecked straight after a check leaves no check, and the reverse re-checks it', async () => {
+    const { backend, doc } = setup();
+    const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
+    const key = sk.hcheck(DAY, h.id);
+    await backend.checkHabit(h.id, DAY);
+    lagKey(doc, key, null); // the check isn't visible to a plain read yet
+    await backend.uncheckHabit(h.id, DAY);
+    expect(await doc.get('u#local', key, { consistent: true })).toBeNull();
+    const checked = await backend.checkHabit(h.id, DAY);
+    const gone = await doc.get('u#local', key);
+    await backend.uncheckHabit(h.id, DAY);
+    lagKey(doc, key, gone); // the uncheck isn't visible yet: a plain read still shows the check
+    const again = await backend.checkHabit(h.id, DAY);
+    expect(again.id).not.toBe(checked.id); // a fresh check, not the stale one handed back
+    expect(await doc.get('u#local', key, { consistent: true })).toMatchObject({ id: again.id });
   });
 });
 

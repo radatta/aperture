@@ -56,6 +56,9 @@ describe('heuristicParse', () => {
       dueTime: '09:15',
     });
     expect(parse('call 12am').dueTime).toBe('00:00');
+    // "due"/"by" with no day word: the clock is the due time and the word leaves the title.
+    expect(parse('call due 9am')).toEqual({ ...blank, title: 'call', dueTime: '09:00' });
+    expect(parse('submit by 4:30pm')).toEqual({ ...blank, title: 'submit', dueTime: '16:30' });
   });
 
   it('a plain line is just a title', () => {

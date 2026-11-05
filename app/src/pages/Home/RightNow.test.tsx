@@ -152,6 +152,29 @@ describe('Right now card', () => {
     expect(screen.getByText(/^due 11:59pm/)).toBeTruthy();
   });
 
+  it('a timed part’s second line reads parent, then ends, then due — the parent name the one that gives way', async () => {
+    const api = stub();
+    const p = await api.createTask({ title: 'Lab', dueDay: TODAY, dueTime: '23:59' });
+    const [part] = await api.createTasks([{ title: 'analysis', parentId: p.id }]);
+    await api.setTaskDue(part!.id, { dueDay: TODAY, dueTime: '23:57' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    const of = await screen.findByText('of Lab');
+    const ends = screen.getByText('ends 11:57pm');
+    const due = screen.getByText(/^due 11:59pm/);
+    // One line, in that order: each piece follows the one before it as a sibling.
+    expect(of.parentElement).toBe(ends.parentElement);
+    expect(ends.parentElement).toBe(due.parentElement);
+    const follows = (a: Element, b: Element) =>
+      !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(of, ends) && follows(ends, due)).toBe(true);
+    // The parent's name is the flexible piece; the tags beside it never shrink.
+    expect(of.className).toMatch(/truncate/);
+    expect(ends.className).toMatch(/shrink-0/);
+    expect(due.className).toMatch(/shrink-0/);
+  });
+
   it('a deadline in tomorrow’s small hours is tonight’s: “by 12:30am”', async () => {
     const api = stub();
     await api.createTask({ title: 'OA', dueDay: addDays(TODAY, 1), dueTime: '00:30' });

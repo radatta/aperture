@@ -369,7 +369,8 @@ export class BackendClient implements ApiClient {
     if (plain.gcalEventId)
       await this.syncCalendar(plain, plain, true, undefined, { parent: false });
   }
-  private async ensureSettings(): Promise<Settings> {
+  // `consistent` for a read whose copy is written back (updateSettings); display reads stay eventual.
+  private async ensureSettings(opts?: { consistent?: boolean }): Promise<Settings> {
     const def: Settings = {
       ...this.base(),
       dayStartHour: 4,
@@ -387,7 +388,7 @@ export class BackendClient implements ApiClient {
       fluxRollId: null,
       fluxDisclaimerAckAt: null,
     };
-    const row = await this.repo.getSettingsRow();
+    const row = await this.repo.getSettingsRow(opts);
     // Backfill defaults over an existing row: fields added later (the calendar set) read as their
     // default, not undefined, on settings written before those fields existed.
     if (row) return { ...def, ...row };
@@ -651,8 +652,9 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Story bank ---
+  // Consistent: its one caller writes the copy back.
   private async mustStory(id: string): Promise<Story> {
-    const s = await this.repo.getStory(id);
+    const s = await this.repo.getStory(id, { consistent: true });
     if (!s) throw new Error(`Not found: ${id}`);
     return s;
   }
@@ -676,7 +678,7 @@ export class BackendClient implements ApiClient {
     return this.repo.putStory({ ...(await this.mustStory(id)), ...patch, updatedAt: this.now() });
   }
   async deleteStory(id: string): Promise<void> {
-    const existing = await this.repo.getStory(id);
+    const existing = await this.repo.getStory(id, { consistent: true });
     if (existing)
       await this.repo.putStory({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }
@@ -1147,14 +1149,16 @@ export class BackendClient implements ApiClient {
       order: input.order,
     };
     if (input.id) {
-      const existing = await this.repo.findPlan(input.id);
+      // Consistent: a second reorder straight after the first must move the row the first one left,
+      // not resurrect the one it dropped.
+      const existing = await this.repo.findPlan(input.id, { consistent: true });
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putPlan({ ...existing, ...fields, updatedAt: this.now() }, existing);
     }
     return this.repo.putPlan({ ...this.base(), ...fields });
   }
   async removePlan(id: string): Promise<void> {
-    const existing = await this.repo.findPlan(id);
+    const existing = await this.repo.findPlan(id, { consistent: true });
     if (existing)
       await this.repo.putPlan(
         { ...existing, deletedAt: this.now(), updatedAt: this.now() },
@@ -1281,19 +1285,20 @@ export class BackendClient implements ApiClient {
       active: input.active ?? true,
     };
     if (input.id) {
-      const existing = await this.repo.getHabit(input.id);
+      const existing = await this.repo.getHabit(input.id, { consistent: true });
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putHabit({ ...existing, ...fields, updatedAt: this.now() });
     }
     return this.repo.putHabit({ ...this.base(), ...fields });
   }
+  // Consistent both ways: a check then an uncheck at once must leave none, and the reverse one.
   async checkHabit(habitId: string, date: string): Promise<HabitCheck> {
-    const existing = await this.repo.getCheck(date, habitId);
+    const existing = await this.repo.getCheck(date, habitId, { consistent: true });
     if (existing) return existing;
     return this.repo.putCheck({ ...this.base(), habitId, date }, date, habitId);
   }
   async uncheckHabit(habitId: string, date: string): Promise<void> {
-    const existing = await this.repo.getCheck(date, habitId);
+    const existing = await this.repo.getCheck(date, habitId, { consistent: true });
     if (existing) await this.repo.deleteCheck(date, habitId);
   }
   async listHabitChecks(range: DateRange): Promise<HabitCheck[]> {
@@ -1361,10 +1366,12 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Day (lazy recurrence + stale sweep on read) ---
-  async getDay(day: string): Promise<Day> {
+  // `consistent` for the setters below, whose copy is written back: a capacity then an intent typed
+  // straight after must both land. The app's load read stays eventual.
+  async getDay(day: string, opts?: { consistent?: boolean }): Promise<Day> {
     await this.materializeDueSeries(day);
     await this.sweepStalePlanned(day);
-    const existing = await this.repo.getDayRow(day);
+    const existing = await this.repo.getDayRow(day, opts);
     if (existing) return existing;
     return this.repo.putDay({
       ...this.base(),
@@ -1445,15 +1452,15 @@ export class BackendClient implements ApiClient {
     }
   }
   async setDayCapacity(day: string, capacityHours: number | null): Promise<Day> {
-    const d = await this.getDay(day);
+    const d = await this.getDay(day, { consistent: true });
     return this.repo.putDay({ ...d, capacityHours, updatedAt: this.now() });
   }
   async setDayIntent(day: string, intent: string): Promise<Day> {
-    const d = await this.getDay(day);
+    const d = await this.getDay(day, { consistent: true });
     return this.repo.putDay({ ...d, intent, updatedAt: this.now() });
   }
   async setDayReflection(day: string, prompt: string, text: string): Promise<Day> {
-    const d = await this.getDay(day);
+    const d = await this.getDay(day, { consistent: true });
     return this.repo.putDay({
       ...d,
       reflectionPrompt: prompt,
@@ -1468,7 +1475,8 @@ export class BackendClient implements ApiClient {
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.id) {
-      const existing = await this.repo.getCategory(input.id);
+      // Consistent: a work flip straight after a rename keeps the rename.
+      const existing = await this.repo.getCategory(input.id, { consistent: true });
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putCategory({
         ...existing,
@@ -1492,7 +1500,7 @@ export class BackendClient implements ApiClient {
     isWork: boolean,
     backfillPast: boolean,
   ): Promise<{ category: Category; backfilled: number }> {
-    const existing = await this.repo.getCategory(id);
+    const existing = await this.repo.getCategory(id, { consistent: true });
     if (!existing) throw new Error(`Not found: ${id}`);
     const category = await this.repo.putCategory({ ...existing, isWork, updatedAt: this.now() });
     let backfilled = 0;
@@ -1524,7 +1532,7 @@ export class BackendClient implements ApiClient {
       await this.repo.putSeries({ ...s, categoryId: reassignToId, updatedAt: this.now() });
     for (const r of rolls)
       await this.repo.putRoll({ ...r, categoryId: reassignToId, updatedAt: this.now() });
-    const cat = await this.repo.getCategory(id);
+    const cat = await this.repo.getCategory(id, { consistent: true });
     if (cat) await this.repo.putCategory({ ...cat, deletedAt: this.now(), updatedAt: this.now() });
   }
 
@@ -1729,7 +1737,7 @@ export class BackendClient implements ApiClient {
     return this.ensureSettings();
   }
   async updateSettings(patch: SettingsPatch): Promise<Settings> {
-    const current = await this.ensureSettings();
+    const current = await this.ensureSettings({ consistent: true });
     return this.repo.putSettings({ ...current, ...patch, updatedAt: this.now() });
   }
 

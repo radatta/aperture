@@ -56,7 +56,10 @@ function useUrgency(t: Task): DueUrgency {
 // A part's category is its parent's, so on a phone it gives way to "of P2" — the title needs the room.
 function PartCategory({ task }: { task: Task }) {
   return (
-    <span className={cx('contents', task.parentId && 'max-sm:hidden')}>
+    <span
+      className={cx('contents', task.parentId && 'max-sm:hidden')}
+      data-phone-hidden={task.parentId ? '' : undefined}
+    >
       <CategoryTag categoryId={task.categoryId} />
     </span>
   );
@@ -64,7 +67,9 @@ function PartCategory({ task }: { task: Task }) {
 
 // A row's title, then its tags. On a phone a tag-heavy row's tags — a part's "of P2 · ends 3pm · due
 // Mon 5pm", a roll rep's category, roll and time — take a second line, so the title keeps the row;
-// elsewhere it's one line.
+// elsewhere it's one line. On that line a "·" sits before every piece after the first one shown (a
+// part's category is there but hidden — `data-phone-hidden` — so the dots skip it), and the parent's
+// name (PartOf) gives way before any tag does.
 function RowText({ task, title, children }: { task: Task; title: ReactNode; children: ReactNode }) {
   const part = !!task.parentId || !!task.rollId;
   return (
@@ -78,7 +83,8 @@ function RowText({ task, title, children }: { task: Task; title: ReactNode; chil
       <span
         className={cx(
           'contents',
-          part && 'max-sm:flex max-sm:max-w-full max-sm:items-center max-sm:gap-2',
+          part &&
+            "max-sm:flex max-sm:max-w-full max-sm:items-center max-sm:gap-2 max-sm:[&>:not([data-phone-hidden])~*]:before:mr-2 max-sm:[&>:not([data-phone-hidden])~*]:before:text-ink-subtle max-sm:[&>:not([data-phone-hidden])~*]:before:content-['·'_/_'']",
         )}
       >
         {children}
@@ -92,9 +98,10 @@ function PartOf({ task }: { task: Task }) {
   const { data: tasks = [] } = useAllTasks();
   const parent = parentOf(tasks, task);
   if (!parent) return null;
-  // Capped beside the title; on a phone it sits on the line under it (RowText).
+  // Capped beside the title; on a phone it sits on the line under it (RowText), where it's the piece
+  // that shrinks — the tags beside it never do.
   return (
-    <Text size="xs" tone="muted" className="min-w-0 truncate sm:max-w-[35%]">
+    <Text size="xs" tone="muted" className="min-w-0 truncate max-sm:flex-1 sm:max-w-[35%]">
       of {parent.title}
     </Text>
   );

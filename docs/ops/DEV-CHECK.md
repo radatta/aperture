@@ -123,6 +123,10 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   through the History tab, which can't tell one set from another. Its `day` is the app's day (the test user's
   `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's one
   non-ledger write: a test user who never opened Flux has the disclaimer accepted (a Settings field, logged).
+- **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
+  deleted with `deleteCategory(id, null)` after the run's tasks (cleanup runs newest-first). The same scenario sets the
+  test user's own day row (capacity, intent) through the UI and puts the prior values back in the step's `finally` —
+  a singleton, nothing to ledger.
 - **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
   A place is recorded from the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's
   request has no `id` — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is

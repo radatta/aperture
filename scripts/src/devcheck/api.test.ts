@@ -4,6 +4,7 @@ import {
   FINANCE_LINK_VIA,
   FINANCE_RULE_VIA,
   PLACE_TOKEN_VIA,
+  CATEGORY_VIA,
   PLACE_VIA,
   UI_PLACE_VIA,
   createApiClient,
@@ -52,6 +53,7 @@ describe('createApiClient', () => {
     expect(Object.keys(api.reads).sort()).toEqual([
       'getAttachmentDownloadUrl',
       'getCalibration',
+      'getDay',
       'getFinanceTransaction',
       'getFluxSet',
       'getPlaceTokenStatus',
@@ -65,6 +67,7 @@ describe('createApiClient', () => {
       'listFluxSets',
       'listPlaceTasks',
       'listPlaces',
+      'listPlansForDay',
       'listRunningSessions',
       'listSessionsForDay',
       'listTasks',
@@ -75,6 +78,7 @@ describe('createApiClient', () => {
       'createAttachment',
       'createTask',
       'deleteAttachment',
+      'deleteCategory',
       'deleteFinanceRule',
       'deleteFluxSet',
       'deletePlace',
@@ -85,11 +89,15 @@ describe('createApiClient', () => {
       'recordPlaceTokenMint',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'setDayCapacity',
+      'setDayIntent',
       'setTaskActual',
       'unlinkFinanceRefund',
       'unsetFinanceBucket',
+      'upsertCategory',
       'upsertFinanceRule',
       'upsertPlace',
+      'upsertPlan',
     ]);
   });
 
@@ -291,6 +299,7 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'finance-bucket:r:tx1', via: FINANCE_BUCKET_VIA },
         { run: 'r', op: 'created' as const, id: 'finance-link:r:tx2', via: FINANCE_LINK_VIA },
         { run: 'r', op: 'created' as const, id: 'R', via: FINANCE_RULE_VIA },
+        { run: 'r', op: 'created' as const, id: 'C', via: CATEGORY_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -302,6 +311,7 @@ describe('createApiClient', () => {
           'finance-bucket:r:tx1',
           'finance-link:r:tx2',
           'R',
+          'C',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -313,6 +323,7 @@ describe('createApiClient', () => {
         'financeBucket',
         'financeLink',
         'financeRule',
+        'category',
         'task',
       ]);
     });

@@ -77,8 +77,12 @@ export class Repo {
   private p(): string {
     return pk(this.userId);
   }
-  private async scanById(prefix: string, id: string): Promise<Item | null> {
-    const rows = await this.doc.query(this.p(), prefix);
+  private async scanById(
+    prefix: string,
+    id: string,
+    opts?: { consistent?: boolean },
+  ): Promise<Item | null> {
+    const rows = await this.doc.query(this.p(), prefix, opts);
     return rows.find((r) => r.id === id) ?? null;
   }
 
@@ -182,8 +186,10 @@ export class Repo {
       (await this.doc.query(this.p(), sk.planAllPrefix(), opts)).map((i) => toEntity<TaskPlan>(i)),
     );
   }
-  async findPlan(id: string): Promise<TaskPlan | null> {
-    const it = await this.scanById(sk.planAllPrefix(), id);
+  // `consistent` for a read whose copy is written back (upsertPlan, removePlan) — a second reorder must
+  // not resurrect the row the first one just moved.
+  async findPlan(id: string, opts?: { consistent?: boolean }): Promise<TaskPlan | null> {
+    const it = await this.scanById(sk.planAllPrefix(), id, opts);
     return it ? toEntity<TaskPlan>(it) : null;
   }
   async putPlan(p: TaskPlan, previous?: TaskPlan): Promise<TaskPlan> {
@@ -218,8 +224,8 @@ export class Repo {
   }
   // getTask-style (re-filter tombstones → null), so updateStory on a deleted row throws — parity with
   // the stub's `patch`, which refuses a tombstoned id.
-  async getStory(id: string): Promise<Story | null> {
-    const it = await this.doc.get(this.p(), sk.story(id));
+  async getStory(id: string, opts?: { consistent?: boolean }): Promise<Story | null> {
+    const it = await this.doc.get(this.p(), sk.story(id), opts);
     const s = it ? toEntity<Story>(it) : null;
     return s && s.deletedAt === null ? s : null;
   }
@@ -286,8 +292,11 @@ export class Repo {
       ),
     );
   }
-  async getRunningSession(id: string): Promise<PomodoroSession | null> {
-    const it = await this.doc.get(this.p(), sk.sessionRunning(id));
+  async getRunningSession(
+    id: string,
+    opts?: { consistent?: boolean },
+  ): Promise<PomodoroSession | null> {
+    const it = await this.doc.get(this.p(), sk.sessionRunning(id), opts);
     return it ? toEntity<PomodoroSession>(it) : null;
   }
   async putSession(s: PomodoroSession): Promise<PomodoroSession> {
@@ -304,8 +313,8 @@ export class Repo {
   async listHabits(): Promise<Habit[]> {
     return alive((await this.doc.query(this.p(), sk.habitPrefix())).map((i) => toEntity<Habit>(i)));
   }
-  async getHabit(id: string): Promise<Habit | null> {
-    const it = await this.doc.get(this.p(), sk.habit(id));
+  async getHabit(id: string, opts?: { consistent?: boolean }): Promise<Habit | null> {
+    const it = await this.doc.get(this.p(), sk.habit(id), opts);
     return it ? toEntity<Habit>(it) : null;
   }
   async putHabit(h: Habit): Promise<Habit> {
@@ -314,8 +323,12 @@ export class Repo {
   }
 
   // --- Habit checks (composite date+habit key → direct read/delete, no scan) ---
-  async getCheck(date: string, habitId: string): Promise<HabitCheck | null> {
-    const it = await this.doc.get(this.p(), sk.hcheck(date, habitId));
+  async getCheck(
+    date: string,
+    habitId: string,
+    opts?: { consistent?: boolean },
+  ): Promise<HabitCheck | null> {
+    const it = await this.doc.get(this.p(), sk.hcheck(date, habitId), opts);
     const c = it ? toEntity<HabitCheck>(it) : null;
     return c && c.deletedAt === null ? c : null;
   }
@@ -352,8 +365,8 @@ export class Repo {
   }
 
   // --- Day singleton ---
-  async getDayRow(date: string): Promise<Day | null> {
-    const it = await this.doc.get(this.p(), sk.day(date));
+  async getDayRow(date: string, opts?: { consistent?: boolean }): Promise<Day | null> {
+    const it = await this.doc.get(this.p(), sk.day(date), opts);
     return it ? toEntity<Day>(it) : null;
   }
   async putDay(d: Day): Promise<Day> {
@@ -370,8 +383,8 @@ export class Repo {
       (await this.doc.query(this.p(), sk.catPrefix())).map((i) => toEntity<Category>(i)),
     );
   }
-  async getCategory(id: string): Promise<Category | null> {
-    const it = await this.doc.get(this.p(), sk.cat(id));
+  async getCategory(id: string, opts?: { consistent?: boolean }): Promise<Category | null> {
+    const it = await this.doc.get(this.p(), sk.cat(id), opts);
     return it ? toEntity<Category>(it) : null;
   }
   async putCategory(c: Category): Promise<Category> {
@@ -635,8 +648,8 @@ export class Repo {
     );
   }
 
-  async getSettingsRow(): Promise<Settings | null> {
-    const it = await this.doc.get(this.p(), sk.settings());
+  async getSettingsRow(opts?: { consistent?: boolean }): Promise<Settings | null> {
+    const it = await this.doc.get(this.p(), sk.settings(), opts);
     return it ? toEntity<Settings>(it) : null;
   }
   async putSettings(s: Settings): Promise<Settings> {
