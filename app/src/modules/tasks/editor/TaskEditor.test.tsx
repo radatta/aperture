@@ -1027,6 +1027,120 @@ describe('TaskEditor', () => {
     expect(screen.getByLabelText('Category')).toBeTruthy(); // recategorizing a done task still matters
   });
 
+  describe('category suggestion', () => {
+    // Synthetic history: two categories, twelve tasks each, with their own vocabulary.
+    const GARDEN = [
+      'water the tomato beds',
+      'prune the rose hedge',
+      'spread mulch on the border',
+      'sow carrot seeds',
+      'stake the bean poles',
+      'weed the herb patch',
+      'repot the fern',
+      'trim the lawn edge',
+      'turn the compost heap',
+      'plant tulip bulbs',
+      'net the berry bushes',
+      'rake the fallen leaves',
+    ];
+    const KITCHEN = [
+      'descale the kettle',
+      'sharpen the chef knife',
+      'clean the oven racks',
+      'restock the pantry shelf',
+      'season the cast skillet',
+      'defrost the freezer drawer',
+      'wipe the range hood',
+      'sort the spice rack',
+      'replace the sink filter',
+      'scrub the cutting board',
+      'organise the baking tins',
+      'degrease the stove top',
+    ];
+    async function seeded() {
+      const client = api();
+      const garden = await client.upsertCategory({ label: 'Garden', isWork: false });
+      const kitchen = await client.upsertCategory({ label: 'Kitchen', isWork: false });
+      for (const title of GARDEN) await client.createTask({ title, categoryId: garden.id });
+      for (const title of KITCHEN) await client.createTask({ title, categoryId: kitchen.id });
+      return { client, garden, kitchen };
+    }
+    const chip = () => screen.queryByRole('button', { name: /^Use suggested category/ });
+
+    it('offers a confident category as a tap-only chip; tapping fills the select and Save persists it', async () => {
+      const { client, garden } = await seeded();
+      const t = await client.createTask({ title: 'mulch the tomato beds' });
+      const { user } = renderEditor(client, t);
+
+      const select = (await screen.findByLabelText('Category')) as HTMLSelectElement;
+      const suggested = await screen.findByRole('button', {
+        name: 'Use suggested category Garden',
+      });
+      expect(suggested.textContent).toBe('Garden?');
+      expect(select.value).toBe(''); // never pre-selected
+      expect(screen.getByRole('button', { name: 'Save' }).getAttribute('aria-disabled')).toBe(
+        'true',
+      );
+      expect((await client.getTask(t.id))?.categoryId).toBeNull();
+
+      await user.click(suggested);
+      expect(select.value).toBe(garden.id);
+      expect(chip()).toBeNull(); // gone once the field has a value
+      expect(screen.getByRole('button', { name: 'Save' }).getAttribute('aria-disabled')).toBe(
+        'false',
+      );
+      expect((await client.getTask(t.id))?.categoryId).toBeNull(); // the tap wrote nothing
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(async () => expect((await client.getTask(t.id))?.categoryId).toBe(garden.id));
+    });
+
+    it('no chip when the task is categorised, when nothing in its title is known, or on a part', async () => {
+      const { client, garden } = await seeded();
+      const filed = await client.createTask({
+        title: 'mulch the tomato beds',
+        categoryId: garden.id,
+      });
+      renderEditor(client, filed);
+      await screen.findByLabelText('Category');
+      expect(chip()).toBeNull();
+      cleanup();
+
+      const stranger = await client.createTask({ title: 'quarterly filing' });
+      renderEditor(client, stranger);
+      const select = (await screen.findByLabelText('Category')) as HTMLSelectElement;
+      // The neighbour is untouched: every category is still on offer (once the roster has loaded).
+      await waitFor(() =>
+        expect(Array.from(select.options).map((o) => o.textContent)).toEqual(
+          expect.arrayContaining(['Garden', 'Kitchen']),
+        ),
+      );
+      expect(chip()).toBeNull();
+      cleanup();
+
+      const parent = await client.createTask({ title: 'tend the plot', categoryId: garden.id });
+      const [part] = await client.createTasks([
+        { title: 'mulch the tomato beds', parentId: parent.id },
+      ]);
+      renderEditor(client, part!);
+      await screen.findByLabelText('Category');
+      expect(chip()).toBeNull();
+    });
+
+    it('follows the title as typed, and clears when the history is too thin', async () => {
+      const { client } = await seeded();
+      const t = await client.createTask({ title: 'quarterly filing' });
+      const { user } = renderEditor(client, t);
+      await screen.findByLabelText('Category');
+      expect(chip()).toBeNull();
+      await user.clear(screen.getByLabelText('Title'));
+      await user.type(screen.getByLabelText('Title'), 'descale the oven');
+      expect(
+        await screen.findByRole('button', { name: 'Use suggested category Kitchen' }),
+      ).toBeTruthy();
+    });
+  });
+
   it("keeps the task's own retired category as '(retired)' and hides other retired ones", async () => {
     const client = api();
     const hw = await client.upsertCategory({ label: 'Homework', isWork: true });

@@ -7,6 +7,7 @@ import { areas } from './areas';
 import { attachmentDelete } from './attachment-delete';
 import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
+import { categorySuggest } from './category-suggest';
 import { deadRows } from './dead-rows';
 import { dayGuards } from './day-guards';
 import { failedReads } from './failed-reads';
@@ -46,6 +47,7 @@ export const SCENARIOS: Scenario[] = [
   timerCredit,
   recurring,
   areas,
+  categorySuggest, // after areas: its 27 seeded tasks would push areas' Home picker past its cap of 30
   finance,
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others

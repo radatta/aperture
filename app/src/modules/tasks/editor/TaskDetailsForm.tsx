@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Ref } from 'react';
 import {
   canEditEstimate,
@@ -18,6 +18,7 @@ import { Text } from '../../../components/Text';
 import { Textarea } from '../../../components/Textarea';
 import { useCategoryOptions } from '../../../data/hooks/useCategories';
 import { usePlaceOptions } from '../../../data/hooks/usePlaces';
+import { useSuggestCategory } from '../../../data/hooks/useSuggestCategory';
 import {
   useSetCategory,
   useSetDue,
@@ -76,6 +77,7 @@ export function TaskDetailsForm({
   const placeName = (slug: string) =>
     placeOptions.places.find((p) => p.slug === slug)?.name ?? slug;
   const setReflection = useSetTaskReflection();
+  const suggest = useSuggestCategory();
 
   const isPart = !!task.parentId;
   const editEstimate = canEditEstimate(task) && !parts;
@@ -96,6 +98,16 @@ export function TaskDetailsForm({
   // and so does any other with one — except one in progress, whose Done form already holds it.
   const [reflection, setReflection_] = useState<string>(task.reflection ?? '');
   const [editingReflection, setEditingReflection] = useState(false);
+  // A confident guess at the category while the field is empty, from the title and notes as typed. A
+  // part takes its parent's category, so it never gets one. Tap-only: it fills the select, the form goes
+  // dirty, Save writes it like a manual pick — never pre-selected (PRODUCT §2: the enrichment pass).
+  const suggestion = useMemo(
+    () => (categoryId === '' && !isPart ? suggest({ id: task.id, title, notes }) : null),
+    [suggest, categoryId, isPart, task.id, title, notes],
+  );
+  const suggestedLabel = suggestion
+    ? categoryOptions.options.find((o) => o.value === suggestion.categoryId)?.label
+    : undefined;
   const showReflection =
     task.status === 'done' || (!!task.reflection && task.status !== 'in_progress');
   // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
@@ -324,15 +336,29 @@ export function TaskDetailsForm({
             )}
           </div>
         )}
-        <Select
-          label="Category"
-          placeholder="Uncategorized"
-          value={categoryId}
-          onChange={(e) => setCategoryId(e.target.value)}
-          options={categoryOptions.options}
-          disabled={categoryOptions.failed}
-          className="w-40"
-        />
+        <div className="flex items-end gap-2">
+          <Select
+            label="Category"
+            placeholder="Uncategorized"
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+            options={categoryOptions.options}
+            disabled={categoryOptions.failed}
+            className="w-40"
+          />
+          {suggestion && suggestedLabel && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCategoryId(suggestion.categoryId)}
+              aria-label={`Use suggested category ${suggestedLabel}`}
+              title="From your other tasks — tap to use"
+              className="border border-dashed border-line text-ink-muted"
+            >
+              {suggestedLabel}?
+            </Button>
+          )}
+        </div>
         {categoryOptions.failed && (
           <LoadError size="xs" onRetry={categoryOptions.retry}>
             Couldn’t load categories.

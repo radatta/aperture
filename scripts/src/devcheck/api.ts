@@ -18,6 +18,7 @@ export interface DevTask {
   title: string;
   estimateMin?: number | null;
   status?: string;
+  categoryId?: string | null; // the category-suggest scenario
   parentId?: string | null;
   place?: string | null; // a place slug — an errand (the places scenario)
   estimateLockedMin?: number | null;
@@ -52,6 +53,7 @@ export interface CreateSeriesInput {
 }
 
 export interface CreateTaskInput {
+  categoryId?: string | null; // the category-suggest scenario seeds categorised history
   title: string;
   estimateMin?: number | null;
   dueDay?: string | null;
