@@ -104,7 +104,10 @@ export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = fal
         steps.find((r) => r.scenario === sc.id && r.step === s.id) ?? { status: 'skipped' },
     );
     const ran = by.map((s, i) => ({ s, r: all[i]! })).filter((x) => x.r.status !== 'deferred');
-    const ownDeferred = ran.length < all.length && !ran.some((x) => x.s.entry === row.entry);
+    const ownDeferred =
+      ran.length < all.length &&
+      !ran.some((x) => x.s.entry === row.entry) &&
+      !ran.some((x) => x.r.status === 'fail'); // a failure still shows on its row
     if (all.length && (all.every((x) => x.status === 'deferred') || ownDeferred))
       return {
         ...base,

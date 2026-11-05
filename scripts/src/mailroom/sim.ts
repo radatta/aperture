@@ -72,6 +72,7 @@ export type IosOp =
   | { op: 'kill'; method: 'terminate' | 'switcher' | 'reboot' }
   | { op: 'nav'; tab: Tab }
   | ({ op: 'find'; label: string; as: string } & Where)
+  | ({ op: 'absent'; label: string } & Where) // passes only when that find would miss
   | ({ op: 'tap'; label: string; as?: string } & Where)
   | { op: 'expect'; signedIn: true }
   | { op: 'expect'; as: string; valueIs: string }
@@ -107,7 +108,8 @@ export interface SimRead {
   role: string;
   label: string;
   value?: string; // dropped while the sign-in form is up
-  id: string; // AXUniqueId: native chrome only, never web content
+  id: string; // AXUniqueId (the trial saw it on native chrome only)
+  pid?: number | null; // the process that owns the element
   enabled: boolean;
   frame: { x: number; y: number; w: number; h: number };
   at: { x: number; y: number }; // the point it was read at
@@ -230,6 +232,10 @@ function opOk(o: unknown): boolean {
         lbl(o.label) &&
         asName(o.as) &&
         where(o)
+      );
+    case 'absent':
+      return (
+        keysOk(o, ['op', 'label'], ['near', 'scan', 'radius', 'role']) && lbl(o.label) && where(o)
       );
     case 'tap':
       return (

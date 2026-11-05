@@ -321,7 +321,9 @@ is exactly one of:
 A step can say so at run time too — `needsYou(reason)` (`scenario.ts`) — for what the build can't help: the
 fixture bank not linked or aged out, the Mac asleep. That step and the rest of its scenario read `needs you`
 with the reason (they never ran because of it), the rows its steps prove likewise, the run stays green and the
-report's _Needs you_ list names it. It never counts among the run's own failures, and it is never for a bug: a
+report's _Needs you_ list names it. The exception is `needsYou(reason, {stepOnly: true})`, for a cause that is
+that step's alone and that later steps don't build on (the sim's soft keyboard): only that step reads `needs
+you`, and the rest of the scenario runs. It never counts among the run's own failures, and it is never for a bug: a
 real throw still fails the step. An `ios` step whose sim couldn't run reads `iOS this run: <reason>`; when any
 does, the status line says `PASS — iOS NOT RUN (<reason>): <n> iPhone rows untested` and the PR's first line
 repeats it (IOS-CHECK.md → Results).
@@ -336,8 +338,10 @@ unreadable diff runs them all. Otherwise it is **deferred**: not run, its status
 steps still running — so a slow step is never a cheap step's prerequisite. A row whose proving steps were all
 deferred reads `deferred`, in the report's own _Deferred (slow tier)_ list, never in _Not proven_ or the paste
 lists. **For the all-clear a deferred row counts like off dev** — the branch touches none of its paths, so it
-can't have changed what the row proves. A row with any proving step that ran is judged on that step. Slow
-today: `ios-standalone` (every step; `app/**` and its harness) and two of `timed-reminders`' wait steps.
+can't have changed what the row proves. A row with any proving step that ran is judged on those steps, with
+one exception: when every step through the row's own entry point was deferred, the row reads `deferred`, so a
+`ui` row never passes on its `api` step alone (a step that failed still fails it). Slow today: `ios-standalone`
+(every step; `app/**` and its harness).
 
 Walk the plan's matrix through **the edge-case checklist**: empty / max / invalid input; cancel; repeat
 (idempotent); survives a reload; the neighbouring item unaffected; ownership (another user's id). `smoke` alone

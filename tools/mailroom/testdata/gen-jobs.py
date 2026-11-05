@@ -267,6 +267,7 @@ srej('sim: radius with scan is BAD_OP', 'BAD_OP', [L, {'op': 'find', 'label': 'H
 srej('sim: an unknown role is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'role': 'AXWindow'}])
 srej('sim: wait 31 is BAD_OP', 'BAD_OP', [{'op': 'wait', 's': 31}])
 srej('sim: a capitalised shot name is BAD_OP', 'BAD_OP', [L, {'op': 'shot', 'name': 'Home'}])
+srej('sim: absent with an as is BAD_OP', 'BAD_OP', [L, {**F('Capture log', 200, 480, 'x'), 'op': 'absent'}])
 srej('sim: erase 0 is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 0}])
 srej('sim: a role given as an array is BAD_OP', 'BAD_OP', [L, F('Capture log', 220, 895, 'bar', role=['AXTextArea'])])
 srej('sim: signIn before any launch is BAD_OP', 'BAD_OP', [{'op': 'signIn'}, L])
@@ -301,23 +302,25 @@ serr('sim: an icon frame with something else under it (wrong page) is WEBCLIP_MI
      tape=[pt(371, 247, el('AXGroup', 'No Events Today', '', 300, 180, 140, 140))], simExcludes=['tap -x 371'])
 serr('sim: no Aperture icon is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False)}],
      simIncludes=['gesture scroll-left --screen-width 440 --screen-height 956'], simExcludes=['tap -x'])
-SIGNED_OUT = [pt(220, 895, {}), pt(220, 530, el('AXButton', 'Sign in', '', 183, 511, 74, 37))]
+SIGNED_OUT = [pt(220, 895, {}), pt(220, 530, el('AXButton', 'Sign in', '', 183, 511, 74, 37, pid=67251))]
 HOST = 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com'
-COGNITO = pt(228, 85, el('AXGenericElement', 'Address', '\u200e' + HOST, 10, 70, 300, 34, AXUniqueId='URL'))
+COGNITO = pt(228, 85, el('AXGenericElement', 'Address', '\u200e' + HOST, 10, 70, 300, 34, AXUniqueId='URL', pid=67016))
 EMAIL = [pt(220, 276, el('AXTextField', 'Email', PW, 60, 258, 320, 35), n=1), pt(220, 276, el('AXTextField', 'Email', PW, 36, 278, 366, 40))]  # zoomed once focused
 FORM = [COGNITO] + EMAIL + [ pt(220, 366, el('AXSecureTextField', 'Password', PW, 41, 345, 320, 40)),
         pt(220, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47))]
 serr('sim: no Keychain password is PASSWORD_MISSING, nothing typed', None, [L, {'op': 'signIn'}], reason='PASSWORD_MISSING', tape=SIGNED_OUT, noSimPassword=True,
      simExcludes=['axe type', '--point 228,85'])
 serr('sim: a sign-in page off dev Cognito is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [pt(228, 85, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL'))], simExcludes=['axe type'])
+     tape=SIGNED_OUT + [pt(228, 85, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL', pid=67016))], simExcludes=['axe type'])
+serr('sim: a lookalike address bar drawn by the page (its pid) is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [pt(228, 85, el('AXGenericElement', 'Address', HOST, 10, 70, 300, 34, AXUniqueId='URL', pid=67251))], simExcludes=['axe type'])
 serr('sim: page text that reads like dev Cognito (no native URL id) is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
      tape=SIGNED_OUT + [pt(228, 85, el('AXStaticText', 'Address', HOST, 10, 70, 300, 34))], simExcludes=['axe type'])
 serr('sim: another account’s Cognito is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [pt(228, 85, el('AXGenericElement', 'Address', 'aperture-dev-111111111111.auth.us-west-1.amazoncognito.com', 10, 70, 300, 34, AXUniqueId='URL'))],
+     tape=SIGNED_OUT + [pt(228, 85, el('AXGenericElement', 'Address', 'aperture-dev-111111111111.auth.us-west-1.amazoncognito.com', 10, 70, 300, 34, AXUniqueId='URL', pid=67016))],
      simExcludes=['axe type'])
 serr('sim: the host changing before the password is COGNITO_HOST, the password never read', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
-     tape=SIGNED_OUT + [{**COGNITO, 'n': 1}, pt(228, 85, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL'))] + FORM[1:],
+     tape=SIGNED_OUT + [{**COGNITO, 'n': 1}, pt(228, 85, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34, AXUniqueId='URL', pid=67016))] + FORM[1:],
      pwTyped=0, simIncludes=['axe type rahul3datta+devcheck@gmail.com'])
 serr('sim: submit probes skip the filled password field (no read inside it)', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
      tape=SIGNED_OUT + [COGNITO] + EMAIL + [pt(220, 386, el('AXSecureTextField', 'Password', PW, 41, 380, 320, 40))], pwTyped=1,
@@ -349,6 +352,9 @@ spass('sim: a whole number written 2.0 still counts (erase taps delete twice)', 
       simIncludes=['tap -x 409 -y 800', 'tap -x 409 -y 800'])
 
 # --- the row's assertion didn't hold: fail ---
+spass('sim: absent passes when nothing matches', [L, {'op': 'absent', 'label': 'Capture log', 'near': {'x': 200, 'y': 480}, 'radius': 10, 'role': 'AXTextArea'}])
+sfail('sim: absent fails PRESENT when the element is there', 'PRESENT', [L, {'op': 'absent', 'label': 'Capture log', 'near': {'x': 200, 'y': 480}, 'radius': 10}],
+      tape=[pt(200, 480, el('AXTextArea', 'Capture log', 'What happened?', 25, 462, 346, 36))])
 sfail('sim: a label nowhere near is MISS', 'MISS', [L, F('Nonexistent', 100, 100, 'x')])
 sfail('sim: an off-screen match is OFF_SCREEN, not tapped', 'OFF_SCREEN', [L, {'op': 'tap', 'label': 'Far', 'near': {'x': 200, 'y': 300}, 'radius': 10}],
       tape=[pt(200, 300, el('AXButton', 'Far', '', 741, 200, 40, 40))], simExcludes=['tap -x 761'])

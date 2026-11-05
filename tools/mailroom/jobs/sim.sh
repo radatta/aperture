@@ -64,6 +64,7 @@ SIM_JQ='
     elif .op == "kill" then keysok(["op","method"]; []) and (.method == "terminate" or .method == "switcher" or .method == "reboot")
     elif .op == "nav" then keysok(["op","tab"]; []) and (.tab | type == "string") and ($tabs | index($o.tab)) != null
     elif .op == "find" then keysok(["op","label","as"]; ["near","scan","radius","role"]) and (.label | lbl) and (.as | asname) and where
+    elif .op == "absent" then keysok(["op","label"]; ["near","scan","radius","role"]) and (.label | lbl) and where
     elif .op == "tap" then keysok(["op","label"]; ["near","scan","radius","role","as"]) and (.label | lbl)
       and (if has("as") then (.as | asname) else true end) and where
     elif .op == "expect" then
@@ -182,7 +183,7 @@ sim_probe_budget() {
   [ "$n" -le "$SIM_MAX_PROBES" ] || { : >"$SIM_P.over"; return 1; }
 }
 
-# One accessibility read at a point: {role,label,value,id,enabled,frame{x,y,w,h},at{x,y}} or {}. While SIM_SENSITIVE
+# One accessibility read at a point: {role,label,value,id,pid,enabled,frame{x,y,w,h},at{x,y}} or {}. While SIM_SENSITIVE
 # (the sign-in form) no value survives: a typed password lives in AXValue, never in a label.
 sim_point() {
   local raw
@@ -193,7 +194,7 @@ sim_point() {
     (if type == "array" then (.[0] // {}) else . end)
     | if type != "object" then {} else
       {role: ((.role // "") | tostring), label: ((.AXLabel // "") | tostring), value: ((.AXValue // "") | tostring | .[0:200]),
-       id: ((.AXUniqueId // "") | tostring | .[0:40]), enabled: (.enabled != false),
+       id: ((.AXUniqueId // "") | tostring | .[0:40]), pid: (if (.pid | type) == "number" then .pid else null end), enabled: (.enabled != false),
        frame: ((.frame // {}) | {x: ((.x // 0) | floor), y: ((.y // 0) | floor), w: ((.width // .w // 0) | floor), h: ((.height // .h // 0) | floor)}),
        at: {x: $x, y: $y}}
       | if $sens then del(.value) else . end end' <<<"$raw" 2>/dev/null || echo '{}'
@@ -334,7 +335,7 @@ sim_lazy_ready() {
   case "$1" in launch | shutdown | wait | kill) return 0 ;; esac
   [ -z "$SIM_READY" ] || return 0
   sim_ready || return 1
-  [ "$SIM_BOOTED" = warm ] || { sim_err SIM_UNAVAILABLE NOT_LAUNCHED "the sim was off; this plan needs a launch first"; return 1; }
+  [ "$SIM_BOOTED" = warm ] || { sim_err SIM_UNAVAILABLE NOT_LAUNCHED "the sim was off, or rebooted to re-arm the keyboard; this plan needs a launch first"; return 1; }
 }
 
 # The app's landmark: Home's capture bar (signed in) or the sign-in card. Echoes already | false | "" (neither).
@@ -395,13 +396,15 @@ sim_op_launch() {
   done
 }
 
-# Is the front sheet dev's Cognito? Read from Safari's own address bar: its id "URL" is native chrome, which web
-# content can't carry (it exposes no AXUniqueId, IOS-CHECK.md → Sign-in), so a page can't draw a lookalike.
+# Is the front sheet dev's Cognito? Read from the sheet's own address bar: native chrome (role, id "URL"), owned
+# by another process than the page ($1, the Sign in button's pid), so the page can't draw a lookalike
+# (IOS-CHECK.md → Sign-in).
 sim_on_cognito() {
   local e x y v
   read -r x y <<<"$SIM_PT_ADDRESS"
   e="$(SIM_SENSITIVE=false && sim_point "$x" "$y")" || return 1
-  jq -e '.id == "URL" and .label == "Address"' <<<"$e" >/dev/null 2>&1 || return 1
+  jq -e --argjson app "${1:-null}" '.role == "AXGenericElement" and .id == "URL" and .label == "Address"
+    and $app != null and .pid != null and .pid != $app' <<<"$e" >/dev/null 2>&1 || return 1
   v="$(jq -r '.value // "" | gsub("^[\u200e\u200f\u202a-\u202e\u2066-\u2069]+"; "")' <<<"$e")" # a leading LRM
   [[ "$v" =~ $SIM_COGNITO_RE ]]
 }
@@ -423,15 +426,16 @@ sim_focus_field() {
 # Sign in from Keychain when the app is signed out. The password goes Keychain → axe's stdin, nowhere else; from the
 # first tap to Home nothing is read back but roles and button/field labels, and nothing is screenshotted.
 sim_op_signIn() {
-  local e pf pt i s
+  local e pf pt i s app
   if [ "$SIM_SIGNED" != false ]; then SIM_NOTE="already signed in"; return 0; fi
   sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \
     || { sim_err PASSWORD_MISSING "" "no readable Keychain item $SIM_KEYCHAIN"; return 1; }
   e="$(sim_point "$SIM_X" "$SIM_Y_SIGNIN")" || return 1
   sim_label_is "$e" "Sign in" || { sim_err SIGNIN_FAILED FORM_CHANGED "no Sign in button"; return 1; }
+  app="$(jq -c '.pid' <<<"$e")"
   sim_tap_el "$e" || return 1
   sleep 3
-  sim_on_cognito || { sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
+  sim_on_cognito "$app" || { sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
   SIM_SENSITIVE=true
   for pt in $SIM_YS_EMAIL; do
     e="$(sim_point "$SIM_X" "$pt")" || return 1
@@ -451,7 +455,7 @@ sim_op_signIn() {
   sim_tap_el "$e" || { SIM_SENSITIVE=false; return 1; }
   pf="$e"
   # Again just before the password: the form flow ran since the first check.
-  sim_on_cognito || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
+  sim_on_cognito "$app" || { SIM_SENSITIVE=false; sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
   if ! sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" -w 2>/dev/null | tr -d '\n' | ax type --stdin >/dev/null 2>&1; then
     SIM_SENSITIVE=false
     sim_err PASSWORD_MISSING "" "the Keychain read or the typing failed"
@@ -542,6 +546,14 @@ sim_op_find() {
   sim_find "$1" || return 1
   sim_read_put "$(jq -r .as <<<"$1")" "$SIM_HIT"
   SIM_NOTE="$(jq -r '"\(.role) at \(.frame.x),\(.frame.y) \(.frame.w)x\(.frame.h)"' <<<"$SIM_HIT")"
+}
+
+# The element must not be there: a find that misses passes; any other outcome of the find stands.
+sim_op_absent() {
+  SIM_DT=""
+  if sim_find "$1"; then sim_fail PRESENT "a matching $(jq -r '.role' <<<"$SIM_HIT") is there"; return 1; fi
+  [ "$SIM_DT" = MISS ] || return 1
+  SIM_ST="" SIM_RS="" SIM_DT="" SIM_NOTE="none there"
 }
 
 sim_op_tap() {

@@ -97,9 +97,10 @@ describe('mailroom runner', () => {
       expect(sim).not.toContain(banned);
     // The host is read from the native address bar (id URL), checked before the email and again just before
     // the password; the password reaches axe only on stdin.
-    expect(sim).toContain(`jq -e '.id == "URL" and .label == "Address"'`);
+    expect(sim).toContain(`'.role == "AXGenericElement" and .id == "URL" and .label == "Address"`);
+    expect(sim).toContain('and $app != null and .pid != null and .pid != $app');
     expect(sim).toContain('[[ "$v" =~ $SIM_COGNITO_RE ]]');
-    const checks = [...sim.matchAll(/\bsim_on_cognito \|\|/g)].map((m) => m.index);
+    const checks = [...sim.matchAll(/\bsim_on_cognito "\$app" \|\|/g)].map((m) => m.index);
     const email = sim.indexOf('ax type "$SIM_EMAIL"');
     const password = sim.indexOf('ax type --stdin');
     expect(checks).toHaveLength(2);

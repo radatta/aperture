@@ -83,6 +83,8 @@ const doneForm = (ctx: Ctx): IosOp[] => [
     as: 'search',
   },
   { op: 'expect', as: 'search', aboveKeyboard: true },
+  // …and the capture dock didn't lift over the page: lifted, its bar would sit just above the keyboard
+  { op: 'absent', label: 'Capture log', near: { x: 200, y: 480 }, radius: 40, role: 'AXTextArea' },
   { op: 'keys', text: marker(ctx) },
   { op: 'blur' },
   { op: 'tap', label: title(ctx), scan: { x: 100, from: 390, to: 840 }, role: 'AXButton' },
@@ -256,7 +258,7 @@ export const iosStandalone: Scenario = {
       id: 'page-field-no-lift',
       entry: 'ios',
       kind: 'edge',
-      what: 'A page field’s keyboard doesn’t lift the dock over it: Tasks search stays above the keyboard',
+      what: 'A page field’s keyboard doesn’t lift the dock over it: Tasks search stays above the keyboard, the capture bar stays down',
     },
   ],
   steps: [

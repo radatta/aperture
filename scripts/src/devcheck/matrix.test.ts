@@ -249,6 +249,11 @@ describe('coverageOf: deferred slow steps', () => {
       ['form', 'deferred'],
       ['saved', 'pass'],
     ]);
+    const broke = coverageOf(m, [res('sim', 'deferred'), res('read', 'fail')]);
+    expect(broke.map((x) => [x.row, x.status])).toEqual([
+      ['form', 'fail'], // a failure still shows on its row
+      ['saved', 'fail'],
+    ]);
   });
 });
 

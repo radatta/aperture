@@ -150,4 +150,15 @@ describe('ctx.ios', () => {
     await b.ios.finish();
     expect(b.submitted).toEqual(['launch']);
   });
+
+  it('a reachable Mac that left the sim booted (NOT_LAUNCHED) still gets the shutdown', async () => {
+    let n = 0;
+    const { client, ios, submitted } = mac(() =>
+      ++n === 1 ? { status: 'error', reason: 'SIM_UNAVAILABLE', detail: 'NOT_LAUNCHED' } : {},
+    );
+    await caught(client.run('capture', [{ op: 'blur' }]));
+    expect(ios.unavailable()).toBe('SIM_UNAVAILABLE/NOT_LAUNCHED');
+    await ios.finish();
+    expect(submitted).toEqual(['blur', 'shutdown']);
+  });
 });

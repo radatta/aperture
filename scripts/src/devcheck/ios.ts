@@ -144,7 +144,8 @@ export function createIos(d: IosDeps): Ios {
       },
     }),
     async finish() {
-      if (!ran || out) return;
+      // No shutdown job to a Mac that isn't answering; any other unavailability (NOT_LAUNCHED…) left it booted.
+      if (!ran || (out && /^MAC_(UNREACHABLE|STALLED)/.test(out))) return;
       const job = makeSimJob(
         'shutdown',
         { sha: d.expectedSha, timeoutSec: 60, shutdown: false, steps: [{ op: 'shutdown' }] },
