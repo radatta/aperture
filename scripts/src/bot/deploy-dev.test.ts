@@ -183,4 +183,45 @@ describe('deployDev', () => {
     );
     expect(g.lock()).toBeNull();
   });
+  it("reports every lock change to onLock (the board's cache), and a throwing one changes nothing", async () => {
+    const clock = fakeClock();
+    const g = github(clock, 40, 'success'); // long enough for a renew while it waits
+    const seen: (string | null)[] = [];
+    await deployDev(repo().run, g.api, clock, quiet, (h) => void seen.push(h?.expiresAt ?? null));
+    expect(seen.length).toBeGreaterThanOrEqual(3); // acquire, a renew while waiting, the final renew
+    expect(seen.every((e) => e !== null)).toBe(true);
+    expect(seen.at(-1)).toBe(g.lock()?.expiresAt);
+
+    const again = github(clock, 5, 'success');
+    const r = await deployDev(repo().run, again.api, clock, quiet, () => {
+      throw new Error('board gone');
+    });
+    expect(r.conclusion).toBe('success');
+  });
+
+  it('reports a release as null, and nothing when the release itself fails', async () => {
+    const clock = fakeClock();
+    const g = github(clock, 5, 'failure');
+    const seen: (string | null)[] = [];
+    await deployDev(
+      repo().run,
+      g.api,
+      clock,
+      quiet,
+      (h) => void seen.push(h?.branch ?? null),
+    ).catch(() => undefined);
+    expect(seen.at(-1)).toBeNull();
+
+    const stuck = github(clock, 5, 'failure');
+    const api = (async (method: string, path: string, body?: unknown) => {
+      if (method === 'DELETE') throw ghError(500);
+      return stuck.api(method, path, body);
+    }) as typeof stuck.api;
+    const kept: (string | null)[] = [];
+    await deployDev(repo().run, api, clock, quiet, (h) => void kept.push(h?.branch ?? null)).catch(
+      () => undefined,
+    );
+    expect(kept).not.toContain(null);
+    expect(stuck.lock()).not.toBeNull();
+  });
 });

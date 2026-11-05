@@ -30,7 +30,7 @@ tick() {  # $1 = print → stdout only, nothing written
     -v anon="$(cg_anon)" -v file="$(cg_file)" -v current="$(cg_current)" -v high="$(cg_high)" \
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \
-    -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" -v dev="$(jq -r '.holderName // empty' "$BOARD_DIR/leases/dev.json" 2>/dev/null)" \
+    -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" -v dev="$(jq -r --argjson now "$(sb_epoch)" '.holder | select(. and (.expiresAt | sub("\\.[0-9]+"; "") | fromdate) > $now) | .branch' "$BOARD_DIR/devlock.json" 2>/dev/null)" \
     -v prevOut="$pOut" -v statusOut="$sOut" -v F1="$panes" -v F2="$sess" -v F3="$slots" -v F4="$prev" \
     "$panes" "$sess" "$slots" "$prev" -)
   rm -f "$panes" "$sess" "$slots"
@@ -58,6 +58,11 @@ while :; do
   if [ $((n % 5)) -eq 0 ] && ! { [ -n "${ov:-}" ] && kill -0 "$ov" 2>/dev/null; }; then
     node "$SB_REPO/scripts/src/board/cli.ts" overlap "$SB_REPO" "$BOARD_DIR" >/dev/null 2>&1 8>&- &
     ov=$!
+  fi
+  # The real dev lock every 10th tick (~5 min), read-only and timed out (devlock.sh); same fd 8 rule.
+  if [ $((n % 10)) -eq 0 ] && ! { [ -n "${dl:-}" ] && kill -0 "$dl" 2>/dev/null; }; then
+    bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 240 >/dev/null 2>&1 8>&- &
+    dl=$!
   fi
   n=$((n + 1))
   sleep "$interval" 8>&- & wait $!

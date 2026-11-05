@@ -1,8 +1,8 @@
 # Session board — sharing one container between Claude sessions
 
 Several Claude sessions run in the one COI container. They share its memory, threads and CPU, and two of
-them can hit the same dev stage or the same files. The board shows who is doing what, keeps a usage history,
-and leases the two shared things that need it. All of it lives in `scripts/board/` (bash) and
+them can hit the same dev stage or the same files. The board shows who is doing what (and who holds the dev
+lock, and the hub — `docs/ops/HUB.md`), keeps a usage history, and leases heavy-job slots. All of it lives in `scripts/board/` (bash) and
 `scripts/src/board/` (the tested decisions, TypeScript under plain `node`).
 
 **It must never make a session timid.** Tests and the headless UI pass always run. Below the _measured_
@@ -13,19 +13,20 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 
 ## Use it
 
-| Want                              | Run                                                                                                                                                                                            |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                              |
-| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                         |
-| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_); the board's `dev` lease below is retired                                                                     |
-| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                            |
-| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`) |
-| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                        |
-| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                         |
+| Want                              | Run                                                                                                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Who's running what, headroom      | `scripts/board/board.sh status` (live in the container; on the Mac, the sampler's latest snapshot) · `board.sh json` for machines                                                                |
+| Run a heavy command               | `scripts/board/heavy.sh -- pnpm test` — same output and exit code, plus its peak usage in the history and a budget slot others can see                                                           |
+| Hold the dev stage for a dev test | `pnpm bot deploy-dev` takes `refs/locks/dev` (`docs/ops/CI-BOT.md` → _Dev lock_); another branch holds it → `pnpm bot lock wait` in the background. The board shows the holder (_Dev lock line_) |
+| Who is the hub, is it up          | `board.sh hub` — the name from `scripts/board/hub.json` and whether a live session by that name is on the board (`docs/ops/HUB.md`)                                                              |
+| What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                              |
+| How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)   |
+| Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                          |
+| Sampler                           | `board.sh sampler start\|restart\|stop\|status` · `board.sh gc` drops stale slots/sessions, history older than 90 days                                                                           |
 
 Every Claude status line ends with the board's one-liner (`· 2 working · 5 idle · heavy 0 · anon 2.0/18G ·
-pids 315/4096 · dev: flux`) — `scripts/board/statusline-snippet.sh`, sourced at the end of
-`~/.claude/statusline-command.sh`.
+pids 315/4096 · dev: flux`; `dev:` is the branch holding a live `refs/locks/dev`) —
+`scripts/board/statusline-snippet.sh`, sourced at the end of `~/.claude/statusline-command.sh`.
 
 ## The container's real limits
 
@@ -137,21 +138,9 @@ State lives on the shared mount (`/workspace/localNotes/board/`, visible from th
 Every lease change runs under `flock /tmp/aperture-board.lock` — on the container's rootfs, because the whole
 population is this one container (virtiofs `flock` semantics aren't worth trusting).
 
-**`dev`** — **retired from the feature workflow at `dev-cutover`** (2026-11): it guarded the user's `dev` push, which
-that PR retired; bot dev deploys take ci-bot's `refs/locks/dev`, GitHub's truth across machines (`docs/ops/CI-BOT.md`
-→ _Dev lock_), and dev-e2e's build marker catches an overwrite after the fact. The code below stays until a cleanup
-PR removes it (with its hooks' dev-lease line). It was one branch on the dev stage at a time, advisory and local:
-the workflow took it before asking the user for the `dev` push (phase 8) and released it at the PR (phase 10). Lease
-`{holderPid, holderStart, holderName, branch, acquiredAt, expiresAt, ttlSec: 2700, note}`:
-
-- free → granted; the holder again → renewed; someone else → exit 3 with who and until when
-  (`--wait SEC` polls, `--force` takes it, logged).
-- **expired** → taken over; holder **dead** (pid gone or reused — `/proc` start time) → taken over at once,
-  with the `SendMessage` text printed for the new holder to send.
-- The holder's **session ending** flags it `holderGone` but keeps it until TTL (45 min) — dev testing and
-  feedback outlive a session restart. The restarted session on that branch takes it back on its first prompt
-  (`takeover`, reason `resumed`, no message; it keeps the original `acquiredAt` and `--note`), and each prompt in the holder's session on that branch renews it.
-- Only the holder releases it (`--force` overrides, logged).
+The board's own `dev` lease is gone (removed in session-comms, 2026-11): the dev lock is `refs/locks/dev` on
+GitHub, below. History keeps its old `lease: "dev"` events for their 90 days, and `cli.ts barriers` ignores them;
+`board.sh gc` deletes a leftover `leases/dev.json`.
 
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
@@ -168,6 +157,28 @@ rather than retry. A longer wait is `--wait <sec>` with the Bash call run in the
 late in the wait still starts the command inside the same call, so with `enforce: true` give long jobs a
 longer Bash timeout or run them in the background.) Slots whose wrapper died are dropped on the next acquire and by `gc`.
 
+## Dev lock line
+
+`board.sh status`, the SessionStart hook and the status line's `dev:` show the real `refs/locks/dev`
+(`docs/ops/CI-BOT.md` → _Dev lock_), from one cache, `board/devlock.json`
+(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?}`). Two writers:
+
+- **`scripts/board/devlock.sh refresh`** peeks read-only with the container's own credential —
+  `git ls-remote origin refs/locks/dev`, then `gh api …/git/tags/<sha>` for the holder — each call under
+  `timeout` (4 s; the hook passes 2). It skips while the cache is younger than `--max-age` (60 s; `status` 30,
+  the sampler 240, run every 10th tick, about 5 min, backgrounded). A failed peek keeps the old cache and sets
+  `failedAt`, and the next peek waits a minute after it; a peek that finds the bot wrote while it was asking keeps
+  the bot's write. No bot key, no token
+  mint, no node.
+- **The bot** (`scripts/src/bot/lock-cache.ts`) writes it on every `pnpm bot lock …`, `lock wait` poll and
+  `deploy-dev` lock change.
+
+`devlock.sh line` judges expiry at read time (the cache never stores a verdict) and names the holder's
+session from `board/sessions/`: `dev lock: free` · `dev lock: flux (flux) until 14:05` ·
+`dev lock: flux — EXPIRED 14:05, the next acquire takes it over` · a ` (as of 13:20, refresh failed)` suffix
+once the cache is over 5 min old · `dev lock: unknown (offline, no cache)`. Test seam:
+`APERTURE_DEVLOCK_SOURCE=file:<path>` stands in for GitHub (`board-cli.test.ts` → `devlock.sh`).
+
 ## `scripts/board/limits.json`
 
 Thresholds are **fractions of the live `pids.max` / `memory.high`**, so a limit change moves nothing:
@@ -183,7 +194,8 @@ over its cost.
 ## Hooks
 
 Four, all fail-open, documented with their fixtures in `.claude/hooks/README.md` → _Board hooks_:
-SessionStart registers and injects headroom / dev lease / overlaps; UserPromptSubmit and Stop keep the state;
+SessionStart registers and injects headroom / the dev lock line / `board.sh hub` (in the hub itself, its roadmap
+reminder) / overlaps; UserPromptSubmit and Stop keep the state;
 the Bash PreToolUse guard offers `heavy.sh` and, with `enforce: true`, denies a raw heavy command only at the
 measured edge or a full cap (recording a `denied` barrier event, pointing at this board's `heavy.sh` by absolute
 path — other worktrees have none until merge — which waits). Only a command that actually starts a runner counts:
@@ -315,6 +327,8 @@ carry the same list.
 - The first sampler started wins the lock; after this lands, `board.sh sampler restart` from the main checkout
   so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
   overwriting a file in place under the running sampler has killed it once.
+- On the Mac there is no `timeout` (coreutils), so `devlock.sh refresh` doesn't peek there and `board.sh status`
+  shows the container's last cache, marked stale once it's 5 min old.
 - The cap only sees suites that hold a slot: a raw `pnpm test` (not under `heavy.sh`) takes none, so 4
   wrapped suites plus raw ones can still pass the edge. The guard's deny at a full cap closes only the case where 4 wrapped suites already run.
 - `edge.sh` maps the throttle regime; pids exhaustion is container-wide, so other live sessions can abort —

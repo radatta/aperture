@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Session board CLI — who's doing what in this shared container (docs/ops/SESSION-BOARD.md).
-#   board.sh status | json   (status ends with the test cap's barrier rollup — cli.ts barriers)
+#   board.sh status | json   (status shows the real dev lock — devlock.sh — and ends with the test cap's barriers)
+#   board.sh hub              the hub session (hub.json, docs/ops/HUB.md) and whether the board has it live
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
 #   board.sh sampler start|restart|stop|status
 #   board.sh gc
@@ -66,7 +67,6 @@ cmd_heartbeat() {
   jq -c --arg s "$state" --arg now "$(sb_now)" --arg branch "$branch" --arg name "$name" '
     .state = $s | .updatedAt = $now | .branch = $branch | .name = $name |
     if $s == "working" then .lastPromptAt = $now else .lastStopAt = $now end' "$f" | sb_write "$f"
-  [ "$state" = working ] && lease_renew_dev "$pid"
   return 0
 }
 
@@ -76,7 +76,6 @@ cmd_end() {
   f=$(me_file "$pid")
   [ -f "$f" ] && jq -c --arg now "$(sb_now)" '.state = "gone" | .endedAt = $now | .updatedAt = $now' "$f" | sb_write "$f"
   for s in "$BOARD_DIR/leases/heavy/$pid"-*.json; do [ -e "$s" ] && rm -f "$s"; done
-  lease_end_dev "$pid"
   return 0
 }
 
@@ -110,19 +109,22 @@ board_json() {
   [ -n "$leases" ] || leases='[]'
   bar=$(node "$SB_REPO/scripts/src/board/cli.ts" barriers "$BOARD_DIR/history" 7 2>/dev/null)  # none on a Mac without node
   jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" --arg bar "$bar" --arg cap "$(sb_limit '.concurrency.test')" \
-    --slurpfile dev <( [ -f "$BOARD_DIR/leases/dev.json" ] && cat "$BOARD_DIR/leases/dev.json" ) \
+    --slurpfile dev <( [ -f "$BOARD_DIR/devlock.json" ] && cat "$BOARD_DIR/devlock.json" ) \
     --slurpfile ov <( [ -f "$BOARD_DIR/overlap.json" ] && cat "$BOARD_DIR/overlap.json" ) \
     --slurpfile reg <( cat "$BOARD_DIR"/sessions/*.json 2>/dev/null ) \
     --arg sampler "$(sampler_running && echo running || echo stopped)" \
     --arg thr "$(sb_thresholds 2>/dev/null)" '
     {sample: $s, sampler: $sampler, barriers: (if $bar == "" then null else $bar end),
      testCap: (if $cap == "" then null else ($cap | tonumber) end), thresholds: ($thr | split(" ") | map(select(. != "") | split("=") | {(.[0]): .[1]}) | add),
-     dev: ($dev[0] // null), heavy: $heavy, overlap: ($ov[0] // null),
+     devLock: ($dev[0] // null), heavy: $heavy, overlap: ($ov[0] // null),
      registered: ($reg | map({key: (.pid | tostring), value: .}) | from_entries)}'
 }
 
 cmd_status() {
-  board_json | jq -r '
+  local dl
+  bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 30 >/dev/null 2>&1
+  dl=$(bash "$SB_SCRIPTS/devlock.sh" line 2>/dev/null)
+  board_json | jq -r --arg dl "${dl:-dev lock: unknown}" '
     def gib: . / 1024 | . * 10 | round / 10 | tostring;
     def hm: if . == null then "?" else (sub("\\.[0-9]+"; "") | fromdate | strflocaltime("%H:%M:%S")) end;
     .sample as $s | .thresholds as $t | .registered as $r |
@@ -135,14 +137,26 @@ cmd_status() {
       "  \(.name)  \(.state)\(if .stateSrc == "cpu" then "*" else "" end)  \($r[.pid | tostring].branch // .branch // "-")" +
       "  thr \(.thr) · \(.rssMiB) MiB\(if .heavy then "  heavy: " + .heavy else "" end)" +
       (($r[.pid | tostring].note // "") as $n | if $n != "" then "  — " + $n else "" end)),
-    (if .dev == null then "dev lease: free"
-     else "dev lease: \(.dev.holderName) (\(.dev.branch)) since \(.dev.acquiredAt | hm), expires \(.dev.expiresAt | hm)\(if .dev.holderGone then " — holder gone" else "" end)" end),
+    $dl,
     "heavy: \(.heavy | length) slot(s)\(if .testCap then " · test \([.heavy[] | select(.class == "test")] | length)/\(.testCap)" else "" end)\(if (.heavy | length) > 0 then " — " + (.heavy | map("\(.name // .pid): \(.label // .class)") | join(", ")) else "" end)",
     (.barriers // empty),
     (if .overlap and ((.overlap.pairs // []) | length) > 0
      then "overlaps:", (.overlap.pairs[] | "  \(.a) ↔ \(.b): \(.files | join(", "))") else empty end),
     "sampler: \(.sampler)\(if .sampler != "running" then " — board.sh sampler start" else "" end)",
     "(* = state inferred from CPU; no hook registration)"'
+}
+
+# The hub (docs/ops/HUB.md): its name from hub.json, and whether a live session by that name is on the board.
+cmd_hub() {
+  local name pid start st branch
+  name=$(jq -r '.name // empty' "$SB_SCRIPTS/hub.json" 2>/dev/null)
+  [ -n "$name" ] || { echo "hub: none named in scripts/board/hub.json — docs/ops/HUB.md → Missing hub"; return 0; }
+  while read -r pid start st branch; do
+    sb_alive "$pid" "$start" || continue
+    echo "hub: $name — on the board ($st, $branch)"; return 0
+  done < <(jq -r --arg n "$name" 'select(.name == $n and .state != "gone") | "\(.pid) \(.pidStart) \(.state // "idle") \(if (.branch // "") == "" then "detached" else .branch end)"' \
+    "$BOARD_DIR"/sessions/*.json 2>/dev/null)
+  echo "hub: $name — not on the board; ListAgents decides (docs/ops/HUB.md → Missing hub)"
 }
 
 # --- sampler lifecycle ---
@@ -189,12 +203,12 @@ cmd_gc() {
     read -r wp st < <(jq -r '"\(.wrapperPid) \(.wrapperStart)"' "$f")
     sb_alive "$wp" "$st" || { rm -f "$f"; n=$((n + 1)); }
   done
+  # The retired board dev lease (refs/locks/dev is the only dev lock since session-comms).
+  rm -f "$BOARD_DIR/leases/dev.json"
   # History older than 90 days.
   find "$BOARD_DIR/history" -name '*.jsonl' -mtime +90 -delete 2>/dev/null
   echo "gc: removed $n stale entr$( [ $n = 1 ] && echo y || echo ies)"
 }
-
-. "$SB_SCRIPTS/lease.sh"
 
 case "${1:-status}" in
   status) cmd_status ;;
@@ -204,7 +218,7 @@ case "${1:-status}" in
   end) cmd_end ;;
   note) shift; cmd_note "$@" ;;
   sampler) shift; cmd_sampler "$@" ;;
+  hub) cmd_hub ;;
   gc) cmd_gc ;;
-  lease) shift; cmd_lease "$@" ;;
-  *) sed -n '2,6p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,7p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

@@ -1,6 +1,6 @@
 #!/bin/bash
-# SessionEnd — marks this session gone on the shared-container board, drops its heavy slots, and flags a
-# dev lease it holds `holderGone` (the lease itself lives until its TTL). docs/ops/SESSION-BOARD.md.
+# SessionEnd — marks this session gone on the shared-container board and drops its heavy slots.
+# docs/ops/SESSION-BOARD.md. (A dev lock it holds lives on GitHub until its TTL.)
 INPUT=$(cat)
 B="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/board" 2>/dev/null && pwd)" || exit 0
 [ -f "$B/lib.sh" ] || exit 0

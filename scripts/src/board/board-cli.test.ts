@@ -108,104 +108,6 @@ beforeEach(() => {
   limits({});
 });
 
-describe('board.sh dev lease', () => {
-  it('grants, makes a second session wait, releases only for the holder', () => {
-    const a = liveSession();
-    const b = liveSession();
-    expect(board(['register', '--pid', `${a}`, '--sid', 'sa', '--cwd', repo('feat-a')]).code).toBe(
-      0,
-    );
-    expect(board(['register', '--pid', `${b}`, '--sid', 'sb', '--cwd', repo('feat-b')]).code).toBe(
-      0,
-    );
-
-    const got = board(['--pid', `${a}`, 'lease', 'acquire', 'dev', '--note', 'round 1']);
-    expect(got.code).toBe(0);
-    expect(JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'))).toMatchObject({
-      holderPid: a,
-      branch: 'feat-a',
-      ttlSec: 2700,
-      note: 'round 1',
-    });
-
-    const blocked = board(['--pid', `${b}`, 'lease', 'acquire', 'dev']);
-    expect(blocked.code).toBe(3);
-    expect(blocked.err).toMatch(/dev held by feat-a \(feat-a\)/);
-    expect(board(['--pid', `${b}`, 'lease', 'release', 'dev']).code).toBe(3);
-
-    expect(board(['--pid', `${a}`, 'lease', 'release', 'dev']).code).toBe(0);
-    expect(existsSync(join(tmp, 'board/leases/dev.json'))).toBe(false);
-    expect(board(['--pid', `${b}`, 'lease', 'acquire', 'dev']).code).toBe(0);
-  });
-
-  it('takes over from a dead holder and prints the message to send', () => {
-    const b = liveSession();
-    board(['register', '--pid', `${b}`, '--cwd', repo('feat-b')]);
-    mkdirSync(join(tmp, 'board/leases'), { recursive: true });
-    const deadLease = {
-      v: 1,
-      holderPid: 4194303,
-      holderStart: '1',
-      holderName: 'flux',
-      branch: 'flux',
-      acquiredAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-      ttlSec: 2700,
-    };
-    writeFileSync(join(tmp, 'board/leases/dev.json'), JSON.stringify(deadLease));
-    const r = board(['--pid', `${b}`, 'lease', 'acquire', 'dev']);
-    expect(r.code).toBe(0);
-    expect(r.out).toMatch(/took over from flux \(flux\) — dead\. SendMessage `flux`/);
-    expect(events().find((e) => e.kind === 'lease')).toMatchObject({
-      action: 'takeover',
-      reason: 'dead',
-    });
-  });
-
-  it('keeps a gone holder’s lease until TTL and renews on the holder’s heartbeat', () => {
-    const a = liveSession();
-    board(['register', '--pid', `${a}`, '--cwd', repo('feat-a')]);
-    board(['--pid', `${a}`, 'lease', 'acquire', 'dev', '--ttl', '60']);
-    const before = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
-    expect(board(['--pid', `${a}`, 'end']).code).toBe(0);
-    expect(JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8')).holderGone).toBe(
-      true,
-    );
-    expect(board(['--pid', `${a}`, 'heartbeat', 'working']).code).toBe(0);
-    const after = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
-    expect(after.holderGone).toBeUndefined();
-    expect(Date.parse(after.expiresAt)).toBeGreaterThanOrEqual(Date.parse(before.expiresAt));
-  });
-});
-
-describe('board.sh dev lease after a restart', () => {
-  it('hands a gone holder’s lease to the restarted session on its branch, not to another branch', () => {
-    const a = liveSession();
-    const dir = repo('feat-a');
-    board(['register', '--pid', `${a}`, '--cwd', dir]);
-    board(['--pid', `${a}`, 'lease', 'acquire', 'dev', '--note', 'dev-test round 1']);
-    const granted = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
-    board(['--pid', `${a}`, 'end']);
-    const other = liveSession();
-    board(['--pid', `${other}`, 'heartbeat', 'working', '--cwd', repo('feat-b')]);
-    expect(JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8')).holderPid).toBe(a);
-    const b = liveSession(); // the same branch, restarted: a new pid
-    expect(board(['--pid', `${b}`, 'heartbeat', 'working', '--cwd', dir]).code).toBe(0);
-    const lease = JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8'));
-    expect(lease).toMatchObject({
-      holderPid: b,
-      branch: 'feat-a',
-      acquiredAt: granted.acquiredAt, // the same dev test continuing
-      note: 'dev-test round 1',
-    });
-    expect(lease.holderGone).toBeUndefined();
-    expect(events().find((e) => e.reason === 'resumed')).toMatchObject({
-      lease: 'dev',
-      action: 'takeover',
-    });
-  });
-});
-
 describe('sampler.sh', () => {
   it('reads every process’s own command line, not just the first one /proc lists', () => {
     // comm is `sleep`; only argv says vitest — its row carries that only if args are read per process
@@ -232,21 +134,7 @@ describe('sampler.sh', () => {
   });
 });
 
-describe('board.sh lease renew / register repair', () => {
-  it('renew only renews your own lease: it never grants a free one or takes over another’s', () => {
-    const a = liveSession();
-    const b = liveSession();
-    board(['register', '--pid', `${a}`, '--cwd', repo('feat-a')]);
-    board(['register', '--pid', `${b}`, '--cwd', repo('feat-b')]);
-    expect(board(['--pid', `${a}`, 'lease', 'renew', 'dev']).code).toBe(3); // free: no grant
-    expect(existsSync(join(tmp, 'board/leases/dev.json'))).toBe(false);
-    board(['--pid', `${a}`, 'lease', 'acquire', 'dev', '--ttl', '1']);
-    spawnSync('sleep', ['1.2']); // a's lease expires
-    expect(board(['--pid', `${b}`, 'lease', 'renew', 'dev']).code).toBe(3); // expired, but not b's
-    expect(JSON.parse(readFileSync(join(tmp, 'board/leases/dev.json'), 'utf8')).holderPid).toBe(a);
-    expect(board(['--pid', `${b}`, 'lease', 'acquire', 'dev']).code).toBe(0); // acquire may take it over
-  });
-
+describe('board.sh register repair', () => {
   it('register heals a corrupt or empty session file instead of keeping it', () => {
     const a = liveSession();
     const f = join(tmp, 'board/sessions', `${a}.json`);
@@ -259,6 +147,150 @@ describe('board.sh lease renew / register repair', () => {
         branch: `r${bad.length}`,
       });
     }
+  });
+});
+
+function devlock(args: string[], source?: string) {
+  const r = spawnSync('bash', [join(boardDir, 'devlock.sh'), ...args], {
+    env: { ...env, APERTURE_DEVLOCK_SOURCE: source ?? `file:${join(tmp, 'gh-lock')}` },
+    cwd: tmp,
+    encoding: 'utf8',
+  });
+  return { code: r.status, out: r.stdout.trim() };
+}
+// What GitHub's refs/locks/dev tag says ('' = no ref); the fake source devlock.sh reads.
+const ghLock = (holder: object | '') =>
+  writeFileSync(join(tmp, 'gh-lock'), holder === '' ? '' : JSON.stringify(holder));
+const cache = () => JSON.parse(readFileSync(join(tmp, 'board/devlock.json'), 'utf8'));
+const iso = (msFromNow: number) => new Date(Date.now() + msFromNow).toISOString();
+const SHA = 'a'.repeat(40);
+
+describe('devlock.sh', () => {
+  beforeEach(() => mkdirSync(join(tmp, 'board'), { recursive: true }));
+
+  it('shows the real lock with the holder’s session name from the board', () => {
+    const a = liveSession();
+    board(['register', '--pid', `${a}`, '--cwd', repo('flux')]);
+    ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(30 * 60_000) });
+    expect(devlock(['refresh']).code).toBe(0);
+    expect(cache()).toMatchObject({ v: 1, source: 'peek', holder: { branch: 'flux', sha: SHA } });
+    expect(devlock(['line']).out).toMatch(/^dev lock: flux \(flux\) until \d\d:\d\d$/);
+  });
+
+  it('says free when the ref is absent, and EXPIRED past expiresAt', () => {
+    ghLock('');
+    devlock(['refresh']);
+    expect(devlock(['line']).out).toBe('dev lock: free');
+    ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(-60_000) });
+    devlock(['refresh', '--max-age', '0']);
+    expect(devlock(['line']).out).toMatch(
+      /^dev lock: flux — EXPIRED \d\d:\d\d, the next acquire takes it over$/,
+    );
+  });
+
+  it('keeps the last cache and marks it stale when the fetch fails or times out', () => {
+    expect(devlock(['line']).out).toBe('dev lock: unknown (offline, no cache)');
+    const old = new Date(Date.now() - 10 * 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const holder = { branch: 'flux', sha: SHA, expiresAt: iso(20 * 60_000) };
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: old, source: 'peek', holder }),
+    );
+    expect(devlock(['refresh'], `file:${join(tmp, 'missing')}`).code).toBe(0);
+    expect(cache()).toMatchObject({ t: old, holder, failedAt: expect.any(String) });
+    expect(devlock(['line']).out).toMatch(
+      /^dev lock: flux until \d\d:\d\d \(as of \d\d:\d\d, refresh failed\)$/,
+    );
+  });
+
+  it('waits a minute after a failed peek before asking GitHub again', () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const holder = { branch: 'flux', sha: SHA, expiresAt: iso(20 * 60_000) };
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({ v: 1, t: old, source: 'peek', holder }),
+    );
+    devlock(['refresh'], `file:${join(tmp, 'missing')}`); // fails: failedAt set
+    ghLock(''); // GitHub is back and says free
+    devlock(['refresh']);
+    expect(cache().holder).toEqual(holder); // within the minute: not asked again
+  });
+
+  it('skips the fetch while the cache is fresh', () => {
+    ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(30 * 60_000) });
+    devlock(['refresh']);
+    ghLock(''); // GitHub says free now, but the cache is seconds old
+    devlock(['refresh']);
+    expect(cache().holder.branch).toBe('flux');
+    devlock(['refresh', '--max-age', '0']);
+    expect(cache().holder).toBeNull();
+  });
+
+  it('says unknown for a garbled cache, and a refresh replaces it', () => {
+    writeFileSync(join(tmp, 'board/devlock.json'), '{"v":1,"t":');
+    expect(devlock(['line']).out).toBe('dev lock: unknown (unreadable cache)');
+    ghLock('');
+    expect(devlock(['refresh']).code).toBe(0);
+    expect(devlock(['line']).out).toBe('dev lock: free');
+  });
+
+  it('reads a cache the bot wrote (milliseconds in its times)', () => {
+    writeFileSync(
+      join(tmp, 'board/devlock.json'),
+      JSON.stringify({
+        v: 1,
+        t: new Date().toISOString(),
+        source: 'bot',
+        holder: { branch: 'ci-bot', sha: SHA, expiresAt: iso(45 * 60_000) },
+      }),
+    );
+    expect(devlock(['line']).out).toMatch(/^dev lock: ci-bot until \d\d:\d\d$/);
+  });
+});
+
+describe('board.sh with the real dev lock', () => {
+  it('board.sh status prints the dev lock line and no dev lease', () => {
+    mkdirSync(join(tmp, 'board'), { recursive: true });
+    ghLock({ branch: 'flux', sha: SHA, expiresAt: iso(30 * 60_000) });
+    const r = spawnSync('bash', [join(boardDir, 'board.sh'), 'status'], {
+      env: { ...env, APERTURE_DEVLOCK_SOURCE: `file:${join(tmp, 'gh-lock')}` },
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    expect(r.stdout).toMatch(/^dev lock: flux until \d\d:\d\d$/m);
+    expect(r.stdout).not.toMatch(/dev lease/);
+  });
+
+  it('the sampler’s status line carries the lock holder from the cache', () => {
+    mkdirSync(join(tmp, 'board'), { recursive: true });
+    const line = (holder: object | null) => {
+      writeFileSync(
+        join(tmp, 'board/devlock.json'),
+        JSON.stringify({ v: 1, t: new Date().toISOString(), source: 'bot', holder }),
+      );
+      spawnSync('bash', [join(boardDir, 'sampler.sh'), '--once'], { env, encoding: 'utf8' });
+      return readFileSync(join(tmp, 'board/status.line'), 'utf8');
+    };
+    expect(line({ branch: 'flux', sha: SHA, expiresAt: iso(30 * 60_000) })).toMatch(/ · dev: flux/);
+    expect(line({ branch: 'flux', sha: SHA, expiresAt: iso(-60_000) })).not.toMatch(/dev:/);
+    expect(line(null)).not.toMatch(/dev:/);
+  });
+
+  it('board.sh hub names the hub from hub.json and says whether it is registered', () => {
+    const hub = JSON.parse(readFileSync(join(boardDir, 'hub.json'), 'utf8')).name;
+    expect(board(['hub']).out).toMatch(new RegExp(`^hub: ${hub} — not on the board`));
+    const a = liveSession();
+    board(['register', '--pid', `${a}`, '--cwd', repo(hub)]); // no tmux here: the name is the branch
+    expect(board(['hub']).out.trim()).toBe(`hub: ${hub} — on the board (idle, ${hub})`);
+    board(['--pid', `${a}`, 'end']);
+    expect(board(['hub']).out).toMatch(/not on the board/);
+  });
+
+  it('gc drops the retired leases/dev.json', () => {
+    mkdirSync(join(tmp, 'board/leases/heavy'), { recursive: true });
+    writeFileSync(join(tmp, 'board/leases/dev.json'), '{"holderName":"flux"}');
+    expect(board(['gc']).code).toBe(0);
+    expect(existsSync(join(tmp, 'board/leases/dev.json'))).toBe(false);
   });
 });
 

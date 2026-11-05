@@ -1,5 +1,4 @@
 // Board CLI for the decisions that deserve tests (docs/ops/SESSION-BOARD.md). Called by scripts/board/*.sh:
-//   node scripts/src/board/cli.ts decide-dev     < {current, req}                         → DevDecision
 //   node scripts/src/board/cli.ts decide-heavy   < {limits, liveLimits, live, slots, req} → HeavyDecision
 //   node scripts/src/board/cli.ts staleness <limits.json> <historyDir>                    → warning lines
 //   node scripts/src/board/cli.ts overlap <repo> <boardDir>                              → writes <boardDir>/overlap.json
@@ -9,10 +8,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { decideDev, decideHeavy, leaseFor, type Alive } from './lease.ts';
+import { decideHeavy } from './lease.ts';
 import { parseLimits, staleness } from './limits.ts';
 import { branchFiles, overlaps, type Tree } from './overlap.ts';
-import { parseLimit, parseStat } from './proc.ts';
+import { parseLimit } from './proc.ts';
 import {
   barriers,
   formatBarriers,
@@ -21,16 +20,9 @@ import {
   type JobEvent,
   type Sample,
 } from './rollup.ts';
+import { sessionNames } from './sessions.ts';
 
 const cgroup = process.env.APERTURE_CGROUP_DIR ?? '/sys/fs/cgroup';
-
-export const procAlive: Alive = (pid, start) => {
-  try {
-    return parseStat(readFileSync(`/proc/${pid}/stat`, 'utf8'))?.startTime === start;
-  } catch {
-    return false;
-  }
-};
 
 function liveLimits() {
   const read = (f: string) => parseLimit(readFileSync(join(cgroup, f), 'utf8'));
@@ -95,38 +87,11 @@ function worktrees(repo: string): Tree[] {
   return trees;
 }
 
-// branch → registered session name (the SendMessage address), from board/sessions/*.json.
-function sessionNames(boardDir: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  let files: string[];
-  try {
-    files = readdirSync(join(boardDir, 'sessions')).filter((f) => f.endsWith('.json'));
-  } catch {
-    return out;
-  }
-  for (const f of files) {
-    try {
-      const s = JSON.parse(readFileSync(join(boardDir, 'sessions', f), 'utf8'));
-      if (s.branch && s.name && s.state !== 'gone') out[s.branch] = s.name;
-    } catch {
-      // half-written by another session — next tick
-    }
-  }
-  return out;
-}
-
 export function main(argv: string[], stdin: () => string): string {
   const [cmd, ...rest] = argv;
   const args = rest.filter((a) => !a.startsWith('--')); // flags (--json) are read separately, never as positionals
   const now = new Date();
   switch (cmd) {
-    case 'decide-dev': {
-      const { current, req, note } = JSON.parse(stdin());
-      const d = decideDev(current ?? null, req, now, procAlive);
-      // grant / takeover carry the lease to write, so the tested builder is the one that runs
-      const lease = leaseFor(d, req, now, note);
-      return JSON.stringify(lease ? { ...d, lease } : d);
-    }
     case 'decide-heavy': {
       const { limits, liveLimits: ll, live, slots, req } = JSON.parse(stdin());
       return JSON.stringify(decideHeavy(parseLimits(limits), ll, live, slots ?? [], req, now));
@@ -173,7 +138,7 @@ export function main(argv: string[], stdin: () => string): string {
     }
     default:
       throw new Error(
-        `usage: cli.ts decide-dev | decide-heavy | staleness | overlap | report | barriers (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers (got ${cmd ?? 'nothing'})`,
       );
   }
 }
