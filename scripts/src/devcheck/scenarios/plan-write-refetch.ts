@@ -3,8 +3,8 @@
 // "+ Today" and an Unplan put on the wire, counted from the page's own requests — and the night row's order
 // against the real server: the timer's stop lands first, and when the unplan then fails (removePlan 500,
 // injected by the harness) the stopped minutes stay, a fresh timer runs, and the row is back. The exact refetch
-// counts are the hook test's. Tasks come from the API (ledgered); the two timers are stopped by the rows
-// themselves. The last step deletes the tasks so later scenarios find the Backlog as they left it (day-guards
+// counts are the hook test's. Tasks come from the API (ledgered); the three timers (and the one a failed
+// unplan restarts) are stopped by the rows themselves. The last step deletes the tasks so later scenarios find the Backlog as they left it (day-guards
 // does the same); a failed step skips it, and a timer left running is then timer-credit's clearTimers to clear.
 import type { DevSession, DevTask } from '../api';
 import type { PwRequest, PwResponse } from '../pw-types';
@@ -41,7 +41,7 @@ const runningOn = async (ctx: Ctx, task: DevTask) =>
 // `quiet()` first, then `arm()`, then the tap.
 function countApi(ctx: Ctx) {
   const counts: Record<string, number> = {};
-  const tapped = new Set<object>(); // requests made after arm(), by identity
+  const tapped = new WeakSet<object>(); // requests made after arm(), by identity
   let last = Date.now();
   let armed = false;
   const methodOf = (url: string) => {
@@ -330,9 +330,11 @@ export const planWriteRefetch: Scenario = {
         const focus = focusThis(ctx, made.U!);
         await focus.waitFor({ state: 'visible', timeout: 15_000 });
         await focus.click();
-        await until('U to be promoted', async () => {
-          const u = await rowsOf(ctx, today, made.U!);
-          return u.length === 1 && u[0]!.order === 2;
+        // Seven rows are renumbered at once: wait for every order to settle, not just U's.
+        await until('the plan to be renumbered', async () => {
+          const rows = await ctx.api.reads.listPlansForDay(today);
+          const u = rows.find((p) => p.taskId === made.U!.id);
+          return u?.order === 2 && rows.every((p, i) => p.order === i || p.order >= 9);
         });
         const after = await ctx.api.reads.listPlansForDay(today);
         if (after.length !== before.length || after.some((p) => !idsBefore.has(p.id)))
@@ -348,6 +350,9 @@ export const planWriteRefetch: Scenario = {
           const n = await ctx.page.getByText(made[what]!.title, { exact: true }).count();
           if (n !== 1) throw new Error(`${what} shows ${n} times after the reload`);
         }
+        // In the Big 3 now: U offers no "Focus this"; T, displaced into "Also today", does.
+        await focusThis(ctx, made.T!).waitFor({ state: 'visible', timeout: 15_000 });
+        if (await focusThis(ctx, made.U!).count()) throw new Error('U still offers Focus this');
         await ctx.shot('focus-this');
       },
     },
@@ -511,7 +516,7 @@ export const planWriteRefetch: Scenario = {
           return running.length === 1 && running[0]!.id !== timers.S2!.id;
         });
         if ((await statusOf(ctx, made.S2!)) !== 'in_progress')
-          throw new Error('S2 left in progress');
+          throw new Error('S2 not restored to in_progress');
         const done = (await ctx.api.reads.listSessionsForDay(today)).find(
           (s) => s.id === timers.S2!.id,
         );
@@ -552,7 +557,7 @@ export const planWriteRefetch: Scenario = {
         }
         if ((await runningOn(ctx, made.S4!)).length) throw new Error('S4 has a timer');
         if ((await statusOf(ctx, made.S4!)) !== 'in_progress')
-          throw new Error('S4 left in progress');
+          throw new Error('S4 not restored to in_progress');
         const done = (await ctx.api.reads.listSessionsForDay(today)).find(
           (s) => s.id === timers.S4!.id,
         );
