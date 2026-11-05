@@ -174,9 +174,66 @@ Ordered, page-first. Each phase names the files it touches; `↳` notes record d
 
 ## 8. Deferred / out of scope
 
-- **Backfill pre-existing orphans** — a delete has removed the bytes since 2026-11-01 (D7), but objects under rows tombstoned before then are still in the bucket, and so are the bytes of an expired `pending` upload until its task is deleted, and of an upload (or MCP `attach_file`) whose PUT lands after its task was deleted. Clearing them needs a one-off sweep with `ListBucket`. Bytes cost pennies; skip until it matters.
+- **Backfill pre-existing orphans** — a delete has removed the bytes since 2026-11-01 (D7), but objects under rows tombstoned before then are still in the bucket, and so are the bytes of an expired `pending` upload until its task is deleted, and of an upload (or MCP `attach_file`) whose PUT lands after its task was deleted. The sweep is §9 (operator, Mac). **Record:** runbook written 2026-11-04; not yet run — dev — · prod —.
 - **Delete-marker tidy-up** — deleting a never-uploaded `pending` key leaves a free delete marker. An `expiredObjectDeleteMarker` lifecycle rule would tidy them, but lifecycle rules are frozen on dev's bot lane (`docs/ops/CI-BOT.md`), so it would need main's lane or an opened freeze.
 - **`deleteTask` cascade** — ✅ landed (D7), bytes included since 2026-11-01.
 - **HEAD-on-confirm** — `confirmAttachment` trusts the client that the PUT succeeded; a HEAD to verify the object exists would add an S3 call. Low value at single-user scale.
 - **Multipart / resumable uploads** — a single XHR PUT is fine at 20 MB; revisit only if the cap rises to large video.
 - **Bytes in the export** — metadata only for now (D8).
+
+## 9. Orphan sweep (operator runbook)
+
+Removes Files-bucket objects that no live attachment row points at: the pre-D7 deletes (§8), expired `pending` uploads, and uploads whose PUT landed after their task was deleted. It runs on the Mac with the aws CLI and jq — the Lambdas have object-level Put/Get/Delete only and no `ListBucket` (`cdk/src/lib/app-stack.ts`), by design, so this never becomes app code. Dev first, then prod. Bytes cost pennies, so there is no schedule; run it when §8's record is stale enough to bother.
+
+**What counts as live.** A row at `SK = attach#<taskId>#<id>` with no `deletedAt` number and either `status = ready` or `createdAt` in the last 24 h — a 24 h grace in place of the cap's 15 min (`countsTowardCap`). Step 2 also skips any object modified in the last 24 h, so an upload in flight is never touched from either side. Keys are `u/<sub>/<taskId>/<attachmentId>`, so one Cognito sub per run: `SUB` is your own sub (the `DEVICE_USER_ID_<STAGE>` repository variable); on dev run it again with the devcheck user's (`DEVCHECK_SUB` in `.secrets/devcheck.dev.env`). The bucket is versioned, so a delete only adds a delete marker; step 7 undoes it for 30 days (the noncurrent-version expiry). Only totals go into §8 — never keys.
+
+Each block is one shell session from `cd /Users/rahuldatta/Coding/Personal/aperture`; set `S` and `P` first — `S=dev P=aperture-dev`, then `S=prod P=<prod profile>` (empty `P` means the default profile).
+
+1. **Names.** The data stack's outputs, and the sub:
+
+   ```sh
+   A() { aws "$@" ${P:+--profile $P} --region us-west-1; }
+   O() { A cloudformation describe-stacks --stack-name ApertureData-$S --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+   B=$(O FilesBucket); T=$(O TableName); SUB=<sub>; echo "$B $T $SUB"
+   ```
+
+2. **Keys older than 24 h** under the sub, with sizes (`date -v-24H` is BSD date — the Mac's):
+
+   ```sh
+   A s3api list-objects-v2 --bucket $B --prefix u/$SUB/ --query "Contents[?LastModified<='$(date -u -v-24H +%FT%TZ)'].[Key,Size]" --output text | sort > keys.tsv
+   cut -f1 keys.tsv > keys.txt; wc -l keys.txt
+   ```
+
+3. **Live rows** — one Query on the user's partition (`PK = u#<sub>`), projected to the four attributes the rule reads; a row with no `deletedAt` number is alive:
+
+   ```sh
+   A dynamodb query --table-name $T --key-condition-expression 'PK = :pk AND begins_with(SK, :p)' --expression-attribute-values "{\":pk\":{\"S\":\"u#$SUB\"},\":p\":{\"S\":\"attach#\"}}" --projection-expression 's3Key,#s,createdAt,deletedAt' --expression-attribute-names '{"#s":"status"}' \
+     | jq -r --argjson c $(( $(date +%s) * 1000 - 86400000 )) '.Items[] | select(.deletedAt.N == null) | select(.status.S == "ready" or (.createdAt.N | tonumber) > $c) | .s3Key.S' | sort > live.txt
+   wc -l live.txt
+   ```
+
+4. **Dry run** — the orphans are keys with no live row. Paste the totals line to Claude and spot-check three keys against the app before deleting anything:
+
+   ```sh
+   comm -23 keys.txt live.txt > orphans.txt
+   grep -F -f orphans.txt keys.tsv | awk '{ n++; s += $2 } END { print n " objects, " s / 1e6 " MB" }'
+   head -3 orphans.txt
+   ```
+
+5. **Delete**, at most 1,000 keys per call (the `DeleteObjects` limit):
+
+   ```sh
+   split -l 1000 orphans.txt batch.
+   for f in batch.??; do jq -R -s 'split("\n") | map(select(length > 0)) | {Objects: map({Key: .}), Quiet: true}' "$f" > "$f.json" && A s3api delete-objects --bucket $B --delete "file://$f.json"; done
+   ```
+
+6. **Verify** — rerun steps 2–4: `orphans.txt` is empty. Open an existing attachment in the app (a live key was never a candidate, but look). On dev, the next full devcheck's `attachment-delete` rows (`neighbour`, `reload`) pass. Then write the totals into §8's record and remove `keys.* live.txt orphans.txt batch.*`.
+
+7. **Undo inside 30 days** — delete the delete markers (needs `s3:DeleteObjectVersion`, which the operator has and the Lambdas don't); the objects become current again:
+
+   ```sh
+   A s3api list-object-versions --bucket $B --prefix u/$SUB/ --query "{Objects: DeleteMarkers[?IsLatest].{Key: Key, VersionId: VersionId}, Quiet: \`true\`}" > undo.json
+   A s3api delete-objects --bucket $B --delete file://undo.json
+   ```
+
+   This reverses every delete marker under the prefix, the sweep's included; an attachment the app deleted in the same window would come back as bytes without a row — harmless, and the next sweep removes it.
