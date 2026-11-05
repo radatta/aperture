@@ -18,6 +18,7 @@ export interface PwRequest {
 export interface PwLocator {
   first(): PwLocator;
   last(): PwLocator;
+  filter(opts: { hasText: string }): PwLocator;
   click(opts?: { timeout?: number }): Promise<void>;
   fill(value: string, opts?: { timeout?: number }): Promise<void>;
   press(key: string, opts?: { timeout?: number }): Promise<void>;

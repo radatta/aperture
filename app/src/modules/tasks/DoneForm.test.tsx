@@ -148,7 +148,9 @@ describe('DoneForm', () => {
 
     expect(order).toEqual(['stop', 'actual']);
     expect(await client.listRunningSessions()).toEqual([]);
-    const stopped = (await client.listSessionsForDay('2026-08-04')).find((s) => s.id === session.id);
+    const stopped = (await client.listSessionsForDay('2026-08-04')).find(
+      (s) => s.id === session.id,
+    );
     expect(stopped?.status).toBe('completed');
     expect(stopped?.activeMinutes).toBeCloseTo(7, 0); // history keeps the time
     expect(await client.getTask(task.id)).toMatchObject({ status: 'done', actualAccruedMin: 30 });
@@ -177,6 +179,28 @@ describe('DoneForm', () => {
     expect(setActual).not.toHaveBeenCalled(); // nothing after a stop that didn't land
     expect((await client.listRunningSessions()).map((s) => s.id)).toEqual([session.id]);
     expect((await client.getTask(task.id))?.status).toBe('in_progress');
+  });
+
+  it('a block sitting on Done prefills Actual with its length, not the wait', async () => {
+    const client = api();
+    const task = await started(client);
+    const s = await client.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    // 24.9 minutes banked, last beat 80 s ago (still fresh): the count would read 26.2 without the hold.
+    client.listRunningSessions = async () => [
+      { ...s, activeMinutes: 24.9, lastHeartbeatAt: Date.now() - 80_000 },
+    ];
+    renderWithProviders(
+      <WhenAdopted>
+        <DoneForm task={task} onDone={vi.fn()} />
+      </WhenAdopted>,
+      { api: client },
+    );
+    expect(((await screen.findByLabelText('Actual (min)')) as HTMLInputElement).value).toBe('25');
   });
 
   it('a failed Mark done keeps the reflection text', async () => {

@@ -187,9 +187,14 @@ export interface DevSettings {
   pomodoroWorkMin: number;
 }
 
-// The slice of a Pomodoro session the check reads. Sessions are never written by the harness's API client.
+// The test user's work block. A step may shorten it; the step's `finally` and each run's start put it back.
+export const DEV_WORK_MIN = 25;
+
+// The slice of a Pomodoro session the check reads. The harness's API client writes one only with a stop it
+// expects refused (stopSession, below).
 export interface DevSession {
   id: string;
+  taskId: string | null;
   status: string;
   startedAt: number;
   endedAt: number | null;
@@ -369,7 +374,7 @@ export function createApiClient({
     getDay: (day: string) => call<DevDay>('getDay', [day]),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
     getSettings: () => call<DevSettings>('getSettings', []),
-    listRunningSessions: () => call<{ id: string }[]>('listRunningSessions', []),
+    listRunningSessions: () => call<DevSession[]>('listRunningSessions', []),
     listSessionsForDay: (day: string) => call<DevSession[]>('listSessionsForDay', [day]),
     listFluxSets: () => call<DevFluxSet[]>('listFluxSets', [{}]),
     // Alive only — a deleted set reads as gone, like getTask.
@@ -432,8 +437,11 @@ export function createApiClient({
 
   const writes = {
     // The test user's own settings row — not ledgered; a step that changes it puts it back in its `finally`
-    // (a 1-minute block for the capped-stop row, 25 again after).
+    // (a 1-minute block for the capped-stop row, 25 again after), and a killed run's next run does (pipeline).
     updateSettings: (patch: Partial<DevSettings>) => call<DevSettings>('updateSettings', [patch]),
+    // Only for a stop the server must refuse (a bad cap): the app stops its timers through the UI.
+    stopSession: (id: string, status: 'completed', opts: { capMin: number }) =>
+      call<DevSession>('stopSession', [id, status, opts]),
     async createTask(input: CreateTaskInput): Promise<DevTask> {
       ledger.append({ run, op: 'intent', via: 'api:createTask', title: input.title });
       const task = await call<DevTask>('createTask', [input]);

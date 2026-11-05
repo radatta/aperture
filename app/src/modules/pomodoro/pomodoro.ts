@@ -24,6 +24,19 @@ export function activeSec(session: PomodoroSession, paused: boolean, now: number
   return base + Math.max(0, (now - session.lastHeartbeatAt) / 1000);
 }
 
+// What the block has worked, as the count-up and the Actual prefill show it: the live count, held at the
+// target once it reaches Done, since the wait there isn't work (the capped stop credits the same). Minutes
+// already persisted past the target stand.
+export function workedSec(
+  session: PomodoroSession,
+  targetSec: number,
+  paused: boolean,
+  now: number,
+): number {
+  const held = Math.min(activeSec(session, paused, now), targetSec);
+  return Math.max(session.activeMinutes * 60, held);
+}
+
 export function remainingSec(
   session: PomodoroSession,
   targetSec: number,

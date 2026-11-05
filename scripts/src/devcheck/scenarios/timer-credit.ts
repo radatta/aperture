@@ -3,9 +3,9 @@
 // only to a task still open (accruesTime), so MCP's complete_task under a phone timer can't be double-counted
 // either. Titles use `devcheck-tc <nonce>` — the parts scenarios sweep `devcheck <nonce>`. One timer runs at a
 // time after the first step, so the bar's bare Stop is this run's. The capped-heartbeat task adds its rows here.
-import type { DevSession } from '../api';
-import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
-import { clearTimers } from './failed-reads';
+import { DEV_WORK_MIN, type DevSession } from '../api';
+import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { clearTimers, isCompleted, sessionsAround } from './failed-reads';
 
 const name = (ctx: Ctx, what: string) => `devcheck-tc ${ctx.nonce} ${what}`;
 const STOP_FAILED = 'Couldn’t mark it done — try again.';
@@ -70,16 +70,7 @@ async function openTask(ctx: Ctx, what: string) {
 
 const stopButton = (ctx: Ctx) => ctx.page.getByRole('button', { name: 'Stop', exact: true });
 
-// This run's completed sessions on the app's day (and the day before, for a run across the day start).
-const isCompleted = (x: DevSession) => x.status === 'completed' && x.endedAt !== null;
-async function completedAround(ctx: Ctx): Promise<DevSession[]> {
-  const { dayStartHour } = await ctx.api.reads.getSettings();
-  const now = Date.now() - dayStartHour * 3_600_000;
-  const days = [laDay(new Date(now)), laDay(new Date(now - 86_400_000))];
-  return (await Promise.all(days.map((d) => ctx.api.reads.listSessionsForDay(d))))
-    .flat()
-    .filter(isCompleted);
-}
+const completedAround = async (ctx: Ctx) => (await sessionsAround(ctx)).filter(isCompleted);
 // The one session a Stop just completed: new since `before`, newest first.
 async function justStopped(ctx: Ctx, before: Set<string>): Promise<DevSession> {
   const mine = (await completedAround(ctx))
@@ -87,6 +78,19 @@ async function justStopped(ctx: Ctx, before: Set<string>): Promise<DevSession> {
     .sort((a, b) => b.endedAt! - a.endedAt!)[0];
   if (!mine) throw new Error('the stopped timer is not among the completed sessions');
   return mine;
+}
+
+// A timer's own row in the bar: Stop's row, narrowed to the task's title.
+const timerRow = (ctx: Ctx, what: string) =>
+  stopButton(ctx)
+    .locator('xpath=ancestor::*[.//button[normalize-space()="Stop"]][1]')
+    .filter({ hasText: name(ctx, what) });
+
+async function stopTimer(ctx: Ctx, what: string, runningAfter: number) {
+  const before = new Set((await completedAround(ctx)).map((x) => x.id));
+  await timerRow(ctx, what).getByRole('button', { name: 'Stop', exact: true }).click();
+  await untilRunning(ctx, runningAfter, `stopping ${what}`);
+  return justStopped(ctx, before);
 }
 
 export const timerCredit: Scenario = {
@@ -152,10 +156,16 @@ export const timerCredit: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'Again on a block that reached Done: the wait before it is not credited, the new block counts',
+    },
+    {
+      id: 'done-prefill',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Mark done on a block sitting on Done prefills Actual with its length, not the wait',
       offDev: {
-        file: 'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
-        test: 'Again on a done block resets its clock first, so the wait before it is never credited; the new block beats',
-        why: 'the wait is the time between Done and Again, which on dev would be a second 1-minute block plus a held wait on top of done-stop (another ~80 s of the slow row); the fake-timer test drives the minutes and the beat loop directly, and done-stop already proves the capped credit on the wire',
+        file: 'app/src/modules/tasks/DoneForm.test.tsx',
+        test: 'a block sitting on Done prefills Actual with its length, not the wait',
+        why: 'same path as done-stop (proven on dev): the same block on Done and the same reads; what differs is the number the form derives from them, a pure decision the test runs (dev would need 30 s more on Done for the rounding to show)',
       },
     },
     {
@@ -163,11 +173,6 @@ export const timerCredit: Scenario = {
       entry: 'api',
       kind: 'edge',
       what: 'A negative capMin is refused and the session keeps running',
-      offDev: {
-        file: 'lambdas/src/backend.test.ts',
-        test: 'a negative capMin is refused over RPC and the session keeps running',
-        why: 'the app never sends a bad cap (stopCapMin is never negative), so only a hand-made call reaches this; the test drives it over the real RPC in node',
-      },
     },
     {
       id: 'keep-stale-onto-cancelled',
@@ -185,7 +190,7 @@ export const timerCredit: Scenario = {
     {
       id: 'setup',
       entry: 'api',
-      title: 'Five backlog tasks — four for the app, one for MCP',
+      title: 'Eight backlog tasks — seven for the app, one for MCP',
       async run(ctx) {
         for (const [what, estimateMin] of [
           ['done', 15],
@@ -193,6 +198,7 @@ export const timerCredit: Scenario = {
           ['split', 45],
           ['fail', 15],
           ['cap', 15],
+          ['ext', 15],
           ['nb2', 15],
         ] as const)
           await ctx.api.writes.createTask({ title: name(ctx, what), estimateMin });
@@ -203,7 +209,8 @@ export const timerCredit: Scenario = {
       id: 'done',
       entry: 'ui',
       proves: ['done-stops-timer', 'neighbour-keeps'],
-      title: 'Two timers; Mark done on one with 30 typed — its timer goes, the other keeps accruing',
+      title:
+        'Two timers; Mark done on one with 30 typed — its timer goes, the other keeps accruing',
       async run(ctx) {
         await clearTimers(ctx);
         const nb = await startAndFocus(ctx, 'nb');
@@ -219,7 +226,8 @@ export const timerCredit: Scenario = {
         await untilRunning(ctx, 1, 'after Mark done');
         // The bar: the neighbour's row only — the done task's title is nowhere (not in the bar, and the
         // lens no longer lists a done task).
-        if ((await stopButton(ctx).count()) !== 1) throw new Error('the bar is not down to one timer');
+        if ((await stopButton(ctx).count()) !== 1)
+          throw new Error('the bar is not down to one timer');
         if (await ctx.page.getByText(name(ctx, 'done'), { exact: true }).count())
           throw new Error('the done task is still on screen (its timer row?)');
         await ctx.shot('after-done-neighbour-runs');
@@ -241,7 +249,8 @@ export const timerCredit: Scenario = {
       id: 'split',
       entry: 'ui',
       proves: ['split-done-stops-timer'],
-      title: 'Timer running → Split… → Done with this part, 20 typed → the timer goes, Part 2 starts at 0',
+      title:
+        'Timer running → Split… → Done with this part, 20 typed → the timer goes, Part 2 starts at 0',
       async run(ctx) {
         const id = await startAndFocus(ctx, 'split');
         const dialog = await openTask(ctx, 'split');
@@ -319,6 +328,26 @@ export const timerCredit: Scenario = {
       },
     },
     {
+      id: 'bad-cap',
+      entry: 'api',
+      proves: ['bad-cap'],
+      title: 'A stop with capMin -1 on the running timer is refused; the timer keeps running',
+      async run(ctx) {
+        const [running] = await ctx.api.reads.listRunningSessions();
+        if (!running) throw new Error('no running timer to send a bad cap to');
+        const refused = await ctx.api.writes
+          .stopSession(running.id, 'completed', { capMin: -1 })
+          .then(
+            () => false,
+            () => true,
+          );
+        if (!refused) throw new Error('the server took a negative capMin');
+        const after = await ctx.api.reads.listRunningSessions();
+        if (!after.some((x) => x.id === running.id))
+          throw new Error('the refused stop still ended the timer');
+      },
+    },
+    {
       id: 'mcp-stop',
       entry: 'ui',
       proves: ['mcp-complete-then-stop'],
@@ -338,41 +367,51 @@ export const timerCredit: Scenario = {
     {
       id: 'done-stop',
       entry: 'ui',
-      proves: ['done-stop', 'neighbour-full-credit'],
-      title: '1-minute block → Done → a second timer starts → 15 s → Stop the done one (credit ≤ 1.05), then the other (credited in full)',
+      proves: ['done-stop', 'neighbour-full-credit', 'extend-on-done'],
+      title:
+        'Two 1-minute blocks → Done → a third timer starts → 15 s → Again on one, Stop the other (credit ≤ 1.05), then the rest',
       async run(ctx) {
-        const settings = await ctx.api.reads.getSettings();
         await ctx.api.writes.updateSettings({ pomodoroWorkMin: 1 });
         try {
           await startAndFocus(ctx, 'cap'); // a fresh page load, so the 1-minute target is in effect
+          const extId = await startAndFocus(ctx, 'ext');
           const again = ctx.page.getByRole('button', { name: 'Again', exact: true });
-          await again.waitFor({ timeout: 90_000 }); // the block reached Done
+          await again.nth(1).waitFor({ timeout: 90_000 }); // both blocks reached Done
           const doneAt = Date.now();
           await startAndFocus(ctx, 'nb2');
           const nbStartedAt = Date.now();
           await wait(Math.max(0, 15_000 - (Date.now() - doneAt))); // sit on Done 15 s in all
           await ctx.shot('done-held-and-neighbour');
-          const before = new Set((await completedAround(ctx)).map((x) => x.id));
-          // The done row's Stop, not the neighbour's: scoped to the row that holds Again.
-          await ctx.page
-            .getByRole('button', { name: 'Again', exact: true })
-            .locator('xpath=ancestor::*[.//button[normalize-space()="Stop"]][1]')
-            .getByRole('button', { name: 'Stop', exact: true })
-            .click();
-          await untilRunning(ctx, 1, 'stopping the done block');
-          const capped = await justStopped(ctx, before);
+
+          // Again: what was banked, then the new block's run, and the 15 s on Done nowhere.
+          const banked = (await ctx.api.reads.listRunningSessions()).find(
+            (x) => x.taskId === extId,
+          );
+          if (!banked) throw new Error('the block to extend is not running on the server');
+          await timerRow(ctx, 'ext').getByRole('button', { name: 'Again', exact: true }).click();
+          const extendedAt = Date.now();
+          await timerRow(ctx, 'ext').getByRole('button', { name: 'Pause', exact: true }).waitFor();
+
+          const capped = await stopTimer(ctx, 'cap', 2);
           if (capped.activeMinutes > 1.05 || capped.activeMinutes < 0.9)
             throw new Error(`the done block credited ${capped.activeMinutes} min, not ~1`);
+
+          await wait(3_000); // the new block counts
+          const extended = await stopTimer(ctx, 'ext', 1);
+          const newRun = (Date.now() - extendedAt) / 60_000;
+          const gained = extended.activeMinutes - banked.activeMinutes;
+          if (gained < newRun - 0.1 || gained > newRun + 0.05)
+            throw new Error(`Again credited ${gained} min for a ${newRun.toFixed(2)} min new run`);
+
           // The neighbour ran on: its stop credits its whole run, no cap.
-          const before2 = new Set((await completedAround(ctx)).map((x) => x.id));
-          await stopButton(ctx).click();
-          await untilRunning(ctx, 0, 'stopping the neighbour');
+          const nb = await stopTimer(ctx, 'nb2', 0);
           const ran = (Date.now() - nbStartedAt) / 60_000;
-          const nb = await justStopped(ctx, before2);
           if (nb.activeMinutes < ran - 0.1 || nb.activeMinutes > ran + 0.05)
-            throw new Error(`the neighbour credited ${nb.activeMinutes} min for a ${ran.toFixed(2)} min run`);
+            throw new Error(
+              `the neighbour credited ${nb.activeMinutes} min for a ${ran.toFixed(2)} min run`,
+            );
         } finally {
-          await ctx.api.writes.updateSettings({ pomodoroWorkMin: settings.pomodoroWorkMin });
+          await ctx.api.writes.updateSettings({ pomodoroWorkMin: DEV_WORK_MIN });
         }
       },
     },

@@ -19,9 +19,9 @@ const PAUSE_MS = 4_000;
 
 // The completed sessions before this run's timer, so the check after it finds this run's own.
 let completedBefore = new Set<string>();
-const isCompleted = (x: DevSession) => x.status === 'completed' && x.endedAt !== null;
+export const isCompleted = (x: DevSession) => x.status === 'completed' && x.endedAt !== null;
 // The app's day, not the calendar's; and the day before, for a run that crossed the day start.
-async function sessionsAround(ctx: Ctx): Promise<DevSession[]> {
+export async function sessionsAround(ctx: Ctx): Promise<DevSession[]> {
   const { dayStartHour } = await ctx.api.reads.getSettings();
   const now = Date.now() - dayStartHour * 3_600_000;
   const days = [laDay(new Date(now)), laDay(new Date(now - 86_400_000))];

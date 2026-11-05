@@ -107,6 +107,7 @@ describe('createApiClient', () => {
       'setDayCapacity',
       'setDayIntent',
       'setTaskActual',
+      'stopSession',
       'transitionTask',
       'uncheckHabit',
       'unlinkFinanceRefund',

@@ -10,7 +10,7 @@ import { isNotFound } from '../../data/retry';
 import { qk } from '../../data/queryKeys';
 import { PomodoroContext } from './pomodoro-context';
 import type { RunningTimer, StartFocusInput } from './pomodoro-context';
-import { activeSec, isStale, remainingSec, stopCapMin, targetSecFor } from './pomodoro';
+import { isStale, remainingSec, stopCapMin, targetSecFor, workedSec } from './pomodoro';
 import { chime, unlockAudio } from './chime';
 
 // The timer engine (PRODUCT §4b, TECH §2.3.3). Owns ALL concurrently-running timers — you run
@@ -50,7 +50,10 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
   const [adoptFailed, setAdoptFailed] = useState(false);
   const [adoptTry, setAdoptTry] = useState(0);
   const [startError, setStartError] = useState<string | null>(null);
-  const fail = useCallback((id: string, msg: string) => setErrors((e) => ({ ...e, [id]: msg })), []);
+  const fail = useCallback(
+    (id: string, msg: string) => setErrors((e) => ({ ...e, [id]: msg })),
+    [],
+  );
   const clear = useCallback((id: string) => setErrors((e) => without(e, id)), []);
 
   // A heartbeat or resume answered after its timer was stopped must not bring the row back.
@@ -83,13 +86,14 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     () =>
       sessions.map((session) => {
         const paused = pausedIds.has(session.id);
-        const remaining = remainingSec(session, targetFor(session), paused, now);
+        const target = targetFor(session);
+        const remaining = remainingSec(session, target, paused, now);
         return {
           session,
           paused,
           remaining,
           done: remaining <= 0,
-          activeSec: activeSec(session, paused, now),
+          activeSec: workedSec(session, target, paused, now),
           error: errors[session.id] ?? null,
           syncFailed: (missed[session.id] ?? 0) >= MISSED_BEATS_WARN,
         };
@@ -341,7 +345,9 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     () => ({
       timers,
       stale,
-      staleErrors: Object.fromEntries(stale.flatMap((x) => (errors[x.id] ? [[x.id, errors[x.id]!]] : []))),
+      staleErrors: Object.fromEntries(
+        stale.flatMap((x) => (errors[x.id] ? [[x.id, errors[x.id]!]] : [])),
+      ),
       adoptFailed,
       retryAdopt,
       startError,

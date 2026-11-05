@@ -45,6 +45,7 @@ function memLedger(initial: Omit<LedgerEntry, 't'>[] = []): Ledger & { entries: 
 // A fake dev backend: a task store the API reads/deletes, and a page that "creates" by emitting a request
 // whose response arrives when `respond` says (immediately by default).
 function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[] } = {}) {
+  let settings = { dayStartHour: 4, pomodoroWorkMin: 25 };
   const tasks = new Map<string, DevTask>(
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
   );
@@ -182,7 +183,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     reads: {
       listTasks: async () => [...tasks.values()],
       listBacklog: async () => [],
-      getSettings: async () => ({ dayStartHour: 4, pomodoroWorkMin: 25 }),
+      getSettings: async () => settings,
       listRunningSessions: async () => [],
       listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
@@ -223,7 +224,11 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listFinanceRules: async () => [...finance.rules.values()],
     },
     writes: {
-      updateSettings: async () => {
+      updateSettings: async (patch) => {
+        settings = { ...settings, ...patch };
+        return settings;
+      },
+      stopSession: async () => {
         throw new Error('unused');
       },
       createTask: async () => {
@@ -431,6 +436,17 @@ describe('runPipeline', () => {
     expect(w.tasks.size).toBe(0);
     expect(ledger.entries.map((e) => e.op)).toEqual(['run-start', 'created', 'deleted', 'run-end']);
     expect(exitCode(r)).toBe(0);
+  });
+
+  it('a leftover short work block from a killed run is put back before any step', async () => {
+    const w = world();
+    await w.api.writes.updateSettings({ pomodoroWorkMin: 1 });
+    let seen = 0;
+    const s = scenario(async () => {
+      seen = (await w.api.reads.getSettings()).pomodoroWorkMin;
+    })(w);
+    await runPipeline(deps(w, [s], memLedger()));
+    expect(seen).toBe(25);
   });
 
   it('records every 429 by method (or path), and nothing else', async () => {

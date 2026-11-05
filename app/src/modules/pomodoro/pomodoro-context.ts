@@ -7,7 +7,7 @@ export interface RunningTimer {
   paused: boolean;
   remaining: number; // seconds left in the current block (0 once done)
   done: boolean; // reached target — holding for stop/extend (no auto-break)
-  activeSec: number; // live active seconds worked (count-up), incl. time since the last heartbeat
+  activeSec: number; // live active seconds worked (count-up), incl. time since the last heartbeat, held at the target on Done
   error: string | null; // the last action on this timer failed (stop, resume, extend) — said on its row
   syncFailed: boolean; // two heartbeats in a row failed: the server isn't hearing this timer
 }
