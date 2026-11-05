@@ -416,7 +416,15 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     return Template.fromStack(appStack);
   };
 
-  it('adds two alarms per Lambda (BFF + finance sync) and one account-wide throttle alarm on one SNS email topic in prod', () => {
+  type AlarmProps = {
+    Properties: Record<string, unknown> & { MetricName: string; Dimensions?: unknown };
+  };
+  const alarmsNamed = (t: Template, metricName: string) =>
+    Object.entries(t.findResources('AWS::CloudWatch::Alarm') as Record<string, AlarmProps>).filter(
+      ([, r]) => r.Properties.MetricName === metricName,
+    );
+
+  it('adds a duration alarm per Lambda (BFF, MCP, finance sync) and two account-wide alarms on one SNS email topic in prod', () => {
     const t = build('prod');
     t.resourceCountIs('AWS::CloudWatch::Alarm', 5);
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
@@ -428,16 +436,34 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
   });
 
-  // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org.
-  it('throttle-alarms the whole account once, at the BFF alarm\'s old id so it updates in place', () => {
-    const throttles = Object.entries(build('prod').findResources('AWS::CloudWatch::Alarm')).filter(
-      ([, r]) => (r as { Properties: { MetricName: string } }).Properties.MetricName === 'Throttles',
-    );
-    expect(throttles).toHaveLength(1);
-    const [[id = '', r] = []] = throttles;
-    expect(id).toMatch(/^MonitoringThrottles/);
-    expect((r as { Properties: Record<string, unknown> }).Properties).toMatchObject({ Namespace: 'AWS/Lambda', Statistic: 'Sum' });
-    expect((r as { Properties: Record<string, unknown> }).Properties.Dimensions).toBeUndefined();
+  it("watches the MCP function's p99 duration at 80% of its 15 s timeout", () => {
+    const t = build('prod');
+    const [mcpFnId] = Object.keys(t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: 'aperture-mcp-prod' } }));
+    expect(mcpFnId).toBeDefined();
+    const durations = alarmsNamed(t, 'Duration');
+    expect(durations.map(([id]) => id.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual([
+      'MonitoringDurationNearTimeout', // the BFF keeps its original id
+      'MonitoringFinanceSyncDurationOverBudget',
+      'MonitoringMcpDurationOverBudget',
+    ]);
+    const mcp = durations.filter(([id]) => id.startsWith('MonitoringMcpDurationOverBudget'));
+    expect(mcp).toHaveLength(1);
+    expect(mcp[0]?.[1].Properties).toMatchObject({
+      ExtendedStatistic: 'p99',
+      Threshold: 12000,
+      Dimensions: [{ Name: 'FunctionName', Value: { Ref: mcpFnId } }],
+    });
+  });
+
+  // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org — so
+  // Errors and Throttles are one alarm each for the whole account, at the BFF alarm's old id so it updates in place.
+  it.each(['Errors', 'Throttles'])('%s: one account-wide alarm, at the BFF alarm\'s old id', (metricName) => {
+    const alarms = alarmsNamed(build('prod'), metricName);
+    expect(alarms).toHaveLength(1);
+    const [[id = '', r] = []] = alarms;
+    expect(id).toMatch(new RegExp(`^Monitoring${metricName}`));
+    expect(r?.Properties).toMatchObject({ Namespace: 'AWS/Lambda', Statistic: 'Sum', Threshold: 1 });
+    expect(r?.Properties.Dimensions).toBeUndefined();
   });
 
   it('adds no alarms or SNS topic in dev (prod-only)', () => {
