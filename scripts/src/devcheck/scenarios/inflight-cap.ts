@@ -4,7 +4,7 @@
 // still holds — consoleErrors is cumulative) got no 429, and the deployed bundle really holds Home's burst at 8,
 // counted from the page's own requests. The slot itself — freed on a throw, held by nothing during a 429's
 // backoff, lapsing at 15 s — is unobservable from outside, so those edges are the http client's tests.
-import type { PwRequest } from '../pw-types';
+import type { PwRequest, PwResponse } from '../pw-types';
 import { noConsoleErrors, type Row, type Scenario } from '../scenario';
 
 const CAP = 8; // app/src/data/httpClient.ts → MAX_IN_FLIGHT
@@ -70,35 +70,37 @@ export const inflightCap: Scenario = {
       proves: ['cap-holds'],
       async run(ctx) {
         const isApi = (url: string) => new URL(url).pathname.startsWith('/api/');
-        let onWire = 0;
+        // Paired by request identity: the last scenario's reads, aborted by this navigation, end here without
+        // having started here, and a request whose body fails after its headers ends twice.
+        const live = new Set<object>(); // by identity: a response's request() is the event's Request object
         let peak = 0;
         let total = 0;
         let last = Date.now();
         const started = (r: PwRequest) => {
           if (!isApi(r.url())) return;
+          live.add(r);
           total++;
-          peak = Math.max(peak, ++onWire);
+          peak = Math.max(peak, live.size);
           last = Date.now();
         };
-        const ended = (r: { url(): string }) => {
-          if (!isApi(r.url())) return;
-          onWire--;
-          last = Date.now();
+        const ended = (r: object) => {
+          if (live.delete(r)) last = Date.now();
         };
+        const responded = (res: PwResponse) => ended(res.request());
         ctx.page.on('request', started);
-        ctx.page.on('response', ended);
+        ctx.page.on('response', responded);
         ctx.page.on('requestfailed', ended);
         try {
           await ctx.ui.goto('/');
           // The burst is over once nothing is on the wire and nothing new has started for a second.
           await until(
             'Home’s burst to finish',
-            () => total > 0 && onWire === 0 && Date.now() - last > 1_000,
+            () => total > 0 && live.size === 0 && Date.now() - last > 1_000,
             20_000,
           );
         } finally {
           ctx.page.off('request', started);
-          ctx.page.off('response', ended);
+          ctx.page.off('response', responded);
           ctx.page.off('requestfailed', ended);
         }
         ctx.log(`${total} /api calls loading Home, at most ${peak} on the wire at once`);

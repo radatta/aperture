@@ -13,10 +13,12 @@ export type FetchLike = (
 // At most this many /api calls on the wire at once, FIFO. Dev's account has a Lambda concurrency quota of
 // 10 (docs/ops/CI-BOT.md → Compute) and Home mounts ~10 RPCs on a cold BFF, so an uncapped burst gets 429s; 8
 // leaves two for the dev check's own calls. Prod has headroom and pays ~100 ms for Home's second wave.
+// Mirrored by scripts/src/devcheck/scenarios/inflight-cap.ts → CAP, which counts it on dev.
 export const MAX_IN_FLIGHT = 8;
-// A slot is held at most this long. The BFF's Lambda times out at 15 s (CI-BOT.md → Compute), so a call still on
-// the wire past that is a stalled connection holding no Lambda — on a phone whose signal dropped mid-load, the
-// queue would otherwise wait behind it until Safari gives up, a minute or more.
+// A slot is held at most this long. The BFF's Lambda times out at 15 s (CI-BOT.md → Compute; a cold start's init
+// runs before that clock, inside the two spare slots), so a call still on the wire past that is a stalled
+// connection, not a running function — on a phone whose signal dropped mid-load, the queue would otherwise wait
+// behind it until Safari gives up, a minute or more.
 export const SLOT_MS = 15_000;
 
 // A FIFO slot limiter: acquire() resolves with the slot's release once one is free. A release hands the slot
