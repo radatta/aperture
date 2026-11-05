@@ -34,12 +34,12 @@ describe('dock: idle Focus', () => {
 
 describe('dock: on-screen keyboard', () => {
   it('lifts above the keyboard while capture has focus', async () => {
-    const root = document.documentElement;
     const originalVv = Object.getOwnPropertyDescriptor(window, 'visualViewport');
-    const originalClient = Object.getOwnPropertyDescriptor(root, 'clientHeight');
+    const originalInner = Object.getOwnPropertyDescriptor(window, 'innerHeight');
     const vv = Object.assign(new EventTarget(), { height: 844, offsetTop: 0, scale: 1 });
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv });
-    Object.defineProperty(root, 'clientHeight', { configurable: true, value: 844 });
+    // The lift measures against innerHeight — the viewable area a fixed element anchors to.
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 });
     try {
       renderApp({ path: '/settings' });
       const field = await screen.findByLabelText('Capture log');
@@ -56,8 +56,7 @@ describe('dock: on-screen keyboard', () => {
     } finally {
       if (originalVv) Object.defineProperty(window, 'visualViewport', originalVv);
       else delete (window as { visualViewport?: unknown }).visualViewport;
-      if (originalClient) Object.defineProperty(root, 'clientHeight', originalClient);
-      else delete (root as { clientHeight?: unknown }).clientHeight;
+      if (originalInner) Object.defineProperty(window, 'innerHeight', originalInner);
     }
   });
 });
