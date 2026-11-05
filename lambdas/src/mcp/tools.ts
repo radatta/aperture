@@ -142,6 +142,18 @@ function nullableText(
     throw new RpcParamError(`"${key}": ${e instanceof Error ? e.message : 'invalid'}`);
   }
 }
+// complete_task's reflection on a task already marked done (a parent, an errand without an actual): if
+// this write fails, say the task is done, so a retry goes to update_task rather than "already done".
+async function reflectAfterDone(ctx: ToolContext, id: string, reflection: string | null) {
+  try {
+    return (await ctx.dispatch('setTaskReflection', [id, reflection])) as Task;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'error';
+    throw new Error(`${msg} (the task is done; the reflection wasn't saved — use update_task)`, {
+      cause: e,
+    });
+  }
+}
 const nullableNotes = (args: Record<string, unknown>, key: string) =>
   nullableText(args, key, normalizeNotes);
 const nullableReflection = (args: Record<string, unknown>) =>
@@ -476,8 +488,7 @@ export const TOOLS: Tool[] = [
         // The server refuses while a part is open, naming it (parts.ts) — that message is the answer.
         const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
         if (reflection === undefined) return { task: done, previousActualMin: 0 };
-        const noted = (await ctx.dispatch('setTaskReflection', [id, reflection])) as Task;
-        return { task: noted, previousActualMin: 0 };
+        return { task: await reflectAfterDone(ctx, id, reflection), previousActualMin: 0 };
       }
       // An errand is checked off — no actual needed (it never feeds calibration: contributesCalibration).
       const actualMin =
@@ -494,8 +505,7 @@ export const TOOLS: Tool[] = [
       const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
       // An errand checked off with no actual has no setTaskActual for the reflection to ride.
       if (actualMin !== null || reflection === undefined) return { task: done, previousActualMin };
-      const noted = (await ctx.dispatch('setTaskReflection', [id, reflection])) as Task;
-      return { task: noted, previousActualMin };
+      return { task: await reflectAfterDone(ctx, id, reflection), previousActualMin };
     },
   },
   {

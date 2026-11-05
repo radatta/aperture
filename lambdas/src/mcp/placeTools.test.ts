@@ -175,4 +175,50 @@ describe('place on the task tools', () => {
     const plain = (await call('create_task', { title: 'pset' })) as Task;
     await expect(call('complete_task', { id: plain.id })).rejects.toThrow(/actualMin/);
   });
+
+  it('complete_task on an errand without actualMin saves a reflection after the check-off', async () => {
+    const t = (await call('create_task', { title: 'syrup', place: 'safeway' })) as Task;
+    const seen: string[] = [];
+    const inner = ctx.dispatch;
+    ctx = { ...ctx, dispatch: (method, args) => (seen.push(method), inner(method, args)) };
+    const res = (await call('complete_task', {
+      id: t.id,
+      reflection: ' only the big bottle ',
+    })) as {
+      task: Task;
+    };
+    expect(res.task).toMatchObject({ status: 'done', reflection: 'only the big bottle' });
+    expect(seen).not.toContain('setTaskActual'); // no actual for it to ride
+    expect(seen.lastIndexOf('setTaskReflection')).toBeGreaterThan(
+      seen.lastIndexOf('transitionTask'),
+    );
+    expect((await setup.getTask(t.id))?.reflection).toBe('only the big bottle');
+
+    // null clears; over the cap lands nothing — the errand stays open.
+    const u = (await call('create_task', { title: 'nails', place: 'safeway' })) as Task;
+    await setup.setTaskReflection(u.id, 'old');
+    const cleared = (await call('complete_task', { id: u.id, reflection: null })) as { task: Task };
+    expect(cleared.task).toMatchObject({ status: 'done', reflection: null });
+    const v = (await call('create_task', { title: 'cups', place: 'safeway' })) as Task;
+    await expect(call('complete_task', { id: v.id, reflection: 'x'.repeat(1001) })).rejects.toThrow(
+      /1,000/,
+    );
+    expect((await setup.getTask(v.id))?.status).toBe('backlog');
+  });
+
+  it('a reflection write that fails after the check-off says the task is done', async () => {
+    const t = (await call('create_task', { title: 'syrup', place: 'safeway' })) as Task;
+    const inner = ctx.dispatch;
+    ctx = {
+      ...ctx,
+      dispatch: (method, args) =>
+        method === 'setTaskReflection'
+          ? Promise.reject(new Error('throttled'))
+          : inner(method, args),
+    };
+    await expect(call('complete_task', { id: t.id, reflection: 'x' })).rejects.toThrow(
+      /throttled \(the task is done; the reflection wasn't saved — use update_task\)/,
+    );
+    expect((await setup.getTask(t.id))?.status).toBe('done');
+  });
 });

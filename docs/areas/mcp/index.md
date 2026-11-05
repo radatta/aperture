@@ -128,7 +128,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   it in an `update_task`, and every task in a `create_tasks` batch. `list_tasks` / `list_backlog` return
   full notes (up to 5 KB each); trimming them in the list tools is a deferred option if that gets heavy.
 - **Reflection** ([tasks/reflection.md](../tasks/reflection.md)) — the user's look back at a finished task —
-  rides on `complete_task` (saved in the same write as `actualMin`; on a parent, after its rollup) and
+  rides on `complete_task` (saved in the same write as `actualMin`; on a parent, after its rollup; on an errand
+  checked off without one, after the check-off — a failure there says the task is done) and
   `update_task` (replaces; `null` or `""` clears). Checked before any dispatch like notes, so an over-cap one
   (1,000 chars) applies nothing. `list_tasks`, `list_backlog` and `get_calibration` return it. The tool text
   says to record it only in the user's own words — never invented or summarised.

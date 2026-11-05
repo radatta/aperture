@@ -26,6 +26,8 @@ on the Done form, and read back beside the estimate-vs-actual delta, so the numb
   - Every spawn path starts it `null`: a split's new parent and follow-up (the original keeps its own,
     since the reflection is about the finished work), series occurrences and roll reps.
   - A done parent takes one in the editor or through MCP, after its parts' rollup.
+  - An errand checked off over MCP without an actual takes one after the check-off (there's no
+    `setTaskActual` for it to ride); a failure there says the task is done, so a retry goes to `update_task`.
 - **Markdown:** the notes subset ([notes.md](notes.md) §2), rendered by the same `NotesView`.
 
 ## 2. Surfaces

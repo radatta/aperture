@@ -393,6 +393,12 @@ export const places: Scenario = {
       what: 'MCP complete_task on an errand without actualMin checks it off (done, still on its list’s word)',
     },
     {
+      id: 'mcp-complete-reflection',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A reflection sent with that check-off is saved — no actual for it to ride (reflection.md)',
+    },
+    {
       id: 'break-down',
       entry: 'ui',
       kind: 'nominal',
@@ -987,11 +993,13 @@ export const places: Scenario = {
     {
       id: 'mcp-complete',
       entry: 'mcp',
-      proves: ['mcp-complete'],
-      title: 'MCP complete_task on the errand with no actualMin: done, its word kept',
+      proves: ['mcp-complete', 'mcp-complete-reflection'],
+      title:
+        'MCP complete_task on the errand with no actualMin (and a reflection): done, its word kept',
       async run(ctx) {
-        const { task } = await ctx.mcp.writes.completeTask(syrupId);
-        if (task.status !== 'done' || task.place !== other.slug)
+        const why = 'Only the big bottle left — devcheck';
+        const { task } = await ctx.mcp.writes.completeTask(syrupId, undefined, why);
+        if (task.status !== 'done' || task.place !== other.slug || task.reflection !== why)
           throw new Error(`complete_task answered ${JSON.stringify(task)}`);
         const list = await ctx.mcp.reads.listPlaceTasks(other.slug);
         if (list.tasks.some((t) => t.id === syrupId))
