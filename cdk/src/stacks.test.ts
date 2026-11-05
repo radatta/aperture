@@ -419,10 +419,10 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
   type AlarmProps = {
     Properties: Record<string, unknown> & { MetricName: string; Dimensions?: unknown };
   };
-  const alarmsNamed = (metricName: string) =>
-    Object.entries(
-      build('prod').findResources('AWS::CloudWatch::Alarm') as Record<string, AlarmProps>,
-    ).filter(([, r]) => r.Properties.MetricName === metricName);
+  const alarmsNamed = (t: Template, metricName: string) =>
+    Object.entries(t.findResources('AWS::CloudWatch::Alarm') as Record<string, AlarmProps>).filter(
+      ([, r]) => r.Properties.MetricName === metricName,
+    );
 
   it('adds a duration alarm per Lambda (BFF, MCP, finance sync) and two account-wide alarms on one SNS email topic in prod', () => {
     const t = build('prod');
@@ -440,7 +440,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     const t = build('prod');
     const [mcpFnId] = Object.keys(t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: 'aperture-mcp-prod' } }));
     expect(mcpFnId).toBeDefined();
-    const mcp = alarmsNamed('Duration').filter(([id]) => id.startsWith('MonitoringMcpDurationOverBudget'));
+    const mcp = alarmsNamed(t, 'Duration').filter(([id]) => id.startsWith('MonitoringMcpDurationOverBudget'));
     expect(mcp).toHaveLength(1);
     expect(mcp[0]?.[1].Properties).toMatchObject({
       ExtendedStatistic: 'p99',
@@ -452,7 +452,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
   // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org — so
   // Errors and Throttles are one alarm each for the whole account, at the BFF alarm's old id so it updates in place.
   it.each(['Errors', 'Throttles'])('%s-alarms the whole account once, at the BFF alarm\'s old id', (metricName) => {
-    const alarms = alarmsNamed(metricName);
+    const alarms = alarmsNamed(build('prod'), metricName);
     expect(alarms).toHaveLength(1);
     const [[id = '', r] = []] = alarms;
     expect(id).toMatch(new RegExp(`^Monitoring${metricName}`));

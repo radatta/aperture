@@ -59,12 +59,13 @@ export class Monitoring extends Construct {
     // Errors and Throttles are account-wide, not per function, so the org stays inside the free ten alarms
     // (prod's five here + dev's five kill alarms, dev-guard-stack.ts): folding the per-function Errors alarms
     // into one paid for the MCP duration alarm. The email loses the function name — the description says where
-    // to look. Each id is the BFF's old one, so that alarm updates in place.
+    // to look (the sum also counts the CDK provider functions, which only run during a deploy). Each id is the
+    // BFF's old one, so that alarm updates in place.
     alarm(
       'Errors',
       new cloudwatch.Metric({ namespace: 'AWS/Lambda', metricName: 'Errors', statistic: 'Sum', period }),
       1,
-      'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync → Monitor',
+      'A Lambda in this account errored or timed out — Lambda console → bff / mcp / finance-sync (or a CDK provider function, deploy-time only) → Monitor',
     );
     alarm(
       'Throttles',
