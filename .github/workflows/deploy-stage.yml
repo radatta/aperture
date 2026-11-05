@@ -63,7 +63,7 @@ jobs:
     timeout-minutes: ${{ inputs.stage == 'dev' && 30 || 60 }}
     # Scopes the OIDC subject to `…:environment:<stage>` (what the deploy role's trust is bound to) — or, on main's
     # dev lane, `…:environment:dev-main`, an environment GitHub admits only from `main`. Also records a GitHub
-    # deployment against it, which nothing consumes since main dropped `required_deployments` (INFRA §9).
+    # deployment against it, which the prod check below and deploy.yml's classification read (scripts/src/deploy-base.ts).
     environment: ${{ inputs.lane == 'devmain' && 'dev-main' || inputs.stage }}
     # One deploy per STAGE at a time, across workflows (both dev lanes share the group, so they serialize). A main push
     # (which deploys dev first) and a bot dispatch (deploy-dev.yml) could otherwise hit the dev stack at once. Queue,

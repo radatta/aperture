@@ -30,11 +30,22 @@ describe('deploy.yml classifies per stage', () => {
     ).not.toContain('event.before');
   });
 
-  it('asks the script about exactly the two environments deploy-stage runs main in', () => {
-    const calls = [...job(deploy, 'changes').matchAll(/deploy-base\.ts (\S+) "\$GITHUB_SHA"/g)].map(
-      (m) => m[1],
-    );
-    expect(calls).toEqual(['dev-main', 'prod']);
+  it('ties each environment to its own output, all the way through', () => {
+    const lines = job(deploy, 'changes')
+      .split('\n')
+      .map((l) => l.trim());
+    for (const line of [
+      'mode_dev=$(node scripts/src/deploy-base.ts dev-main "$GITHUB_SHA")',
+      'mode_prod=$(node scripts/src/deploy-base.ts prod "$GITHUB_SHA")',
+      '{ echo "mode_dev=$mode_dev"; echo "mode_prod=$mode_prod"; } >> "$GITHUB_OUTPUT"',
+      'mode_dev: ${{ steps.detect.outputs.mode_dev }}',
+      'mode_prod: ${{ steps.detect.outputs.mode_prod }}',
+    ])
+      expect(lines, line).toContain(line);
+    expect(lines.filter((l) => !l.startsWith('#') && l.includes('deploy-base.ts'))).toHaveLength(2);
+  });
+
+  it('asks about the two environments deploy-stage runs main in', () => {
     expect(stage).toContain(
       "environment: ${{ inputs.lane == 'devmain' && 'dev-main' || inputs.stage }}",
     );
@@ -54,10 +65,9 @@ describe('deploy.yml classifies per stage', () => {
 
   it('assigns each mode before writing it, so a crash fails the job instead of emptying an output', () => {
     const changes = job(deploy, 'changes');
-    expect(changes).toContain('mode_dev=$(node scripts/src/deploy-base.ts');
-    expect(changes).toContain('mode_prod=$(node scripts/src/deploy-base.ts');
     expect(changes).toContain('case "$mode" in none|app|full) ;; *)');
-    expect(changes).not.toContain('|| true');
+    expect(changes).toContain('timeout-minutes: 5');
+    expect(changes).toContain('fetch-depth: 0');
   });
 
   it('grants the token what the lookup reads, and nothing to write', () => {
@@ -80,6 +90,11 @@ describe('the dispatched lane exercises the same lookup', () => {
       ),
     ).toEqual(['dev-main', 'prod']);
     expect(verify).toContain('If merged now: dev-main=$merged_dev prod=$merged_prod');
+  });
+
+  it('has the history to diff, and classifies a dispatch by where a move came from too', () => {
+    expect(verify).toContain('fetch-depth: 0');
+    expect(verify).toContain('git diff --name-only --no-renames "$base" "$SHA"');
   });
 
   it('with the same token grants as the main path', () => {
@@ -108,6 +123,11 @@ describe('deploy-stage.yml keeps what the lookup reads', () => {
       .split('\n')
       .slice(0, 3)
       .join('\n');
+
+  // A step that fails but reports success would make a failed deploy a base.
+  it('never lets a failed step report success', () => {
+    expect(stage).not.toContain('continue-on-error');
+  });
 
   it('runs CDK only on full, under the step name deploy-base.ts reads', () => {
     expect(stepWith('Deploy stacks')).toContain("if: inputs.mode == 'full'");

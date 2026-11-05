@@ -42,7 +42,7 @@ async function lastDevJob(
 }
 
 // A main deploy sets dev's infrastructure only when its `Deploy stacks` step ran: an app- or docs-only main
-// merge leaves whatever infra a dispatch put there (its mode came from main's own diff, not from dev).
+// merge leaves whatever infra a dispatch put there (its mode came from main's own lane, not from dev's dispatches).
 // A dispatch always counts — its mode was computed against what dev served, so dev's infra matches its sha.
 const ranCdk = (job: Job) =>
   job.steps?.some((s) => s.name === 'Deploy stacks' && s.conclusion === 'success') ?? false;

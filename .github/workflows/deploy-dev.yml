@@ -40,7 +40,7 @@ jobs:
   # main-ref dispatch, by the branch's own on a branch-ref one.
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # a checkout and a few git checks
+    timeout-minutes: 5 # a checkout, a few git checks and the preview's API reads (a request that hangs times out to `full`)
     permissions:
       contents: read
       deployments: read # the merge preview: each stage's deployment records
@@ -91,7 +91,7 @@ jobs:
           if [ -z "$base" ]; then
             mode=full; echo "Base $BASE unknown — full deploy."
           else
-            changed=$(git diff --name-only "$base" "$SHA")
+            changed=$(git diff --name-only --no-renames "$base" "$SHA")
             echo "Changed vs $base:"; echo "$changed"
             mode=$(printf '%s\n' "$changed" | node scripts/src/classify-changes.ts)
           fi

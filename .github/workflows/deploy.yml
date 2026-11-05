@@ -30,6 +30,7 @@ jobs:
   # parallel with `check`; deploy-dev waits on both. Kept toolchain-free and short.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # a checkout and a few API reads; a request that hangs times out to `full` well inside this
     permissions:
       contents: read
       deployments: read # each stage's deployment records
@@ -46,7 +47,7 @@ jobs:
       # record is never a base). app/** only → app. Anything else, or an indeterminate base → full. The rules are tested
       # modules, not inline shell: scripts/src/deploy-base.ts (what a stage serves) over classify-changes.ts (the tier).
       # Never github.event.before: that is main's previous head, which a failed or cancelled run never deployed.
-      # No setup/install (~20s): both modules import only node: builtins, and the runner image's default Node
+      # No setup/install (~20s): past each other and bot/api.ts, the modules import only node: builtins, and the runner image's default Node
       # (22.23.2 on ubuntu-24.04 at the time, 22.23.3 by 2026-10-13) strips TypeScript types natively. This
       # job is outside the setup action's .nvmrc guard, but the same run's other jobs fail loudly on a major
       # change. The constraints that puts on the modules are in their headers. `node --version` makes a

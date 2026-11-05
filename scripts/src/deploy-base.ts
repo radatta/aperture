@@ -6,7 +6,8 @@
 // against a backend that never got its half, and "Prod never moves backwards" refused the re-run.
 //
 // The answer comes from GitHub's deployment records for the stage's environment (`prod`; `dev-main` for main's dev
-// lane). A cancelled pending run never started its job, so it has no record. Walking newest → oldest:
+// lane). A run cancelled while pending never started its jobs, so it has no record; a job cancelled later leaves one
+// that isn't a success. Walking newest → oldest:
 //   failed or still running → unknown (possibly half-applied)
 //   ran `Deploy stacks`     → infra = its sha, front = the newest publish seen so far or its sha; stop
 //   ran only `Publish frontend` → front = its sha if none yet; go on
@@ -17,7 +18,8 @@
 // Run: `node scripts/src/deploy-base.ts <environment> <head sha>` prints the tier on stdout, the reasoning on stderr,
 // with GITHUB_TOKEN (deployments: read, actions: read) and GITHUB_REPOSITORY in the env. API trouble still prints a
 // tier; only misuse exits non-zero. Same constraint as classify-changes: CI runs this with no install, so erasable
-// syntax and node: builtins only (`import type` is erased; bot/api.ts imports nothing).
+// syntax, and only node: builtins past the two relative modules below (`import type` is erased; bot/api.ts imports
+// nothing).
 import { execFileSync } from 'node:child_process';
 import { makeApi, type Api } from './bot/api.ts';
 import { classify, type Tier } from './classify-changes.ts';
@@ -33,11 +35,14 @@ interface JobSteps {
   steps?: { name: string; conclusion: string | null }[];
 }
 
-// A later failure beats an earlier success. `inactive` after a success still served it, so it stays a success.
+// Only the latest state decides. `inactive` over a success means GitHub superseded a deployment that did succeed.
 export function outcome(statuses: Status[]): 'success' | 'failure' | 'running' {
   const latest = statuses[0]?.state;
   if (latest === 'failure' || latest === 'error') return 'failure';
-  return statuses.some((s) => s.state === 'success') ? 'success' : 'running';
+  if (latest === 'success') return 'success';
+  return latest === 'inactive' && statuses.some((s) => s.state === 'success')
+    ? 'success'
+    : 'running';
 }
 
 export const jobIdOf = (logUrl: string | undefined) => /\/job\/(\d+)/.exec(logUrl ?? '')?.[1];
@@ -59,7 +64,10 @@ export async function servedBy(
   environment: string,
   log: (line: string) => void = () => undefined,
 ): Promise<Base> {
-  const unknown = (why: string): Base => (log(`${environment}: unknown — ${why}`), 'unknown');
+  const unknown = (why: string): Base => {
+    log(`${environment}: unknown — ${why}`);
+    return 'unknown';
+  };
   try {
     const list = await api<{ id: number; sha: string }[]>(
       'GET',
@@ -90,22 +98,36 @@ export async function servedBy(
 // `infra` answers whether the backend must move, `front` whether the frontend must. Front is at or after infra, so
 // its diff is the smaller one: a docs merge after an app merge is `none`, with no redundant publish. An empty diff
 // (a re-run of what is already served) classifies as full.
-export function modeFor(base: Base, head: string, diff: Diff): Tier {
+export function modeFor(
+  base: Base,
+  head: string,
+  diff: Diff,
+  log: (line: string) => void = () => undefined,
+): Tier {
   if (base === 'unknown') return 'full';
   try {
     if (classify(diff(base.infra, head)) === 'full') return 'full';
     return classify(diff(base.front, head));
-  } catch {
+  } catch (err) {
+    log(`diff failed, so full — ${(err as Error).message}`);
     return 'full';
   }
 }
 
 // --no-renames lists both sides: a move out of lambdas/ into docs/ must still classify by where it came from.
-const gitDiff: Diff = (from, to) =>
-  execFileSync('git', ['diff', '--name-only', '--no-renames', from, to], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).split('\n');
+export const gitDiff =
+  (cwd?: string): Diff =>
+  (from, to) =>
+    execFileSync('git', ['diff', '--name-only', '--no-renames', from, to], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).split('\n');
+
+// A hung request must end in `full` like any other API trouble, not in the job being killed. One timeout ends the walk.
+const REQUEST_MS = 20_000;
+const timedFetch: typeof fetch = (url, init) =>
+  fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_MS) });
 
 async function main() {
   const [environment, head] = process.argv.slice(2);
@@ -123,8 +145,8 @@ async function main() {
     process.exit(1);
   }
   const log = (line: string) => console.error(line);
-  const base = await servedBy(makeApi(token), repo, environment, log);
-  const mode = modeFor(base, head as string, gitDiff);
+  const base = await servedBy(makeApi(token, timedFetch), repo, environment, log);
+  const mode = modeFor(base, head as string, gitDiff(), log);
   log(`${environment}: base ${JSON.stringify(base)} → ${mode}`);
   process.stdout.write(mode);
 }

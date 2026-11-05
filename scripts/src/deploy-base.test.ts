@@ -1,7 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import type { Diff } from './deploy-base';
-import { deployedTier, jobIdOf, modeFor, outcome, servedBy } from './deploy-base';
+import { deployedTier, gitDiff, jobIdOf, modeFor, outcome, servedBy } from './deploy-base';
 import { fakeApi, ghError } from './bot/fakes';
 
 type Tier = 'full' | 'app' | 'none';
@@ -47,6 +50,9 @@ describe('outcome', () => {
     expect(outcome([{ state: 'inactive' }, { state: 'success' }])).toBe('success');
     expect(outcome([{ state: 'failure' }, { state: 'success' }])).toBe('failure');
     expect(outcome([{ state: 'error' }])).toBe('failure');
+    expect(outcome([{ state: 'error' }, { state: 'waiting' }])).toBe('failure'); // a job cancelled while waiting
+    expect(outcome([{ state: 'in_progress' }, { state: 'success' }])).toBe('running');
+    expect(outcome([{ state: 'queued' }, { state: 'success' }])).toBe('running');
     expect(outcome([{ state: 'in_progress' }, { state: 'queued' }])).toBe('running');
     expect(outcome([{ state: 'inactive' }])).toBe('running');
     expect(outcome([])).toBe('running');
@@ -208,6 +214,55 @@ describe('modeFor', () => {
     expect(modeFor({ infra: 'f', front: 'f' }, 'a1', diff)).toBe('app');
     expect(modeFor({ infra: 'f', front: 'a1' }, 'd1', diff)).toBe('none');
     expect(modeFor({ infra: 'f', front: 'a1' }, 'l1', diff)).toBe('full');
+  });
+});
+
+describe('modeFor, on a diff failure', () => {
+  it('says why it went full', () => {
+    const lines: string[] = [];
+    const diff = () => {
+      throw new Error('bad object f');
+    };
+    expect(modeFor({ infra: 'f', front: 'f' }, 'h', diff, (l) => lines.push(l))).toBe('full');
+    expect(lines.join()).toContain('bad object f');
+  });
+});
+
+describe('gitDiff, against a real repo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-base-'));
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }).trim();
+  afterAll(() => rmSync(dir, { recursive: true }));
+  const commit = () => {
+    git('add', '-A');
+    git('commit', '-qm', 'x');
+    return git('rev-parse', 'HEAD');
+  };
+
+  it('classifies a move out of lambdas/ into docs/ by where it came from', () => {
+    git('init', '-q', '-b', 'fixture');
+    mkdirSync(join(dir, 'lambdas'));
+    mkdirSync(join(dir, 'docs'));
+    writeFileSync(
+      join(dir, 'lambdas/a.ts'),
+      'long enough for rename detection to pair it\n'.repeat(5),
+    );
+    const before = commit();
+    renameSync(join(dir, 'lambdas/a.ts'), join(dir, 'docs/a.md'));
+    const after = commit();
+    const diff = gitDiff(dir);
+    expect(diff(before, after).filter(Boolean).sort()).toEqual(['docs/a.md', 'lambdas/a.ts']);
+    expect(modeFor({ infra: before, front: before }, after, diff)).toBe('full');
+  });
+
+  it('throws on a base git does not have, which modeFor turns into full', () => {
+    const missing = 'a'.repeat(40);
+    expect(() => gitDiff(dir)(missing, 'HEAD')).toThrow();
+    expect(modeFor({ infra: missing, front: missing }, 'HEAD', gitDiff(dir))).toBe('full');
   });
 });
 
