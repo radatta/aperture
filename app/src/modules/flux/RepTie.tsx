@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Button, ButtonLink } from '../../components/Button';
+import { Link } from 'react-router';
+import { Button } from '../../components/Button';
 import { CheckCircleIcon } from '../../components/icons';
 import { Text } from '../../components/Text';
 import { usePickRollToday } from '../../data/hooks/useRolls';
@@ -113,19 +114,18 @@ export function RepTieStrip({ handle, activeMs }: { handle: RepTieHandle; active
   );
 }
 
-// The library's one line when no Roll is linked yet.
+// The library's one line when no Roll is linked yet. A plain inline link, not a ButtonLink: the sentence
+// wraps as prose at phone width, and the full stop sits flush against it.
 export function UnlinkedRollNote() {
   return (
     <Text as="p" size="sm" tone="muted">
       Flux sessions can count as a Roll&apos;s daily rep —{' '}
-      <ButtonLink
+      <Link
         to="/settings#flux"
-        variant="quiet"
-        size="sm"
-        className="py-0 pr-0 pl-1 underline"
+        className="text-ink underline underline-offset-2 transition hover:text-teal"
       >
         link one in Settings
-      </ButtonLink>
+      </Link>
       .
     </Text>
   );

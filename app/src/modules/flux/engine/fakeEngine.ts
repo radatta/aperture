@@ -70,7 +70,9 @@ export function createFakeEngine(opts: { auto?: boolean } = {}): {
     if (r.autoCalibrated) emit({ type: 'calibrated', ok: true, auto: true });
     for (const event of r.events) emit({ type: 'exerciseEvent', event });
     if (r.state) emit({ type: 'exerciseState', state: r.state });
-    drawDot(canvas, pose);
+    // A listener may have stopped the engine on one of those (the session's last set): the canvas was
+    // just cleared, so no dot is left behind on the idle stage.
+    if (timer) drawDot(canvas, pose);
   };
   const halt = () => {
     if (timer) clearInterval(timer);

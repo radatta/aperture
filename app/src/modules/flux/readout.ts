@@ -33,10 +33,13 @@ export interface RestInfo {
   readonly next: number;
 }
 
-// "Rest · 23 s · Set two next" — the HUD note and the panel's done block say the same line; the voice
-// says "Set two" when the rest ends.
-export const restLine = (rest: RestInfo): string =>
-  `Rest · ${rest.remainingSec} s · Set ${countWord(rest.next).toLowerCase()} next`;
+// "Rest · 23 s · Set two next" — the panel's done block says it as one line, the HUD note as two (the one
+// line reached the face at phone width); the voice says "Set two" when the rest ends.
+export const restParts = (rest: RestInfo): readonly [string, string] => [
+  `Rest · ${rest.remainingSec} s`,
+  `Set ${countWord(rest.next).toLowerCase()} next`,
+];
+export const restLine = (rest: RestInfo): string => restParts(rest).join(' · ');
 
 // Out in a ROM excursion but short of the hold zone, the hold not yet done — the voice says "Further"
 // (D37), so the ring says it too. A dip below the zone keeps the ring's progress.

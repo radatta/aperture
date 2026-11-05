@@ -31,6 +31,9 @@ export interface PwLocator {
   inputValue(): Promise<string>;
   scrollIntoViewIfNeeded(opts?: { timeout?: number }): Promise<void>;
   count(): Promise<number>;
+  // A string expression over the element (`el => …`), like PwPage's — the scripts package has no DOM lib
+  // to type a function against.
+  evaluate<T>(expression: string): Promise<T>;
   getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
   getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;

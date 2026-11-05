@@ -168,9 +168,10 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const restTick = useRef<ReturnType<typeof setInterval>>(undefined);
   const restEndsAt = useRef(0); // performance.now() the pending rest ends at
   const restShown = useRef<RestInfo | null>(null); // what the stage last showed — a pause keeps it
-  // No session running: before the first Start, and after Stop or a self-ended session. The worker's
-  // last posts (a state at the throttle, a finished set) land after the stop; dropped here, the idle panel
-  // reads "Start the camera to begin." every time instead of "Set complete · Again" by the post's luck.
+  // No session running: before the first Start, and after Stop, a self-ended session or a tracker error.
+  // The worker's last posts (a state at the throttle, a finished set) land after the stop; dropped here,
+  // the idle panel reads "Start the camera to begin." every time instead of "Set complete · Again" by
+  // the post's luck.
   const idleRef = useRef(true);
   const planDoneRef = useRef(0); // sets of this exercise done this session, toward opts.sets
   const startOnCalibrate = useRef(false); // "Start now" tapped before there was a neutral
@@ -396,6 +397,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
           readyRef.current = false;
           clearAuto();
           engine.stop();
+          idleRef.current = true;
           say({ type: 'trackingStopped' });
           setError({ stage: e.stage, message: e.message });
           return setStatus('error');

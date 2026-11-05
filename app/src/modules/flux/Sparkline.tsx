@@ -12,26 +12,32 @@ export interface SparkPoint {
   readonly label: string; // "Oct 20 · 52°" — the tooltip
 }
 
-const FALLBACK_W = 240; // before the first measurement, and where there's no layout (jsdom)
-const H = 48;
+// Before the first measurement, and where there's no layout (jsdom): a 240 × 48 drawing.
+const FALLBACK_W = 240;
+const FALLBACK_H = 48; // h-12 at the default text size; iOS text-size changes move it, so it's measured too
 const PAD = 6;
 
-function useMeasuredWidth<T extends Element>() {
+type Size = { readonly w: number; readonly h: number };
+
+// The element's own box, kept current — observed while `active` (the svg exists only with two points).
+function useMeasuredSize<T extends Element>(active: boolean) {
   const ref = useRef<T>(null);
-  const [width, setWidth] = useState<number | null>(null);
+  const [size, setSize] = useState<Size | null>(null);
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const take = (w: number) => setWidth(w > 0 ? Math.round(w) : null);
-    take(el.getBoundingClientRect().width);
+    if (!active || !el || typeof ResizeObserver === 'undefined') return;
+    const take = (w: number, h: number) =>
+      setSize(w > 0 && h > 0 ? { w: Math.round(w), h: Math.round(h) } : null);
+    const box = el.getBoundingClientRect();
+    take(box.width, box.height);
     const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width ?? el.getBoundingClientRect().width;
-      take(w);
+      const r = entries[0]?.contentRect ?? el.getBoundingClientRect();
+      take(r.width, r.height);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
-  return { ref, width };
+  }, [active]);
+  return { ref, size };
 }
 
 export function Sparkline({
@@ -43,9 +49,10 @@ export function Sparkline({
   target?: number;
   label: string; // the accessible name: what's plotted, and how it's going
 }) {
-  const { ref, width } = useMeasuredWidth<SVGSVGElement>();
+  const { ref, size } = useMeasuredSize<SVGSVGElement>(points.length >= 2);
   if (points.length < 2) return null;
-  const W = width ?? FALLBACK_W;
+  const W = size?.w ?? FALLBACK_W;
+  const H = size?.h ?? FALLBACK_H;
   const values = points.map((p) => p.value);
   const lo = Math.min(...values, target ?? Infinity);
   const hi = Math.max(...values, target ?? -Infinity);

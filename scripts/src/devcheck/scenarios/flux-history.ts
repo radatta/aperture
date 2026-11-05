@@ -169,10 +169,8 @@ export const fluxHistory: Scenario = {
         await ctx.page.getByRole('button', { name: 'rotation', exact: true }).click();
         const spark = ctx.page.getByRole('img', { name: /rotation · avg peak, 3 sets/ });
         await spark.waitFor({ state: 'visible', timeout: 15_000 });
-        const { viewBoxW, width } = await spark.evaluate((el) => ({
-          viewBoxW: Number(el.getAttribute('viewBox')?.split(' ')[2]),
-          width: el.getBoundingClientRect().width,
-        }));
+        const viewBoxW = Number((await spark.getAttribute('viewBox'))?.split(' ')[2]);
+        const width = (await spark.boundingBox())?.width ?? 0;
         if (!(width > 0) || Math.abs(viewBoxW - width) > 1)
           throw new Error(`the sparkline draws ${viewBoxW} px in a ${width.toFixed(1)} px tile`);
         await ctx.shot('history-trend');
@@ -185,22 +183,21 @@ export const fluxHistory: Scenario = {
       title: 'Library: "link one in Settings." with no gap before the full stop',
       async run(ctx) {
         await ctx.ui.goto('/flux');
-        // The note shows only while no active Roll is linked — the test user's state, unless someone linked one;
-        // a missing note says which, loudly.
+        // The note shows only while no active Roll is linked — the test user's state, unless someone linked
+        // one; a missing note says so, loudly.
         const link = ctx.page.getByRole('link', { name: 'link one in Settings', exact: true });
-        await link.waitFor({ state: 'visible', timeout: 15_000 }).catch(async () => {
-          const { fluxRollId } = await ctx.api.reads.getSettings();
+        await link.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {
           throw new Error(
-            fluxRollId == null
-              ? 'the Library shows no "link one in Settings" note'
-              : `no "link one in Settings" note — the test user may have Roll ${fluxRollId} linked (an active one hides it)`,
+            'the Library shows no "link one in Settings" note — an active Roll linked under Settings → Flux hides it',
           );
         });
-        const note =
-          (await link.locator('xpath=..').textContent())?.replace(/\s+/g, ' ').trim() ?? '';
-        if (!/link one in Settings\.$/.test(note)) throw new Error(`the note reads "${note}"`);
+        // The sentence as one paragraph, the full stop right after the link (getByText matches the <p>,
+        // whose text ends with the stop; the link's own text doesn't).
+        const note = ctx.page.getByText(/daily rep — link one in Settings\.$/);
+        if (!(await note.isVisible()))
+          throw new Error('the note does not end in "link one in Settings."');
         // The gap was the link's own right padding (PR 65's nit), not a space in the text: measure it.
-        const pad = await link.evaluate((el) => getComputedStyle(el).paddingRight);
+        const pad = await link.evaluate<string>('el => getComputedStyle(el).paddingRight');
         if (pad !== '0px') throw new Error(`the link keeps ${pad} of padding before the full stop`);
         await ctx.shot('library-note');
       },

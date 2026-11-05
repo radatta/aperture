@@ -124,13 +124,16 @@ describe('Flux History tab', () => {
       globalThis.ResizeObserver = RO;
     });
 
-    // jsdom has no layout, so the tile's width comes from a ResizeObserver that answers at once with the
-    // width a phone's Trend card has inside its padding.
-    it('draws at the measured width, the end dot at its right edge', async () => {
+    // jsdom has no layout, so the tile's box comes from a ResizeObserver that answers at once with the
+    // width a phone's Trend card has inside its padding (and a taller box, as a larger iOS text size gives).
+    it('draws at the measured size, the end dot at its right edge', async () => {
       globalThis.ResizeObserver = class {
         constructor(private readonly cb: ResizeObserverCallback) {}
         observe(el: Element) {
-          this.cb([{ target: el, contentRect: { width: 376 } } as ResizeObserverEntry], this);
+          this.cb(
+            [{ target: el, contentRect: { width: 376, height: 56 } } as ResizeObserverEntry],
+            this,
+          );
         }
         unobserve() {}
         disconnect() {}
@@ -143,7 +146,7 @@ describe('Flux History tab', () => {
       ]);
       await user.click(await screen.findByRole('button', { name: 'rotation' }));
       const svg = screen.getByRole('img', { name: /rotation · avg peak, 3 sets/ });
-      expect(svg.getAttribute('viewBox')).toBe('0 0 376 48');
+      expect(svg.getAttribute('viewBox')).toBe('0 0 376 56');
       // The end dot sits at the right edge, less the pad — not at 234 of a 240 px drawing.
       const dot = svg.querySelector('circle[r="4"]');
       expect(Number(dot?.getAttribute('cx'))).toBe(370);
