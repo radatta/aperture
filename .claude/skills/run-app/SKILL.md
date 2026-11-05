@@ -117,11 +117,12 @@ Aperture is used on an **iPhone 18 Pro Max, as the installed PWA in Safari** (th
 | width       | why                                                                                                        |
 | ----------- | ---------------------------------------------------------------------------------------------------------- |
 | **440×956** | the daily device — what the user actually sees; most findings are real here                                |
-| **390×844** | the floor (iPhone 12–15 class) — the narrowest layout we keep working; real findings have come from it too |
+| **390×844** | the floor (iPhone 12–14 class) — the narrowest layout we keep working; real findings have come from it too |
 
 Each width is its own context (never `setViewportSize` on the desktop one — `isMobile` can't change after creation):
 
 ```js
+const OUT = '/path/to/aperture/.claude/worktrees/<branch>/localNotes/screenshots/round-1'; // mkdirSync it
 const PHONES = [
   { width: 440, height: 956 }, // iPhone 18 Pro Max — first
   { width: 390, height: 844 }, // the floor
@@ -135,11 +136,12 @@ for (const viewport of PHONES) {
     timezoneId: 'America/Los_Angeles',
   });
   const page = await context.newPage();
-  // …goto / waitForSelector as above, then for each screen a light + dark pair:
+  // attach the `errors` listeners (console + pageerror) to THIS page too — each context has its own;
+  // then goto / waitForSelector as above, and for each screen a light + dark pair:
   for (const theme of ['light', 'dark']) {
     await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
     await page.waitForTimeout(250); // the theme-flip gotcha below
-    await page.screenshot({ path: `${viewport.width}-${theme}-01-home.png` }); // viewport-sized = one phone screen
+    await page.screenshot({ path: `${OUT}/${viewport.width}-${theme}-01-home.png` }); // viewport-sized = one phone screen
   }
   await context.close();
 }
@@ -157,15 +159,17 @@ for (const viewport of PHONES) {
 
 **What a headless pass does _not_ prove — hard rule.** This is a Chromium browser tab wearing phone
 dimensions, not the installed PWA. It has **no status bar or Dynamic Island, no home indicator**
-(`env(safe-area-inset-*)` is 0, so `.pt-safe`/`.pb-safe` add nothing), **no standalone mode**
+(`env(safe-area-inset-*)` is 0: `.pt-safe` adds nothing and `.pb-safe` sits at its 1rem floor, where the phone
+has 34 px — the dock is ~18 px lower in a shot than on the device), **no standalone mode**
 (`display-mode: standalone` is false, `isStandalonePwa()` false), **no iOS keyboard** (`visualViewport` never
 shrinks, so `useKeyboardInset` never lifts the dock), **no focus zoom on fields under 16px**
-(`CONVENTIONS.md` → _Text fields are 16px or larger_), and no service-worker cold launch. A green pass says
+(`CONVENTIONS.md` → _Text fields are 16px or larger_), and **no service worker at all** (`vite dev` has it off,
+`app/vite.config.ts`) — the two-launch refresh is only visible on the phone or in the devcheck's 3-reload check. A green pass says
 the layout works at the phone's width — nothing about insets, the keyboard, zoom, or standalone. Those are
 verified **on the phone via a dev push** (or the iOS Simulator once mac-sim PR 2 lands), never inferred from
-these shots; say so in the report instead of claiming them. Real safe-area insets through a CDP override
-(`Emulation.setSafeAreaInsetsOverride`, 62 top / 34 bottom) are the parked task `01M4VJ8PQ8H61CMQP10CKMN17V`
-("devcheck-phone insets") — when it lands, an _Insets_ snippet joins this section; until then, insets are 0 here.
+these shots; say so in the report instead of claiming them. Real safe-area insets in headless are the parked
+task `01M4VJ8PQ8H61CMQP10CKMN17V` ("devcheck-phone insets") — when it lands, an _Insets_ snippet joins this
+section; until then, insets are 0 here.
 
 ## Gotchas
 
