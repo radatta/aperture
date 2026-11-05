@@ -120,6 +120,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const pendingRecords: Promise<void>[] = []; // one per create request, from the moment it's SENT
   let baseline: Set<string> | undefined; // the partition's task ids right after the sweep
   let placeBaseline: Set<string> | undefined; // and its place ids
+  let categoryBaseline: Set<string> | undefined; // and its category ids
   let browser: BrowserSession | undefined;
   let session: Session | undefined;
   let api: ApiClient | undefined;
@@ -187,6 +188,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));
     placeBaseline = new Set((await api.reads.listPlaces()).map((p) => p.id));
+    categoryBaseline = new Set((await api.reads.listCategories()).map((c) => c.id));
     // After the sweep (whose writes use the checked app session), before any step: the MCP token is the
     // test user's — WRONG_USER otherwise — before a step can write through it.
     const mcpSession = await browser.signInMcp((p) =>
@@ -550,6 +552,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const places = (await api.reads.listPlaces()).map((p) => p.id).filter((id) => !known.has(id));
     r.unrecorded.push(...places.filter((id) => !placeBaseline || placeBaseline.has(id)));
     if (placeBaseline) r.appeared.push(...places.filter((id) => !placeBaseline!.has(id)));
+    // And categories (Settings' Add, MCP create_category): the same leak check.
+    const cats = (await api.reads.listCategories()).map((c) => c.id).filter((id) => !known.has(id));
+    r.unrecorded.push(...cats.filter((id) => !categoryBaseline || categoryBaseline.has(id)));
+    if (categoryBaseline) r.appeared.push(...cats.filter((id) => !categoryBaseline!.has(id)));
     if (r.appeared.length)
       fail('LEFTOVERS', `appeared during the run, not in the ledger: ${r.appeared.join(', ')}`);
 

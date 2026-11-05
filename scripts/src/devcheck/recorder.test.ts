@@ -37,6 +37,13 @@ describe('recorder', () => {
     expect(isCreateRequest('upsertPlace', 'not json')).toBe(false);
     expect(isCreateRequest('createTask', null)).toBe(true);
     expect(isCreateRequest('listPlaces', body({}))).toBe(false);
+    // A category added in Settings follows the same rule (the areas scenario).
+    expect(idsFromCreateResponse('upsertCategory', { id: 'c1', label: 'X' })).toEqual(['c1']);
+    expect(isCreateRequest('upsertCategory', body({ label: 'X', isWork: true }))).toBe(true);
+    expect(isCreateRequest('upsertCategory', body({ id: 'c1', label: 'X', isWork: true }))).toBe(
+      false,
+    );
+    expect(isCreateRequest('upsertCategory', null)).toBe(false);
   });
 
   it('ignores other methods and malformed bodies', () => {

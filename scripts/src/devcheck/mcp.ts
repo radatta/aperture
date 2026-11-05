@@ -7,6 +7,7 @@ import {
   MCP_SERIES_VIA,
   ledgerKind,
   type CreateSeriesInput,
+  MCP_CATEGORY_VIA,
   type DevAttachment,
   type DevCategory,
   type DevPlace,
@@ -211,6 +212,18 @@ export function createMcpClient({
     // The server's answer to stop_series for an id that isn't the user's — no ledger check, since the point is
     // that the server refuses it; the harness only ever names ids no row can have.
     stopSeriesUnknown: (id: string) => tool('stop_series', { id }),
+    // create_category, ledgered like create_task (the areas scenario proves `area` on create); cleaned by the
+    // API's deleteCategory on the recorded id.
+    async createCategory(input: {
+      label: string;
+      isWork: boolean;
+      area?: DevCategory['area'];
+    }): Promise<DevCategory> {
+      ledger.append({ run, op: 'intent', via: MCP_CATEGORY_VIA, title: input.label });
+      const cat = await data<DevCategory>('create_category', input);
+      ledger.append({ run, op: 'created', id: cat.id, via: MCP_CATEGORY_VIA, title: input.label });
+      return cat;
+    },
     // Patch a category this run created (update_category) — the areas scenario sets its area over MCP.
     async updateCategory(
       id: string,

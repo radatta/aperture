@@ -77,6 +77,7 @@ describe('createMcpClient', () => {
     expect(Object.keys(c.writes).sort()).toEqual([
       'completeTask',
       'createSeries',
+      'createCategory',
       'createTask',
       'deleteAttachment',
       'deleteTask',

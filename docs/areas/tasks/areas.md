@@ -51,9 +51,10 @@ Category ──── area: 'school' | 'aperture' | 'recruiting' | 'personal' | 
   Aperture-area cards wait behind a toggle chip **"Aperture · N"** in the chips row — pressed while shown. It
   lives in the session query (D4: sticky for the session, reset each day), it widens rather than narrows so
   it is no override chip and never counts toward "Filter · N", and Clear / Reset to lens fold it back. A
-  search ignores the fold: typing finds everything (D1). A part folded under its parent's card is in its
-  parent's area (as it is in its place): the card is one thing, hidden or shown whole, and counted once by
-  the parent; a part standing alone (its parent on today's plan, say) reads by its own category. Today and
+  search ignores the fold: typing finds everything (D1). A part whose parent is in the same place is in its
+  parent's area (as it is in its place — `areaOfOwner` keys on the place, not on the parent surviving the
+  other filters): the card is one thing, hidden or shown whole, and counted once by the parent; a part
+  standing alone (its parent on today's plan, say) reads by its own category. Today and
   Week never filter by area — a dev ticket due Friday is due Friday.
 - **Home "+ Add".** `useBacklog` (the "N waiting in the backlog" count) and the picker's unsearched list
   apply the same life predicate (`lifeFrom`, `areas.ts`) — the hook adds "backlog, untimed, no parent", the

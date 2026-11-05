@@ -195,8 +195,12 @@ export const FLUX_SET_VIA = 'api:recordFluxSet';
 // A place this harness created (through the API, or the browser's upsertPlace create — recorder.ts).
 export const PLACE_VIA = 'api:upsertPlace';
 export const UI_PLACE_VIA = 'ui:upsertPlace';
-// A category this harness created, recorded from the create response like a place.
+// A category this harness created — through the API (upsertCategory with no id), Settings' Add (the browser's
+// upsertCategory create, recorder.ts) or MCP create_category. Cleaned by deleteCategory on the recorded id
+// (newest-first, so after the run's tasks on it); never an existing category of the test user's.
 export const CATEGORY_VIA = 'api:upsertCategory';
+export const UI_CATEGORY_VIA = 'ui:upsertCategory';
+export const MCP_CATEGORY_VIA = 'mcp:create_category';
 // A habit this harness created. The API has no habit delete, so cleanup ARCHIVES it (`active: false`) and
 // "exists" means listed and active — archived `devcheck …` habits stay on the test user, by design, until
 // a tombstoning deleteHabit lands (day-guards' follow-up).
@@ -242,7 +246,8 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FLUX_SET_VIA) return 'flux';
   if (via !== undefined && SERIES_VIAS.includes(via)) return 'series';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
-  if (via === CATEGORY_VIA) return 'category';
+  if (via === CATEGORY_VIA || via === UI_CATEGORY_VIA || via === MCP_CATEGORY_VIA)
+    return 'category';
   if (via === HABIT_VIA) return 'habit';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';

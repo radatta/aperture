@@ -10,7 +10,8 @@ import type { DevCategory, DevTask } from '../api';
 import { needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const title = (ctx: Ctx, what: string) => `devcheck-areas ${ctx.nonce} ${what}`;
-const catLabel = (ctx: Ctx, which: 'A' | 'B') => `Devcheck areas ${ctx.nonce} ${which}`;
+// A, B: the seed's (API); C: Settings' Add; D: MCP create_category. Each is ledgered and cleaned by id.
+const catLabel = (ctx: Ctx, which: 'A' | 'B' | 'C' | 'D') => `Devcheck areas ${ctx.nonce} ${which}`;
 // 390×844 is the narrowest phone the UI pass covers (browser.ts); the Settings rows must keep their arrows there.
 const NARROW = { width: 390, height: 844 } as const;
 
@@ -74,6 +75,12 @@ export const areas: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Settings › Area… › Aperture on a category: one write, the row reads "Work · Aperture"',
+    },
+    {
+      id: 'settings-new-area',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Settings › New category with Area: Recruiting → the row reads "Work · Recruiting", the server has it',
     },
     {
       id: 'settings-arrows-390',
@@ -150,6 +157,18 @@ export const areas: Scenario = {
       entry: 'mcp',
       kind: 'nominal',
       what: 'update_category {area: "school"} → list_categories returns it; the Backlog shows the task on reload',
+    },
+    {
+      id: 'mcp-create-area',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'create_category {area: "school"} → the category lists with it',
+    },
+    {
+      id: 'mcp-clear-area',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'update_category {area: null} clears it (reads as Personal); an unsent area keeps it',
     },
     {
       id: 'api-invalid-area',
@@ -275,6 +294,32 @@ export const areas: Scenario = {
       },
     },
     {
+      id: 'settings-new',
+      entry: 'ui',
+      proves: ['settings-new-area'],
+      title:
+        'Settings › New category "…C", Area: Recruiting, Add → its row reads it; the ledger has its id',
+      async run(ctx) {
+        await ctx.page.getByLabel('New category', { exact: true }).fill(catLabel(ctx, 'C'));
+        await ctx.page.getByLabel('Area', { exact: true }).selectOption({ label: 'Recruiting' });
+        await ctx.page.getByRole('button', { name: 'Add', exact: true }).click();
+        const row = ctx.page.getByRole('group', {
+          name: `Category ${catLabel(ctx, 'C')}`,
+          exact: true,
+        });
+        await row.waitFor({ state: 'visible', timeout: 15_000 });
+        await row.getByText('Work · Recruiting', { exact: true }).waitFor({ timeout: 10_000 });
+        const made = (await ctx.api.reads.listCategories()).find(
+          (c) => c.label === catLabel(ctx, 'C'),
+        );
+        if (!made || made.area !== 'recruiting')
+          throw new Error(`server has ${JSON.stringify(made)}`);
+        if (!ctx.createdIds().includes(made.id))
+          throw new Error('the upsertCategory response never reached the ledger (recorder.ts)');
+        await ctx.shot('settings-new');
+      },
+    },
+    {
       id: 'backlog-folded',
       entry: 'ui',
       proves: ['backlog-hides', 'no-area-personal'],
@@ -357,6 +402,30 @@ export const areas: Scenario = {
         if (listed?.area !== 'school') throw new Error(`list_categories has ${listed?.area}`);
         if ((await serverCategory(ctx, catA.id)).area !== 'school')
           throw new Error('the API lists a different area than MCP');
+      },
+    },
+    {
+      id: 'mcp-create-clear',
+      entry: 'mcp',
+      proves: ['mcp-create-area', 'mcp-clear-area'],
+      title: 'create_category with area: school; a rename keeps it; area: null clears it',
+      async run(ctx) {
+        const made = await ctx.mcp.writes.createCategory({
+          label: catLabel(ctx, 'D'),
+          isWork: false,
+          area: 'school',
+        });
+        if (made.area !== 'school')
+          throw new Error(`create_category answered ${JSON.stringify(made)}`);
+        const kept = await ctx.mcp.writes.updateCategory(made.id, {
+          label: `${catLabel(ctx, 'D')}2`,
+        });
+        if (kept.area !== 'school') throw new Error('a rename over MCP dropped the area');
+        const cleared = await ctx.mcp.writes.updateCategory(made.id, { area: null });
+        if (cleared.area !== null) throw new Error(`area: null read back ${String(cleared.area)}`);
+        const listed = (await ctx.mcp.reads.listCategories()).find((c) => c.id === made.id);
+        if (!listed || listed.area !== null || listed.label !== `${catLabel(ctx, 'D')}2`)
+          throw new Error(`list_categories has ${JSON.stringify(listed)}`);
       },
     },
     {

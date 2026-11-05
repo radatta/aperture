@@ -756,6 +756,27 @@ describe('runPipeline', () => {
     expect(r.status).toBe('PASS');
   });
 
+  it('a category that appears during the run without a ledger entry fails it; one from before is reported', async () => {
+    const w = world();
+    const cat = (id: string): DevCategory => ({
+      id,
+      label: id,
+      isWork: true,
+      order: 0,
+      active: true,
+      area: null,
+    });
+    w.categories.set('users', cat('users'));
+    const sc = scenario(async (x) => {
+      x.categories.set('ghost', cat('ghost'));
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.appeared).toEqual(['ghost']);
+    expect(r.unrecorded).toEqual(['users']);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(w.categoriesDeleted).toEqual([]);
+  });
+
   it('revokes a token this run minted, and verifies it inactive', async () => {
     const w = world();
     const ledger = memLedger();
