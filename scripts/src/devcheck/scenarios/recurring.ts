@@ -99,13 +99,13 @@ export const recurring: Scenario = {
       id: 'unplan',
       entry: 'ui',
       kind: 'edge',
-      what: 'Unplan sends the occurrence to Backlog; Today shows no copy, and reloading spawns none',
+      what: 'Unplan sends the occurrence back to the backlog (listed under Week — it’s due tomorrow); Today shows no copy, and reloading spawns none',
     },
     {
       id: 'replan',
       entry: 'ui',
       kind: 'edge',
-      what: '“+ Today” from Backlog brings the same occurrence back — still one',
+      what: '“+ Today” from Week brings the same occurrence back — still one',
     },
     {
       id: 'ended',
@@ -134,6 +134,17 @@ export const recurring: Scenario = {
         file: 'lambdas/src/backend.test.ts',
         test: 'getDay twice after removePlan spawns no second occurrence',
         why: 'same path as unplan (proven on dev): the browser’s Unplan is removePlan then getDay, and every reload is another getDay; the test runs the Lambda’s own path a third time',
+      },
+    },
+    {
+      id: 'api-delete',
+      entry: 'api',
+      kind: 'edge',
+      what: 'deleteSeries tombstones the template (API only); a stop or edit after it is Not found',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'deleteSeries tombstones the template and later series writes answer Not found',
+        why: 'the teardown step runs deleteSeries on dev for every series this scenario made; the tombstone itself (kept in the table, gone from every read) is only visible under the facade',
       },
     },
     {
@@ -236,7 +247,7 @@ export const recurring: Scenario = {
       id: 'unplan',
       entry: 'ui',
       proves: ['unplan'],
-      title: 'Unplan → Backlog; Today shows no copy after two reloads',
+      title: 'Unplan → backlog status, listed under Week; Today shows no copy after two reloads',
       async run(ctx) {
         const title = name(ctx, 'prelab');
         await todaySearched(ctx, title);
@@ -260,19 +271,21 @@ export const recurring: Scenario = {
             );
         }
         await ctx.shot('today-after-unplan');
-        await ctx.ui.goto('/tasks?lens=backlog');
+        // Due tomorrow, so its home lens is Week, not Backlog (lenses.md §1) — the status is backlog.
+        await ctx.ui.goto('/tasks?lens=week');
         await ctx.page.getByLabel('Search tasks').fill(title);
         await rowOf(ctx, title).waitFor({ timeout: 15_000 });
+        await ctx.shot('week-after-unplan');
       },
     },
     {
       id: 'replan',
       entry: 'ui',
       proves: ['replan'],
-      title: '“+ Today” from Backlog → the same occurrence is back on Today, still one',
+      title: '“+ Today” from Week → the same occurrence is back on Today, still one',
       async run(ctx) {
         const title = name(ctx, 'prelab');
-        await ctx.ui.goto('/tasks?lens=backlog');
+        await ctx.ui.goto('/tasks?lens=week');
         await ctx.page.getByLabel('Search tasks').fill(title);
         const add = ctx.page.getByRole('button', { name: `Add ${title} to today` });
         await add.waitFor({ timeout: 15_000 });
@@ -306,8 +319,12 @@ export const recurring: Scenario = {
           until: yesterday,
         });
         await ctx.ui.expectText(`Weekdays · due same day · ended ${monthDay(yesterday)}`);
-        if ((await ctx.page.getByRole('button', { name: 'Stop', exact: true }).count()) < 2)
-          throw new Error('an ended series lost its Stop');
+        // The ended row's own card still offers Stop (D2): the card is the nearest ancestor holding both.
+        const endedCard = ctx.page
+          .getByText(name(ctx, 'ended'), { exact: true })
+          .locator('xpath=ancestor::*[.//button[normalize-space()="Stop"]][1]');
+        if ((await endedCard.getByRole('button', { name: 'Stop', exact: true }).count()) !== 1)
+          throw new Error('the ended series’ row has no Stop of its own');
         plain = await addSeries(ctx, name(ctx, 'plain'), { repeats: 'Every day' });
         await ctx.page.getByText('Every day', { exact: true }).first().waitFor({ timeout: 10_000 });
         await ctx.shot('recurring-three-rows');

@@ -69,17 +69,17 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 
 ## Tools (v1)
 
-| group            | tools                                                                                                                                                                                                                                                                                                                         |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?, reflection?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md))                                           |
-| places           | `list_places`, `list_place_tasks {place}` (the Shortcut's digest + `tasks[]` ids, no heartbeat — [tasks/places](../tasks/places.md))                                                                                                                                                                                          |
+| group            | tools                                                                                                                                               |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?, reflection?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
+| places           | `list_places`, `list_place_tasks {place}` (the Shortcut's digest + `tasks[]` ids, no heartbeat — [tasks/places](../tasks/places.md)) |
 | series           | `list_series {includeStopped?}`, `create_series {title, rule, categoryId?, defaultEstimateMin?, dueOffsetDays?, until?}` (anchored on the user's today; an `until` before it is refused), `stop_series {id}` — the templates; occurrences are `list_tasks` rows with `seriesId` ([tasks/recurring](../tasks/recurring.md) D5) |
-| categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                                                                                                                                                                                                |
-| calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                                                                                                                                                                                             |
-| calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                                                                                                                                                                                            |
-| attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`                                                                                                                                                                                      |
-| finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`                                                                                                                                                                                      |
-| flux (read)      | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                                                                                                                                                                                               |
+| categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
+| calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
+| calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
+| attachments      | `list_attachments`, `attach_file`, `create_attachment_upload` + `confirm_attachment`, `get_attachment_download_url`, `delete_attachment`            |
+| finances (read)  | `get_finance_overview {today?}`, `list_finance_transactions {from?,to?,unsorted?,bucket?,merchant?,today?,limit?}`, `list_finance_rules`           |
+| flux (read)      | `list_flux_sets {from?,to?,exerciseId?}`, `list_flux_exercises`                                                                                    |
 
 Notes that matter (carried in the tool descriptions, since the model can't infer them):
 
@@ -101,7 +101,7 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   other (before 2026-10-06 an estimate-only call zeroed the buffer) — the calibration baseline frozen at start
   never moves, and a failing field's error names which fields already applied.
 - **`split_task {id, finish, actualMin?, title?, parentTitle?, estimateMin?, bufferMin?, followUpTitle,
-followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md)) — "scope change =
+  followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md)) — "scope change =
   split" is the product's move, so voice gets it as one call rather than improvising cancel + create.
   `finish: "done"` (a started task only) **requires `actualMin`** — the same posture as `complete_task`;
   `keep` rejects it. A split always yields parent + parts: a standalone task becomes "Part 1" (unless `title`)
@@ -432,7 +432,7 @@ Decisions (2026-10-12) — the parse moved to the server ([quick-add](../tasks/q
   server-side, so the script lost its prompt, schema, field re-check and category cache. Of the
   2026-10-09 bullets below, structured outputs and the field re-check now run in the Lambda
   (`lambdas/src/anthropic/`, `validateParsedTask`); the category cache and the hard-coded 4am are
-  _superseded_ — the enum is the live active list and "today" reads Settings.
+  *superseded* — the enum is the live active list and "today" reads Settings.
 - **A failed `parse_task` (an `ok: false` result, an RPC error, a timeout at 12s) still adds the task
   raw**, with the reason in the red toast — unchanged behaviour, new reasons.
 
@@ -447,10 +447,10 @@ Decisions (2026-10-09):
   The script re-checks each field against the server's rules and drops a bad one, naming it in the toast;
   if the server still rejects the args (`-32602`, raised before any write) it resends the line raw.
 - **"Today" uses the 4am day start** (`dayStartHour`'s default — no MCP tool reads Settings), so a
-  relative due date means what the app's Today means. _Superseded 2026-10-12:_ the server reads the real
+  relative due date means what the app's Today means. *Superseded 2026-10-12:* the server reads the real
   `dayStartHour`.
 - **Parse failure still adds the task, raw** (the line as its title), with a loud `Added RAW (couldn't
-parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is quiet.
+  parse: …)` toast, red (exit 1) — the user's call over blocking; nothing is quiet.
 - **A time with no day means today** (`call dentist 4pm`) — the user's call; a time whose day was
   dropped as invalid is dropped too.
 

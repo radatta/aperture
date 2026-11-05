@@ -1324,6 +1324,36 @@ export function runApiContract(
       expect(await api.listPlansForDay('2026-08-31')).toHaveLength(3);
     });
 
+    it('series: an occurrence moved onto another due day is its own deliverable — that day still spawns', async () => {
+      // Identity is (series, day), not the plan row (recurring.md D4): the pre-lab for lab 3, replanned onto
+      // next Tuesday, doesn't stand in for lab 4's — both show, each with its own due date.
+      const s = await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 1,
+      });
+      await api.getDay('2026-08-04');
+      const [plan] = await api.listPlansForDay('2026-08-04');
+      await api.removePlan(plan!.id);
+      await api.upsertPlan({
+        taskId: plan!.taskId,
+        day: '2026-08-05',
+        plannedMinutes: 60,
+        order: 1,
+      });
+      await api.getDay('2026-08-05');
+      const rows = await api.listPlansForDay('2026-08-05');
+      expect(rows).toHaveLength(2);
+      const tasks = (await api.listTasks()).filter((t) => t.seriesId === s.id);
+      expect(tasks.map((t) => [t.seriesDay, t.dueDay, t.status]).sort()).toEqual([
+        ['2026-08-04', '2026-08-05', 'planned'],
+        ['2026-08-05', '2026-08-06', 'planned'],
+      ]);
+    });
+
     it('series: nothing spawns after until; the row stays active', async () => {
       const s = await api.upsertSeries({
         title: 'Pre-lab',
@@ -1379,6 +1409,7 @@ export function runApiContract(
       await api.deleteSeries(s.id);
       await api.deleteSeries('nope');
       expect(await api.listSeries()).toHaveLength(0);
+      await expect(api.deactivateSeries(s.id)).rejects.toThrow(/Not found/);
       await api.getDay('2026-08-05');
       const occurrences = (await api.listTasks()).filter((t) => t.seriesId === s.id);
       expect(occurrences).toHaveLength(1);

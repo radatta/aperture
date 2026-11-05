@@ -211,7 +211,8 @@ export class Repo {
   }
   async getSeries(id: string, opts?: { consistent?: boolean }): Promise<TaskSeries | null> {
     const it = await this.doc.get(this.p(), sk.series(id), opts);
-    return it ? toEntity<TaskSeries>(it) : null;
+    const s = it ? toEntity<TaskSeries>(it) : null;
+    return s && s.deletedAt === null ? s : null; // a deleteSeries tombstone reads as gone, like a task
   }
   async putSeries(s: TaskSeries): Promise<TaskSeries> {
     await this.writes.put(entityItem(this.userId, sk.series(s.id), s));

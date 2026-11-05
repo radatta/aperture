@@ -69,6 +69,35 @@ describe('backend recurrence', () => {
     });
     expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
   });
+
+  // deleteSeries is a tombstone (TECH.md asks every new delete path to prove soft, not hard), and the row
+  // then reads as gone to every series write — a stop or edit after it is Not found, as the stub answers.
+  it('deleteSeries tombstones the template and later series writes answer Not found', async () => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => clock,
+    });
+    const input = {
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 60,
+      rule: { kind: 'daily' } as const,
+      anchorDate: '2026-08-01',
+    };
+    const s = await backend.upsertSeries(input);
+    clock += 1000;
+    await backend.deleteSeries(s.id);
+    const raw = await doc.get('u#local', sk.series(s.id));
+    expect(raw?.deletedAt).toBe(clock);
+    expect(await backend.listSeries()).toEqual([]);
+    await expect(backend.deactivateSeries(s.id)).rejects.toThrow(/Not found/);
+    await expect(backend.upsertSeries({ ...input, id: s.id })).rejects.toThrow(/Not found/);
+    clock += 1000;
+    await backend.deleteSeries(s.id); // idempotent: the tombstone keeps its first stamp
+    expect((await doc.get('u#local', sk.series(s.id)))?.deletedAt).toBe(clock - 1000);
+  });
 });
 
 describe('backend attachments', () => {
