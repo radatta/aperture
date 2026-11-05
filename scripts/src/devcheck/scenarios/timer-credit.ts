@@ -192,6 +192,7 @@ export const timerCredit: Scenario = {
         await dialog.getByRole('button', { name: /^Split/ }).click();
         const actual = dialog.getByLabel("This part's actual (min)");
         await actual.waitFor({ timeout: 10_000 });
+        await actual.scrollIntoViewIfNeeded(); // the reveal opens below the modal's fold
         await ctx.shot('split-form-timer-running');
         await actual.fill('20');
         await dialog.getByRole('button', { name: 'Split', exact: true }).click();
