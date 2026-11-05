@@ -35,16 +35,18 @@ export const KILL_ALARMS = [
     minutes: 60,
     periods: 1,
   },
-  // A slower drain still: a rolling three-hour sum, compared every minute (a period under a day evaluates per minute
-  // over a sliding window), so a drain that rests between bursts can't dodge it the way it could three hourly checks.
-  // 300,000 ms in three hours is about 1.7 environment-minutes an hour. Measured 2026-11-01: the whole dev-account window
-  // (deploys, two full devchecks, a phone test) used 17,707 ms in three hours, so a busy session sits ~17× under it.
-  // Re-tune if real agent sessions come near it.
+  // A rolling three-hour sum, compared every minute (a period under a day evaluates per minute over a sliding window).
+  // 1,800,000 ms in three hours is ten environment-minutes an hour — the hourly alarm's rate — so in steady state it is
+  // a second, independent trip on a sustained drain rather than a lower one (any three-hour window at this sum holds an
+  // hour at the hourly's), and the slot to re-tighten once devcheck cost settles. Measured 2026-11-04 (PT): parallel
+  // lanes put ~314,000 ms in a three-hour window and tripped the old 300,000 — a full devcheck now costs ~55–60k ms, up
+  // from the 17,707 ms a whole 2026-11-01 window measured — so that busy window sits ~6× under this, a single devcheck
+  // ~30×. The live alarm was raised by hand first (break-glass put-metric-alarm, the same night); this matches it.
   {
     name: `${KILL_ALARM_PREFIX}duration-3h`,
     namespace: 'AWS/Lambda',
     metricName: 'Duration',
-    threshold: 300_000,
+    threshold: 1_800_000,
     minutes: 180,
     periods: 1,
   },
