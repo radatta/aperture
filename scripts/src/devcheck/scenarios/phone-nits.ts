@@ -47,6 +47,10 @@ async function findRow(ctx: Ctx, lens: string) {
   return button;
 }
 
+// The card's Done, not the Done lens tab (same role and name): the tabs are a group, the lists regions.
+const cardDone = (ctx: Ctx) =>
+  ctx.page.getByRole('region').getByRole('button', { name: 'Done', exact: true });
+
 const dialogOf = (ctx: Ctx) => ctx.page.getByRole('dialog', { name: `Task: ${name(ctx)}` });
 
 // Due and Due time sit on one line of the open editor.
@@ -201,13 +205,9 @@ export const phoneNits: Scenario = {
         await at(ctx, FLOOR, async () => {
           await findRow(ctx, 'backlog');
           await ctx.page.getByRole('button', { name: 'Start', exact: true }).click();
-          await ctx.page
-            .getByRole('button', { name: 'Done', exact: true })
-            .waitFor({ timeout: 15_000 });
+          await cardDone(ctx).waitFor({ timeout: 15_000 });
           const title = await findRow(ctx, 'today');
-          await ctx.page
-            .getByRole('button', { name: 'Done', exact: true })
-            .waitFor({ timeout: 15_000 });
+          await cardDone(ctx).waitFor({ timeout: 15_000 });
           await expectTwoLines(title, 'Today at 390');
           await ctx.shot('today-390');
         });
