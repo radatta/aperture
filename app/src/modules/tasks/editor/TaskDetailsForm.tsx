@@ -392,7 +392,9 @@ export function TaskDetailsForm({
             </Text>
           </div>
         ) : (
-          <>
+          // One group, like Buffer + "+25%": the pair (300px) fits a line at 440 and 390, where a bare
+          // Due time used to wrap alone under the row.
+          <div className="flex items-end gap-3">
             <Field
               label={isPart ? 'Ends' : 'Due'}
               type="date"
@@ -413,7 +415,7 @@ export function TaskDetailsForm({
               onChange={(e) => setDueTime(timeKeyOfInput(e.target.value))}
               className="w-32"
             />
-          </>
+          </div>
         )}
       </div>
       {parent &&

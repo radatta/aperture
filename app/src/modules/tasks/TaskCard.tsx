@@ -39,7 +39,8 @@ const ROW_CONTROLS = 'button, a, input, select, textarea, label';
 
 // One task, slimmed to the lifecycle actions you press without thinking — Start, Focus, Done, plus the
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
-// calendar, files, drop, delete — lives in the modal the title (or Scope/Done) opens. No overflow menu.
+// calendar, files, drop, delete — lives in the modal the title (or Done, or the meta line's "not scoped")
+// opens. No overflow menu, and no Scope button: three buttons left a 390 title ~14 characters.
 // `notesHit` marks a search result the title and category alone don't explain, so the row says why
 // it's here. A parent (parts.ts) is the deliverable: never started itself, it shows its progress (its
 // one-tap Mark done, once every part is dealt with, comes in `actions` from the list, which owns focus
@@ -98,16 +99,11 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
             urgency={urgencyLabel(urgency)}
             summary={summary}
             parent={parentOf(tasks, task)}
+            onScope={() => openAs('scope')}
           />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {actions}
-          {/* An errand (on a store's list) is checked off, not timed — nothing to scope. */}
-          {canScope && task.estimateMin == null && !task.place && (
-            <Button variant="quiet" size="sm" onClick={() => openAs('scope')}>
-              Scope
-            </Button>
-          )}
           {canScope && (
             <Button size="sm" onClick={() => transition.mutate({ id: task.id, to: 'in_progress' })}>
               Start
@@ -134,20 +130,23 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
   );
 }
 
-// One quiet metadata line. Absence is shown by absence — except that an unscoped backlog task now says
-// so, since the always-visible Scope button that used to carry that signal is gone from the card.
+// One quiet metadata line. Absence is shown by absence — except that an unscoped backlog task says so,
+// and that cue is the button that opens the editor on Estimate (`onScope`): the Scope button it replaces
+// cost the title ~72px of the row.
 function TaskMeta({
   task,
   notesHit,
   urgency,
   summary,
   parent,
+  onScope,
 }: {
   task: Task;
   notesHit: boolean;
   urgency: string | null;
   summary: PartsSummary | null; // set when it's a parent
   parent: Task | undefined; // set when it's a part
+  onScope: () => void;
 }) {
   const { data: settings } = useSettings();
   const { data: attachments = [] } = useAttachments();
@@ -176,10 +175,16 @@ function TaskMeta({
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <CategoryTag categoryId={task.categoryId} />
       <PlaceTag place={task.place} />
+      {/* An errand (on a store's list) is checked off, not timed — nothing to scope. Text-sized, with the
+          hit area grown by negative margin so the meta line stays one line tall but the tap is ≥ 28px. */}
       {task.estimateMin == null && canScope && !task.place && (
-        <Text size="xs" tone="muted">
+        <button
+          type="button"
+          onClick={onScope}
+          className="-my-1.5 py-1.5 text-xs text-ink-muted underline decoration-dotted underline-offset-2 hover:text-ink"
+        >
           not scoped
-        </Text>
+        </button>
       )}
       {bits.length > 0 && (
         <Text size="xs" tone="muted" tabular>

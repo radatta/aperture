@@ -48,19 +48,20 @@ describe('TaskCard', () => {
     await waitFor(() => expect(document.activeElement).toBe(dialog));
   });
 
-  it('Scope still opens on the Estimate field', async () => {
+  it('the “not scoped” cue opens on the Estimate field — there is no Scope button', async () => {
     const api = freshApi();
     await api.createTask({ title: 'Needs scoping' });
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
 
     await user.click(await screen.findByRole('button', { name: 'Backlog' }));
-    await user.click(await screen.findByRole('button', { name: 'Scope' }));
+    expect(screen.queryByRole('button', { name: 'Scope' })).toBeNull();
+    await user.click(await screen.findByRole('button', { name: 'not scoped' }));
     const d = within(await screen.findByRole('dialog', { name: 'Task: Needs scoping' }));
     await waitFor(() => expect(document.activeElement).toBe(d.getByLabelText('Estimate (min)')));
   });
 
-  it('shows Scope only while the task is unscoped', async () => {
+  it('shows “not scoped” only while the task is unscoped', async () => {
     const api = freshApi();
     await api.createTask({ title: 'Unscoped' });
     await api.createTask({ title: 'Scoped', estimateMin: 30 });
@@ -69,21 +70,20 @@ describe('TaskCard', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Backlog' }));
     await screen.findByRole('button', { name: 'Scoped' });
-    // Only the unscoped task carries a Scope button.
-    const scopeButtons = screen.getAllByRole('button', { name: 'Scope' });
-    expect(scopeButtons).toHaveLength(1);
+    // Only the unscoped task carries the cue.
+    expect(screen.getAllByRole('button', { name: 'not scoped' })).toHaveLength(1);
   });
 });
 
 describe('row click', () => {
   it('opens the editor from anywhere on the row, but a button does only its own thing', async () => {
     const api = freshApi();
-    const t = await api.createTask({ title: 'Clickable' });
+    const t = await api.createTask({ title: 'Clickable', estimateMin: 30 });
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
 
     await user.click(await screen.findByRole('button', { name: 'Backlog' }));
-    await user.click(await screen.findByText('not scoped'));
+    await user.click(await screen.findByText('30m est')); // the meta line, not a control
     expect(await screen.findByRole('dialog', { name: 'Task: Clickable' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -1191,8 +1191,7 @@ describe('an errand’s card', () => {
     await api.createTask({ title: 'stamps', place: 'corner', dueDay: todayKey(4) });
     renderApp({ api, path: '/tasks?lens=week' });
     expect(await screen.findByText('@Corner Shop')).toBeTruthy();
-    expect(screen.queryByText('not scoped')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Scope' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'not scoped' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
   });
 });

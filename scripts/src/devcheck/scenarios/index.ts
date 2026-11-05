@@ -10,6 +10,7 @@ import { fluxHistory } from './flux-history';
 import { inflightCap } from './inflight-cap';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
+import { phoneNits } from './phone-nits';
 import { places } from './places';
 import { reflectionLine } from './reflection-line';
 import { smoke } from './smoke';
@@ -23,6 +24,7 @@ export const SCENARIOS: Scenario[] = [
   attachmentDelete,
   places,
   reflectionLine,
+  phoneNits,
   finance,
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others

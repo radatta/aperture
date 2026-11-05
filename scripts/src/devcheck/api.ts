@@ -260,7 +260,8 @@ export function createApiClient({
     listTasks: () => call<DevTask[]>('listTasks', []),
     listBacklog: () => call<DevTask[]>('listBacklog', []),
     getTask: (id: string) => call<DevTask | null>('getTask', [id]),
-    listCategories: () => call<{ id: string; label: string }[]>('listCategories', []),
+    listCategories: () =>
+      call<{ id: string; label: string; active: boolean; order: number }[]>('listCategories', []),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
     getSettings: () => call<{ dayStartHour: number }>('getSettings', []),
     listRunningSessions: () => call<{ id: string }[]>('listRunningSessions', []),
