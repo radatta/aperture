@@ -5,6 +5,7 @@ import type { Scenario, Tier } from '../scenario';
 import { attachmentDelete } from './attachment-delete';
 import { captureTask } from './capture-task';
 import { failedReads } from './failed-reads';
+import { finance } from './finance';
 import { fluxHistory } from './flux-history';
 import { inflightCap } from './inflight-cap';
 import { partsV2 } from './parts-v2';
@@ -22,6 +23,7 @@ export const SCENARIOS: Scenario[] = [
   attachmentDelete,
   places,
   reflectionLine,
+  finance,
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];

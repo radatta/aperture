@@ -95,6 +95,26 @@ export interface Ui {
   settle(): Promise<void>;
 }
 
+// A step that can't run here through no fault of the build — a fixture bank not linked yet or aged out of
+// the lookback, the Mac asleep — says so instead of failing: `needsYou(reason)` marks the step `needs-you`,
+// the rows its scenario's steps prove read "needs you: <reason>" in the report (matrix.ts), the scenario's
+// later steps are left unrun (they build on it — its noConsoleErrors too, so a needs-you scenario checks no
+// console), and the run stays green. Never for a bug — a real throw still fails the step — and never
+// recorded under the run's own failures (those are the harness's).
+export class NeedsYou extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`needs you: ${reason}`);
+    this.name = 'NeedsYou';
+    this.reason = reason;
+  }
+}
+export function needsYou(reason: string): never {
+  throw new NeedsYou(reason);
+}
+export const needsYouReason = (err: unknown): string | null =>
+  err instanceof NeedsYou ? err.reason : null;
+
 // A scenario's last step: the run's console so far is clean. Its own step, proving no row, so a console error
 // (a throttled call, DEV-CHECK.md → Throttles (429)) fails it without unproving the feature's rows.
 export const noConsoleErrors: Step = {

@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState } from 'react';
+import type { Ref } from 'react';
 import {
   addDays,
   FINANCE_BUCKET_LABELS,
@@ -78,8 +79,11 @@ export function TransactionDetail({
   // Focus follows a link/unlink/mark (the clicked button unmounts) — but never on first open, where
   // a focused Link button would make a stray Enter link the refund.
   const [acted, setActed] = useState(false);
+  // An Unlink, specifically: the one action after which the suggestions may have nothing to focus.
+  const [unlinked, setUnlinked] = useState(false);
   const setLink = (chargeId: string | null) => {
     setActed(true);
+    setUnlinked(chargeId === null);
     link.mutate({ refundId: txn.id, chargeId });
   };
   const setMark = (marked: boolean) => {
@@ -87,6 +91,10 @@ export function TransactionDetail({
     mark.mutate({ id: txn.id, marked });
   };
   const incomeLink = useDisclosure();
+  // After an Unlink that leaves nothing to focus (a card credit with no suggestions), focus goes to the
+  // Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone keyboard.
+  // Only after an Unlink: a period mark in flight would otherwise hop there for a frame.
+  const bucketRef = useRef<SegmentedHandle>(null);
   // null until you type: an untouched field tracks the server's note, so closing never writes it.
   const [draft, setDraft] = useState<string | null>(null);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
@@ -161,6 +169,7 @@ export function TransactionDetail({
             focus={acted}
             fallback="No likely charge found — search for it above, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
+            onNothingToFocus={unlinked ? () => bucketRef.current?.focus() : undefined}
           />
         )}
         {linkableIncome &&
@@ -207,6 +216,7 @@ export function TransactionDetail({
         {(kind === 'expense' || isRefund) && !txn.refundOfId && (
           <>
             <Segmented
+              ref={bucketRef}
               label="Bucket"
               autoFocus
               options={[
@@ -347,6 +357,7 @@ function RefundSuggestions({
   fallback,
   onLink,
   onCancel,
+  onNothingToFocus,
 }: {
   refund: FinanceTransaction;
   view: FinanceView;
@@ -355,6 +366,7 @@ function RefundSuggestions({
   fallback: string;
   onLink: (chargeId: string) => void;
   onCancel?: () => void; // a collapsible list gets a way back (and a focus target when it's empty)
+  onNothingToFocus?: () => void; // asked to focus, but no Link row and no Cancel to take it
 }) {
   const [query, setQuery] = useState('');
   // Once you've typed, nothing autofocuses: clearing the box remounts the suggestions, and their
@@ -383,12 +395,29 @@ function RefundSuggestions({
   const merchant = refund.merchantName ?? refund.name;
   const labelId = `refund-of-${refund.id}`;
   const statusId = `refund-search-${refund.id}`;
+  // Nothing on screen takes the focus that was asked for: no Link row, and no Cancel. Once, when that
+  // first holds — a later render never re-steals it, and typing ends autoFocus for good.
+  const nothingToFocus = autoFocus && matches.length === 0 && !onCancel;
+  const nothingRef = useRef(onNothingToFocus);
+  nothingRef.current = onNothingToFocus;
+  useEffect(() => {
+    if (nothingToFocus) nothingRef.current?.();
+  }, [nothingToFocus]);
 
   const row = (
     c: FinanceTransaction,
     opts: { named: boolean; primary: boolean; focus: boolean },
   ) => {
     const refunded = view.refunded.get(c.id) ?? 0;
+    const bucket = c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted';
+    // Under the merchant, on their own line: a phone truncates the line above, and the bucket and what's
+    // already refunded were what got cut. A same-merchant row names no merchant, so its bucket stays up.
+    const meta = [
+      opts.named ? bucket : null,
+      refunded > 0 ? `${fmtMoney(refunded)} already refunded` : null,
+    ]
+      .filter((x) => x !== null)
+      .join(' · ');
     return (
       <li
         key={c.id}
@@ -398,9 +427,7 @@ function RefundSuggestions({
           {fmtMonthShortDay(c.date)}
         </Text>
         <Text size="sm" className="min-w-0 flex-1 truncate">
-          {opts.named ? `${c.merchantName ?? c.name} · ` : ''}
-          {c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted'}
-          {refunded > 0 ? ` · ${fmtMoney(refunded)} already refunded` : ''}
+          {opts.named ? (c.merchantName ?? c.name) : bucket}
         </Text>
         <Text size="sm" tabular>
           {fmtMoney(view.amount(c))}
@@ -415,6 +442,11 @@ function RefundSuggestions({
         >
           Link
         </Button>
+        {meta && (
+          <Text size="xs" tone="muted" className="w-full truncate">
+            {meta}
+          </Text>
+        )}
         {/* Its own line: the row above truncates on a phone, and this is why it only counts
             part of the money. */}
         {over(c) > 0 && (
@@ -558,15 +590,22 @@ function RefundsAgainst({ charge, view }: { charge: FinanceTransaction; view: Fi
   );
 }
 
+export interface SegmentedHandle {
+  focus(): void; // the group's one tab stop: the checked option, else the first
+}
+
 // A radiogroup per the WAI-ARIA pattern: one tab stop (the checked option, else the first), arrow keys
-// move AND select, Home/End jump. `autoFocus` makes the dialog open on the checked option.
+// move AND select, Home/End jump. `autoFocus` makes the dialog open on the checked option; `ref` lets the
+// detail send focus there later (after an Unlink that leaves nothing else to focus).
 function Segmented<T extends string | null>({
+  ref,
   label,
   options,
   value,
   onChange,
   autoFocus = false,
 }: {
+  ref?: Ref<SegmentedHandle>;
   label: string;
   options: { value: T; label: string }[];
   value: T;
@@ -576,6 +615,7 @@ function Segmented<T extends string | null>({
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const checked = options.findIndex((o) => o.value === value);
   const stop = checked === -1 ? 0 : checked;
+  useImperativeHandle(ref, () => ({ focus: () => refs.current[stop]?.focus() }), [stop]);
   const select = (i: number) => {
     const j = (i + options.length) % options.length;
     onChange(options[j]!.value);

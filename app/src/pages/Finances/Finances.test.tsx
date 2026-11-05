@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
-import { FIXTURE_INSTITUTION, FIXTURE_LINK_ACCOUNTS, todayKey } from '@aperture/shared';
+import {
+  FINANCE_BUCKETS,
+  FIXTURE_INSTITUTION,
+  FIXTURE_LINK_ACCOUNTS,
+  todayKey,
+} from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_FAIL_NEXT_SYNC_KEY } from '../../data/stubClient';
@@ -786,6 +791,54 @@ describe('Refund link search', () => {
         within(dialog).getByRole('button', { name: 'Link as a refund' }),
       ),
     );
+  });
+
+  it('Unlink on a card credit with no suggestions focuses Bucket', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    await api.linkFinanceRefund('fx-refund-2', 'fx-card-12'); // the $10 Target credit, on a Target charge
+    // Seen as −$5,000 nothing has that much left, so neither pass offers a charge: by merchant or by size.
+    const list = api.listFinanceTransactions.bind(api);
+    api.listFinanceTransactions = async (range) =>
+      (await list(range)).map((t) =>
+        t.id === 'fx-refund-2' ? { ...t, rawAmountCents: -500_000 } : t,
+      );
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Target.*\+\$5,000/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Target/ });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    const bucket = await within(dialog).findByRole('radiogroup', { name: 'Bucket' });
+    expect(within(dialog).getByText(/No likely charge found/)).toBeTruthy();
+    // No Link row and no Cancel: focus lands on the checked option, not <body> and not the search box.
+    const unsorted = within(bucket).getByRole('radio', { name: 'Unsorted' });
+    await waitFor(() => expect(document.activeElement).toBe(unsorted));
+    await user.keyboard('{ArrowRight}'); // wraps to the first bucket — the next thing you'd do
+    await waitFor(async () =>
+      expect(
+        (await list({ from: '2000-01-01', to: '2100-01-01' })).find((t) => t.id === 'fx-refund-2')!
+          .bucket,
+      ).toBe(FINANCE_BUCKETS[0]),
+    );
+  });
+
+  it('a search row keeps the merchant on one line and the bucket on its own', async () => {
+    const user = userEvent.setup();
+    const api = await linked();
+    // Every Target charge in Budget, the newest with $10 of it already refunded — the first search row.
+    const targets = (await api.listFinanceTransactions({ from: '2000-01-01', to: '2100-01-01' }))
+      .filter((t) => t.merchantName === 'Target' && t.rawAmountCents > 0)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    await api.setFinanceBucket({ ids: targets.map((t) => t.id), bucket: 'budget' });
+    await api.linkFinanceRefund('fx-refund-2', targets[0]!.id);
+    renderApp({ api, path: '/finances/all' });
+    await user.click((await findRows(/Amazon.*\+\$34\.99/))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: /^Refund: Amazon/ });
+    await user.type(searchBox(dialog), 'target');
+    const first = within(dialog).getAllByRole('button', { name: /^Link to Target/ })[0]!;
+    const row = first.closest('li')!;
+    expect(within(row).getByText('Target').textContent).toBe('Target'); // the merchant alone
+    const meta = within(row).getByText('Budget · $10.00 already refunded');
+    expect(meta.className).toMatch(/\bw-full\b/); // its own line under the merchant
   });
 
   it('a broad search shows eight and says how many more', async () => {

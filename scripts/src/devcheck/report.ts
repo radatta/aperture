@@ -4,7 +4,9 @@
 import type { ReasonCode } from './errors';
 import type { EntryPoint, RowKind } from './scenario';
 
-export type StepStatus = 'pass' | 'fail' | 'skipped';
+// needs-you: the step said so itself (scenario.ts needsYou) — nothing broke, the user has to do something
+// first; the scenario's later steps carry it too, since they never ran because of it.
+export type StepStatus = 'pass' | 'fail' | 'skipped' | 'needs-you';
 
 export interface StepResult {
   scenario: string;
@@ -13,6 +15,7 @@ export interface StepResult {
   status: StepStatus;
   ms: number;
   error?: string;
+  note?: string; // needs-you: the reason
   shot?: string;
 }
 
@@ -222,7 +225,7 @@ export function renderReport(r: RunResult): string {
   );
   for (const s of r.steps)
     lines.push(
-      `| ${s.scenario} | ${cell(s.title)} | ${s.status} | ${sec(s.ms)} | ${cell(s.error ?? '')}${s.shot ? ` ![](shots/${s.shot})` : ''} |`,
+      `| ${s.scenario} | ${cell(s.title)} | ${s.status === 'needs-you' ? 'needs you' : s.status} | ${sec(s.ms)} | ${cell(s.error ?? s.note ?? '')}${s.shot ? ` ![](shots/${s.shot})` : ''} |`,
     );
   lines.push('', '## Data', '');
   if (!r.created.length) lines.push('Created nothing.');

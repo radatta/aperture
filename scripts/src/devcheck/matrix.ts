@@ -74,8 +74,10 @@ export function matrixProblems(scenarios: Scenario[], root: string, fs: MatrixFs
 }
 
 // Each row's result: off dev and needs you as declared; a step-proven row passes only when every step
-// naming it passed, fails when any failed, and is skipped otherwise (a step that never ran proves nothing).
-// `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven another build.
+// naming it passed, fails when any failed, reads needs-you when a step said so at run time (scenario.ts
+// needsYou — the rest passed or were left unrun by it), and is skipped otherwise (a step that never ran
+// proves nothing). `buildChanged` (DEV_CHANGED_MID_RUN) leaves no row proven: its steps may have driven
+// another build.
 export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = false): RowResult[] {
   return sc.rows.map((row) => {
     const base = { scenario: sc.id, row: row.id, entry: row.entry, kind: row.kind, what: row.what };
@@ -92,14 +94,19 @@ export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = fal
       };
     const by = sc.steps.filter((s) => s.proves?.includes(row.id));
     const results = by.map(
-      (s) => steps.find((r) => r.scenario === sc.id && r.step === s.id)?.status ?? 'skipped',
+      (s): Pick<StepResult, 'status' | 'note'> =>
+        steps.find((r) => r.scenario === sc.id && r.step === s.id) ?? { status: 'skipped' },
     );
-    const status = results.includes('fail')
+    const statuses = results.map((r) => r.status);
+    const status = statuses.includes('fail')
       ? 'fail'
-      : results.length && results.every((x) => x === 'pass')
+      : statuses.length && statuses.every((x) => x === 'pass')
         ? 'pass'
-        : 'skipped';
-    const failed = by.filter((_, i) => results[i] === 'fail').map((s) => s.id);
+        : statuses.includes('needs-you') && statuses.every((x) => x === 'pass' || x === 'needs-you')
+          ? 'needs-you'
+          : 'skipped';
+    const failed = by.filter((_, i) => statuses[i] === 'fail').map((s) => s.id);
+    const reason = results.find((r) => r.status === 'needs-you')?.note;
     return {
       ...base,
       status: buildChanged && status === 'pass' ? 'skipped' : status,
@@ -108,6 +115,7 @@ export function coverageOf(sc: Scenario, steps: StepResult[], buildChanged = fal
         : 'no proving step',
       ...(failed.length ? { failedSteps: failed } : {}),
       ...(buildChanged && status === 'pass' ? { note: 'dev’s build changed mid-run' } : {}),
+      ...(status === 'needs-you' ? { note: reason ?? 'a step said needs you' } : {}),
     };
   });
 }

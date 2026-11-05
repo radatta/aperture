@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  FINANCE_BUCKET_VIA,
+  FINANCE_LINK_VIA,
+  FINANCE_RULE_VIA,
   PLACE_TOKEN_VIA,
   PLACE_VIA,
   UI_PLACE_VIA,
   createApiClient,
+  financeRowOf,
   isGone,
   ledgerKind,
   type FetchLike,
@@ -48,6 +52,7 @@ describe('createApiClient', () => {
     expect(Object.keys(api.reads).sort()).toEqual([
       'getAttachmentDownloadUrl',
       'getCalibration',
+      'getFinanceTransaction',
       'getFluxSet',
       'getPlaceTokenStatus',
       'getSettings',
@@ -55,6 +60,8 @@ describe('createApiClient', () => {
       'listAttachments',
       'listBacklog',
       'listCategories',
+      'listFinanceRules',
+      'listFinanceTransactions',
       'listFluxSets',
       'listPlaceTasks',
       'listPlaces',
@@ -68,14 +75,20 @@ describe('createApiClient', () => {
       'createAttachment',
       'createTask',
       'deleteAttachment',
+      'deleteFinanceRule',
       'deleteFluxSet',
       'deletePlace',
       'deleteTask',
+      'recordFinanceBucket',
+      'recordFinanceLink',
       'recordFluxSet',
       'recordPlaceTokenMint',
       'revokePlaceToken',
       'rotatePlaceToken',
       'setTaskActual',
+      'unlinkFinanceRefund',
+      'unsetFinanceBucket',
+      'upsertFinanceRule',
       'upsertPlace',
     ]);
   });
@@ -275,10 +288,33 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'P', via: PLACE_VIA },
         { run: 'r', op: 'created' as const, id: 'Q', via: UI_PLACE_VIA },
         { run: 'r', op: 'created' as const, id: 'place-token:r', via: PLACE_TOKEN_VIA },
+        { run: 'r', op: 'created' as const, id: 'finance-bucket:r:tx1', via: FINANCE_BUCKET_VIA },
+        { run: 'r', op: 'created' as const, id: 'finance-link:r:tx2', via: FINANCE_LINK_VIA },
+        { run: 'r', op: 'created' as const, id: 'R', via: FINANCE_RULE_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
-        ['T', 'F', 'P', 'Q', 'place-token:r', 'never'].map((id) => ledgerKind(entries, id)),
-      ).toEqual(['task', 'flux', 'place', 'place', 'placeToken', 'task']);
+        [
+          'T',
+          'F',
+          'P',
+          'Q',
+          'place-token:r',
+          'finance-bucket:r:tx1',
+          'finance-link:r:tx2',
+          'R',
+          'never',
+        ].map((id) => ledgerKind(entries, id)),
+      ).toEqual([
+        'task',
+        'flux',
+        'place',
+        'place',
+        'placeToken',
+        'financeBucket',
+        'financeLink',
+        'financeRule',
+        'task',
+      ]);
     });
 
     it('GETs the Shortcut route on the dev origin with the place token, never the session token', async () => {
@@ -457,5 +493,95 @@ describe('createApiClient', () => {
     const fetch = vi.fn<FetchLike>(async () => reply(401, { error: 'Unauthorized' }));
     const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
     await expect(api.reads.listTasks()).rejects.toThrow(/listTasks → HTTP 401.*Unauthorized/);
+  });
+
+  describe('finance (the fixture bank’s rows)', () => {
+    it('records a bucket set / a link as finance-<kind>:<run>:<row> once a run, with no request', () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      api.writes.recordFinanceBucket('tx1');
+      api.writes.recordFinanceBucket('tx1');
+      api.writes.recordFinanceLink('tx1');
+      expect(fetch).not.toHaveBeenCalled();
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'finance-bucket:r1:tx1',
+          via: FINANCE_BUCKET_VIA,
+          title: 'bucket on tx1',
+        },
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'finance-link:r1:tx1',
+          via: FINANCE_LINK_VIA,
+          title: 'link on tx1',
+        },
+      ]);
+      expect(financeRowOf('finance-bucket:r1:tx1')).toBe('tx1');
+      expect(financeRowOf('finance-link:r1:01HZZ')).toBe('01HZZ');
+    });
+
+    it('clears only a recorded bucket / link, by the row the id names, through the row’s own method', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () => reply(200, []));
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await expect(api.writes.unsetFinanceBucket('finance-bucket:r1:tx1')).rejects.toThrow(
+        /LEDGER_GUARD/,
+      );
+      await expect(api.writes.unlinkFinanceRefund('finance-link:r1:tx1')).rejects.toThrow(
+        /LEDGER_GUARD/,
+      );
+      api.writes.recordFinanceBucket('tx1');
+      api.writes.recordFinanceLink('tx2');
+      await expect(api.writes.unsetFinanceBucket('finance-link:r1:tx2')).rejects.toThrow(
+        /LEDGER_GUARD/,
+      ); // a link isn't a bucket
+      await expect(api.writes.deleteTask('finance-bucket:r1:tx1')).rejects.toThrow(/LEDGER_GUARD/); // nor a task
+      expect(fetch).not.toHaveBeenCalled();
+      await api.writes.unsetFinanceBucket('finance-bucket:r1:tx1');
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/setFinanceBucket`,
+        expect.objectContaining({ body: '{"args":[{"ids":["tx1"],"bucket":null}]}' }),
+      );
+      await api.writes.unlinkFinanceRefund('finance-link:r1:tx2');
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/linkFinanceRefund`,
+        expect.objectContaining({ body: '{"args":["tx2",null]}' }),
+      );
+    });
+
+    it('records a rule from the create response, and deletes only a recorded rule', async () => {
+      const ledger = memLedger();
+      const fetch = vi.fn<FetchLike>(async () =>
+        reply(200, { id: 'R1', pattern: 'devcheck', bucket: 'budget' }),
+      );
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await expect(api.writes.deleteFinanceRule('R0')).rejects.toThrow(/LEDGER_GUARD/);
+      const rule = await api.writes.upsertFinanceRule({ pattern: 'devcheck', bucket: 'budget' });
+      expect(rule.id).toBe('R1');
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'intent', via: FINANCE_RULE_VIA, title: 'devcheck' },
+        { run: 'r1', op: 'created', id: 'R1', via: FINANCE_RULE_VIA, title: 'devcheck' },
+      ]);
+      await api.writes.deleteFinanceRule('R1');
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/deleteFinanceRule`,
+        expect.objectContaining({ body: '{"args":["R1"]}' }),
+      );
+    });
+
+    it('reads one row back from the whole range, null when gone', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, [{ id: 'tx1', bucket: 'budget' }]));
+      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      expect((await api.reads.getFinanceTransaction('tx1'))?.bucket).toBe('budget');
+      expect(await api.reads.getFinanceTransaction('tx9')).toBeNull();
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/listFinanceTransactions`,
+        expect.objectContaining({ body: '{"args":[{"from":"2000-01-01","to":"2100-01-01"}]}' }),
+      );
+    });
   });
 });

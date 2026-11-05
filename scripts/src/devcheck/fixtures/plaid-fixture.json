@@ -1,0 +1,93 @@
+{
+  "version": 2,
+  "seed": "aperture-devcheck-finance-1",
+  "roll_dates_forward": true,
+  "override_accounts": [
+    {
+      "type": "credit",
+      "subtype": "credit card",
+      "starting_balance": 320.5,
+      "currency": "USD",
+      "meta": {
+        "name": "Devcheck Card",
+        "official_name": "Devcheck Rewards Card",
+        "mask": "4242",
+        "limit": 5000
+      },
+      "transactions": [
+        {
+          "date_transacted": "2026-10-02",
+          "date_posted": "2026-10-02",
+          "currency": "USD",
+          "amount": 6.5,
+          "description": "DEVCHECK COFFEE #1"
+        },
+        {
+          "date_transacted": "2026-10-09",
+          "date_posted": "2026-10-09",
+          "currency": "USD",
+          "amount": 6.5,
+          "description": "DEVCHECK COFFEE #2"
+        },
+        {
+          "date_transacted": "2026-10-12",
+          "date_posted": "2026-10-12",
+          "currency": "USD",
+          "amount": 42.17,
+          "description": "DEVCHECK GROCER MARKETPLACE OF VERY LONG MERCHANT NAMES"
+        },
+        {
+          "date_transacted": "2026-10-15",
+          "date_posted": "2026-10-15",
+          "currency": "USD",
+          "amount": 19.99,
+          "description": "DEVCHECK BOOKS"
+        },
+        {
+          "date_transacted": "2026-10-20",
+          "date_posted": "2026-10-20",
+          "currency": "USD",
+          "amount": -19.99,
+          "description": "DEVCHECK BOOKS"
+        },
+        {
+          "date_transacted": "2026-10-24",
+          "date_posted": "2026-10-24",
+          "currency": "USD",
+          "amount": -250,
+          "description": "DEVCHECK REBATE"
+        },
+        {
+          "date_transacted": "2026-10-26",
+          "date_posted": "2026-10-26",
+          "currency": "USD",
+          "amount": 6.5,
+          "description": "DEVCHECK COFFEE #3"
+        }
+      ]
+    },
+    {
+      "type": "depository",
+      "subtype": "checking",
+      "starting_balance": 1200,
+      "currency": "USD",
+      "meta": { "name": "Devcheck Checking", "official_name": "Devcheck Checking", "mask": "1001" },
+      "transactions": [
+        {
+          "date_transacted": "2026-10-18",
+          "date_posted": "2026-10-18",
+          "currency": "USD",
+          "amount": 30,
+          "description": "DEVCHECK DINNER"
+        },
+        {
+          "date_transacted": "2026-10-25",
+          "date_posted": "2026-10-25",
+          "currency": "USD",
+          "amount": -30,
+          "description": "DEVCHECK PAYBACK"
+        }
+      ]
+    }
+  ]
+}

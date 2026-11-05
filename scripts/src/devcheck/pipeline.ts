@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { ledgerKind, type ApiClient } from './api';
+import { financeRowOf, ledgerKind, type ApiClient } from './api';
 import { DEV_ORIGIN } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -18,6 +18,7 @@ import {
   createUi,
   datesFor,
   makeShot,
+  needsYouReason,
   shotWithheld,
   type Ctx,
   type InterceptOpts,
@@ -201,6 +202,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     };
     for (const sc of d.scenarios) {
       let failed = false;
+      let needs: string | null = null; // a step said needs you: the rest of the scenario reads so too
       for (const step of sc.steps) {
         prefix = `${sc.id}-${step.id}`;
         const res: StepResult = {
@@ -212,12 +214,26 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         };
         r.steps.push(res);
         if (failed) continue;
+        if (needs !== null) {
+          res.status = 'needs-you';
+          res.note = needs;
+          continue;
+        }
         const s0 = d.now();
         try {
           await step.run(ctx);
           await Promise.all(pendingRecords); // a create's id is in the ledger before the next step reads it
           res.status = 'pass';
         } catch (err) {
+          const reason = needsYouReason(err);
+          if (reason !== null) {
+            // Not a failure: the run stays green, the rows read needs-you with the reason (matrix.ts).
+            needs = reason;
+            res.status = 'needs-you';
+            res.note = reason;
+            res.ms = d.now() - s0;
+            continue;
+          }
           failed = true;
           res.status = 'fail';
           res.error = err instanceof Error ? err.message : String(err);
@@ -347,6 +363,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // through its own method, so a Flux set or a place is never "verified gone" by a task lookup. The place
   // token has no id of its own: `place-token:<run>` stands for "a run minted the test user's token", which
   // exists while the status reads active and is removed by a revoke.
+  // A finance bucket or link names a row the fixture bank owns (api.ts financeRowOf): it "exists" while
+  // the row still carries what the run set, and removing it clears that, never the row.
   async function exists(client: ApiClient, id: string): Promise<boolean> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
@@ -355,6 +373,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.listPlaces()).some((p) => p.id === id);
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
+      case 'financeBucket':
+        return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.bucket != null;
+      case 'financeLink':
+        return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.refundOfId != null;
+      case 'financeRule':
+        return (await client.reads.listFinanceRules()).some((x) => x.id === id);
       case 'task':
         return (await client.reads.getTask(id)) !== null;
     }
@@ -369,6 +393,15 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();
+        return true;
+      case 'financeBucket':
+        await client.writes.unsetFinanceBucket(id);
+        return true;
+      case 'financeLink':
+        await client.writes.unlinkFinanceRefund(id);
+        return true;
+      case 'financeRule':
+        await client.writes.deleteFinanceRule(id);
         return true;
       case 'task':
         return safeDelete(client, id);

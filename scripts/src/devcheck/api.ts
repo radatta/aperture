@@ -89,6 +89,24 @@ export interface DevFluxSet {
   count: number;
 }
 
+// The slices of the finance contract the check reads (packages/shared/src/finance.ts) — the fixture bank's
+// rows (DEV-CHECK.md → One-time setup), never created here: a run only sorts and links them, and clears that.
+export interface DevFinanceTransaction {
+  id: string;
+  accountId: string;
+  date: string;
+  name: string;
+  merchantName: string | null;
+  rawAmountCents: number; // Plaid's sign: positive = money out
+  bucket: string | null;
+  refundOfId: string | null;
+}
+export interface DevFinanceRule {
+  id: string;
+  pattern: string;
+  bucket: string;
+}
+
 // The slice of an attachment the check reads. Attachments are never ledgered: each lives on a ledgered
 // task, and that task's delete cascade removes it (and its bytes).
 export interface DevAttachment {
@@ -117,13 +135,29 @@ export const UI_PLACE_VIA = 'ui:upsertPlace';
 // a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
 export const placeTokenId = (run: string): string => `place-token:${run}`;
+// A bucket set or a refund link on a fixture bank row. Neither has an id of its own, so, like the token, a run
+// records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` — before the click that sets it (the
+// browser does the write), run-scoped so two runs on the same row never resolve each other's entry. Cleanup
+// clears the bucket / the link; the row itself is the fixture's and stays. A rule the run adds is its own
+// row with an id, recorded from the create response like a place.
+export const FINANCE_BUCKET_VIA = 'ui:setFinanceBucket';
+export const FINANCE_LINK_VIA = 'ui:linkFinanceRefund';
+export const FINANCE_RULE_VIA = 'api:upsertFinanceRule';
+export const financeBucketId = (run: string, row: string): string => `finance-bucket:${run}:${row}`;
+export const financeLinkId = (run: string, row: string): string => `finance-link:${run}:${row}`;
+// The row a finance-bucket / finance-link ledger id names — after the last colon (a ULID has none).
+export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':') + 1);
 
 // What a ledger id names, by the `via` it was created with — each kind is read and deleted its own way.
-export type LedgerKind = 'task' | 'flux' | 'place' | 'placeToken';
+export type LedgerKind =
+  'task' | 'flux' | 'place' | 'placeToken' | 'financeBucket' | 'financeLink' | 'financeRule';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
+  if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
+  if (via === FINANCE_LINK_VIA) return 'financeLink';
+  if (via === FINANCE_RULE_VIA) return 'financeRule';
   return via === PLACE_TOKEN_VIA ? 'placeToken' : 'task';
 }
 
@@ -147,6 +181,10 @@ export interface ApiDeps {
   run: string;
   sleep?: (ms: number) => Promise<void>;
 }
+
+// Every finance row the server keeps: the fixture's rows shift once at link and then stand still (DEV-CHECK.md
+// → One-time setup), so a read-back by id can't assume a window.
+const FINANCE_ANY_RANGE = { from: '2000-01-01', to: '2100-01-01' };
 
 // A 429 is Lambda refusing to start the function (the account's concurrency limit — the app's own page load
 // fires many requests at once), so the call never ran: retrying is safe for every method, createTask too.
@@ -247,6 +285,14 @@ export function createApiClient({
     getPlaceTokenStatus: () => call<DevPlaceTokenStatus>('getPlaceTokenStatus', []),
     getCalibration: (range: { from: string; to: string }) =>
       call<DevCalibrationPoint[]>('getCalibration', [range]),
+    listFinanceTransactions: (range: { from: string; to: string }) =>
+      call<DevFinanceTransaction[]>('listFinanceTransactions', [range]),
+    // One row by id, anywhere the server keeps it (there is no get-by-id RPC) — null when gone.
+    getFinanceTransaction: async (id: string) =>
+      (await call<DevFinanceTransaction[]>('listFinanceTransactions', [FINANCE_ANY_RANGE])).find(
+        (t) => t.id === id,
+      ) ?? null,
+    listFinanceRules: () => call<DevFinanceRule[]>('listFinanceRules', []),
     // The iPhone Shortcut's route, raw: GET /api/places/<slug>/tasks with the place token (never the session
     // JWT) in the BFF header, or none — the status and parsed body, whatever they are, so a step can assert a
     // refusal. A 200 bumps the token's count and the place's lastReadAt server-side, as the Shortcut does;
@@ -377,6 +423,51 @@ export function createApiClient({
     // The ledger half alone, for Settings' Generate / Rotate: called before the click, so a token the
     // browser mints is recorded like one rotated here. Writes nothing to dev.
     recordPlaceTokenMint: (): void => recordTokenMint(),
+    // The ledger half of a bucket set / refund link the browser is about to make on a fixture row: called
+    // before the click, so a crash mid-step still leaves it for the next run's sweep to clear. Writes
+    // nothing to dev; recorded once a run per row.
+    recordFinanceBucket(row: string): void {
+      const id = financeBucketId(run, row);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({
+          run,
+          op: 'created',
+          id,
+          via: FINANCE_BUCKET_VIA,
+          title: `bucket on ${row}`,
+        });
+    },
+    recordFinanceLink(row: string): void {
+      const id = financeLinkId(run, row);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: FINANCE_LINK_VIA, title: `link on ${row}` });
+    },
+    // Cleanup's halves: clear what a recorded entry set — never a row the ledger doesn't name.
+    async unsetFinanceBucket(id: string): Promise<void> {
+      assertLedger(id, 'financeBucket');
+      await call<unknown>('setFinanceBucket', [{ ids: [financeRowOf(id)], bucket: null }]);
+    },
+    async unlinkFinanceRefund(id: string): Promise<void> {
+      assertLedger(id, 'financeLink');
+      await call<unknown>('linkFinanceRefund', [financeRowOf(id), null]);
+    },
+    // A rule, recorded from the create response like a place; deleted only when recorded.
+    async upsertFinanceRule(input: { pattern: string; bucket: string }): Promise<DevFinanceRule> {
+      ledger.append({ run, op: 'intent', via: FINANCE_RULE_VIA, title: input.pattern });
+      const rule = await call<DevFinanceRule>('upsertFinanceRule', [input]);
+      ledger.append({
+        run,
+        op: 'created',
+        id: rule.id,
+        via: FINANCE_RULE_VIA,
+        title: input.pattern,
+      });
+      return rule;
+    },
+    async deleteFinanceRule(id: string): Promise<void> {
+      assertLedger(id, 'financeRule');
+      await call<null>('deleteFinanceRule', [id]);
+    },
     // Only while the ledger holds a token a run minted and nothing has resolved yet: the test user's token
     // is the harness's to revoke only when the harness made it.
     async revokePlaceToken(): Promise<void> {

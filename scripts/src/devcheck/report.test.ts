@@ -27,6 +27,32 @@ const base: RunResult = {
 };
 
 describe('report', () => {
+  it('a needs-you step reads "needs you" with its reason in the steps table', () => {
+    const md = renderReport({
+      ...base,
+      steps: [
+        {
+          scenario: 'fin',
+          step: 'fixture',
+          title: 'Bank linked',
+          status: 'needs-you',
+          ms: 10,
+          note: 'link it',
+        },
+        {
+          scenario: 'fin',
+          step: 'rows',
+          title: 'Rows',
+          status: 'needs-you',
+          ms: 0,
+          note: 'link it',
+        },
+      ],
+    });
+    expect(md).toContain('| fin | Bank linked | needs you | 0.0s | link it |');
+    expect(md).toContain('| fin | Rows | needs you | 0.0s | link it |');
+  });
+
   it('leads with the status line', () => {
     expect(renderReport(base).split('\n')[0]).toBe('# Dev check — PASS');
     expect(
