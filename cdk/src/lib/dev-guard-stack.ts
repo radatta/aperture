@@ -26,27 +26,25 @@ export const KILL_ALARMS = [
     periods: 2,
   },
   // The slow drain the per-minute alarm misses: one environment kept busy, or a sparse loop holding the table at its
-  // cap. 600,000 ms an hour is ten minutes of compute — far past a dev session's.
+  // cap. 1,800,000 ms an hour is thirty environment-minutes of compute — a few full devchecks' worth. Raised to match
+  // the live alarm, set by hand first; history and measurements: docs/ops/CI-BOT.md → Worst case.
   {
     name: `${KILL_ALARM_PREFIX}duration-hour`,
     namespace: 'AWS/Lambda',
     metricName: 'Duration',
-    threshold: 600_000,
+    threshold: 1_800_000,
     minutes: 60,
     periods: 1,
   },
-  // A rolling three-hour sum, compared every minute (a period under a day evaluates per minute over a sliding window).
-  // 1,800,000 ms in three hours is ten environment-minutes an hour — the hourly alarm's rate — so in steady state it is
-  // a second, independent trip on a sustained drain rather than a lower one (any three-hour window at this sum holds an
-  // hour at the hourly's), and the slot to re-tighten once devcheck cost settles. Measured 2026-11-04 (PT): parallel
-  // lanes put ~314,000 ms in a three-hour window and tripped the old 300,000 — a full devcheck now costs ~55–60k ms, up
-  // from the 17,707 ms a whole 2026-11-01 window measured — so that busy window sits ~6× under this, a single devcheck
-  // ~30×. The live alarm was raised by hand first (break-glass put-metric-alarm, the same night); this matches it.
+  // A rolling three-hour sum, compared every minute (a period under a day evaluates per minute over a sliding window),
+  // for the drain that stays under the hourly alarm. 3,600,000 ms in three hours is twenty environment-minutes an hour
+  // — under the hourly's thirty — so a sustained 20–30 min/h drain the hourly never sees trips here within three hours
+  // (the test pins 3 h ÷ 3 < hourly; equal would be dead weight). Same provenance as the hourly's.
   {
     name: `${KILL_ALARM_PREFIX}duration-3h`,
     namespace: 'AWS/Lambda',
     metricName: 'Duration',
-    threshold: 1_800_000,
+    threshold: 3_600_000,
     minutes: 180,
     periods: 1,
   },
