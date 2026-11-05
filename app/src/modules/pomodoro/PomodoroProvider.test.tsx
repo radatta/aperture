@@ -150,36 +150,64 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await screen.findByText('Couldn’t start the timer — try again.');
   });
 
-  it('stopping a paused timer resets its clock first, so the pause is never credited', async () => {
-    const user = userEvent.setup();
-    const api = stub();
+  // The calls a stop makes, with the cap it sent: 'stop' uncapped, 'stop:0' for a paused timer, and so on.
+  function recordStops(api: ApiClient) {
     const calls: string[] = [];
     const resume = api.resumeSession.bind(api);
     const stopS = api.stopSession.bind(api);
     api.resumeSession = (id) => (calls.push('resume'), resume(id));
-    api.stopSession = (id, st) => (calls.push('stop'), stopS(id, st));
+    api.stopSession = (id, st, opts) => (
+      calls.push(opts?.capMin === undefined ? 'stop' : `stop:${opts.capMin}`), stopS(id, st, opts)
+    );
+    return calls;
+  }
+
+  it('stopping a paused timer sends capMin 0 and no resume first, so the pause is never credited', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    const calls = recordStops(api);
     renderApp({ api, path: '/settings' });
     await startFocus(user);
     await user.click(screen.getByRole('button', { name: 'Pause' }));
     await user.click(await screen.findByRole('button', { name: 'Stop' }));
     await screen.findByTitle('Start a 25-minute focus block');
-    expect(calls).toEqual(['resume', 'stop']);
+    expect(calls).toEqual(['stop:0']);
   });
 
-  it('a running timer stops without a reset', async () => {
+  it('a running timer stops uncapped', async () => {
     const user = userEvent.setup();
     const api = stub();
-    const calls: string[] = [];
-    const resume = api.resumeSession.bind(api);
-    api.resumeSession = (id) => (calls.push('resume'), resume(id));
+    const calls = recordStops(api);
     renderApp({ api, path: '/settings' });
     await startFocus(user);
     await user.click(screen.getByRole('button', { name: 'Stop' }));
     await screen.findByTitle('Start a 25-minute focus block');
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['stop']);
   });
 
-  it('stopping a finished block never resets its clock — one that ended behind a locked phone keeps its last stretch', async () => {
+  it('a block that reached done mid-stretch stops capped at what was left to its target', async () => {
+    const user = userEvent.setup();
+    const api: ApiClient = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    // 24.5 minutes counted, last beat a minute ago (fresh, not stale): past its 25, and the half minute
+    // before that is real work.
+    api.listRunningSessions = async () => [
+      { ...s0, activeMinutes: 24.5, lastHeartbeatAt: Date.now() - 60_000 },
+    ];
+    const calls = recordStops(api);
+    renderApp({ api, path: '/settings' });
+    await screen.findByText('Done');
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(calls).toEqual(['stop:0.5']));
+  });
+
+  it('stopping a finished block never resets its clock — one that ended behind a locked phone keeps its last stretch, and the wait is capped out', async () => {
     const user = userEvent.setup();
     const api = stub();
     const s0 = await api.startSession({
@@ -196,14 +224,10 @@ describe('PomodoroProvider: failed calls never look like success', () => {
       lastHeartbeatAt: Date.now() - 30_000,
     };
     api.listRunningSessions = async () => [done];
-    const calls: string[] = [];
-    const resume = api.resumeSession.bind(api);
-    const stopS = api.stopSession.bind(api);
-    api.resumeSession = (id) => (calls.push('resume'), resume(id));
-    api.stopSession = (id, st) => (calls.push('stop'), stopS(id, st));
+    const calls = recordStops(api);
     renderApp({ api, path: '/settings' });
     await screen.findByText('Done');
     await user.click(screen.getByRole('button', { name: 'Stop' }));
-    await waitFor(() => expect(calls).toEqual(['stop']));
+    await waitFor(() => expect(calls).toEqual(['stop:0'])); // nothing left to its target; no reset
   });
 });
