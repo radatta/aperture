@@ -27,7 +27,8 @@ and an auth path, nothing more.
 
 Claude Code authenticates with a long-lived **agent token** sent as the raw `x-aperture-agent-token`
 header (no `Bearer` prefix). Same class + delivery as the recruiting **device token** (a plain Lambda env
-var from a gitignored file / `APERTURE_AGENT_TOKEN` in CI, NOT Secrets Manager), validated with
+var from a gitignored file / `APERTURE_AGENT_TOKEN` in CI — `AGENT_TOKEN_PROD` is a secret of the `prod`
+GitHub environment, and an empty value in CI fails the synth instead of rotating it — NOT Secrets Manager), validated with
 `timingSafeEqual` in `resolveAgentUserId`, attributed to the same Cognito `sub` (`DEVICE_USER_ID`). It is
 kept **distinct** from the device token so the two revoke independently.
 
@@ -253,7 +254,8 @@ transport. See `lambdas/src/mcp/protocol.ts`.
   of the 15 s timeout) plus the account-wide `Errors` / `Throttles` alarms — the handler answers JSON-RPC errors
   and 401s itself, so a Lambda error here is a crash or a timeout (`docs/arch/CICD_HARDENING.md` → Item 5).
 - `cdk/src/config/claudeConnector.ts` — claude.ai's connector callback URLs (committed constants).
-- `cdk/src/bin/aperture.ts` — `agentTokenFor(stage)` (cloned from `deviceTokenFor`).
+- `cdk/src/config/ciSecrets.ts` — `stageSecret('AGENT_TOKEN', stage)`, the same reader as the origin secret and the
+  device token (`bin/aperture.ts` calls it; INFRA §10).
 - `scripts/aws/health-check.mjs` — the post-deploy `/mcp` probe (401 without a token, 405 on GET, the
   façade's S256 metadata + the path-suffixed protected-resource doc, and the bearer-→-`"invalid token"`
   R7 check).
