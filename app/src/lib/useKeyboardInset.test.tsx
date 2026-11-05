@@ -7,11 +7,15 @@ import { useKeyboardInset } from './useKeyboardInset';
 // (shared-jsdom contract — no global leaks into the next file).
 const root = document.documentElement;
 const originalVv = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+const originalInner = Object.getOwnPropertyDescriptor(window, 'innerHeight');
 const originalClient = Object.getOwnPropertyDescriptor(root, 'clientHeight');
 
-function fakeViewport(layout: number, height: number) {
+// `viewable` is window.innerHeight — what a fixed element anchors to; `layout` is the static ICB
+// (documentElement.clientHeight), which the hook must NOT measure against.
+function fakeViewport(viewable: number, height: number, layout = viewable) {
   const vv = Object.assign(new EventTarget(), { height, offsetTop: 0, scale: 1 });
   Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: viewable });
   Object.defineProperty(root, 'clientHeight', { configurable: true, value: layout });
   return vv;
 }
@@ -19,6 +23,7 @@ function fakeViewport(layout: number, height: number) {
 afterEach(() => {
   if (originalVv) Object.defineProperty(window, 'visualViewport', originalVv);
   else delete (window as { visualViewport?: unknown }).visualViewport;
+  if (originalInner) Object.defineProperty(window, 'innerHeight', originalInner);
   if (originalClient) Object.defineProperty(root, 'clientHeight', originalClient);
   else delete (root as { clientHeight?: unknown }).clientHeight;
 });
@@ -36,8 +41,8 @@ function Harness() {
   );
 }
 
-function setup(layout = 844, height = 844) {
-  const vv = fakeViewport(layout, height);
+function setup(viewable = 844, height = 844, layout = viewable) {
+  const vv = fakeViewport(viewable, height, layout);
   const r = render(<Harness />);
   const dock = r.getByTestId('dock');
   const keyboard = (h: number, offsetTop = 0) =>
@@ -74,6 +79,17 @@ describe('useKeyboardInset', () => {
     keyboard(844);
     expect(dock.style.bottom).toBe('');
     expect(dock.style.maxHeight).toBe('');
+  });
+
+  // A Safari tab with its toolbars collapsed: the ICB stays at the toolbars-shown height (744) while
+  // the viewable area grows to 844. `bottom: 0` anchors to the viewable area, so the lift must be the
+  // full 394, not the 294 the ICB would give — the chips row sat behind the keyboard on that 100px.
+  it('lifts by the full gap in a Safari tab with collapsed toolbars', () => {
+    const { dock, keyboard, getByLabelText } = setup(844, 844, 744);
+    act(() => getByLabelText('dock field').focus());
+    keyboard(450);
+    expect(dock.style.bottom).toBe('394px');
+    expect(dock.dataset.lifted).toBe('true');
   });
 
   it("doesn't lift for a page field's keyboard — it would cover the field", () => {

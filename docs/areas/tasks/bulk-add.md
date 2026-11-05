@@ -76,7 +76,9 @@ bypass — the model never sees a grammar line.
     textarea already carries `aria-describedby`/`aria-invalid`). Not a live region — it changes per
     keystroke. Each chip has a standalone name ("Estimate 15m", "Due Friday, Oct 2") since "15m" or
     "Fri" alone means nothing. Chips `preventDefault` on mousedown so an iPhone tap keeps the keyboard
-    up. Tab is ignored mid-IME-composition.
+    up. Enter, ⌘Enter and Tab are ignored mid-IME-composition — `isComposing`, or `keyCode` 229, which
+    is WebKit's committing Enter after `compositionend` (bug 165004, fixed 2026-04, reverted 2026-10) —
+    so the IME commits and nothing half-composed is saved (2026-11).
   - **Caret placement is keyed on an accept nonce, not the text** — accepting an already-complete token
     changes nothing, and a text-keyed effect would skip it and jump the caret on the next keystroke.
 - **Explicit ` | ` separator** (space-pipe-space) between title and tokens. The one grammar with zero
@@ -234,6 +236,9 @@ still blurs.
 - Setting `bufferMin` from a token (bulk sets estimate only).
 - A `\"` escape inside `notes:"…"` (reword, or use `'`).
 - Per-line editing in the preview (fix the textarea instead — it's a paste, re-pasting is free).
-- Capture autocomplete: `~` presets ordered by what I actually use / calibration history (fixed for
-  now); starter chips at an empty token position; completing the `due:` keyword from `d`; an
-  arrow-key highlight.
+- Capture autocomplete (decided 2026-11-05): the grammar chips are the desktop and paste path. On the
+  phone a natural line needs no symbols-page key since quick add ([quick-add.md](quick-add.md),
+  2026-10-12), so starter chips at an empty token position, a `|` chip and completing `due:` from `d`
+  are closed — a `|` chip would be the structure affordance PRODUCT §2 forbids, and a second way to
+  do what the parse already does. Still parked: `~` presets ordered by use / calibration history
+  (fixed for now), and an arrow-key highlight.
