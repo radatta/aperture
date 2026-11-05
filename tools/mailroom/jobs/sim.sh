@@ -210,19 +210,19 @@ sim_match() {
 sim_label_is() { jq -e --arg l "$2" '((.label // "") | ascii_downcase) == ($l | ascii_downcase)' <<<"$1" >/dev/null 2>&1; }
 
 # The full tree's app: "Web" while the Home Screen web app is in front. The first reads after a boot can time out
-# ("creating the simulator remote automation session": three in a row once): up to four tries.
+# ("creating the simulator remote automation session": four in a row before a fifth worked): up to eight tries.
 sim_tree() {
   local t i
-  for i in 1 2 3 4; do
+  for i in 1 2 3 4 5 6 7 8; do
     if t="$(ax describe-ui 2>/dev/null)"; then printf '%s' "$t"; return 0; fi
-    [ "$i" = 4 ] || sleep 2
+    [ "$i" = 8 ] || sleep 2
   done
   return 1
 }
 # Not in front is the row's failure; an unreadable tree is the sim's (needs you).
 sim_in_app() {
   local t
-  t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out four times"; return 1; }
+  t="$(sim_tree)" || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
   jq -e '[.. | objects | select(.role? == "AXApplication")][0].AXLabel == "Web"' <<<"$t" >/dev/null 2>&1 \
     || { sim_fail NOT_IN_APP "the Aperture web app isn't in front"; return 1; }
 }
@@ -325,7 +325,7 @@ sim_ready() {
   if [ "$(sim_pref HardwareKeyboardLastSeen)" != 0 ] || [ "$(sim_pref AutomaticMinimizationEnabled)" != 0 ]; then
     sim_arm || return 1
   fi
-  sim_tree >/dev/null || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out four times"; return 1; }
+  sim_tree >/dev/null || { sim_err SIM_UNAVAILABLE AX_TIMEOUT "describe-ui timed out eight times"; return 1; }
   SIM_READY=1
 }
 
@@ -348,20 +348,16 @@ sim_landmark() {
   echo ""
 }
 
+# The icon from the full tree, and only on page 2: page 1 has a widget where page 2 has the icon, and --point can't
+# confirm it (it names a neighbouring icon inside this frame: profile.md, P12 finding 1).
 sim_icon() {
   local t
   t="$(sim_tree)" || return 1
-  jq -c --argjson w "$SIM_W" --argjson h "$SIM_H" '[.. | objects | select(.AXLabel? == "Aperture" and .role? == "AXButton")
+  jq -c --argjson w "$SIM_W" --argjson h "$SIM_H" 'select(any(.. | objects; .AXValue? == "Page 2 of 2"))
+    | [.. | objects | select(.AXLabel? == "Aperture" and .role? == "AXButton")
     | (.frame // {}) | {x: ((.x // 0) | floor), y: ((.y // 0) | floor), w: ((.width // 0) | floor), h: ((.height // 0) | floor)}
     | select(.w > 0 and .h > 0 and .x >= 0 and .x + .w <= $w and .y >= 0 and .y + .h <= $h)][0] // empty
     | {role: "AXButton", label: "Aperture", frame: .}' <<<"$t" 2>/dev/null
-}
-
-sim_icon_here() {
-  local x y e
-  read -r x y < <(jq -r '.frame | "\(.x + (.w / 2) | floor) \(.y + (.h / 2) | floor)"' <<<"$1")
-  e="$(sim_point "$x" "$y")" || return 1
-  [ "$(jq -r .role <<<"$e")" = AXButton ] && sim_label_is "$e" "Aperture"
 }
 
 # --- ops ----------------------------------------------------------------------------------------------------------
@@ -372,11 +368,13 @@ sim_op_launch() {
   icon="$(sim_icon)" || true
   if [ -z "$icon" ]; then # after a boot the Home Screen opens on page 1; the icon lives on page 2
     ax gesture scroll-left --screen-width "$SIM_W" --screen-height "$SIM_H" >/dev/null 2>&1 || true
-    icon="$(sim_icon)" || true
+    for i in 1 2 3; do # the tree can lag the page change
+      icon="$(sim_icon)" || true
+      [ -z "$icon" ] || break
+      sleep 1
+    done
   fi
-  [ -n "$icon" ] || { sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon (add dev to the sim's Home Screen)"; return 1; }
-  # The tree can lag a page change; page 1 has a widget where page 2 has the icon (profile.md surprise 13).
-  sim_icon_here "$icon" || { sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "the Aperture icon isn't under its frame (wrong Home Screen page?)"; return 1; }
+  [ -n "$icon" ] || { sim_err SIM_UNAVAILABLE WEBCLIP_MISSING "no on-screen Aperture icon on Home Screen page 2 (add dev to the sim's Home Screen)"; return 1; }
   sim_tap_el "$icon" || return 1
   i=0
   while :; do

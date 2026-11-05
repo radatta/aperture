@@ -188,7 +188,10 @@ def el(role, label, value, x, y, w, h, **k): return {'role': role, 'AXLabel': la
 TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max'  # sim.sh: SIM_DEVICE_TYPE
 def dev(state='Booted', n=1, type_=TYPE): return {'devices': {'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{'name': 'aperture-devcheck', 'udid': U, 'state': state, 'isAvailable': True, 'deviceTypeIdentifier': type_}] * n}}
 ICON = {'role': 'AXButton', 'AXLabel': 'Aperture', 'frame': {'x': 335, 'y': 200.7, 'width': 72, 'height': 94.7}}
-def tree(app='Web', icon=True): return [{'role': 'AXApplication', 'AXLabel': app, 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': [ICON] if icon else [{'role': 'AXGroup', 'AXLabel': 'Aperture', 'frame': {'x': 0, 'y': 0, 'width': 0, 'height': 0}}]}]
+def tree(app='Web', icon=True, page=None):
+    pill = {'role': 'AXGroup', 'AXLabel': 'Search', 'AXValue': f'Page {page or (2 if icon else 1)} of 2'}
+    kids = [ICON] if icon else [{'role': 'AXGroup', 'AXLabel': 'Aperture', 'frame': {'x': 0, 'y': 0, 'width': 0, 'height': 0}}]
+    return [{'role': 'AXApplication', 'AXLabel': app, 'frame': {'x': 0, 'y': 0, 'width': 440, 'height': 956}, 'children': [pill] + kids}]
 def pt(x, y, out, **k): return {'m': f'--point {x},{y} ', 'out': out, **k}
 CAPTURE = el('AXTextArea', 'Capture log', 'What happened?', 25, 877, 346, 36)
 KEYS = {'q': (26, 688), 'w': (69, 688), 'e': (113, 688), 'r': (156, 688), 't': (199, 688), 'y': (243, 688), 'u': (286, 688), 'i': (329, 688), 'o': (373, 688), 'p': (416, 688),
@@ -200,7 +203,7 @@ deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version',
             pt(220, 895, CAPTURE), pt(395, 575, el('AXButton', 'Done', '', 375, 556, 40, 38)),
             pt(57, 935, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
             pt(38, 168, el('AXLink', 'Home', 'Home', 20, 158, 37, 20)), pt(136, 168, el('AXLink', 'Tasks', 'Tasks', 118, 158, 36, 20)),
-            pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20)), pt(371, 247, ICON)]
+            pt(395, 168, el('AXLink', 'Settings', 'Settings', 375, 158, 40, 20))]
            + [pt(x, y, el('AXButton', k, '', x - 15, y - 20, 30, 40)) for k, (x, y) in KEYS.items()]
            + [{'m': 'describe-ui --udid', 'out': tree()}])
 simbase = {'v': 1, 'id': '20261104T190000Z-ios-launch-ab12', 'job': 'sim', 'submittedAt': 'now', 'expiresInMin': 10,
@@ -297,9 +300,9 @@ serr('sim: a sim of another device type is PROFILE_MISMATCH, nothing tapped', 'P
      tape=[{'m': 'simctl list devices -j', 'out': dev(type_='com.apple.CoreSimulator.SimDeviceType.iPhone-17')}], simExcludes=['tap -x', 'describe-ui'])
 serr('sim: Device Hub never starting is DEVICE_HUB', 'DEVICE_HUB', tape=[{'m': 'pgrep -x DeviceHub', 'rc': 1}], simIncludes=['open -g -b com.apple.dt.Devices'])
 serr('sim: a failed boot is BOOT_FAILED', 'BOOT_FAILED', tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}, {'m': 'bootstatus', 'rc': 1}])
-serr('sim: describe-ui timing out twice is AX_TIMEOUT', 'AX_TIMEOUT', tape=[{'m': 'describe-ui --udid', 'rc': 1, 'n': 4}])
-serr('sim: an icon frame with something else under it (wrong page) is WEBCLIP_MISSING, not tapped', 'WEBCLIP_MISSING',
-     tape=[pt(371, 247, el('AXGroup', 'No Events Today', '', 300, 180, 140, 140))], simExcludes=['tap -x 371'])
+serr('sim: describe-ui timing out eight times is AX_TIMEOUT', 'AX_TIMEOUT', tape=[{'m': 'describe-ui --udid', 'rc': 1, 'n': 8}])
+serr('sim: an icon frame while the pill says page 1 (a stale tree, the widget under it) is WEBCLIP_MISSING, not tapped', 'WEBCLIP_MISSING',
+     tape=[{'m': 'describe-ui --udid', 'out': tree(page=1)}], simExcludes=['tap -x 371'])
 serr('sim: no Aperture icon is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False)}],
      simIncludes=['gesture scroll-left --screen-width 440 --screen-height 956'], simExcludes=['tap -x'])
 SIGNED_OUT = [pt(220, 895, {}), pt(220, 530, el('AXButton', 'Sign in', '', 183, 511, 74, 37, pid=67251))]
