@@ -98,8 +98,6 @@ export function fluxSetError(input: RecordFluxSetInput): string | null {
   return null;
 }
 
-// The count a set goes for under its prescription (D56): both sides for a bilateral drill, none for a
-// timed one. One home for the live readout's "/ 10", the draft's `planned` and so History's "2 of 10".
 // The sets stepper's range (D42), and the one refusal for a `fluxSets` settings patch (D61): a plain
 // object of catalogue ids to whole numbers in that range; null = valid. Stub and Lambda both throw it.
 export const FLUX_MIN_SETS = 1;
@@ -115,6 +113,8 @@ export function fluxSetsError(value: unknown): string | null {
   return null;
 }
 
+// The count a set goes for under its prescription (D56): both sides for a bilateral drill, none for a
+// timed one. One home for the live readout's "/ 10", the draft's `planned` and so History's "2 of 10".
 export function plannedCount(def: ExerciseDefinition): number | null {
   switch (def.kind) {
     case 'romReps':

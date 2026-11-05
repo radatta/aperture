@@ -1,10 +1,11 @@
 // Flux history on dev (docs/areas/flux D47–D51): save one set through the guarded API, then prove the History
 // tab and the night home's Flux line show it. The headless browser has no camera, so the set is recorded
 // the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
-// records it before the call) — never through the UI, which can't tell this set from another. The Library
+// records it before the call). The one UI delete (chip-order) takes a ledgered set, found by its own text,
+// so the sweep's delete of it is a no-op. The Library
 // tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
-import { laDay, noConsoleErrors, type Scenario } from '../scenario';
+import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -17,6 +18,9 @@ export function devUlid(now = Date.now()): string {
 }
 
 const EXERCISE = 'Chin Tuck (Cervical Retraction)';
+const stepperOf = (ctx: Ctx) => ctx.page.getByRole('group', { name: 'Sets this session' });
+const expectSets = (ctx: Ctx, n: number) =>
+  stepperOf(ctx).getByText(`${n} sets`, { exact: true }).waitFor({ timeout: 15_000 });
 
 export const fluxHistory: Scenario = {
   id: 'flux-history',
@@ -82,33 +86,18 @@ export const fluxHistory: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Start with 3 sets → leave → reopen the exercise: the stepper reads 3; another exercise still opens at 2',
-      offDev: {
-        file: 'app/src/pages/Flux/ExerciseView.test.tsx',
-        test: 'opens at the last session’s count, and remembers a changed count on Start',
-        why: 'the count is written on Start camera, a Settings write the harness has no ledger for; the test runs the real stage over the stub API and reads the settings back',
-      },
     },
     {
       id: 'sets-refused',
       entry: 'api',
       kind: 'edge',
       what: 'updateSettings({ fluxSets: { "chin-tuck": 9 } }) is refused, and so is an unknown exercise',
-      offDev: {
-        file: 'packages/shared/src/flux/history.test.ts',
-        test: 'accepts a map of catalogue ids to whole numbers 1–5, and nothing else',
-        why: 'a refused write is a refusal the contract tests run against the stub and the Lambda alike; dev would need a settings write to clean up',
-      },
     },
     {
       id: 'chip-order',
       entry: 'ui',
       kind: 'edge',
       what: 'Deleting an exercise’s newest set leaves the History chips in the same order',
-      offDev: {
-        file: 'app/src/pages/Flux/HistoryTab.test.tsx',
-        test: 'chip order is stable across a delete',
-        why: 'the delete is a UI write the scenario’s ledger doesn’t cover for a set it would have to record first; the test drives the real tab over the stub',
-      },
     },
     {
       id: 'chin-tuck-neutral',
@@ -167,21 +156,23 @@ export const fluxHistory: Scenario = {
         const now = Date.now();
         const DAY = 86_400_000;
         const tuck = { exerciseId: 'chin-tuck', avgPeakDeg: null } as const;
+        // Newest first: stopped tuck, rotation, finished tuck — so deleting the stopped one makes rotation
+        // the newest exercise, the delete that reordered the chips when they sorted by recency.
         await record({ ...tuck, count: 6, stoppedEarly: false, completedAt: now - 1000 });
         await record({ ...tuck, count: 2, stoppedEarly: true, completedAt: now }); // stopped after two holds (D55)
         // Three rotation sets with an angle: the trend (and its sparkline) shows from three sets up (D50).
         const turn = { exerciseId: 'cervical-rotation', count: 10, stoppedEarly: false } as const;
         await record({ ...turn, avgPeakDeg: 44, completedAt: now - 4 * DAY });
         await record({ ...turn, avgPeakDeg: 48, completedAt: now - 2 * DAY });
-        await record({ ...turn, avgPeakDeg: 53, completedAt: now - 2000 });
+        await record({ ...turn, avgPeakDeg: 53, completedAt: now - 500 });
       },
     },
     {
       id: 'history',
       entry: 'ui',
-      proves: ['history', 'sparkline'],
+      proves: ['history', 'sparkline', 'chip-order'],
       title:
-        'History lists both, the stopped one marked; the rotation trend’s sparkline spans its tile',
+        'History lists both, the stopped one marked; deleting it holds the chips’ order; the rotation trend’s sparkline spans its tile',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
@@ -199,6 +190,20 @@ export const fluxHistory: Scenario = {
         await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
         await ctx.ui.expectText(/2 of 6 holds · stopped early/, 15_000);
         await ctx.shot('history');
+        // The stopped tuck is this run's own newest set: delete it from the screen, the chips hold still.
+        const chips = () => ctx.page.getByRole('group', { name: 'Exercise' }).textContent();
+        const before = await chips();
+        const stopped = ctx.page.getByText(/2 of 6 holds · stopped early/);
+        await stopped
+          .locator('xpath=ancestor::*[.//button[starts-with(@aria-label, "Delete ")]][1]')
+          .getByRole('button', { name: /^Delete / })
+          .click();
+        await ctx.page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
+        await stopped.waitFor({ state: 'hidden', timeout: 15_000 });
+        const after = await chips();
+        if (!before?.includes('rotation') || before !== after)
+          throw new Error(`the chips moved: ${before} → ${after}`);
+        await ctx.shot('history-after-delete');
         // The rotation chip filters to its three sets and shows the trend tile; the sparkline measures its
         // own width (viewBox = rendered width), so the line reaches the tile's edges instead of sitting in a
         // 240 px drawing centred in it.
@@ -210,6 +215,61 @@ export const fluxHistory: Scenario = {
         if (!(width > 0) || Math.abs(viewBoxW - width) > 1)
           throw new Error(`the sparkline draws ${viewBoxW} px in a ${width.toFixed(1)} px tile`);
         await ctx.shot('history-trend');
+      },
+    },
+    {
+      id: 'sets-remembered',
+      entry: 'ui',
+      proves: ['sets-remembered'],
+      title: 'Chin tuck: + to 3 sets, Start; another exercise opens at 2, chin tuck reopens at 3',
+      async run(ctx) {
+        // Runs after `history`, which passed the disclaimer. The map is the test user's own: start from an
+        // empty one (so a run killed mid-step can't leave this one a wrong opening count), put it back after.
+        const prior = (await ctx.api.reads.getSettings()).fluxSets;
+        await ctx.api.writes.updateSettings({ fluxSets: {} });
+        try {
+          await ctx.ui.goto('/flux/chin-tuck');
+          await expectSets(ctx, 2);
+          await ctx.page.getByRole('button', { name: 'More sets' }).click();
+          await expectSets(ctx, 3);
+          await ctx.page.getByRole('button', { name: 'Start camera' }).click();
+          const deadline = Date.now() + 15_000;
+          let held: number | undefined;
+          while (held !== 3 && Date.now() < deadline) {
+            held = (await ctx.api.reads.getSettings()).fluxSets['chin-tuck'];
+            if (held !== 3) await new Promise((r) => setTimeout(r, 500));
+          }
+          if (held !== 3) throw new Error(`the server holds ${held} sets for chin tuck, not 3`);
+          await ctx.ui.goto('/flux/cervical-rotation');
+          await expectSets(ctx, 2);
+          await ctx.ui.goto('/flux/chin-tuck');
+          await expectSets(ctx, 3);
+          await ctx.shot('sets-remembered');
+        } finally {
+          await ctx.api.writes.updateSettings({ fluxSets: prior });
+        }
+      },
+    },
+    {
+      id: 'sets-refused',
+      entry: 'api',
+      proves: ['sets-refused'],
+      title: 'A count of 9 and an unknown exercise are refused, and the map stays as it was',
+      async run(ctx) {
+        const before = JSON.stringify((await ctx.api.reads.getSettings()).fluxSets);
+        const refusal = (fluxSets: Record<string, number>) =>
+          ctx.api.writes.updateSettings({ fluxSets }).then(
+            () => null,
+            (e: unknown) => (e instanceof Error ? e.message : String(e)),
+          );
+        const count = await refusal({ 'chin-tuck': 9 });
+        if (!count || !/whole number from 1 to 5/.test(count))
+          throw new Error(`a count of 9 was not refused: ${count}`);
+        const unknown = await refusal({ 'not-an-exercise': 2 });
+        if (!unknown || !/Unknown Flux exercise/.test(unknown))
+          throw new Error(`an unknown exercise was not refused: ${unknown}`);
+        const after = JSON.stringify((await ctx.api.reads.getSettings()).fluxSets);
+        if (after !== before) throw new Error(`the map changed: ${before} → ${after}`);
       },
     },
     {

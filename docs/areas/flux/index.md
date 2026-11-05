@@ -263,7 +263,7 @@ Everything flux had is here. Each item is listed with where it lives, or what ch
   and says "Hold longer" (D35); flux counted on return regardless. The posture warning is silent (D28). The
   session itself is spoken and runs hands free (D36–D43).
 - **Persistence:** flux's three `localStorage` keys became `aperture.flux.voice` and `voiceName` — since
-  D58 `voiceURI`, with a saved name still honoured — (per device) and `fluxDisclaimerAckAt` (Settings).
+  D58 `voiceURI`, with a saved name still honoured — (per device) and `fluxDisclaimerAckAt` (Settings); `fluxSets` (Settings, D61) is new since flux.
 - **Footer:** "Not a medical device…" on every Flux screen.
 
 **Dropped:** the SSR "Loading…" pre-mount and the page `<title>`, both of which don't apply in an SPA;

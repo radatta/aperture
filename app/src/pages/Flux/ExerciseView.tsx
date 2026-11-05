@@ -9,6 +9,7 @@ import {
   type ExerciseId,
 } from '@aperture/shared/flux';
 import { dayKey, ulid } from '@aperture/shared';
+import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { EmptyState } from '../../components/EmptyState';
@@ -31,7 +32,6 @@ import { UnsavedSetsStrip } from '../../modules/flux/UnsavedSetsStrip';
 import { useFluxOutbox } from '../../modules/flux/useFluxOutbox';
 import { DEFAULT_SETS, useFluxEngine, type SessionSummary } from '../../modules/flux/useFluxEngine';
 import { useVoice } from '../../modules/flux/useVoice';
-import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 
 // /flux/:exerciseId — one exercise's stage. Keyed by id, so moving between exercises is a fresh stage
 // (camera stopped, contraindication re-gated), as Back → pick did in flux-track.
@@ -66,8 +66,7 @@ function Stage({ id }: { id: ExerciseId }) {
   const { data: settings } = useSettings();
   const updateSettings = useUpdateSettings();
   const [pickedSets, setSets] = useState<number | null>(null);
-  const exerciseKey = def.id as ExerciseId; // the catalogue's own id, from getExercise
-  const storedSets = settings?.fluxSets[exerciseKey] ?? DEFAULT_SETS;
+  const storedSets = settings?.fluxSets[id] ?? DEFAULT_SETS;
   const sets = pickedSets ?? storedSets;
   const lastSide = useRef<Side>('a'); // the side the last finished set was done on
 
@@ -105,7 +104,7 @@ function Stage({ id }: { id: ExerciseId }) {
   const start = () => {
     // Remember the count for next time — only a change, so an untouched stepper never writes.
     if (settings && sets !== storedSets)
-      updateSettings.mutate({ fluxSets: { ...settings.fluxSets, [exerciseKey]: sets } });
+      updateSettings.mutate({ fluxSets: { ...settings.fluxSets, [id]: sets } });
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (video && canvas) void engine.start({ video, canvas });

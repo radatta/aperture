@@ -186,6 +186,7 @@ export interface DevAttachment {
 export interface DevSettings {
   dayStartHour: number;
   pomodoroWorkMin: number;
+  fluxSets: Record<string, number>;
 }
 
 // The test user's work block. A step may shorten it; the step's `finally` and each run's start put it back.

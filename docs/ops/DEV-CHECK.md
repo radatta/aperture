@@ -116,14 +116,16 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 - **Attachments are written only on a run's own tasks.** `createAttachment`/`deleteAttachment` refuse a task the
   ledger never recorded, and `deleteAttachment` refuses an attachment this run didn't create. They're never
   ledgered themselves: the task's delete cascade removes them, bytes included.
-- **Flux sets are the other kind written** (`scenarios/flux-history.ts` writes two a run: a finished set and one stopped early). Their id is minted by the
+- **Flux sets are the other kind written** (`scenarios/flux-history.ts` writes five a run: two chin tucks, a finished set and one stopped early, and three rotation sets). Their id is minted by the
   harness (the client mints it in the app too — [flux](../areas/flux/index.md) D47), so `recordFluxSet` records
   it as `created` with `via: api:recordFluxSet` _before_ the call — a set the server stored is never unrecorded.
   Cleanup, the sweep and the read-back go by that `via`: a Flux id is read with `listFluxSets` and deleted with
-  `deleteFluxSet` (a soft-delete), never through the task methods (`deleteTask` refuses a Flux id), and never
-  through the History tab, which can't tell one set from another. Its `day` is the app's day (the test user's
-  `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's one
-  non-ledger write: a test user who never opened Flux has the disclaimer accepted (a Settings field, logged).
+  `deleteFluxSet` (a soft-delete), never through the task methods (`deleteTask` refuses a Flux id). The scenario's one UI delete
+  (row `chip-order`) picks the run's own stopped set by its text; the sweep's delete of it is then a no-op. Its `day` is the app's day (the test user's
+  `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's two
+  non-ledger writes, both Settings fields on the test user's own row: a test user who never opened Flux has the
+  disclaimer accepted (logged), and row `sets-remembered` empties `fluxSets` first and puts the prior map back in
+  the step's `finally`.
 - **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
   deleted with `deleteCategory(id, null)`. Cleanup runs newest-first and the category is made after the run's tasks, so it goes
   before them — a run task on a run category would make the delete refuse, so no scenario puts one there. The same scenario sets the
