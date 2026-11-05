@@ -352,10 +352,10 @@ function TransactionRow({
         aria-describedby={brush === null || disabled ? undefined : inert ? INERT_ID : BRUSH_HINT_ID}
         className={cx(
           'flex w-full items-center gap-3 py-2 text-left',
-          // Armed, the sticky Sort-into bar covers the top: keep a focused row scrolled clear of it —
-          // its height (12rem / 9rem) plus the status-bar inset it now sits below.
-          brush !== null &&
-            'scroll-mt-[calc(12rem+var(--safe-top))] sm:scroll-mt-[calc(9rem+var(--safe-top))]',
+          // Armed, the sticky Sort-into bar covers the top: keep a focused row scrolled clear of it (the
+          // bar's height; the status-bar inset the bar sits below comes from html's scroll-padding-top,
+          // which a scroll margin adds to — never both).
+          brush !== null && 'scroll-mt-48 sm:scroll-mt-36',
           inert ? 'cursor-not-allowed' : 'enabled:hover:bg-panel-2',
           brush !== null && paintable && 'cursor-pointer',
         )}
