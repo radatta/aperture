@@ -6,7 +6,10 @@ import {
   PLACE_TOKEN_VIA,
   CATEGORY_VIA,
   PLACE_VIA,
+  MCP_SERIES_VIA,
+  SERIES_VIA,
   UI_PLACE_VIA,
+  UI_SERIES_VIA,
   createApiClient,
   financeRowOf,
   isGone,
@@ -69,6 +72,7 @@ describe('createApiClient', () => {
       'listPlaces',
       'listPlansForDay',
       'listRunningSessions',
+      'listSeries',
       'listSessionsForDay',
       'listTasks',
       'placeDigestRaw',
@@ -76,12 +80,14 @@ describe('createApiClient', () => {
     ]);
     expect(Object.keys(api.writes).sort()).toEqual([
       'createAttachment',
+      'createSeries',
       'createTask',
       'deleteAttachment',
       'deleteCategory',
       'deleteFinanceRule',
       'deleteFluxSet',
       'deletePlace',
+      'deleteSeries',
       'deleteTask',
       'recordFinanceBucket',
       'recordFinanceLink',
@@ -300,6 +306,9 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'finance-link:r:tx2', via: FINANCE_LINK_VIA },
         { run: 'r', op: 'created' as const, id: 'R', via: FINANCE_RULE_VIA },
         { run: 'r', op: 'created' as const, id: 'C', via: CATEGORY_VIA },
+        { run: 'r', op: 'created' as const, id: 'S', via: SERIES_VIA },
+        { run: 'r', op: 'created' as const, id: 'S2', via: UI_SERIES_VIA },
+        { run: 'r', op: 'created' as const, id: 'S3', via: MCP_SERIES_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -312,6 +321,9 @@ describe('createApiClient', () => {
           'finance-link:r:tx2',
           'R',
           'C',
+          'S',
+          'S2',
+          'S3',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -324,6 +336,9 @@ describe('createApiClient', () => {
         'financeLink',
         'financeRule',
         'category',
+        'series',
+        'series',
+        'series',
         'task',
       ]);
     });

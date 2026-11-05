@@ -64,7 +64,10 @@ import {
   ROLL_PLAN_FALLBACK_MIN,
   rollRepFields,
   sanitizeFilename,
+  seriesCadence,
   seriesDueOn,
+  seriesHasOccurrence,
+  occurrenceFields,
   setNotesArg,
   setReflectionArg,
   followUpPlanDay,
@@ -1087,28 +1090,23 @@ class StubClient implements ApiClient {
     return this.alive(this.store.series);
   }
   async upsertSeries(input: UpsertSeriesInput): Promise<TaskSeries> {
-    if (input.id) {
-      return this.writes.patch(this.store.series, input.id, {
-        title: input.title,
-        categoryId: input.categoryId,
-        defaultEstimateMin: input.defaultEstimateMin,
-        rule: input.rule,
-        anchorDate: input.anchorDate,
-        active: input.active ?? true,
-      });
-    }
-    return this.writes.insert(this.store.series, {
-      ...this.base(),
+    const fields = {
       title: input.title,
       categoryId: input.categoryId,
       defaultEstimateMin: input.defaultEstimateMin,
       rule: input.rule,
       anchorDate: input.anchorDate,
       active: input.active ?? true,
-    });
+      ...seriesCadence(input), // throws before any write
+    };
+    if (input.id) return this.writes.patch(this.store.series, input.id, fields);
+    return this.writes.insert(this.store.series, { ...this.base(), ...fields });
   }
   async deactivateSeries(id: string): Promise<TaskSeries> {
     return this.writes.patch(this.store.series, id, { active: false });
+  }
+  async deleteSeries(id: string): Promise<void> {
+    if (this.find(this.store.series, id)) this.writes.softDelete(this.store.series, id);
   }
 
   // --- Sessions ------------------------------------------------------------
@@ -1304,37 +1302,19 @@ class StubClient implements ApiClient {
       reflectionText: null,
     });
   }
+  // An occurrence is spawned once per (series, day) — identity by seriesDay (seriesHasOccurrence), so an
+  // unplanned occurrence isn't respawned (recurring.md D4).
   private materializeDueSeries(day: string): void {
-    for (const series of this.alive(this.store.series).filter((s) => s.active)) {
+    const active = this.alive(this.store.series).filter((s) => s.active);
+    if (active.length === 0) return;
+    const tasks = this.alive(this.store.tasks);
+    const plansOnDay = this.alive(this.store.plans).filter((p) => p.day === day);
+    for (const series of active) {
       if (!seriesDueOn(series, day)) continue;
-      const already = this.alive(this.store.plans).some(
-        (p) => p.day === day && this.find(this.store.tasks, p.taskId)?.seriesId === series.id,
-      );
-      if (already) continue;
+      if (seriesHasOccurrence(series, day, tasks, plansOnDay)) continue;
       const task = this.writes.insert(this.store.tasks, {
         ...this.base(),
-        title: series.title,
-        status: 'planned',
-        categoryId: series.categoryId,
-        dueDay: null,
-        dueTime: null,
-        notes: null,
-        reflection: null,
-        seriesId: series.id,
-        rollId: null,
-        estimateMin: series.defaultEstimateMin,
-        bufferMin: null,
-        estimateLockedMin: null,
-        parentId: null,
-        place: null,
-        actualAccruedMin: 0,
-        startedAt: null,
-        completedAt: null,
-        cancelledAt: null,
-        gcalAccountId: null,
-        gcalCalendarId: null,
-        gcalEventId: null,
-        gcalSyncError: null,
+        ...occurrenceFields(series, day),
       });
       this.writes.insert(this.store.plans, {
         ...this.base(),

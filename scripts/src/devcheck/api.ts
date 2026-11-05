@@ -23,6 +23,31 @@ export interface DevTask {
   estimateLockedMin?: number | null;
   actualAccruedMin?: number;
   reflection?: string | null; // the reflection scenario
+  seriesId?: string | null; // the recurring scenario: an occurrence of that series
+  seriesDay?: string | null;
+  dueDay?: string | null;
+}
+
+// The slice of a recurring series the check reads and writes (packages/shared/src/types.ts TaskSeries).
+export interface DevSeries {
+  id: string;
+  title: string;
+  rule: { kind: string; daysOfWeek?: number[]; interval?: number };
+  active: boolean;
+  anchorDate: string;
+  dueOffsetDays?: number | null;
+  until?: string | null;
+}
+export interface CreateSeriesInput {
+  title: string;
+  rule: {
+    kind: 'daily' | 'weekdays' | 'weekly' | 'everyN';
+    daysOfWeek?: number[];
+    interval?: number;
+  };
+  defaultEstimateMin?: number | null;
+  dueOffsetDays?: number | null;
+  until?: string | null;
 }
 
 export interface CreateTaskInput {
@@ -157,6 +182,13 @@ export const UI_PLACE_VIA = 'ui:upsertPlace';
 export const CATEGORY_VIA = 'api:upsertCategory';
 // The test user's Shortcut token. It has no id, so a rotate records `place-token:<run>` — before the call, like
 // a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
+// A recurring series this harness created — through the API, the browser's upsertSeries create (recorder.ts)
+// or MCP's create_series. Cleanup deletes its occurrences (tasks with that seriesId, which getDay spawned
+// server-side, so no create response ever named them) and then the series, by this one recorded id.
+export const SERIES_VIA = 'api:upsertSeries';
+export const UI_SERIES_VIA = 'ui:upsertSeries';
+export const MCP_SERIES_VIA = 'mcp:create_series';
+const SERIES_VIAS: readonly string[] = [SERIES_VIA, UI_SERIES_VIA, MCP_SERIES_VIA];
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
 export const placeTokenId = (run: string): string => `place-token:${run}`;
 // A bucket set or a refund link on a fixture bank row. Neither has an id of its own, so, like the token, a run
@@ -181,10 +213,12 @@ export type LedgerKind =
   | 'category'
   | 'financeBucket'
   | 'financeLink'
-  | 'financeRule';
+  | 'financeRule'
+  | 'series';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
+  if (via !== undefined && SERIES_VIAS.includes(via)) return 'series';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
   if (via === CATEGORY_VIA) return 'category';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
@@ -306,6 +340,8 @@ export function createApiClient({
       (await call<DevFluxSet[]>('listFluxSets', [{}])).find((f) => f.id === id) ?? null,
     listAttachments: (taskId: string) => call<DevAttachment[]>('listAttachments', [taskId]),
     getAttachmentDownloadUrl: (id: string) => call<string>('getAttachmentDownloadUrl', [id]),
+    // Every alive series, stopped ones included (a deleted one reads as gone).
+    listSeries: () => call<DevSeries[]>('listSeries', []),
     // GET a BFF-minted presigned URL and return only its status (200 while the bytes exist, 403/404 after).
     // Gone is 403 or 404 — see isGone.
     async probePresigned(url: string): Promise<number> {
@@ -438,6 +474,24 @@ export function createApiClient({
     async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
       assertLedger(id, 'category');
       await call<null>('deleteCategory', [id, reassignToId]);
+    },
+    // A series counts from the app's today (getSettings' day boundary), as the Recurring tab does.
+    async createSeries(input: CreateSeriesInput, anchorDate: string): Promise<DevSeries> {
+      ledger.append({ run, op: 'intent', via: SERIES_VIA, title: input.title });
+      const s = await call<DevSeries>('upsertSeries', [
+        { categoryId: null, defaultEstimateMin: null, ...input, anchorDate },
+      ]);
+      ledger.append({ run, op: 'created', id: s.id, via: SERIES_VIA, title: input.title });
+      return s;
+    },
+    // A recorded series goes with every occurrence it spawned: those tasks were made server-side by getDay
+    // (no create response named them), so the series id is their record. deleteTask is the BFF's — the app's
+    // and MCP's delete refuse an occurrence only because the series would respawn it, which the tombstone ends.
+    async deleteSeries(id: string): Promise<void> {
+      assertLedger(id, 'series');
+      for (const t of (await reads.listTasks()).filter((t) => t.seriesId === id))
+        await call<null>('deleteTask', [t.id]);
+      await call<null>('deleteSeries', [id]);
     },
     // Mint an upload URL, PUT the bytes to S3 as the app does, then confirm — or leave it pending
     // (confirm: false), as an abandoned upload would.

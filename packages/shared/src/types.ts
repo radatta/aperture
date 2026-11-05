@@ -30,6 +30,10 @@ export interface Task extends BaseEntity {
   status: TaskStatus;
   categoryId: string | null;
   seriesId: string | null; // set when spawned from a recurring series
+  // The day the series spawned this occurrence for — its identity within the series (recurrence.ts
+  // seriesHasOccurrence): getDay never spawns a second occurrence for a (series, day) that has one, whatever
+  // happened to its plan row. Occurrences spawned before this field read back undefined (docs/areas/tasks/recurring.md D4).
+  seriesDay?: string | null;
   // The Roll this task is a "rep" of, when picked from a Roll (see rolls.ts). Nullable — most tasks
   // aren't reps, and pre-existing rows read back as undefined, so readers compare `=== id` / `!rollId`,
   // never `=== null`. The contact-sheet momentum is DERIVED from done tasks carrying this (no counter).
@@ -110,6 +114,12 @@ export interface TaskSeries extends BaseEntity {
   rule: RecurrenceRule;
   active: boolean;
   anchorDate: string; // YYYY-MM-DD the rule counts from
+  // The cadence: an occurrence spawns planned on its day, due `dueOffsetDays` later (0 = the same day, 1 = the
+  // next day …), untimed. null = no due date. Rows from before read back undefined → `?? null`.
+  dueOffsetDays?: number | null;
+  // The last day the series spawns (inclusive, YYYY-MM-DD); null = open-ended. Past it the series stays
+  // `active` and its row reads "ended …" until stopped. Rows from before read back undefined → `?? null`.
+  until?: string | null;
 }
 
 // --- Ideas (inbox) ---------------------------------------------------------

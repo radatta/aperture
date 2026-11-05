@@ -20,6 +20,13 @@ describe('recorder', () => {
     expect(idsFromCreateResponse('splitTask', split)).toEqual(['f']);
   });
 
+  it('records a series added on the Recurring tab, never an edit of one', () => {
+    expect(idsFromCreateResponse('upsertSeries', { id: 's1', title: 'Pre-lab' })).toEqual(['s1']);
+    const body = (input: unknown) => JSON.stringify({ args: [input] });
+    expect(isCreateRequest('upsertSeries', body({ title: 'Pre-lab' }))).toBe(true);
+    expect(isCreateRequest('upsertSeries', body({ id: 's1', title: 'Pre-lab' }))).toBe(false);
+  });
+
   it('records a place added in Settings, never an edit of an existing one', () => {
     expect(idsFromCreateResponse('upsertPlace', { id: 'p1', slug: 'shop' })).toEqual(['p1']);
     const body = (input: unknown) => JSON.stringify({ args: [input] });

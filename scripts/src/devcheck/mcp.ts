@@ -4,12 +4,16 @@
 // stateless JSON-RPC (lambdas/src/mcp/protocol.ts): no initialize or session needed; a tool's result is
 // `{content: [{type: 'text', text}], isError?}` inside HTTP 200, the text JSON (or 'ok').
 import {
+  MCP_SERIES_VIA,
   ledgerKind,
+  type CreateSeriesInput,
   type DevAttachment,
   type DevPlace,
   type DevPlaceDigest,
+  type DevSeries,
   type DevTask,
   type FetchLike,
+  type LedgerKind,
 } from './api';
 import { DEV_ORIGIN, assertDevOrigin } from './config';
 import { DevcheckError } from './errors';
@@ -31,6 +35,18 @@ interface ToolResult {
   text: string;
   isError: boolean;
 }
+
+// A JSON-RPC error from dev's /mcp. PARAM_ERROR (-32602) is the protocol's "bad args" — raised by the tool
+// before any dispatch (lambdas/src/mcp/types.ts RpcParamError), so the server wrote nothing.
+export class McpRpcError extends Error {
+  readonly code: number;
+  constructor(method: string, code: number, message: string) {
+    super(`mcp ${method} → ${code} ${message}`);
+    this.name = 'McpRpcError';
+    this.code = code;
+  }
+}
+export const PARAM_ERROR = -32602;
 
 export function createMcpClient({
   fetch,
@@ -59,7 +75,7 @@ export function createMcpClient({
     if (res.status !== 200)
       throw new Error(`mcp ${method} → HTTP ${res.status}: ${text.slice(0, 200)}`);
     const body = JSON.parse(text) as { result?: T; error?: { code: number; message: string } };
-    if (body.error) throw new Error(`mcp ${method} → ${body.error.code} ${body.error.message}`);
+    if (body.error) throw new McpRpcError(method, body.error.code, body.error.message);
     return body.result as T;
   }
 
@@ -82,14 +98,15 @@ export function createMcpClient({
     }
   }
 
-  // A write may only touch a task this harness created (not a Flux set's or a place's id) — as api.ts.
-  function assertLedgerTask(id: string): void {
-    if (!ledger.has(id) || ledgerKind(ledger.read(), id) !== 'task')
+  // A write may only touch a row this harness created, through its own kind's methods — as api.ts.
+  function assertLedger(id: string, kind: LedgerKind): void {
+    if (!ledger.has(id) || ledgerKind(ledger.read(), id) !== kind)
       throw new DevcheckError(
         'LEDGER_GUARD',
-        `refusing to touch ${id} — the ledger never recorded it`,
+        `refusing to touch ${id} — the ledger never recorded it as a ${kind}`,
       );
   }
+  const assertLedgerTask = (id: string) => assertLedger(id, 'task');
 
   const reads = {
     toolsList: async () =>
@@ -101,6 +118,9 @@ export function createMcpClient({
     listAttachments: (taskId: string) => data<DevAttachment[]>('list_attachments', { taskId }),
     getAttachmentDownloadUrl: (id: string) => data<string>('get_attachment_download_url', { id }),
     listPlaces: () => data<DevPlace[]>('list_places'),
+    // list_series: the active ones, or every one with includeStopped (a stopped series stays, inactive).
+    listSeries: (includeStopped = false) =>
+      data<DevSeries[]>('list_series', includeStopped ? { includeStopped: true } : {}),
     // The digest plus each errand's id and status (lambdas/src/mcp/placeTools.ts) — a pure read, no heartbeat.
     listPlaceTasks: (place: string) =>
       data<DevPlaceDigest & { tasks: { id: string; title: string; status: string }[] }>(
@@ -163,6 +183,31 @@ export function createMcpClient({
       const out = JSON.parse(r.text) as { deleted: string; parts?: string[] };
       return { deleted: out.deleted, parts: out.parts ?? [] };
     },
+    // create_series: intent, then the server's id (the series counts from the user's today, server-side). A
+    // param error (-32602) is raised before any dispatch, so it resolves the intent as `refused`; any other
+    // failure leaves the intent open — the create may have landed.
+    async createSeries(input: CreateSeriesInput): Promise<DevSeries> {
+      ledger.append({ run, op: 'intent', via: MCP_SERIES_VIA, title: input.title });
+      let s: DevSeries;
+      try {
+        s = await data<DevSeries>('create_series', { ...input });
+      } catch (err) {
+        if (err instanceof McpRpcError && err.code === PARAM_ERROR)
+          ledger.append({ run, op: 'refused', via: MCP_SERIES_VIA, title: input.title });
+        throw err;
+      }
+      ledger.append({ run, op: 'created', id: s.id, via: MCP_SERIES_VIA, title: input.title });
+      return s;
+    },
+    // stop_series on a series this harness created; cleanup still deletes it by id (api.ts deleteSeries).
+    // An id the ledger never recorded is refused here; one the server doesn't have throws its text.
+    async stopSeries(id: string): Promise<DevSeries> {
+      assertLedger(id, 'series');
+      return data<DevSeries>('stop_series', { id });
+    },
+    // The server's answer to stop_series for an id that isn't the user's — no ledger check, since the point is
+    // that the server refuses it; the harness only ever names ids no row can have.
+    stopSeriesUnknown: (id: string) => tool('stop_series', { id }),
     // Only an attachment the server lists on one of this run's tasks.
     async deleteAttachment(taskId: string, id: string): Promise<{ deleted: string }> {
       assertLedgerTask(taskId);

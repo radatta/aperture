@@ -107,7 +107,7 @@ Plus the **finance line** only while charges wait to be sorted ("N charges to so
    - **Calibration at two levels:** each part, and the whole job (the parent's lock vs Σ its parts — a missing part shows up there).
 4. **Done** — **actual time** recorded, plus an optional **reflection** line (what went well, what to do differently — [reflection](../areas/tasks/reflection.md)) → estimate-vs-actual delta captured, with its why. `cancelled` tasks are excluded from calibration.
 
-**Recurring tasks** — a task can recur (simple rules: daily / weekdays / weekly / every-N). Each occurrence is its own instance with its own estimate/actual → its own calibration point. Distinct from **habits** (recurring *behaviors*, no estimate).
+**Recurring tasks** — a task can recur (simple rules: daily / weekdays / weekly / every-N), with a **cadence**: each occurrence is planned on its day and due a set number of days later ("pre-lab every Tuesday, due Wednesday"), and the series can **end** on a date (the quarter's last lab). Each occurrence is its own instance with its own estimate/actual → its own calibration point; unplanning one defers it, never duplicates it. Distinct from **habits** (recurring *behaviors*, no estimate). Design: [areas/tasks/recurring.md](../areas/tasks/recurring.md).
 
 **Actual-time measurement — hybrid:** on "done," prompt for one number, **prefilled from any pomodoro time tracked, editable.** Works even on days no timer ran, so calibration data stays complete. An honest manual guess still calibrates fine.
 

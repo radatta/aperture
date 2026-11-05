@@ -12,6 +12,7 @@ import {
   localEpochFromDayTime,
   rollRepFields,
   syncWindow,
+  weekdayOf,
 } from '@aperture/shared';
 import type {
   BaseEntity,
@@ -23,6 +24,7 @@ import type {
   FluxSet,
   Roll,
   Task,
+  TaskSeries,
 } from '@aperture/shared';
 import type { Store } from './stubClient';
 
@@ -513,6 +515,22 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     active: true,
   };
   store.rolls.push(leetcode, study, build);
+
+  // --- A recurring series with a cadence (docs/areas/tasks/recurring.md): the pre-lab is written the day
+  // before the lab, so it recurs weekly on today's weekday (its occurrence materializes on today's load),
+  // due the next day, through the quarter's last lab. Course = category.
+  const prelab: TaskSeries = {
+    ...mk(nowMs - 20 * DAY),
+    title: 'Pre-lab report',
+    categoryId: byLabel('Learning').id,
+    defaultEstimateMin: 60,
+    rule: { kind: 'weekly', daysOfWeek: [weekdayOf(today)] },
+    active: true,
+    anchorDate: addDays(today, -21),
+    dueOffsetDays: 1,
+    until: addDays(today, 42),
+  };
+  store.series.push(prelab);
 
   // One done rep = one filled cell. `seq` offsets a second rep on the same day so a cell can read "2".
   const rep = (roll: Roll, dAgo: number, seq = 0) => {

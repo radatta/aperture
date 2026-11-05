@@ -39,6 +39,14 @@ describe('orphanIntents', () => {
     ];
     expect(orphanIntents(entries).map((x) => x.title)).toEqual(['y']);
   });
+  it('a refused create (a param error, nothing written) resolves its intent', () => {
+    const entries = [
+      e('intent', undefined, { via: 'mcp:create_series', title: 'x' }),
+      e('refused', undefined, { via: 'mcp:create_series', title: 'x' }),
+      e('intent', undefined, { via: 'mcp:create_series', title: 'y' }),
+    ];
+    expect(orphanIntents(entries).map((x) => x.title)).toEqual(['y']);
+  });
 });
 
 describe('openLedger', () => {

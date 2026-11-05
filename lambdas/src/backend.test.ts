@@ -38,6 +38,68 @@ describe('backend story soft-delete', () => {
   });
 });
 
+// The respawn fix (recurring.md D4) on the Lambda's own path: an occurrence's identity is (series, day), so
+// getDay after removePlan spawns nothing — however many times it runs — and the one task goes to backlog.
+describe('backend recurrence', () => {
+  it('getDay twice after removePlan spawns no second occurrence', async () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+    });
+    const series = await backend.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 60,
+      rule: { kind: 'daily' },
+      anchorDate: '2026-08-01',
+      dueOffsetDays: 1,
+    });
+    await backend.getDay('2026-08-04');
+    const [plan] = await backend.listPlansForDay('2026-08-04');
+    await backend.removePlan(plan!.id);
+    await backend.getDay('2026-08-04');
+    await backend.getDay('2026-08-04');
+    const mine = (await backend.listTasks()).filter((t) => t.seriesId === series.id);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({
+      status: 'backlog',
+      seriesDay: '2026-08-04',
+      dueDay: '2026-08-05',
+    });
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
+  });
+
+  // deleteSeries is a tombstone (TECH.md asks every new delete path to prove soft, not hard), and the row
+  // then reads as gone to every series write — a stop or edit after it is Not found, as the stub answers.
+  it('deleteSeries tombstones the template and later series writes answer Not found', async () => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => clock,
+    });
+    const input = {
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 60,
+      rule: { kind: 'daily' } as const,
+      anchorDate: '2026-08-01',
+    };
+    const s = await backend.upsertSeries(input);
+    clock += 1000;
+    await backend.deleteSeries(s.id);
+    const raw = await doc.get('u#local', sk.series(s.id));
+    expect(raw?.deletedAt).toBe(clock);
+    expect(await backend.listSeries()).toEqual([]);
+    await expect(backend.deactivateSeries(s.id)).rejects.toThrow(/Not found/);
+    await expect(backend.upsertSeries({ ...input, id: s.id })).rejects.toThrow(/Not found/);
+    clock += 1000;
+    await backend.deleteSeries(s.id); // idempotent: the tombstone keeps its first stamp
+    expect((await doc.get('u#local', sk.series(s.id)))?.deletedAt).toBe(clock - 1000);
+  });
+});
+
 describe('backend attachments', () => {
   const setup = (userId = 'local') => {
     const doc = new InMemoryDoc();

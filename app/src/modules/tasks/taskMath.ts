@@ -1,4 +1,5 @@
-import type { RecurrenceRule, Task, TaskStatus } from '@aperture/shared';
+import { fmtMonthShortDay } from '@aperture/shared';
+import type { RecurrenceRule, Task, TaskSeries, TaskStatus } from '@aperture/shared';
 
 // Human label for a status. "Dropped" for cancelled — the product word for abandoning a task (the
 // row action is "Drop"), never "Cancelled".
@@ -103,4 +104,22 @@ export function ruleSummary(rule: RecurrenceRule): string {
     case 'everyN':
       return rule.interval === 1 ? 'Every day' : `Every ${rule.interval} days`;
   }
+}
+
+// The series row's one line: the rule, then the cadence's due offset and end when set (recurring.md D6) —
+// "Mon, Wed · due next day · until Dec 5", "ended Dec 5" once `today` is past it. A year other than
+// today's is spelled out.
+export function seriesSummary(series: TaskSeries, today: string): string {
+  const parts = [ruleSummary(series.rule)];
+  const offset = series.dueOffsetDays ?? null;
+  if (offset !== null)
+    parts.push(
+      offset === 0 ? 'due same day' : offset === 1 ? 'due next day' : `due in ${offset} days`,
+    );
+  const until = series.until ?? null;
+  if (until !== null) {
+    const year = until.slice(0, 4) === today.slice(0, 4) ? '' : `, ${until.slice(0, 4)}`;
+    parts.push(`${until < today ? 'ended' : 'until'} ${fmtMonthShortDay(until)}${year}`);
+  }
+  return parts.join(' · ');
 }

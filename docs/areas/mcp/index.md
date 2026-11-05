@@ -73,6 +73,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?, reflection?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
 | places           | `list_places`, `list_place_tasks {place}` (the Shortcut's digest + `tasks[]` ids, no heartbeat — [tasks/places](../tasks/places.md)) |
+| series           | `list_series {includeStopped?}`, `create_series {title, rule, categoryId?, defaultEstimateMin?, dueOffsetDays?, until?}` (anchored on the user's today; an `until` before it is refused), `stop_series {id}` — the templates; occurrences are `list_tasks` rows with `seriesId` ([tasks/recurring](../tasks/recurring.md) D5) |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
@@ -147,7 +148,8 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
 - **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
   (deleting their stored bytes, as `delete_attachment` does) and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
-  (`seriesId` set), matching the UI — `getDay` would respawn it; cancel it instead.
+  (`seriesId` set), matching the UI — a tombstoned occurrence isn't alive, so `getDay` would respawn it
+  ([tasks/recurring](../tasks/recurring.md) §4); cancel it, or `stop_series`, instead.
 - **Rename** is a new contract method, `setTaskTitle` (allowed at any status; with auto-sync on it also
   renames a linked calendar event). Exposed as `update_task.title`.
 - **Calendar** events are created **from a task only** (the schema has nowhere to pin a standalone event).
