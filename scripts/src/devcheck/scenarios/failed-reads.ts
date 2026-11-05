@@ -42,7 +42,7 @@ async function until(what: string, ok: () => boolean, timeoutMs = 15_000) {
 // A run that died mid-timer leaves one running (or stale) on the test user. Clear it through the dock, judged
 // by the server's list — the dock's idle Focus shows before that read lands. Timers live only in the test
 // user's partition.
-async function clearTimers(ctx: Ctx) {
+export async function clearTimers(ctx: Ctx) {
   for (let i = 0; i < 8; i++) {
     if (!(await ctx.api.reads.listRunningSessions()).length) return;
     if (i === 0) await ctx.ui.goto('/settings');

@@ -9,6 +9,9 @@ const SMALL = /\btext-(?:sm|xs)\b/;
 
 // The index just past the tag's `>` — walked, not matched: an attribute may hold a `>` (an arrow function)
 // or a `}` (inside a string), so strings and brace depth are tracked.
+// Known limits: a comment or regex literal inside an attribute expression isn't parsed (an apostrophe there
+// reads as a string start), and a className passed as a variable or spread isn't seen — keep classes literal
+// on fields.
 function tagEnd(src: string, from: number): number {
   let depth = 0;
   let quote: string | null = null;

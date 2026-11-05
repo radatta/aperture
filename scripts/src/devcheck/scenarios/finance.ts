@@ -8,6 +8,7 @@
 // Bucket option, bucket + "already refunded" on their own line in refund rows, two fields at 16px.
 import { PHONE } from '../browser';
 import { needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { clearTimers } from './failed-reads';
 
 // The fixture's rows, by the start of their bank text (localNotes/plaid-fixture.json in the branch that
 // built it; the JSON is pasted into Link, never synced from the repo).
@@ -35,9 +36,15 @@ async function openRow(ctx: Ctx, name: RegExp, title: RegExp) {
   await dialog.waitFor({ timeout: 10_000 });
   return dialog;
 }
+// Escape clears a search box that has text before it closes the detail (LedgerControls' SearchBox), so a
+// second press may be needed.
 const closeDetail = async (ctx: Ctx) => {
-  await ctx.page.keyboard.press('Escape');
-  await ctx.page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 10_000 });
+  const dialog = ctx.page.getByRole('dialog');
+  for (let i = 0; i < 2 && (await dialog.isVisible()); i++) {
+    await ctx.page.keyboard.press('Escape');
+    await wait(300);
+  }
+  await dialog.waitFor({ state: 'hidden', timeout: 10_000 });
 };
 const focusedText = (ctx: Ctx) =>
   ctx.page.evaluate<string>(
@@ -133,7 +140,7 @@ export const finance: Scenario = {
   steps: [
     {
       id: 'fixture',
-      entry: 'api',
+      entry: 'ui', // reads the server, then looks for the rows on the All tab
       title: 'The fixture bank is linked and its rows are on the All tab',
       async run(ctx) {
         const { rows, find } = await fixtureRows(ctx);
@@ -228,7 +235,7 @@ export const finance: Scenario = {
         const focused = await focusedText(ctx);
         if (!/^Link to /.test(focused)) throw new Error(`after Unlink, focus is on "${focused}"`);
         await ctx.shot('money-in-unlink');
-        await closeDetail(ctx); // Escape with an empty search box closes the detail
+        await closeDetail(ctx);
       },
     },
     {
@@ -246,7 +253,7 @@ export const finance: Scenario = {
         const row = link.locator('xpath=ancestor::li[1]');
         const merchant = await row.getByText(GROCER).first().boundingBox();
         const bucket = await row
-          .getByText(/^(Unsorted|Budget|I pay|Not spending)/)
+          .getByText(/^(Unsorted|Budget|I pay|Parents pay|Not spending)/)
           .first()
           .boundingBox();
         const button = await link.boundingBox();
@@ -274,13 +281,25 @@ export const finance: Scenario = {
         await select.waitFor({ timeout: 15_000 });
         const selectPx = await fontSizeOf(ctx, `select[aria-label="Bucket for ${rule.pattern}"]`);
         if (selectPx < 16) throw new Error(`the rule’s bucket select is ${selectPx}px`);
-        await ctx.page.getByRole('button', { name: '+ New focus' }).click();
+        // The New focus row lives in the running timer's bar: start a focus from the dock's idle Focus
+        // (a leftover one cleared first, as failed-reads does), open the row, measure, Cancel it, Stop the
+        // timer. Like failed-reads, this leaves a seconds-long completed session in the test user's history.
+        await clearTimers(ctx);
+        await ctx.page.getByRole('button', { name: 'Focus', exact: true }).first().click();
+        const open = ctx.page.getByRole('button', { name: '+ New focus', exact: true });
+        await open.waitFor({ timeout: 15_000 });
+        await open.click();
         const input = ctx.page.getByLabel('New focus label');
         await input.waitFor({ timeout: 10_000 });
         const inputPx = await fontSizeOf(ctx, 'input[aria-label="New focus label"]');
         if (inputPx < 16) throw new Error(`the New focus input is ${inputPx}px`);
         await ctx.shot('field-size');
-        await ctx.page.getByRole('button', { name: 'Cancel' }).click();
+        await ctx.page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
+        await ctx.page.getByRole('button', { name: 'Stop', exact: true }).first().click();
+        for (let i = 0; (await ctx.api.reads.listRunningSessions()).length; i++) {
+          if (i >= 40) throw new Error('the focus timer never stopped on the server');
+          await wait(250);
+        }
       },
     },
     noConsoleErrors,
