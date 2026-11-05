@@ -3,6 +3,7 @@
 // are the feature's in the report.
 import type { Scenario, Tier } from '../scenario';
 import { attachmentDelete } from './attachment-delete';
+import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
 import { failedReads } from './failed-reads';
 import { finance } from './finance';
@@ -19,6 +20,7 @@ import { smoke } from './smoke';
 export const SCENARIOS: Scenario[] = [
   smoke,
   captureTask,
+  captureDock,
   partsV2,
   partsV2b,
   partsV2bReads,

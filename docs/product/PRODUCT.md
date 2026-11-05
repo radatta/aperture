@@ -46,7 +46,7 @@ Stay ambitious and productive **and** get more mindful/balanced — with a hard 
 - **One universal capture bar**, always present on the home and focusable from anywhere via a global hotkey (web-first). On phone it's a persistent bar (bottom, thumb reach).
 - **Mode toggle** decides routing: `[ Log | Task | Idea ]`, click or **Tab**-cycle, **Enter** submits. Nothing to memorize, always visible, keyboard-fast.
 - **Default = Log.** With no action, plain text drops a timestamped entry into today's interstitial log. The effortless default → the log builds itself, which is also the reflection substrate.
-- **After submit:** bar stays focused, **mode snaps back to Log** (protects the default; batch-entering tasks is really the morning plan pass, not capture).
+- **After submit:** bar stays focused and **keeps its mode** (since 2026-10-04: batch-entering tasks or ideas re-picked the mode every time); Log is still the default on open.
 
 ### What each mode creates
 - **Log** → timestamped entry in today's timeline. No other fields.

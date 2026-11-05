@@ -46,7 +46,8 @@ export interface BulkLine {
 }
 // `unknown` carries the token that wasn't recognized.
 export type BulkErrorKind =
-  { kind: 'category' | 'due' | 'place' | 'other' } | { kind: 'unknown'; token: string };
+  | { kind: 'category' | 'estimate' | 'due' | 'place' | 'other' }
+  | { kind: 'unknown'; token: string };
 
 export interface BulkParse {
   lines: BulkLine[]; // one per non-blank input line
@@ -121,6 +122,7 @@ function parseLine(
     out.errorKinds.push(kind);
   };
   const CATEGORY: BulkErrorKind = { kind: 'category' };
+  const ESTIMATE: BulkErrorKind = { kind: 'estimate' };
   const DUE: BulkErrorKind = { kind: 'due' };
   const PLACE: BulkErrorKind = { kind: 'place' };
 
@@ -169,7 +171,7 @@ function parseLine(
       const rest = tok.slice(1);
       const min = Number(rest);
       if (!/^\d+$/.test(rest) || min < 1)
-        fail(`invalid estimate '${tok}' — use ~<whole minutes>, e.g. ~30`);
+        fail(`invalid estimate '${tok}' — use ~<whole minutes>, e.g. ~30`, ESTIMATE);
       else out.estimateMin = min;
     } else if (tok.startsWith('#')) {
       if (!once('category', 'category (#)')) continue;

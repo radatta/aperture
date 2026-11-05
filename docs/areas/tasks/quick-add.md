@@ -16,7 +16,8 @@ Raycast ─ parse_task ┘     (RPC / MCP)    runQuickParse └─ else → Anth
 
 - **Enter / Send = Auto.** The field clears at once; the parse and the create run behind it; the receipt
   reads back what was saved (`Task added → backlog`, plus a 4s line under the field — `fix login bug ·
-Aperture · due Fri 4pm · 30m` — until you start the next capture).
+Aperture · due Fri 4pm · 30m` — until you start the next capture). On the phone, type it as you'd
+  say it — nothing in a natural line needs the symbols page (`|`, `~` and `#` all sit on it).
 - **✨ Review (or ⌘/Ctrl+Enter).** Parses into a preview under the field — title, `no category` or the
   category chip, due (relative: `due tomorrow 4pm`), estimate, notes (2 lines), and any dropped field in
   gold. A second press (✨, Enter or Send) saves exactly the preview, without parsing again. On a failed

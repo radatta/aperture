@@ -249,11 +249,14 @@ export function CaptureBar({
   // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
   // shows once one is refused — or once the caret leaves it (or the field). Three cases:
   const typing = focused && !shown?.blocked && !acked;
-  const tokenKind = token?.kind === 'category' || token?.kind === 'place' ? token.kind : null;
-  // - the #/@ token speaks through its chips: its own refusal (a bare "@", a partial that starts several);
+  const tokenKind = token?.kind ?? null;
+  // - the token speaks through its chips: its own refusal (a bare "@", "~" or "due:", a partial that
+  //   starts several) — every chip-bearing kind, since each one's parse error carries that kind;
   const typingKind = typing && suggestions.length > 0 ? tokenKind : null;
-  // - its gold "no category" / "no place" warning waits too — the next letter may make it a match;
-  const typingWarn = typing ? tokenKind : null;
+  // - a #/@ token's gold "no category" / "no place" warning waits too — the next letter may make it a
+  //   match;
+  const typingWarn =
+    typing && (tokenKind === 'category' || tokenKind === 'place') ? tokenKind : null;
   // - "milk | " with the caret right after the separator: the token is the next thing you type.
   const sepAt = text.indexOf(SEP);
   const typingAfterSep =
@@ -525,18 +528,25 @@ export function CaptureBar({
   }, [placeNonce]);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // An IME's committing Enter must never submit the half-composed line. WebKit has fired that
+    // keydown after compositionend with isComposing false for years (bug 165004, fixed 2026-04,
+    // reverted 2026-10); keyCode 229 is the signal that holds either way. Enter falls through
+    // without preventDefault so the IME commits.
+    const composing = e.nativeEvent.isComposing || e.keyCode === 229;
     // Shift+Enter is a newline — the log takes multi-line entries now that the field can show them.
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      if (composing) return;
       e.preventDefault();
       if (mode === 'task') review();
       else submit();
     } else if (e.key === 'Enter' && !e.shiftKey) {
+      if (composing) return;
       e.preventDefault();
       submit();
     } else if (e.key === 'Tab') {
       e.preventDefault();
       // Tab takes the first chip while chips show; Shift+Tab always switches mode (the escape hatch).
-      if (e.nativeEvent.isComposing) return; // don't replace text an IME is still composing
+      if (composing) return; // don't replace text an IME is still composing
       if (!e.shiftKey && suggestions.length > 0) accept(suggestions[0]!);
       else changeMode((m) => cycleMode(m, e.shiftKey ? -1 : 1));
     } else if (e.key === 'Escape') {
@@ -621,6 +631,9 @@ export function CaptureBar({
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={onKeyDown}
+          // Relabels the phone's return key (iOS 13.4+); a label only — Enter already saves in every
+          // mode — and static, since iOS ignores runtime changes to it.
+          enterKeyHint="send"
           placeholder={placeholderFor(mode, toToday)}
           aria-label={`Capture ${mode}`}
           aria-describedby={line ? previewId : preview ? parseId : undefined}

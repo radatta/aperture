@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
@@ -67,6 +67,65 @@ describe('CaptureBar', () => {
 
     expect(field().value).toBe('first line\nsecond line');
     expect(await api.listLogEntries(todayKey(4))).toHaveLength(0);
+  });
+
+  // userEvent can't compose, so these fire the keydown an IME produces. A composing Enter must fall
+  // through untouched (the IME commits on it). The negative is the field keeping its text — a submit
+  // clears it at once — and the real Enter afterwards shows the guard didn't swallow the next one.
+  describe('IME composition', () => {
+    async function composed(storageKey: string) {
+      const api = createStubClient({ seed: false, storageKey });
+      const user = userEvent.setup();
+      renderWithProviders(<CaptureBar />, { api });
+      await user.type(field(), 'にほんご');
+      fireEvent.compositionStart(field());
+      return { api, user };
+    }
+
+    it('Enter mid-IME composition never submits', async () => {
+      const { api, user } = await composed('cap-ime-enter');
+      fireEvent.keyDown(field(), { key: 'Enter', isComposing: true });
+      expect(field().value).toBe('にほんご');
+      fireEvent.compositionEnd(field());
+      await user.keyboard('{Enter}');
+      await waitFor(async () => expect(await api.listLogEntries(todayKey(4))).toHaveLength(1));
+      expect(field().value).toBe('');
+    });
+
+    it('a committing Enter with keyCode 229 never submits', async () => {
+      const { api, user } = await composed('cap-ime-229');
+      // WebKit: keydown after compositionend, isComposing already false, keyCode still 229.
+      fireEvent.compositionEnd(field());
+      fireEvent.keyDown(field(), { key: 'Enter', keyCode: 229 });
+      expect(field().value).toBe('にほんご');
+      await user.keyboard('{Enter}');
+      await waitFor(async () => expect(await api.listLogEntries(todayKey(4))).toHaveLength(1));
+    });
+
+    it('⌘Enter mid-composition never reviews or saves', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'にほんご');
+      fireEvent.compositionStart(box());
+      fireEvent.keyDown(box(), { key: 'Enter', metaKey: true, isComposing: true });
+      expect(box().value).toBe('にほんご');
+      expect(parse).not.toHaveBeenCalled();
+      expect(screen.queryByText('Reading it…')).toBeNull();
+      fireEvent.compositionEnd(box());
+      await user.keyboard('{Enter}');
+      await waitFor(async () => expect(await api.listTasks()).toHaveLength(1));
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    it('Enter after compositionend saves as usual', async () => {
+      const { api, user } = await composed('cap-ime-after');
+      fireEvent.compositionEnd(field());
+      await user.keyboard('{Enter}');
+      await waitFor(async () => {
+        const entries = await api.listLogEntries(todayKey(4));
+        expect(entries.map((e) => e.text)).toEqual(['にほんご']);
+      });
+    });
   });
 
   it('confirms where the capture went, so a submit is never silent', async () => {
@@ -246,6 +305,36 @@ describe('CaptureBar', () => {
       expect(await screen.findByText(/Not saved/)).toBeTruthy();
       await user.click(screen.getByLabelText('Save task'));
       expect(box().value).toBe('x | ~30m');
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('a bare ~ speaks through its chips: no red error until Enter refuses it', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'x | ~');
+      expect(await screen.findByLabelText('Suggestions')).toBeTruthy();
+      expect(screen.queryByText(/invalid estimate/)).toBeNull();
+
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      // In the preview row and the status region both.
+      expect(screen.getAllByText(/invalid estimate '~'/).length).toBeGreaterThan(0);
+      expect(box().value).toBe('x | ~');
+      expect(await api.listTasks()).toHaveLength(0);
+      // Still a red error once the chips can't help: ~30m matches no preset.
+      await user.type(box(), '30m');
+      expect((await screen.findAllByText(/invalid estimate '~30m'/)).length).toBeGreaterThan(0);
+    });
+
+    it('a bare due: speaks through its day chips the same way', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'x | due:');
+      expect(await screen.findByLabelText('Suggestions')).toBeTruthy();
+      expect(screen.queryByText(/invalid due date/)).toBeNull();
+
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(screen.getAllByText(/invalid due date 'due:'/).length).toBeGreaterThan(0);
+      expect(box().value).toBe('x | due:');
       expect(await api.listTasks()).toHaveLength(0);
     });
 
