@@ -11,8 +11,8 @@ import { EmptyState } from '../components/EmptyState';
 export function lazyPage<M>(load: () => Promise<M>, pick: (m: M) => ComponentType) {
   const Page = lazy(() =>
     load().then(
-      (m) => ({ default: pick(m) }),
-      () => ({
+      (m): { default: ComponentType } => ({ default: pick(m) }),
+      (): { default: ComponentType } => ({
         default: () => <EmptyState error onRetry={() => window.location.reload()} title="" />,
       }),
     ),
