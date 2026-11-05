@@ -180,6 +180,7 @@ function Stage({ id }: { id: ExerciseId }) {
           def={shown}
           sample={engine.sample}
           state={engine.exState}
+          rest={engine.rest}
           idle={engine.status === 'idle'}
           calibrated={engine.calibrated}
           onControl={engine.control}

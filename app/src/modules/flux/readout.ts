@@ -5,6 +5,7 @@ import {
   type RepositionState,
 } from '@aperture/shared/flux';
 import { magnitude } from './engine/headPose';
+import { countWord } from './voice/cues';
 
 // The live numbers a set shows — rep count and the hold/countdown ring — derived once from definition
 // + evaluator state, so the panel and the overlay on the video (StageReadout) show the same numbers.
@@ -25,6 +26,17 @@ export interface Readout {
 }
 
 const secs = (n: number) => `${Math.max(0, Math.ceil(n))}`;
+
+// The rest between sets (D42), as the stage counts it down: seconds left, and the 1-based set it leads to.
+export interface RestInfo {
+  readonly remainingSec: number;
+  readonly next: number;
+}
+
+// "Rest · 23 s · Set two next" — the HUD note and the panel's done block say the same line; the voice
+// says "Set two" when the rest ends.
+export const restLine = (rest: RestInfo): string =>
+  `Rest · ${rest.remainingSec} s · Set ${countWord(rest.next).toLowerCase()} next`;
 
 // Out in a ROM excursion but short of the hold zone, the hold not yet done — the voice says "Further"
 // (D37), so the ring says it too. A dip below the zone keeps the ring's progress.

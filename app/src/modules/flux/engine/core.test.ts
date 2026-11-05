@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { FluxCore } from './core';
+import { getExercise } from '@aperture/shared/flux';
+import { FluxCore, recalLimitFor } from './core';
 
 // Column-major yaw rotation, as MediaPipe hands it back.
 function yaw(deg: number): number[] {
@@ -324,6 +325,53 @@ describe('FluxCore', () => {
         done = r?.events.some((e) => e.type === 'setCompleted') ?? false;
       }
       expect(autos(run(side, hold(yaw(22), 120), ts).out)).toEqual([]);
+    });
+
+    it("chin tuck's rest never re-sets the neutral; upper trap's still does (D60)", () => {
+      // A hold whose target (a 5° nod) is within the re-set's reach: a tuck held still in the rest would
+      // become the neutral, and the next set would need a 10° tuck. A hold needs a release between reps,
+      // so the set is run as blocks in position and out of it until it finishes.
+      const finished = (
+        id: 'chin-tuck' | 'upper-trap-stretch',
+        inPose: number[],
+        out: number[],
+      ) => {
+        const core = new FluxCore();
+        let t = run(core, hold(pitch(0), 70)).t;
+        expect(core.calibrated).toBe(true);
+        core.selectExercise(id, 'a');
+        core.control({ type: 'start' });
+        let done = false;
+        for (let block = 0; !done && block < 40; block++) {
+          const r = run(core, [...hold(inPose, 12 * 30), ...hold(out, 45)], t); // longest hold is 10 s
+          t = r.t;
+          done = r.out.some((f) => f?.events.some((e) => e.type === 'setCompleted'));
+        }
+        expect(done).toBe(true);
+        return { core, t };
+      };
+      expect(recalLimitFor(getExercise('chin-tuck'))).toBe(0);
+      expect(recalLimitFor(getExercise('upper-trap-stretch'))).toBe(10);
+      expect(recalLimitFor(getExercise('isometric-flexion'))).toBe(10);
+      expect(recalLimitFor(null)).toBe(10);
+      // Chin tuck: 4 s still in the tuck during the rest — the neutral stays the level head, so the
+      // next set still measures the tuck from it.
+      const tuck = finished('chin-tuck', pitch(5), pitch(-15));
+      const rest = run(tuck.core, hold(pitch(5), 120), tuck.t);
+      expect(autos(rest.out)).toEqual([]);
+      expect(rest.out.at(-1)?.sample.rel.pitch).toBeCloseTo(5, 0);
+      // A manual Re-calibrate in the rest is still the user's to take.
+      expect(tuck.core.calibrate()).toBe(true);
+      expect(run(tuck.core, hold(pitch(5), 5), rest.t).out.at(-1)?.sample.rel.pitch).toBeCloseTo(
+        0,
+        0,
+      );
+      // Upper trap (roll 28): a rest 6° off still re-sets — the slouch correction every other exercise
+      // relies on.
+      const trap = finished('upper-trap-stretch', roll(30), roll(0));
+      const back = run(trap.core, hold(roll(6), 75), trap.t);
+      expect(autos(back.out)).toHaveLength(1);
+      expect(back.out.at(-1)?.sample.rel.roll).toBeCloseTo(0, 0);
     });
 
     it('not for a pose well away from the neutral (a stretch), nor once the next set starts', () => {

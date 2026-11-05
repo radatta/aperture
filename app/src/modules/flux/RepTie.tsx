@@ -118,7 +118,12 @@ export function UnlinkedRollNote() {
   return (
     <Text as="p" size="sm" tone="muted">
       Flux sessions can count as a Roll&apos;s daily rep —{' '}
-      <ButtonLink to="/settings#flux" variant="quiet" size="sm" className="px-1 py-0 underline">
+      <ButtonLink
+        to="/settings#flux"
+        variant="quiet"
+        size="sm"
+        className="py-0 pr-0 pl-1 underline"
+      >
         link one in Settings
       </ButtonLink>
       .

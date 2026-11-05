@@ -2,15 +2,37 @@
 // precedent). One series, so no legend: the stat tile's label names it. Marks follow the dataviz
 // specs: a 2px round line, an end dot (r 4) with a 2px surface ring, the target as a solid hairline.
 // Every point keeps a native tooltip on a hit target larger than the mark; the list below is the table.
+// Drawn at the width it's given: the svg measures itself (ResizeObserver, AppShell's precedent) so the
+// line spans the tile on a phone and a Mac alike, instead of a 240 px drawing centred in it.
+
+import { useLayoutEffect, useRef, useState } from 'react';
 
 export interface SparkPoint {
   readonly value: number;
   readonly label: string; // "Oct 20 · 52°" — the tooltip
 }
 
-const W = 240;
+const FALLBACK_W = 240; // before the first measurement, and where there's no layout (jsdom)
 const H = 48;
 const PAD = 6;
+
+function useMeasuredWidth<T extends Element>() {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const take = (w: number) => setWidth(w > 0 ? Math.round(w) : null);
+    take(el.getBoundingClientRect().width);
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? el.getBoundingClientRect().width;
+      take(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return { ref, width };
+}
 
 export function Sparkline({
   points,
@@ -21,7 +43,9 @@ export function Sparkline({
   target?: number;
   label: string; // the accessible name: what's plotted, and how it's going
 }) {
+  const { ref, width } = useMeasuredWidth<SVGSVGElement>();
   if (points.length < 2) return null;
+  const W = width ?? FALLBACK_W;
   const values = points.map((p) => p.value);
   const lo = Math.min(...values, target ?? Infinity);
   const hi = Math.max(...values, target ?? -Infinity);
@@ -35,6 +59,7 @@ export function Sparkline({
 
   return (
     <svg
+      ref={ref}
       viewBox={`0 0 ${W} ${H}`}
       className="h-12 w-full overflow-visible"
       role="img"

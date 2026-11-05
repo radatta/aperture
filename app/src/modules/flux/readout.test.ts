@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { getExercise, type ExerciseState } from '@aperture/shared/flux';
 import { initialState } from './engine/evaluate';
-import { liveReadout } from './readout';
+import { liveReadout, restLine } from './readout';
 
 // An evaluator state with some fields set, as the engine would hand it over mid-set.
 const with_ = (base: ExerciseState, over: Record<string, unknown>) =>
   ({ ...base, ...over }) as ExerciseState;
+
+describe('restLine', () => {
+  it('names the seconds left and the set the rest leads to, in the voice’s words', () => {
+    expect(restLine({ remainingSec: 23, next: 2 })).toBe('Rest · 23 s · Set two next');
+    expect(restLine({ remainingSec: 0, next: 5 })).toBe('Rest · 0 s · Set five next');
+  });
+});
 
 describe('liveReadout', () => {
   it('is null with no state, or a state from another kind', () => {

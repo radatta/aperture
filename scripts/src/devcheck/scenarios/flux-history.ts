@@ -1,7 +1,8 @@
 // Flux history on dev (docs/areas/flux D47–D51): save one set through the guarded API, then prove the History
 // tab and the night home's Flux line show it. The headless browser has no camera, so the set is recorded
 // the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
-// records it before the call) — never through the UI, which can't tell this set from another.
+// records it before the call) — never through the UI, which can't tell this set from another. The Library
+// tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
 import { laDay, noConsoleErrors, type Scenario } from '../scenario';
 
@@ -39,6 +40,12 @@ export const fluxHistory: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'The night home says "Flux · … chin tuck"',
+    },
+    {
+      id: 'library-note',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The Library’s note reads "link one in Settings." — the full stop flush against the link',
     },
     {
       id: 'on-screen',
@@ -110,6 +117,30 @@ export const fluxHistory: Scenario = {
         await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
         await ctx.ui.expectText(/2 of 6 holds · stopped early/, 15_000);
         await ctx.shot('history');
+      },
+    },
+    {
+      id: 'library-note',
+      entry: 'ui',
+      proves: ['library-note'],
+      title: 'Library: "link one in Settings." with no gap before the full stop',
+      async run(ctx) {
+        // The note shows only while no active Roll is linked — the test user's state, unless someone linked one.
+        const { fluxRollId } = await ctx.api.reads.getSettings();
+        if (fluxRollId != null)
+          throw new Error(
+            `the test user has Roll ${fluxRollId} linked, so the Library has no note to check`,
+          );
+        await ctx.ui.goto('/flux');
+        const link = ctx.page.getByRole('link', { name: 'link one in Settings', exact: true });
+        await link.waitFor({ state: 'visible', timeout: 15_000 });
+        const note =
+          (await link.locator('xpath=..').textContent())?.replace(/\s+/g, ' ').trim() ?? '';
+        if (!/link one in Settings\.$/.test(note)) throw new Error(`the note reads "${note}"`);
+        // The gap was the link's own right padding (PR 65's nit), not a space in the text: measure it.
+        const pad = await link.evaluate((el) => getComputedStyle(el).paddingRight);
+        if (pad !== '0px') throw new Error(`the link keeps ${pad} of padding before the full stop`);
+        await ctx.shot('library-note');
       },
     },
     {

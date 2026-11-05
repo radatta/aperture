@@ -524,6 +524,62 @@ describe('useFluxEngine — the session runs itself (D40–D43)', () => {
     expect(starts(fake().calls)).toBe(1);
   });
 
+  it('the rest countdown: on screen at 1 Hz, frozen by a pause, back to 30 s with the re-armed rest', async () => {
+    const { hook, fake, advance } = await running();
+    expect(hook.result.current.rest).toBeNull();
+    act(() => fake().event(DONE));
+    expect(hook.result.current.rest).toEqual({ remainingSec: 30, next: 2 });
+    advance(7_000);
+    expect(hook.result.current.rest).toEqual({ remainingSec: 23, next: 2 });
+    act(() => fake().pause());
+    advance(5_000);
+    expect(hook.result.current.rest).toEqual({ remainingSec: 23, next: 2 }); // frozen where it was
+    await act(() => hook.result.current.resume());
+    expect(hook.result.current.rest).toEqual({ remainingSec: 30, next: 2 }); // the rest re-armed
+    advance(29_000);
+    expect(hook.result.current.rest).toEqual({ remainingSec: 1, next: 2 });
+    advance(1_000);
+    expect(hook.result.current.rest).toBeNull(); // set two is under way
+    expect(starts(fake().calls)).toBe(1);
+  });
+
+  it('Again or Stop during the rest takes the countdown with it', async () => {
+    const { hook, fake, advance } = await running();
+    act(() => fake().event(DONE));
+    advance(3_000);
+    act(() => hook.result.current.control({ type: 'start' }));
+    expect(hook.result.current.rest).toBeNull();
+    act(() => fake().event(DONE)); // the session's last set; a third would rest again
+    expect(hook.result.current.rest).toBeNull();
+    const again = await running({ sets: 3 });
+    act(() => again.fake().event(DONE));
+    expect(again.hook.result.current.rest?.next).toBe(2);
+    act(() => void again.hook.result.current.stop());
+    expect(again.hook.result.current.rest).toBeNull();
+  });
+
+  it('no state post after a self-ended session reaches the panel, until the next Start', async () => {
+    const { hook, fake } = await running({ sets: 1 });
+    const def = getExercise('chin-tuck');
+    const done = { ...initialState(def), phase: 'complete', holdsDone: 6 } as ExerciseState;
+    act(() => fake().state(done));
+    expect(hook.result.current.exState).toEqual(done);
+    act(() => fake().event(DONE));
+    expect(hook.result.current.status).toBe('idle');
+    expect(hook.result.current.exState).toBeNull();
+    // The stopped worker's last state post, and a late event: dropped.
+    act(() => fake().state(done));
+    act(() => fake().event(DONE));
+    act(() => fake().calibrated(true, true));
+    expect(hook.result.current.exState).toBeNull();
+    expect(hook.result.current.calibrated).toBe(false);
+    expect(hook.result.current.notice).toBeNull();
+    await act(() => hook.result.current.start(els));
+    act(() => fake().ready('GPU'));
+    act(() => fake().state(initialState(def)));
+    expect(hook.result.current.exState).toEqual(initialState(def));
+  });
+
   it('a manual Stop cancels the pending rest', async () => {
     const { hook, v, fake, onSessionEnd, advance } = await running();
     act(() => fake().event(DONE));

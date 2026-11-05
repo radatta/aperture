@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, ulid, type RecordFluxSetInput } from '@aperture/shared';
@@ -116,6 +116,52 @@ describe('Flux History tab', () => {
     expect(screen.queryByRole('img')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'All' }));
     expect(screen.getByText('Chin Tuck (Cervical Retraction)')).toBeTruthy();
+  });
+
+  describe('the sparkline spans its tile', () => {
+    const RO = globalThis.ResizeObserver;
+    afterEach(() => {
+      globalThis.ResizeObserver = RO;
+    });
+
+    // jsdom has no layout, so the tile's width comes from a ResizeObserver that answers at once with the
+    // width a phone's Trend card has inside its padding.
+    it('draws at the measured width, the end dot at its right edge', async () => {
+      globalThis.ResizeObserver = class {
+        constructor(private readonly cb: ResizeObserverCallback) {}
+        observe(el: Element) {
+          this.cb([{ target: el, contentRect: { width: 376 } } as ResizeObserverEntry], this);
+        }
+        unobserve() {}
+        disconnect() {}
+      };
+      const t = Date.now();
+      const { user } = await history([
+        set({ day: addDays(today, -4), completedAt: t - 4e8, avgPeakDeg: 44 }),
+        set({ day: addDays(today, -2), completedAt: t - 2e8, avgPeakDeg: 48 }),
+        set({ completedAt: t - 1000, avgPeakDeg: 53 }),
+      ]);
+      await user.click(await screen.findByRole('button', { name: 'rotation' }));
+      const svg = screen.getByRole('img', { name: /rotation · avg peak, 3 sets/ });
+      expect(svg.getAttribute('viewBox')).toBe('0 0 376 48');
+      // The end dot sits at the right edge, less the pad — not at 234 of a 240 px drawing.
+      const dot = svg.querySelector('circle[r="4"]');
+      expect(Number(dot?.getAttribute('cx'))).toBe(370);
+      const hairline = svg.querySelector('line');
+      expect(hairline?.getAttribute('x2')).toBe('370');
+    });
+
+    it('with nothing to measure, falls back to a 240 px drawing', async () => {
+      const t = Date.now();
+      const { user } = await history([
+        set({ day: addDays(today, -4), completedAt: t - 4e8, avgPeakDeg: 44 }),
+        set({ day: addDays(today, -2), completedAt: t - 2e8, avgPeakDeg: 48 }),
+        set({ completedAt: t - 1000, avgPeakDeg: 53 }),
+      ]);
+      await user.click(await screen.findByRole('button', { name: 'rotation' }));
+      const svg = screen.getByRole('img', { name: /rotation · avg peak, 3 sets/ });
+      expect(svg.getAttribute('viewBox')).toBe('0 0 240 48');
+    });
   });
 
   it('delete asks first, then removes the set (a soft-delete) and leaves the rest', async () => {

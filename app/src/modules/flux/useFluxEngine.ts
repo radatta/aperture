@@ -20,6 +20,7 @@ import {
 import type { Delegate, ErrorStage, Sample } from './engine/protocol';
 import type { Side } from './engine/side';
 import { readForcedCpu, readGpuBootMark } from './prefs';
+import type { RestInfo } from './readout';
 import type { VoiceControl } from './useVoice';
 import { initialCueState, isMirrored, reduceCue, type CueEvent, type CueState } from './voice/cues';
 
@@ -29,8 +30,8 @@ import { initialCueState, isMirrored, reduceCue, type CueEvent, type CueState } 
 //
 // Once Start is tapped the session runs itself, eyes and hands free (the guiding principle): the neutral
 // sets itself (D40) and a drifted one is re-set between sets (D46), timed kinds start on their own (D41),
-// sets follow each other after a rest and the session ends itself (D42), and a lost face is said out
-// loud (D43).
+// sets follow each other after a rest — counted down on screen — and the session ends itself (D42), and
+// a lost face is said out loud (D43).
 
 export type FluxStatus = 'idle' | 'loading' | 'running' | 'paused' | 'error';
 
@@ -136,6 +137,9 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const [sessionSets, setSessionSets] = useState<readonly FluxSetDraft[]>([]);
   // The last session ended itself after its last set (D42) — the idle stage says so.
   const [sessionDone, setSessionDone] = useState(false);
+  // The rest between sets as the stage shows it ("Rest · 23 s · Set two next"), at 1 Hz; frozen by a
+  // pause, gone when the next set starts or a tap cuts the rest short.
+  const [rest, setRest] = useState<RestInfo | null>(null);
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -161,6 +165,13 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   // The session's automatic steps (D41, D42): one timer, and what it will do.
   const autoTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const autoStep = useRef<AutoStep | null>(null);
+  const restTick = useRef<ReturnType<typeof setInterval>>(undefined);
+  const restEndsAt = useRef(0); // performance.now() the pending rest ends at
+  const restShown = useRef<RestInfo | null>(null); // what the stage last showed — a pause keeps it
+  // No session running: before the first Start, and after Stop or a self-ended session. The worker's
+  // last posts (a state at the throttle, a finished set) land after the stop; dropped here, the idle panel
+  // reads "Start the camera to begin." every time instead of "Set complete · Again" by the post's luck.
+  const idleRef = useRef(true);
   const planDoneRef = useRef(0); // sets of this exercise done this session, toward opts.sets
   const startOnCalibrate = useRef(false); // "Start now" tapped before there was a neutral
   // Face-presence cues and the calibration hint, timed in worker seconds (sample.tSec).
@@ -195,7 +206,11 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   const clearAuto = useCallback(() => {
     clearTimeout(autoTimer.current);
     autoTimer.current = undefined;
+    clearInterval(restTick.current);
+    restTick.current = undefined;
     autoStep.current = null;
+    restShown.current = null;
+    setRest(null);
   }, []);
 
   // Every set's clock starts with its start, so set two's duration leaves out the rest before it.
@@ -213,14 +228,22 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     (step: AutoStep) => {
       clearAuto();
       autoStep.current = step;
-      autoTimer.current = setTimeout(
-        () => {
-          autoStep.current = null;
-          if (step.kind === 'start') startSet();
-          else nextSetRef.current(step.index, false);
-        },
-        step.kind === 'start' ? SET_LEAD_MS : SET_REST_MS,
-      );
+      const ms = step.kind === 'start' ? SET_LEAD_MS : SET_REST_MS;
+      autoTimer.current = setTimeout(() => {
+        autoStep.current = null;
+        if (step.kind === 'start') startSet();
+        else nextSetRef.current(step.index, false);
+      }, ms);
+      if (step.kind !== 'rest') return;
+      // The rest on screen, counted down once a second; the voice says "Set two" when it ends.
+      restEndsAt.current = performance.now() + ms;
+      const show = () => {
+        const left = Math.max(0, Math.ceil((restEndsAt.current - performance.now()) / 1000));
+        restShown.current = { remainingSec: left, next: step.index + 1 };
+        setRest(restShown.current);
+      };
+      show();
+      restTick.current = setInterval(show, 1000);
     },
     [startSet, clearAuto],
   );
@@ -250,6 +273,12 @@ export function useFluxEngine(opts: FluxEngineOptions) {
   useEffect(() => {
     const onEvent = (e: FluxEngineEvent) => {
       const o = optsRef.current;
+      // A stopped worker's last posts (above); samples still land — they're display only.
+      if (
+        idleRef.current &&
+        (e.type === 'exerciseState' || e.type === 'exerciseEvent' || e.type === 'calibrated')
+      )
+        return;
       switch (e.type) {
         case 'progress':
           return setProgress({ loaded: e.loaded, total: e.total });
@@ -348,10 +377,16 @@ export function useFluxEngine(opts: FluxEngineOptions) {
         case 'paused': {
           pausedRef.current = true;
           pauseClock(clock.current);
-          // Hold the pending step; Resume re-arms it from the start.
+          // Hold the pending step; Resume re-arms it from the start — the rest's countdown freezes
+          // where it was until then.
           const step = autoStep.current;
+          const shown = restShown.current;
           clearAuto();
           autoStep.current = step;
+          if (step?.kind === 'rest' && shown) {
+            restShown.current = shown;
+            setRest(shown);
+          }
           say({ type: 'cameraPaused' });
           return setStatus('paused');
         }
@@ -469,6 +504,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
       clearAuto();
       resetFace();
       clock.current = { activeMs: 0, since: null };
+      idleRef.current = false;
       setStatus('loading');
       await engine.start(els);
     },
@@ -519,6 +555,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     clearAuto();
     startOnCalibrate.current = false;
     engine.stop();
+    idleRef.current = true;
     if (cancelVoice) optsRef.current.voice.cancel();
     reset();
     setStatus('idle');
@@ -593,6 +630,7 @@ export function useFluxEngine(opts: FluxEngineOptions) {
     lastCue,
     sessionSets,
     sessionDone,
+    rest,
     activeMs,
     start,
     stop,
