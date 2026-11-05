@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
 import { taskPushPath } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
+import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 
 const stub = () => createStubClient({ seed: false, storageKey: `linked-${Math.random()}` });
@@ -72,5 +73,27 @@ describe('Tasks: a reminder’s link', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(screen.queryByText(/That reminder’s task is gone/)).toBeNull();
     expect(screen.getByRole('dialog', { name: 'Task: Newer reminder' })).toBeTruthy();
+  });
+
+  it('a lens switch before the read lands drops its answer: no modal, no note', async () => {
+    const api = stub();
+    const elsewhere = await api.createTask({ title: 'Read late' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    // The link's task isn't in the list, so it waits on a read — which, answered, would open "Read late".
+    vi.spyOn(api, 'getTask').mockImplementation(async () => {
+      await gate;
+      return elsewhere;
+    });
+    const user = userEvent.setup();
+    const { router } = renderApp({ api, path: taskPushPath('01ELSEWHERE', '01ELSEWHERE') });
+    await waitFor(() => expect(api.getTask).toHaveBeenCalledWith('01ELSEWHERE'));
+    await user.click(screen.getByRole('button', { name: /^Week/ }));
+    await waitFor(() => expect(router.state.location.search).toBe('?lens=week'));
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByRole('dialog', { name: 'Task: Read late' })).toBeNull();
+    expect(screen.queryByText(/That reminder’s task/)).toBeNull();
+    expect(router.state.location.search).toBe('?lens=week');
   });
 });

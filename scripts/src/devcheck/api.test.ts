@@ -122,6 +122,7 @@ describe('createApiClient', () => {
       'setTaskDue',
       'startSession',
       'stopSession',
+      'subscribeHarnessPush',
       'subscribePush',
       'subscribePushExpectingRefusal',
       'transitionTask',
@@ -741,7 +742,8 @@ describe('createApiClient', () => {
       const ledger = memLedger();
       const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
       const id = harnessPushId('e2e');
-      expect(id).toMatch(/^[0-9a-f]{16}$/);
+      // lambdas/src/backend.push.test.ts pins the BFF's id for the same endpoint: they can't drift apart.
+      expect(id).toBe('54c270db2e586463');
       await api.writes.removeHarnessStray(id, 'Devcheck A x');
       expect(ledger.entries).toEqual([
         { run: 'r1', op: 'created', id, via: PUSH_SUB_VIA, title: 'stray Devcheck A x' },
@@ -755,6 +757,46 @@ describe('createApiClient', () => {
       );
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(isHarnessPushId(harnessPushId('banner'))).toBe(true);
+    });
+
+    it('records a harness slot’s id before the subscribe, so a lost answer still leaves it to clean', async () => {
+      const ledger = memLedger();
+      const lost = vi.fn<FetchLike>(async () => {
+        throw new Error('socket hang up');
+      });
+      const api = createApiClient({ fetch: lost, token: () => 't', ledger, run: 'r1' });
+      const keys = { p256dh: 'BPk', auth: 'au' };
+      await expect(api.writes.subscribeHarnessPush('e2e', keys, 'Devcheck A x')).rejects.toThrow();
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: '54c270db2e586463',
+          via: PUSH_SUB_VIA,
+          title: 'Devcheck A x',
+        },
+      ]);
+      expect(ledgerKind(ledger.read(), '54c270db2e586463')).toBe('pushsub');
+      // Answered: posted to the slot's endpoint, recorded once; an id the server derives otherwise fails.
+      const ok = vi.fn<FetchLike>(async () => reply(200, { id: '54c270db2e586463', label: 'x' }));
+      const api2 = createApiClient({ fetch: ok, token: () => 't', ledger, run: 'r1' });
+      await api2.writes.subscribeHarnessPush('e2e', keys, 'Devcheck A x');
+      expect(ok).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/subscribePush`,
+        expect.objectContaining({
+          body: JSON.stringify({
+            args: [
+              { endpoint: 'https://web.push.apple.com/devcheck-e2e', keys, label: 'Devcheck A x' },
+            ],
+          }),
+        }),
+      );
+      expect(ledger.entries).toHaveLength(1);
+      const moved = vi.fn<FetchLike>(async () => reply(200, { id: 'ffffffffffffffff' }));
+      const api3 = createApiClient({ fetch: moved, token: () => 't', ledger, run: 'r1' });
+      await expect(api3.writes.subscribeHarnessPush('c', keys, 'C')).rejects.toThrow(
+        /derivation moved/,
+      );
     });
 
     it('re-dates only a task this harness created', async () => {

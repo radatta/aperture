@@ -38,7 +38,7 @@ import type { PushGateway, PushReadiness, PushResult } from './gateway';
 //
 // Armed before it fires (reminders.md → §3): the window catches up a reminder a failed tick missed, never
 // one that wasn't set yet. A task or plan pings only if its current fire time was set (remindArmedAt —
-// created, re-dated, reopened, re-planned) no later than that fire time, its kind's toggle was on by then,
+// created, re-dated, re-planned) no later than that fire time, its kind's toggle was on by then,
 // and the user had reminders on by then (the registry row's createdAt — the first device, and the backfill
 // that comes with it). Send test is exempt: it's asked for now.
 

@@ -271,11 +271,46 @@ describe('resyncHere (D7)', () => {
     expect(pm.subscribe).toHaveBeenCalledTimes(1);
     expect(retire).toHaveBeenCalledTimes(1);
     expect(deviceIdHere()).toBe('d2');
+    expect(localStorage.getItem('aperture.push.retire')).toBeNull(); // nothing left owing
     const after = status({ devices: [device('d2')], removedDeviceIds: ['d1'] });
     expect(await dropIfRemovedHere(after, NOW + 1)).toBe(false);
     expect(deviceIdHere()).toBe('d2');
     expect(removedElsewhereHere()).toBe(false);
   }
+
+  it('a retire a blip refuses is no sync error: kept, and retried on the next healthy launch', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const blip = vi.fn(async () => {
+      throw new Error('unsubscribePush failed (503)');
+    });
+    expect(
+      await resyncHere(
+        status({ devices: [device('d1')] }),
+        NOW,
+        srv(async () => device('d2'), blip),
+      ),
+    ).toBe(true);
+    expect(deviceIdHere()).toBe('d2'); // the device itself is healthy
+    expect(syncErrorHere()).toBeNull();
+    expect(syncErrorUndismissed()).toBeNull();
+    expect(JSON.parse(localStorage.getItem('aperture.push.retire')!)).toEqual(['d1']);
+
+    // Next launch, healthy: subscribed with this key and listed — the owed retire goes out.
+    const healthy = status({ devices: [device('d2')] });
+    const stillDown = vi.fn(async () => {
+      throw new Error('unsubscribePush failed (503)');
+    });
+    expect(await resyncHere(healthy, NOW, srv(vi.fn(), stillDown))).toBe(false);
+    expect(stillDown).toHaveBeenCalledWith('d1');
+    expect(JSON.parse(localStorage.getItem('aperture.push.retire')!)).toEqual(['d1']); // kept again
+    const retire = vi.fn(async () => {});
+    expect(await resyncHere(healthy, NOW, srv(vi.fn(), retire))).toBe(false);
+    expect(retire).toHaveBeenCalledWith('d1');
+    expect(localStorage.getItem('aperture.push.retire')).toBeNull();
+    expect(syncErrorHere()).toBeNull();
+    expect(pm.subscribe).toHaveBeenCalledTimes(1); // only the first launch subscribed
+  });
 
   it('iOS dropped the subscription: re-subscribes, remembers the new id, retires the old row', async () => {
     const { pm } = safari({ permission: 'granted' });
@@ -361,8 +396,26 @@ describe('resyncHere (D7)', () => {
       forgetHere();
       return device('d2');
     });
-    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
+    const retire = vi.fn(async () => {});
+    expect(await resyncHere(status(), NOW, srv(upsert, retire))).toBe(false);
     expect(deviceIdHere()).toBeNull();
+    expect((await fresh(pm)).unsubscribe).toHaveBeenCalled();
+    expect(retire).toHaveBeenCalledWith('d2'); // the row the upsert made goes too — no live row on it
+  });
+
+  it('opt-in dropped by a removal-elsewhere read while the upsert was out: the revived row is tombstoned again', async () => {
+    const { pm } = safari({ permission: 'granted' });
+    rememberHere(device('d1'), NOW);
+    const upsert = vi.fn(async () => {
+      // A status read lands meanwhile and sees d1 removed on another device.
+      await dropIfRemovedHere(status({ removedDeviceIds: ['d1'] }), NOW + 1);
+      return device('d1'); // the same endpoint: the upsert just revived it
+    });
+    const retire = vi.fn(async () => {});
+    expect(await resyncHere(status(), NOW, srv(upsert, retire))).toBe(false);
+    expect(retire).toHaveBeenCalledWith('d1');
+    expect(deviceIdHere()).toBeNull();
+    expect(removedElsewhereHere()).toBe(true);
     expect((await fresh(pm)).unsubscribe).toHaveBeenCalled();
   });
 
@@ -373,9 +426,11 @@ describe('resyncHere (D7)', () => {
       rememberHere(device('d3'), NOW + 5);
       return device('d2');
     });
-    expect(await resyncHere(status(), NOW, srv(upsert))).toBe(false);
+    const retire = vi.fn(async () => {});
+    expect(await resyncHere(status(), NOW, srv(upsert, retire))).toBe(false);
     expect(deviceIdHere()).toBe('d3');
     expect((await fresh(pm)).unsubscribe).not.toHaveBeenCalled();
+    expect(retire).not.toHaveBeenCalled();
   });
 
   it('afterResync waits for the run in flight', async () => {

@@ -31,6 +31,12 @@ describe('InMemoryDoc', () => {
     await db.deleteIf('u#1', 'pushsub#a', 6);
     expect(await db.get('u#1', 'pushsub#a')).toBeNull();
     await expect(db.deleteIf('u#1', 'pushsub#a', 6)).rejects.toBeInstanceOf(ConditionFailedError);
+    // No version to match (a row without updatedAt, or none passed): never a delete.
+    await db.put(item({ PK: 'u#1', SK: 'pushsub#b' }));
+    await expect(
+      db.deleteIf('u#1', 'pushsub#b', undefined as unknown as number),
+    ).rejects.toBeInstanceOf(ConditionFailedError);
+    expect(await db.get('u#1', 'pushsub#b')).not.toBeNull();
   });
 
   it('get misses return null', async () => {

@@ -416,6 +416,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       subscribePushExpectingRefusal: async () => {
         throw new Error('unused');
       },
+      subscribeHarnessPush: async () => {
+        throw new Error('unused');
+      },
       removeHarnessStray: async () => {
         throw new Error('unused');
       },

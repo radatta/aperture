@@ -21,7 +21,6 @@
 // plan's dev-test matrix (localNotes/plan.md §5 E), with the removal rule and the armed-before-it-fires rule.
 import { createECDH, randomBytes } from 'node:crypto';
 import {
-  harnessPushEndpoint,
   harnessPushId,
   isHarnessPushId,
   type DevPushDevice,
@@ -46,7 +45,6 @@ const PING_LEAD_MS = 25_000;
 
 const title = (ctx: Ctx, what: string) => `devcheck-rm ${ctx.nonce} ${what}`;
 const label = (ctx: Ctx, which: string) => `Devcheck ${which} ${ctx.nonce}`;
-const endpoint = harnessPushEndpoint;
 const linkTo = (id: string) => `/tasks?lens=today&task=${id}&n=${id}`;
 
 // "HH:MM" of `d` on the LA clock — with laDay, the deadline a task due this minute has.
@@ -71,6 +69,9 @@ export function pushKeys(): DevSubscribePushInput['keys'] {
 // Keys of the right shape that are no P-256 point: the poller drops the device without a request.
 const UNUSABLE_KEYS = { p256dh: 'devcheck-not-a-point', auth: 'devcheck-not-a-secret' };
 
+// A stage fault (dispatch.ts STAGE_ERROR: no key, a malformed key, no APP_URL) — all end the same way.
+export const stageFault = (s: DevPushStatus): boolean =>
+  /— reminders are off$/.test(s.poller.lastError ?? '');
 // The health line's error, one entry per device that refused in that tick (dispatch.ts joins them).
 const errorsOf = (s: DevPushStatus): string[] => (s.poller.lastError ?? '').split(' · ');
 // "<label> stopped accepting reminders (its keys are invalid) — …": the poller dropped an unusable device.
@@ -92,8 +93,7 @@ export function e2eOutcome(
   since: number,
 ): { ok: true; how: string } | { ok: false; why: string } | null {
   const err = s.poller.lastError ?? '';
-  if (err.startsWith('No VAPID key') || err.startsWith('VAPID private key is malformed'))
-    return { ok: false, why: `the stage can't send: ${err}` };
+  if (stageFault(s)) return { ok: false, why: `the stage can't send: ${err}` };
   const fresh = (s.poller.lastErrorAt ?? 0) >= since - CLOCK_SLACK_MS;
   // Each run spends two of the test user's 50 a day (the reminder and Send test, one batch when they share a
   // tick): a run deep into a busy day finds the guard shut — named, not a timeout.
@@ -301,7 +301,7 @@ export const timedReminders: Scenario = {
       id: 'armed-late',
       entry: 'api',
       kind: 'edge',
-      what: 'A task created, re-dated or reopened after its fire time — or planned after 9am for today — never pings; the window catches up only what was set in time',
+      what: 'A task created or re-dated after its fire time — or planned after 9am for today — never pings; the window catches up only what was set in time',
       offDev: {
         file: 'lambdas/src/push/dispatch.test.ts',
         test: 'a task created after its fire time never pings, even inside the window',
@@ -534,16 +534,16 @@ export const timedReminders: Scenario = {
         if (JSON.stringify((await status(ctx)).devices) !== JSON.stringify(before.devices))
           throw new Error('the refused subscribe changed the device list');
         // Its own slot, with keys no push service takes: nothing can ever be sent to it.
-        const first = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('dup'),
-          keys: UNUSABLE_KEYS,
-          label: `${label(ctx, 'D')} first`,
-        });
-        const again = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('dup'),
-          keys: UNUSABLE_KEYS,
-          label: label(ctx, 'D'),
-        });
+        const first = await ctx.api.writes.subscribeHarnessPush(
+          'dup',
+          UNUSABLE_KEYS,
+          `${label(ctx, 'D')} first`,
+        );
+        const again = await ctx.api.writes.subscribeHarnessPush(
+          'dup',
+          UNUSABLE_KEYS,
+          label(ctx, 'D'),
+        );
         if (again.id !== first.id)
           throw new Error(`two devices for one endpoint: ${first.id}, ${again.id}`);
         const mine = (await status(ctx)).devices.filter((d) => d.id === first.id);
@@ -557,11 +557,7 @@ export const timedReminders: Scenario = {
       entry: 'api',
       title: 'A device no push service could use, to remove in Settings',
       async run(ctx) {
-        deviceB = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('b'),
-          keys: UNUSABLE_KEYS,
-          label: label(ctx, 'B'),
-        });
+        deviceB = await ctx.api.writes.subscribeHarnessPush('b', UNUSABLE_KEYS, label(ctx, 'B'));
       },
     },
     {
@@ -605,11 +601,7 @@ export const timedReminders: Scenario = {
         // Headless Chromium can't subscribe (its permission reads denied), so this browser's opt-in is
         // seeded: a device subscribed and removed through the API — the BFF's own id for it — written where
         // Enable keeps it (browserPush.ts, aperture.push.enabled / .enabledAt), stamped before the read.
-        deviceR = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('r'),
-          keys: UNUSABLE_KEYS,
-          label: label(ctx, 'R'),
-        });
+        deviceR = await ctx.api.writes.subscribeHarnessPush('r', UNUSABLE_KEYS, label(ctx, 'R'));
         await ctx.api.writes.unsubscribePush(deviceR.id);
         await until(
           'R listed as removed',
@@ -758,11 +750,7 @@ export const timedReminders: Scenario = {
           ctx.log(`removing the harness's own live device ${d.label}`);
           await ctx.api.writes.removeHarnessStray(d.id, d.label);
         }
-        deviceC = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('c'),
-          keys: UNUSABLE_KEYS,
-          label: label(ctx, 'C'),
-        });
+        deviceC = await ctx.api.writes.subscribeHarnessPush('c', UNUSABLE_KEYS, label(ctx, 'C'));
         await ctx.ui.goto('/settings');
         const send = ctx.page.getByRole('button', { name: 'Send test', exact: true });
         await send.waitFor({ state: 'visible', timeout: 15_000 });
@@ -806,9 +794,14 @@ export const timedReminders: Scenario = {
         const s = await until(
           'the test’s tick',
           () => status(ctx),
-          (v) =>
-            (v.poller.lastErrorAt ?? 0) >= testAt - CLOCK_SLACK_MS &&
-            errorsOf(v).some((e) => e.startsWith(droppedForKeys(label(ctx, 'C')))),
+          (v) => {
+            // A stage that can't send fails now, by its own message — not after the wait.
+            if (stageFault(v)) throw new Error(`the stage can't send: ${v.poller.lastError}`);
+            return (
+              (v.poller.lastErrorAt ?? 0) >= testAt - CLOCK_SLACK_MS &&
+              errorsOf(v).some((e) => e.startsWith(droppedForKeys(label(ctx, 'C'))))
+            );
+          },
           Math.max(testAt + TICK_WAIT_MS - Date.now(), 10_000),
           3_000,
         );
@@ -833,11 +826,7 @@ export const timedReminders: Scenario = {
           await ctx.api.writes.setTaskDue(ping.id, { dueDay: laDay(due), dueTime: laClock(due) });
           ctx.log(`reminder moved to ${due.toISOString()}`);
         }
-        deviceA = await ctx.api.writes.subscribePush({
-          endpoint: endpoint('e2e'),
-          keys: pushKeys(),
-          label: label(ctx, 'A'),
-        });
+        deviceA = await ctx.api.writes.subscribeHarnessPush('e2e', pushKeys(), label(ctx, 'A'));
       },
     },
     {

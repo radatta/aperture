@@ -821,6 +821,26 @@ export function createApiClient({
       ledger.append({ run, op: 'created', id: device.id, via: PUSH_SUB_VIA, title: input.label });
       return device;
     },
+    // A harness slot's device: its id is known before the call (harnessPushId), so `created` is recorded
+    // first — a response lost after the BFF wrote it still leaves cleanup the id to remove. The server must
+    // answer with that id (the derivation is pinned in api.test.ts and backend.push.test.ts).
+    async subscribeHarnessPush(
+      slot: HarnessPushSlot,
+      keys: DevSubscribePushInput['keys'],
+      label: string,
+    ): Promise<DevPushDevice> {
+      const id = harnessPushId(slot);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: PUSH_SUB_VIA, title: label });
+      const device = await call<DevPushDevice>('subscribePush', [
+        { endpoint: harnessPushEndpoint(slot), keys, label },
+      ]);
+      if (device.id !== id)
+        throw new Error(
+          `slot ${slot} subscribed as ${device.id}, not ${id} — the id derivation moved`,
+        );
+      return device;
+    },
     // The SSRF row: a subscribe the BFF must refuse (HTTP 400), so nothing is ledgered first — an intent
     // with no create would read as a leak. Answers the refusal's message. Should it land after all, its id
     // is recorded (cleanup removes it) and the call throws.

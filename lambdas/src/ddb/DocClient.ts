@@ -163,6 +163,8 @@ export class InMemoryDoc implements DocClient {
   }
 
   async deleteIf(pk: string, sk: string, expectedUpdatedAt: number): Promise<void> {
+    // Like LiveDoc: an unknown version can't be matched.
+    if (typeof expectedUpdatedAt !== 'number') throw new ConditionFailedError();
     const key = keyOf(pk, sk);
     const hook = this.deleteIntercepts.get(key);
     if (hook) {

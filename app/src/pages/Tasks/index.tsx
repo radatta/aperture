@@ -221,6 +221,15 @@ function OpenLinkedTask({
   // out wins, and the older answer is dropped when it lands.
   const handled = useRef<string | null | undefined>(undefined);
   const turn = useRef(0);
+  // Unmounted — the lens switched (which drops the link), the page left — before the read lands: its
+  // answer is nobody's. A flag set in the effect, not a turn bumped on cleanup: StrictMode's
+  // mount/unmount/mount would otherwise void the first, still-wanted read.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => void (mounted.current = false);
+  }, []);
+  const current = (mine: number) => mounted.current && mine === turn.current;
   useEffect(() => {
     if (!tasks || handled.current === id) return;
     handled.current = id;
@@ -235,13 +244,13 @@ function OpenLinkedTask({
       .getTask(id)
       .then(
         (task) => {
-          if (mine !== turn.current) return;
+          if (!current(mine)) return;
           if (task) openTask?.(task, 'view', null);
           else onMiss('gone');
         },
-        () => mine === turn.current && onMiss('failed'),
+        () => current(mine) && onMiss('failed'),
       )
-      .finally(() => mine === turn.current && onDone());
+      .finally(() => current(mine) && onDone());
   }, [id, tasks, api, openTask, onDone, onMiss]);
   return null;
 }

@@ -844,8 +844,8 @@ export class Repo {
       GSI1SK: gsi1.remindSk(t.createdAt),
     });
   }
-  async listPushTests(): Promise<PushTestRow[]> {
-    return (await this.doc.query(this.p(), sk.pushTestPrefix())).map((i) =>
+  async listPushTests(opts?: { consistent?: boolean }): Promise<PushTestRow[]> {
+    return (await this.doc.query(this.p(), sk.pushTestPrefix(), opts)).map((i) =>
       toEntity<PushTestRow>(i),
     );
   }

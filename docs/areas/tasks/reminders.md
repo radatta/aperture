@@ -119,8 +119,23 @@ Settings › Notifications shows:
 **Send test** queues a `ptest#` row in the remind key space. The poller sends it on the next tick, so the test
 proves the whole chain. The BFF never holds the private key.
 
-Re-subscribe on launch (`usePushSync`): if permission is granted but the subscription is gone or was made with a
-different VAPID key, the app re-subscribes silently.
+**Re-subscribe on launch** (`usePushSync` → `browserPush.ts` `resyncHere`, http mode, permission granted):
+
+- **Healing.** The subscription is gone, was made with a different VAPID key, or the server no longer lists
+  this device. The last case is the poller's hard delete after a 404/410 or keys it couldn't use. The app
+  then drops that dead endpoint and subscribes fresh, never re-sending the old one, and upserts the device.
+- **Retiring the old row.** When the server lists the fresh subscription under a new id (a new endpoint),
+  the app tombstones its own old row. It records the new id first, so the tombstone doesn't read as a
+  removal from another device. Otherwise the old row would sit live as a twin the poller 410s and reports as
+  "stopped accepting". A retire that fails is retried on a later launch.
+- **Removal sticks** (Rahul). A device removed in Settings on another device is a tombstone, listed in
+  `removedDeviceIds`. When a status read finds this device's id there, the app drops its opt-in and its
+  browser subscription and writes nothing to the server. Settings then shows a one-time note worded for
+  what this browser can do next: tap Enable, allow notifications first, open the Home Screen app, or
+  nothing works here. The note stays until Enable or Dismiss. A launch never re-adds a removed device.
+- **Home banner.** A failed resync is remembered on the device. Home shows "Reminders couldn't refresh on
+  this device — open Settings", with Dismiss. A dismissal holds until a new failure, and the next healthy
+  launch clears it.
 
 ## 5. Security and cost
 

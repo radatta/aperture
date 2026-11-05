@@ -449,6 +449,34 @@ describe('armed before it fires, through the BFF', () => {
   });
 });
 
+describe('Send test rows never go stale', () => {
+  it('a newer Send test replaces an unsent one, and a re-enable starts with none queued', async () => {
+    const e = env();
+    const api = e.make();
+    const a = await api.subscribePush(input());
+    const tests = () =>
+      new Repo(e.doc, liveWrites(e.doc), 'u1').listPushTests({ consistent: true });
+    await api.sendTestPush();
+    e.advance(1000);
+    await api.sendTestPush();
+    expect((await tests()).map((t) => t.createdAt)).toEqual([NOW + 1000]);
+    // Removed before any tick: the test never went, and the poller no longer ticks this user.
+    await api.unsubscribePush(a.id);
+    e.advance(5 * 60_000);
+    await api.subscribePush(input()); // Enable again
+    expect(await tests()).toEqual([]);
+    expect(await tick(e).then(titles)).toEqual([]);
+  });
+});
+
+describe('the device id the dev check derives', () => {
+  // scripts/src/devcheck/api.ts harnessPushId pins the same value: the two derivations can't drift apart.
+  it('is a sha256(endpoint) hex prefix — devcheck-e2e is 54c270db2e586463', async () => {
+    const d = await env().make().subscribePush(input('https://web.push.apple.com/devcheck-e2e'));
+    expect(d.id).toBe('54c270db2e586463');
+  });
+});
+
 describe('a reopen stays quiet', () => {
   // Done and cancelled are terminal (machines.ts), so no BFF path reopens a task — a plan can't re-fire that
   // way. Pinned here so a reopen path added later meets this test (and re-arms the task's plans).

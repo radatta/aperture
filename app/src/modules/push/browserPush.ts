@@ -23,6 +23,7 @@ const SYNC_ERROR_AT_KEY = 'aperture.push.syncErrorAt'; // "<epoch ms>-<nonce>" �
 const SYNC_DISMISSED_KEY = 'aperture.push.syncErrorDismissed'; // the failure Home was told to drop
 const REMOVED_KEY = 'aperture.push.removedElsewhere'; // the opt-in was dropped: removed on another device
 const ENABLED_AT_KEY = 'aperture.push.enabledAt'; // when the opt-in was last made, epoch ms
+const RETIRE_KEY = 'aperture.push.retire'; // this device's old rows still to tombstone (JSON ids)
 
 // iPadOS reports a Mac UA; its touch points give it away.
 const isIOS = (ua: string, touchPoints = 0) =>
@@ -239,6 +240,29 @@ export async function dropIfRemovedHere(status: PushStatus, askedAt?: number): P
   return true;
 }
 
+// This device's own old rows to tombstone. Never a sync error: the device itself is healthy, so a failed
+// tombstone (a network blip) is kept for the next healthy launch to retry instead.
+const pendingRetires = (): string[] => {
+  try {
+    const ids: unknown = JSON.parse(read(RETIRE_KEY) ?? '[]');
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+async function retire(server: PushServer, ids: string[]): Promise<void> {
+  const left = new Set([...pendingRetires(), ...ids]);
+  for (const id of [...left]) {
+    try {
+      await server.unsubscribePush(id);
+      left.delete(id);
+    } catch {
+      // kept in `left`: the next healthy launch tries again
+    }
+  }
+  write(RETIRE_KEY, left.size > 0 ? JSON.stringify([...left]) : null);
+}
+
 // One resync at a time, and a Remove on this device waits for it (afterResync) — so a Remove tapped
 // while the launch resync is mid-flight can't be undone by its upsert.
 let inflight: Promise<unknown> = Promise.resolve();
@@ -282,9 +306,13 @@ async function resync(
   if (notificationPermission() !== 'granted') return false;
   // Still the opt-in this run started from — not removed here meanwhile, nor replaced by a new Enable.
   const ours = () => deviceIdHere() === id && read(ENABLED_AT_KEY) === stamp;
-  // Lost it mid-run: a subscription nobody opted into goes; one a new Enable owns stays.
-  const abandon = async (sub: PushSubscription) => {
-    if (deviceIdHere() === null) await sub.unsubscribe().catch(() => false);
+  // Lost it mid-run: a subscription nobody opted into goes — and so does the row the upsert already made
+  // for it, or it would sit live on a dropped endpoint (410, a false red line). One a new Enable owns
+  // stays.
+  const abandon = async (sub: PushSubscription, upserted?: PushDevice) => {
+    if (deviceIdHere() !== null) return false;
+    await sub.unsubscribe().catch(() => false);
+    if (upserted) await retire(server, [upserted.id]);
     return false;
   };
   try {
@@ -295,19 +323,20 @@ async function resync(
     const known = status.devices.some((d) => d.id === id);
     if (known && had && sameKey(had.options.applicationServerKey, key)) {
       clearSyncError(); // a healthy launch is a successful resync
+      await retire(server, pendingRetires()); // old rows a blip left live last time
       return false;
     }
     const sub = await subscribeWith(pm, key, !known);
     if (!ours()) return abandon(sub);
     const device = await server.subscribePush(toInput(sub));
-    // Removed while the upsert was out: its row is alive again on the server, pointing at a subscription
-    // dropped here — the poller's next send gets a 410 and deletes it.
-    if (!ours()) return abandon(sub);
+    // Removed while the upsert was out (here, or by a status read seeing a removal elsewhere): the upsert's
+    // row goes too.
+    if (!ours()) return abandon(sub, device);
     // The new id first, then the old row goes: its tombstone lands in removedDeviceIds, and a read that
     // sees it must already find this device under the new id, or dropIfRemovedHere would take it for a
     // removal elsewhere. (A device the server had lost has no row to retire.)
     rememberHere(device, now);
-    if (known && device.id !== id) await server.unsubscribePush(id);
+    if (known && device.id !== id) await retire(server, [id]);
     return true;
   } catch (e) {
     write(SYNC_ERROR_KEY, e instanceof Error ? e.message : String(e));

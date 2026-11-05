@@ -1965,12 +1965,20 @@ export class BackendClient implements ApiClient {
     if (!(await this.pushPublicKey())) throw new Error(PUSH_UNCONFIGURED_ERROR);
     const now = this.now();
     await this.ensurePushUser(now); // heals a registry row a subscribe/remove race dropped
+    await this.clearPushTests(); // one test queued at a time: a newer Send test replaces an unsent one
     await this.repo.putPushTest({ id: this.ulid(), createdAt: now });
   }
+  // A user going live again starts with no queued test: one left unsent (the poller ticks only registered
+  // users) must not fire on a later re-enable.
   private async ensurePushUser(now: number): Promise<void> {
     if (await this.pushRegistry.hasUser(this.userId)) return;
     await this.backfillReminders(now);
+    await this.clearPushTests();
     await this.pushRegistry.addUser(this.userId, now);
+  }
+  private async clearPushTests(): Promise<void> {
+    for (const t of await this.repo.listPushTests({ consistent: true }))
+      await this.repo.deletePushTest(t.id);
   }
   // Re-key every alive task and plan that can still fire (from the window's start on) onto the remind
   // index, each conditional on the version read (Repo.rekey — a write since already keyed it), armed now: what

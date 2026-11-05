@@ -1,7 +1,7 @@
 import { createECDH } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DevPushDevice, DevPushStatus } from '../api';
-import { droppedForKeys, e2eOutcome, laClock, pushKeys } from './timed-reminders';
+import { droppedForKeys, e2eOutcome, laClock, pushKeys, stageFault } from './timed-reminders';
 
 // The end-to-end step reads the poller's own words back (lambdas/src/push/dispatch.ts — scripts doesn't
 // depend on lambdas): the strings below are what it writes for each answer Apple can give a never-issued
@@ -126,10 +126,11 @@ describe('e2eOutcome', () => {
         SINCE,
       ),
     ).toMatchObject({ ok: false, why: expect.stringMatching(/daily guard/) });
-    // The stage can't sign at all: no key, or a malformed one.
+    // The stage can't sign at all: no key, a malformed one, or no APP_URL (dispatch.ts STAGE_ERROR).
     for (const lastError of [
       'No VAPID key on this stage — reminders are off',
       'VAPID private key is malformed — reminders are off',
+      'This stage has no APP_URL (the VAPID sub) — reminders are off',
     ])
       expect(e2eOutcome(status({ poller: { lastError } }), 'A', LABEL, SINCE)).toMatchObject({
         ok: false,
@@ -143,6 +144,16 @@ describe('e2eOutcome', () => {
     const s = status({ poller: { lastError: err, lastErrorAt: AT } });
     expect(e2eOutcome(s, 'A', odd, SINCE)).toMatchObject({ ok: true });
     expect(e2eOutcome(s, 'A', 'Devcheck XAX n0nce', SINCE)).toMatchObject({ ok: false });
+  });
+});
+
+describe('stageFault', () => {
+  it('is any stage error, by its common ending — never a device’s', () => {
+    expect(stageFault(status({ poller: { lastError: 'A new fault — reminders are off' } }))).toBe(
+      true,
+    );
+    expect(stageFault(status({ poller: { lastError: cDropped } }))).toBe(false);
+    expect(stageFault(status({}))).toBe(false);
   });
 });
 
