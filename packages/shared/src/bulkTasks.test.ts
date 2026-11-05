@@ -387,7 +387,9 @@ describe('errorKinds', () => {
     expect(kinds('x | due:2026-13-01')).toEqual([{ kind: 'due' }]);
     expect(kinds('x | due:2026-10-01@25:00')).toEqual([{ kind: 'due' }]);
     expect(kinds('x | due:2026-10-01 due:2026-10-02')).toEqual([{ kind: 'due' }]);
-    expect(kinds('x | ~0')).toEqual([{ kind: 'other' }]);
+    expect(kinds('x | ~0')).toEqual([{ kind: 'estimate' }]);
+    expect(kinds('x | ~')).toEqual([{ kind: 'estimate' }]);
+    expect(kinds('x | ~5 ~10')).toEqual([{ kind: 'other' }]); // a repeat is "once", not the value
     expect(kinds('x | category')).toEqual([{ kind: 'unknown', token: 'category' }]);
   });
 });
