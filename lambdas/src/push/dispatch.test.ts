@@ -351,7 +351,8 @@ describe('push dispatch — fail-closed sending', () => {
     );
   });
 
-  it(`the hidden guard refuses past ${PUSH_DAILY_GUARD} a day and says so`, async () => {
+  it('the hidden guard refuses past 50 a day and says so', async () => {
+    expect(PUSH_DAILY_GUARD).toBe(50); // the title names it (the dev check's matrix reads it verbatim)
     const w = world();
     await w.device();
     await w.repo().putPushCountIf({ day: TODAY, count: PUSH_DAILY_GUARD - 1, updatedAt: 1 }, null);

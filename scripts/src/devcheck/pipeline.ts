@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { DEV_WORK_MIN, financeRowOf, ledgerKind, type ApiClient } from './api';
+import { DEV_WORK_MIN, financeRowOf, ledgerKind, REMINDERS_ON, type ApiClient } from './api';
 import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -459,6 +459,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // the row still carries what the run set, and removing it clears that, never the row.
   // A push device exists while it's among the status's alive devices (a removed one is a keyless
   // tombstone; one the poller dropped is gone).
+  // The reminder toggles, `reminder-toggles:<run>`, exist while any reads off; removing them switches all on.
   async function exists(client: ApiClient, id: string): Promise<boolean> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
@@ -481,6 +482,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.listSeries()).some((x) => x.id === id);
       case 'pushsub':
         return (await client.reads.getPushStatus()).devices.some((d) => d.id === id);
+      case 'reminderToggles': {
+        const st = await client.reads.getSettings();
+        return !st.remindTimed || !st.remindDueDay || !st.remindPlanned;
+      }
       case 'task':
         return (await client.reads.getTask(id)) !== null;
     }
@@ -516,6 +521,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'pushsub':
         await client.writes.unsubscribePush(id);
+        return true;
+      case 'reminderToggles':
+        await client.writes.setReminderSettings({ ...REMINDERS_ON });
         return true;
       case 'task':
         return safeDelete(client, id);

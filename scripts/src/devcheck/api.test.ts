@@ -10,9 +10,11 @@ import {
   PLACE_VIA,
   MCP_SERIES_VIA,
   PUSH_SUB_VIA,
+  REMINDER_TOGGLES_VIA,
   SERIES_VIA,
   UI_CATEGORY_VIA,
   UI_PLACE_VIA,
+  UI_PUSH_SUB_VIA,
   UI_SERIES_VIA,
   createApiClient,
   financeRowOf,
@@ -103,6 +105,7 @@ describe('createApiClient', () => {
       'recordFinanceLink',
       'recordFluxSet',
       'recordPlaceTokenMint',
+      'recordReminderToggles',
       'removePlan',
       'revokePlaceToken',
       'rotatePlaceToken',
@@ -115,6 +118,7 @@ describe('createApiClient', () => {
       'startSession',
       'stopSession',
       'subscribePush',
+      'subscribePushExpectingRefusal',
       'transitionTask',
       'uncheckHabit',
       'unlinkFinanceRefund',
@@ -691,10 +695,57 @@ describe('createApiClient', () => {
       ]);
     });
 
-    it('writes only the three reminder toggles to settings', async () => {
+    it('a refused subscribe ledgers nothing and answers the refusal; one that lands is recorded and fails', async () => {
+      const ledger = memLedger();
+      const refuse = vi.fn<FetchLike>(async () => reply(400, { error: 'not a push service' }));
+      const api = createApiClient({ fetch: refuse, token: () => 't', ledger, run: 'r1' });
+      expect(await api.writes.subscribePushExpectingRefusal(input)).toBe('not a push service');
+      expect(ledger.entries).toEqual([]);
+      const accept = vi.fn<FetchLike>(async () => reply(200, { id: 'D7' }));
+      const api2 = createApiClient({ fetch: accept, token: () => 't', ledger, run: 'r1' });
+      await expect(api2.writes.subscribePushExpectingRefusal(input)).rejects.toThrow(
+        /should have refused/,
+      );
+      expect(ledger.entries).toEqual([
+        { run: 'r1', op: 'created', id: 'D7', via: PUSH_SUB_VIA, title: 'devcheck' },
+      ]);
+      // A throttle is backed off; any other failure isn't a refusal.
+      const broken = vi.fn<FetchLike>(async () => reply(500, 'oops'));
+      const api3 = createApiClient({
+        fetch: broken,
+        token: () => 't',
+        ledger: memLedger(),
+        run: 'r1',
+      });
+      await expect(api3.writes.subscribePushExpectingRefusal(input)).rejects.toThrow(/HTTP 500/);
+    });
+
+    it('names a device Enable subscribed, and the toggles a run flipped, by their via', () => {
+      const entries = [
+        { run: 'r', op: 'created' as const, id: 'U', via: UI_PUSH_SUB_VIA },
+        { run: 'r', op: 'created' as const, id: 'reminder-toggles:r', via: REMINDER_TOGGLES_VIA },
+      ].map((e) => ({ t: '', ...e }));
+      expect(['U', 'reminder-toggles:r'].map((id) => ledgerKind(entries, id))).toEqual([
+        'pushsub',
+        'reminderToggles',
+      ]);
+    });
+
+    it('writes only the three reminder toggles to settings, recording the run before the first', async () => {
       const fetch = vi.fn<FetchLike>(async () => reply(200, {}));
-      const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      api.writes.recordReminderToggles();
       await api.writes.setReminderSettings({ remindTimed: false, remindPlanned: true });
+      expect(ledger.entries).toEqual([
+        {
+          run: 'r1',
+          op: 'created',
+          id: 'reminder-toggles:r1',
+          via: REMINDER_TOGGLES_VIA,
+          title: 'reminder toggles',
+        },
+      ]);
       expect(fetch).toHaveBeenLastCalledWith(
         `${DEV_ORIGIN}/api/updateSettings`,
         expect.objectContaining({

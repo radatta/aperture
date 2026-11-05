@@ -270,8 +270,16 @@ export const MCP_SERIES_VIA = 'mcp:create_series';
 const SERIES_VIAS: readonly string[] = [SERIES_VIA, UI_SERIES_VIA, MCP_SERIES_VIA];
 export const PLACE_TOKEN_VIA = 'api:rotatePlaceToken';
 export const placeTokenId = (run: string): string => `place-token:${run}`;
-// A push device this harness subscribed — by the id the server answered with (a sha256(endpoint) prefix).
+// A push device this harness subscribed — by the id the server answered with (a sha256(endpoint) prefix) —
+// through the API, or Settings' Enable (the browser's subscribePush response, recorder.ts).
 export const PUSH_SUB_VIA = 'api:subscribePush';
+export const UI_PUSH_SUB_VIA = 'ui:subscribePush';
+// The test user's reminder toggles, flipped by a run: like the place token, no id of its own, so
+// `reminder-toggles:<run>` is recorded before the first flip (API or Settings) — a run that dies mid-way
+// still leaves the next run's sweep to switch them back on. It exists while any toggle reads off.
+export const REMINDER_TOGGLES_VIA = 'api:setReminderSettings';
+export const reminderTogglesId = (run: string): string => `reminder-toggles:${run}`;
+export const REMINDERS_ON = { remindTimed: true, remindDueDay: true, remindPlanned: true } as const;
 
 // A bucket set or a refund link on a fixture bank row. Neither has an id of its own, so, like the token, a run
 // records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` — before the click that sets it (the
@@ -298,6 +306,7 @@ export type LedgerKind =
   | 'financeLink'
   | 'financeRule'
   | 'pushsub'
+  | 'reminderToggles'
   | 'series';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
@@ -310,7 +319,8 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
-  if (via === PUSH_SUB_VIA) return 'pushsub';
+  if (via === PUSH_SUB_VIA || via === UI_PUSH_SUB_VIA) return 'pushsub';
+  if (via === REMINDER_TOGGLES_VIA) return 'reminderToggles';
   return via === PLACE_TOKEN_VIA ? 'placeToken' : 'task';
 }
 
@@ -405,6 +415,17 @@ export function createApiClient({
     const id = placeTokenId(run);
     if (!pendingIds(ledger.read()).includes(id))
       ledger.append({ run, op: 'created', id, via: PLACE_TOKEN_VIA, title: 'place token' });
+  }
+  function recordToggles(): void {
+    const id = reminderTogglesId(run);
+    if (!pendingIds(ledger.read()).includes(id))
+      ledger.append({
+        run,
+        op: 'created',
+        id,
+        via: REMINDER_TOGGLES_VIA,
+        title: 'reminder toggles',
+      });
   }
   // Attachments this client created; deleteAttachment refuses any other id.
   const attachmentIds = new Set<string>();
@@ -780,13 +801,37 @@ export function createApiClient({
       ledger.append({ run, op: 'created', id: device.id, via: PUSH_SUB_VIA, title: input.label });
       return device;
     },
+    // The SSRF row: a subscribe the BFF must refuse (HTTP 400), so nothing is ledgered first — an intent
+    // with no create would read as a leak. Answers the refusal's message. Should it land after all, its id
+    // is recorded (cleanup removes it) and the call throws.
+    async subscribePushExpectingRefusal(input: DevSubscribePushInput): Promise<string> {
+      const url = `${DEV_ORIGIN}/api/subscribePush`;
+      assertDevOrigin(url);
+      const { status, text } = await backoff(() =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', [AUTH_HEADER]: `Bearer ${token()}` },
+          body: JSON.stringify({ args: [input] }),
+        }),
+      );
+      if (status === 200) {
+        const id = (JSON.parse(text) as { id?: unknown }).id;
+        if (typeof id === 'string')
+          ledger.append({ run, op: 'created', id, via: PUSH_SUB_VIA, title: input.label });
+        throw new Error(`subscribePush accepted ${input.endpoint} — it should have refused`);
+      }
+      if (status !== 400 || !bffError(text))
+        throw new Error(`subscribePush → HTTP ${status}: ${text.slice(0, 200)}`);
+      return (JSON.parse(text) as { error: string }).error;
+    },
     async unsubscribePush(id: string): Promise<void> {
       assertLedger(id, 'pushsub');
       await call<null>('unsubscribePush', [id]);
     },
     // Queues a test on the test user's devices — all of them this harness's (the test user has no phone).
     sendTestPush: () => call<null>('sendTestPush', []),
-    // Only the three reminder toggles: a scenario flips them and restores what it read.
+    // Only the three reminder toggles, recorded before the write (`reminder-toggles:<run>`) so cleanup
+    // switches them back on whatever happens; cleanup's own restore goes through here too.
     async setReminderSettings(patch: DevReminderSettings): Promise<void> {
       for (const k of Object.keys(patch))
         if (!REMINDER_SETTING_KEYS.has(k))
@@ -794,8 +839,11 @@ export function createApiClient({
             'LEDGER_GUARD',
             `refusing to write setting ${k} — reminder toggles only`,
           );
+      recordToggles();
       await call<unknown>('updateSettings', [patch]);
     },
+    // The ledger half alone, for a Settings toggle click: called before it. Writes nothing to dev.
+    recordReminderToggles: (): void => recordToggles(),
   };
 
   return { reads, writes };

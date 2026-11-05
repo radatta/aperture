@@ -1,0 +1,155 @@
+import { createECDH } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import type { DevPushDevice, DevPushStatus } from '../api';
+import { e2eOutcome, laClock, pushKeys } from './timed-reminders';
+
+// The end-to-end step reads the poller's own words back (lambdas/src/push/dispatch.ts — scripts doesn't
+// depend on lambdas): the strings below are what it writes for each answer Apple can give a never-issued
+// endpoint. If dispatch's copy moves, these and e2eOutcome move with it.
+const SINCE = 1_800_000_000_000;
+const LABEL = 'Devcheck A n0nce';
+const device = (over: Partial<DevPushDevice> = {}): DevPushDevice => ({
+  id: 'A',
+  label: LABEL,
+  createdAt: SINCE,
+  lastOkAt: null,
+  lastError: null,
+  lastErrorAt: null,
+  ...over,
+});
+type Over = Partial<Omit<DevPushStatus, 'poller'>> & { poller?: Partial<DevPushStatus['poller']> };
+const status = ({ poller, ...over }: Over): DevPushStatus => ({
+  configured: true,
+  vapidPublicKey: 'B',
+  devices: [],
+  removedDeviceIds: [],
+  ...over,
+  poller: { lastRunAt: SINCE, lastSentAt: null, lastError: null, lastErrorAt: null, ...poller },
+});
+const goneError = (code: number) =>
+  `${LABEL} stopped accepting reminders (push service answered ${code}) — turn them on again on that device`;
+const keptError = (code: number) =>
+  `Last reminder didn't reach this device (push service answered ${code})`;
+
+describe('e2eOutcome', () => {
+  it('waits while no send is stamped since the run armed', () => {
+    expect(e2eOutcome(status({ devices: [device()] }), 'A', LABEL, SINCE)).toBeNull();
+    const old = status({ devices: [device()], poller: { lastSentAt: SINCE - 60_000 } });
+    expect(e2eOutcome(old, 'A', LABEL, SINCE)).toBeNull();
+  });
+
+  it('404 and 410: the poller deleted the device and named it — a pass', () => {
+    for (const code of [404, 410])
+      expect(
+        e2eOutcome(
+          status({ poller: { lastSentAt: SINCE + 30_000, lastError: goneError(code) } }),
+          'A',
+          LABEL,
+          SINCE,
+        ),
+      ).toEqual({ ok: true, how: `Apple answered ${code}: the poller deleted the device` });
+  });
+
+  it('400 and 403: the device stays, carrying the error — a pass', () => {
+    for (const code of [400, 403])
+      expect(
+        e2eOutcome(
+          status({
+            devices: [device({ lastError: keptError(code), lastErrorAt: SINCE + 30_000 })],
+            poller: { lastSentAt: SINCE + 30_000, lastError: `${LABEL}: ${keptError(code)}` },
+          }),
+          'A',
+          LABEL,
+          SINCE,
+        ),
+      ).toEqual({ ok: true, how: `Apple answered ${code}: the device carries the error` });
+  });
+
+  it('anything else a send can produce is a named failure', () => {
+    const sent = { lastSentAt: SINCE + 30_000 };
+    for (const lastError of [
+      "Last reminder didn't reach this device (push service answered 503)",
+      "Last reminder didn't reach this device (timed out)",
+      "Last reminder didn't reach this device (network error)",
+    ]) {
+      const o = e2eOutcome(
+        status({ devices: [device({ lastError })], poller: sent }),
+        'A',
+        LABEL,
+        SINCE,
+      );
+      expect(o).toMatchObject({ ok: false });
+    }
+    // Delivered?! Apple took a never-issued endpoint.
+    expect(
+      e2eOutcome(
+        status({ devices: [device({ lastOkAt: SINCE + 1 })], poller: sent }),
+        'A',
+        LABEL,
+        SINCE,
+      ),
+    ).toMatchObject({ ok: false });
+    // Gone without a 404/410, or gone because the user removed it.
+    expect(e2eOutcome(status({ poller: sent }), 'A', LABEL, SINCE)).toMatchObject({ ok: false });
+    expect(
+      e2eOutcome(
+        status({ removedDeviceIds: ['A'], poller: { ...sent, lastError: goneError(410) } }),
+        'A',
+        LABEL,
+        SINCE,
+      ),
+    ).toMatchObject({ ok: false });
+    // The test user's daily guard is shut (26+ runs in one LA day).
+    expect(
+      e2eOutcome(
+        status({
+          devices: [device()],
+          poller: {
+            lastError: "Daily reminder limit (50) reached — the rest of today's were held back",
+            lastErrorAt: SINCE + 1,
+          },
+        }),
+        'A',
+        LABEL,
+        SINCE,
+      ),
+    ).toMatchObject({ ok: false, why: expect.stringMatching(/daily guard/) });
+    // The stage can't sign at all.
+    expect(
+      e2eOutcome(
+        status({ poller: { lastError: 'No VAPID key on this stage — reminders are off' } }),
+        'A',
+        LABEL,
+        SINCE,
+      ),
+    ).toMatchObject({ ok: false, why: expect.stringMatching(/can't send/) });
+  });
+
+  it('a label with regex characters still matches only itself', () => {
+    const odd = 'Devcheck (A) n0nce';
+    const err = `${odd} stopped accepting reminders (push service answered 410) — turn them on again on that device`;
+    const s = status({ poller: { lastSentAt: SINCE, lastError: err } });
+    expect(e2eOutcome(s, 'A', odd, SINCE)).toMatchObject({ ok: true });
+    expect(e2eOutcome(s, 'A', 'Devcheck XAX n0nce', SINCE)).toMatchObject({ ok: false });
+  });
+});
+
+describe('the end-to-end task and keys', () => {
+  it('laClock is the LA wall clock, 24-hour, so a task due this minute is in the next tick’s window', () => {
+    expect(laClock(new Date('2026-11-04T22:05:59Z'))).toBe('14:05'); // PST
+    expect(laClock(new Date('2026-07-04T07:00:00Z'))).toBe('00:00'); // PDT, midnight as 00
+  });
+
+  it('pushKeys is a P-256 point and a 16-octet secret, fresh each time', () => {
+    const k = pushKeys();
+    const point = Buffer.from(k.p256dh, 'base64url');
+    expect(point).toHaveLength(65);
+    expect(point[0]).toBe(4);
+    expect(Buffer.from(k.auth, 'base64url')).toHaveLength(16);
+    // It's a real point: an ECDH against it works (what the poller's encrypt does first).
+    const e = createECDH('prime256v1');
+    e.generateKeys();
+    expect(e.computeSecret(point)).toHaveLength(32);
+    expect(pushKeys().p256dh).not.toBe(k.p256dh);
+  });
+});

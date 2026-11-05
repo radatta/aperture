@@ -48,6 +48,9 @@ export async function launch(
     hasTouch: true,
     timezoneId: TIMEZONE,
     locale: 'en-US',
+    // Settings' Enable asks for it inside the tap; granted, so the run drives the subscribe itself (headless
+    // Chromium's push service then answers it, or refuses — both on screen) rather than only the denied copy.
+    permissions: ['notifications'],
     ...(storageStatePath && existsSync(storageStatePath) ? { storageState: storageStatePath } : {}),
   });
   return { browser, context };

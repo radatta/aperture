@@ -46,6 +46,13 @@ describe('recorder', () => {
     expect(isCreateRequest('upsertCategory', null)).toBe(false);
   });
 
+  it('records a push device Settings’ Enable subscribed, by the id the server answered with', () => {
+    expect(isCreateRequest('subscribePush', JSON.stringify({ args: [{}] }))).toBe(true);
+    expect(idsFromCreateResponse('subscribePush', { id: 'd1', label: 'x' })).toEqual(['d1']);
+    expect(idsFromCreateResponse('subscribePush', { error: 'nope' })).toEqual([]);
+    expect(isCreateRequest('unsubscribePush', JSON.stringify({ args: ['d1'] }))).toBe(false);
+  });
+
   it('ignores other methods and malformed bodies', () => {
     expect(idsFromCreateResponse('listTasks', [{ id: 'a' }])).toEqual([]);
     expect(idsFromCreateResponse('createTask', null)).toEqual([]);

@@ -26,6 +26,7 @@ export interface PwLocator {
   waitFor(opts?: { state?: 'visible' | 'attached' | 'hidden'; timeout?: number }): Promise<void>;
   isVisible(): Promise<boolean>;
   isDisabled(): Promise<boolean>;
+  isChecked(): Promise<boolean>;
   nth(index: number): PwLocator;
   getAttribute(name: string): Promise<string | null>;
   boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null>;
