@@ -13,10 +13,14 @@ const WORKER = /\/?assets\/flux\.worker-[\w-]+\.js/; // the precache manifest wr
 const WASM = /\/assets\/vision_wasm_module_internal-[\w-]+\.br\.wasm/;
 
 // Every resource the page has loaded so far (the SW-served ones included), by URL.
-const loaded = (ctx: Parameters<Scenario['steps'][number]['run']>[0]) =>
-  ctx.page.evaluate<string[]>(
+// Throws if the buffer (250 entries by default) filled, so a "no chunk" check can't pass by overflow.
+const loaded = async (ctx: Parameters<Scenario['steps'][number]['run']>[0]) => {
+  const names = await ctx.page.evaluate<string[]>(
     "performance.getEntriesByType('resource').map((e) => e.name).concat(performance.getEntriesByType('navigation').map((e) => e.name))",
   );
+  if (names.length >= 250) throw new Error(`resource timing buffer full (${names.length} entries)`);
+  return names;
+};
 
 // The gate (a test user who never opened Flux) or the tabs: Settings may still be loading when the shell is up.
 async function pastTheGate(ctx: Parameters<Scenario['steps'][number]['run']>[0]): Promise<void> {
@@ -92,7 +96,7 @@ export const fluxPerf: Scenario = {
       id: 'cache-hit',
       entry: 'ui',
       kind: 'edge',
-      what: 'A wasm already in the Cache API (an uncompressed copy from before, or the decoded one from last time) still loads',
+      what: 'A wasm already in the Cache API (the decoded copy from last time) loads without a download',
       offDev: {
         file: 'app/src/modules/flux/engine/assets.test.ts',
         test: 'serves the second load from the cache without touching the network',

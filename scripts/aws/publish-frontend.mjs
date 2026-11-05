@@ -53,17 +53,20 @@ run(
   `aws s3 sync app/dist/assets "s3://${bucket}/assets" --exclude "*.wasm" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
 );
 const brDir = mkdtempSync(join(tmpdir(), 'aperture-wasm-'));
-for (const name of readdirSync(`${root}/app/dist/assets`).filter((f) => f.endsWith('.br.wasm'))) {
-  const { body, rawLength } = brotliWasm(readFileSync(`${root}/app/dist/assets/${name}`));
-  console.log(
-    `  brotli ${name}: ${rawLength.toLocaleString()} → ${body.byteLength.toLocaleString()} B`,
-  );
-  writeFileSync(join(brDir, name), body);
-  run(
-    `aws s3 cp "${join(brDir, name)}" "s3://${bucket}/assets/${name}" --content-type "application/wasm" --content-encoding br --metadata ${RAW_LENGTH_META}=${rawLength} --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
-  );
+try {
+  for (const name of readdirSync(`${root}/app/dist/assets`).filter((f) => f.endsWith('.br.wasm'))) {
+    const { body, rawLength } = brotliWasm(readFileSync(`${root}/app/dist/assets/${name}`));
+    console.log(
+      `  brotli ${name}: ${rawLength.toLocaleString()} → ${body.byteLength.toLocaleString()} B`,
+    );
+    writeFileSync(join(brDir, name), body);
+    run(
+      `aws s3 cp "${join(brDir, name)}" "s3://${bucket}/assets/${name}" --content-type "application/wasm" --content-encoding br --metadata ${RAW_LENGTH_META}=${rawLength} --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
+    );
+  }
+} finally {
+  rmSync(brDir, { recursive: true, force: true });
 }
-rmSync(brDir, { recursive: true, force: true });
 // Everything else (index.html, icons, …) must revalidate so a client never holds a stale shell.
 // --exclude assets/* leaves the immutable pass above untouched and means old hashes are never deleted, so
 // in-flight clients can still load old chunks. sw.js and the manifest are excluded here (and so from

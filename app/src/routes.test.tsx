@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ReactElement } from 'react';
 import { screen } from '@testing-library/react';
 import { AppShell } from './components/AppShell';
 import { lazyPage } from './lib/lazyPage';
@@ -11,7 +12,7 @@ import { renderApp } from './test/utils';
 describe('routes', () => {
   it('a deep link to /flux/history keeps the shell up, with "Loading…" in the outlet, until the Flux chunk lands', async () => {
     let land = () => {};
-    const chunk = new Promise<{ History: () => React.JSX.Element }>((r) => {
+    const chunk = new Promise<{ History: () => ReactElement }>((r) => {
       land = () => r({ History: () => <h1>Flux history landed</h1> });
     });
     renderApp({
@@ -41,5 +42,30 @@ describe('routes', () => {
     expect(await screen.findByRole('heading', { name: 'Flux history landed' })).toBeTruthy();
     expect(screen.queryByText('Loading…')).toBeNull();
     expect(screen.getByRole('link', { name: 'Flux' })).toBeTruthy();
+  });
+
+  it('a chunk that fails to load shows the error with Retry in the outlet, never the router’s error page', async () => {
+    renderApp({
+      path: '/flux/history',
+      routes: [
+        {
+          path: '/',
+          element: <AppShell />,
+          children: [
+            {
+              path: 'flux/history',
+              element: lazyPage(
+                () => Promise.reject(new Error('offline')),
+                (m: { History: () => ReactElement }) => m.History,
+              ),
+            },
+          ],
+        },
+      ],
+    });
+    expect(await screen.findByText(/Couldn’t load this|Couldn't load this/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Flux' })).toBeTruthy(); // the shell is still there
+    expect(screen.queryByText(/Unexpected Application Error/)).toBeNull();
   });
 });
