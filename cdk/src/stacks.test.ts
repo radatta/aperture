@@ -432,6 +432,8 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
       Statistic: 'Maximum',
       MetricName: 'Duration',
     });
+    // The push dispatch adds none (no fixed monthly cost): the account-wide Errors alarm covers it.
+    expect(Object.keys(t.findResources('AWS::CloudWatch::Alarm')).filter((id) => id.includes('PushDispatch'))).toEqual([]);
     t.resourceCountIs('AWS::SNS::Topic', 1);
     t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email' });
   });

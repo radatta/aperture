@@ -15,7 +15,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { FINANCE_SYNC_TIMEOUT, FinanceSync } from './finance-sync';
 import { Monitoring } from './monitoring';
-import { PUSH_DISPATCH_TIMEOUT, PushDispatch } from './push-dispatch';
+import { PushDispatch } from './push-dispatch';
 import { CLAUDE_CONNECTOR_CALLBACK_URLS } from '../config/claudeConnector';
 
 export interface AppStackProps extends StackProps {
@@ -443,7 +443,7 @@ export class ApertureAppStack extends Stack {
 
     // The reminder poller — after the distribution, since its links (and VAPID `sub`) need appUrl, and
     // nothing refers back to it, so CloudFront's domain token forms no cycle here.
-    const pushDispatch = new PushDispatch(this, 'PushDispatch', {
+    new PushDispatch(this, 'PushDispatch', {
       stage,
       table,
       appUrl,
@@ -461,7 +461,9 @@ export class ApertureAppStack extends Stack {
     new CfnOutput(this, 'McpUrl', { value: `${appUrl}/mcp` }); // the URL to register in Claude Code / claude.ai
     new CfnOutput(this, 'McpClientId', { value: claudeClient.userPoolClientId }); // paste into claude.ai's connector OAuth Client ID
 
-    // Runtime watch on the Lambdas, prod only (see monitoring.ts). Option B: Lambda alarms only — CloudFront
+    // Runtime watch on the Lambdas, prod only (see monitoring.ts). The push dispatch has no alarm of its own (no
+    // fixed monthly cost — Rahul, 2026-11-04): the account-wide Errors alarm covers it, and a stuck tick's 20 s
+    // timeout lands in Errors. Option B: Lambda alarms only — CloudFront
     // 5xx is deliberately not alarmed (its metrics live only in us-east-1; a cross-region topic isn't
     // worth it, and the synthetic check already proves the edge wiring at deploy time).
     if (stage === 'prod')
@@ -492,17 +494,6 @@ export class ApertureAppStack extends Stack {
             durationAlarm: {
               statistic: 'Maximum',
               thresholdMs: FINANCE_SYNC_TIMEOUT.toMilliseconds() - 5_000,
-            },
-          },
-          // Maximum ≥ 15 s: a tick near its 20 s timeout (a stuck SSM read or push service); a timeout also
-          // lands in Errors. Every minute, so a stuck poller emails within 5 min (the cost bound's cap).
-          {
-            id: 'PushDispatch',
-            label: 'Push dispatch',
-            fn: pushDispatch.fn,
-            durationAlarm: {
-              statistic: 'Maximum',
-              thresholdMs: PUSH_DISPATCH_TIMEOUT.toMilliseconds() - 5_000,
             },
           },
         ],

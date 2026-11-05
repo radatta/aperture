@@ -101,10 +101,13 @@ different VAPID key, the app re-subscribes silently.
 - **Logs:** one JSON line per send or error (`push_sent | push_failed | push_guard_tripped | push_no_key`). Each
   line carries the status, the task id and a sub-id prefix — never the endpoint, the keys or the title.
 - **Cost bound:**
-  - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**.
+  - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
+    tiers. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
+    per stage, against CloudWatch's free 5 GB.
   - Worst case is a tick stuck at the 20 s timeout every minute: about $0.15/day, with pushes capped by the
     guard.
-  - On prod, reserved concurrency 1 plus the Errors/Duration alarms email within 5 minutes.
+  - On prod, reserved concurrency 1. There is no alarm of its own, because a rule says no fixed monthly cost: the
+    account-wide Lambda Errors alarm emails on a failing tick, and a stuck tick's 20 s timeout counts as an error.
   - On dev, reservations are impossible (quota 10, and the SCP denies it). Timeout < rate keeps ticks from
     overlapping, and the hourly kill alarm trips a stalled poller.
 
