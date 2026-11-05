@@ -48,7 +48,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items and their sync states, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
-- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. One live violation — see **[Tech debt](#tech-debt)**.
+- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. No live violation since `day-guards` (2026-11) — the last, `uncheckHabit`, is kept as a record under **[Tech debt](#tech-debt)**.
 - **`exportData` excludes tombstones.** The "you own your data" snapshot returns live rows only, on both impls, asserted by the export contract test. So a soft-deleted row is **unrecoverable from an export** — deliberate while the export is a one-way download with no import path. If restore/merge ever lands it will need tombstones plus a versioned envelope; revisit then. The bundle's shape is the shared `ExportBundle` type, and every collection is required — omitting one is a compile error, not a silent gap (which is how `leetcodeAttempts` once shipped missing).
 
 ### 2.2 Entities
@@ -238,7 +238,9 @@ falling back to `CLAUDE_PROJECT_DIR` then `$(pwd)`; verified empirically both wa
 hooks: `.claude/hooks/README.md`. Note the fix only takes effect once merged to `main` and the main
 checkout pulls it — the executing copy is always `${CLAUDE_PROJECT_DIR}`'s (the main checkout).
 
-### Hard-deletes — breaks §2.1 "Soft-delete everywhere"
+### Hard-deletes — RESOLVED 2026-11-05 (`day-guards`)
+
+Kept as a record. **Fix:** `uncheckHabit` writes a tombstone at the same key (`putCheck` with `deletedAt`) and `repo.deleteCheck` is gone; a re-check writes a fresh row (new id) over it, as the stub does. The proof lives in `lambdas/` as the record below said it must: `backend.test.ts` "uncheck keeps the row as a tombstone…" reads the raw item after the uncheck. `listChecks` also became one date-bounded range read. The text below is as written when the violation was live.
 
 **The rule: nothing is ever hard-deleted.** Every entity carries `deletedAt`, deleting sets it, reads
 filter tombstones. This isn't fastidiousness. `updatedAt` is **last-write-wins across devices**, so a row
@@ -246,7 +248,7 @@ that simply vanishes is indistinguishable from a row that never synced — the t
 one device can tell another that something was deliberately removed rather than lost. Destroy the row and
 a stale device silently resurrects it on next write.
 
-**Live violation: `uncheckHabit`.** `BackendClient.uncheckHabit` calls `repo.deleteCheck`, a real
+**Live violation (then): `uncheckHabit`.** `BackendClient.uncheckHabit` called `repo.deleteCheck`, a real
 DynamoDB `DeleteItem` — the row is gone. The stub soft-deletes the same row. Every other delete in the
 app follows the rule (`deleteCategory` and `removePlan` both write `deletedAt`), so this is the lone
 outlier, and two things make it worse than an ordinary bug:

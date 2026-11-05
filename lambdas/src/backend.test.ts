@@ -775,6 +775,26 @@ describe('backend read-then-write under lagging reads', () => {
     });
   });
 
+  it('uncheck keeps the row as a tombstone — gone from every list, kept in the table; a re-check is a fresh alive row', async () => {
+    const { backend, doc } = setup();
+    const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
+    const key = sk.hcheck(DAY, h.id);
+    const first = await backend.checkHabit(h.id, DAY);
+    await backend.uncheckHabit(h.id, DAY);
+    const raw = await doc.get('u#local', key, { consistent: true });
+    expect(raw).toMatchObject({ id: first.id });
+    expect(raw?.deletedAt).not.toBeNull();
+    expect(await backend.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toEqual([]);
+    expect((await backend.exportData()).habitChecks).toEqual([]);
+    await backend.uncheckHabit(h.id, DAY); // again, and on a day never checked: no-ops
+    await backend.uncheckHabit(h.id, '2026-08-02');
+    const again = await backend.checkHabit(h.id, DAY);
+    expect(again.id).not.toBe(first.id);
+    expect(await backend.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toEqual([
+      again,
+    ]);
+  });
+
   it('a habit unchecked straight after a check leaves no check, and the reverse re-checks it', async () => {
     const { backend, doc } = setup();
     const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
@@ -782,7 +802,7 @@ describe('backend read-then-write under lagging reads', () => {
     await backend.checkHabit(h.id, DAY);
     lagKey(doc, key, null); // the check isn't visible to a plain read yet
     await backend.uncheckHabit(h.id, DAY);
-    expect(await doc.get('u#local', key, { consistent: true })).toBeNull();
+    expect((await doc.get('u#local', key, { consistent: true }))?.deletedAt).not.toBeNull(); // tombstoned
     const checked = await backend.checkHabit(h.id, DAY);
     const live = await doc.get('u#local', key, { consistent: true });
     await backend.uncheckHabit(h.id, DAY);

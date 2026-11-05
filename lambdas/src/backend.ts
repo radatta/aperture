@@ -1317,9 +1317,16 @@ export class BackendClient implements ApiClient {
     if (existing) return existing;
     return this.repo.putCheck({ ...this.base(), habitId, date }, date, habitId);
   }
+  // A tombstone at the same key, like every other delete (TECH §2.1): a stale device can tell "removed"
+  // from "never synced". A re-check writes a fresh row over it (new id) — stub parity.
   async uncheckHabit(habitId: string, date: string): Promise<void> {
     const existing = await this.repo.getCheck(date, habitId, { consistent: true });
-    if (existing) await this.repo.deleteCheck(date, habitId);
+    if (existing)
+      await this.repo.putCheck(
+        { ...existing, deletedAt: this.now(), updatedAt: this.now() },
+        date,
+        habitId,
+      );
   }
   async listHabitChecks(range: DateRange): Promise<HabitCheck[]> {
     return this.repo.listChecks(range.from, range.to);

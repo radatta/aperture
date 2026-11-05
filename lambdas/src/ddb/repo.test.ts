@@ -134,19 +134,34 @@ describe('Repo persistence', () => {
     expect(doc2.size).toBe(0);
   });
 
-  it('habit checks read/delete by composite (date, habitId) with no scan', async () => {
-    const check = {
-      id: 'c1',
+  it('habit checks read by composite (date, habitId); an uncheck tombstones; listChecks bounds by date', async () => {
+    const { doc, repo: r } = repo();
+    const check = (id: string, date: string) => ({
+      id,
       userId: U,
       createdAt: 0,
       updatedAt: 0,
       deletedAt: null,
       habitId: 'h1',
-      date: '2026-08-04',
-    };
-    await r.putCheck(check, '2026-08-04', 'h1');
+      date,
+    });
+    await r.putCheck(check('c1', '2026-08-04'), '2026-08-04', 'h1');
+    await r.putCheck(check('c0', '2026-08-01'), '2026-08-01', 'h1');
     expect((await r.getCheck('2026-08-04', 'h1'))?.id).toBe('c1');
-    await r.deleteCheck('2026-08-04', 'h1');
+    // The tombstone sits at the same key: gone from getCheck and the lists, kept in the table.
+    await r.putCheck(
+      { ...check('c1', '2026-08-04'), deletedAt: 5, updatedAt: 5 },
+      '2026-08-04',
+      'h1',
+    );
     expect(await r.getCheck('2026-08-04', 'h1')).toBeNull();
+    expect((await doc.get(`u#${U}`, 'hcheck#2026-08-04#h1'))?.deletedAt).toBe(5);
+    expect((await r.listChecks('2026-08-01', '2026-08-07')).map((c) => c.id)).toEqual(['c0']);
+    expect(await r.listChecks('2026-08-02', '2026-08-07')).toEqual([]); // c0 is outside the range
+    expect(doc.queries.at(-1)).toMatchObject({
+      prefix: 'hcheck#',
+      from: 'hcheck#2026-08-02#',
+      to: 'hcheck#2026-08-07#\uffff',
+    });
   });
 });

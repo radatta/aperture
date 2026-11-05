@@ -24,7 +24,7 @@ import type {
   TaskPlan,
   TaskSeries,
 } from '@aperture/shared';
-import { ConditionFailedError } from './DocClient';
+import { ConditionFailedError, SK_END } from './DocClient';
 import type { DocClient, Item } from './DocClient';
 import type { Writes } from './writes';
 import { pointerOf } from './placeTokens';
@@ -347,14 +347,13 @@ export class Repo {
     await this.writes.put(entityItem(this.userId, sk.hcheck(date, habitId), c));
     return c;
   }
-  async deleteCheck(date: string, habitId: string): Promise<void> {
-    await this.writes.delete(this.p(), sk.hcheck(date, habitId));
-  }
+  // One range read (the SK sorts by date): `hcheck#<from>#` … the end of `hcheck#<to>#`.
   async listChecks(fromDate: string, toDate: string): Promise<HabitCheck[]> {
-    const rows = await this.doc.query(this.p(), sk.hcheckAllPrefix());
-    return alive(rows.map((i) => toEntity<HabitCheck>(i))).filter(
-      (c) => c.date >= fromDate && c.date <= toDate,
-    );
+    const rows = await this.doc.query(this.p(), sk.hcheckAllPrefix(), {
+      from: sk.hcheckPrefix(fromDate),
+      to: sk.hcheckPrefix(toDate) + SK_END,
+    });
+    return alive(rows.map((i) => toEntity<HabitCheck>(i)));
   }
   async listAllChecks(): Promise<HabitCheck[]> {
     return alive(

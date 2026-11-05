@@ -164,4 +164,4 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
 
 ## 3. Deferred
 
-- Find-from-anywhere (Cmd/Ctrl+K) reusing `query.ts`, only if searching outside `/tasks` is missed.
+- Find-from-anywhere (Cmd/Ctrl+K) reusing `query.ts` — **won't do** (2026-11-05): the daily device is the phone, where "find" is Tasks → type and D1 makes the lens moot; no usage note records a miss. The build shape, if a miss is ever reported, is on task 01M38GBZ6SYT21KV0GP2QXCW4P (a `?q=` link into `/tasks` first, a Find dialog only if still wanted).
