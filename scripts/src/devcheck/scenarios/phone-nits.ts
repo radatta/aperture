@@ -1,11 +1,12 @@
 // Four phone layout fixes (docs/areas/tasks/task-editor.md → Build record, 2026-11-05): the editor's Due and
 // Due time share a line; a card title clamps to two lines, with the Scope button folded into the meta line's
-// "not scoped"; a Settings category row keeps its reorder arrows at 390 (that one is the user's: rows, below). The run renders at 440 (browser.ts);
-// the steps that need the 390 floor or the desktop set the viewport and put 440 back in `finally`, so a
-// failure here never changes what the scenarios after see. Layout is measured through roles and labels (the
-// boxes of the controls the user sees), never a class. Titles use `devcheck-nits <nonce>`.
+// "not scoped"; a Settings category row keeps its reorder arrows at 390. The run renders at 440 (browser.ts);
+// the steps that need the 390 floor or the desktop set the viewport, shoot a failure at that width, and put
+// 440 back in `finally`, so a failure here never changes what the scenarios after see. Layout is measured
+// through roles and labels (the boxes of the controls the user sees), never a class. Titles use
+// `devcheck-nits <nonce>`.
 import { PHONE } from '../browser';
-import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const FLOOR = { width: 390, height: 844 } as const; // iPhone 12–14 class — the narrowest layout kept working
 const DESKTOP = { width: 1512, height: 860 } as const; // the 14" MacBook Pro's Safari content area
@@ -22,10 +23,15 @@ async function boxOf(l: { boundingBox(): Promise<Box | null> }, what: string): P
 const sameLine = (a: Box, b: Box) => Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) <= 4;
 const r = (n: number) => Math.round(n);
 
+// The pipeline's own failure shot comes after `finally`, at 440 — so a failure is shot here first, at the
+// width it happened at.
 async function at<T>(ctx: Ctx, size: { width: number; height: number }, fn: () => Promise<T>) {
   await ctx.page.setViewportSize(size);
   try {
     return await fn();
+  } catch (err) {
+    await ctx.shot(`fail-at-${size.width}`).catch(() => null);
+    throw err;
   } finally {
     await ctx.page.setViewportSize(PHONE);
   }
@@ -93,30 +99,28 @@ export const phoneNits: Scenario = {
       id: 'title-clamp-390',
       entry: 'ui',
       kind: 'edge',
-      what: 'A 120-character title clamps at two lines (not three) and Start stays right-aligned inside the viewport',
+      what: 'A 120-character title clamps at two lines, not three; Start stays inside the viewport',
     },
     {
       id: 'not-scoped-opens-390',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Tapping “not scoped” on the card opens the editor on the Estimate field (there is no Scope button)',
+      what: 'Tapping “not scoped” on the card opens the editor on Estimate; there is no Scope button',
     },
     {
       id: 'today-in-progress-390',
       entry: 'ui',
       kind: 'edge',
-      what: 'Started, the Today card (Focus / Done) wraps its title to two lines too',
+      what: 'Started, its card on the Today lens (Focus / Done, found by search) wraps its title too',
     },
-    // The dev test user has no categories, and the harness has no category write or cleanup — so the
-    // Settings rows are the user's glance for now (the headless stub pass covered both at 390: PR
-    // screenshots); life-areas adds the `category` ledger kind and a row proving these arrows at 390.
+    // The harness has no category write or cleanup yet (life-areas adds the `category` ledger kind and a
+    // row proving these arrows at 390), so the nominal row measures whatever category the dev test user
+    // has and says needs-you at run time when there is none; the long-name edge needs a write.
     {
       id: 'settings-arrows-390',
       entry: 'ui',
       kind: 'nominal',
       what: 'Settings → Categories at 390 keeps both reorder arrows on the row, nothing scrolling sideways',
-      needsYou:
-        'the dev test user has no categories and the harness has no category create/cleanup yet; the stub pass covered it at 390, and life-areas’ areas scenario proves it on dev once both land',
     },
     {
       id: 'settings-long-name-390',
@@ -124,13 +128,14 @@ export const phoneNits: Scenario = {
       kind: 'edge',
       what: 'A 40-character category name shrinks the rename input instead of wrapping the arrows',
       needsYou:
-        'the dev test user has no categories and the harness has no category create/cleanup yet; the stub pass covered it at 390, and life-areas’ areas scenario proves it on dev once both land',
+        'renaming a category is a write the harness cannot clean up yet; the stub pass covered it at 390, ' +
+        'and life-areas’ areas scenario proves it on dev once both land',
     },
     {
       id: 'desktop-unchanged-1512',
       entry: 'ui',
       kind: 'nominal',
-      what: 'At 1512 the editor keeps Category, Due and Due time on one line, as before',
+      what: 'At 1512 the editor is as before: Estimate, Buffer, Category on one line, the Due pair next',
     },
   ],
   steps: [
@@ -241,6 +246,37 @@ export const phoneNits: Scenario = {
       async run(ctx) {
         await ctx.ui.goto('/tasks');
         await ctx.page.getByLabel('Search tasks').fill('');
+      },
+    },
+    // Last: a needs-you here leaves only noConsoleErrors unrun, never the search clear.
+    {
+      id: 'settings-390',
+      entry: 'ui',
+      proves: ['settings-arrows-390'],
+      title:
+        'Settings → Categories at 390: the first active row keeps both arrows, no sideways scroll',
+      async run(ctx) {
+        const active = (await ctx.api.reads.listCategories()).filter((c) => c.active);
+        if (!active.length) needsYou('the dev test user has no category to show a row for');
+        const { label } = active.sort((a, b) => a.order - b.order)[0]!;
+        await at(ctx, FLOOR, async () => {
+          await ctx.ui.goto('/settings');
+          const input = await boxOf(ctx.page.getByLabel(`Rename ${label}`), 'the rename input');
+          const up = await boxOf(ctx.page.getByLabel(`Move ${label} up`), 'the up arrow');
+          const down = await boxOf(ctx.page.getByLabel(`Move ${label} down`), 'the down arrow');
+          if (!sameLine(input, up) || !sameLine(input, down))
+            throw new Error(
+              `arrows wrapped: input y ${r(input.y)}, arrows y ${r(up.y)}/${r(down.y)}`,
+            );
+          if (down.x + down.width > FLOOR.width)
+            throw new Error(
+              `the down arrow ends at x ${r(down.x + down.width)} — past the viewport`,
+            );
+          const width = await ctx.page.evaluate<number>('document.documentElement.scrollWidth');
+          if (width > FLOOR.width)
+            throw new Error(`the page scrolls sideways: ${width}px wide at 390`);
+          await ctx.shot('settings-390');
+        });
       },
     },
     noConsoleErrors,

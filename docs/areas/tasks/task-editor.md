@@ -68,7 +68,8 @@ The card keeps only the actions you press without thinking. No overflow menu.
   as a menu item — `cancelled` is terminal and it sits next to Delete, so a misclick is costly. All
   gates are the card's, moved verbatim: Drop only when `canScope`; Delete hidden when `seriesId !==
   null` (a recurring occurrence respawns — Drop is the right tool). Reveals are exclusive, one level.
-- **The "not scoped" cue + Scope button stay on the card.** Removing the always-visible Scope button
+- **The "not scoped" cue + Scope button stay on the card** (superseded 2026-11-05: the cue is the
+  button, the Scope button is gone — Build record). Removing the always-visible Scope button
   would have dropped the only "this task is unscoped" signal and made scoping — the morning-pass
   signature move — a title-tap→edit→Save instead of one tap. An unscoped backlog task keeps a quiet
   "not scoped" meta line and a `Scope` button that opens the modal on the Estimate field.
