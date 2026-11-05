@@ -363,15 +363,17 @@ function clip(text: string, max: number): string {
   return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), max - 24))}…`;
 }
 
-// The cache key of a stored note: at most one model call per saved (or deleted) set — a note is rebuilt
-// only when this week's alive sets change.
-export const fluxNoteFingerprint = (
-  weekSets: readonly Pick<FluxSet, 'id' | 'completedAt'>[],
-): string => {
-  const newest = [...weekSets].sort(
-    (a, b) => b.completedAt - a.completedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-  )[0];
-  return `${weekSets.length}:${newest?.id ?? ''}`;
+// The cache key of a stored note: the identity of this week's alive sets — a save, a delete, or an
+// offline set landing later with an earlier time all change it, so a note is rebuilt (one model call)
+// only when the week's sets change. The ids are hashed so the row stays small.
+export const fluxNoteFingerprint = (weekSets: readonly Pick<FluxSet, 'id'>[]): string => {
+  const ids = weekSets
+    .map((s) => s.id)
+    .sort()
+    .join(',');
+  let h = 5381; // djb2 — a stable, dependency-free digest; a collision would only delay a rebuild
+  for (let i = 0; i < ids.length; i++) h = ((h * 33) ^ ids.charCodeAt(i)) >>> 0;
+  return `${weekSets.length}:${h.toString(16)}`;
 };
 
 export const FLUX_NOTE_MIN_SETS = 2;
@@ -423,22 +425,30 @@ export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): s
   const text = note.trim().replace(/\s+/g, ' ');
   if (!text || text.length > FLUX_NOTE_MAX) return null;
   const data = fluxNoteData(s);
-  if (!data.exercises.some((e) => text.toLowerCase().includes(e.name.toLowerCase()))) return null;
+  // Names compare with dashes and spacing folded: "chin-tuck", "eye-head" and "eye–head" are one name.
+  const fold = (t: string) => t.toLowerCase().replace(/[\s\-–—]+/g, ' ');
+  const folded = fold(text);
+  if (!data.exercises.some((e) => folded.includes(fold(e.name)))) return null;
   const allowed = new Set<string>();
   const add = (n: number | undefined) => {
-    if (n !== undefined) allowed.add(String(n));
+    if (n !== undefined) allowed.add(String(Math.abs(n)));
   };
   add(data.totalSets);
   add(data.lastWeekSets);
+  add(data.totalSets - data.lastWeekSets); // a difference the model may state is a number it was given
   for (const e of data.exercises) {
     add(e.sets);
     add(e.stoppedEarly);
     add(e.first);
     add(e.latest);
+    if (e.first !== undefined && e.latest !== undefined) add(e.latest - e.first);
     add(e.sides?.right);
     add(e.sides?.left);
     add(e.lastWeek?.sets);
     add(e.lastWeek?.latest);
+    if (e.lastWeek) add(e.sets - e.lastWeek.sets);
+    if (e.lastWeek?.latest !== undefined && e.latest !== undefined)
+      add(e.latest - e.lastWeek.latest);
   }
   for (const n of line.match(/\d+/g) ?? []) allowed.add(n);
   for (const n of text.match(/\d+/g) ?? []) if (!allowed.has(n)) return null;

@@ -104,6 +104,7 @@ describe('backend getFluxWeekNote', () => {
       { ok: true as const, fields: { note: 'x'.repeat(141) } },
       { ok: true as const, fields: { note: '   ' } },
       { ok: true as const, fields: { note: 'Rotation improved by 12 degrees.' } }, // 12 is not in the input
+      { ok: true as const, fields: { note: 'Two sets, 44° to 53°.' } }, // names no exercise
       { ok: true as const, fields: { nope: 1 } },
       { ok: false as const, reason: 'timeout' as const },
     ]) {

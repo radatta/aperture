@@ -6,7 +6,15 @@
 // tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
 import { DEV_ORIGIN, assertDevOrigin } from '../config';
-import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { laDay, needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+
+// Day maths for the note's week (scripts has no @aperture/shared): Monday of the LA day given.
+const addLaDays = (day: string, n: number): string => {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const laWeekday = (day: string): number => new Date(`${day}T12:00:00Z`).getUTCDay(); // 0 = Sunday
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -178,11 +186,16 @@ export const fluxHistory: Scenario = {
       proves: ['note-null'],
       title: 'getFluxWeekNote is null while the test user has under two sets this week',
       async run(ctx) {
-        // The sweep cleared earlier runs' sets; anything left is someone else's doing — say so.
-        const sets = await ctx.api.reads.listFluxSets();
+        // The sweep cleared earlier runs' sets; sets left this week are ones no ledger knows (the Mac's
+        // run, or a set done by hand as the test user) — not this build's doing, and not the harness's
+        // to delete: the step says so instead of failing (DEV-CHECK → Rows, needsYou).
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const today = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
+        const monday = addLaDays(today, -((laWeekday(today) + 6) % 7));
+        const sets = (await ctx.api.reads.listFluxSets()).filter((s) => s.day >= monday);
         if (sets.length >= 2)
-          throw new Error(
-            `the test user already has ${sets.length} sets: ${sets.map((s) => s.id).join(', ')}`,
+          needsYou(
+            `the test user already has ${sets.length} sets this week (${sets.map((s) => s.id).join(', ')}) — delete them to prove the null case`,
           );
         const note = await ctx.api.reads.getFluxWeekNote();
         if (note) throw new Error(`a note with under two sets: ${note.text}`);
@@ -255,8 +268,8 @@ export const fluxHistory: Scenario = {
           throw new Error('no note after the scenario’s sets (expected at least two this week)');
         if (note.text.length > 140)
           throw new Error(`note is ${note.text.length} chars: ${note.text}`);
-        // The server refuses a note naming none of the week's exercises (fluxNoteText), so this is the
-        // contract, whichever the model leads with — chin tuck and rotation are this run's two.
+        // The server refuses a note naming none of the week's exercises (fluxNoteText, dashes folded),
+        // so one of this run's two — chin tuck, rotation — is always named, whichever the model leads with.
         if (!/chin[ -]?tucks?|rotation/i.test(note.text))
           throw new Error(`note names neither chin tuck nor rotation: ${note.text}`);
         const again = await ctx.api.reads.getFluxWeekNote();

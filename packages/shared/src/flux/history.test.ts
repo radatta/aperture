@@ -334,13 +334,15 @@ describe('fluxWeekSummary + fluxWeekLine', () => {
 });
 
 describe('fluxNoteFingerprint', () => {
-  it('changes with the count or the newest set, not the order given', () => {
+  it('is the identity of the week’s sets: order-free, and a swap of one set for another changes it', () => {
     const a = weekSet({ id: 'A', completedAt: 1 });
     const b = weekSet({ id: 'B', completedAt: 2 });
-    expect(fluxNoteFingerprint([a, b])).toBe('2:B');
-    expect(fluxNoteFingerprint([b, a])).toBe('2:B');
-    expect(fluxNoteFingerprint([a])).toBe('1:A');
-    expect(fluxNoteFingerprint([])).toBe('0:');
+    const c = weekSet({ id: 'C', completedAt: 0 }); // an offline set landing later, with an earlier time
+    expect(fluxNoteFingerprint([a, b])).toBe(fluxNoteFingerprint([b, a]));
+    expect(fluxNoteFingerprint([a, b])).not.toBe(fluxNoteFingerprint([c, b]));
+    expect(fluxNoteFingerprint([a, b])).not.toBe(fluxNoteFingerprint([a]));
+    expect(fluxNoteFingerprint([a, b])).toMatch(/^2:[0-9a-f]+$/);
+    expect(fluxNoteFingerprint([])).toMatch(/^0:/);
   });
 });
 
@@ -355,10 +357,31 @@ describe('fluxNoteText', () => {
       'Rotation twice, 44° to 53°.',
     );
   });
-  it('refuses a non-string, an empty, an over-long, or a number the input lacks', () => {
+  it('accepts a difference of two given numbers, and a dashed or plural form of a name', () => {
+    expect(fluxNoteText('Rotation up 9 degrees over two sets.', line, s)).toBe(
+      'Rotation up 9 degrees over two sets.',
+    );
+    const tucks = fluxWeekSummary(
+      [
+        weekSet({ exerciseId: 'chin-tuck', kind: 'holdAtTarget', avgPeakDeg: null }),
+        weekSet({
+          exerciseId: 'chin-tuck',
+          kind: 'holdAtTarget',
+          avgPeakDeg: null,
+          completedAt: 2,
+        }),
+      ],
+      '2026-11-02',
+    );
+    expect(fluxNoteText('Two chin-tuck sets.', fluxWeekLine(tucks), tucks)).toBe(
+      'Two chin-tuck sets.',
+    );
+  });
+  it('refuses a non-string, an empty, an over-long, a number the input lacks, or a note naming no exercise', () => {
     expect(fluxNoteText(null, line, s)).toBeNull();
     expect(fluxNoteText('   ', line, s)).toBeNull();
     expect(fluxNoteText('x'.repeat(141), line, s)).toBeNull();
-    expect(fluxNoteText('Rotation up 9 degrees.', line, s)).toBeNull();
+    expect(fluxNoteText('Rotation up 12 degrees.', line, s)).toBeNull();
+    expect(fluxNoteText('Two sets, 44° to 53°.', line, s)).toBeNull();
   });
 });

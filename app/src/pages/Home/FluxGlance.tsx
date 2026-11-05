@@ -9,7 +9,7 @@ import { useFluxWeekNote } from '../../data/hooks/useFluxWeekNote';
 // The week's note (D62) rides under it in the same element, on the same days-with-sets rule.
 export function FluxGlance({ today }: { today: string }) {
   const { data: sets, isError } = useFluxSets({ from: today, to: today });
-  const note = useFluxWeekNote();
+  const note = useFluxWeekNote(!!sets?.length); // only on a day the line shows
   // A failed read is one quiet-but-visible line, never the "no sets today" silence.
   if (isError && !sets)
     return (
