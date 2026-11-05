@@ -41,8 +41,10 @@ not in the run is an error, like a bad `--scenario`.
 
 Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--feature`, and the codes `ENV_MISSING`,
 `PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else — stop the run before it starts:
-printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status — then the
-screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
+printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status, and when the
+harness itself failed (the deploy wait, a sign-in, the build check, cleanup) the error's text follows it, with a
+`**Failed:** <code> — <message>` line per failure under _Leftovers_ (a step's error is in its _Steps_ row; the
+_Known 429s_ line below is unchanged, since `STEP_FAILED` carries no text there) — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
 
 ## One-time setup
 
@@ -328,7 +330,8 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
 
 ## Artifacts
 
-Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json`, `shots/`.
+Per run, in the worktree (archived with it): `localNotes/devcheck/<run>/report.md`, `report.json` (the same result for
+tooling: `codes` is the dedup'd list, `failures` the harness failures as `{code, message}`), `shots/`.
 `report.md`'s _Feature coverage_ splits _This feature_ (`--feature`) — its table and two lists, _You don't need to
 test_ (proven on dev, and off dev with its test) and _Needs you_, that `report-<branch>.md` and the `CC done` notes
 paste as they are — from _Other scenarios (regression)_: per-scenario counts and a _Not proven_ list, no paste lists,

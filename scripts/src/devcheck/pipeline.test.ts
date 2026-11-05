@@ -357,6 +357,7 @@ describe('runPipeline', () => {
     expect(r.steps.map((s) => s.status)).toEqual(['pass', 'fail', 'skipped']);
     expect(r.status).toBe('FAIL');
     expect(r.codes).toEqual(['STEP_FAILED']);
+    expect(r.failures).toEqual([]);
     expect(w.deleted).toEqual(['t1']);
     expect(exitCode(r)).toBe(1);
   });
@@ -438,6 +439,7 @@ describe('runPipeline', () => {
     w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
     const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
     expect(r.codes).toContain('WRONG_USER');
+    expect(r.failures).toEqual([{ code: 'WRONG_USER', message: 'x' }]);
     expect(w.deleted).toEqual([]);
   });
 
@@ -448,6 +450,7 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [], ledger));
     expect(r.created).toEqual([{ id: 'old1', via: 'swept', final: 'left' }]);
     expect(r.codes).toEqual(['LEFTOVERS']);
+    expect(r.failures).toEqual([{ code: 'LEFTOVERS', message: 'left: old1' }]);
   });
 
   it("never deletes a task whose server-side parts the ledger doesn't know — the cascade would take them", async () => {
@@ -695,6 +698,9 @@ describe('runPipeline', () => {
     const w = world({ shells: [shell(SHA), shell('b'.repeat(40))] });
     const r = await runPipeline(deps(w, []));
     expect(r.codes).toEqual(['DEV_CHANGED_MID_RUN']);
+    expect(r.failures).toEqual([
+      { code: 'DEV_CHANGED_MID_RUN', message: `end build bbbbbbb ≠ start ${SHA.slice(0, 7)}` },
+    ]);
   });
 
   it('a setup DevcheckError is a FAIL with its code; anything else is a CRASH (exit 2)', async () => {
@@ -705,6 +711,7 @@ describe('runPipeline', () => {
       }),
     );
     expect([fail.status, fail.codes]).toEqual(['FAIL', ['DEPLOY_FAILED']]);
+    expect(fail.failures).toEqual([{ code: 'DEPLOY_FAILED', message: 'x' }]); // the text, not `DEPLOY_FAILED: x`
     const crash = await runPipeline(
       deps(w, [], memLedger(), {
         openBrowser: async () => Promise.reject(new Error('chromium died')),
@@ -811,6 +818,7 @@ describe('runPipeline', () => {
     );
     expect(r.steps[0]).toMatchObject({ status: 'fail', error: expect.stringMatching(/expired/) });
     expect(r.codes).toEqual(['STEP_FAILED']);
+    expect(r.failures).toEqual([]);
   });
 
   it('carries the feature ids into the result, [] when none', async () => {

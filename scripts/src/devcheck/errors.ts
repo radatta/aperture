@@ -22,12 +22,16 @@ export type ReasonCode = (typeof REASON_CODES)[number];
 
 export class DevcheckError extends Error {
   readonly code: ReasonCode;
+  readonly detail: string; // the text alone — `message` carries the `CODE: ` prefix for steps and stderr
   constructor(code: ReasonCode, message: string) {
     super(`${code}: ${message}`);
     this.name = 'DevcheckError';
     this.code = code;
+    this.detail = message;
   }
 }
 
 export const codeOf = (err: unknown): ReasonCode | undefined =>
   err instanceof DevcheckError ? err.code : undefined;
+export const detailOf = (err: unknown): string | undefined =>
+  err instanceof DevcheckError ? err.detail : undefined;
