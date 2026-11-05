@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { FLUX_SET_VIA, type ApiClient, type DevFluxSet, type DevTask } from './api';
+import {
+  FLUX_SET_VIA,
+  PLACE_TOKEN_VIA,
+  type ApiClient,
+  type DevFluxSet,
+  type DevPlace,
+  type DevTask,
+} from './api';
 import { DevcheckError } from './errors';
 import type { Ledger, LedgerEntry } from './ledger';
 import { exitCode, runPipeline, type BrowserSession, type PipelineDeps } from './pipeline';
 import type { McpClient } from './mcp';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
-import type { Ctx, Scenario } from './scenario';
+import { hidingSecret, type Ctx, type Scenario } from './scenario';
 
 const SHA = 'a'.repeat(40);
 const shell = (sha: string) => `<meta name="aperture-build" content="${sha}" />`;
@@ -29,6 +36,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const deleted: string[] = [];
   const fluxSets = new Map<string, DevFluxSet>();
   const fluxDeleted: string[] = [];
+  const places = new Map<string, DevPlace>();
+  const placesDeleted: string[] = [];
+  const placeToken = { active: false, revokes: 0 };
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
   const consoleListeners: ((m: { type(): string; text(): string }) => void)[] = [];
@@ -36,6 +46,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   type Handler = (r: PwRoute) => Promise<void> | void;
   const routes: { match: Match; handler: Handler }[] = [];
   const inPage = [...(opts.inPage ?? [SHA])];
+  const gotos: string[] = [];
   let n = 0;
   const page = {
     on: (ev: string, fn: (r: never) => void) =>
@@ -52,6 +63,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     evaluate: async (expr: string) =>
       expr.includes('aperture-build') ? (inPage.length > 1 ? inPage.shift() : inPage[0]) : null,
     reload: async () => undefined,
+    goto: async (url: string) => void gotos.push(url),
     screenshot: async () => undefined,
     locator: () => ({}),
     getByRole: () => ({}),
@@ -70,8 +82,29 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     const req = {
       url: () => url,
       method: () => 'POST',
+      postData: () => JSON.stringify({ args: [{ title }] }),
       response: () =>
         respond === 'never' ? new Promise<never>(() => undefined) : respond.then(() => res),
+    };
+    for (const l of listeners) l(req);
+    return id;
+  };
+  // Settings' Add (no id: a create) or a row's rename (an id: an edit) — the browser's upsertPlace.
+  const uiPlace = (name: string, editId?: string) => {
+    const id = editId ?? `p${++n}`;
+    places.set(id, { id, name, slug: name.toLowerCase(), lastReadAt: null });
+    const url = 'https://dev.aperture.rahuldatta.dev/api/upsertPlace';
+    const res = {
+      url: () => url,
+      status: () => 200,
+      request: () => ({ method: () => 'POST' }),
+      json: async () => places.get(id),
+    };
+    const req = {
+      url: () => url,
+      method: () => 'POST',
+      postData: () => JSON.stringify({ args: [editId ? { id: editId, name } : { name }] }),
+      response: async () => res,
     };
     for (const l of listeners) l(req);
     return id;
@@ -102,7 +135,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     const hit = [...routes].reverse().find((x) => x.match(new URL(url))); // Playwright: last registered wins
     if (!hit) return 'real';
     let out: number | 'real' | 'dropped' = 'real';
-    const request = { url: () => url, method: () => 'POST', response: async () => null };
+    const request = {
+      url: () => url,
+      method: () => 'POST',
+      postData: () => null,
+      response: async () => null,
+    };
     await hit.handler({
       request: () => request,
       continue: async () => void (out = 'real'),
@@ -133,12 +171,30 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       probePresigned: async () => {
         throw new Error('unused');
       },
+      listPlaces: async () => [...places.values()],
+      listPlaceTasks: async () => {
+        throw new Error('unused');
+      },
+      getPlaceTokenStatus: async () => ({
+        active: placeToken.active,
+        createdAt: null,
+        lastUsedAt: null,
+        hint: null,
+        readsToday: 0,
+      }),
+      getCalibration: async () => [],
+      placeDigestRaw: async () => {
+        throw new Error('unused');
+      },
     },
     writes: {
       createTask: async () => {
         throw new Error('unused');
       },
       recordFluxSet: async () => {
+        throw new Error('unused');
+      },
+      recordPlaceTokenMint: () => {
         throw new Error('unused');
       },
       createAttachment: async () => {
@@ -154,6 +210,20 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       deleteTask: async (id) => {
         deleted.push(id);
         tasks.delete(id);
+      },
+      upsertPlace: async () => {
+        throw new Error('unused');
+      },
+      deletePlace: async (id) => {
+        placesDeleted.push(id);
+        places.delete(id);
+      },
+      rotatePlaceToken: async () => {
+        throw new Error('unused');
+      },
+      revokePlaceToken: async () => {
+        placeToken.revokes++;
+        placeToken.active = false;
       },
     },
   };
@@ -183,11 +253,16 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     deleted,
     fluxSets,
     fluxDeleted,
+    places,
+    placesDeleted,
+    placeToken,
     uiCreate,
+    uiPlace,
     respond,
     consoleError,
     call,
     routes,
+    gotos,
     api,
     mcp,
     browser,
@@ -281,6 +356,30 @@ describe('runPipeline', () => {
     expect(r.codes).toEqual(['STEP_FAILED']);
     expect(w.deleted).toEqual(['t1']);
     expect(exitCode(r)).toBe(1);
+  });
+
+  it('a failed step is shot — unless it failed with a secret on screen (hidingSecret): blanked, no shot', async () => {
+    const w = world();
+    const plain = scenario(async () => {
+      throw new Error('boom');
+    })(w);
+    const secret = {
+      ...scenario(async (_x, ctx) =>
+        hidingSecret(ctx.page, async () => {
+          throw new Error('the reveal never closed');
+        }),
+      )(w),
+      id: 'sc2',
+    };
+    const r = await runPipeline(deps(w, [plain, secret]));
+    expect(r.steps.map((s) => [s.scenario, s.status, s.error])).toEqual([
+      ['sc', 'fail', 'boom'],
+      ['sc2', 'fail', 'the reveal never closed'],
+    ]);
+    expect(r.steps[0]!.shot).toBe('sc-s0-fail-light.png');
+    expect(r.steps[1]!.shot).toBeUndefined();
+    expect(r.shots.filter((f) => f.startsWith('sc2-'))).toEqual([]);
+    expect(w.gotos).toEqual(['about:blank']);
   });
 
   it('a task gone before cleanup (deleted with its parent) is "gone", not a leftover', async () => {
@@ -417,6 +516,165 @@ describe('runPipeline', () => {
       { id: 'fx-new', via: FLUX_SET_VIA, title: undefined, final: 'deleted' },
     ]);
     expect(r.status).toBe('PASS');
+  });
+
+  it('a place added in Settings is recorded, then deleted as a place (its tasks off the list), never as a task', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      x.uiPlace('Shop');
+      x.uiCreate('errand');
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.status).toBe('PASS');
+    expect(w.placesDeleted).toEqual(['p1']);
+    expect(w.deleted).toEqual(['t2']); // the task first (newest first), the place after
+    expect(r.created).toEqual([
+      { id: 'p1', via: 'ui:upsertPlace', title: undefined, final: 'deleted' },
+      { id: 't2', via: 'ui:createTask', title: undefined, final: 'deleted' },
+    ]);
+  });
+
+  it('never records a rename of an existing place — cleanup must not delete a place the run didn’t make', async () => {
+    const w = world();
+    w.places.set('users', { id: 'users', name: 'Home', slug: 'home', lastReadAt: null });
+    const r = await runPipeline(
+      deps(w, [scenario(async (x) => void x.uiPlace('Home2', 'users'))(w)]),
+    );
+    expect(r.created).toEqual([]);
+    expect(w.placesDeleted).toEqual([]);
+    expect(r.unrecorded).toEqual(['users']); // there before the run: reported, not deleted
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a place that appears during the run without a ledger entry fails it, and is not deleted', async () => {
+    const w = world();
+    const sc = scenario(async (x) => {
+      x.places.set('ghost', { id: 'ghost', name: 'G', slug: 'g', lastReadAt: null });
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.appeared).toEqual(['ghost']);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(w.placesDeleted).toEqual([]);
+  });
+
+  it('revokes a token this run minted, and verifies it inactive', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'place-token:run1', via: PLACE_TOKEN_VIA });
+      x.placeToken.active = true;
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.placeToken).toEqual({ active: false, revokes: 1 });
+    expect(r.created).toEqual([
+      { id: 'place-token:run1', via: PLACE_TOKEN_VIA, title: undefined, final: 'deleted' },
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a token revoked mid-run is "gone"; a crashed run’s active token is swept first', async () => {
+    const w = world();
+    w.placeToken.active = true;
+    const ledger = memLedger([
+      { run: 'run0', op: 'created', id: 'place-token:run0', via: PLACE_TOKEN_VIA },
+    ]);
+    const sc = scenario(async () => {
+      ledger.append({ run: 'run1', op: 'created', id: 'place-token:run1', via: PLACE_TOKEN_VIA });
+      // minted and revoked by the steps themselves: inactive at cleanup
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.swept).toEqual(['place-token:run0']);
+    expect(w.placeToken.revokes).toBe(1); // the sweep's; cleanup found nothing active
+    expect(r.created).toEqual([
+      { id: 'place-token:run1', via: PLACE_TOKEN_VIA, title: undefined, final: 'gone' },
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a removal that throws (a revoke racing another device) never stops cleanup: the rest go, LEFTOVERS', async () => {
+    const w = world();
+    const race = 'The Shortcut token changed on another device — try again';
+    w.api.writes.revokePlaceToken = async () => {
+      throw new Error(race);
+    };
+    const ledger = memLedger();
+    const sc = scenario(
+      async (x) => void x.uiPlace('Shop'),
+      async (x) => {
+        ledger.append({ run: 'run1', op: 'created', id: 'place-token:run1', via: PLACE_TOKEN_VIA });
+        x.placeToken.active = true;
+        x.uiCreate('errand');
+      },
+    )(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    // Newest first: the task, the token (throws), then the place — still deleted after the throw.
+    expect(w.deleted).toEqual(['t2']);
+    expect(w.placesDeleted).toEqual(['p1']);
+    expect(r.failedDeletes).toEqual([`place-token:run1: ${race}`]);
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['p1', 'deleted'],
+      ['place-token:run1', 'left'],
+      ['t2', 'deleted'],
+    ]);
+    expect(r.status).toBe('FAIL'); // reported, not a crash
+    expect(r.codes).toContain('LEFTOVERS');
+    // Still pending, so the next run's sweep retries it.
+    expect(ledger.entries.some((e) => e.id === 'place-token:run1' && e.op !== 'created')).toBe(
+      false,
+    );
+  });
+
+  it('a sweep delete that throws is reported and the sweep goes on to the next id', async () => {
+    const w = world({ existing: ['old1', 'old2'] });
+    const del = w.api.writes.deleteTask;
+    w.api.writes.deleteTask = async (id) => {
+      if (id === 'old1') throw new Error('HTTP 500 on deleteTask');
+      await del(id);
+    };
+    const ledger = memLedger([
+      { run: 'run0', op: 'created', id: 'old1' },
+      { run: 'run0', op: 'created', id: 'old2' },
+    ]);
+    const ran: string[] = [];
+    const sc = scenario(async () => void ran.push('step'))(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.deleted).toEqual(['old2']);
+    expect(r.swept).toEqual(['old2']);
+    expect(r.failedDeletes).toEqual(['old1: HTTP 500 on deleteTask']);
+    expect(ran).toEqual(['step']); // the run went on
+    expect(r.status).toBe('FAIL');
+    expect(r.codes).toContain('LEFTOVERS');
+  });
+
+  it('a guard refusal during cleanup keeps its own code beside LEFTOVERS', async () => {
+    const w = world();
+    w.api.writes.deleteTask = async (id) => {
+      throw new DevcheckError('LEDGER_GUARD', `refusing to touch ${id}`);
+    };
+    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    expect(r.failedDeletes).toEqual(['t1: LEDGER_GUARD: refusing to touch t1']);
+    expect(r.codes).toEqual(expect.arrayContaining(['LEDGER_GUARD', 'LEFTOVERS']));
+    expect(r.status).toBe('FAIL');
+  });
+
+  it('a read-back that throws proves nothing: the id stays left, the error reported', async () => {
+    const w = world();
+    const get = w.api.reads.getTask;
+    let deletedOnce = false;
+    w.api.writes.deleteTask = async (id) => {
+      deletedOnce = true;
+      w.tasks.delete(id);
+    };
+    w.api.reads.getTask = async (id) => {
+      if (deletedOnce) throw new Error('HTTP 502 on getTask');
+      return get(id);
+    };
+    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    expect(r.created[0]!.final).toBe('left');
+    expect(r.failedDeletes).toEqual(['t1: read-back: HTTP 502 on getTask']);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(r.status).toBe('FAIL');
   });
 
   it('reloads until the page shows the expected build; BUILD_MISMATCH_IN_PAGE if it never does', async () => {

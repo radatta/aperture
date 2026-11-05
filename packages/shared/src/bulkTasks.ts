@@ -11,6 +11,7 @@
 //                                               optional '@HH:MM' (24h, zero-padded) is the dueTime
 //           | 'notes:"' <text> '"'           -- notes; escapes '\n' (newline) and '\\' (backslash)
 //                                               only, no '"' inside, <= TASK_NOTES_MAX after unescaping
+//           | '@' <slug>                     -- Place.slug (places.ts), case-insensitive exact match
 //
 // errors[] are RED (blocking — gate submit); warnings[] are YELLOW (non-blocking — the task is still
 // created). A token that declares intent but can't be parsed is red; one that parses but doesn't match
@@ -22,7 +23,10 @@
 import { isDayKey, isTimeKey } from './dates';
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
-import type { Category } from './types';
+import { PLACE_SLUG_RE } from './places';
+import type { Category, Place } from './types';
+
+export type PlaceRef = Pick<Place, 'slug' | 'name'>;
 
 export interface BulkLine {
   line: number; // 1-based line number in the textarea (blank lines are counted, so it matches)
@@ -34,13 +38,15 @@ export interface BulkLine {
   dueDay: string | null;
   dueTime: string | null; // "HH:MM" from due:<day>@HH:MM
   notes: string | null; // unescaped + trimmed
+  placeSlug: string | null; // as written (lowercased), for the preview (present even when unmatched)
+  place: string | null; // resolved Place slug, or null
   errors: string[]; // red — blocking
   errorKinds: BulkErrorKind[]; // parallel to errors: what each is about, for a surface with its own words
   warnings: string[]; // yellow — non-blocking
 }
 // `unknown` carries the token that wasn't recognized.
 export type BulkErrorKind =
-  { kind: 'category' | 'due' | 'other' } | { kind: 'unknown'; token: string };
+  { kind: 'category' | 'due' | 'place' | 'other' } | { kind: 'unknown'; token: string };
 
 export interface BulkParse {
   lines: BulkLine[]; // one per non-blank input line
@@ -92,6 +98,7 @@ function parseLine(
   raw: string,
   lineNo: number,
   categories: readonly Pick<Category, 'id' | 'label'>[],
+  places: readonly PlaceRef[],
 ): BulkLine {
   const out: BulkLine = {
     line: lineNo,
@@ -103,6 +110,8 @@ function parseLine(
     dueDay: null,
     dueTime: null,
     notes: null,
+    placeSlug: null,
+    place: null,
     errors: [],
     errorKinds: [],
     warnings: [],
@@ -113,6 +122,7 @@ function parseLine(
   };
   const CATEGORY: BulkErrorKind = { kind: 'category' };
   const DUE: BulkErrorKind = { kind: 'due' };
+  const PLACE: BulkErrorKind = { kind: 'place' };
 
   if (LIST_MARKER.test(raw.trim()))
     fail('remove the list marker (- / * / 1.) — titles are taken literally');
@@ -133,13 +143,19 @@ function parseLine(
   else if (/notes:"/i.test(out.title))
     out.warnings.push("'notes:\"' is in the title — tokens go after ' | '");
 
-  type Kind = 'estimate' | 'category' | 'due' | 'notes';
+  type Kind = 'estimate' | 'category' | 'due' | 'notes' | 'place';
   const seen = new Set<Kind>();
   const once = (kind: Kind, label: string): boolean => {
     if (seen.has(kind)) {
       fail(
         `duplicate ${label} token — each is allowed once`,
-        kind === 'category' ? CATEGORY : kind === 'due' ? DUE : undefined,
+        kind === 'category'
+          ? CATEGORY
+          : kind === 'due'
+            ? DUE
+            : kind === 'place'
+              ? PLACE
+              : undefined,
       );
       return false;
     }
@@ -216,9 +232,20 @@ function parseLine(
         out.dueDay = day;
         out.dueTime = time;
       }
+    } else if (tok.startsWith('@')) {
+      if (!once('place', 'place (@)')) continue;
+      const slug = tok.slice(1).toLowerCase();
+      if (slug === '') fail('empty place — use @<place>, e.g. @safeway', PLACE);
+      else if (!PLACE_SLUG_RE.test(slug))
+        fail(`invalid place '${tok}' — use @ and the place's link word, e.g. @safeway`, PLACE);
+      else {
+        out.placeSlug = slug;
+        if (places.some((p) => p.slug === slug)) out.place = slug;
+        else out.warnings.push(`no place '@${slug}' — created without one`);
+      }
     } else {
       fail(
-        `unrecognized token '${tok}' — expected ~<min>, #<label>, due:YYYY-MM-DD[@HH:MM], or notes:"…"`,
+        `unrecognized token '${tok}' — expected ~<min>, #<label>, @<place>, due:YYYY-MM-DD[@HH:MM], or notes:"…"`,
         { kind: 'unknown', token: tok },
       );
     }
@@ -230,6 +257,7 @@ function parseLine(
 export function parseBulkTasks(
   text: string,
   categories: readonly Pick<Category, 'id' | 'label'>[],
+  places: readonly PlaceRef[],
   existingTitles?: ReadonlySet<string>, // lowercased live task titles, for the "already exists" warning
 ): BulkParse {
   const rawLines = text.replace(/\r\n/g, '\n').split('\n');
@@ -238,7 +266,7 @@ export function parseBulkTasks(
 
   rawLines.forEach((raw, i) => {
     if (raw.trim() === '') return; // skip blank lines, but i+1 keeps the true line number
-    const parsed = parseLine(raw, i + 1, categories);
+    const parsed = parseLine(raw, i + 1, categories, places);
     if (parsed.title !== '') {
       const key = parsed.title.toLowerCase();
       if (seenTitles.has(key)) parsed.warnings.push('duplicate title in this paste');
@@ -252,7 +280,7 @@ export function parseBulkTasks(
   return { lines, errorCount, canSubmit: errorCount === 0 && lines.length > 0 };
 }
 
-export type CaretTokenKind = 'category' | 'estimate' | 'due';
+export type CaretTokenKind = 'category' | 'estimate' | 'due' | 'place';
 export interface CaretToken {
   kind: CaretTokenKind;
   partial: string; // typed so far, after the prefix (and an opening '#"' quote)
@@ -261,7 +289,7 @@ export interface CaretToken {
 }
 
 // The completable token under the caret, for capture's suggestion chips — or null. Only in the region
-// after the FIRST ' | ', only #/~/due: (never inside notes:"…"), and a caret at a token's end counts.
+// after the FIRST ' | ', only #/~/@/due: (never inside notes:"…"), and a caret at a token's end counts.
 export function tokenAtCaret(text: string, caret: number): CaretToken | null {
   const idx = text.indexOf(SEP);
   if (idx === -1) return null;
@@ -277,9 +305,11 @@ export function tokenAtCaret(text: string, caret: number): CaretToken | null {
       ? ['category', 1]
       : tok.startsWith('~')
         ? ['estimate', 1]
-        : tok.startsWith('due:')
-          ? ['due', 4]
-          : [null, 0];
+        : tok.startsWith('@')
+          ? ['place', 1]
+          : tok.startsWith('due:')
+            ? ['due', 4]
+            : [null, 0];
   if (!kind) return null;
   const partial = text.slice(base + span.start + prefixLen, caret).replace(/"$/, '');
   return { kind, partial, replaceStart: base + span.start, replaceEnd: base + span.end };
@@ -296,8 +326,9 @@ export const hasTaskTokens = (text: string): boolean => text.includes(SEP);
 export function parseTaskLine(
   raw: string,
   categories: readonly Pick<Category, 'id' | 'label'>[],
+  places: readonly PlaceRef[],
 ): BulkLine {
-  const out = parseLine(raw, 1, categories);
+  const out = parseLine(raw, 1, categories, places);
   if (raw.includes('\n')) {
     out.errors.push('tokens need a single line — remove the line break (Bulk add takes many)');
     out.errorKinds.push({ kind: 'other' });
@@ -305,8 +336,8 @@ export function parseTaskLine(
   return out;
 }
 
-// The create input for one clean line. An unmatched #label leaves categoryId null (created
-// uncategorised, by design).
+// The create input for one clean line. An unmatched #label or @place leaves categoryId / place null
+// (created uncategorised / off any list, by design).
 export const toCreateInput = (l: BulkLine): CreateTaskInput => ({
   title: l.title,
   categoryId: l.categoryId,
@@ -314,6 +345,7 @@ export const toCreateInput = (l: BulkLine): CreateTaskInput => ({
   dueDay: l.dueDay,
   dueTime: l.dueTime,
   notes: l.notes,
+  place: l.place,
 });
 
 // The create inputs for a clean parse. The caller checks `canSubmit` first.

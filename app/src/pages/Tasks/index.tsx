@@ -12,23 +12,27 @@ import { QueryControls } from '../../modules/tasks/QueryControls';
 import { TaskListSection } from '../../modules/tasks/TaskListSection';
 import { TaskModalHost } from '../../modules/tasks/TaskModalHost';
 import { TodayLens } from '../../modules/tasks/TodayLens';
+import { PlacesLens } from '../../modules/tasks/PlacesLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
 import { CalibrationSection } from '../../modules/calibration/CalibrationSection';
 import { BulkAddDialog } from '../../modules/tasks/BulkAddDialog';
-import { foldParts, normalize, placer } from '../../modules/tasks/query';
+import { errandsByPlace, foldParts, normalize, placer } from '../../modules/tasks/query';
 import type { QueryCtx } from '../../modules/tasks/query';
 import { useTaskQuery } from '../../modules/tasks/useTaskQuery';
 
 const RECEIPT_MS = 2400;
 
 // The tasks deep view (PRODUCT §4a) as lenses over one list: Today (the plan pass), Week (due in the
-// next 7 days), Backlog, Done — each open task lives in exactly one — plus Recurring and Calibration.
+// next 7 days), Backlog, Done — each open task lives in exactly one — and Places (every open errand by
+// store, also on Today/Week when it's due or planned), plus Recurring and Calibration.
 // Typing in search looks across every open task. Bulk add lives in the header, visible on every lens.
 export function TasksPage() {
-  const { lens, place, query, setQuery, setLens, today, dayStartHour } = useTaskQuery();
+  const { lens, place, focusPlace, query, setQuery, setLens, today, dayStartHour } = useTaskQuery();
   const bulk = useDisclosure();
   // `at` is a nonce so two adds in a row re-arm the fade (same trick as the capture receipt).
-  const [receipt, setReceipt] = useState<{ count: number; at: number } | null>(null);
+  const [receipt, setReceipt] = useState<{ count: number; placed: number; at: number } | null>(
+    null,
+  );
 
   // Whichever lens opens first: getDay(today) materializes today's recurring occurrences and sweeps
   // stale planned tasks back to the backlog before any lens reads the list.
@@ -48,14 +52,26 @@ export function TasksPage() {
     categories,
     dayStartHour,
   };
-  // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice.
-  const counts = { today: 0, week: 0 };
+  // Cards, not tasks: a part folded under its parent's card in the same place isn't counted twice. Places
+  // counts every open errand as the digest's items (errandsByPlace) — what its lens shows, Settings counts
+  // and the Shortcut reads out.
+  const counts = { today: 0, week: 0, places: 0 };
   if (!pending) {
     const place = placer(tasks, ctx);
     for (const p of ['today', 'week'] as const)
       counts[p] = foldParts(tasks.filter((t) => place(t) === p)).length;
+    for (const list of errandsByPlace(tasks).values()) counts.places += list.length;
   }
-  const isList = lens === 'today' || lens === 'week' || lens === 'backlog' || lens === 'done';
+  const isList =
+    lens === 'today' ||
+    lens === 'week' ||
+    lens === 'places' ||
+    lens === 'backlog' ||
+    lens === 'done';
+  const retry = () => {
+    if (tasksQ.isError) void tasksQ.refetch();
+    if (plansQ.isError) void plansQ.refetch();
+  };
   const searching = normalize(query.text) !== '';
 
   useEffect(() => {
@@ -73,7 +89,7 @@ export function TasksPage() {
         <div className="flex items-center gap-3">
           {receipt && (
             <Text size="sm" tone="teal">
-              Added {receipt.count} to Backlog
+              {bulkReceipt(receipt)}
             </Text>
           )}
           <Button
@@ -93,6 +109,15 @@ export function TasksPage() {
       <TaskModalHost className="flex flex-col gap-4">
         {lens === 'today' && !searching ? (
           <TodayLens tasks={tasks} onOpenWeek={() => setLens('week')} />
+        ) : lens === 'places' && !searching ? (
+          // Places needs no plan: every open errand shows, so only the tasks read gates it.
+          <PlacesLens
+            tasks={tasksQ.isPending || (tasksQ.isError && !tasksQ.data) ? [] : tasks}
+            focus={focusPlace}
+            pending={tasksQ.isPending}
+            error={tasksQ.isError && !tasksQ.data}
+            onRetry={retry}
+          />
         ) : isList ? (
           <TaskListSection
             place={place}
@@ -103,10 +128,7 @@ export function TasksPage() {
             ctx={ctx}
             pending={pending}
             error={error}
-            onRetry={() => {
-              if (tasksQ.isError) void tasksQ.refetch();
-              if (plansQ.isError) void plansQ.refetch();
-            }}
+            onRetry={retry}
           />
         ) : null}
         {lens === 'recurring' && <RecurringSection />}
@@ -115,8 +137,15 @@ export function TasksPage() {
       <BulkAddDialog
         open={bulk.open}
         onClose={bulk.onClose}
-        onAdded={(count) => setReceipt({ count, at: Date.now() })}
+        onAdded={(added) => setReceipt({ ...added, at: Date.now() })}
       />
     </div>
   );
+}
+
+// Where a bulk add went: errands wait on the Places lens, the rest in the Backlog.
+function bulkReceipt({ count, placed }: { count: number; placed: number }): string {
+  if (placed === 0) return `Added ${count} to Backlog`;
+  if (placed === count) return `Added ${count} to Places`;
+  return `Added ${count} — ${placed} to Places`;
 }

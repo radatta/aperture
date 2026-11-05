@@ -54,6 +54,9 @@ export interface Task extends BaseEntity {
   // level — a parent can't have a parent, a part can't have parts. Parenthood is derived (some task points
   // here), never stored. Pre-existing rows read back undefined → `!parentId`.
   parentId: string | null;
+  // The errand list this task is on (places.ts): a Place's slug, or null. A placed task is an errand —
+  // never a calibration point (contributesCalibration). Pre-existing rows read back undefined → `!place`.
+  place: string | null;
   actualAccruedMin: number; // denormalized; bumped when a work session closes
   startedAt: number | null;
   completedAt: number | null;
@@ -170,6 +173,16 @@ export interface Category extends BaseEntity {
   isWork: boolean;
   order: number;
   active: boolean;
+}
+
+// --- Places (errand lists) -------------------------------------------------
+// A store you run errands at (places.ts). Tasks reference it by slug — the word in `@slug`, the Shortcut's
+// URL and the lens link — so a slug edit rewrites its tasks. No address: the geofence lives in the iPhone's
+// Shortcuts automation, never here. lastReadAt = the last Shortcut read (the setup's heartbeat).
+export interface Place extends BaseEntity {
+  name: string;
+  slug: string;
+  lastReadAt: number | null;
 }
 
 // --- Google Calendar accounts (multi-account) ------------------------------

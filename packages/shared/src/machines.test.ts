@@ -33,6 +33,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     bufferMin: 15,
     estimateLockedMin: null,
     parentId: null,
+    place: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -89,6 +90,11 @@ describe('taskTransition — estimate freeze', () => {
     expect(contributesCalibration(baseTask({ status: 'done', estimateLockedMin: null }))).toBe(
       false,
     );
+  });
+
+  it('an errand (a placed task) never contributes, even with a lock', () => {
+    const errand = baseTask({ status: 'done', estimateLockedMin: 5, place: 'safeway' });
+    expect(contributesCalibration(errand)).toBe(false);
   });
 });
 

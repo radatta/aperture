@@ -9,9 +9,11 @@ import { LOCAL_WRITE_TTL_MS } from '../taskCache';
 import { useBacklog } from './useBacklog';
 import {
   useAllTasks,
+  useCheckOffErrand,
   useCreateTask,
   useCreateTasks,
   useDeleteTask,
+  useSetTaskPlace,
   useSetTaskTitle,
   useSplitTask,
   useTransitionTask,
@@ -45,6 +47,8 @@ function setup(before?: (api: ApiClient) => Promise<void> | void) {
       transition: useTransitionTask(),
       split: useSplitTask(),
       del: useDeleteTask(),
+      checkOff: useCheckOffErrand(),
+      setPlace: useSetTaskPlace(),
     }),
     { wrapper },
   );
@@ -243,5 +247,42 @@ describe('the tasks list carries what writes returned', () => {
     expect(hook.result.current.backlog.data?.map((x) => x.id).sort()).toEqual(
       [plain.id, part!.id].sort(),
     );
+  });
+});
+
+describe('errands', () => {
+  it('a check-off chains an unstarted errand through in_progress to done, and the list shows it', async () => {
+    const { api, hook } = setup();
+    await api.upsertPlace({ name: 'Market' });
+    const t = await api.createTask({ title: 'milk', place: 'market' });
+    await reload(hook);
+    const transition = vi.spyOn(api, 'transitionTask');
+    holdList(api);
+    await run(() => hook.result.current.checkOff.mutateAsync(t));
+    expect(transition.mock.calls.map((c) => c[1])).toEqual(['in_progress', 'done']);
+    expect(byId(hook, t.id)!.status).toBe('done');
+  });
+
+  it('a started errand is just finished', async () => {
+    const { api, hook } = setup();
+    await api.upsertPlace({ name: 'Market' });
+    const t = await api.transitionTask(
+      (await api.createTask({ title: 'milk', place: 'market' })).id,
+      'in_progress',
+    );
+    await reload(hook);
+    const transition = vi.spyOn(api, 'transitionTask');
+    await run(() => hook.result.current.checkOff.mutateAsync(t));
+    expect(transition.mock.calls.map((c) => c[1])).toEqual(['done']);
+  });
+
+  it('setting a place shows in the list at once', async () => {
+    const { api, hook } = setup();
+    await api.upsertPlace({ name: 'Market' });
+    const t = await api.createTask({ title: 'milk' });
+    await reload(hook);
+    holdList(api);
+    await run(() => hook.result.current.setPlace.mutateAsync({ id: t.id, place: 'market' }));
+    expect(byId(hook, t.id)!.place).toBe('market');
   });
 });

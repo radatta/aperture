@@ -11,6 +11,7 @@ export interface PwResponse {
 export interface PwRequest {
   url(): string;
   method(): string;
+  postData(): string | null;
   response(): Promise<PwResponse | null>;
 }
 
@@ -22,12 +23,18 @@ export interface PwLocator {
   waitFor(opts?: { state?: 'visible' | 'attached' | 'hidden'; timeout?: number }): Promise<void>;
   isVisible(): Promise<boolean>;
   isDisabled(): Promise<boolean>;
+  nth(index: number): PwLocator;
+  getAttribute(name: string): Promise<string | null>;
+  boundingBox(): Promise<{ x: number; y: number; width: number; height: number } | null>;
   or(other: PwLocator): PwLocator;
   textContent(): Promise<string | null>;
   inputValue(): Promise<string>;
   count(): Promise<number>;
   getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
+  getByText(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
+  // A <select>: by an option's visible label (what the user picks), never its value.
+  selectOption(option: { label: string }, opts?: { timeout?: number }): Promise<string[]>;
 }
 
 export interface PwPage {

@@ -71,6 +71,7 @@ Revocation is one secret rotation + redeploy + re-register, independent of the r
 | group            | tools                                                                                                                                               |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | tasks            | `list_tasks {status?}`, `list_backlog`, `create_task`, `create_tasks {tasks[]}`, `update_task`, `complete_task {id, actualMin?}`, `split_task`, `delete_task {id}`, `parse_task {text}` (quick add's Haiku parse, writes nothing — [quick-add](../tasks/quick-add.md)) |
+| places           | `list_places`, `list_place_tasks {place}` (the Shortcut's digest + `tasks[]` ids, no heartbeat — [tasks/places](../tasks/places.md)) |
 | categories       | `list_categories`, `create_category`, `update_category {id, label?, isWork?, order?, active?}`                                                      |
 | calibration / LC | `get_calibration {from,to}`, `list_leetcode_attempts {from?,to?}`                                                                                   |
 | calendar         | `list_calendars`, `create_calendar_event`, `delete_calendar_event`, `sync_calendar_event {taskId}`, `get_day_busy`                                  |
@@ -85,13 +86,15 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   any timer-tracked minutes, echoing the previous value so an overwrite is visible. **A parent** (a task with
   parts, [tasks/parts.md](../tasks/parts.md)) is the exception: `actualMin` is a param error there (its actual
   is Σ its parts), and the call is refused while a part is open, with the shared message naming the parts.
+  **An errand** (a task with a `place`) is the other: `actualMin` is optional, since errands never count in
+  calibration.
 - **Parent + parts** ([tasks/parts.md](../tasks/parts.md)): `parentId` on `create_task`/`create_tasks` makes a
   task a part (breaking a deliverable down is one `create_tasks` call), and `update_task {parentId}` attaches or
   (`null`) detaches. `list_tasks` annotates a parent with `parts: {total, done, estimateMin}`, from the same
   read. `delete_task` on a parent deletes every part and returns their ids. `create_calendar_event` refuses a
   parent (its one event is its due marker — `sync_calendar_event` places it), and names a part's block
   `Parent · Part` by default ([tasks/parts.md](../tasks/parts.md) D12/D13).
-- **`update_task`** fan-out order is title → categoryId → parentId → due → notes → estimate → status; the estimate
+- **`update_task`** fan-out order is title → categoryId → parentId → place → due → notes → estimate → status; the estimate
   (the working one) is editable until the task is done/cancelled — `estimateMin` or `bufferMin` alone keeps the
   other (before 2026-10-06 an estimate-only call zeroed the buffer) — the calibration baseline frozen at start
   never moves, and a failing field's error names which fields already applied.
@@ -111,6 +114,14 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   Edits made in Google come back via the app's pull ([calendar → Two-way sync](../calendar/index.md)) —
   `list_tasks` does **not** pull, so it shows what the app last pulled; a task Google changed carries
   `gcalPulled` (`{at, note}` — what changed, or what Google changed that Aperture kept).
+- **Places** ([tasks/places.md](../tasks/places.md)): `place` (a slug — `Safeway` or `@safeway` is normalised —
+  or `null`) rides on `create_task`, `create_tasks` and `update_task`; an unknown place is refused, and so is a
+  place change on a finished task (its place is history — places.md D3) and a `place` on a part that isn't its
+  parent's (a part follows its parent; naming the parent's own place is a no-op). `update_task` applies
+  `parentId` before `place`, so attaching a part and naming a different place is refused after the attach
+  ("already applied: parentId"). An errand
+  isn't calibration, so `complete_task` takes `actualMin` as optional there (recorded if given). Voice: "add
+  shampoo to my Safeway list" → `list_places` → `create_task {place}`.
 - **Notes** ([tasks/notes.md](../tasks/notes.md)) ride on `create_task`, `create_tasks` and `update_task`
   (`notes: null` or `""` clears; an update replaces the whole note). They're checked before any dispatch,
   so an over-cap note (5,000 chars) is a param error that applies nothing — including the fields ahead of

@@ -142,6 +142,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         bufferMin: Math.round(est * 0.25),
         estimateLockedMin: est,
         parentId: null,
+        place: null,
         actualAccruedMin: actual,
         startedAt,
         completedAt,
@@ -197,6 +198,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     bufferMin: null,
     estimateLockedMin: 60,
     parentId: null,
+    place: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -212,6 +214,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       bufferMin: 15,
       estimateLockedMin: 60,
       parentId: litParent.id,
+      place: null,
       actualAccruedMin: 70,
       startedAt: litDone - 70 * 60_000,
       completedAt: litDone,
@@ -225,6 +228,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       bufferMin: null,
       estimateLockedMin: null,
       parentId: litParent.id,
+      place: null,
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -280,6 +284,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       bufferMin: null,
       estimateLockedMin: null,
       parentId: null,
+      place: null,
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -307,6 +312,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     bufferMin: null,
     estimateLockedMin: 75,
     parentId: null,
+    place: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -320,6 +326,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     bufferMin: null,
     estimateLockedMin: est,
     parentId: pset.id,
+    place: null,
     actualAccruedMin: actual,
     startedAt: at,
     completedAt: at + actual * 60_000,
@@ -340,6 +347,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     bufferMin: null,
     estimateLockedMin: null,
     parentId: null,
+    place: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -363,6 +371,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     bufferMin: null,
     estimateLockedMin: null,
     parentId: lab.id,
+    place: null,
     actualAccruedMin: 0,
     startedAt: null,
     completedAt: null,
@@ -421,6 +430,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       bufferMin: Math.round(est * 0.25),
       estimateLockedMin: inProgress ? est : null,
       parentId: null,
+      place: null,
       actualAccruedMin: inProgress ? 12 : 0,
       startedAt: inProgress ? nowMs - 20 * 60_000 : null,
       completedAt: null,
@@ -516,6 +526,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       bufferMin: null,
       estimateLockedMin: est,
       parentId: null,
+      place: null,
       actualAccruedMin: actual,
       startedAt,
       completedAt,
@@ -720,4 +731,40 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     '',
     '',
   );
+
+  // Places — two sample errand lists so the Places lens and Settings › Places have something to show
+  // offline. Stub-only: the deployed app starts with no places (an empty Settings card invites one).
+  const placeDefs = [
+    { name: 'Safeway', slug: 'safeway', errands: ['shampoo', 'nails', 'maple syrup'] },
+    { name: "Trader Joe's", slug: 'tj', errands: ['frozen dumplings'] },
+  ];
+  placeDefs.forEach(({ name, slug, errands }, i) => {
+    store.places.push({ ...mk(nowMs - (20 - i) * DAY), name, slug, lastReadAt: null });
+    errands.forEach((title, j) =>
+      store.tasks.push({
+        ...mk(nowMs - (3 - j) * HOUR - i * DAY),
+        title,
+        status: 'backlog',
+        categoryId: null,
+        dueDay: null,
+        dueTime: null,
+        notes: null,
+        seriesId: null,
+        rollId: null,
+        estimateMin: null,
+        bufferMin: null,
+        estimateLockedMin: null,
+        parentId: null,
+        place: slug,
+        actualAccruedMin: 0,
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        gcalAccountId: null,
+        gcalCalendarId: null,
+        gcalEventId: null,
+        gcalSyncError: null,
+      }),
+    );
+  });
 }

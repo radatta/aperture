@@ -36,6 +36,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     bufferMin: null,
     estimateLockedMin: 30,
     parentId: null,
+    place: null,
     actualAccruedMin: 25,
     startedAt: null,
     completedAt: 1_700_000_000_000,

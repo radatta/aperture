@@ -55,6 +55,7 @@ const mkTask = (over: Partial<Task>): Task => ({
   bufferMin: null,
   estimateLockedMin: null,
   parentId: null,
+  place: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -693,7 +694,9 @@ describe('TaskEditor', () => {
       try {
         await user.click(await screen.findByRole('button', { name: 'Mark done' }));
         const alert = await screen.findByRole('alert');
-        expect(alert.textContent).toMatch(/Part 2 isn’t finished — complete, drop or delete it first/);
+        expect(alert.textContent).toMatch(
+          /Part 2 isn’t finished — complete, drop or delete it first/,
+        );
         // It lands below a phone's fold, so it's brought into view — and again on the next refusal.
         await waitFor(() => expect(scrolled.mock.contexts).toContain(alert));
         const before = scrolled.mock.calls.length;
@@ -740,7 +743,7 @@ describe('TaskEditor', () => {
       expect(document.activeElement).toBe(screen.getByLabelText(/Add parts — one per line/));
     });
 
-        it('Delete names how many parts go with it', async () => {
+    it('Delete names how many parts go with it', async () => {
       const client = api();
       const { p } = await withParts(client, ['open', 'open', 'open']);
       const { user } = renderEditor(client, p);
@@ -1171,5 +1174,76 @@ describe('TaskEditor', () => {
       expect((field as HTMLTextAreaElement).value).toHaveLength(5100); // never silently truncated
       expect(screen.getByRole('button', { name: 'Save' }).hasAttribute('disabled')).toBe(true);
     });
+  });
+});
+
+describe('the task’s place', () => {
+  it('puts a task on a store’s list and takes it off again, keeping the modal open', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    const t = await client.createTask({ title: 'milk' });
+    const user = userEvent.setup();
+    renderWithProviders(<TaskDetailsForm task={t} />, { api: client });
+    const select = await screen.findByLabelText<HTMLSelectElement>('Place');
+    expect(select.value).toBe('');
+    await user.selectOptions(select, 'market');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () => expect((await client.getTask(t.id))!.place).toBe('market'));
+    expect(await screen.findByText('Saved')).toBeTruthy();
+
+    await user.selectOptions(select, '');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () => expect((await client.getTask(t.id))!.place).toBeNull());
+  });
+
+  it('is locked on a finished task — its place is history, like its estimate', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    let t = await client.createTask({ title: 'milk', place: 'market' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    t = await client.transitionTask(t.id, 'done');
+    renderEditor(client, t);
+    // Plain text, like the other finished fields — never a select that looks editable.
+    expect(await screen.findByText('@Market')).toBeTruthy();
+    expect(screen.queryByLabelText('Place')).toBeNull();
+    expect(screen.getByText('Done')).toBeTruthy(); // the header keeps the status once it's finished
+  });
+
+  it('a finished task off every list reads "No place"', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    let t = await client.createTask({ title: 'pset' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    t = await client.transitionTask(t.id, 'done');
+    renderEditor(client, t);
+    expect(await screen.findByText('No place')).toBeTruthy();
+    expect(screen.queryByLabelText('Place')).toBeNull();
+  });
+
+  it('a part has no picker — it follows its parent’s place, and says so', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    const p = await client.createTask({ title: 'party', place: 'market' });
+    const [part] = await client.createTasks([{ title: 'cups', parentId: p.id }]);
+    renderEditor(client, part!);
+    expect(await screen.findByText('On @Market — a part follows its parent’s place.')).toBeTruthy();
+    expect(screen.queryByLabelText('Place')).toBeNull();
+  });
+
+  it('the header says Places for a waiting errand, not Backlog', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Market' });
+    const t = await client.createTask({ title: 'milk', place: 'market' });
+    renderEditor(client, t);
+    expect(await screen.findByText('Places')).toBeTruthy();
+    expect(screen.queryByText('Backlog')).toBeNull();
+  });
+
+  it('has no picker when there are no places and the task has none', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'pset' });
+    renderWithProviders(<TaskDetailsForm task={t} />, { api: client });
+    await screen.findByLabelText('Category');
+    await waitFor(() => expect(screen.queryByLabelText('Place')).toBeNull());
   });
 });

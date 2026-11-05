@@ -233,7 +233,12 @@ export function TaskEditor({
           below, which is also where it reads unclipped. */}
       <div className="flex flex-wrap items-center gap-2">
         <Text size="sm" tone="muted">
-          {isParent && task.status === 'backlog' ? 'Open' : statusLabel(task.status)}
+          {isParent && task.status === 'backlog'
+            ? 'Open'
+            : // An errand waiting on a store's list lives on the Places lens, not the Backlog.
+              task.status === 'backlog' && task.place
+              ? 'Places'
+              : statusLabel(task.status)}
           {isParent &&
             ` · ${summary.done} of ${summary.total} ${summary.total === 1 ? 'part' : 'parts'}`}
           {/* A dropped part no longer counts among its parent's parts, so it has no "Part 2 of 2". */}

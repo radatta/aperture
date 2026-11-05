@@ -1,8 +1,8 @@
 // Option 3 on the deployed app: a timed task is on Today on its day, by its time ("By time"), never
 // planned. Tasks are made through the API (ledger-recorded, so cleanup deletes them). The test user has
-// no Google account, so a timed create writes nothing to any calendar. Run before 4am LA, the app's day
-// is still yesterday (dayStartHour), and "today" here would be tomorrow there — run it in the day.
-import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+// no Google account, so a timed create writes nothing to any calendar. "Today" is the app's day, not the
+// calendar's: before the user's day start (4am) the app is still on yesterday (as in flux-history).
+import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
 
@@ -30,21 +30,23 @@ export const partsV2b: Scenario = {
       entry: 'api',
       title: 'A timed task and a timed part due today, a timed task later this week (API)',
       async run(ctx) {
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const { today, tomorrow } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
         await ctx.api.writes.createTask({
           title: name(ctx, 'OA'),
-          dueDay: ctx.dates.today,
+          dueDay: today,
           dueTime: '23:58',
         });
         const p = await ctx.api.writes.createTask({ title: name(ctx, 'P') });
         await ctx.api.writes.createTask({
           title: name(ctx, 'read2b'),
           parentId: p.id,
-          dueDay: ctx.dates.today,
+          dueDay: today,
           dueTime: '23:57',
         });
         await ctx.api.writes.createTask({
           title: name(ctx, 'later'),
-          dueDay: ctx.dates.tomorrow,
+          dueDay: tomorrow,
           dueTime: '10:00',
         });
       },

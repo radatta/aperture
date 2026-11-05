@@ -6,6 +6,7 @@ import { Text } from '../../components/Text';
 import { Button } from '../../components/Button';
 import { Textarea } from '../../components/Textarea';
 import { useActiveCategories } from '../../data/hooks/useCategories';
+import { usePlaces } from '../../data/hooks/usePlaces';
 import { useAllTasks, useCreateTasks } from '../../data/hooks/useTasks';
 import { TaskTokenChips } from './TaskTokenChips';
 
@@ -15,7 +16,7 @@ book flight | due:2026-10-02
 read ch. 4 | notes:"q6: use the lemma\\nhttps://example.edu/pset4"`;
 
 // Bulk add — the plan-pass surface (PRODUCT §2: batch entry is the morning plan, not capture). One line
-// = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category,
+// = one backlog task; ' | ' separates the title from inline tokens (~minutes, #category, @place,
 // due:YYYY-MM-DD[@HH:MM], notes:"…").
 // The preview parses live: red errors gate submit, gold warnings don't (the task is created anyway). The
 // grammar is meant to be GENERATED (by Claude), so it's strict — operator reference: docs/areas/tasks/bulk-add.md.
@@ -26,7 +27,7 @@ export function BulkAddDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onAdded: (count: number) => void;
+  onAdded: (added: { count: number; placed: number }) => void; // placed: how many went on a store's list
 }) {
   const categoriesQ = useActiveCategories();
   const tasksQ = useAllTasks();
@@ -35,6 +36,8 @@ export function BulkAddDialog({
   const categoriesLoaded = categoriesQ.data !== undefined;
   const { data: tasks = [] } = tasksQ;
   const categoriesFailed = categoriesQ.isError && categoriesQ.data === undefined;
+  const placesQ = usePlaces();
+  const placesFailed = placesQ.isError && placesQ.data === undefined;
   // Without the task list the "already exists" warnings can't fire — said, not silently skipped.
   const tasksFailed = tasksQ.isError && tasksQ.data === undefined;
   const createTasks = useCreateTasks();
@@ -64,24 +67,31 @@ export function BulkAddDialog({
     () => categories.map((c) => ({ id: c.id, label: c.label })),
     [categories],
   );
+  const placeRefs = useMemo(
+    () => (placesQ.data ?? []).map((p) => ({ slug: p.slug, name: p.name })),
+    [placesQ.data],
+  );
   const parse = useMemo(
-    () => parseBulkTasks(text, catRefs, existingTitles),
-    [text, catRefs, existingTitles],
+    () => parseBulkTasks(text, catRefs, placeRefs, existingTitles),
+    [text, catRefs, placeRefs, existingTitles],
   );
   const n = parse.lines.length;
   // If a paste references categories but the list hasn't loaded yet (or errored), a real #label would
   // silently miss — the parser sees an empty set → a gold "no category" warning → an uncategorised task.
   // Block submit until categories are in, but only when it actually matters (title-only pastes still go).
   const awaitingCategories = !categoriesLoaded && parse.lines.some((l) => l.categoryLabel !== null);
-  const blocked = !parse.canSubmit || createTasks.isPending || awaitingCategories;
+  // The same for @places: a real one would land off its list.
+  const awaitingPlaces =
+    placesQ.data === undefined && parse.lines.some((l) => l.placeSlug !== null);
+  const blocked = !parse.canSubmit || createTasks.isPending || awaitingCategories || awaitingPlaces;
 
   const submit = () => {
     if (blocked) return;
     const inputs = toCreateInputs(parse);
     setFailed(false);
     createTasks.mutate(inputs, {
-      onSuccess: () => {
-        onAdded(inputs.length);
+      onSuccess: (tasks) => {
+        onAdded({ count: tasks.length, placed: tasks.filter((t) => t.place).length });
         onClose();
       },
       // Keep the dialog + text; on refetch the "already exists" warnings mark exactly what did land.
@@ -111,6 +121,11 @@ export function BulkAddDialog({
               Categories: {categories.map((c) => c.label).join(', ')}
             </Text>
           )}
+          {placeRefs.length > 0 && (
+            <Text size="xs" tone="subtle">
+              Places: {placeRefs.map((p) => `@${p.slug}`).join(', ')}
+            </Text>
+          )}
         </div>
 
         <Textarea
@@ -121,7 +136,8 @@ export function BulkAddDialog({
           aria-label="Tasks, one per line"
           aria-describedby="bulk-add-summary"
           onChange={(e) => setText(e.target.value)}
-          className="font-mono text-sm"
+          // Mono at the 16px base: anything smaller zooms iOS Safari on focus.
+          className="font-mono"
         />
 
         {n > 0 && (
@@ -167,6 +183,17 @@ export function BulkAddDialog({
           ) : (
             <Text size="sm" tone="muted">
               Loading categories… hold on so your #labels resolve.
+            </Text>
+          ))}
+
+        {awaitingPlaces &&
+          (placesFailed ? (
+            <LoadError onRetry={() => void placesQ.refetch()}>
+              Couldn’t load places — remove the @places to save without them.
+            </LoadError>
+          ) : (
+            <Text size="sm" tone="muted">
+              Loading places… hold on so your @places resolve.
             </Text>
           ))}
 

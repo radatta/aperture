@@ -5,7 +5,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { isPlace, LENS_PRESET, resetToLens } from './query';
 import type { LensId, Place, TaskQuery } from './query';
 
-const LENSES: LensId[] = ['today', 'week', 'backlog', 'done', 'recurring', 'calibration'];
+const LENSES: LensId[] = ['today', 'week', 'places', 'backlog', 'done', 'recurring', 'calibration'];
 const QUERY_KEY = 'aperture.tasks.query';
 const COLLAPSE_KEY = 'aperture.tasks.collapsed';
 
@@ -47,9 +47,9 @@ function isStored(s: Stored | null): s is Stored {
   );
 }
 
-// /tasks view state. The lens lives in the URL (?lens=, so Home can deep-link to Week); search and
-// filters live in sessionStorage, sticky for the session but reset each new day; which groups are
-// collapsed lives in localStorage.
+// /tasks view state. The lens lives in the URL (?lens=, so Home can deep-link to Week; with the Places
+// lens, ?place= opens one store's list); search and filters live in sessionStorage, sticky for the
+// session but reset each new day; which groups are collapsed lives in localStorage.
 export function useTaskQuery() {
   const [params, setParams] = useSearchParams();
   const { data: settings } = useSettings();
@@ -58,6 +58,8 @@ export function useTaskQuery() {
   const raw = params.get('lens') as LensId | null;
   const lens: LensId = raw && LENSES.includes(raw) ? raw : 'today';
   const place: Place = isPlace(lens) ? lens : 'today';
+  // The store a Places link points at (?place=<slug> — the Shortcut's tap-through, placeLensPath).
+  const focusPlace = lens === 'places' ? params.get('place') : null;
 
   const [stored, setStored] = useState<Stored | null>(() => {
     const s = read<Stored>('session', QUERY_KEY);
@@ -95,7 +97,7 @@ export function useTaskQuery() {
     [today, query, setParams],
   );
 
-  return { lens, place, query, setQuery, setLens, today, dayStartHour };
+  return { lens, place, focusPlace, query, setQuery, setLens, today, dayStartHour };
 }
 
 // Collapsed groups, remembered per lens:group. A group with no remembered choice takes the caller's

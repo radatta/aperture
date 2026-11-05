@@ -5,6 +5,10 @@ export const qk = {
   tasks: () => ['tasks'] as const,
   plans: (day: string) => ['plans', day] as const,
   categories: () => ['categories'] as const,
+  // Every place key starts with 'places', so a place edit refreshes the Settings "Test" previews too.
+  places: () => ['places'] as const,
+  placeDigest: (slug: string) => ['places', 'digest', slug] as const,
+  placeToken: () => ['placeToken'] as const,
   series: () => ['series'] as const,
   calibration: (from: string, to: string) => ['calibration', from, to] as const,
   leetcodeAttempts: (from = 'all', to = 'all') => ['leetcodeAttempts', from, to] as const,

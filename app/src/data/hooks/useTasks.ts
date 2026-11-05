@@ -90,6 +90,33 @@ export function useSetCategory() {
   });
 }
 
+// The errand list a task is on (a Place slug, or null) — settable while it's open (a finished task's place is
+// history) and on a parent, whose open parts move with it; a part follows its parent, an unknown slug is refused.
+export function useSetTaskPlace() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; place: string | null }) => api.setTaskPlace(v.id, v.place),
+    ...written(qc),
+  });
+}
+
+// One-tap errand check-off (Places lens). backlog → done isn't a legal edge (machines.ts), so an unstarted
+// errand is started then finished, as complete_task chains it. No actual is asked: an errand is never a
+// calibration point. If the finish fails the errand is left started — the invalidate shows it in Today.
+export function useCheckOffErrand() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (task: Task) => {
+      if (task.status !== 'in_progress')
+        putTasks(qc, [await api.transitionTask(task.id, 'in_progress')]);
+      return api.transitionTask(task.id, 'done');
+    },
+    ...written(qc),
+  });
+}
+
 // Due date — day-granular deadline metadata. No freeze constraint: settable at any status.
 // Deadline day + optional time, one write (and one calendar sync — see setTaskDue).
 export function useSetDue() {

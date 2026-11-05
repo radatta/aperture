@@ -1,8 +1,15 @@
 // Single-table key layout (TECH §2.4). One partition per user; type-prefixed range keys so a
 // begins_with Query pulls exactly one entity kind. Nothing here talks to DynamoDB — pure string math,
 // so it's trivially testable and shared by the in-memory and the real DocClient alike.
+//
+// The one partition that is NOT a user's: `placetoken#<sha256hex> / placetoken`, the Shortcut token's
+// lookup row (places.md). The Shortcut route holds only the token, so the row has to be findable by its
+// hash before any userId is known — it carries the userId instead. Never read by a user's queries
+// (they all start `u#`), never exported.
 
 export const pk = (userId: string) => `u#${userId}`;
+export const placeTokenPk = (hash: string) => `placetoken#${hash}`;
+export const PLACE_TOKEN_SK = 'placetoken';
 
 // Plan order and GSI completion time are numbers we sort lexically inside the SK — pad to fixed width.
 const padOrder = (order: number) => String(Math.max(0, Math.trunc(order))).padStart(6, '0');
@@ -54,6 +61,13 @@ export const sk = {
 
   cat: (id: string) => `cat#${id}`,
   catPrefix: () => `cat#`,
+
+  // Places (errand lists) — id-keyed, a `place#` begins-with list (tiny N; slug unique per user). The
+  // token pointer is a singleton: which lookup row is this user's live token, and which old ones are still
+  // to delete (rotate/revoke find them through it). A credential's pointer — never exported.
+  place: (id: string) => `place#${id}`,
+  placePrefix: () => `place#`,
+  ptoken: () => `ptoken`,
 
   idea: (id: string) => `idea#${id}`,
   ideaPrefix: () => `idea#`,

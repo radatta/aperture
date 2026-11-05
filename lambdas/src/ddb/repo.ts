@@ -14,6 +14,7 @@ import type {
   Idea,
   LeetcodeAttempt,
   LogEntry,
+  Place,
   PomodoroSession,
   Roll,
   GcalSyncState,
@@ -26,6 +27,8 @@ import type {
 import { ConditionFailedError } from './DocClient';
 import type { DocClient, Item } from './DocClient';
 import type { Writes } from './writes';
+import { pointerOf } from './placeTokens';
+import type { PlaceTokenPointer } from './placeTokens';
 import { gsi1, pk, sk } from './keys';
 import {
   entityItem,
@@ -374,6 +377,58 @@ export class Repo {
   async putCategory(c: Category): Promise<Category> {
     await this.writes.put(entityItem(this.userId, sk.cat(c.id), c));
     return c;
+  }
+
+  // --- Places (errand lists) ---
+  async listPlaces(opts?: { consistent?: boolean }): Promise<Place[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.placePrefix(), opts)).map((i) => toEntity<Place>(i)),
+    );
+  }
+  // getStory-style (re-filter tombstones → null): a deleted place can't be renamed or deleted again.
+  async getPlace(id: string, opts?: { consistent?: boolean }): Promise<Place | null> {
+    const it = await this.doc.get(this.p(), sk.place(id), opts);
+    const p = it ? toEntity<Place>(it) : null;
+    return p && p.deletedAt === null ? p : null;
+  }
+  async putPlace(p: Place): Promise<Place> {
+    await this.writes.put(entityItem(this.userId, sk.place(p.id), p));
+    return p;
+  }
+  // The Shortcut read's heartbeat: one conditional write on the row as read, so a rename that landed
+  // meanwhile is never flattened (a lost race re-reads — casUpdate). A tombstoned place throws Not found.
+  async touchPlace(place: Place, now: number): Promise<Place> {
+    const stamped = { ...place, lastReadAt: now, updatedAt: Math.max(now, place.updatedAt + 1) };
+    try {
+      await this.writes.putIf(
+        entityItem(this.userId, sk.place(place.id), stamped),
+        place.updatedAt,
+      );
+      return stamped;
+    } catch (err) {
+      if (!(err instanceof ConditionFailedError)) throw err;
+      const shape: CasShape<Place> = {
+        sk: sk.place(place.id),
+        read: (i) => toEntity<Place>(i),
+        toItem: (t) => entityItem(this.userId, sk.place(t.id), t),
+      };
+      return this.casUpdate(shape, place.id, (fresh) => ({ ...fresh, lastReadAt: now }), now);
+    }
+  }
+
+  // --- Place token pointer (the user's live Shortcut token: its hash, never the token) ---
+  // Consistent: rotate/revoke write it back conditionally on the version read here.
+  async getPlaceTokenPointer(): Promise<PlaceTokenPointer | null> {
+    const it = await this.doc.get(this.p(), sk.ptoken(), { consistent: true });
+    return it ? pointerOf(it) : null; // PlaceTokenPointerError on a row with no numeric updatedAt
+  }
+  // Lands only while the stored pointer is still at `expectedUpdatedAt` (null: none yet) —
+  // ConditionFailedError otherwise.
+  async putPlaceTokenPointer(
+    ptr: PlaceTokenPointer,
+    expectedUpdatedAt: number | null,
+  ): Promise<void> {
+    await this.writes.putIf({ PK: this.p(), SK: sk.ptoken(), ...ptr }, expectedUpdatedAt);
   }
 
   // --- Finances ---

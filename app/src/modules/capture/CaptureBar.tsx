@@ -10,7 +10,7 @@ import {
   todayKey,
   tokenAtCaret,
 } from '@aperture/shared';
-import type { CreateTaskInput } from '@aperture/shared';
+import type { CreateTaskInput, Task } from '@aperture/shared';
 import { cx } from '../../lib/cx';
 import { Text } from '../../components/Text';
 import { ModeToggle } from '../../components/ModeToggle';
@@ -21,12 +21,20 @@ import { useCreateTask } from '../../data/hooks/useTasks';
 import { useAddToDay } from '../../data/hooks/useAddToDay';
 import { useCreateIdea } from '../../data/hooks/useIdeas';
 import { useActiveCategories } from '../../data/hooks/useCategories';
+import { usePlaces } from '../../data/hooks/usePlaces';
 import { isTypingTarget } from '../../lib/keys';
 import { TaskTokenChips } from '../tasks/TaskTokenChips';
 import { useAutoGrow } from './useAutoGrow';
-import { applySuggestion, suggestionsFor, type Suggestion } from './suggestions';
+import { applySuggestion, completeTokens, suggestionsFor, type Suggestion } from './suggestions';
 import { TokenSuggestions } from './TokenSuggestions';
-import { CAPTURE_MODES, cycleMode, placeholderFor, receiptFor, type CaptureMode } from './mode';
+import {
+  CAPTURE_MODES,
+  cycleMode,
+  placeholderFor,
+  receiptFor,
+  type CaptureDest,
+  type CaptureMode,
+} from './mode';
 import { useQuickParse } from './useQuickParse';
 import {
   newCaptureId,
@@ -53,9 +61,17 @@ const PARKED_LABEL: Record<Parked['why'], string> = {
   'set-aside': 'Set aside:',
 };
 
+// The grammar's own words (shared bulkTasks.ts) for what may wait while you're still typing it.
+const SEP = ' | ';
+const EMPTY_TOKENS = "nothing after ' | '";
+const UNKNOWN_PLACE = "no place '";
+const UNKNOWN_CATEGORY = "no category '";
+
 // Why a submit was refused. Each keeps the text and says so — a refused capture is never silent. The
 // visible notice is just "Not saved" (the mode row is ~375px on a phone); the reason is in the preview row.
-type Blocked = 'invalid' | 'categories' | 'categories-failed';
+// 'held': a warning the typing rule was still holding back — the first press shows it, the next saves.
+type Blocked = 'invalid' | 'categories' | 'categories-failed' | 'places' | 'places-failed' | 'held';
+const HELD_AGAIN = 'Enter or Save again to save without it';
 
 // The global capture bar — PRODUCT's #1 mechanic. Always present, bottom-docked for thumb reach.
 // Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
@@ -66,7 +82,7 @@ type Blocked = 'invalid' | 'categories' | 'categories-failed';
 // that. A failed parse saves the line as typed and says so — never silently, never lost.
 // A line with ' | ' skips the model: it takes one line of the bulk grammar (`memo | ~30 #Admin`), and a red
 // error refuses the submit and keeps the text (docs/areas/tasks/bulk-add.md).
-// Once you've typed `#`, `~` or `due:` there, chips offer completions; a tap (or Tab) types the literal
+// Once you've typed `#`, `~`, `@` or `due:` there, chips offer completions; a tap (or Tab) types the literal
 // token, so the grammar is unchanged — and nothing appears until you start a token, so it never asks.
 //
 // The field is a growing textarea, not an input, and the mode toggle sits on its own row: on a
@@ -88,6 +104,7 @@ export function CaptureBar({
   const [mode, setMode] = useState<CaptureMode>('log');
   const [text, setText] = useState('');
   const [caret, setCaret] = useState(0);
+  const [focused, setFocused] = useState(false);
   // Set by an accepted suggestion; applied after the new value renders (see the layout effect). The
   // nonce, not `text`, triggers it — an accept that changes nothing must still place the caret.
   const pendingCaret = useRef<number | null>(null);
@@ -100,7 +117,7 @@ export function CaptureBar({
   // confirmation would vanish after the FIRST timer's remainder.
   const [receipt, setReceipt] = useState<{
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean; timedOn?: string };
+    dest?: CaptureDest;
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
@@ -109,6 +126,15 @@ export function CaptureBar({
     unparsed?: string; // why a quick add saved as typed (parseFailText)
     at: number;
   } | null>(null);
+  // A 'held' refusal's promise — the next press saves — kept apart from the receipt, which a late one (an
+  // earlier capture's save, a parked failure, the outbox sweep) may replace at any moment. `text` is the
+  // field's value when it refused: while the field still holds exactly that, the warning stays shown and
+  // the next press saves. Editing the text, Put back or a mode change drops it.
+  const [heldAck, setHeldAck] = useState<{ text: string; warning: string } | null>(null);
+  const changeMode = (m: CaptureMode | ((m: CaptureMode) => CaptureMode)) => {
+    setMode(m);
+    setHeldAck(null);
+  };
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const previewId = useId();
   const parseId = useId();
@@ -146,15 +172,27 @@ export function CaptureBar({
     () => categories.map((c) => ({ id: c.id, label: c.label })),
     [categories],
   );
+  // The same rule for an @place line: wait for the roster, never save it off its list unseen.
+  const { data: placeData, isError: placesFailed } = usePlaces();
+  const placesLoaded = placeData !== undefined;
+  const placeRefs = useMemo(
+    () => (placeData ?? []).map((p) => ({ slug: p.slug, name: p.name })),
+    [placeData],
+  );
 
   // Trailing whitespace holding a newline is dropped (invisible, so a "single line" error would
-  // confuse); a bare trailing space is kept so "milk | " reads as an empty token region.
+  // confuse); a bare trailing space is kept so "milk | " reads as an empty token region. A half-typed
+  // #label / @place is completed to its one match, or refused while it has several (completeTokens).
   const line = useMemo(
     () =>
       mode === 'task' && hasTaskTokens(text)
-        ? parseTaskLine(text.replace(/\s*\n\s*$/, ''), catRefs)
+        ? completeTokens(
+            parseTaskLine(text.replace(/\s*\n\s*$/, ''), catRefs, placeRefs),
+            catRefs,
+            placeRefs,
+          )
         : null,
-    [mode, text, catRefs],
+    [mode, text, catRefs, placeRefs],
   );
   const token = useMemo(
     () => (mode === 'task' && hasTaskTokens(text) ? tokenAtCaret(text, caret) : null),
@@ -163,12 +201,14 @@ export function CaptureBar({
   // Before categories load catRefs is empty, so `#` offers nothing — the preview row already says
   // "Loading categories…" for that line.
   const suggestions = useMemo(
-    () => (token ? suggestionsFor(token, { cats: catRefs, today }) : []),
-    [token, catRefs, today],
+    () => (token ? suggestionsFor(token, { cats: catRefs, places: placeRefs, today }) : []),
+    [token, catRefs, placeRefs, today],
   );
 
   // Before categories load, a real #label would parse as unknown and land uncategorised — wait instead.
   const awaitingCategories = line !== null && line.categoryLabel !== null && !categoriesLoaded;
+  const awaitingPlaces = line !== null && line.placeSlug !== null && !placesLoaded;
+  const awaiting = awaitingCategories || awaitingPlaces;
   const invalid = line !== null && line.errors.length > 0;
   const block: Blocked | null = invalid
     ? 'invalid'
@@ -176,23 +216,59 @@ export function CaptureBar({
       ? categoriesFailed
         ? 'categories-failed'
         : 'categories'
-      : null;
+      : awaitingPlaces
+        ? placesFailed
+          ? 'places-failed'
+          : 'places'
+        : null;
   // The one reason a screen reader hears on a refused submit — the preview row isn't announced.
   const blockReason = invalid
     ? line.errors[0]!
-    : categoriesFailed
-      ? 'Couldn’t load categories — remove the #label to save without one'
-      : 'Loading categories…';
+    : awaitingCategories
+      ? categoriesFailed
+        ? 'Couldn’t load categories — remove the #label to save without one'
+        : 'Loading categories…'
+      : placesFailed
+        ? 'Couldn’t load places — remove the @place to save without one'
+        : 'Loading places…';
+  const awaitingFailed = awaitingCategories ? categoriesFailed : placesFailed;
   // A Review's preview — only while the field still holds exactly the text it was parsed from.
   // A parse resolves "tmw" against its day, so one made before the 4am rollover is dropped after it.
   const previewed = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
   const preview = previewed?.result?.ok && previewed.result.today !== today ? null : previewed;
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
-  // line fixed) it goes too, and its text always names the current cause.
-  const shown = receipt?.blocked && !block ? null : receipt;
+  // line fixed) it goes too, and its text always names the current cause. A 'held' one stays while its
+  // promise does (heldAck) and the line still warns.
+  const acked =
+    heldAck !== null &&
+    heldAck.text === text &&
+    !!line?.warnings.includes(heldAck.warning) &&
+    !block;
+  const shown =
+    receipt?.blocked && !block && !(receipt.blocked === 'held' && acked) ? null : receipt;
+  // What you're still typing at the caret doesn't flash a complaint mid-word. It still blocks a save, and
+  // shows once one is refused — or once the caret leaves it (or the field). Three cases:
+  const typing = focused && !shown?.blocked && !acked;
+  const tokenKind = token?.kind === 'category' || token?.kind === 'place' ? token.kind : null;
+  // - the #/@ token speaks through its chips: its own refusal (a bare "@", a partial that starts several);
+  const typingKind = typing && suggestions.length > 0 ? tokenKind : null;
+  // - its gold "no category" / "no place" warning waits too — the next letter may make it a match;
+  const typingWarn = typing ? tokenKind : null;
+  // - "milk | " with the caret right after the separator: the token is the next thing you type.
+  const sepAt = text.indexOf(SEP);
+  const typingAfterSep =
+    typing &&
+    sepAt !== -1 &&
+    caret >= sepAt + SEP.length &&
+    text.slice(sepAt + SEP.length).trim() === '';
+  const quietError = (e: string, i: number) =>
+    line?.errorKinds[i]?.kind === typingKind || (typingAfterSep && e.startsWith(EMPTY_TOKENS));
+  const quietWarning = (w: string) =>
+    (typingWarn === 'place' && w.startsWith(UNKNOWN_PLACE)) ||
+    (typingWarn === 'category' && w.startsWith(UNKNOWN_CATEGORY));
   useEffect(() => {
-    if (!block) setReceipt((r) => (r?.blocked ? null : r));
-  }, [block]);
+    if (!block) setReceipt((r) => (r?.blocked && !(r.blocked === 'held' && acked) ? null : r));
+  }, [block, acked]);
 
   useAutoGrow(inputRef, text);
 
@@ -256,6 +332,15 @@ export function CaptureBar({
       setReceipt({ mode: submitted, blocked: block, at: Date.now() });
       return;
     }
+    // A warning still held back at the caret would save unseen — the receipt says only where it went. So
+    // the first press refuses and shows it (typing ends with a refusal); the next one saves without it.
+    const held = acked ? undefined : line?.warnings.find(quietWarning);
+    if (held) {
+      setHeldAck({ text, warning: held });
+      setReceipt({ mode: submitted, blocked: 'held', at: Date.now() });
+      return;
+    }
+    setHeldAck(null);
     const goesToday = submitted === 'task' && toToday;
     // The field clears optimistically so capture stays instant — which means a failed write would
     // otherwise destroy the thought outright: the creates roll back, the entry disappears from the
@@ -275,7 +360,7 @@ export function CaptureBar({
       textRef.current = value; // a second failure in the same tick must see the field as taken
       setText(value);
       setCaret(value.length);
-      setMode(submitted);
+      changeMode(submitted);
       setToToday(goesToday); // the retry goes where the first attempt was headed, and nowhere else
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
     };
@@ -296,7 +381,14 @@ export function CaptureBar({
         .then((r) =>
           r.ok
             ? saveTask(r.input, goesToday, restore, settled, {
-                parsed: savedSummary(r.input, r.categoryLabel, r.today, r.dropped, dayStartHour),
+                parsed: savedSummary(
+                  r.input,
+                  r.categoryLabel,
+                  r.today,
+                  r.dropped,
+                  dayStartHour,
+                  r.placeName,
+                ),
               })
             : saveTask({ title: value }, goesToday, restore, settled, {
                 unparsed: parseFailText(r),
@@ -324,6 +416,9 @@ export function CaptureBar({
     settled: (() => void) | null,
     note: { parsed?: string; unparsed?: string },
   ) {
+    // An errand's receipt names its store: the roster's name, else the slug as typed (never "backlog").
+    const placeName = (t: Task) =>
+      t.place ? (placeData?.find((p) => p.slug === t.place)?.name ?? `@${t.place}`) : undefined;
     const saved = goesToday
       ? createToday(input).then(
           (r) =>
@@ -335,6 +430,7 @@ export function CaptureBar({
                 ...(r.timed && r.task.dueDay
                   ? { timedOn: fmtDueDay(r.task.dueDay, today, r.task.dueTime, { dayStartHour }) }
                   : {}),
+                placeName: placeName(r.task),
               },
               ...note,
               at: Date.now(),
@@ -346,13 +442,14 @@ export function CaptureBar({
           (t) =>
             setReceipt({
               mode: 'task',
-              ...(isTimed(t) && {
-                dest: {
-                  today: false,
-                  planned: false,
+              dest: {
+                today: false,
+                planned: false,
+                ...(isTimed(t) && {
                   timedOn: fmtDueDay(t.dueDay!, today, t.dueTime, { dayStartHour }),
-                },
-              }),
+                }),
+                placeName: placeName(t),
+              },
               ...note,
               at: Date.now(),
             }),
@@ -374,8 +471,10 @@ export function CaptureBar({
     textRef.current = p.text;
     setText(p.text);
     setCaret(p.text.length);
-    setMode(p.mode);
+    changeMode(p.mode);
     setToToday(p.toToday);
+    // The field holds other text now: a refusal of what it held goes with it.
+    setReceipt((r) => (r?.blocked ? null : r));
     inputRef.current?.focus();
   }
 
@@ -398,6 +497,7 @@ export function CaptureBar({
 
   function update(value: string) {
     setText(value);
+    setHeldAck(null);
     if (receipt?.blocked) setReceipt(null);
   }
 
@@ -438,7 +538,7 @@ export function CaptureBar({
       // Tab takes the first chip while chips show; Shift+Tab always switches mode (the escape hatch).
       if (e.nativeEvent.isComposing) return; // don't replace text an IME is still composing
       if (!e.shiftKey && suggestions.length > 0) accept(suggestions[0]!);
-      else setMode((m) => cycleMode(m, e.shiftKey ? -1 : 1));
+      else changeMode((m) => cycleMode(m, e.shiftKey ? -1 : 1));
     } else if (e.key === 'Escape') {
       inputRef.current?.blur();
     }
@@ -450,7 +550,9 @@ export function CaptureBar({
       className="pointer-events-auto rounded-2xl border border-line bg-panel-2 p-2 shadow-[var(--shadow-dock)]"
     >
       <div className="flex items-center justify-between gap-2 pb-1.5">
-        <div className="flex shrink-0 items-center gap-1.5">
+        {/* No control in the bar takes focus from the field: a blur would reveal a held-back warning,
+            grow the bar and move the button out from under the tap (the first tap would be lost). */}
+        <div className="flex shrink-0 items-center gap-1.5" onMouseDown={(e) => e.preventDefault()}>
           <ModeToggle<CaptureMode>
             size="sm"
             options={CAPTURE_MODES.map((m) => ({
@@ -458,7 +560,7 @@ export function CaptureBar({
               label: m[0]!.toUpperCase() + m.slice(1),
             }))}
             value={mode}
-            onChange={setMode}
+            onChange={changeMode}
           />
           {mode === 'task' && (
             <button
@@ -482,12 +584,27 @@ export function CaptureBar({
             read aloud 1.8s later. */}
         <div className="flex min-w-0 items-center gap-1">
           <div aria-live="polite" role="status" className="min-w-0">
-            {shown && <Receipt key={shown.at} receipt={shown} reason={blockReason} />}
+            {shown && (
+              <Receipt
+                key={shown.at}
+                receipt={shown}
+                reason={
+                  shown.blocked === 'held' && acked && heldAck
+                    ? `${heldAck.warning} — ${HELD_AGAIN}`
+                    : blockReason
+                }
+              />
+            )}
           </div>
           {!shown && <Hint suggesting={suggestions.length > 0} task={mode === 'task'} />}
           {/* On a phone the row can't hold both, so it gives way to a receipt there (a failure
               notice stays until the next capture). Desktop has room for both. */}
-          <div className={cx('shrink-0', shown && 'max-sm:hidden')}>{trailing}</div>
+          <div
+            className={cx('shrink-0', shown && 'max-sm:hidden')}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            {trailing}
+          </div>
         </div>
       </div>
       <div className="flex items-end gap-2">
@@ -501,6 +618,8 @@ export function CaptureBar({
           }}
           onSelect={syncCaret}
           onKeyUp={syncCaret}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           onKeyDown={onKeyDown}
           placeholder={placeholderFor(mode, toToday)}
           aria-label={`Capture ${mode}`}
@@ -535,14 +654,18 @@ export function CaptureBar({
         )}
         <button
           type="button"
+          // Keep focus in the field: a blur here would show a held-back warning mid-press, the bar would
+          // grow under the finger, and the click would land elsewhere. It's still a plain button for keys.
+          // mousedown, not pointerdown: cancelling pointerdown drops the click of a WebKit touch tap.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={submit}
           disabled={!text.trim()}
           // Refused, not disabled: a tap must still say why (a dead button on iPhone is silent).
-          aria-disabled={invalid || awaitingCategories || undefined}
+          aria-disabled={invalid || awaiting || undefined}
           aria-label={`Save ${mode}`}
           className={cx(
             'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition',
-            text.trim() && !invalid && !awaitingCategories
+            text.trim() && !invalid && !awaiting
               ? 'bg-teal text-surface hover:opacity-90'
               : 'border border-line text-ink-subtle',
           )}
@@ -627,6 +750,7 @@ export function CaptureBar({
           </Text>
           <button
             type="button"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => putBack(p)}
             aria-describedby={`${parkedId}-${p.id}`}
             className="min-h-8 shrink-0 rounded-md px-2 text-xs text-teal hover:underline"
@@ -637,6 +761,7 @@ export function CaptureBar({
             type="button"
             aria-label="Discard"
             aria-describedby={`${parkedId}-${p.id}`}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => setParked((list) => list.filter((x) => x.id !== p.id))}
             className="min-h-8 min-w-8 shrink-0 rounded-md text-sm text-ink-muted hover:text-ink"
           >
@@ -651,22 +776,32 @@ export function CaptureBar({
           <div className="flex flex-wrap items-baseline gap-2">
             <TaskTokenChips line={line} />
           </div>
-          {line.errors.map((e, i) => (
-            <Text key={`e${i}`} size="xs" tone="danger" className="break-words">
-              {e}
-            </Text>
-          ))}
-          {/* While categories load, the "no category" warning would be a lie — say what's happening. */}
-          {awaitingCategories ? (
-            <Text size="xs" tone={categoriesFailed ? 'danger' : 'muted'}>
+          {line.errors.map((e, i) =>
+            quietError(e, i) ? null : (
+              <Text key={`e${i}`} size="xs" tone="danger" className="break-words">
+                {e}
+              </Text>
+            ),
+          )}
+          {/* While categories (or places) load, the "no category" warning would be a lie — say what's
+              happening. */}
+          {awaiting ? (
+            <Text size="xs" tone={awaitingFailed ? 'danger' : 'muted'}>
               {blockReason}
             </Text>
           ) : (
-            line.warnings.map((w, i) => (
-              <Text key={`w${i}`} size="xs" tone="gold" className="break-words">
-                {w}
-              </Text>
-            ))
+            line.warnings.map((w, i) =>
+              quietWarning(w) ? null : (
+                <Text key={`w${i}`} size="xs" tone="gold" className="break-words">
+                  {w}
+                </Text>
+              ),
+            )
+          )}
+          {acked && (
+            <Text size="xs" tone="gold" className="break-words">
+              {HELD_AGAIN}.
+            </Text>
           )}
         </div>
       )}
@@ -698,7 +833,7 @@ function Receipt({
   reason: string;
   receipt: {
     mode: CaptureMode;
-    dest?: { today: boolean; planned: boolean; timedOn?: string };
+    dest?: CaptureDest;
     failed?: boolean;
     blocked?: Blocked;
     parked?: boolean;

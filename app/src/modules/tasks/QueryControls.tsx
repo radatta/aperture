@@ -22,12 +22,14 @@ const DUE_LABEL: Record<DueBucket, string> = {
 const DUE_OPTIONS: Record<Place, DueBucket[]> = {
   today: [],
   week: ['any', 'today'],
+  places: [],
   backlog: ['any', 'dated', 'undated'],
   done: ['any', 'dated', 'undated'],
 };
 
 // Search box + "Filter" disclosure + the chips for whatever differs from the lens preset. On Today
-// it's search only: the plan's order is the point there, so there's nothing to sort or group.
+// it's search only: the plan's order is the point there, so there's nothing to sort or group — and on
+// Places, where the store is the grouping and a list reads oldest first.
 export function QueryControls({
   place,
   query,
@@ -42,7 +44,7 @@ export function QueryControls({
   // Without the roster, labels, #label search and the Category filter are all off — said once, here.
   const categoriesFailed = categoriesQ.isError && categoriesQ.data === undefined;
   const panel = useDisclosure();
-  const searchOnly = place === 'today';
+  const searchOnly = place === 'today' || place === 'places';
   const chips = searchOnly ? [] : overrideChips(query, place, categories);
 
   return (

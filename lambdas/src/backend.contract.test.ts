@@ -5,6 +5,7 @@ import { InMemoryDoc } from './ddb/DocClient';
 import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
+import { PlaceTokenStore } from './ddb/placeTokens';
 import { BackendClient } from './backend';
 import { handleRpc } from './handler';
 import { inlineInvoker } from './finance/invoker';
@@ -43,6 +44,7 @@ runApiContract('lambda (direct)', (now) => {
     now,
     presigner: fakePresigner(),
     objects: fakeObjectStore(),
+    placeTokens: new PlaceTokenStore(doc, liveWrites(doc)),
     ...financeDeps(doc, now),
   });
 });

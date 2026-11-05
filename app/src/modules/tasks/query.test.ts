@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { placeTasks } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import {
   applyQuery,
+  errandsByPlace,
+  foldParts,
   groupTasks,
   inDueBucket,
   isNarrowing,
@@ -38,6 +41,7 @@ const task = (over: Partial<Task>): Task => ({
   bufferMin: null,
   estimateLockedMin: null,
   parentId: null,
+  place: null,
   actualAccruedMin: 0,
   startedAt: null,
   completedAt: null,
@@ -99,6 +103,21 @@ describe('placeOf', () => {
     ['p7 due today+7 → backlog', task({ dueDay: '2026-09-30' }), none, 'backlog'],
     ['p8 past due → week', task({ dueDay: '2026-09-01' }), none, 'week'],
     ['p9 planned for another day, undated → backlog', task({ status: 'planned' }), none, 'backlog'],
+    ['p10 an errand → places', task({ place: 'market' }), none, 'places'],
+    ['p11 an errand due this week → week', task({ place: 'market', dueDay: TODAY }), none, 'week'],
+    [
+      'p12 an errand on today’s plan → today',
+      task({ id: 'a', status: 'planned', place: 'market' }),
+      new Map([['a', 0]]),
+      'today',
+    ],
+    [
+      'p13 an errand started → today',
+      task({ status: 'in_progress', place: 'market' }),
+      none,
+      'today',
+    ],
+    ['p14 an errand done → done', task({ status: 'done', place: 'market' }), none, 'done'],
   ] as const)('%s', (_name, t, plan, want) => {
     expect(placeOf(t, pctx(plan as Map<string, number>))).toBe(want);
   });
@@ -114,6 +133,46 @@ describe('placeOf', () => {
     expect(placeOf(part, pctx(new Map([['a', 0]])), parent)).toBe('today');
     expect(placeOf(part, pctx(), { ...parent, status: 'done' })).toBe('backlog'); // its own
     expect(placer([parent, part], pctx())(part)).toBe('week');
+  });
+
+  it('a part follows its owner’s place: in Places with a placed parent, Backlog with an unplaced one', () => {
+    const parent = task({ id: 'p', place: 'market' });
+    const part = task({ id: 'a', parentId: 'p' });
+    expect(placer([parent, part], pctx())(parent)).toBe('places');
+    expect(placer([parent, part], pctx())(part)).toBe('places');
+    expect(foldParts([parent, part])).toEqual([parent]); // drawn inside the parent's card
+
+    const plain = task({ id: 'q' });
+    const placedPart = task({ id: 'b', parentId: 'q', place: 'market' });
+    expect(placer([plain, placedPart], pctx())(plain)).toBe('backlog');
+    expect(placer([plain, placedPart], pctx())(placedPart)).toBe('backlog');
+    // A finished parent hands the part back its own place.
+    expect(placeOf(placedPart, pctx(), { ...plain, status: 'done' })).toBe('places');
+  });
+
+  it('the Places lens lists every open errand, whatever its home — the digest’s items', () => {
+    const tomorrow = task({ id: 'w', place: 'market', dueDay: '2026-09-24', createdAt: 2 });
+    const undated = task({ id: 'u', place: 'market', createdAt: 1 });
+    const planned = task({ id: 'p', place: 'corner', status: 'planned', createdAt: 3 });
+    const started = task({ id: 's', place: 'corner', status: 'in_progress', createdAt: 4 });
+    const done = task({ id: 'd', place: 'corner', status: 'done', createdAt: 5 });
+    const party = task({ id: 'party', place: 'gone', createdAt: 6 });
+    const cups = task({ id: 'cups', parentId: 'party', place: 'gone', createdAt: 7 });
+    const plain = task({ id: 'x', dueDay: '2026-09-24' });
+    const all = [tomorrow, undated, planned, started, done, party, cups, plain];
+    const place = placer(all, pctx(new Map([['p', 0]])));
+    expect(place(tomorrow)).toBe('week');
+    expect(place(undated)).toBe('places');
+    expect(place(planned)).toBe('today');
+    expect(place(started)).toBe('today');
+    const lists = errandsByPlace(all);
+    expect([...lists.keys()]).toEqual(['market', 'corner', 'gone']);
+    expect(lists.get('market')).toEqual([undated, tomorrow]);
+    expect(lists.get('corner')).toEqual([planned, started]);
+    expect(lists.get('gone')).toEqual([cups]); // a parent with open parts gives way to them
+    for (const [slug, list] of lists) expect(list).toEqual(placeTasks(slug, all));
+    // A list with nothing open on it is left out.
+    expect(errandsByPlace([done]).size).toBe(0);
   });
 
   it('option 3: a timed task is on Today on its day, by its time — a plan row never places it', () => {
@@ -387,6 +446,19 @@ describe('groupTasks', () => {
       ]),
     );
     expect(groups[0]!.tasks.map((t) => t.id)).toEqual(['first', 'second', 'ip']);
+  });
+
+  it('g3 a search’s place groups put Places between This week and Backlog', () => {
+    const tasks = [
+      task({ id: 'b' }),
+      task({ id: 'e', place: 'market' }),
+      task({ id: 'w', dueDay: TODAY }),
+    ];
+    expect(groupTasks(tasks, 'place', ctx()).map((g) => g.label)).toEqual([
+      'This week',
+      'Places',
+      'Backlog',
+    ]);
   });
 
   it('never returns an empty group', () => {

@@ -32,6 +32,7 @@ import type {
 } from '@aperture/shared';
 import { FINANCE_TOOLS } from './financeTools';
 import { FLUX_TOOLS } from './fluxTools';
+import { PLACE_ARG_DESC, PLACE_TOOLS, placeArg } from './placeTools';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
@@ -209,7 +210,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_task',
     description:
-      "Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day (on a part: when its block ends, not a deadline); notes is free-form context (light markdown). The estimate stays editable until the task is done or cancelled. parentId makes it a PART of that task (one level: not a part, not finished, not already worked on): the parent is the deliverable and holds the deadline; its parts hold the work. Its first part clears the parent's estimate (now the sum of its parts), and if the parent was planned an untimed first part takes its spot. A timed task (dueDay + dueTime) is never planned: it's on Today on its day, by its time.",
+      "Create one backlog task. categoryId comes from list_categories (a label will not resolve). estimateMin/bufferMin are minutes; dueDay is an ISO date (YYYY-MM-DD); dueTime is an optional HH:MM deadline time on that day (on a part: when its block ends, not a deadline); notes is free-form context (light markdown). The estimate stays editable until the task is done or cancelled. parentId makes it a PART of that task (one level: not a part, not finished, not already worked on): the parent is the deliverable and holds the deadline; its parts hold the work. Its first part clears the parent's estimate (now the sum of its parts), and if the parent was planned an untimed first part takes its spot. A timed task (dueDay + dueTime) is never planned: it's on Today on its day, by its time. place puts it on an errand list (a slug from list_places) — \"add shampoo to my Safeway list\" is create_task { title: 'shampoo', place: 'safeway' }. A part always takes its parent's place: omit place (a different one errors).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -221,6 +222,7 @@ export const TOOLS: Tool[] = [
         dueTime: { type: 'string', description: DUE_TIME_DESC },
         notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
         parentId: { type: 'string', description: 'make it a part of this task (list_tasks id)' },
+        place: { type: ['string', 'null'], description: PLACE_ARG_DESC },
       },
       required: ['title'],
       additionalProperties: false,
@@ -228,6 +230,7 @@ export const TOOLS: Tool[] = [
     run(args, ctx) {
       const input: CreateTaskInput = { title: reqStr(args, 'title') };
       if (present(args, 'parentId')) input.parentId = nullableStr(args, 'parentId');
+      if (present(args, 'place')) input.place = placeArg(args, 'place');
       if (present(args, 'categoryId')) input.categoryId = nullableStr(args, 'categoryId');
       if (present(args, 'estimateMin')) input.estimateMin = reqInt(args, 'estimateMin', 0);
       if (present(args, 'bufferMin')) input.bufferMin = reqInt(args, 'bufferMin', 0);
@@ -240,7 +243,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'create_tasks',
     description:
-      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task, parentId included — breaking a deliverable into parts is one call with every part pointing at it. All-or-nothing on invalid input: one bad task (e.g. notes over the cap, an ineligible parentId) creates none. Use this for a study plan or a session backlog dump.',
+      'Bulk-create many backlog tasks in order (one shared timestamp so they sort together). Each task takes the same fields as create_task, parentId included — breaking a deliverable into parts is one call with every part pointing at it. All-or-nothing on invalid input: one bad task (e.g. notes over the cap, an ineligible parentId, an unknown place, a part placed differently from its parent) creates none. Use this for a study plan or a session backlog dump.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -257,6 +260,7 @@ export const TOOLS: Tool[] = [
               dueTime: { type: 'string', description: 'HH:MM (24h), needs dueDay' },
               notes: { type: ['string', 'null'], description: NOTES_SCHEMA_DESC },
               parentId: { type: 'string' },
+              place: { type: ['string', 'null'], description: 'place slug (list_places)' },
             },
             required: ['title'],
           },
@@ -281,6 +285,7 @@ export const TOOLS: Tool[] = [
         if (present(row, 'dueTime')) input.dueTime = nullableTime(row, 'dueTime');
         if (present(row, 'notes')) input.notes = nullableNotes(row, 'notes');
         if (present(row, 'parentId')) input.parentId = nullableStr(row, 'parentId');
+        if (present(row, 'place')) input.place = placeArg(row, 'place');
         return input;
       });
       return ctx.dispatch('createTasks', [inputs]);
@@ -301,13 +306,14 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→due→notes→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).',
+      "Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent's baseline; an open part takes its parent's place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent's place and errors — set the parent's, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or \"\" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).",
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
         title: { type: 'string' },
         categoryId: { type: ['string', 'null'] },
+        place: { type: ['string', 'null'], description: PLACE_ARG_DESC },
         parentId: { type: ['string', 'null'], description: 'parent task id, or null to detach' },
         dueDay: { type: ['string', 'null'], description: 'ISO date YYYY-MM-DD, or null to clear' },
         dueTime: { type: ['string', 'null'], description: `${DUE_TIME_DESC}; null clears` },
@@ -327,6 +333,7 @@ export const TOOLS: Tool[] = [
       const fields = [
         'title',
         'categoryId',
+        'place',
         'parentId',
         'dueDay',
         'dueTime',
@@ -339,6 +346,7 @@ export const TOOLS: Tool[] = [
         throw new RpcParamError('update_task needs at least one field to change');
       }
       const notes = present(args, 'notes') ? nullableNotes(args, 'notes') : undefined; // before any write
+      const place = present(args, 'place') ? placeArg(args, 'place') : undefined;
       const dueDay = present(args, 'dueDay') ? nullableDay(args, 'dueDay') : undefined;
       const dueTime = present(args, 'dueTime') ? nullableTime(args, 'dueTime') : undefined;
       const applied: string[] = [];
@@ -351,9 +359,23 @@ export const TOOLS: Tool[] = [
           await ctx.dispatch('setTaskCategory', [id, nullableStr(args, 'categoryId')]);
           applied.push('categoryId');
         }
+        // parentId before place: a detach then frees the place, and a place given with an attach is
+        // refused (a part follows its parent) rather than silently overwritten by the parent's.
+        let current: Task | null = null;
         if (present(args, 'parentId')) {
-          await ctx.dispatch('setTaskParent', [id, nullableStr(args, 'parentId')]);
+          current = (await ctx.dispatch('setTaskParent', [
+            id,
+            nullableStr(args, 'parentId'),
+          ])) as Task;
           applied.push('parentId');
+        }
+        if (place !== undefined) {
+          // A part already on that place (its parent's) is a no-op, as create_task takes it — only a
+          // DIFFERENT place on a part is refused.
+          current ??= (await ctx.dispatch('getTask', [id])) as Task | null;
+          if (!(current?.parentId && current.place === place))
+            await ctx.dispatch('setTaskPlace', [id, place]);
+          applied.push('place');
         }
         if (dueDay !== undefined || dueTime !== undefined) {
           // A time-only change keeps the task's day; the server rejects a time with no day at all.
@@ -400,7 +422,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'complete_task',
     description:
-      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin — its actual is what its parts took — and it is refused while any part is still open (complete, drop or delete that part first).',
+      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin — its actual is what its parts took — and it is refused while any part is still open (complete, drop or delete that part first). An ERRAND (a task with a place) may omit actualMin too: it is checked off, never a calibration point.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -408,7 +430,8 @@ export const TOOLS: Tool[] = [
         actualMin: {
           type: 'integer',
           minimum: 1,
-          description: 'actual minutes the task took (required, except on a parent: omit it)',
+          description:
+            'actual minutes the task took (required, except on a parent: omit it; optional on an errand)',
         },
       },
       required: ['id'],
@@ -429,12 +452,14 @@ export const TOOLS: Tool[] = [
         const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
         return { task: done, previousActualMin: 0 };
       }
-      const actualMin = reqInt(args, 'actualMin', 1);
+      // An errand is checked off — no actual needed (it never feeds calibration: contributesCalibration).
+      const actualMin =
+        task.place && !present(args, 'actualMin') ? null : reqInt(args, 'actualMin', 1);
       const previousActualMin = task.actualAccruedMin;
       if (task.status === 'backlog' || task.status === 'planned') {
         await ctx.dispatch('transitionTask', [id, 'in_progress']);
       }
-      await ctx.dispatch('setTaskActual', [id, actualMin]);
+      if (actualMin !== null) await ctx.dispatch('setTaskActual', [id, actualMin]);
       const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
       return { task: done, previousActualMin };
     },
@@ -921,6 +946,7 @@ export const TOOLS: Tool[] = [
   },
   ...FINANCE_TOOLS,
   ...FLUX_TOOLS,
+  ...PLACE_TOOLS,
 ];
 
 // Guard against a duplicate name slipping in (both clients index tools by name).

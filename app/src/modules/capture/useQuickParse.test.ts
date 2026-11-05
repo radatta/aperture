@@ -13,6 +13,7 @@ describe('withTimeout', () => {
     source: 'haiku',
     input: { title: 'x' },
     categoryLabel: null,
+    placeName: null,
     dropped: [],
     today: '2026-10-12',
   };

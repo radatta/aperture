@@ -67,3 +67,27 @@ describe('stub — lazy recurrence', () => {
     expect(task?.seriesId).toBeTruthy();
   });
 });
+
+describe('stub — places', () => {
+  it('seeds sample places with errands for offline use', async () => {
+    const api = client();
+    const places = await api.listPlaces();
+    expect(places.length).toBeGreaterThan(0);
+    expect((await api.listPlaceTasks(places[0]!.slug)).count).toBeGreaterThan(0);
+  });
+
+  it('a store persisted before places loads with no places and its tasks off every list', async () => {
+    const key = `legacy.${FIXED}`;
+    const legacy = createStubClient({ now: () => FIXED, storageKey: key, seed: false });
+    const t = await legacy.createTask({ title: 'old task' });
+    const raw = JSON.parse(localStorage.getItem(key)!) as Record<string, unknown>;
+    delete raw.places;
+    delete raw.placeToken;
+    for (const task of raw.tasks as Record<string, unknown>[]) delete task.place;
+    localStorage.setItem(key, JSON.stringify(raw));
+    const api = createStubClient({ now: () => FIXED, storageKey: key });
+    expect(await api.listPlaces()).toEqual([]);
+    expect((await api.getTask(t.id))!.place).toBeNull();
+    expect((await api.getPlaceTokenStatus()).active).toBe(false);
+  });
+});

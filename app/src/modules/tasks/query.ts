@@ -1,4 +1,4 @@
-import { addDays, deadlineOf, isTimed, placedByTime, timedDay } from '@aperture/shared';
+import { addDays, deadlineOf, isTimed, placedByTime, placeTasks, timedDay } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import { byDueHint } from './taskMath';
 import { byDeadline } from './todayRows';
@@ -6,8 +6,10 @@ import { byDeadline } from './todayRows';
 // The /tasks query engine: every list view is a preset lens over one task list. Pure — the page
 // feeds it tasks + today's plan and renders what comes back. See docs/areas/tasks/lenses.md.
 
-// Where an open task lives. Exactly one place per task, so lenses never show a task twice.
-export type Place = 'today' | 'week' | 'backlog' | 'done';
+// Where an open task lives. Exactly one home per task, so Today, Week, Backlog and Done never show a task
+// twice. ('places' is the home of an errand nothing else claims — a task on a store's list, places.ts — not
+// to be confused with this type. The Places lens itself lists every open errand, errandsByPlace.)
+export type Place = 'today' | 'week' | 'places' | 'backlog' | 'done';
 export type LensId = Place | 'recurring' | 'calibration';
 export type DueBucket = 'any' | 'today' | 'week' | 'dated' | 'undated';
 export type SortKey = 'due' | 'newest' | 'oldest' | 'estimate' | 'title';
@@ -44,10 +46,11 @@ export const WEEK_DAYS = 6;
 // A group this big starts collapsed on first visit; smaller ones start open.
 export const COLLAPSE_AT = 8;
 
-export const PLACES: Place[] = ['today', 'week', 'backlog', 'done'];
+export const PLACES: Place[] = ['today', 'week', 'places', 'backlog', 'done'];
 export const PLACE_LABEL: Record<Place, string> = {
   today: 'Today',
   week: 'This week',
+  places: 'Places',
   backlog: 'Backlog',
   done: 'Done',
 };
@@ -58,7 +61,9 @@ export const isPlace = (lens: LensId): lens is Place => (PLACES as string[]).inc
 // lives where its open parent does — and folds under that parent's card there (parts.ts). A timed task
 // is on Today on the app day its deadline falls on, and a plan row on it places nothing (option 3,
 // lenses.md D13); a parent's deadline is its marker, never Today. Placement reads the app day, as the
-// due chips and labels do ("due tonight 12:30am").
+// due chips and labels do ("due tonight 12:30am"). An errand (a task on a store's list) that nothing
+// above claimed lives in 'places', never the Backlog — a part by its owner's place, so it stays folded
+// under its parent wherever that lands. (Every open errand also shows on the Places lens, whatever its home.)
 export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = false): Place {
   if (task.status === 'done' || task.status === 'cancelled') return 'done';
   if (task.status === 'in_progress') return 'today';
@@ -72,7 +77,7 @@ export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = fal
   const owner = openParent ? parent : task;
   const due = timedDay(owner, dayStartHour) ?? owner.dueDay;
   if (due && due <= addDays(today, WEEK_DAYS)) return 'week';
-  return 'backlog';
+  return owner.place ? 'places' : 'backlog';
 }
 
 // placeOf over a list, each part looked up against its parent.
@@ -83,6 +88,20 @@ export function placer(tasks: Task[], ctx: PlaceCtx) {
     placeOf(t, ctx, t.parentId ? byId.get(t.parentId) : undefined, parents.has(t.id));
 }
 
+// The Places lens's rows, store by store: every open errand, as the Shortcut's digest lists them (places.ts
+// placeTasks — a parent with open parts gives way to them), whatever its home — one dated this week, on
+// today's plan or started shows on Week/Today too. So the lens, its pill, Settings' counts and the
+// notification count the same things. Keyed by slug, each list oldest first; empty lists are left out.
+export function errandsByPlace(tasks: Task[]): Map<string, Task[]> {
+  const slugs = new Set(tasks.flatMap((t) => (t.place ? [t.place] : [])));
+  const lists = new Map<string, Task[]>();
+  for (const s of slugs) {
+    const list = placeTasks(s, tasks);
+    if (list.length) lists.set(s, list);
+  }
+  return lists;
+}
+
 // Outside a search, a part whose parent is in the same list is drawn inside the parent's card, not as a
 // row of its own — the deliverable stays one thing you plan from.
 export function foldParts(tasks: Task[]): Task[] {
@@ -90,12 +109,15 @@ export function foldParts(tasks: Task[]): Task[] {
   return tasks.filter((t) => !(t.parentId && ids.has(t.parentId)));
 }
 
-// Presets carry only how a lens sorts and groups; which tasks it shows is placeOf's job.
+// Presets carry only how a lens sorts and groups; which tasks it shows is placeOf's job (errandsByPlace's,
+// on Places).
 const BLANK = { text: '', due: 'any' } as const;
 export const LENS_PRESET: Record<Place, TaskQuery> = {
   today: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
   // Flat: the only question on Week is what's due next, and every row already carries its category.
   week: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
+  // Drawn by PlacesLens (grouped by store, oldest first); this preset only shapes a search from it.
+  places: { ...BLANK, categories: [], statuses: [], sort: 'oldest', groupBy: 'none' },
   backlog: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'category' },
   done: { ...BLANK, categories: [], statuses: [], sort: 'newest', groupBy: 'none' },
 };

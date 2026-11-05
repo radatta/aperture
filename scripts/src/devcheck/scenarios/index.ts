@@ -8,6 +8,7 @@ import { failedReads } from './failed-reads';
 import { fluxHistory } from './flux-history';
 import { partsV2 } from './parts-v2';
 import { partsV2b } from './parts-v2b';
+import { places } from './places';
 import { smoke } from './smoke';
 
 export const SCENARIOS: Scenario[] = [
@@ -17,6 +18,7 @@ export const SCENARIOS: Scenario[] = [
   partsV2b,
   fluxHistory,
   attachmentDelete,
+  places,
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others
 ];
 

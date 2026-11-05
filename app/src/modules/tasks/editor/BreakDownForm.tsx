@@ -9,21 +9,24 @@ import { fmtDuration } from '../../../lib/format';
 import { useEditSlot } from './editState';
 import type { EditSlots } from './editState';
 
-// A line's parse errors in this form's terms, plus the tokens a part can't take: its category is its
-// parent's, and the deadline belongs to the parent (a part's own time is set on the part, as when its
-// block ends). The bulk-add grammar for those (#, due:) never shows here — a part has no use for it.
+// A line's parse errors in this form's terms, plus the tokens a part can't take: its category and place
+// are its parent's, and the deadline belongs to the parent (a part's own time is set on the part, as when
+// its block ends). The bulk-add grammar for those (#, @, due:) never shows here — a part has no use for it.
 const CATEGORY = 'a part takes its parent’s category — remove the category';
+const PLACE = 'a part takes its parent’s place — remove the @place';
 const DEADLINE = 'the deadline is the parent’s — remove the date (a part’s end is set on the part)';
 function lineErrors(line: ReturnType<typeof parseBulkTasks>['lines'][number]): string[] {
   const out = new Set<string>();
   line.errorKinds.forEach((k, i) => {
     if (k.kind === 'category') out.add(CATEGORY);
+    else if (k.kind === 'place') out.add(PLACE);
     else if (k.kind === 'due') out.add(DEADLINE);
     else if (k.kind === 'unknown')
       out.add(`“${k.token}” isn’t something a part takes — use ~minutes (like ~30) or notes:"…"`);
     else out.add(line.errors[i]!);
   });
   if (line.categoryLabel !== null) out.add(CATEGORY);
+  if (line.placeSlug !== null) out.add(PLACE);
   if (line.dueDay !== null) out.add(DEADLINE);
   return [...out];
 }
@@ -55,7 +58,7 @@ export function BreakDownForm({
   // Typed lines not yet added ask before an exit; lines on their way hold it.
   const dirty = text !== prefill;
   useEditSlot(edits, 'reveal', sending ? 'saving' : dirty ? 'dirty' : 'clean');
-  const parsed = parseBulkTasks(text, []);
+  const parsed = parseBulkTasks(text, [], []);
   const errors = parsed.lines.flatMap((l) => lineErrors(l).map((e) => `Line ${l.line}: ${e}`));
   const count = parsed.lines.length;
   const est = parsed.lines.reduce((s, l) => s + (l.estimateMin ?? 0), 0);
@@ -71,6 +74,7 @@ export function BreakDownForm({
           estimateMin: l.estimateMin,
           notes: l.notes,
           categoryId: task.categoryId,
+          place: task.place ?? null, // an errand's parts are on the same list
           parentId: task.id,
         })),
       );

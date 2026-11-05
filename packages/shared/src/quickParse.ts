@@ -6,7 +6,7 @@
 
 import { isDayKey, isTimeKey } from './dates';
 import { nightDueDay } from './due';
-import { hasTaskTokens, parseTaskLine, toCreateInput } from './bulkTasks';
+import { hasTaskTokens, parseTaskLine, toCreateInput, type PlaceRef } from './bulkTasks';
 import { TASK_NOTES_MAX } from './taskNotes';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
@@ -33,6 +33,7 @@ export type ParseTaskResult =
       source: 'haiku' | 'grammar';
       input: CreateTaskInput;
       categoryLabel: string | null;
+      placeName: string | null; // the list a known `@slug` put it on (places.ts)
       dropped: string[]; // fields the model returned that the server would reject, named for the receipt
       today: string; // the day "today"/"tmw" were resolved against (the user's dayStartHour)
     }
@@ -52,6 +53,7 @@ export type ParseCategory = Pick<Category, 'id' | 'label'>;
 
 export interface ParseContext {
   categories: readonly ParseCategory[]; // active only
+  places: readonly PlaceRef[]; // alive — a known `@slug` word is taken before the model sees the line
   today: string;
   dayStartHour: number; // the day start `today` was resolved with — a small-hours clock is tonight's
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
@@ -145,6 +147,25 @@ export function validateParsedTask(
   return { input, categoryLabel, dropped };
 }
 
+// A known `@slug` word in a natural-language line ("shampoo @safeway"): the place, and the line without it.
+// Deterministic, like the grammar — the model never guesses a place. An unknown `@word` stays in the line.
+// Trailing punctuation ("@safeway, nails") goes with the word.
+export function takePlaceWord(
+  line: string,
+  places: readonly PlaceRef[],
+): { place: PlaceRef | null; rest: string } {
+  for (const m of line.matchAll(/(^|\s)@([A-Za-z0-9][A-Za-z0-9-]*)([,.;:!?]*)(?=\s|$)/g)) {
+    const place = places.find((p) => p.slug === m[2]!.toLowerCase());
+    if (!place) continue;
+    const at = m.index + m[1]!.length;
+    const rest = (line.slice(0, at) + line.slice(at + 1 + m[2]!.length + m[3]!.length))
+      .replace(/\s+/g, ' ')
+      .trim();
+    return { place, rest };
+  }
+  return { place: null, rest: line };
+}
+
 // The one flow both the Lambda and the stub run. A ' | ' line takes the strict grammar (deterministic —
 // the model never sees it); anything else goes to `model`, and its fields through validateParsedTask.
 export async function runQuickParse(
@@ -155,7 +176,7 @@ export async function runQuickParse(
   const line = text.trim();
   if (!line) return { ok: false, reason: 'empty-title' };
   if (hasTaskTokens(line)) {
-    const l = parseTaskLine(line, ctx.categories);
+    const l = parseTaskLine(line, ctx.categories, ctx.places);
     if (l.errors.length) return { ok: false, reason: 'grammar', detail: l.errors[0] };
     const label = ctx.categories.find((c) => c.id === l.categoryId)?.label ?? null;
     return {
@@ -163,6 +184,7 @@ export async function runQuickParse(
       source: 'grammar',
       input: present(toCreateInput(l)),
       categoryLabel: label,
+      placeName: ctx.places.find((p) => p.slug === l.place)?.name ?? null,
       dropped: l.warnings,
       today: ctx.today,
     };
@@ -173,11 +195,14 @@ export async function runQuickParse(
       reason: 'unavailable',
       detail: `over ${PARSE_TEXT_MAX.toLocaleString('en-US')} characters`,
     };
-  const out = await model(line);
+  const { place, rest } = takePlaceWord(line, ctx.places);
+  if (!rest) return { ok: false, reason: 'empty-title' };
+  const out = await model(rest);
   if (!out.ok) return out;
-  const v = validateParsedTask(out.fields, { ...ctx, line });
+  const v = validateParsedTask(out.fields, { ...ctx, line: rest });
   if (!v) return { ok: false, reason: 'empty-title' };
-  return { ok: true, source: 'haiku', ...v, today: ctx.today };
+  if (place) v.input.place = place.slug;
+  return { ok: true, source: 'haiku', ...v, placeName: place?.name ?? null, today: ctx.today };
 }
 
 // One line for a toast or receipt: why a parse fell back to a raw save.

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, screen, waitFor, within } from '@testing-library/react';
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
@@ -7,6 +7,8 @@ import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { STUB_FAIL_NEXT_PARSE_KEY } from '../../data/stubParse';
 import { CAPTURE_OUTBOX_KEY, CAPTURE_PARKED_KEY, OUTBOX_STALE_MS } from './captureOutbox';
+import { PomodoroProvider } from '../pomodoro/PomodoroProvider';
+import { IdleFocus } from '../pomodoro/TimerBar';
 import { CaptureBar } from './CaptureBar';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -201,6 +203,39 @@ describe('CaptureBar', () => {
       expect((await api.listTasks()).every((t) => t.estimateMin === null)).toBe(true);
     });
 
+    it('an empty token region waits while the caret sits after " | ", and refuses a save visibly', async () => {
+      const { api, user, box } = await taskBar();
+      await user.type(box(), 'milk | ');
+      // About to type a token: no red mid-thought.
+      expect(screen.queryByText(/nothing after/)).toBeNull();
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      // The preview row's red line shows again, not only the refusal's reason.
+      const said = screen.getAllByText(/nothing after ' \| '/);
+      expect(said.some((el) => el.className.includes('text-danger'))).toBe(true);
+      expect(box().value).toBe('milk | ');
+      expect(await api.listTasks()).toHaveLength(0);
+      // Red is never a once-only refusal: Enter and Save again still refuse.
+      await user.keyboard('{Enter}');
+      await user.click(screen.getByLabelText('Save task'));
+      expect(screen.getByText(/Not saved/)).toBeTruthy();
+      expect(screen.queryByText(/Enter or Save again/)).toBeNull();
+      expect(box().value).toBe('milk | ');
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('an empty token region shows its error once the caret leaves it, or the field', async () => {
+      const { user, box } = await taskBar();
+      await user.type(box(), 'milk | ');
+      expect(screen.queryByText(/nothing after/)).toBeNull();
+      await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}');
+      expect(await screen.findByText(/nothing after ' \| '/)).toBeTruthy();
+      await user.keyboard('{End}');
+      await waitFor(() => expect(screen.queryByText(/nothing after/)).toBeNull());
+      act(() => box().blur());
+      expect(await screen.findByText(/nothing after ' \| '/)).toBeTruthy();
+    });
+
     it('a red error refuses Enter and Send, keeps the text, and says so', async () => {
       const { api, user, box } = await taskBar();
       await user.type(box(), 'x | ~30m');
@@ -214,10 +249,13 @@ describe('CaptureBar', () => {
       expect(await api.listTasks()).toHaveLength(0);
     });
 
-    it('an unknown label warns before submit, then saves uncategorised', async () => {
+    it('an unknown label warns once the caret leaves it, then saves uncategorised', async () => {
       const { api, user, box } = await taskBar();
       await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
       await user.type(box(), 'x | #Nope');
+      // Still being typed: the next letter might make it a match, so no gold warning yet.
+      expect(screen.queryByText(/no category/)).toBeNull();
+      await user.type(box(), ' ');
       expect(await screen.findByText(/no category 'Nope'/)).toBeTruthy();
       await user.keyboard('{Enter}');
 
@@ -225,6 +263,47 @@ describe('CaptureBar', () => {
         const [t] = await api.listTasks();
         expect(t).toMatchObject({ title: 'x', categoryId: null });
       });
+    });
+
+    it('Enter with an unknown #label still at the caret refuses once and shows why, then saves', async () => {
+      const { api, user, box } = await taskBar();
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
+      await user.type(box(), 'x | #zz');
+      expect(screen.queryByText(/no category/)).toBeNull();
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(screen.getByText("no category 'zz' — created without one")).toBeTruthy();
+      expect(box().value).toBe('x | #zz');
+      expect(await api.listTasks()).toHaveLength(0);
+
+      await user.click(screen.getByLabelText('Save task'));
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'x', categoryId: null }),
+      );
+    });
+
+    it('Enter on a half-typed #label with one match takes it, as Tab would', async () => {
+      const { api, user, box } = await taskBar();
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(1));
+      await user.type(box(), 'x | #Adm');
+      await screen.findByRole('group', { name: 'Suggestions' });
+      expect(screen.queryByText(/no category/)).toBeNull();
+      await user.keyboard('{Enter}');
+      const [admin] = await api.listCategories();
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({ title: 'x', categoryId: admin!.id }),
+      );
+    });
+
+    it('a half-typed #label that starts several refuses the save and says which', async () => {
+      const { api, user, box } = await taskBar({ categories: ['Admin', 'Admissions'] });
+      await waitFor(async () => expect(await api.listCategories()).toHaveLength(2));
+      await user.type(box(), 'x | #Adm');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Not saved/)).toBeTruthy();
+      expect(screen.getByText('#Adm could be Admin or Admissions — pick one')).toBeTruthy();
+      expect(box().value).toBe('x | #Adm');
+      expect(await api.listTasks()).toHaveLength(0);
     });
 
     it('"→ today" with an estimate plans that many minutes', async () => {
@@ -567,6 +646,7 @@ describe('CaptureBar', () => {
         source: 'haiku',
         input: { title: 'STALE' },
         categoryLabel: null,
+        placeName: null,
         dropped: [],
         today: todayKey(4),
       });
@@ -835,6 +915,7 @@ describe('CaptureBar', () => {
         source: 'haiku',
         input: { title: 'yesterday parse' },
         categoryLabel: null,
+        placeName: null,
         dropped: [],
         today: addDays(todayKey(4), -1),
       });
@@ -863,5 +944,332 @@ describe('CaptureBar', () => {
       );
       expect(titles.sort()).toEqual(['book flight', 'pay rent']);
     });
+  });
+});
+
+describe('CaptureBar — places', () => {
+  async function placeBar(opts: { hangPlaces?: boolean; more?: string[]; focus?: boolean } = {}) {
+    const api = createStubClient({ seed: false, storageKey: `cap-place-${Math.random()}` });
+    await api.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    for (const name of opts.more ?? []) await api.upsertPlace({ name });
+    if (opts.hangPlaces) vi.spyOn(api, 'listPlaces').mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    // AppShell docks the idle Focus button in the bar's trailing slot.
+    const bar = opts.focus ? (
+      <PomodoroProvider>
+        <CaptureBar trailing={<IdleFocus />} />
+      </PomodoroProvider>
+    ) : (
+      <CaptureBar />
+    );
+    renderWithProviders(bar, { api });
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    const box = () => screen.getByLabelText('Capture task') as HTMLTextAreaElement;
+    return { api, user, box };
+  }
+
+  it('an @ chip types the link word, the preview reads the name, and the task lands on the list', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @co');
+    const chip = await waitFor(() =>
+      within(screen.getByRole('group', { name: 'Suggestions' })).getByText('@Corner Shop', {
+        selector: 'button',
+      }),
+    );
+    await user.click(chip);
+    expect(box().value).toBe('milk | @corner ');
+    expect(await screen.findByText('@Corner Shop', { selector: 'span' })).toBeTruthy();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+  });
+
+  it('the receipt names the store an errand went to, not the backlog', async () => {
+    const { user, box } = await placeBar();
+    await user.type(box(), 'milk | @corner');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('Task added → Corner Shop')).toBeTruthy();
+  });
+
+  it('Enter on a half-typed @place with one match takes it — never a quiet drop off the list', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @cor');
+    await screen.findByRole('group', { name: 'Suggestions' });
+    // Still being typed at the caret: no "no place" warning flashes while the chip shows.
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+    expect(await screen.findByText('Task added → Corner Shop')).toBeTruthy();
+  });
+
+  it('a half-typed @place that starts several refuses the save and says which', async () => {
+    const { api, user, box } = await placeBar({ more: ['Costco'] });
+    await user.type(box(), 'milk | @co');
+    await screen.findByRole('group', { name: 'Suggestions' });
+    expect(screen.queryByText(/could be/)).toBeNull(); // mid-word: the chips speak
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText('@co could be Corner Shop or Costco — pick one')).toBeTruthy();
+    expect(box().value).toBe('milk | @co');
+    expect(await api.listTasks()).toHaveLength(0);
+  });
+
+  it('an @word that starts no place warns once you leave it, and saves off any list', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull(); // still being typed at the caret
+    act(() => box().blur());
+    expect(await screen.findByText(/no place '@zz'/)).toBeTruthy();
+    await user.type(box(), ' ');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),
+    );
+    expect(await screen.findByText('Task added → backlog')).toBeTruthy();
+  });
+
+  // The typing rule hides the warning while the caret is in the token — so Enter right there must not
+  // save it unseen (the receipt says only where it went). The first press shows it; the next one saves.
+  it('Enter with an unknown @word still at the caret refuses once and shows why, then saves', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText("no place '@zz' — created without one")).toBeTruthy();
+    expect(screen.getByText('Enter or Save again to save without it.')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(
+      /Not saved: no place '@zz' — created without one — Enter or Save again to save without it/,
+    );
+    expect(box().value).toBe('milk | @zz');
+    expect(await api.listTasks()).toHaveLength(0);
+
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),
+    );
+    expect(await screen.findByText('Task added → backlog')).toBeTruthy();
+    expect(box().value).toBe('');
+  });
+
+  it('no other bar control takes focus from the field while a warning is held back', async () => {
+    const { user, box } = await placeBar({ focus: true });
+    await screen.findByRole('button', { name: /^Focus$/ });
+    await user.type(box(), 'milk | @zz');
+    const blurred = vi.fn();
+    box().addEventListener('blur', blurred);
+    // Log last: Log mode drops the token warning by design.
+    for (const name of [/today/, /^Focus$/, /^Log$/]) {
+      const control = screen.getByRole('button', { name });
+      await user.pointer({ keys: '[MouseLeft>]', target: control });
+      expect(document.activeElement).toBe(box());
+      expect(screen.queryByText(/no place/)).toBeNull(); // nothing grew under the press
+      await user.pointer({ keys: '[/MouseLeft]', target: control });
+    }
+    expect(blurred).not.toHaveBeenCalled();
+  });
+
+  it('Put back and × keep focus in the field: no blur, no warning grown under the press', async () => {
+    localStorage.setItem(
+      CAPTURE_PARKED_KEY,
+      JSON.stringify([
+        { id: 'a', text: 'stamps', mode: 'task', toToday: false, why: 'set-aside' },
+        { id: 'b', text: 'eggs', mode: 'task', toToday: false, why: 'set-aside' },
+      ]),
+    );
+    const { user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    const blurred = vi.fn();
+    box().addEventListener('blur', blurred);
+    const discard = screen.getAllByRole('button', { name: 'Discard' })[0]!;
+    await user.pointer({ keys: '[MouseLeft>]', target: discard });
+    expect(document.activeElement).toBe(box());
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.pointer({ keys: '[/MouseLeft]', target: discard });
+    expect(screen.queryByText('Set aside: “stamps”')).toBeNull();
+    const putBack = screen.getByRole('button', { name: 'Put back' });
+    await user.pointer({ keys: '[MouseLeft>]', target: putBack });
+    expect(document.activeElement).toBe(box());
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.pointer({ keys: '[/MouseLeft]', target: putBack });
+    expect(box().value).toBe('eggs');
+    expect(screen.getByText('Set aside: “milk | @zz”')).toBeTruthy();
+    expect(blurred).not.toHaveBeenCalled();
+  });
+
+  // The typing rule's three steps, deliberately: leaving the field shows the warning, coming back into the
+  // token holds it back again, and Enter there still refuses once before it saves.
+  it('blur shows a held warning, tapping back into the token hides it, and Enter refuses once more', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull();
+    act(() => box().blur());
+    expect(await screen.findByText("no place '@zz' — created without one")).toBeTruthy();
+    await user.click(box()); // the caret lands at the end: back in the token
+    expect(box().selectionStart).toBe('milk | @zz'.length);
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText("no place '@zz' — created without one")).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(0);
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),
+    );
+  });
+
+  // The refusal's promise isn't the receipt's: a late receipt landing in between (an earlier capture's save
+  // or its parked failure) must not hide the warning again or make the promised second press refuse.
+  it.each([
+    ['an earlier save', 'resolve', 'Task added → Corner Shop'],
+    ['an earlier failure parked', 'reject', "Couldn't save — kept below the box."],
+  ] as const)('a held refusal survives a late receipt from %s', async (_, how, late) => {
+    const { api, user, box } = await placeBar();
+    const real = api.createTask.bind(api);
+    let settle!: () => void;
+    api.createTask = vi
+      .fn()
+      .mockImplementationOnce(
+        (input: Parameters<typeof real>[0]) =>
+          new Promise((ok, fail) => {
+            settle = () => (how === 'resolve' ? ok(real(input)) : fail(new Error('offline')));
+          }),
+      )
+      .mockImplementation(real);
+    await user.type(box(), 'eggs | @corner');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+    await user.type(box(), 'milk | @zz');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    act(() => settle());
+    expect(await screen.findByText(late)).toBeTruthy();
+    expect(screen.queryByText(/Not saved/)).toBeNull(); // the slot is the late receipt's now
+    // …but the warning and the promise stay, with the caret still in the token.
+    expect(document.activeElement).toBe(box());
+    expect(screen.getByText("no place '@zz' — created without one")).toBeTruthy();
+    expect(screen.getByText('Enter or Save again to save without it.')).toBeTruthy();
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks()).find((t) => t.title === 'milk')).toMatchObject({
+        place: null,
+      }),
+    );
+  });
+
+  it('Put back drops a refusal even when the line it brings back is refused too', async () => {
+    localStorage.setItem(
+      CAPTURE_PARKED_KEY,
+      JSON.stringify([
+        { id: 'a', text: 'y | ~45m', mode: 'task', toToday: false, why: 'set-aside' },
+      ]),
+    );
+    const { user, box } = await placeBar();
+    await user.type(box(), 'x | ~30m');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('y | ~45m');
+    expect(screen.getByText(/invalid estimate/)).toBeTruthy(); // its own error shows in the preview
+    expect(screen.queryByText(/Not saved/)).toBeNull(); // but nothing was refused for it yet
+  });
+
+  it('Put back and a mode switch drop a held refusal: the next press refuses afresh', async () => {
+    localStorage.setItem(
+      CAPTURE_PARKED_KEY,
+      JSON.stringify([{ id: 'a', text: 'eggs', mode: 'task', toToday: false, why: 'set-aside' }]),
+    );
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('eggs');
+    expect(screen.queryByText(/Not saved/)).toBeNull();
+    // The refused line comes back from the parked list: its earlier refusal doesn't carry over.
+    await user.click(screen.getByRole('button', { name: 'Put back' }));
+    expect(box().value).toBe('milk | @zz');
+    expect(screen.queryByText(/no place/)).toBeNull(); // caret at its end: held back again
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Log' }));
+    await user.click(screen.getByRole('button', { name: 'Task' }));
+    expect(screen.queryByText(/Not saved/)).toBeNull();
+    expect(screen.queryByText(/no place/)).toBeNull();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(0);
+  });
+
+  it('the Save button keeps focus in the field: no blur, no layout shift, a refusal then a save', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    const save = screen.getByLabelText('Save task');
+    const blurred = vi.fn();
+    box().addEventListener('blur', blurred);
+    // pointerdown → mousedown → click, as a tap or a mouse press does — the field must not blur between.
+    await user.pointer({ keys: '[MouseLeft>]', target: save });
+    expect(blurred).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(box());
+    expect(screen.queryByText(/no place/)).toBeNull(); // nothing grew under the press
+    await user.pointer({ keys: '[/MouseLeft]', target: save });
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText("no place '@zz' — created without one")).toBeTruthy();
+    expect(box().value).toBe('milk | @zz');
+    expect(await api.listTasks()).toHaveLength(0);
+
+    await user.click(save);
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: null }),
+    );
+    expect(blurred).not.toHaveBeenCalled();
+  });
+
+  it('a known @place still saves on the first Enter', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @corner');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+    expect(screen.queryByText(/Not saved/)).toBeNull();
+  });
+
+  it('a held-back refusal goes once the text changes — the next held warning refuses again', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk | @zz');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    await user.type(box(), 'q');
+    await waitFor(() => expect(screen.queryByText(/Not saved/)).toBeNull());
+    expect(screen.queryByText(/no place/)).toBeNull(); // typing again: held back again
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(screen.getByText("no place '@zzq' — created without one")).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(0);
+  });
+
+  it('waits for places before an @place line can save', async () => {
+    const { api, user, box } = await placeBar({ hangPlaces: true });
+    await user.type(box(), 'milk | @corner');
+    expect(await screen.findByText('Loading places…')).toBeTruthy();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText(/Not saved/)).toBeTruthy();
+    expect(box().value).toBe('milk | @corner');
+    expect(await api.listTasks()).toHaveLength(0);
+  });
+
+  it('quick add takes a known @word and says which list it went on', async () => {
+    const { api, user, box } = await placeBar();
+    await user.type(box(), 'milk @corner');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),
+    );
+    expect(await screen.findByText('milk · no category · @Corner Shop')).toBeTruthy();
+    expect(screen.getByText(/Task added → Corner Shop/)).toBeTruthy();
   });
 });

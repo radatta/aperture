@@ -35,7 +35,12 @@ bypass — the model never sees a grammar line.
     receipt says "Not saved" (the full reason is in the preview row, and in the status
     region for screen readers). Send is `aria-disabled`, not `disabled`, so a tap still explains. The
     notice clears once its cause is gone (line fixed, categories arrived, mode switched). Gold warnings
-    show in the preview row before submit and don't block.
+    don't block, but since places (2026-11-04) they wait while the caret is still in the token (so `@n`
+    doesn't flash "no place" mid-word), and the red "nothing after ' | '" waits while the caret sits right
+    after the separator; both show once the caret leaves or the field blurs. A warning still held back
+    refuses the **first** Enter/Save once, showing it ("Enter or Save again to save without it"); the
+    second press saves. Any edit, Put back or mode switch resets that. No control in the bar takes focus
+    from the field (mousedown guard), so a revealed warning can't move a button out from under a tap.
   - **One line only.** Tokens plus a line break is red — splitting would turn one capture into N tasks,
     truncating would drop text. Bulk add takes many. Multi-line captures *without* ` | ` are unchanged.
   - **Waits for categories.** A `#label` line before the list first loads is refused ("Loading
@@ -130,6 +135,9 @@ bypass — the model never sees a grammar line.
 
 **This is a spec Claude reads before generating a bulk paste — treat it as the contract, not prose.**
 
+Matching is exact here (bulk add, Raycast, MCP `parse_task`). Only capture's one-line Task mode completes a
+half-typed `#adm` / `@saf`: one match is taken on Enter, several block the save with "could be … — pick one".
+
 ```
 One task per line. A line is:   <title>[ | <tokens>]
 
@@ -142,6 +150,7 @@ One task per line. A line is:   <title>[ | <tokens>]
              due:<YYYY-MM-DD>  real calendar date, ISO   e.g. due:2026-09-25
              due:<YYYY-MM-DD>@<HH:MM>  + a 24h deadline time   e.g. due:2026-09-25@17:00
              notes:"<text>"    quoted; \n = a newline    e.g. notes:"Ch. 4\nq6: use the lemma"
+             @<place>          a place's link word       e.g. @safeway  (an errand — places.md)
 ```
 
 The `notes:"…"` value is the task's notes (light markdown — see [notes.md](notes.md)). Inside the

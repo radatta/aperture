@@ -68,6 +68,13 @@ import {
   parseBudgetMs,
   runQuickParse,
   userDueEpoch,
+  placeDigestOf,
+  placeError,
+  placeUnknownError,
+  PLACE_FINISHED_ERROR,
+  PLACE_PART_ERROR,
+  PLACE_TOKEN_RACE_ERROR,
+  slugify,
 } from '@aperture/shared';
 import type {
   ApiClient,
@@ -111,6 +118,9 @@ import type {
   FluxSetFilter,
   RecordFluxSetInput,
   LogEntry,
+  Place,
+  PlaceDigest,
+  PlaceTokenStatus,
   PomodoroSession,
   RecordLeetcodeAttemptInput,
   Roll,
@@ -131,12 +141,22 @@ import type {
   TaskStatus,
   UpsertCategoryInput,
   UpsertHabitInput,
+  UpsertPlaceInput,
   UpsertPlanInput,
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
 import { fluxFilterError, fluxSetError, inRange } from '@aperture/shared/flux';
 import type { Repo } from './ddb/repo';
+import type { PlaceTokenPointer, PlaceTokenStore } from './ddb/placeTokens';
+import { ConditionFailedError } from './ddb/DocClient';
+import {
+  countPlaceRead,
+  hashPlaceToken,
+  mintPlaceToken,
+  readsToday,
+  type PlaceReadAuth,
+} from './auth/placeToken';
 import { FinanceService } from './finance/service';
 import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
@@ -160,6 +180,7 @@ export interface BackendOptions {
   plaid?: PlaidGateway; // gated Plaid seam; defaults to the inert noop
   financeInvoker?: FinanceSyncInvoker; // starts a finance sync; defaults to nothing
   anthropic?: AnthropicGateway; // gated Claude API seam (quick add's parse); defaults to the inert noop
+  placeTokens?: PlaceTokenStore; // the Shortcut token's lookup rows (outside the user partition)
 }
 
 // Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
@@ -178,6 +199,24 @@ const unconfiguredObjects: ObjectStore = {
     throw new Error('Attachments unavailable: no object store configured.');
   },
 };
+// And for the place token: only the token methods and the Shortcut read touch it.
+const noPlaceTokens = (): never => {
+  throw new Error('Place tokens unavailable: no token store configured.');
+};
+const unconfiguredPlaceTokens = {
+  get: noPlaceTokens,
+  create: noPlaceTokens,
+  replace: noPlaceTokens,
+  delete: noPlaceTokens,
+  pointer: noPlaceTokens,
+} as unknown as PlaceTokenStore;
+const INACTIVE_TOKEN: PlaceTokenStatus = {
+  active: false,
+  createdAt: null,
+  lastUsedAt: null,
+  hint: null,
+  readsToday: 0,
+};
 
 // The server-side ApiClient — the SAME contract as the stub, over the DynamoDB Repo. Business rules
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
@@ -195,6 +234,26 @@ const BULK_SYNC_BUDGET_MS = 3_000;
 // plus the per-event DynamoDB writes — inside the 15 s Lambda timeout.
 const PULL_BUDGET_MS = 8_000;
 
+// A task's place as given ('' or absent is none), refused unless an alive place has that slug — the
+// stub's knownPlace. The wire is untrusted JSON, so a non-string is refused too.
+function knownPlace(slug: unknown, places: ReadonlySet<string>): string | null {
+  if (slug === undefined || slug === null || slug === '') return null;
+  if (typeof slug !== 'string' || !places.has(slug))
+    throw new Error(placeUnknownError(String(slug)));
+  return slug;
+}
+const byAdded = (a: Place, b: Place) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1);
+const isFinished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
+// A part's place is its parent's: none given takes it, a different slug is refused. Not a part → as given.
+function partPlace(given: string | null, parent: Task | undefined): string | null {
+  if (!parent) return given;
+  if (given !== null && given !== parent.place) throw new Error(PLACE_PART_ERROR);
+  return parent.place;
+}
+// Every hash a new pointer must retire: the live one it replaces, plus any a cut-short delete left.
+const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
+  prev ? [...new Set([...(prev.hash ? [prev.hash] : []), ...prev.retiring])] : [];
+
 export class BackendClient implements ApiClient {
   private readonly userId: string;
   private readonly now: () => number;
@@ -205,6 +264,7 @@ export class BackendClient implements ApiClient {
   private readonly objects: ObjectStore;
   private readonly finance: FinanceService;
   private readonly anthropic: AnthropicGateway;
+  private readonly placeTokens: PlaceTokenStore;
 
   constructor(
     private readonly repo: Repo,
@@ -218,6 +278,7 @@ export class BackendClient implements ApiClient {
     this.presigner = opts.presigner ?? unconfiguredPresigner;
     this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
+    this.placeTokens = opts.placeTokens ?? unconfiguredPlaceTokens;
     this.finance = new FinanceService({
       repo,
       userId: this.userId,
@@ -237,7 +298,15 @@ export class BackendClient implements ApiClient {
   }
   // The task literal, shared by createTask and createTasks. `t` is the createdAt stamp — a batch passes
   // one value for every task so they tie on createdAt and render as a block in ULID (paste) order.
-  private newTask(input: CreateTaskInput, t: number): Task {
+  // `places` = the alive slugs (placeSlugsFor); an unknown one throws here, before any write. `tasks` =
+  // the alive tasks when some input is a part (its parent's place is the part's — partPlace).
+  private newTask(
+    input: CreateTaskInput,
+    t: number,
+    places: ReadonlySet<string>,
+    tasks: readonly Task[],
+  ): Task {
+    const parent = input.parentId ? tasks.find((x) => x.id === input.parentId) : undefined;
     return {
       ...this.baseAt(t),
       title: input.title,
@@ -251,6 +320,7 @@ export class BackendClient implements ApiClient {
       bufferMin: input.bufferMin ?? null,
       estimateLockedMin: null,
       parentId: input.parentId || null, // '' is no parent, never a link to validate
+      place: partPlace(knownPlace(input.place, places), parent),
       actualAccruedMin: 0,
       startedAt: null,
       completedAt: null,
@@ -696,17 +766,29 @@ export class BackendClient implements ApiClient {
   }
   async createTask(input: CreateTaskInput): Promise<Task> {
     if (input.parentId) return (await this.createTasks([input]))[0]!; // the parts rules live once
-    return this.syncCalendar(null, await this.repo.putTask(this.newTask(input, this.now())));
+    const task = this.newTask(input, this.now(), await this.placeSlugsFor([input]), []);
+    return this.syncCalendar(null, await this.repo.putTask(task));
+  }
+  // The alive place slugs — read only when some input names a place. Consistent, like placeSlugs: a
+  // capture right after adding the place must find it.
+  private async placeSlugsFor(inputs: readonly CreateTaskInput[]): Promise<ReadonlySet<string>> {
+    if (!inputs.some((i) => i?.place)) return new Set();
+    return this.placeSlugs();
   }
   // Quick add's parse (shared runQuickParse; docs/areas/tasks/quick-add.md). The server owns "today" and
   // the category list — the client sends only the text — so Raycast and the app resolve "tmw" against
   // the same dayStartHour and can only ever get an active category's id back. Writes nothing.
   async parseTask(text: string): Promise<ParseTaskResult> {
     if (typeof text !== 'string') throw new Error('text must be a string');
-    const [settings, all] = await Promise.all([this.ensureSettings(), this.repo.listCategories()]);
+    const [settings, all, alivePlaces] = await Promise.all([
+      this.ensureSettings(),
+      this.repo.listCategories(),
+      this.repo.listPlaces({ consistent: true }), // a place added a moment ago resolves its @slug
+    ]);
     const categories = all.filter((c) => c.active).map(({ id, label }) => ({ id, label }));
+    const places = alivePlaces.map(({ slug, name }) => ({ slug, name }));
     const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
-    const ctx = { categories, today, dayStartHour: settings.dayStartHour };
+    const ctx = { categories, places, today, dayStartHour: settings.dayStartHour };
     return runQuickParse(text, ctx, (line) =>
       this.anthropic.parseTask({ text: line, today, categories, timeoutMs: parseBudgetMs(line) }),
     );
@@ -714,15 +796,16 @@ export class BackendClient implements ApiClient {
   async createTasks(inputs: CreateTaskInput[]): Promise<Task[]> {
     if (inputs.length === 0) return [];
     const t = this.now();
-    const tasks = inputs.map((input) => this.newTask(input, t)); // normalizes all first: one bad input writes nothing
-    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     // Parts (parts.ts): every parent is checked before any write. A planned task taking its first part
     // hands its spot on the plan to that part (the batch's first for it) — an untimed one: a timed part
-    // is on its own day by its time (option 3).
+    // is on its own day by its time (option 3). A part takes its parent's place (partPlace).
     // Consistent: a parent is written back from this copy (adoptAsParent), and a part made a moment
     // ago must count — else a rename just saved is lost, or the parent is adopted twice.
-    const parentIds = [...new Set(tasks.map((x) => x.parentId).filter((x): x is string => !!x))];
+    const parentIds = [...new Set(inputs.map((x) => x?.parentId).filter((x): x is string => !!x))];
     const all = parentIds.length ? await this.repo.listTasks({ consistent: true }) : [];
+    const places = await this.placeSlugsFor(inputs);
+    const tasks = inputs.map((input) => this.newTask(input, t, places, all)); // normalizes all first: one bad input writes nothing
+    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from the start: the writes below spend it too
     const landing = new Map<string, TaskPlan>(); // part id → the parent's row it takes over
     if (parentIds.length) {
       const plans = await this.repo.listAllPlans({ consistent: true });
@@ -808,7 +891,10 @@ export class BackendClient implements ApiClient {
     const all = await this.repo.listTasks();
     assertCanBePart(task, parent, all);
     const first = !hasParts(all, parentId);
-    const part = await this.repo.putTask({ ...task, parentId, updatedAt: this.now() });
+    // An open part takes its parent's place (PLACE_PART_ERROR); a finished one's is history. A detach
+    // (above) keeps whatever it had.
+    const place = isFinished(task) ? task.place : parent.place;
+    const part = await this.repo.putTask({ ...task, parentId, place, updatedAt: this.now() });
     if (first) await this.adoptAsParent(parent);
     if (task.parentId === parentId) return part; // already its part: nothing moved, nothing starts
     await this.releaseParentState(task.parentId); // moved from another parent
@@ -1305,6 +1391,7 @@ export class BackendClient implements ApiClient {
         bufferMin: null,
         estimateLockedMin: null,
         parentId: null,
+        place: null,
         actualAccruedMin: 0,
         startedAt: null,
         completedAt: null,
@@ -1428,6 +1515,202 @@ export class BackendClient implements ApiClient {
       await this.repo.putRoll({ ...r, categoryId: reassignToId, updatedAt: this.now() });
     const cat = await this.repo.getCategory(id);
     if (cat) await this.repo.putCategory({ ...cat, deletedAt: this.now(), updatedAt: this.now() });
+  }
+
+  // --- Places (errand lists — places.ts) ---
+  // Consistent (N is tiny): Settings reads it straight after a rename or an add.
+  async listPlaces(): Promise<Place[]> {
+    return (await this.repo.listPlaces({ consistent: true })).sort(byAdded);
+  }
+  // Consistent: an update decides on (and writes back) this row, and a just-deleted place must read gone.
+  private async mustPlace(id: string): Promise<Place> {
+    const p = await this.repo.getPlace(id, { consistent: true });
+    if (!p) throw new Error(`Not found: ${id}`);
+    return p;
+  }
+  private async placeSlugs(): Promise<ReadonlySet<string>> {
+    return new Set((await this.repo.listPlaces({ consistent: true })).map((p) => p.slug));
+  }
+  async upsertPlace(input: UpsertPlaceInput): Promise<Place> {
+    if (typeof input?.name !== 'string') throw new Error('A place needs a name');
+    if (input.slug !== undefined && typeof input.slug !== 'string')
+      throw new Error('A place link must be a string');
+    const name = input.name.trim();
+    // Consistent: the slug-uniqueness check must see a place added a moment ago.
+    const others = (await this.repo.listPlaces({ consistent: true })).filter(
+      (p) => p.id !== input.id,
+    );
+    if (input.id) {
+      const existing = await this.mustPlace(input.id);
+      const slug = input.slug ?? existing.slug;
+      const err = placeError(name, slug, others);
+      if (err) throw new Error(err);
+      // The slug is what tasks store, so a new one follows them — finished ones too: they stay placed, so
+      // their calibration can't change. Consistent: each is written back.
+      if (slug !== existing.slug)
+        for (const t of await this.repo.listTasks({ consistent: true }))
+          if (t.place === existing.slug)
+            await this.repo.putTask({ ...t, place: slug, updatedAt: this.now() });
+      return this.repo.putPlace({ ...existing, name, slug, updatedAt: this.now() });
+    }
+    const slug = input.slug ?? slugify(name);
+    const err = placeError(name, slug, others);
+    if (err) throw new Error(err);
+    return this.repo.putPlace({ ...this.base(), name, slug, lastReadAt: null });
+  }
+  // Its alive tasks move to `reassignToSlug` (another alive place — finished ones too, they stay placed),
+  // or its open ones go off any list (null — a finished task keeps the old slug as history, so it never
+  // turns into a calibration point after the fact). Then the place is tombstoned. Every check runs before
+  // the first write.
+  async deletePlace(id: string, reassignToSlug: string | null): Promise<void> {
+    const place = await this.mustPlace(id);
+    if (reassignToSlug === place.slug)
+      throw new Error('Move its errands to another place, or to no place');
+    const to = knownPlace(reassignToSlug, await this.placeSlugs());
+    for (const t of await this.repo.listTasks({ consistent: true }))
+      if (t.place === place.slug && (to !== null || !isFinished(t)))
+        await this.repo.putTask({ ...t, place: to, updatedAt: this.now() });
+    await this.repo.putPlace({ ...place, deletedAt: this.now(), updatedAt: this.now() });
+  }
+  // Open tasks only: a finished task's place is history, like its estimate (PLACE_FINISHED_ERROR). A part
+  // follows its parent (PLACE_PART_ERROR); a parent carries its open parts along — finished parts keep
+  // theirs. Parts first, so a cut-short move is finished by re-running it (each part whose place differs).
+  async setTaskPlace(id: string, place: string | null): Promise<Task> {
+    const t = await this.mustTask(id);
+    if (isFinished(t)) throw new Error(PLACE_FINISHED_ERROR);
+    if (t.parentId) throw new Error(PLACE_PART_ERROR);
+    const slug = knownPlace(place, place ? await this.placeSlugs() : new Set());
+    // Consistent: each part is written back from this copy.
+    const parts = (await this.repo.listTasks({ consistent: true })).filter(
+      (p) => p.parentId === id && !isFinished(p) && p.place !== slug,
+    );
+    if (parts.length)
+      await this.repo.putTasks(parts.map((p) => ({ ...p, place: slug, updatedAt: this.now() })));
+    return this.repo.putTask({ ...t, place: slug, updatedAt: this.now() });
+  }
+  // The Shortcut's digest as a pure read (Settings' Test, MCP) — no heartbeat, no count.
+  async listPlaceTasks(slug: string): Promise<PlaceDigest> {
+    const place = (await this.repo.listPlaces()).find((p) => p.slug === slug);
+    if (!place) throw new Error(placeUnknownError(String(slug)));
+    return placeDigestOf(place, await this.repo.listTasks());
+  }
+
+  // The Shortcut route (index.ts, NOT via RPC — like completeGoogleConnect): the edge resolved the token
+  // (auth + cap, resolvePlaceRead) and built this backend for its userId. Reads the place and its open
+  // errands; only then writes, exactly twice: the token's count (first — a token revoked mid-read fails
+  // here, 401, before anything else lands) and the place's lastReadAt. An unknown slug writes nothing.
+  // The heartbeat is best-effort: once the read is counted the digest goes out even if it fails (logged,
+  // name only) — Settings' "last called" lags, the Shortcut still shows the list.
+  async readPlaceForShortcut(slug: string, auth: PlaceReadAuth): Promise<PlaceDigest> {
+    if (auth.userId !== this.userId) throw new Error('Unauthorized: token is for another user');
+    const place = (await this.repo.listPlaces()).find((p) => p.slug === slug);
+    if (!place) throw new Error(placeUnknownError(slug));
+    const digest = placeDigestOf(place, await this.repo.listTasks());
+    const now = this.now();
+    await countPlaceRead(this.placeTokens, auth, now);
+    try {
+      await this.repo.touchPlace(place, now);
+    } catch (err) {
+      const name = err instanceof Error ? err.name : 'unknown';
+      console.log(JSON.stringify({ event: 'place_heartbeat_failed', name }));
+    }
+    return digest;
+  }
+
+  // The Shortcut token: one per user. Never the token or its hash out — hint (last 4) and timestamps.
+  async getPlaceTokenStatus(): Promise<PlaceTokenStatus> {
+    const ptr = await this.repo.getPlaceTokenPointer();
+    // Revoked (hash null), or a pointer whose lookup row is gone: a token that no longer works.
+    const row = ptr?.hash ? await this.placeTokens.get(ptr.hash, { consistent: true }) : null;
+    if (!row) return INACTIVE_TOKEN;
+    return {
+      active: true,
+      createdAt: row.createdAt,
+      lastUsedAt: row.lastUsedAt,
+      hint: row.hint,
+      readsToday: readsToday(row, this.now()),
+    };
+  }
+  // Pointer P (consistent) → new lookup row N → pointer {N, retiring: P's hash + P's leftovers}, written
+  // only on P's version → every retiring row deleted → retiring cleared. Two devices racing: one pointer
+  // write wins, the loser deletes its own N and throws (PLACE_TOKEN_RACE_ERROR) — no orphan token works.
+  // A crash after the pointer moved leaves the old hashes in `retiring`, deleted by the next rotate/revoke;
+  // they're already dead — a read is refused unless the pointer names its hash (resolvePlaceRead).
+  // The plaintext leaves here once and is never stored or logged.
+  async rotatePlaceToken(): Promise<{ token: string; status: PlaceTokenStatus }> {
+    const now = this.now();
+    const token = mintPlaceToken();
+    const hash = hashPlaceToken(token);
+    const hint = token.slice(-4);
+    const prev = await this.repo.getPlaceTokenPointer();
+    await this.placeTokens.create(hash, {
+      userId: this.userId,
+      createdAt: now,
+      updatedAt: now,
+      lastUsedAt: null,
+      readsDay: null,
+      readsCount: 0,
+      hint,
+    });
+    const next: PlaceTokenPointer = {
+      hash,
+      createdAt: now,
+      hint,
+      retiring: retiringOf(prev),
+      updatedAt: prev ? Math.max(now, prev.updatedAt + 1) : now,
+    };
+    try {
+      await this.repo.putPlaceTokenPointer(next, prev?.updatedAt ?? null);
+    } catch (err) {
+      // Lost or unknown: N must not outlive a pointer that may not name it (a pointer naming a deleted
+      // row just reads inactive — fail closed).
+      await this.placeTokens.delete(hash);
+      if (err instanceof ConditionFailedError)
+        throw new Error(PLACE_TOKEN_RACE_ERROR, { cause: err });
+      throw err;
+    }
+    await this.retirePlaceTokens(next);
+    return {
+      token,
+      status: { active: true, createdAt: now, lastUsedAt: null, hint, readsToday: 0 },
+    };
+  }
+  // Pointer → {hash: null, retiring: every old hash} on the version read → those rows deleted → retiring
+  // cleared. Leaves an inactive pointer (never a delete), so a rotate racing it loses its conditional write.
+  async revokePlaceToken(): Promise<void> {
+    const prev = await this.repo.getPlaceTokenPointer();
+    const retiring = retiringOf(prev);
+    if (!prev || (prev.hash === null && retiring.length === 0)) return;
+    const next: PlaceTokenPointer = {
+      hash: null,
+      createdAt: null,
+      hint: null,
+      retiring,
+      updatedAt: Math.max(this.now(), prev.updatedAt + 1),
+    };
+    try {
+      await this.repo.putPlaceTokenPointer(next, prev.updatedAt);
+    } catch (err) {
+      if (err instanceof ConditionFailedError)
+        throw new Error(PLACE_TOKEN_RACE_ERROR, { cause: err });
+      throw err;
+    }
+    await this.retirePlaceTokens(next);
+  }
+  // Delete every retiring lookup row (idempotent), then clear the list on the pointer as just written. A
+  // failed delete throws with the list intact — the next rotate/revoke retries it. A lost clear means
+  // another rotate/revoke already took the list over, so it is dropped, not retried.
+  private async retirePlaceTokens(ptr: PlaceTokenPointer): Promise<void> {
+    if (ptr.retiring.length === 0) return;
+    for (const h of ptr.retiring) await this.placeTokens.delete(h);
+    try {
+      await this.repo.putPlaceTokenPointer(
+        { ...ptr, retiring: [], updatedAt: Math.max(this.now(), ptr.updatedAt + 1) },
+        ptr.updatedAt,
+      );
+    } catch (err) {
+      if (!(err instanceof ConditionFailedError)) throw err;
+    }
   }
 
   // --- Settings ---
@@ -1781,6 +2064,7 @@ export class BackendClient implements ApiClient {
       sessions: await this.repo.listAllSessions(),
       days: await this.repo.listAllDays(),
       categories: await this.repo.listCategories(),
+      places: await this.listPlaces(), // never the token pointer or its lookup row (a credential)
       leetcodeAttempts: await this.repo.listLeetcodeAttempts(),
       stories: await this.repo.listStories(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),

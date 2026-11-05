@@ -25,6 +25,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { CategoryTag } from './CategoryTag';
+import { PlaceTag } from './PlaceTag';
 import { RollTag } from '../rolls/RollTag';
 import { PartsList } from './PartRow';
 import { TaskModalHost } from './TaskModalHost';
@@ -101,7 +102,8 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {actions}
-          {canScope && task.estimateMin == null && (
+          {/* An errand (on a store's list) is checked off, not timed — nothing to scope. */}
+          {canScope && task.estimateMin == null && !task.place && (
             <Button variant="quiet" size="sm" onClick={() => openAs('scope')}>
               Scope
             </Button>
@@ -173,7 +175,8 @@ function TaskMeta({
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
       <CategoryTag categoryId={task.categoryId} />
-      {task.estimateMin == null && canScope && (
+      <PlaceTag place={task.place} />
+      {task.estimateMin == null && canScope && !task.place && (
         <Text size="xs" tone="muted">
           not scoped
         </Text>

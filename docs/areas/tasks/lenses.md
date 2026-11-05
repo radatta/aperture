@@ -1,8 +1,10 @@
 # Task lenses
 
 `/tasks` is one list seen through preset **lenses** — Today · Week · Backlog · Done — plus the
-Recurring and Calibration views. Every open task lives in exactly one place, so no lens shows a task
-twice; typing in search looks across all of them. Around it: a Home "+ Add" to put things on today,
+Recurring and Calibration views. Every open task has exactly one home (Today, Week, Backlog or Done never
+show a task twice); **Places** also lists every open errand by store, so a dated or started errand shows
+there and in Week/Today ([places.md](places.md) §3). Typing in search looks across all of them, grouped by
+each task's one home. Around it: a Home "+ Add" to put things on today,
 a one-shot "→ today" on capture, and a night "Still open — when?" step.
 
 Code: `app/src/modules/tasks/query.ts` (pure engine), `useTaskQuery.ts` (lens + filter state),
@@ -18,6 +20,7 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 | done or dropped | Done |
 | timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
 | due today through today+6, or past due | Week |
+| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places |
 | everything else | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
@@ -31,7 +34,8 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   history only. Search matches every word against the title + category label + notes (case and
   accents ignored); a row the title and category alone don't explain says "in notes" ([notes.md](notes.md)).
   The add-to-today picker searches title + category only. Why: "find the thing" shouldn't depend on guessing which lens it's in.
-- **D2 — presets carry sort + group only.** Which tasks a lens shows is `placeOf`'s job, so a filter or
+- **D2 — presets carry sort + group only.** Which tasks a lens shows is `placeOf`'s job (on Places,
+  `errandsByPlace` — every open errand, the Shortcut's items), so a filter or
   a search can never be clipped by a lens's window. Backlog groups by category (Settings order,
   retired-with-tasks after, "No category" last); Week is flat (D10). Both sort soonest-due first; Done
   is ungrouped, newest finished first, 50 at a time.

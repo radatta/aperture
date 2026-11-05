@@ -1,14 +1,26 @@
 // @aperture/lambdas — the RPC BFF handler. One Lambda, one route: POST /api/<method> → the matching
 // ApiClient method over DynamoDB (single-table). Business logic lives in BackendClient (shared
 // machines); this file is just the AWS/HTTP edge. Phase 11 replaces the fixed userId with the Cognito
-// `sub`; Phase 12 provisions the table + wires TABLE_NAME.
-import { APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
+// `sub`; Phase 12 provisions the table + wires TABLE_NAME. Beside the RPC route sit three non-RPC ones:
+// /api/health, the Google OAuth callback, and the iPhone Shortcut's GET /api/places/<slug>/tasks.
+import {
+  APERTURE,
+  AUTH_HEADER,
+  ORIGIN_SECRET_HEADER,
+  PLACE_READ_TEXT,
+  placeLensPath,
+  placeReadUnknownText,
+  placeUnknownError,
+} from '@aperture/shared';
+import type { PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
 import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
 import { handleRpc } from './handler';
 import { BackendClient } from './backend';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
+import { PlaceTokenStore } from './ddb/placeTokens';
+import { PlaceReadCapError, resolvePlaceRead } from './auth/placeToken';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
 import { createS3Presigner } from './s3/presigner';
@@ -92,10 +104,6 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
   if (event.requestContext?.http?.method === 'OPTIONS')
     return { statusCode: 204, headers: CORS, body: '' };
 
-  const body = event.body
-    ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
-    : {};
-
   // Origin lockdown for HTTP requests only: the Function URL is public, so only requests through
   // CloudFront (which stamps the shared secret) are honored. Direct invokes are AWS-cred-gated already.
   const originSecret = process.env.ORIGIN_SECRET;
@@ -152,6 +160,15 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
       return back('error');
     }
   }
+  // The iPhone Shortcut's read (places.md): GET /api/places/<slug>/tasks with a place token — OUTSIDE the
+  // RPC dispatch, and the only thing a place token opens. Behind the origin gate above, ahead of the
+  // JWT path: every /api/places/* path ends here, so it never reaches handleRpc and never falls through
+  // to JWT. The body (and testMode) is ignored.
+  if (path.startsWith('/api/places/')) return placeRead(event, path);
+
+  const body = event.body
+    ? (JSON.parse(event.body) as { args?: unknown[]; testMode?: boolean })
+    : {};
   // JWT arrives in the custom header (past CloudFront); fall back to Authorization for direct/local calls.
   const authHeader =
     event.headers?.[AUTH_HEADER] ?? event.headers?.authorization ?? event.headers?.Authorization;
@@ -185,5 +202,69 @@ export async function handler(event: HttpEvent): Promise<HttpResult> {
         ? 404
         : 400;
     return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
+  }
+}
+
+// Case-insensitive, then lowercased: an automation passing `Safeway` finds `safeway`.
+const PLACE_ROUTE = /^\/api\/places\/([A-Za-z0-9-]{1,32})\/tasks$/;
+// A fixed code per 401 (so the log line can never echo anything a message might one day carry).
+const UNAUTHORIZED_REASON = (message: string): string =>
+  /missing/.test(message)
+    ? 'missing'
+    : /not a place token/.test(message)
+      ? 'malformed'
+      : /revoked/.test(message)
+        ? 'revoked'
+        : 'unknown';
+
+// 405 non-GET → 401 no/unknown token, or one its user's pointer no longer names (revoked/rotated out —
+// resolvePlaceRead; no 'local' fallback, any stage) → 429 at the daily cap → 422 a
+// malformed path or an unknown slug, only once authenticated (no unauthenticated slug probing) → 200 the
+// digest + lens link. Never 404: CloudFront turns an origin 403/404 into the app's index.html (a 200 the
+// Shortcut would read as an empty list). Every body carries `text` (the digest's, or PLACE_READ_TEXT), so
+// no failure is silent on the phone. Only a 200 writes (the count + the place's heartbeat —
+// BackendClient.readPlaceForShortcut). The log line carries the outcome only — never the header, token,
+// hash or an error message.
+async function placeRead(event: HttpEvent, path: string): Promise<HttpResult> {
+  const reply = (
+    statusCode: number,
+    reason: string,
+    body: PlaceRead | PlaceReadError,
+    extra: Record<string, string> = {},
+  ): HttpResult => {
+    console.log(JSON.stringify({ event: 'place_read', ok: statusCode === 200, reason, ...extra }));
+    return { statusCode, headers: CORS, body: JSON.stringify(body) };
+  };
+  if (event.requestContext?.http?.method !== 'GET') {
+    const res = reply(405, 'method', { error: 'Method Not Allowed', text: PLACE_READ_TEXT.method });
+    return { ...res, headers: { ...res.headers, allow: 'GET' } };
+  }
+  const now = Date.now();
+  const slug = PLACE_ROUTE.exec(path)?.[1]?.toLowerCase();
+  const writes = liveWrites(doc); // one per request: the token store and the Repo share it
+  const store = new PlaceTokenStore(doc, writes);
+  try {
+    const auth = await resolvePlaceRead(store, event.headers?.[AUTH_HEADER], now);
+    if (!slug) return reply(422, 'path', { error: 'Not a place list', text: PLACE_READ_TEXT.path });
+    const backend = new BackendClient(new Repo(doc, writes, auth.userId), {
+      userId: auth.userId,
+      placeTokens: store,
+    });
+    const digest = await backend.readPlaceForShortcut(slug, auth);
+    const read: PlaceRead = { ...digest, url: `${APP_URL}${placeLensPath(digest.slug)}` };
+    return reply(200, 'ok', read);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    if (err instanceof PlaceReadCapError)
+      return reply(429, 'cap', { error: message, text: PLACE_READ_TEXT.cap });
+    if (message.startsWith('Unauthorized'))
+      return reply(401, UNAUTHORIZED_REASON(message), {
+        error: message,
+        text: PLACE_READ_TEXT.unauthorized,
+      });
+    if (slug && message === placeUnknownError(slug))
+      return reply(422, 'place', { error: message, text: placeReadUnknownText(slug) });
+    const name = err instanceof Error ? err.name : 'unknown';
+    return reply(500, 'error', { error: 'Internal error', text: PLACE_READ_TEXT.error }, { name });
   }
 }

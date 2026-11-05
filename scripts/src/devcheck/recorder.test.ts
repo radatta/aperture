@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { idsFromCreateResponse, methodOf } from './recorder';
+import { idsFromCreateResponse, isCreateRequest, methodOf } from './recorder';
 
 describe('recorder', () => {
   it('reads the method from an /api/ URL', () => {
@@ -18,6 +18,18 @@ describe('recorder', () => {
       'f',
     ]);
     expect(idsFromCreateResponse('splitTask', split)).toEqual(['f']);
+  });
+
+  it('records a place added in Settings, never an edit of an existing one', () => {
+    expect(idsFromCreateResponse('upsertPlace', { id: 'p1', slug: 'shop' })).toEqual(['p1']);
+    const body = (input: unknown) => JSON.stringify({ args: [input] });
+    expect(isCreateRequest('upsertPlace', body({ name: 'Shop' }))).toBe(true);
+    expect(isCreateRequest('upsertPlace', body({ id: 'p1', name: 'Shop' }))).toBe(false);
+    // unreadable: not recorded (the end-of-run check reports a place that appeared)
+    expect(isCreateRequest('upsertPlace', null)).toBe(false);
+    expect(isCreateRequest('upsertPlace', 'not json')).toBe(false);
+    expect(isCreateRequest('createTask', null)).toBe(true);
+    expect(isCreateRequest('listPlaces', body({}))).toBe(false);
   });
 
   it('ignores other methods and malformed bodies', () => {

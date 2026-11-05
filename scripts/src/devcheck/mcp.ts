@@ -3,7 +3,14 @@
 // dev origin, a create is ledgered from its response, and a delete must name a ledger id. The server is
 // stateless JSON-RPC (lambdas/src/mcp/protocol.ts): no initialize or session needed; a tool's result is
 // `{content: [{type: 'text', text}], isError?}` inside HTTP 200, the text JSON (or 'ok').
-import { FLUX_SET_VIA, type DevAttachment, type DevTask, type FetchLike } from './api';
+import {
+  ledgerKind,
+  type DevAttachment,
+  type DevPlace,
+  type DevPlaceDigest,
+  type DevTask,
+  type FetchLike,
+} from './api';
 import { DEV_ORIGIN, assertDevOrigin } from './config';
 import { DevcheckError } from './errors';
 import type { Ledger } from './ledger';
@@ -75,10 +82,9 @@ export function createMcpClient({
     }
   }
 
-  // A write may only touch a task this harness created (and not a Flux set's id) — as api.ts.
+  // A write may only touch a task this harness created (not a Flux set's or a place's id) — as api.ts.
   function assertLedgerTask(id: string): void {
-    const isFlux = ledger.read().some((e) => e.id === id && e.via === FLUX_SET_VIA);
-    if (!ledger.has(id) || isFlux)
+    if (!ledger.has(id) || ledgerKind(ledger.read(), id) !== 'task')
       throw new DevcheckError(
         'LEDGER_GUARD',
         `refusing to touch ${id} — the ledger never recorded it`,
@@ -92,14 +98,39 @@ export function createMcpClient({
     listBacklog: () => data<DevTask[]>('list_backlog'),
     listAttachments: (taskId: string) => data<DevAttachment[]>('list_attachments', { taskId }),
     getAttachmentDownloadUrl: (id: string) => data<string>('get_attachment_download_url', { id }),
+    listPlaces: () => data<DevPlace[]>('list_places'),
+    // The digest plus each errand's id and status (lambdas/src/mcp/placeTools.ts) — a pure read, no heartbeat.
+    listPlaceTasks: (place: string) =>
+      data<DevPlaceDigest & { tasks: { id: string; title: string; status: string }[] }>(
+        'list_place_tasks',
+        { place },
+      ),
   };
 
   const writes = {
-    async createTask(input: { title: string; estimateMin?: number }): Promise<DevTask> {
+    async createTask(input: {
+      title: string;
+      estimateMin?: number;
+      place?: string | null;
+    }): Promise<DevTask> {
       ledger.append({ run, op: 'intent', via: MCP_CREATE_VIA, title: input.title });
       const task = await data<DevTask>('create_task', input);
       ledger.append({ run, op: 'created', id: task.id, via: MCP_CREATE_VIA, title: input.title });
       return task;
+    },
+    // Patch fields on a task this run created (update_task: place moves it between errand lists).
+    async updateTask(id: string, patch: { place?: string | null }): Promise<DevTask> {
+      assertLedgerTask(id);
+      return data<DevTask>('update_task', { id, ...patch });
+    },
+    // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
+    // a parent) — omitted here, it is left out of the call, never sent as null.
+    async completeTask(
+      id: string,
+      actualMin?: number,
+    ): Promise<{ task: DevTask; previousActualMin: number | null }> {
+      assertLedgerTask(id);
+      return data('complete_task', actualMin === undefined ? { id } : { id, actualMin });
     },
     // Deleting a parent deletes its parts, so a recorded parent with a part the ledger doesn't know is
     // refused, as the pipeline's cleanup does. A task already gone answers Not found — returned, not thrown.
