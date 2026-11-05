@@ -120,6 +120,36 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await waitFor(() => expect(screen.queryByText('not syncing')).toBeNull());
   });
 
+  it('Again on a done block resets its clock first, so the wait before it is never credited; the new block beats', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const api: ApiClient = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    // Adopted on Done: past its 25 minutes, last beat 30 s ago; nothing beats while it sits there.
+    api.listRunningSessions = async () => [
+      { ...s0, activeMinutes: 25.5, lastHeartbeatAt: Date.now() - 30_000 },
+    ];
+    const calls: string[] = [];
+    const resume = api.resumeSession.bind(api);
+    const beat = api.heartbeatSession.bind(api);
+    api.resumeSession = (id) => (calls.push('resume'), resume(id));
+    api.heartbeatSession = (id) => (calls.push('beat'), beat(id));
+    renderApp({ api, path: '/settings' });
+    await screen.findByText('Done');
+    await act(async () => void vi.advanceTimersByTime(15_000));
+    expect(calls).toEqual([]); // on Done the wait is never beaten
+    await user.click(screen.getByRole('button', { name: 'Again' }));
+    await waitFor(() => expect(calls).toEqual(['resume'])); // the clock resets, crediting nothing
+    await act(async () => void vi.advanceTimersByTime(15_000));
+    await waitFor(() => expect(calls).toEqual(['resume', 'beat'])); // the new block counts
+  });
+
   it('a failed keep keeps the stale prompt and says so', async () => {
     const user = userEvent.setup();
     const api: ApiClient = stub();

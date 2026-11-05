@@ -148,6 +148,17 @@ export const timerCredit: Scenario = {
       what: 'A second running timer keeps beating meanwhile and its stop credits its whole run',
     },
     {
+      id: 'extend-on-done',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Again on a block that reached Done: the wait before it is not credited, the new block counts',
+      offDev: {
+        file: 'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
+        test: 'Again on a done block resets its clock first, so the wait before it is never credited; the new block beats',
+        why: 'the wait is the time between Done and Again, which on dev would be a second 1-minute block plus a held wait on top of done-stop (another ~80 s of the slow row); the fake-timer test drives the minutes and the beat loop directly, and done-stop already proves the capped credit on the wire',
+      },
+    },
+    {
       id: 'bad-cap',
       entry: 'api',
       kind: 'edge',
