@@ -178,9 +178,191 @@ c('a .hostjobs under a symlinked parent is refused (real-path pin)', setup='pare
 c('a symlinked .hostjobs is refused', setup='hj-symlink', exit=1, noResult=True, inboxLeft=1, calls=[])
 c('a symlinked results dir is refused', setup='results-symlink', exit=1, noResult=True, inboxLeft=1, calls=[])
 
+# ===================================================================================================== sim job ===
+# The default tape is a happy sim: axe 1.8.0, one booted aperture-devcheck, keyboard prefs 0/0, Device Hub up, the
+# web app in front with its Home Screen icon on screen, Home's capture bar at the bottom, a soft keyboard (keys,
+# space bar, accessory Done) and the Settings build stamp for sha aaaaaaa. Cases put their own rules first.
+U = '6FDB7DD0-EA8A-48DC-8A3D-D7CC9AF2FA1F'
+PW = 'FIXTUREPW-9d41'  # run-fixtures.sh: MAILROOM_FIXTURE_PW
+def el(role, label, value, x, y, w, h, **k): return {'role': role, 'AXLabel': label, 'AXValue': value, 'frame': {'x': x, 'y': y, 'width': w, 'height': h}, **k}
+def dev(state='Booted', n=1): return {'devices': {'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{'name': 'aperture-devcheck', 'udid': U, 'state': state, 'isAvailable': True}] * n}}
+ICON = {'role': 'AXButton', 'AXLabel': 'Aperture', 'frame': {'x': 304.3, 'y': 188.3, 'width': 71, 'height': 90.7}}
+def tree(app='Web', icon=True): return [{'role': 'AXApplication', 'AXLabel': app, 'frame': {'x': 0, 'y': 0, 'width': 402, 'height': 874}, 'children': [ICON] if icon else [{'role': 'AXGroup', 'AXLabel': 'Aperture', 'frame': {'x': 0, 'y': 0, 'width': 0, 'height': 0}}]}]
+def pt(x, y, out, **k): return {'m': f'--point {x},{y} ', 'out': out, **k}
+CAPTURE = el('AXTextArea', 'Capture log', 'What happened?', 25, 795, 308, 36)
+KEYS = {'q': (23, 618), 'w': (62, 618), 'e': (102, 618), 'r': (141, 618), 't': (181, 618), 'y': (221, 618), 'u': (260, 618), 'i': (300, 618), 'o': (339, 618), 'p': (378, 618),
+        'a': (42, 672), 's': (82, 672), 'd': (121, 672), 'f': (161, 672), 'g': (200, 672), 'h': (240, 672), 'j': (279, 672), 'k': (319, 672), 'l': (359, 672),
+        'z': (82, 726), 'x': (121, 726), 'c': (161, 726), 'v': (200, 726), 'b': (240, 726), 'n': (279, 726), 'm': (319, 726), 'delete': (372, 726), 'space': (201, 780)}
+deftape = ([{'m': 'axe --version', 'out': '1.8.0'}, {'m': 'xcodebuild -version', 'out': 'Xcode 27.2'},
+            {'m': 'xcrun simctl list devices -j', 'out': dev()}, {'m': 'defaults read com.apple.keyboard.preferences', 'out': '0'},
+            {'m': 'pgrep -x DeviceHub'},
+            pt(200, 813, CAPTURE), pt(361, 512, el('AXButton', 'Done', '', 341, 493, 40, 38)),
+            pt(55, 860, el('AXStaticText', '', 'Build aaaaaaa', 20, 852, 71, 17)),
+            pt(20, 168, el('AXLink', 'Home', 'Home', 20, 158, 37, 20)), pt(140, 168, el('AXLink', 'Tasks', 'Tasks', 118, 158, 36, 20)),
+            pt(380, 168, el('AXLink', 'Settings', 'Settings', 360, 158, 40, 20))]
+           + [pt(x, y, el('AXButton', k, '', x - 15, y - 20, 30, 40)) for k, (x, y) in KEYS.items()]
+           + [{'m': 'describe-ui --udid', 'out': tree()}])
+simbase = {'v': 1, 'id': '20261104T190000Z-ios-launch-ab12', 'job': 'sim', 'submittedAt': 'now', 'expiresInMin': 10,
+           'params': {'sha': A, 'timeoutSec': 300, 'shutdown': False,
+                      'steps': [{'op': 'launch'}, {'op': 'readBuild'}, {'op': 'expectBuild'}, {'op': 'shot', 'name': 'home'}]}}
+L = {'op': 'launch'}
+def ST(*steps): return {'params': {'steps': list(steps)}}
+def F(label, x, y, as_, **k): return {'op': 'find', 'label': label, 'near': {'x': x, 'y': y}, 'radius': 10, 'as': as_, **k}
+NOSIM = ['axe ', 'xcrun ']
+def sc(name, steps=None, **k):
+    if steps is not None: k['patch'] = {**k.get('patch', {}), **ST(*steps)}
+    c(name, kind='sim', **k)
+def srej(name, reason, steps=None, patch=None):
+    k = {'patch': patch} if patch else {}
+    sc(name, steps, expect={'status': 'rejected', 'reason': reason}, simExcludes=NOSIM, ts=reason, **k)
+def serr(name, detail, steps=None, reason='SIM_UNAVAILABLE', **k):
+    sc(name, steps, expect={'status': 'error', 'reason': reason, 'detail': detail}, **k)
+def sfail(name, detail, steps, **k): sc(name, steps, expect={'status': 'fail', 'reason': 'ASSERT', 'detail': detail}, **k)
+def spass(name, steps=None, **k):
+    e = {'status': 'pass', 'reason': None, **k.pop('expect', {})}
+    sc(name, steps, expect=e, **k)
+
+# --- the plan runs ---
+spass('sim: launch, read the build, screenshot (the canonical plan)', ts=None,
+      expect={'buildsSeen': ['aaaaaaa'], 'shots': ['shots/01-home.png'], 'signedIn': 'already', 'booted': 'warm', 'detail': None,
+              'device': {'name': 'aperture-devcheck', 'udid': U, 'runtime': 'iOS 27.0', 'axe': '1.8.0', 'xcode': 'Xcode 27.2'}},
+      files=['shots/01-home.png', 'progress.json'],
+      simIncludes=['axe --version', 'xcrun simctl list devices -j', 'pgrep -x DeviceHub', 'defaults read com.apple.keyboard.preferences HardwareKeyboardLastSeen',
+                   'batch --step button home', 'tap -x 339 -y 233 --tap-style physical', '--point 380,168', '--point 55,860', 'screenshot --output'],
+      simExcludes=['axe type', 'terminate', 'bootstatus', 'defaults write'])
+EVERY = [L, {'op': 'signIn'}, {'op': 'nav', 'tab': 'Tasks'}, F('Capture log', 200, 813, 'bar'), {'op': 'tap', 'label': 'Capture', 'near': {'x': 200, 'y': 813}},
+         {'op': 'expect', 'as': 'bar', 'valueIs': 'What happened?'}, {'op': 'expect', 'as': 'bar', 'labelIs': 'Capture log'}, {'op': 'expect', 'as': 'bar', 'enabled': True},
+         {'op': 'keys', 'text': 'ab'}, {'op': 'erase', 'n': 2}, {'op': 'blur'}, {'op': 'scroll', 'dir': 'down', 'pt': 200}, {'op': 'readBuild'},
+         {'op': 'expectBuild', 'relaunches': 0}, {'op': 'shot', 'name': 'all-ops'}, {'op': 'wait', 's': 1}, {'op': 'kill', 'method': 'terminate'}, L,
+         {'op': 'expect', 'signedIn': True}, {'op': 'shutdown'}]
+spass('sim: a plan using every op passes', EVERY, ts=None, expect={'booted': 'off'},
+      simIncludes=['tap -x 42 -y 672', 'tap -x 240 -y 726', 'tap -x 372 -y 726', 'tap -x 361 -y 512', 'swipe --start-x 201 --start-y 650 --end-x 201 --end-y 450',
+                   'simctl terminate ' + U + ' com.apple.webapp', 'simctl shutdown'], simExcludes=['axe type'])
+
+# --- plan validation (before any simctl/axe call) ---
+srej('sim: a short sha is BAD_PARAM', 'BAD_PARAM', patch={'params': {'sha': 'abc1234'}})
+srej('sim: timeoutSec 601 is BAD_PARAM', 'BAD_PARAM', patch={'params': {'timeoutSec': 601}})
+srej('sim: timeoutSec 59 is BAD_PARAM', 'BAD_PARAM', patch={'params': {'timeoutSec': 59}})
+srej('sim: an extra param (url) is BAD_PARAM', 'BAD_PARAM', patch={'params': {'url': 'https://example.com'}})
+srej('sim: a non-boolean shutdown is BAD_PARAM', 'BAD_PARAM', patch={'params': {'shutdown': 'yes'}})
+srej('sim: no steps is BAD_PARAM', 'BAD_PARAM', [])
+srej('sim: steps as an object is BAD_PARAM', 'BAD_PARAM', patch={'params': {'steps': {'op': 'launch'}}})
+srej('sim: 81 ops is TOO_MANY_OPS', 'TOO_MANY_OPS', [{'op': 'wait', 's': 1}] * 81)
+srej('sim: an unknown op (openUrl) is BAD_OP', 'BAD_OP', [L, {'op': 'openUrl', 'route': '/'}])
+srej('sim: an extra key on an op is BAD_OP', 'BAD_OP', [{'op': 'launch', 'url': 'x'}])
+srej('sim: keys with a digit is BAD_OP', 'BAD_OP', [L, {'op': 'keys', 'text': 'a1'}])
+srej('sim: keys with a capital is BAD_OP', 'BAD_OP', [L, {'op': 'keys', 'text': 'Ab'}])
+srej('sim: keys with a trailing newline is BAD_OP', 'BAD_OP', [L, {'op': 'keys', 'text': 'ab\n'}])
+srej('sim: keys over 24 chars is BAD_OP', 'BAD_OP', [L, {'op': 'keys', 'text': 'a' * 25}])
+srej('sim: a 61-char label is BAD_OP', 'BAD_OP', [L, F('A' * 61, 200, 200, 'x')])
+srej('sim: a label with a newline is BAD_OP', 'BAD_OP', [L, F('Home\n', 200, 200, 'x')])
+srej('sim: a label with a dollar is BAD_OP', 'BAD_OP', [L, F('$(id)', 200, 200, 'x')])
+srej('sim: near off the screen is BAD_OP', 'BAD_OP', [L, F('Home', 403, 200, 'x')])
+srej('sim: radius 81 is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'radius': 81}])
+srej('sim: near and scan together are BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'scan': {'x': 200, 'from': 100, 'to': 200}}])
+srej('sim: neither near nor scan is BAD_OP', 'BAD_OP', [L, {'op': 'find', 'label': 'Home', 'as': 'x'}])
+srej('sim: a scan of 22 probes is BAD_OP', 'BAD_OP', [L, {'op': 'find', 'label': 'Home', 'as': 'x', 'scan': {'x': 200, 'from': 0, 'to': 630}}])
+srej('sim: radius with scan is BAD_OP', 'BAD_OP', [L, {'op': 'find', 'label': 'Home', 'as': 'x', 'radius': 20, 'scan': {'x': 200, 'from': 0, 'to': 60}}])
+srej('sim: an unknown role is BAD_OP', 'BAD_OP', [L, {**F('Home', 200, 200, 'x'), 'role': 'AXWindow'}])
+srej('sim: wait 31 is BAD_OP', 'BAD_OP', [{'op': 'wait', 's': 31}])
+srej('sim: a capitalised shot name is BAD_OP', 'BAD_OP', [L, {'op': 'shot', 'name': 'Home'}])
+srej('sim: erase 0 is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 0}])
+srej('sim: erase 25 is BAD_OP', 'BAD_OP', [L, {'op': 'erase', 'n': 25}])
+srej('sim: an unknown nav tab is BAD_OP', 'BAD_OP', [L, {'op': 'nav', 'tab': 'Admin'}])
+srej('sim: a kill method off the list is BAD_OP', 'BAD_OP', [L, {'op': 'kill', 'method': 'pkill'}])
+srej('sim: expect on an unknown name is BAD_OP', 'BAD_OP', [L, {'op': 'expect', 'as': 'nope', 'enabled': True}])
+srej('sim: expect with two assertions is BAD_OP', 'BAD_OP', [L, F('Home', 20, 168, 'h'), {'op': 'expect', 'as': 'h', 'enabled': True, 'valueIs': 'Home'}])
+srej('sim: sameWidthAs an unknown name is BAD_OP', 'BAD_OP', [L, F('Home', 20, 168, 'h'), {'op': 'expect', 'as': 'h', 'sameWidthAs': 'nope'}])
+srej('sim: a reused name is BAD_OP', 'BAD_OP', [L, F('Home', 20, 168, 'h'), F('Tasks', 140, 168, 'h')])
+srej('sim: a kill not followed by launch is BAD_OP', 'BAD_OP', [L, {'op': 'kill', 'method': 'terminate'}, {'op': 'nav', 'tab': 'Home'}])
+srej('sim: shutdown before the last op is BAD_OP', 'BAD_OP', [L, {'op': 'shutdown'}, {'op': 'wait', 's': 1}])
+srej('sim: 21 screenshots is BAD_OP', 'BAD_OP', [L] + [{'op': 'shot', 'name': f's{i}'} for i in range(21)])
+srej('sim: tapping Mark done is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Mark done', 'near': {'x': 200, 'y': 600}}])
+srej('sim: tapping Save log is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': 'Save log', 'near': {'x': 360, 'y': 810}}])
+srej('sim: tapping " Save " (padded) is DENIED_TAP', 'DENIED_TAP', [L, {'op': 'tap', 'label': ' Save ', 'near': {'x': 200, 'y': 600}}])
+srej('sim: an unknown job field is BAD_JSON', 'BAD_JSON', patch={'device': 'iPhone'})
+
+# --- the sim can't run it: error, so the devcheck says "needs you" ---
+serr('sim: no axe is AXE_MISSING', 'AXE_MISSING', tape=[{'m': 'axe --version', 'rc': 127}], simExcludes=['describe-ui', 'bootstatus'], ts=None)
+serr('sim: another axe version is AXE_VERSION', 'AXE_VERSION(1.7.0)', tape=[{'m': 'axe --version', 'out': '1.7.0'}], simExcludes=['describe-ui'])
+serr('sim: no aperture-devcheck sim is SIM_MISSING', 'SIM_MISSING', tape=[{'m': 'simctl list devices -j', 'out': {'devices': {}}}])
+serr('sim: two aperture-devcheck sims is SIM_AMBIGUOUS', 'SIM_AMBIGUOUS', tape=[{'m': 'simctl list devices -j', 'out': dev(n=2)}])
+serr('sim: Device Hub never starting is DEVICE_HUB', 'DEVICE_HUB', tape=[{'m': 'pgrep -x DeviceHub', 'rc': 1}], simIncludes=['open -g -b com.apple.dt.Devices'])
+serr('sim: a failed boot is BOOT_FAILED', 'BOOT_FAILED', tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}, {'m': 'bootstatus', 'rc': 1}])
+serr('sim: describe-ui timing out twice is AX_TIMEOUT', 'AX_TIMEOUT', tape=[{'m': 'describe-ui --udid', 'rc': 1, 'n': 2}])
+serr('sim: no Aperture icon is WEBCLIP_MISSING', 'WEBCLIP_MISSING', tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False)}],
+     simIncludes=['gesture scroll-left --screen-width 402 --screen-height 874'], simExcludes=['tap -x'])
+SIGNED_OUT = [pt(200, 813, {}), pt(200, 488, el('AXButton', 'Sign in', '', 164, 470, 74, 37))]
+COGNITO = pt(29, 87, el('AXGenericElement', 'Address', 'aperture-dev-618015769091.auth.us-west-1.amazoncognito.com', 10, 70, 300, 34))
+FORM = [COGNITO, pt(200, 276, el('AXTextField', 'Email', PW, 41, 258, 320, 35)), pt(200, 366, el('AXSecureTextField', 'Password', PW, 41, 345, 320, 40)),
+        pt(200, 454, el('AXButton', 'submit', PW, 41, 430, 320, 47))]
+serr('sim: no Keychain password is PASSWORD_MISSING, nothing typed', None, [L, {'op': 'signIn'}], reason='PASSWORD_MISSING', tape=SIGNED_OUT, noSimPassword=True,
+     simExcludes=['axe type', '--point 29,87'])
+serr('sim: a sign-in page off dev Cognito is COGNITO_HOST, nothing typed', 'COGNITO_HOST', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + [pt(29, 87, el('AXGenericElement', 'Address', 'evil.example.com', 10, 70, 300, 34))], simExcludes=['axe type'])
+serr('sim: a rejected password is AUTH_REJECTED (typed once, never read back)', 'AUTH_REJECTED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED',
+     tape=SIGNED_OUT + FORM, pwTyped=1, simIncludes=['axe type rahul3datta+devcheck@gmail.com', '<<<' + PW, 'tap -x 201 -y 453 --tap-style physical --pre-delay 2'])
+serr('sim: a missing Email field is FORM_CHANGED', 'FORM_CHANGED', [L, {'op': 'signIn'}], reason='SIGNIN_FAILED', tape=SIGNED_OUT + [COGNITO], simExcludes=['axe type'])
+spass('sim: a fresh sign-in types the password once, dismisses Save Password and re-arms the keyboard', [L, {'op': 'signIn'}, {'op': 'expect', 'signedIn': True}],
+      tape=[pt(200, 813, {}, n=1)] + SIGNED_OUT[1:] + FORM + [pt(200, 547, el('AXButton', 'Never for This Website', '', 57, 523, 288, 48))],
+      expect={'signedIn': 'fresh', 'booted': 'rebooted'}, pwTyped=1,
+      simIncludes=['--point 29,87', 'axe type rahul3datta+devcheck@gmail.com', '<<<' + PW, 'tap -x 201 -y 547',
+                   'defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false',
+                   'defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false', 'simctl shutdown', 'bootstatus'])
+spass('sim: signIn when already signed in does nothing', [L, {'op': 'signIn'}], simExcludes=['axe type', '--point 29,87'])
+serr('sim: no soft keyboard where one is due is KEYBOARD_SETUP (needs you, not a fail)', 'KEYBOARD_SETUP',
+     [L, F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}],
+     tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36)), pt(201, 780, {})])
+serr('sim: keys with no soft keyboard is KEYBOARD_SETUP', 'KEYBOARD_SETUP', [L, {'op': 'keys', 'text': 'ab'}], tape=[pt(201, 780, {})], simExcludes=['tap -x 42'])
+
+# --- the row's assertion didn't hold: fail ---
+sfail('sim: a label nowhere near is MISS', 'MISS', [L, F('Nonexistent', 100, 100, 'x')])
+sfail('sim: an off-screen match is OFF_SCREEN, not tapped', 'OFF_SCREEN', [L, {'op': 'tap', 'label': 'Far', 'near': {'x': 200, 'y': 300}, 'radius': 10}],
+      tape=[pt(200, 300, el('AXButton', 'Far', '', 741, 200, 40, 40))], simExcludes=['tap -x 761'])
+sfail('sim: another app in front is NOT_IN_APP', 'NOT_IN_APP', [F('Capture log', 200, 813, 'bar')], tape=[{'m': 'describe-ui --udid', 'out': tree('SpringBoard')}])
+sfail('sim: a field under the keyboard is BELOW_KEYBOARD', 'BELOW_KEYBOARD', [L, F('Capture log', 200, 813, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}])
+spass('sim: a field above the keyboard passes', [L, F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'aboveKeyboard': True}],
+      tape=[pt(200, 417, el('AXTextArea', 'Capture log', 'What happened?', 25, 399, 308, 36))])
+sfail('sim: another value is VALUE', 'VALUE', [L, F('Capture log', 200, 813, 'bar'), {'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}])
+sfail('sim: an enabled control expected disabled is ENABLED', 'ENABLED', [L, F('Capture log', 200, 813, 'bar'), {'op': 'expect', 'as': 'bar', 'enabled': False}])
+sfail('sim: a zoomed field is WIDTH', 'WIDTH', [L, F('Capture log', 200, 813, 'bar0'), F('Capture log', 200, 417, 'bar'), {'op': 'expect', 'as': 'bar', 'sameWidthAs': 'bar0'}],
+      tape=[pt(200, 417, el('AXTextArea', 'Capture log', '', 18, 399, 366, 40))])
+sfail('sim: a build stale after a relaunch is STALE_BUILD', 'STALE_BUILD', [L, {'op': 'readBuild'}, {'op': 'expectBuild'}],
+      tape=[pt(55, 860, el('AXStaticText', '', 'Build bbbbbbb', 20, 852, 71, 17))], simIncludes=['simctl terminate ' + U + ' com.apple.webapp'])
+spass('sim: the two-launch refresh (old build, then the new one) passes', [L, {'op': 'readBuild'}, {'op': 'expectBuild'}],
+      tape=[pt(55, 860, el('AXStaticText', '', 'Build bbbbbbb', 20, 852, 71, 17), n=1)], expect={'buildsSeen': ['bbbbbbb', 'aaaaaaa']})
+sfail('sim: no landmark after launch is LANDMARK', 'LANDMARK', [L], tape=[pt(200, 813, {}), pt(200, 488, {})],
+      simIncludes=['swipe --start-x 201 --start-y 450 --end-x 201 --end-y 250'])
+sfail('sim: a prefix that lands on a write button is DENIED, not tapped', 'DENIED', [L, {'op': 'tap', 'label': 'Sav', 'near': {'x': 200, 'y': 300}, 'radius': 10}],
+      tape=[pt(200, 300, el('AXButton', 'Save', '', 180, 280, 80, 40))], simExcludes=['tap -x 220 -y 300'], ts=None)
+sfail('sim: a key not where the layout puts it is MISS', 'MISS', [L, {'op': 'keys', 'text': 'z'}], tape=[pt(82, 726, el('AXButton', 'x', '', 67, 706, 30, 40))],
+      simExcludes=['tap -x 82 -y 726'])
+
+# --- recipes ---
+spass('sim: keyboard prefs at 1 are re-armed with a reboot', [L], tape=[{'m': 'defaults read com.apple.keyboard.preferences', 'out': '1', 'n': 1}],
+      expect={'booted': 'rebooted'}, simIncludes=['defaults write com.apple.keyboard.preferences HardwareKeyboardLastSeen -bool false',
+                                                  'defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool false', 'simctl shutdown', 'bootstatus'])
+spass('sim: a shut-down sim is booted cold', [L], tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}], expect={'booted': 'cold'}, simIncludes=['bootstatus'])
+spass('sim: an icon on the other Home Screen page is reached with scroll-left', [L], tape=[{'m': 'describe-ui --udid', 'out': tree(icon=False), 'n': 2}],
+      simIncludes=['gesture scroll-left --screen-width 402 --screen-height 874', 'tap -x 339 -y 233'])
+spass('sim: a stale first landmark read is read again', [L], tape=[pt(200, 813, el('AXRadioButton', 'Capture log', '1', 25, 795, 308, 36), n=1)],
+      expect={'signedIn': 'already'})
+spass('sim: kill by app switcher', [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}],
+      simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', 'swipe --start-x 320 --start-y 560 --end-x 320 --end-y 40',
+                   'tap -x 360 -y 840 --tap-style physical'])
+spass('sim: kill by reboot', [L, {'op': 'kill', 'method': 'reboot'}, L], expect={'booted': 'rebooted'}, simIncludes=['simctl shutdown', 'bootstatus'])
+spass('sim: keys are tapped on the soft keyboard, never typed', [L, {'op': 'keys', 'text': 'zq x'}],
+      simIncludes=['tap -x 82 -y 726', 'tap -x 23 -y 618', 'tap -x 201 -y 780', 'tap -x 121 -y 726'], simExcludes=['axe type'])
+spass('sim: a nav tab off the row is found after a swipe', [L, {'op': 'nav', 'tab': 'Settings'}], tape=[pt(380, 168, {}, n=1)],
+      simIncludes=['swipe --start-x 360 --start-y 168 --end-x 40 --end-y 168', 'tap -x 380 -y 168'])
+spass('sim: shutdown: true shuts the sim down after a pass', patch={'params': {'shutdown': True}}, expect={'booted': 'off'}, simIncludes=['simctl shutdown'])
+spass('sim: a bare shutdown resolves the device first', [{'op': 'shutdown'}], expect={'booted': 'off'},
+      simIncludes=['simctl list devices -j', 'simctl shutdown ' + U], simExcludes=['describe-ui', 'bootstatus'])
+sc('sim: an existing result dir is a DUPLICATE, nothing runs', setup='duplicate', noResult=True, simExcludes=NOSIM)
+
 with open(out, 'w') as f:
-    f.write(json.dumps({'base': base}) + '\n')
-    f.write(json.dumps({'defaultApi': default}) + '\n')
+    f.write(json.dumps({'base': base, 'simBase': simbase}) + '\n')
+    f.write(json.dumps({'defaultApi': default, 'defaultTape': deftape}) + '\n')
     for x in C:
         f.write(json.dumps(x, ensure_ascii=True) + '\n')
 print(len(C), 'cases')

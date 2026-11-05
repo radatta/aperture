@@ -99,6 +99,78 @@ const opened = (job: { params: { bodySha256: string } }) =>
     bodySha256: job.params.bodySha256,
   }) as Partial<Result>;
 
+describe('openPr: the iPhone-checks banner', () => {
+  const report = (fs: ReturnType<typeof memFs>, run: string, r: object) =>
+    fs.files.set(`${ROOT}/localNotes/devcheck/${run}/report.json`, JSON.stringify(r));
+  const NOT_RUN = { reason: 'MAC_UNREACHABLE', rows: 14 };
+  const sent = async (prep: (fs: ReturnType<typeof memFs>) => void, body?: string) => {
+    let job: { params: { body: string; bodySha256: string } } | undefined;
+    const { d, fs } = setup({
+      body,
+      mac: (j) => {
+        job = j as typeof job;
+        return opened(j);
+      },
+    });
+    prep(fs);
+    expect(await openPr(d, 'Mac mailroom opens PRs')).toBe(EXIT.ok);
+    return job?.params ?? { body: '', bodySha256: '' };
+  };
+
+  it('puts "iPhone checks did not run" first when the head commit’s newest devcheck had them unavailable', async () => {
+    const p = await sent((fs) => {
+      report(fs, '2026-11-04T10-00-00-full', { expectedSha: SHA, ios: { unavailable: null } }); // older, ran
+      report(fs, '2026-11-04T11-00-00-full', { expectedSha: SHA, ios: { unavailable: NOT_RUN } });
+    });
+    expect(p.body.split('\n')[0]).toBe(
+      '> ⚠ **iPhone checks did not run** (MAC_UNREACHABLE, Mac asleep?): 14 iOS rows untested. Rerun the devcheck with the Mac awake before merging a UI change.',
+    );
+    expect(p.body.endsWith(BODY)).toBe(true);
+    expect(p.bodySha256).toBe(sha256(p.body)); // hashed after the banner, so the Mac's body check still holds
+    expect(p.body).not.toContain('️'); // the emoji form would be BAD_TEXT
+  });
+
+  it('adds nothing when the newest run at the head ran its iPhone checks, even if an older one did not', async () => {
+    const p = await sent((fs) => {
+      report(fs, '2026-11-04T10-00-00-full', { expectedSha: SHA, ios: { unavailable: NOT_RUN } });
+      report(fs, '2026-11-04T11-00-00-full', { expectedSha: SHA, ios: { unavailable: null } });
+    });
+    expect(p.body).toBe(BODY);
+  });
+
+  it('ignores runs at another commit, unreadable reports, and no devcheck at all', async () => {
+    expect((await sent(() => {})).body).toBe(BODY);
+    const p = await sent((fs) => {
+      report(fs, '2026-11-04T12-00-00-full', {
+        expectedSha: 'b'.repeat(40),
+        ios: { unavailable: NOT_RUN },
+      });
+      fs.files.set(`${ROOT}/localNotes/devcheck/2026-11-04T13-00-00-full/report.json`, '{not json');
+    });
+    expect(p.body).toBe(BODY);
+  });
+
+  it('never adds it twice', async () => {
+    const already = `> ⚠ **iPhone checks did not run** (MAC_UNREACHABLE, Mac asleep?): 14 iOS rows untested.\n\n${BODY}`;
+    const p = await sent(
+      (fs) =>
+        report(fs, '2026-11-04T11-00-00-full', { expectedSha: SHA, ios: { unavailable: NOT_RUN } }),
+      already,
+    );
+    expect(p.body).toBe(already);
+  });
+
+  it('a reason off the code alphabet is replaced, never pasted into the PR', async () => {
+    const p = await sent((fs) =>
+      report(fs, '2026-11-04T11-00-00-full', {
+        expectedSha: SHA,
+        ios: { unavailable: { reason: 'x @octocat', rows: 1 } },
+      }),
+    );
+    expect(p.body.split('\n')[0]).toContain('(SIM_UNAVAILABLE, Mac asleep?): 1 iOS row untested');
+  });
+});
+
 describe('openPr', () => {
   it('opens through the Mac and reports the URL', async () => {
     const { d, logs } = setup({ mac: opened });

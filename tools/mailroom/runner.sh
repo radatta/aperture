@@ -2,7 +2,8 @@
 # The Mac mailroom's clerk: drains <hostjobs>/inbox, runs each allowlisted job, writes <hostjobs>/results/<id>/.
 # launchd runs the INSTALLED copy (~/Library/Application Support/aperture-mailroom/bin/) — never this file in the
 # repo, which the container can write. Jobs are data: validated with jq, run with argv arrays, no eval/sh -c.
-# Bash 3.2 (macOS /bin/bash) + jq + curl + security, all builtin on macOS 15+. Design: docs/ops/MAILROOM.md.
+# Bash 3.2 (macOS /bin/bash) + jq + curl + security, all builtin on macOS 15+; the sim job adds AXe (Homebrew) and
+# Xcode's simctl. Design: docs/ops/MAILROOM.md, docs/ops/IOS-CHECK.md.
 #
 #   runner.sh <hostjobs-dir> <state-dir>     both absolute; the plist passes them (install.sh renders it)
 set -euo pipefail
@@ -12,7 +13,7 @@ export LC_ALL=C # deterministic globs and regexes, as under launchd
 HJ="${1:?usage: runner.sh <hostjobs-dir> <state-dir>}"
 STATE="${2:?usage: runner.sh <hostjobs-dir> <state-dir>}"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
-JOBS="open-pr" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
+JOBS="open-pr sim" # the allowlist; each has jobs/<name>.sh defining validate_<name> and run_<name> (- → _)
 MAX_FILE=73728 # 72 KiB per job file
 MAX_PER_DRAIN=5
 ID_RE='^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,48}$'
@@ -54,6 +55,20 @@ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
 park() { mv -- "$1" "$REJECTED/$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM" 2>/dev/null || rm -f -- "$1" 2>/dev/null || true; }
 
 # --- results: mkdir under a pinned cwd, re-verify, write with noclobber; the content never echoes job text ---
+# The result dir is made once per job: before the run (make_rdir: a job's artifacts and heartbeat go there, and the
+# container takes its existence as the pickup), or by write_result for a job refused before it ran.
+RDIR_MADE=""
+make_rdir() {
+  local id="$1"
+  (
+    cd "$HJ_REAL/results" && [ "$(pwd -P)" = "$HJ_REAL/results" ] || exit 1
+    mkdir "./$id" 2>/dev/null || exit 1
+  ) || {
+    log "$id DUPLICATE or results dir moved — not run"
+    return 1
+  }
+  RDIR_MADE="$id"
+}
 write_result() {
   local id="$1" json="$2"
   (
@@ -61,7 +76,7 @@ write_result() {
       log "$id results dir moved — not written"
       exit 1
     }
-    mkdir "./$id" 2>/dev/null || {
+    [ "$RDIR_MADE" = "$id" ] || mkdir "./$id" 2>/dev/null || {
       log "$id DUPLICATE — results/$id exists"
       exit 1
     }
@@ -79,13 +94,14 @@ write_result() {
 }
 
 # result ID STATUS REASON STARTED_MS [EXTRA_JSON] — EXTRA_JSON holds only fields a job built from anchored values.
+# The job name is the validated one ($job), or null for a file refused before its envelope was read.
 result() {
   local id="$1" status="$2" reason="$3" started="$4" extra="${5:-}" fin
   [ -n "$extra" ] || extra='{}'
   fin="$(now_ms)"
-  write_result "$id" "$(jq -cn --arg id "$id" --arg status "$status" --arg reason "$reason" \
+  write_result "$id" "$(jq -cn --arg id "$id" --arg status "$status" --arg reason "$reason" --arg job "${job:-}" \
     --argjson started "$started" --argjson fin "$fin" --arg rv "$RUNNER_VERSION" --argjson extra "$extra" \
-    '{v: 1, id: $id, job: "open-pr", status: $status, reason: (if $reason == "" then null else $reason end),
+    '{v: 1, id: $id, job: (if $job == "" then null else $job end), status: $status, reason: (if $reason == "" then null else $reason end),
       startedAt: ($started / 1000 | floor | todate), finishedAt: ($fin / 1000 | floor | todate),
       durationMs: ($fin - $started), runnerVersion: $rv} + $extra')"
   log "$id $status ${reason:-ok} $((fin - started))ms"
@@ -94,7 +110,7 @@ result() {
 status_of() {
   case "$1" in
     EXPIRED) echo expired ;;
-    TOKEN_* | API_FAILED | RATE_LIMITED | TIMEOUT | WRONG_AUTHOR) echo error ;;
+    TOKEN_* | API_FAILED | RATE_LIMITED | TIMEOUT | WRONG_AUTHOR | SIM_UNAVAILABLE | PASSWORD_MISSING | SIGNIN_FAILED) echo error ;;
     *) echo rejected ;;
   esac
 }
@@ -130,6 +146,7 @@ for entry in ./*; do
   name="${entry#./}"
   stem="${name%.json}"
   started="$(now_ms)"
+  job=""
   if ! [[ "$name" == *.json && "$stem" =~ $ID_RE ]]; then
     park "$entry"
     log "rejected an entry with a bad name"
@@ -185,8 +202,12 @@ for entry in ./*; do
     result "$stem" "$(status_of "$reason")" "$reason" "$started"
     continue
   fi
-  # run_<job> W prints "STATUS REASON EXTRA_JSON" on one line (REASON "-" for none).
-  out="$("run_$fn" "$w" "$WORK/$stem")" || out="error API_FAILED {}"
+  if ! make_rdir "$stem"; then
+    rm -f -- "$w"
+    continue
+  fi
+  # run_<job> W PRIVATE_PREFIX RESULT_DIR prints "STATUS REASON EXTRA_JSON" on one line (REASON "-" for none).
+  out="$("run_$fn" "$w" "$WORK/$stem" "$HJ_REAL/results/$stem")" || out="error API_FAILED {}"
   rm -f -- "$w" "$WORK/$stem".*
   st="${out%% *}"
   rest="${out#* }"

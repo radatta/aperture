@@ -1,9 +1,12 @@
-// The mailroom's job contract, container side: build an `open-pr` job and check it with the same rules, in the
-// same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh). The runner is the authority; this is
+// The mailroom's job contract, container side: build an `open-pr` job and check any job with the same rules, in
+// the same order, as the Mac runner (tools/mailroom/runner.sh + jobs/open-pr.sh; a `sim` job's plan: sim.ts). The runner is the authority; this is
 // the early, fixable copy, and tools/mailroom/testdata/jobs.jsonl drives both (job.test.ts). docs/ops/MAILROOM.md.
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { isoSeconds, makeId } from './ids.ts';
+import { SIM_REASON_HINT, validateSimParams } from './sim.ts';
+import type { SimReason } from './sim.ts';
 
-export const JOBS = ['open-pr'] as const;
+export const JOBS = ['open-pr', 'sim'] as const;
 export const EXPIRES_IN_MIN = 20;
 export const MAX_BODY_BYTES = 65536;
 const ENVELOPE_KEYS = ['v', 'id', 'job', 'submittedAt', 'expiresInMin', 'params'];
@@ -33,7 +36,8 @@ export type Reason =
   | 'BAD_TEXT'
   | 'MENTION'
   | 'HASH_REF'
-  | 'XREF';
+  | 'XREF'
+  | SimReason;
 
 export interface OpenPrParams {
   branch: string;
@@ -45,24 +49,14 @@ export interface OpenPrParams {
 export interface Job {
   v: 1;
   id: string;
-  job: (typeof JOBS)[number];
+  job: 'open-pr';
   submittedAt: string;
   expiresInMin: number;
   params: OpenPrParams;
 }
 
 export const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
-export const isoSeconds = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-// `<UTC stamp>-<branch, cut>-<4 random>`: unique per submit, and the result directory's name.
-export function makeId(
-  branch: string,
-  nowMs: number,
-  rand = randomBytes(2).toString('hex'),
-): string {
-  const stamp = isoSeconds(nowMs).replace(/[-:]/g, '');
-  return `${stamp}-${branch.slice(0, 43)}-${rand}`;
-}
+export { isoSeconds, makeId } from './ids.ts';
 
 export function makeOpenPrJob(
   p: Omit<OpenPrParams, 'bodySha256'>,
@@ -129,6 +123,7 @@ export function validateJob(job: unknown, stem: string, nowMs: number): Reason |
   const at = Date.parse(job.submittedAt);
   if (Number.isNaN(at)) return 'BAD_PARAM';
   if (at > nowMs + 300_000 || at + exp * 60_000 < nowMs) return 'EXPIRED';
+  if (job.job === 'sim') return validateSimParams(job.params);
 
   const p = job.params;
   if (!isObj(p) || !sameKeys(p, PARAM_KEYS)) return 'BAD_PARAM';
@@ -151,10 +146,11 @@ export function validateJob(job: unknown, stem: string, nowMs: number): Reason |
 
 // What to fix, for the container's own refusal (the Mac result carries only the code).
 export const REASON_HINT: Record<Reason, string> = {
+  ...SIM_REASON_HINT,
   BAD_JSON: 'malformed job',
   BAD_ID: 'job id does not match its file name',
   UNKNOWN_JOB: 'job not on the allowlist',
-  BAD_PARAM: `branch must match ${BRANCH_RE.source} (not main/master/dev); title must match ${TITLE_RE.source}; body 1–64 KiB`,
+  BAD_PARAM: `branch must match ${BRANCH_RE.source} (not main/master/dev); title must match ${TITLE_RE.source}; body 1–64 KiB — or, for a sim job, ${SIM_REASON_HINT.BAD_PARAM}`,
   EXPIRED: 'job expired',
   BAD_TEXT: 'the body holds a control, zero-width or bidi character',
   MENTION:
