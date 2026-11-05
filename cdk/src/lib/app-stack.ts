@@ -467,8 +467,8 @@ export class ApertureAppStack extends Stack {
           },
           // Maximum ≥ 295 s: a run that ate most of its 10 s safety margin (a real timeout also lands in
           // Errors).
-          // Not p99-at-80%: a legitimate refresh poll runs for minutes. Errors here are infra faults
-          // only — a bank's failure is a per-item report, not a throw.
+          // Not p99-at-80%: a legitimate refresh poll runs for minutes. Its Lambda Errors (on the account-wide
+          // alarm) are infra faults only — a bank's failure is a per-item report, not a throw.
           {
             id: 'FinanceSync',
             label: 'Finance sync',

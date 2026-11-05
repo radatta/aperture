@@ -440,7 +440,13 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
     const t = build('prod');
     const [mcpFnId] = Object.keys(t.findResources('AWS::Lambda::Function', { Properties: { FunctionName: 'aperture-mcp-prod' } }));
     expect(mcpFnId).toBeDefined();
-    const mcp = alarmsNamed(t, 'Duration').filter(([id]) => id.startsWith('MonitoringMcpDurationOverBudget'));
+    const durations = alarmsNamed(t, 'Duration');
+    expect(durations.map(([id]) => id.replace(/[0-9A-F]{8}$/, '')).sort()).toEqual([
+      'MonitoringDurationNearTimeout', // the BFF keeps its original id
+      'MonitoringFinanceSyncDurationOverBudget',
+      'MonitoringMcpDurationOverBudget',
+    ]);
+    const mcp = durations.filter(([id]) => id.startsWith('MonitoringMcpDurationOverBudget'));
     expect(mcp).toHaveLength(1);
     expect(mcp[0]?.[1].Properties).toMatchObject({
       ExtendedStatistic: 'p99',
@@ -451,7 +457,7 @@ describe('ApertureAppStack monitoring (prod-only, Option B)', () => {
 
   // Prod's five plus the dev account's five kill alarms fill CloudWatch's free ten, shared across the org — so
   // Errors and Throttles are one alarm each for the whole account, at the BFF alarm's old id so it updates in place.
-  it.each(['Errors', 'Throttles'])('%s-alarms the whole account once, at the BFF alarm\'s old id', (metricName) => {
+  it.each(['Errors', 'Throttles'])('%s: one account-wide alarm, at the BFF alarm\'s old id', (metricName) => {
     const alarms = alarmsNamed(build('prod'), metricName);
     expect(alarms).toHaveLength(1);
     const [[id = '', r] = []] = alarms;
