@@ -155,8 +155,10 @@ Lambda never started the function, so that attempt was never tested — the app'
 have recovered the call, but the method isn't proven by this run. Chromium logs every 429 as a console error, retried
 or not, so one fails the run like any other console error, and the report's _Throttled (429)_ section names each
 (`/api/<method>`), which Chromium's line doesn't. Treat one as a bug — a burst wider than the cap, a refetch storm, the
-harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run saw. Failures a
-scenario injects on purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here.
+harness bursting on its own — never as weather; the `inflight-cap` scenario fails on any the run's console saw (one
+inside an injected-failure window is dropped from the console and shows only under _Throttled (429)_ — read that
+section too). The same scenario counts Home's `/api` requests on the wire and fails past 8. Failures a scenario injects on
+purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here.
 
 ## Ledgers
 

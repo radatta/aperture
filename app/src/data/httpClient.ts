@@ -14,21 +14,35 @@ export type FetchLike = (
 // 10 (docs/ops/CI-BOT.md → Compute) and Home mounts ~10 RPCs on a cold BFF, so an uncapped burst gets 429s; 8
 // leaves two for the dev check's own calls. Prod has headroom and pays ~100 ms for Home's second wave.
 export const MAX_IN_FLIGHT = 8;
+// A slot is held at most this long. The BFF's Lambda times out at 15 s (CI-BOT.md → Compute), so a call still on
+// the wire past that is a stalled connection holding no Lambda — on a phone whose signal dropped mid-load, the
+// queue would otherwise wait behind it until Safari gives up, a minute or more.
+export const SLOT_MS = 15_000;
 
 // A FIFO slot limiter: acquire() resolves with the slot's release once one is free. A release hands the slot
-// straight to the next waiter, so the count never dips for a queued call to miss its turn.
-export function createLimiter(max: number) {
+// straight to the next waiter, so the count never dips for a queued call to miss its turn. Each grant's release
+// runs once — from the holder or from the lease timer, whichever is first; the other is a no-op.
+export function createLimiter(max: number, slotMs = SLOT_MS) {
   let inFlight = 0;
   const waiting: ((release: () => void) => void)[] = [];
-  const release = () => {
-    const next = waiting.shift();
-    if (next) next(release);
-    else inFlight--;
+  const grant = (): (() => void) => {
+    let done = false;
+    const release = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(lease);
+      const next = waiting.shift();
+      if (next) next(grant());
+      else inFlight--;
+    };
+    const lease = setTimeout(release, slotMs);
+    return release;
   };
   return {
     acquire: (): Promise<() => void> => {
-      if (inFlight < max) return (inFlight++, Promise.resolve(release));
-      return new Promise((r) => waiting.push(r));
+      if (inFlight >= max) return new Promise((r) => waiting.push(r));
+      inFlight++;
+      return Promise.resolve(grant());
     },
     get inFlight() {
       return inFlight;

@@ -1,6 +1,6 @@
 import { AUTH_HEADER } from '@aperture/shared';
-import { describe, expect, it } from 'vitest';
-import { MAX_IN_FLIGHT, createHttpClient } from './httpClient';
+import { describe, expect, it, vi } from 'vitest';
+import { MAX_IN_FLIGHT, SLOT_MS, createHttpClient } from './httpClient';
 import { ApiError } from './retry';
 import type { FetchLike } from './httpClient';
 
@@ -285,6 +285,35 @@ describe('createHttpClient (RPC transport)', () => {
       }
       await Promise.all(calls);
       expect(w.peak()).toBe(MAX_IN_FLIGHT);
+    });
+
+    it('a call that never answers frees its slot after SLOT_MS — the Lambda behind it has timed out', async () => {
+      vi.useFakeTimers();
+      try {
+        const w = wire();
+        const api = client(w);
+        const calls = ids(MAX_IN_FLIGHT + 1).map((id) => api.getTask(id));
+        await vi.advanceTimersByTimeAsync(SLOT_MS - 1);
+        expect(w.started).toHaveLength(MAX_IN_FLIGHT); // eight stalled, the ninth still waiting
+        await vi.advanceTimersByTimeAsync(1);
+        expect(w.started).toEqual(ids(MAX_IN_FLIGHT + 1)); // the leases lapsed: the ninth is on the wire
+        // The stalled calls still answer in their own time, and answering frees nothing twice.
+        while (w.pending.length) {
+          w.answer();
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        await Promise.all(calls);
+        const late = ids(MAX_IN_FLIGHT + 2).map((id) => api.getTask(id));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(w.started).toHaveLength(2 * MAX_IN_FLIGHT + 1); // the count is whole again: 8 go, 2 wait
+        while (w.pending.length) {
+          w.answer();
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        await Promise.all(late);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
