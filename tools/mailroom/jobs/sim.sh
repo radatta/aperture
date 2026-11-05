@@ -13,8 +13,29 @@ SIM_EMAIL="rahul3datta+devcheck@gmail.com"
 SIM_KEYCHAIN="aperture-devcheck-dev" # the dev test user's password: this Mac's Keychain only, never a file
 SIM_COGNITO_RE='^aperture-dev-[0-9]{12}\.auth\.us-west-1\.amazoncognito\.com$'
 SIM_KB="com.apple.keyboard.preferences"
+# --- the device profile: every fixed point the recipes use, in points (SIM_W×SIM_H), measured on the device
+# type below (IOS-CHECK.md → Device profile). A sim of any other type is PROFILE_MISMATCH, never mis-aimed taps.
+SIM_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 SIM_W=402
 SIM_H=874
+SIM_X=200                                      # the probe column for centred controls
+SIM_Y_HOME=813                                 # Home's capture bar, no keyboard: the signed-in landmark
+SIM_Y_SIGNIN=488                               # the Sign in card's button: the signed-out landmark
+SIM_PT_ADDRESS="29 87"                         # the Cognito sheet's address bar
+SIM_YS_EMAIL="276 266 286 256 296"             # the Email field, nearest first
+SIM_YS_PASSWORD="366 356 376 346 386 336 396 326" # the Password field, after the form zoomed on focus
+SIM_YS_SUBMIT="454 444 464 434 474 424 414"    # the form's submit button
+SIM_Y_NEVER=547                                # Save Password's "Never for This Website"
+SIM_PT_SPACE="201 780"                         # the soft keyboard's space bar
+SIM_X_DONE=361                                 # the keyboard accessory bar's Done
+SIM_YS_ACCESSORY="512 502 522 492 532 482 542" # that bar, nearest first
+SIM_Y_NAV=168                                  # the nav row (page scrolled to the top)
+SIM_XS_NAV="20 60 100 140 180 220 260 300 340 380"
+SIM_X_BUILD=55                                 # Settings' build stamp, page scrolled to the bottom
+SIM_YS_BUILD="860 845 830 815 800 785 770 755 740 725 710 695 680 665 650 635 620 605 590 575 560"
+SIM_CARD_SWIPE="320 560 320 40"                # the app switcher: the app's card, swiped up
+SIM_PT_BACKGROUND="360 840"                    # the app switcher: empty background, to leave it
+SIM_SCROLL_X=201                               # where page swipes run
 SIM_MAX_PROBES=400
 SIM_TABS='["Home","Log","Tasks","Recruiting","Habits","Rolls","Flux","Finances","Inbox","Settings"]'
 # The app's write buttons, refused for `tap` (lowercased, exact). A belt: the boundary is the test user's partition.
@@ -242,10 +263,14 @@ sim_device() {
   n="$(jq --arg n "$SIM_NAME" '[.devices[][] | select(.name == $n and .isAvailable == true)] | length' <<<"$list" 2>/dev/null || echo 0)"
   [ "$n" != 0 ] || { sim_err SIM_UNAVAILABLE SIM_MISSING "no available $SIM_NAME sim"; return 1; }
   [ "$n" = 1 ] || { sim_err SIM_UNAVAILABLE SIM_AMBIGUOUS "$n sims named $SIM_NAME"; return 1; }
-  read -r SIM_U SIM_STATE SIM_RUNTIME < <(jq -r --arg n "$SIM_NAME" '.devices | to_entries[] | .key as $rt | .value[]
+  read -r SIM_U SIM_STATE SIM_TYPE SIM_RUNTIME < <(jq -r --arg n "$SIM_NAME" '.devices | to_entries[] | .key as $rt | .value[]
     | select(.name == $n and .isAvailable == true)
-    | "\(.udid) \(.state) \($rt | sub(".*SimRuntime\\."; "") | sub("-"; " ") | gsub("-"; "."))"' <<<"$list")
+    | "\(.udid) \(.state) \(.deviceTypeIdentifier // "-") \($rt | sub(".*SimRuntime\\."; "") | sub("-"; " ") | gsub("-"; "."))"' <<<"$list")
   [[ "$SIM_U" =~ ^[0-9A-F-]{36}$ ]] || { sim_err SIM_UNAVAILABLE SIM_MISSING "bad udid"; return 1; }
+  [ "$SIM_TYPE" = "$SIM_DEVICE_TYPE" ] || {
+    sim_err SIM_UNAVAILABLE PROFILE_MISMATCH "the sim is ${SIM_TYPE##*.}, the profile ${SIM_DEVICE_TYPE##*.} (IOS-CHECK.md -> Device profile)"
+    return 1
+  }
 }
 
 sim_boot() { sx 90 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 90 s"; return 1; }; }
@@ -294,9 +319,9 @@ sim_ready() {
 # The app's landmark: Home's capture bar (signed in) or the sign-in card. Echoes already | false | "" (neither).
 sim_landmark() {
   local e
-  e="$(sim_point 200 813)" || return 1
+  e="$(sim_point "$SIM_X" "$SIM_Y_HOME")" || return 1
   if [ "$(jq -r '.role' <<<"$e")" = AXTextArea ] && sim_match "$e" "Capture" ""; then echo already; return 0; fi
-  e="$(sim_point 200 488)" || return 1
+  e="$(sim_point "$SIM_X" "$SIM_Y_SIGNIN")" || return 1
   if [ "$(jq -r '.role' <<<"$e")" = AXButton ] && sim_label_is "$e" "Sign in"; then echo false; return 0; fi
   echo ""
 }
@@ -333,8 +358,8 @@ sim_op_launch() {
     i=$((i + 1))
     [ "$i" -lt 20 ] || { sim_fail LANDMARK "neither Home nor the sign-in card after launch"; return 1; }
     if [ "$i" = 10 ]; then # the page can draw offset from its accessibility frames after a kill: nudge it
-      ax swipe --start-x 201 --start-y 450 --end-x 201 --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
-      ax swipe --start-x 201 --start-y 250 --end-x 201 --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
+      ax swipe --start-x "$SIM_SCROLL_X" --start-y 450 --end-x "$SIM_SCROLL_X" --end-y 250 --duration 0.2 >/dev/null 2>&1 || true
+      ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y 450 --duration 0.2 >/dev/null 2>&1 || true
     fi
     sleep 2
   done
@@ -343,20 +368,21 @@ sim_op_launch() {
 # Sign in from Keychain when the app is signed out. The password goes Keychain → axe's stdin, nowhere else; from the
 # first tap to Home nothing is read back but roles and button/field labels, and nothing is screenshotted.
 sim_op_signIn() {
-  local e addr pt i s
+  local e addr pt i s x y
   if [ "$SIM_SIGNED" != false ]; then SIM_NOTE="already signed in"; return 0; fi
   sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \
     || { sim_err PASSWORD_MISSING "" "no readable Keychain item $SIM_KEYCHAIN"; return 1; }
-  e="$(sim_point 200 488)" || return 1
+  e="$(sim_point "$SIM_X" "$SIM_Y_SIGNIN")" || return 1
   sim_label_is "$e" "Sign in" || { sim_err SIGNIN_FAILED FORM_CHANGED "no Sign in button"; return 1; }
   sim_tap_el "$e" || return 1
   sleep 3
-  addr="$(sim_point 29 87)" || return 1
+  read -r x y <<<"$SIM_PT_ADDRESS"
+  addr="$(sim_point "$x" "$y")" || return 1
   addr="$(jq -r '.value // ""' <<<"$addr")"
   [[ "$addr" =~ $SIM_COGNITO_RE ]] || { sim_err SIGNIN_FAILED COGNITO_HOST "the sign-in page isn't dev's Cognito"; return 1; }
   SIM_SENSITIVE=true
-  for pt in 276 266 286 256 296; do
-    e="$(sim_point 200 "$pt")" || return 1
+  for pt in $SIM_YS_EMAIL; do
+    e="$(sim_point "$SIM_X" "$pt")" || return 1
     sim_match "$e" "Email" "AXTextField" && break
     e=""
   done
@@ -364,8 +390,8 @@ sim_op_signIn() {
   sim_tap_el "$e" || { SIM_SENSITIVE=false; return 1; }
   ax type "$SIM_EMAIL" >/dev/null 2>&1 || { SIM_SENSITIVE=false; sim_err SIM_UNAVAILABLE AXE_FAILED "typing failed"; return 1; }
   # The form zooms on focus, so the password field is found again.
-  for pt in 366 356 376 346 386 336 396 326; do
-    e="$(sim_point 200 "$pt")" || return 1
+  for pt in $SIM_YS_PASSWORD; do
+    e="$(sim_point "$SIM_X" "$pt")" || return 1
     if jq -e '.role == "AXTextField" or .role == "AXSecureTextField"' <<<"$e" >/dev/null && sim_match "$e" "Password" ""; then break; fi
     e=""
   done
@@ -376,8 +402,8 @@ sim_op_signIn() {
     sim_err PASSWORD_MISSING "" "the Keychain read or the typing failed"
     return 1
   fi
-  for pt in 454 444 464 434 474 424 414; do
-    e="$(sim_point 200 "$pt")" || return 1
+  for pt in $SIM_YS_SUBMIT; do
+    e="$(sim_point "$SIM_X" "$pt")" || return 1
     if [ "$(jq -r .role <<<"$e")" = AXButton ] && sim_label_is "$e" "submit"; then break; fi
     e=""
   done
@@ -392,7 +418,7 @@ sim_op_signIn() {
     sleep 2
   done
   SIM_SENSITIVE=false
-  e="$(sim_point 200 547)" || return 1
+  e="$(sim_point "$SIM_X" "$SIM_Y_NEVER")" || return 1
   if sim_label_is "$e" "Never for This Website"; then sim_tap_el "$e" || return 1; fi
   # HID typing flipped the keyboard prefs back: re-arm, reboot, relaunch.
   sim_arm || return 1
@@ -403,14 +429,15 @@ sim_op_signIn() {
 }
 
 sim_op_kill() {
-  local m
+  local m sx sy ex ey bx by
   m="$(jq -r .method <<<"$1")"
   case "$m" in
     terminate) sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; } ;;
     switcher)
       ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
-        && ax swipe --start-x 320 --start-y 560 --end-x 320 --end-y 40 --duration 0.2 >/dev/null 2>&1 \
-        && ax tap -x 360 -y 840 --tap-style physical >/dev/null 2>&1 \
+        && read -r sx sy ex ey <<<"$SIM_CARD_SWIPE" && read -r bx by <<<"$SIM_PT_BACKGROUND" \
+        && ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
+        && ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 \
         || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; } ;;
     reboot)
       sim_shutdown
@@ -421,12 +448,12 @@ sim_op_kill() {
   SIM_NOTE="killed by $m"
 }
 
-sim_to_top() { local i; for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x 201 --start-y 250 --end-x 201 --end-y 800 --duration 0.15 >/dev/null 2>&1 || true; done; }
+sim_to_top() { local i; for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y $((SIM_H - 74)) --duration 0.15 >/dev/null 2>&1 || true; done; }
 
 sim_nav_probe() {
   local x e
-  for x in 20 60 100 140 180 220 260 300 340 380; do
-    e="$(sim_point "$x" 168)" || return 1
+  for x in $SIM_XS_NAV; do
+    e="$(sim_point "$x" "$SIM_Y_NAV")" || return 1
     if [ "$(jq -r .role <<<"$e")" = AXLink ] && sim_label_is "$e" "$1"; then SIM_HIT="$e"; return 0; fi
   done
   return 2
@@ -439,12 +466,12 @@ sim_op_nav() {
   sim_to_top
   sim_nav_probe "$tab"; rc=$?
   if [ "$rc" = 2 ]; then
-    ax swipe --start-x 360 --start-y 168 --end-x 40 --end-y 168 --duration 0.4 >/dev/null 2>&1 || true
+    ax swipe --start-x $((SIM_W - 42)) --start-y "$SIM_Y_NAV" --end-x 40 --end-y "$SIM_Y_NAV" --duration 0.4 >/dev/null 2>&1 || true
     sim_nav_probe "$tab"; rc=$?
   fi
   if [ "$rc" = 2 ]; then
-    ax swipe --start-x 40 --start-y 168 --end-x 360 --end-y 168 --duration 0.4 >/dev/null 2>&1 || true
-    ax swipe --start-x 40 --start-y 168 --end-x 360 --end-y 168 --duration 0.4 >/dev/null 2>&1 || true
+    ax swipe --start-x 40 --start-y "$SIM_Y_NAV" --end-x $((SIM_W - 42)) --end-y "$SIM_Y_NAV" --duration 0.4 >/dev/null 2>&1 || true
+    ax swipe --start-x 40 --start-y "$SIM_Y_NAV" --end-x $((SIM_W - 42)) --end-y "$SIM_Y_NAV" --duration 0.4 >/dev/null 2>&1 || true
     sim_nav_probe "$tab"; rc=$?
   fi
   [ "$rc" != 1 ] || return 1
@@ -473,7 +500,7 @@ sim_op_tap() {
 }
 
 # The soft keyboard is up when its space bar answers; its accessory bar's top is the line a field must clear.
-sim_kb_up() { local e; e="$(sim_point 201 780)" || return 1; sim_label_is "$e" "space"; }
+sim_kb_up() { local e x y; read -r x y <<<"$SIM_PT_SPACE"; e="$(sim_point "$x" "$y")" || return 1; sim_label_is "$e" "space"; }
 # No soft keyboard where one is due: the keyboard recipe rests on undocumented iOS prefs, so an Xcode or iOS update
 # can break it for every branch at once. That is the environment, not the row: error (needs you), never a fail.
 sim_kb_missing() {
@@ -481,8 +508,8 @@ sim_kb_missing() {
 }
 sim_accessory_top() {
   local e y
-  for y in 512 502 522 492 532 482 542; do
-    e="$(sim_point 361 "$y")" || return 1
+  for y in $SIM_YS_ACCESSORY; do
+    e="$(sim_point "$SIM_X_DONE" "$y")" || return 1
     if [ "$(jq -r .role <<<"$e")" = AXButton ] && jq -e '(.label // "") | ascii_downcase | test("^(done|previous|next)$")' <<<"$e" >/dev/null; then
       SIM_HIT="$e"
       jq -r '.frame.y' <<<"$e"
@@ -533,6 +560,7 @@ sim_op_expect() {
   sim_fail VALUE "$a $f differs"
 }
 
+# The soft keyboard's keys (part of the device profile).
 sim_key_xy() {
   case "$1" in
     q) echo 23 618 ;; w) echo 62 618 ;; e) echo 102 618 ;; r) echo 141 618 ;; t) echo 181 618 ;;
@@ -590,9 +618,9 @@ sim_op_scroll() {
   local pt
   pt="$(jq -r .pt <<<"$1")"
   if [ "$(jq -r .dir <<<"$1")" = down ]; then
-    ax swipe --start-x 201 --start-y 650 --end-x 201 --end-y $((650 - pt)) --duration 0.3 >/dev/null 2>&1
+    ax swipe --start-x "$SIM_SCROLL_X" --start-y 650 --end-x "$SIM_SCROLL_X" --end-y $((650 - pt)) --duration 0.3 >/dev/null 2>&1
   else
-    ax swipe --start-x 201 --start-y 200 --end-x 201 --end-y $((200 + pt)) --duration 0.3 >/dev/null 2>&1
+    ax swipe --start-x "$SIM_SCROLL_X" --start-y 200 --end-x "$SIM_SCROLL_X" --end-y $((200 + pt)) --duration 0.3 >/dev/null 2>&1
   fi || { sim_err SIM_UNAVAILABLE AXE_FAILED "swipe failed"; return 1; }
   sleep 1
 }
@@ -600,10 +628,10 @@ sim_op_scroll() {
 sim_op_readBuild() {
   local i y e b
   sim_op_nav '{"op":"nav","tab":"Settings"}' || return 1
-  for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x 390 --start-y 700 --end-x 390 --end-y 150 --duration 0.15 >/dev/null 2>&1 || true; done
+  for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x $((SIM_W - 12)) --start-y 700 --end-x $((SIM_W - 12)) --end-y 150 --duration 0.15 >/dev/null 2>&1 || true; done
   b=""
-  for y in 860 845 830 815 800 785 770 755 740 725 710 695 680 665 650 635 620 605 590 575 560; do
-    e="$(sim_point 55 "$y")" || return 1
+  for y in $SIM_YS_BUILD; do
+    e="$(sim_point "$SIM_X_BUILD" "$y")" || return 1
     b="$(jq -r '(.value // "") | select(test("^Build [0-9a-f]{7}$")) | .[6:]' <<<"$e")"
     [ -z "$b" ] || break
   done
@@ -650,7 +678,7 @@ run_sim() {
   SIM_P="$2"
   SIM_RD="$3"
   SIM_SHA="$(jq -r .params.sha "$w")"
-  SIM_U="" SIM_STATE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE=""
+  SIM_U="" SIM_STATE="" SIM_TYPE="" SIM_RUNTIME="" SIM_AXE_OK="" SIM_XCODE="" SIM_HIT="{}" SIM_NOTE=""
   SIM_BOOTED=warm SIM_SIGNED=unknown SIM_SENSITIVE=false SIM_PROBES=0 SIM_SHOTS=0
   SIM_ST="" SIM_RS="" SIM_DT=""
   echo '{}' >"$SIM_P.reads"

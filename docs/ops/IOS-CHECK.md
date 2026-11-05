@@ -51,6 +51,10 @@ A job's `params`: `{sha: <40 hex: the build under test>, timeoutSec: 60–600, s
 
 Refused at validation (`rejected`, a harness bug): `BAD_PARAM`, `TOO_MANY_OPS`, `BAD_OP` (an unknown op or argument, an `as` used before it's defined or defined twice, a kill not followed by launch, shutdown not last, over 20 shots) and `DENIED_TAP`. `TAP_DENY` lists the app's write buttons (`Save`, `Save log`, `Mark done`, `Start`, `Delete`, `Export JSON`, …); the runner checks it again on the element actually matched (`DENIED`), since a label prefix could land on one. A belt — the boundary is the test user's own partition.
 
+## Device profile
+
+Every fixed point a recipe uses — the landmarks (Home's capture bar, the Sign in card), the Cognito form, the keyboard's keys, space bar and accessory bar, the nav row, the build stamp, the app switcher — lives in one block at the top of `jobs/sim.sh`, measured on one device type (`SIM_DEVICE_TYPE`). A sim of any other type is `SIM_UNAVAILABLE/PROFILE_MISMATCH` (needs you), never a run of mis-aimed taps. Changing the device: create the sim, add dev to its Home Screen by hand, measure the points in a Mac session (the mac-sim branch's `localNotes/trial/remeasure.md` is the procedure), replace the block, and update the fixture tape (`gen-jobs.py`'s point rules) — a fixture that probes a point the runner no longer uses fails, so the two can't drift.
+
 ## Reading the page
 
 AXe's full accessibility tree holds no web content (AXe issue 65): only native chrome such as SpringBoard icons. So `tap --label` can't target page elements. **`describe-ui --point X,Y` does see web content**, about 1 s per read: static text puts its text in `AXValue` (label empty), controls carry their `aria-label` in `AXLabel`, toggles their state in `AXValue` (`"1"`/`"0"`), buttons `enabled`. An empty field reports its placeholder as its value. No DOM ids come through. Coordinates are points (`SIM_W`×`SIM_H`; screenshots are 3×).

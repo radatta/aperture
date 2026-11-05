@@ -185,7 +185,8 @@ c('a symlinked results dir is refused', setup='results-symlink', exit=1, noResul
 U = '6FDB7DD0-EA8A-48DC-8A3D-D7CC9AF2FA1F'
 PW = 'FIXTUREPW-9d41'  # run-fixtures.sh: MAILROOM_FIXTURE_PW
 def el(role, label, value, x, y, w, h, **k): return {'role': role, 'AXLabel': label, 'AXValue': value, 'frame': {'x': x, 'y': y, 'width': w, 'height': h}, **k}
-def dev(state='Booted', n=1): return {'devices': {'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{'name': 'aperture-devcheck', 'udid': U, 'state': state, 'isAvailable': True}] * n}}
+TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-17'  # sim.sh: SIM_DEVICE_TYPE
+def dev(state='Booted', n=1, type_=TYPE): return {'devices': {'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{'name': 'aperture-devcheck', 'udid': U, 'state': state, 'isAvailable': True, 'deviceTypeIdentifier': type_}] * n}}
 ICON = {'role': 'AXButton', 'AXLabel': 'Aperture', 'frame': {'x': 304.3, 'y': 188.3, 'width': 71, 'height': 90.7}}
 def tree(app='Web', icon=True): return [{'role': 'AXApplication', 'AXLabel': app, 'frame': {'x': 0, 'y': 0, 'width': 402, 'height': 874}, 'children': [ICON] if icon else [{'role': 'AXGroup', 'AXLabel': 'Aperture', 'frame': {'x': 0, 'y': 0, 'width': 0, 'height': 0}}]}]
 def pt(x, y, out, **k): return {'m': f'--point {x},{y} ', 'out': out, **k}
@@ -287,6 +288,8 @@ serr('sim: no axe is AXE_MISSING', 'AXE_MISSING', tape=[{'m': 'axe --version', '
 serr('sim: another axe version is AXE_VERSION', 'AXE_VERSION(1.7.0)', tape=[{'m': 'axe --version', 'out': '1.7.0'}], simExcludes=['describe-ui'])
 serr('sim: no aperture-devcheck sim is SIM_MISSING', 'SIM_MISSING', tape=[{'m': 'simctl list devices -j', 'out': {'devices': {}}}])
 serr('sim: two aperture-devcheck sims is SIM_AMBIGUOUS', 'SIM_AMBIGUOUS', tape=[{'m': 'simctl list devices -j', 'out': dev(n=2)}])
+serr('sim: a sim of another device type is PROFILE_MISMATCH, nothing tapped', 'PROFILE_MISMATCH',
+     tape=[{'m': 'simctl list devices -j', 'out': dev(type_='com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max')}], simExcludes=['tap -x', 'describe-ui'])
 serr('sim: Device Hub never starting is DEVICE_HUB', 'DEVICE_HUB', tape=[{'m': 'pgrep -x DeviceHub', 'rc': 1}], simIncludes=['open -g -b com.apple.dt.Devices'])
 serr('sim: a failed boot is BOOT_FAILED', 'BOOT_FAILED', tape=[{'m': 'simctl list devices -j', 'out': dev('Shutdown')}, {'m': 'bootstatus', 'rc': 1}])
 serr('sim: describe-ui timing out twice is AX_TIMEOUT', 'AX_TIMEOUT', tape=[{'m': 'describe-ui --udid', 'rc': 1, 'n': 2}])
