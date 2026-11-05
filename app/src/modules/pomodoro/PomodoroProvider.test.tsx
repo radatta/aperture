@@ -51,6 +51,34 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy();
   });
 
+  it('a stop whose response was lost settles on the retry: the server had stopped it', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    const stopS = api.stopSession.bind(api);
+    // The first stop lands server-side but its response never arrives; the retry finds no running row.
+    api.stopSession = (id, st) => stopS(id, st).then(() => Promise.reject(new Error('Failed to fetch')));
+    renderApp({ api, path: '/settings' });
+    await startFocus(user);
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Couldn’t stop — try again.');
+    api.stopSession = stopS;
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByTitle('Start a 25-minute focus block'); // the row is gone — settled, not an error
+    expect(screen.queryByText('Couldn’t stop — try again.')).toBeNull();
+    expect(await api.listRunningSessions()).toEqual([]);
+  });
+
+  it('a session another device already stopped is settled on Stop, never "Couldn’t stop"', async () => {
+    const user = userEvent.setup();
+    const api = stub();
+    api.stopSession = (id) => Promise.reject(new Error(`Not found: ${id}`));
+    renderApp({ api, path: '/settings' });
+    await startFocus(user);
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByTitle('Start a 25-minute focus block');
+    expect(screen.queryByText('Couldn’t stop — try again.')).toBeNull();
+  });
+
   it('a failed pause still pauses locally', async () => {
     const user = userEvent.setup();
     const api = stub();
