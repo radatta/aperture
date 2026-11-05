@@ -336,7 +336,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       .map((t) => t.id);
     if (unknownParts.length) {
       r.blockedDeletes.push(`${id} (unrecorded parts: ${unknownParts.join(', ')})`);
-      fail('LEFTOVERS');
+      fail('LEFTOVERS', `${id} kept: unrecorded parts ${unknownParts.join(', ')}`);
       return false;
     }
     await client.writes.deleteTask(id);
@@ -383,10 +383,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if (!(await exists(client, id))) return 'gone';
       return (await removeRecorded(client, id)) ? 'removed' : 'kept';
     } catch (err) {
-      r.failedDeletes.push(`${id}: ${err instanceof Error ? err.message : String(err)}`);
+      const what = `${id}: ${err instanceof Error ? err.message : String(err)}`;
+      r.failedDeletes.push(what);
       const code = codeOf(err); // a guard's refusal (LEDGER_GUARD…) keeps its own code too
       if (code && code !== 'LEFTOVERS') fail(code, detailOf(err));
-      fail('LEFTOVERS');
+      fail('LEFTOVERS', what); // a swept id has no `left:` verdict later, so the why is recorded here
       return 'kept';
     }
   }

@@ -421,6 +421,13 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc], memLedger(), { responseWaitMs: 5 }));
     expect(r.orphanIntents).toEqual(['ui:createTask sent, no response within the wait']);
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([
+      {
+        code: 'LEFTOVERS',
+        message: 'create sent, id never recorded: ui:createTask sent, no response within the wait',
+      },
+      { code: 'LEFTOVERS', message: 'appeared during the run, not in the ledger: t1' }, // the one that landed
+    ]);
   });
 
   it('a task that appears during the run without a ledger entry fails it, and is not deleted', async () => {
@@ -431,6 +438,9 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc]));
     expect(r.appeared).toEqual(['ghost']);
     expect(r.codes).toEqual(['LEFTOVERS']);
+    expect(r.failures).toEqual([
+      { code: 'LEFTOVERS', message: 'appeared during the run, not in the ledger: ghost' },
+    ]);
     expect(w.deleted).toEqual([]);
   });
 
@@ -463,6 +473,11 @@ describe('runPipeline', () => {
     expect(w.deleted).toEqual([]);
     expect(r.blockedDeletes).toEqual(['t1 (unrecorded parts: users-part)']);
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([
+      { code: 'LEFTOVERS', message: 't1 kept: unrecorded parts users-part' },
+      { code: 'LEFTOVERS', message: 'left: t1' },
+      { code: 'LEFTOVERS', message: 'appeared during the run, not in the ledger: users-part' },
+    ]);
   });
 
   it('the sweep also refuses to delete a leftover that has unrecorded parts', async () => {
@@ -474,6 +489,9 @@ describe('runPipeline', () => {
     expect(r.swept).toEqual([]);
     expect(r.blockedDeletes).toEqual(['old1 (unrecorded parts: users-part)']);
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([
+      { code: 'LEFTOVERS', message: 'old1 kept: unrecorded parts users-part' },
+    ]); // never in `created`, so this is its only line
   });
 
   it('LEFTOVERS when a delete does not take', async () => {
@@ -651,6 +669,7 @@ describe('runPipeline', () => {
     expect(ran).toEqual(['step']); // the run went on
     expect(r.status).toBe('FAIL');
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([{ code: 'LEFTOVERS', message: 'old1: HTTP 500 on deleteTask' }]);
   });
 
   it('a guard refusal during cleanup keeps its own code beside LEFTOVERS', async () => {
