@@ -418,6 +418,7 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
     log_path = handoffs / "precompact.log"
     log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     problems += [f"log lacks {x!r} (log: {log.strip()[-120:]!r})" for x in case.get("log", []) if x not in log]
+    problems += [f"log has {x!r}" for x in case.get("log_absent", []) if x in log]
     problems += [f"no file {g}" for g in case.get("exists", []) if not list(handoffs.glob(g))]
     problems += [f"left behind {g}" for g in case.get("absent", []) if list(handoffs.glob(g))]
     for g, needles in case.get("contains", {}).items():
