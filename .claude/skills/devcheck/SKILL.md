@@ -32,11 +32,11 @@ docs, infra) runs without `--feature`; naming a scenario that isn't in the run i
 
 1. Read `localNotes/devcheck/<run>/report.md`. The first line is the status; then _Feature coverage_ — every row
    — under _This feature_ and _Other scenarios (regression)_ alike — must be `pass`, `off dev` or `needs you`. A
-   `fail` or `skipped` row is not proven, whatever the status line or _Known 429s_ say; under _Other scenarios_ it
+   `fail` or `skipped` row is not proven, whatever the status line says; under _Other scenarios_ it
    is a regression, still a bug (phase 9; the fails-on-main fallback in the doc).
 2. **Read the screenshots** — both themes. A PASS with a broken-looking screen is not tested; say what you see.
-3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do — but while its _Known 429s_ section
-   exists, check its conditions first: a run that meets them counts as green. `DEV_CHANGED_MID_RUN` means main won:
+3. On FAIL, the reason codes table in `docs/ops/DEV-CHECK.md` says what to do. A line under _Throttled (429)_ is a
+   bug too, never weather (its _Throttles (429)_). `DEV_CHANGED_MID_RUN` means main won:
    read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a `.github/workflows/` branch: the user's push),
    `pnpm bot deploy-dev`, rerun.
 4. Leftovers must be 0. Never delete anything the report lists as "not in the ledger" — report it.

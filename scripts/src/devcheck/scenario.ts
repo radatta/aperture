@@ -96,7 +96,7 @@ export interface Ui {
 }
 
 // A scenario's last step: the run's console so far is clean. Its own step, proving no row, so a console error
-// (the cold-start 429 burst, DEV-CHECK.md → Known 429s) fails it without unproving the feature's rows.
+// (a throttled call, DEV-CHECK.md → Throttles (429)) fails it without unproving the feature's rows.
 export const noConsoleErrors: Step = {
   id: 'no-console-errors',
   title: 'No console errors on the way',
