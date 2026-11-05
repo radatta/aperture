@@ -176,9 +176,10 @@ export class Repo {
   }
 
   // --- Plans ---
-  async listPlans(day: string): Promise<TaskPlan[]> {
+  // `consistent` for upsertPlan's dedupe: "+ Today" twice in one second must see the first row.
+  async listPlans(day: string, opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.planPrefix(day))).map((i) => toEntity<TaskPlan>(i)),
+      (await this.doc.query(this.p(), sk.planPrefix(day), opts)).map((i) => toEntity<TaskPlan>(i)),
     );
   }
   async listAllPlans(opts?: { consistent?: boolean }): Promise<TaskPlan[]> {

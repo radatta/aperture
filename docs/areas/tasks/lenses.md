@@ -55,9 +55,12 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   off:
   - add = plan row **first**, then backlog → planned (a planned task without a row is what the stale
     sweep moves back). A planned task stays planned; an in-progress task keeps its status.
-  - dedupe: `upsertPlan` has none, so the hook reads that day's plan fresh and skips writing a row the
-    task already has, and ignores a second call while the first is in flight. The status step still
-    runs on that path, so retrying repairs a half-done add. Server-side dedupe is a follow-up (§3).
+  - dedupe: `upsertPlan` keeps one alive row per (task, day) on both impls — an id-less insert for a
+    task already on that day returns the row untouched (no resize, no reorder; edits go through `id`),
+    on a consistent read so two taps in one second see each other (`day-guards`, 2026-11). The hook
+    still reads that day's plan fresh (it sets `order` and `already`) and ignores a second call while
+    the first is in flight, so the status step still runs on that path and retrying repairs a
+    half-done add.
   - unplan (today's row) = remove the row, then `getDay(today)`: the stale sweep moves the task to
     backlog unless it has a row on a later day. The sweep owns that rule, so the client doesn't
     re-derive it. A started task (night "Backlog") is moved explicitly first — the sweep never touches
@@ -159,5 +162,4 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
 
 ## 3. Deferred
 
-- Server-side plan dedupe (both impls, contract-tested).
 - Find-from-anywhere (Cmd/Ctrl+K) reusing `query.ts`, only if searching outside `/tasks` is missed.

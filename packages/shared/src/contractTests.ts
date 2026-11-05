@@ -1134,6 +1134,38 @@ export function runApiContract(
       expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).not.toContain(plan.id);
     });
 
+    it('plans: a second insert for one task and day returns the existing row; an id write still edits it; a removed row can be re-added', async () => {
+      const task = await api.createTask({ title: 'Planned' });
+      const other = await api.createTask({ title: 'Neighbour' });
+      const row = { taskId: task.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+      const first = await api.upsertPlan(row);
+      const again = await api.upsertPlan({ ...row, plannedMinutes: 60, order: 2 });
+      expect(again).toEqual(first); // untouched: no resize, no reorder
+      await api.upsertPlan({ ...row, taskId: other.id, order: 1 });
+      const rows = () => api.listPlansForDay('2026-08-04');
+      expect((await rows()).filter((p) => p.taskId === task.id)).toHaveLength(1);
+      // A day apart is another row; an id write edits in place.
+      await api.upsertPlan({ ...row, day: '2026-08-05' });
+      expect(
+        (await api.listPlansForDay('2026-08-05')).filter((p) => p.taskId === task.id),
+      ).toHaveLength(1);
+      const edited = await api.upsertPlan({ ...row, id: first.id, plannedMinutes: 45 });
+      expect(edited.id).toBe(first.id);
+      expect((await rows()).filter((p) => p.taskId === task.id)).toEqual([
+        expect.objectContaining({ id: first.id, plannedMinutes: 45 }),
+      ]);
+      expect((await rows()).find((p) => p.taskId === other.id)).toMatchObject({
+        plannedMinutes: 30,
+        order: 1,
+      });
+      await api.removePlan(first.id);
+      const readded = await api.upsertPlan(row);
+      expect(readded.id).not.toBe(first.id);
+      expect((await rows()).filter((p) => p.taskId === task.id)).toEqual([
+        expect.objectContaining({ id: readded.id, plannedMinutes: 30 }),
+      ]);
+    });
+
     it('habits: check is idempotent per day and uncheck clears it', async () => {
       const h = await api.upsertHabit({ name: 'Read', categoryId: null, cadencePerWeek: 5 });
       const c1 = await api.checkHabit(h.id, '2026-08-04');

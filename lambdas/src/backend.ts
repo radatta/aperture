@@ -1160,6 +1160,13 @@ export class BackendClient implements ApiClient {
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putPlan({ ...existing, ...fields, updatedAt: this.now() }, existing);
     }
+    // One alive row per (task, day): an id-less insert means "put it on this day", so a task already
+    // there is returned untouched — no resize, no reorder (edits go through `id`). Consistent, so a
+    // second "+ Today" straight after the first sees the first one's row.
+    const dup = (await this.repo.listPlans(input.day, { consistent: true })).find(
+      (p) => p.taskId === input.taskId,
+    );
+    if (dup) return dup;
     return this.repo.putPlan({ ...this.base(), ...fields });
   }
   async removePlan(id: string): Promise<void> {

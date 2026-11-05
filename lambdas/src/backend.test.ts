@@ -839,6 +839,17 @@ describe('backend decisions under a lagging task list', () => {
     expect(doc.gets.some((g) => g.key.endsWith(sk.task(t.id)) && g.consistent)).toBe(true);
   });
 
+  it('a second insert straight after the first sees the row though the plain list lags', async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const row = { taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+    const first = await backend.upsertPlan(row);
+    doc.staleNextQueries('u#local', sk.plan('2026-08-04', 0, first.id), null, 20); // not visible yet
+    expect((await backend.upsertPlan(row)).id).toBe(first.id);
+    const rows = await doc.query('u#local', sk.planPrefix('2026-08-04'), { consistent: true });
+    expect(rows.filter((r) => r.taskId === t.id)).toHaveLength(1);
+  });
+
   it('option 3: the sweep reads plan rows consistently — a row just written keeps its task planned', async () => {
     const { backend, doc } = setup();
     const t = await backend.createTask({ title: 'pset' });

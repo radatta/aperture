@@ -1073,6 +1073,11 @@ class StubClient implements ApiClient {
         order: input.order,
       });
     }
+    // One alive row per (task, day) — an id-less insert for a task already on that day returns it.
+    const dup = this.alive(this.store.plans).find(
+      (p) => p.taskId === input.taskId && p.day === input.day,
+    );
+    if (dup) return dup;
     return this.writes.insert(this.store.plans, {
       ...this.base(),
       taskId: input.taskId,
