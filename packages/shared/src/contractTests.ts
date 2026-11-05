@@ -4,6 +4,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from '.
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
+import { FUTURE_DAY_ERROR } from './machines';
 import { SERIES_OFFSET_ERROR, SERIES_UNTIL_ERROR } from './recurrence';
 import {
   PLACE_FINISHED_ERROR,
@@ -68,6 +69,11 @@ export function runApiContract(
     });
     const advance = (ms: number) => {
       clock += ms;
+    };
+    // getDay refuses a day after the user's app day: a case that reads a 2026-08 day sets the clock to
+    // that day first (noon LA — 20:00Z — so no day-start offset moves it).
+    const at = (day: string) => {
+      clock = Date.parse(`${day}T20:00:00Z`);
     };
 
     it('logs: create is retrievable by its own day, and updates', async () => {
@@ -656,6 +662,7 @@ export function runApiContract(
     });
 
     it('parts: a roll rep or a recurring occurrence can’t be split — no parent is minted', async () => {
+      at('2026-08-04');
       const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
       const { task: rep } = await api.pickRollToday(roll.id, '2026-08-04');
       await api.upsertSeries({
@@ -1252,6 +1259,7 @@ export function runApiContract(
     });
 
     it('day: getDay materializes due recurrence exactly once', async () => {
+      at('2026-08-05');
       await api.upsertSeries({
         title: 'Daily standup',
         categoryId: null,
@@ -1449,6 +1457,7 @@ export function runApiContract(
     });
 
     it('day: a missed occurrence the series does not replace today goes to backlog', async () => {
+      at('2026-08-05');
       await api.upsertSeries({
         title: 'Laundry',
         categoryId: null,
@@ -1464,6 +1473,7 @@ export function runApiContract(
     });
 
     it('day: getDay sweeps stale planned tasks to backlog and leaves the rest', async () => {
+      at('2026-08-04');
       const plan = async (
         title: string,
         days: string[],
@@ -1533,6 +1543,7 @@ export function runApiContract(
     });
 
     it('option 3: a planned task that gains a time goes back to backlog on the next getDay; its row stays as history', async () => {
+      at('2026-08-04');
       const t = await api.createTask({ title: 'pset' });
       await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
       await api.transitionTask(t.id, 'planned');
@@ -1571,7 +1582,25 @@ export function runApiContract(
       );
     });
 
+    it('day: getDay refuses a future day and changes nothing', async () => {
+      at('2026-08-04');
+      const t = await api.createTask({ title: 'pset' });
+      const row = await api.upsertPlan({
+        taskId: t.id,
+        day: '2026-08-04',
+        plannedMinutes: 30,
+        order: 0,
+      });
+      await api.transitionTask(t.id, 'planned');
+      await expect(api.getDay('2026-08-05')).rejects.toThrow(FUTURE_DAY_ERROR);
+      await expect(api.getDay('2026-13-01')).rejects.toThrow('Invalid day');
+      expect((await api.getTask(t.id))?.status).toBe('planned');
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).toEqual([row.id]);
+      expect((await api.getDay('2026-08-03')).date).toBe('2026-08-03'); // past days are allowed
+    });
+
     it('day: intent persists on the singleton', async () => {
+      at('2026-08-04');
       const d = await api.setDayIntent('2026-08-04', 'Protect the morning');
       expect(d.intent).toBe('Protect the morning');
       expect((await api.getDay('2026-08-04')).intent).toBe('Protect the morning');

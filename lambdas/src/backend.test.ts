@@ -9,7 +9,17 @@ import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
 import { fakeObjectStore } from './s3/objects';
 import type { Presigner } from './s3/presigner';
-import { ulid, type PomodoroSession, type RecordFluxSetInput, type Task } from '@aperture/shared';
+import {
+  ulid,
+  USER_TIME_ZONE,
+  zonedEpoch,
+  type PomodoroSession,
+  type RecordFluxSetInput,
+  type Task,
+} from '@aperture/shared';
+
+// Noon LA on 2026-08-04: the day the getDay cases read (a future day is refused).
+const AUG_4_NOON = zonedEpoch('2026-08-04', '12:00', USER_TIME_ZONE);
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -572,7 +582,7 @@ describe('backend read-then-write under lagging reads', () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
       userId: 'local',
-      now: () => 1_700_000_000_000,
+      now: () => AUG_4_NOON, // the day cases read 2026-08-04, which getDay refuses from a 2023 clock
     });
     // Plain gets (and list queries) of `id` keep showing the copy from before the next write.
     const snapshot = async (id: string) => {
@@ -791,7 +801,7 @@ describe('backend decisions under a lagging task list', () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
       userId: 'local',
-      now: () => 1_700_000_000_000,
+      now: () => AUG_4_NOON,
     });
     // Every non-consistent list read for the next while shows `id` as it is now.
     const lagging = async (id: string) =>

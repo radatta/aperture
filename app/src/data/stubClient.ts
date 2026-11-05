@@ -86,6 +86,8 @@ import {
   PARENT_NO_PLAN_ERROR,
   isTimed,
   TIMED_NO_PLAN_ERROR,
+  FUTURE_DAY_ERROR,
+  isDayKey,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   parentOf,
@@ -1294,6 +1296,9 @@ class StubClient implements ApiClient {
 
   // --- Day (lazy recurrence + stale sweep on read) --------------------------
   async getDay(day: string): Promise<Day> {
+    // Lambda parity: a day after the client's app day is refused (its sweep would clear today's plan).
+    if (!isDayKey(day)) throw new Error('Invalid day');
+    if (day > todayKey(this.dayStartHour(), this.now())) throw new Error(FUTURE_DAY_ERROR);
     this.materializeDueSeries(day);
     this.sweepStalePlanned(day);
     const existing = this.alive(this.store.days).find((d) => d.date === day);

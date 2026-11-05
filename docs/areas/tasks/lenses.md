@@ -145,7 +145,9 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   - **One write rule, one healer:** `upsertPlan` refuses a timed task; a planned task that gains a time
     (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
     back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its
-    rows stay as history. That sweep is also the migration: zero Google writes, status only. The
+    rows stay as history. The sweep is monotone, so `getDay` refuses a day after the user's app day
+    (`FUTURE_DAY_ERROR`, both impls, `day-guards` 2026-11) — a future call is a client bug surfaced
+    loudly, never served unswept. That sweep is also the migration: zero Google writes, status only. The
     Lambda re-judges each move on a consistent re-read, and `upsertPlan` reads the list consistently
     (a time cleared a moment ago is honoured). A timed occurrence is never dropped as superseded — it
     goes to backlog and sits overdue in Week until dealt with; rare, and safer than cancelling an

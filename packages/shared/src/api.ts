@@ -436,7 +436,8 @@ export interface ApiClient {
 
   // Day (singleton per date). `day` is the client's CURRENT day: getDay lazily materializes due
   // recurrence and sweeps stale planned tasks (no plan row on/after `day`) back to backlog — both
-  // relative to it. Never call it with a future day; read another day's plan with listPlansForDay.
+  // relative to it. A day after the user's app day is refused (`FUTURE_DAY_ERROR`; a malformed key is
+  // 'Invalid day'); read another day's plan with listPlansForDay. Past days are allowed.
   getDay(day: string): Promise<Day>;
   setDayCapacity(day: string, capacityHours: number | null): Promise<Day>;
   setDayIntent(day: string, intent: string): Promise<Day>;

@@ -54,6 +54,8 @@ import {
   PARENT_NO_PLAN_ERROR,
   isTimed,
   TIMED_NO_PLAN_ERROR,
+  FUTURE_DAY_ERROR,
+  isDayKey,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
@@ -1387,6 +1389,12 @@ export class BackendClient implements ApiClient {
   // `consistent` for the setters below, whose copy is written back: a capacity then an intent typed
   // straight after must both land. The app's load read stays eventual.
   async getDay(day: string, opts?: { consistent?: boolean }): Promise<Day> {
+    // Refused, never clamped: a day after the user's app day (their zone, their day start) would sweep
+    // today's plan. Past days stay allowed — Night at 2am reads yesterday's key by design.
+    if (!isDayKey(day)) throw new Error('Invalid day');
+    const { dayStartHour } = await this.ensureSettings();
+    if (day > dayKeyInZone(this.now(), USER_TIME_ZONE, dayStartHour))
+      throw new Error(FUTURE_DAY_ERROR);
     await this.materializeDueSeries(day);
     await this.sweepStalePlanned(day);
     const existing = await this.repo.getDayRow(day, opts);
