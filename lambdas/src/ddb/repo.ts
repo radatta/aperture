@@ -97,8 +97,8 @@ export class Repo {
       (await this.doc.query(this.p(), sk.logAllPrefix())).map((i) => toEntity<LogEntry>(i)),
     );
   }
-  async findLog(id: string): Promise<LogEntry | null> {
-    const it = await this.scanById(sk.logAllPrefix(), id);
+  async findLog(id: string, opts?: { consistent?: boolean }): Promise<LogEntry | null> {
+    const it = await this.scanById(sk.logAllPrefix(), id, opts);
     return it ? toEntity<LogEntry>(it) : null;
   }
   async putLog(e: LogEntry): Promise<LogEntry> {
@@ -209,8 +209,8 @@ export class Repo {
       (await this.doc.query(this.p(), sk.seriesPrefix())).map((i) => toEntity<TaskSeries>(i)),
     );
   }
-  async getSeries(id: string): Promise<TaskSeries | null> {
-    const it = await this.doc.get(this.p(), sk.series(id));
+  async getSeries(id: string, opts?: { consistent?: boolean }): Promise<TaskSeries | null> {
+    const it = await this.doc.get(this.p(), sk.series(id), opts);
     return it ? toEntity<TaskSeries>(it) : null;
   }
   async putSeries(s: TaskSeries): Promise<TaskSeries> {
@@ -239,8 +239,8 @@ export class Repo {
     return alive((await this.doc.query(this.p(), sk.rollPrefix())).map((i) => toEntity<Roll>(i)));
   }
   // getStory-style (re-filter tombstones → null) so upsert on a deleted roll throws — stub parity.
-  async getRoll(id: string): Promise<Roll | null> {
-    const it = await this.doc.get(this.p(), sk.roll(id));
+  async getRoll(id: string, opts?: { consistent?: boolean }): Promise<Roll | null> {
+    const it = await this.doc.get(this.p(), sk.roll(id), opts);
     const r = it ? toEntity<Roll>(it) : null;
     return r && r.deletedAt === null ? r : null;
   }
@@ -266,8 +266,8 @@ export class Repo {
     );
   }
   // getStory-style (re-filter tombstones → null) so confirm/download on a deleted attachment throws.
-  async findAttachment(id: string): Promise<Attachment | null> {
-    const it = await this.scanById(sk.attachAllPrefix(), id);
+  async findAttachment(id: string, opts?: { consistent?: boolean }): Promise<Attachment | null> {
+    const it = await this.scanById(sk.attachAllPrefix(), id, opts);
     const a = it ? toEntity<Attachment>(it) : null;
     return a && a.deletedAt === null ? a : null;
   }
@@ -355,8 +355,8 @@ export class Repo {
   async listIdeas(): Promise<Idea[]> {
     return alive((await this.doc.query(this.p(), sk.ideaPrefix())).map((i) => toEntity<Idea>(i)));
   }
-  async getIdea(id: string): Promise<Idea | null> {
-    const it = await this.doc.get(this.p(), sk.idea(id));
+  async getIdea(id: string, opts?: { consistent?: boolean }): Promise<Idea | null> {
+    const it = await this.doc.get(this.p(), sk.idea(id), opts);
     return it ? toEntity<Idea>(it) : null;
   }
   async putIdea(i: Idea): Promise<Idea> {
@@ -633,8 +633,11 @@ export class Repo {
 
   // --- Settings singleton ---
   // --- Calendar two-way sync cursor (one row per Google account) ---
-  async getGcalSyncState(sub: string): Promise<GcalSyncState | null> {
-    const it = await this.doc.get(this.p(), sk.gcalSync(sub));
+  async getGcalSyncState(
+    sub: string,
+    opts?: { consistent?: boolean },
+  ): Promise<GcalSyncState | null> {
+    const it = await this.doc.get(this.p(), sk.gcalSync(sub), opts);
     const s = it ? toEntity<GcalSyncState>(it) : null;
     return s && s.deletedAt === null ? s : null;
   }

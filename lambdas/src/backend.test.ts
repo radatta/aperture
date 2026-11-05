@@ -636,17 +636,14 @@ describe('backend read-then-write under lagging reads', () => {
     const { backend, doc } = setup();
     const cat = await backend.upsertCategory({ label: 'Old', isWork: false });
     const before = await doc.get('u#local', sk.cat(cat.id));
-    await backend.upsertCategory({ ...cat, label: 'New' });
+    await backend.upsertCategory({ ...cat, label: 'New', order: 3 });
     lagKey(doc, sk.cat(cat.id), before);
     const { category } = await backend.setCategoryWork(cat.id, true, false);
-    expect(category).toMatchObject({ label: 'New', isWork: true });
+    expect(category).toMatchObject({ label: 'New', isWork: true, order: 3 });
+    // An edit that leaves order/active to the read keeps what the flip's write left.
     lagKey(doc, sk.cat(cat.id), before);
-    await backend.upsertCategory({ ...cat, label: 'New', isWork: true, order: 3 });
-    expect(await doc.get('u#local', sk.cat(cat.id), { consistent: true })).toMatchObject({
-      label: 'New',
-      isWork: true,
-      order: 3,
-    });
+    const edited = await backend.upsertCategory({ id: cat.id, label: 'Newer', isWork: true });
+    expect(edited).toMatchObject({ label: 'Newer', isWork: true, order: 3 });
   });
 
   it('deleting a category straight after a rename tombstones the renamed row', async () => {
@@ -688,6 +685,24 @@ describe('backend read-then-write under lagging reads', () => {
     expect(row?.deletedAt).not.toBeNull();
   });
 
+  it('a series deactivated straight after a rename keeps the name', async () => {
+    const { backend, doc } = setup();
+    const series = await backend.upsertSeries({
+      title: 'old',
+      categoryId: null,
+      defaultEstimateMin: 30,
+      rule: { kind: 'daily' },
+      anchorDate: '2026-08-01',
+    });
+    const before = await doc.get('u#local', sk.series(series.id));
+    await backend.upsertSeries({ ...series, title: 'new' });
+    lagKey(doc, sk.series(series.id), before);
+    expect(await backend.deactivateSeries(series.id)).toMatchObject({
+      title: 'new',
+      active: false,
+    });
+  });
+
   it('a habit unchecked straight after a check leaves no check, and the reverse re-checks it', async () => {
     const { backend, doc } = setup();
     const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
@@ -697,9 +712,9 @@ describe('backend read-then-write under lagging reads', () => {
     await backend.uncheckHabit(h.id, DAY);
     expect(await doc.get('u#local', key, { consistent: true })).toBeNull();
     const checked = await backend.checkHabit(h.id, DAY);
-    const gone = await doc.get('u#local', key);
+    const live = await doc.get('u#local', key);
     await backend.uncheckHabit(h.id, DAY);
-    lagKey(doc, key, gone); // the uncheck isn't visible yet: a plain read still shows the check
+    lagKey(doc, key, live); // the uncheck isn't visible yet: a plain read still shows the check
     const again = await backend.checkHabit(h.id, DAY);
     expect(again.id).not.toBe(checked.id); // a fresh check, not the stale one handed back
     expect(await doc.get('u#local', key, { consistent: true })).toMatchObject({ id: again.id });

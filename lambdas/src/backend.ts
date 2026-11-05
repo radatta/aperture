@@ -564,7 +564,7 @@ export class BackendClient implements ApiClient {
     return this.repo.putLog({ ...this.base(), day, text });
   }
   async updateLogEntry(id: string, text: string): Promise<LogEntry> {
-    const e = await this.repo.findLog(id);
+    const e = await this.repo.findLog(id, { consistent: true });
     if (!e) throw new Error(`Not found: ${id}`);
     return this.repo.putLog({ ...e, text, updatedAt: this.now() });
   }
@@ -684,8 +684,9 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Task attachments ---
+  // Consistent: confirm writes the row back, and a download moments after an upload must find it.
   private async mustAttachment(id: string): Promise<Attachment> {
-    const a = await this.repo.findAttachment(id); // null on missing OR tombstoned
+    const a = await this.repo.findAttachment(id, { consistent: true }); // null on missing OR tombstoned
     if (!a) throw new Error(`Not found: ${id}`);
     return a;
   }
@@ -745,7 +746,7 @@ export class BackendClient implements ApiClient {
     return this.presigner.getUrl(a.s3Key, a.contentType, disposition);
   }
   async deleteAttachment(id: string): Promise<void> {
-    const a = await this.repo.findAttachment(id);
+    const a = await this.repo.findAttachment(id, { consistent: true });
     if (a) await this.removeAttachment(a, this.now());
   }
   // Bytes FIRST, then the tombstone. A failed S3 delete throws with the row still live and pointing at
@@ -1180,14 +1181,14 @@ export class BackendClient implements ApiClient {
       active: input.active ?? true,
     };
     if (input.id) {
-      const existing = await this.repo.getSeries(input.id);
+      const existing = await this.repo.getSeries(input.id, { consistent: true });
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putSeries({ ...existing, ...fields, updatedAt: this.now() });
     }
     return this.repo.putSeries({ ...this.base(), ...fields });
   }
   async deactivateSeries(id: string): Promise<TaskSeries> {
-    const existing = await this.repo.getSeries(id);
+    const existing = await this.repo.getSeries(id, { consistent: true });
     if (!existing) throw new Error(`Not found: ${id}`);
     return this.repo.putSeries({ ...existing, active: false, updatedAt: this.now() });
   }
@@ -1317,7 +1318,7 @@ export class BackendClient implements ApiClient {
       active: input.active ?? true,
     };
     if (input.id) {
-      const existing = await this.repo.getRoll(input.id);
+      const existing = await this.repo.getRoll(input.id, { consistent: true });
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putRoll({ ...existing, ...fields, updatedAt: this.now() });
     }
@@ -1360,7 +1361,7 @@ export class BackendClient implements ApiClient {
     return this.repo.putIdea({ ...this.base(), text, status: 'open' });
   }
   async triageIdea(id: string, status: IdeaStatus): Promise<Idea> {
-    const existing = await this.repo.getIdea(id);
+    const existing = await this.repo.getIdea(id, { consistent: true });
     if (!existing) throw new Error(`Not found: ${id}`);
     return this.repo.putIdea({ ...existing, status, updatedAt: this.now() });
   }
@@ -1755,7 +1756,7 @@ export class BackendClient implements ApiClient {
   async completeGoogleConnect(code: string): Promise<void> {
     const { sub, email, refreshToken } = await this.google.exchangeCode(code);
     await this.google.storeRefreshToken(sub, refreshToken);
-    const settings = await this.ensureSettings();
+    const settings = await this.ensureSettings({ consistent: true });
     const others = settings.googleAccounts.filter((a) => a.sub !== sub);
     // Default the account's primary calendar (id = email) into the shape set on connect, so a freshly
     // connected account contributes to the day shape without a manual picker step; set it as the write
@@ -1912,7 +1913,7 @@ export class BackendClient implements ApiClient {
     const states = await Promise.all(
       settings.googleAccounts.map(
         async (a) =>
-          (await this.repo.getGcalSyncState(a.sub)) ?? {
+          (await this.repo.getGcalSyncState(a.sub, { consistent: true })) ?? {
             ...this.base(),
             id: a.sub,
             sub: a.sub,
@@ -2030,10 +2031,10 @@ export class BackendClient implements ApiClient {
   async disconnectGoogleAccount(accountSub: string): Promise<void> {
     await this.google.removeAccount(accountSub);
     // Tombstone the cursor (never a hard delete — TECH §2.4); a reconnect starts with a full sync.
-    const sync = await this.repo.getGcalSyncState(accountSub);
+    const sync = await this.repo.getGcalSyncState(accountSub, { consistent: true });
     if (sync)
       await this.repo.putGcalSyncState({ ...sync, deletedAt: this.now(), updatedAt: this.now() });
-    const settings = await this.ensureSettings();
+    const settings = await this.ensureSettings({ consistent: true });
     await this.repo.putSettings({
       ...settings,
       googleAccounts: settings.googleAccounts.filter((a) => a.sub !== accountSub),

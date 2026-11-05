@@ -57,6 +57,8 @@ export const partsV2bReads: Scenario = {
       kind: 'edge',
       what: 'Rename a category, then Make it work straight after → the new name is kept (Settings)',
     },
+    // The lag itself is never producible on dev (its DynamoDB is consistent within a request's time on
+    // demand); these rows are the in-memory doc's lagging-reads cases, one per written-back row kind.
     {
       id: 'habit',
       entry: 'api',
@@ -65,6 +67,72 @@ export const partsV2bReads: Scenario = {
       offDev: {
         file: 'lambdas/src/backend.test.ts',
         test: 'a habit unchecked straight after a check leaves no check, and the reverse re-checks it',
+        why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
+      },
+    },
+    {
+      id: 'unplan',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A plan removed straight after a reorder is gone, not left at its new spot',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a plan removed straight after a reorder is gone, not left at its new spot',
+        why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
+      },
+    },
+    {
+      id: 'reflection',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A reflection straight after an intent keeps the intent',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a reflection straight after an intent keeps the intent',
+        why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
+      },
+    },
+    {
+      id: 'delete-category',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Deleting a category straight after a rename tombstones the renamed row',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'deleting a category straight after a rename tombstones the renamed row',
+        why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
+      },
+    },
+    {
+      id: 'settings',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A settings patch straight after another keeps both',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a settings patch straight after another keeps both',
+        why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
+      },
+    },
+    {
+      id: 'story',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A story patch straight after a rename keeps the title; a delete tombstones the renamed row',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a story patch straight after a rename keeps the title; a delete tombstones the renamed row',
+        why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
+      },
+    },
+    {
+      id: 'series',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A series deactivated straight after a rename keeps the name',
+      offDev: {
+        file: 'lambdas/src/backend.test.ts',
+        test: 'a series deactivated straight after a rename keeps the name',
         why: 'dev’s DynamoDB rarely lags on demand; the lag is modelled on the in-memory doc',
       },
     },

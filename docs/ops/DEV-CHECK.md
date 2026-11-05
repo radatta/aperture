@@ -126,7 +126,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
 - **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
   deleted with `deleteCategory(id, null)` after the run's tasks (cleanup runs newest-first). The same scenario sets the
   test user's own day row (capacity, intent) through the UI and puts the prior values back in the step's `finally` —
-  a singleton, nothing to ledger.
+  a singleton, nothing to ledger (an intent that was never set comes back as `''`; the API has no null intent).
 - **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
   A place is recorded from the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's
   request has no `id` — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is
