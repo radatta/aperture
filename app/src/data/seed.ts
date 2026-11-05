@@ -758,6 +758,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         dueDay: null,
         dueTime: null,
         notes: null,
+        reflection: null,
         seriesId: null,
         rollId: null,
         estimateMin: null,

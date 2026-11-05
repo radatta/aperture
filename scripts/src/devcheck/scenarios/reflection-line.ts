@@ -297,12 +297,10 @@ export const reflectionLine: Scenario = {
       title: 'complete_task with 1,001 characters is refused; the task stays in the backlog',
       async run(ctx) {
         const id = (await mine(ctx, 'cap')).id;
-        const refused = await ctx.mcp.writes
-          .completeTask(id, 10, 'x'.repeat(1001))
-          .then(
-            () => null,
-            (e: unknown) => (e instanceof Error ? e.message : String(e)),
-          );
+        const refused = await ctx.mcp.writes.completeTask(id, 10, 'x'.repeat(1001)).then(
+          () => null,
+          (e: unknown) => (e instanceof Error ? e.message : String(e)),
+        );
         if (!refused || !/1,000/.test(refused))
           throw new Error(`not refused by the cap: ${refused}`);
         const t = (await ctx.mcp.reads.listTasks()).find((x) => x.id === id);
