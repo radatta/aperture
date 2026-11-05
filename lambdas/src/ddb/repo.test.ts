@@ -99,6 +99,33 @@ describe('Repo persistence', () => {
     expect(plans[0]!.order).toBe(5);
   });
 
+  it('listPlansFrom reads rows dated the day or later, alive only, in one bounded query', async () => {
+    const { doc, repo: r } = repo();
+    const row = (id: string, day: string, deletedAt: number | null = null) => ({
+      id,
+      userId: U,
+      createdAt: 0,
+      updatedAt: 0,
+      deletedAt,
+      taskId: 't1',
+      day,
+      plannedMinutes: 30,
+      order: 0,
+    });
+    for (const p of [row('a', '2026-08-01'), row('b', '2026-08-04'), row('c', '2026-08-05')])
+      await r.putPlan(p);
+    await r.putPlan(row('d', '2026-08-04', 1)); // a tombstone inside the range
+    expect((await r.listPlansFrom('2026-08-04', { consistent: true })).map((p) => p.id)).toEqual([
+      'b',
+      'c',
+    ]);
+    expect(doc.queries.at(-1)).toMatchObject({
+      prefix: 'plan#',
+      from: 'plan#2026-08-04#',
+      consistent: true,
+    });
+  });
+
   it('noopWrites makes writes a no-op (the smoke-test guarantee)', async () => {
     const doc2 = new InMemoryDoc();
     const smoke = new Repo(doc2, noopWrites(), U);

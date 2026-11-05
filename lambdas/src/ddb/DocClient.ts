@@ -33,13 +33,28 @@ export interface DocClient {
   // Throws ConditionFailedError otherwise.
   putIf(item: Item, expectedUpdatedAt: number | null): Promise<void>;
   // begins_with(SK, prefix) within a partition, ascending by SK. `consistent`: strongly consistent — a
-  // decision taken on the list straight after a write must see that write.
-  query(pk: string, skPrefix: string, opts?: { consistent?: boolean }): Promise<Item[]>;
+  // decision taken on the list straight after a write must see that write. `from`/`to` bound the sort
+  // key inside the prefix (inclusive; `to` defaults to the end of the prefix) — one range read instead
+  // of a whole-history scan, for prefixes that grow forever (plan rows, habit checks).
+  query(pk: string, skPrefix: string, opts?: QueryOpts): Promise<Item[]>;
   // GSI1 range read, ascending by GSI1SK (done-task calibration window).
   queryIndex(gsi1pk: string, range?: IndexRange): Promise<Item[]>;
   delete(pk: string, sk: string): Promise<void>;
   batchPut(items: Item[]): Promise<void>;
 }
+
+export interface QueryOpts {
+  consistent?: boolean;
+  from?: string;
+  to?: string;
+}
+// Sorts after every key under a prefix (U+FFFF: the last code point, above all ASCII in UTF-8 byte
+// order — DynamoDB compares strings as UTF-8 bytes; our keys are ASCII).
+export const SK_END = '\uffff';
+export const rangeOf = (skPrefix: string, opts?: QueryOpts): { from: string; to: string } => ({
+  from: opts?.from ?? skPrefix,
+  to: opts?.to ?? skPrefix + SK_END,
+});
 
 const keyOf = (pk: string, sk: string) => `${pk}\u0000${sk}`;
 const clone = <T>(v: T): T => structuredClone(v);
@@ -53,6 +68,8 @@ export class InMemoryDoc implements DocClient {
   private staleQueries = new Map<string, { snapshot: Item | null; left: number }>();
   // Test-only: every get, and whether it asked for a strongly consistent read.
   readonly gets: { key: string; consistent: boolean }[] = [];
+  // Test-only: every query — its prefix, the bounds it carried (if any) and the read mode.
+  readonly queries: { prefix: string; from?: string; to?: string; consistent: boolean }[] = [];
 
   async get(pk: string, sk: string, opts?: { consistent?: boolean }): Promise<Item | null> {
     const key = keyOf(pk, sk);
@@ -100,10 +117,18 @@ export class InMemoryDoc implements DocClient {
     this.items.set(keyOf(item.PK, item.SK), clone(item));
   }
 
-  async query(pk: string, skPrefix: string, opts?: { consistent?: boolean }): Promise<Item[]> {
+  async query(pk: string, skPrefix: string, opts?: QueryOpts): Promise<Item[]> {
+    this.queries.push({
+      prefix: skPrefix,
+      from: opts?.from,
+      to: opts?.to,
+      consistent: opts?.consistent === true,
+    });
+    const { from, to } = rangeOf(skPrefix, opts);
     const rows: Item[] = [];
     for (const [key, it] of this.items) {
       if (it.PK !== pk || !it.SK.startsWith(skPrefix)) continue;
+      if (it.SK < from || it.SK > to) continue;
       const lag = opts?.consistent === true ? undefined : this.staleQueries.get(key);
       if (!lag) rows.push(it);
       else {

@@ -1436,9 +1436,10 @@ export class BackendClient implements ApiClient {
   private async sweepStalePlanned(day: string): Promise<void> {
     const tasks = await this.repo.listTasks();
     if (!tasks.some((t) => t.status === 'planned')) return;
-    // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing.
-    if (stalePlannedMoves(tasks, await this.repo.listAllPlans(), day).length === 0) return;
-    const plans = await this.repo.listAllPlans({ consistent: true });
+    // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing. Rows
+    // before `day` never decide one (stalePlannedMoves reads `p.day >= day`), so this is one bounded
+    // read from today's rows on — not a scan of every plan row ever written.
+    const plans = await this.repo.listPlansFrom(day, { consistent: true });
     for (const { task } of stalePlannedMoves(tasks, plans, day)) {
       const fresh = await this.repo.getTask(task.id, { consistent: true });
       if (!fresh) continue;

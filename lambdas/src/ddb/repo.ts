@@ -187,6 +187,15 @@ export class Repo {
       (await this.doc.query(this.p(), sk.planAllPrefix(), opts)).map((i) => toEntity<TaskPlan>(i)),
     );
   }
+  // Alive rows dated `day` or later, one range read (the SK sorts by day): the stale sweep's input —
+  // rows before `day` never decide a move, and plan history only grows.
+  async listPlansFrom(day: string, opts?: { consistent?: boolean }): Promise<TaskPlan[]> {
+    const rows = await this.doc.query(this.p(), sk.planAllPrefix(), {
+      ...opts,
+      from: sk.planPrefix(day),
+    });
+    return alive(rows.map((i) => toEntity<TaskPlan>(i)));
+  }
   // `consistent` for a read whose copy is written back (upsertPlan, removePlan) — a second reorder must
   // not resurrect the row the first one just moved.
   async findPlan(id: string, opts?: { consistent?: boolean }): Promise<TaskPlan | null> {

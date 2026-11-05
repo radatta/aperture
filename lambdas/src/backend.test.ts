@@ -860,6 +860,32 @@ describe('backend decisions under a lagging task list', () => {
     expect(rows.filter((r) => r.taskId === t.id)).toHaveLength(1);
   });
 
+  it('the sweep reads only plan rows dated today or later, consistently', async () => {
+    const { backend, doc } = setup();
+    const planned = async (title: string, days: string[]) => {
+      const t = await backend.createTask({ title });
+      for (const day of days)
+        await backend.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+      await backend.transitionTask(t.id, 'planned');
+      return t;
+    };
+    const gone = await planned('yesterday only', ['2026-08-03']);
+    const later = await planned('yesterday and tomorrow', ['2026-08-03', '2026-08-05']);
+    const today = await planned('today', ['2026-08-04']);
+    doc.queries.length = 0;
+    await backend.getDay('2026-08-04');
+    const status = async (id: string) => (await backend.getTask(id))?.status;
+    expect([await status(gone.id), await status(later.id), await status(today.id)]).toEqual([
+      'backlog',
+      'planned',
+      'planned',
+    ]);
+    const planReads = doc.queries.filter((q) => q.prefix === sk.planAllPrefix());
+    expect(planReads).toEqual([
+      { prefix: 'plan#', from: sk.planPrefix('2026-08-04'), to: undefined, consistent: true },
+    ]);
+  });
+
   it('option 3: the sweep reads plan rows consistently — a row just written keeps its task planned', async () => {
     const { backend, doc } = setup();
     const t = await backend.createTask({ title: 'pset' });

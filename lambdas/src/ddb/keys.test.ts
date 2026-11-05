@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SK_END } from './DocClient';
 import { gsi1, pk, placeTokenPk, PLACE_TOKEN_SK, sk } from './keys';
 
 describe('single-table keys', () => {
@@ -32,6 +33,11 @@ describe('single-table keys', () => {
     const ten = sk.plan('2026-08-04', 10, 'b');
     expect(two < ten).toBe(true); // 000002 < 000010, not "10" < "2"
     expect(two.startsWith(sk.planPrefix('2026-08-04'))).toBe(true);
+    // A day's prefix sorts at the start of its rows and before any later day's; the range end sorts
+    // after every plan key — the stale sweep's `SK BETWEEN plan#<today># AND plan#\uffff`.
+    expect(sk.planPrefix('2026-08-04') <= two && two < sk.planPrefix('2026-08-05')).toBe(true);
+    expect(sk.plan('2026-08-03', 999_999, 'z') < sk.planPrefix('2026-08-04')).toBe(true);
+    expect(ten < sk.planAllPrefix() + SK_END).toBe(true);
   });
 
   it('scopes a day-check per habit and a day singleton by direct key', () => {

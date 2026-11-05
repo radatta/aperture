@@ -1,6 +1,6 @@
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import { ConditionFailedError } from './DocClient';
+import { ConditionFailedError, rangeOf } from './DocClient';
 import type { DocClient, IndexRange, Item } from './DocClient';
 
 // The real DynamoDB single-table DocClient — the deploy-time (Phase 12) implementation of the same
@@ -58,9 +58,16 @@ export function createLiveDoc(tableName: string): DocClient {
       }
     },
     async query(pk, skPrefix, opts) {
+      // One sort-key condition per query: a bound inside the prefix is BETWEEN, not begins_with AND >=.
+      const bounded = opts?.from !== undefined || opts?.to !== undefined;
+      const { from, to } = rangeOf(skPrefix, opts);
       return queryAll({
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :p)',
-        ExpressionAttributeValues: { ':pk': pk, ':p': skPrefix },
+        KeyConditionExpression: bounded
+          ? 'PK = :pk AND SK BETWEEN :from AND :to'
+          : 'PK = :pk AND begins_with(SK, :p)',
+        ExpressionAttributeValues: bounded
+          ? { ':pk': pk, ':from': from, ':to': to }
+          : { ':pk': pk, ':p': skPrefix },
         ConsistentRead: opts?.consistent === true,
       });
     },

@@ -36,6 +36,32 @@ describe('InMemoryDoc', () => {
     ]);
   });
 
+  it('query with from/to reads one sort-key range inside the prefix, ascending, and logs the bounds', async () => {
+    for (const day of ['2026-08-01', '2026-08-03', '2026-08-04', '2026-08-05'])
+      await db.put(item({ PK: 'u#1', SK: `plan#${day}#000000#x` }));
+    await db.put(item({ PK: 'u#1', SK: 'plan#2026-08-04#000001#y' }));
+    await db.put(item({ PK: 'u#1', SK: 'task#a' })); // another prefix never matches a plan range
+    const from = 'plan#2026-08-04#';
+    expect((await db.query('u#1', 'plan#', { from })).map((p) => p.SK)).toEqual([
+      'plan#2026-08-04#000000#x',
+      'plan#2026-08-04#000001#y',
+      'plan#2026-08-05#000000#x',
+    ]);
+    expect(
+      (
+        await db.query('u#1', 'plan#', { from: 'plan#2026-08-03#', to: 'plan#2026-08-04#\uffff' })
+      ).map((p) => p.SK),
+    ).toEqual(['plan#2026-08-03#000000#x', 'plan#2026-08-04#000000#x', 'plan#2026-08-04#000001#y']);
+    expect(db.queries.at(-2)).toEqual({ prefix: 'plan#', from, to: undefined, consistent: false });
+    // A lag inside the range is still a lag; a row outside it never shows, lag or not.
+    db.staleNextQueries('u#1', 'plan#2026-08-05#000000#x', null, 1);
+    expect((await db.query('u#1', 'plan#', { from })).map((p) => p.SK)).toEqual([
+      'plan#2026-08-04#000000#x',
+      'plan#2026-08-04#000001#y',
+    ]);
+    expect((await db.query('u#1', 'plan#', { from, consistent: true })).length).toBe(3);
+  });
+
   it('queryIndex ranges over GSI1SK ascending and respects from/to', async () => {
     await db.put(item({ PK: 'u#1', SK: 'task#a', GSI1PK: 'u#1#done', GSI1SK: 300 }));
     await db.put(item({ PK: 'u#1', SK: 'task#b', GSI1PK: 'u#1#done', GSI1SK: 100 }));
