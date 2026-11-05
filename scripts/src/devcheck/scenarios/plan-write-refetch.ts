@@ -11,9 +11,10 @@ import type { PwRequest, PwResponse } from '../pw-types';
 import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck-pw ${ctx.nonce} ${what}`;
-const SAVE_FAILED = 'Couldn’t save that — try again.';
+const SAVE_FAILED = "Couldn't save that — try again."; // StillOpenSection's straight apostrophe
+const START_FAILED = 'Couldn’t start the timer — try again.'; // the dock's (PomodoroProvider)
 const made: Record<string, DevTask> = {}; // scenario-scoped, set by setup
-let firstTimer: DevSession | undefined; // S2's timer before the failed unplan
+const timers: Record<string, DevSession> = {}; // S2's and S4's timers before their failed unplans
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(what: string, ok: () => Promise<boolean> | boolean, timeoutMs = 15_000) {
@@ -33,11 +34,14 @@ const statusOf = async (ctx: Ctx, task: DevTask) => (await ctx.api.reads.getTask
 const runningOn = async (ctx: Ctx, task: DevTask) =>
   (await ctx.api.reads.listRunningSessions()).filter((s) => s.taskId === task.id);
 
-// Served /api reads by method (200 responses, so a 429 the client retries counts once), from `arm()` until the
-// wire has been quiet for `quietMs`. The page's load burst — useDay's cascade refetches tasks and plans after
-// getDay lands — must be over before arming, so `quiet()` first, then `arm()`, then the tap.
+// Served /api reads by method — 200 responses to requests made after `arm()`, so a 429 the client retries
+// counts once and a page-load read still in flight at arming time (paired by request identity, as
+// inflight-cap does) counts not at all — until the wire has been quiet for `quietMs`. The page's load burst
+// (useDay's cascade refetches tasks and plans after getDay lands) should be over before arming anyway:
+// `quiet()` first, then `arm()`, then the tap.
 function countApi(ctx: Ctx) {
   const counts: Record<string, number> = {};
+  const tapped = new Set<object>(); // requests made after arm(), by identity
   let last = Date.now();
   let armed = false;
   const methodOf = (url: string) => {
@@ -45,13 +49,16 @@ function countApi(ctx: Ctx) {
     return path.startsWith('/api/') ? path.slice('/api/'.length) : null;
   };
   const requested = (r: PwRequest) => {
-    if (methodOf(r.url())) last = Date.now();
+    if (!methodOf(r.url())) return;
+    last = Date.now();
+    if (armed) tapped.add(r);
   };
   const responded = (res: PwResponse) => {
     const method = methodOf(res.url());
     if (!method) return;
     last = Date.now();
-    if (armed && res.status() === 200) counts[method] = (counts[method] ?? 0) + 1;
+    if (tapped.has(res.request()) && res.status() === 200)
+      counts[method] = (counts[method] ?? 0) + 1;
   };
   ctx.page.on('request', requested);
   ctx.page.on('response', responded);
@@ -92,6 +99,12 @@ const unplanButton = (ctx: Ctx, task: DevTask) =>
     .locator('xpath=ancestor::*[.//button[normalize-space()="Unplan"]][1]')
     .getByRole('button', { name: 'Unplan', exact: true });
 const nightRow = (ctx: Ctx, task: DevTask) => ctx.page.getByRole('group', { name: task.title });
+// A Right-now "Also today" row's "Focus this": the row whose title is this task's.
+const focusThis = (ctx: Ctx, task: DevTask) =>
+  ctx.page
+    .getByText(task.title, { exact: true })
+    .locator('xpath=ancestor::*[.//button[normalize-space()="Focus this"]][1]')
+    .getByRole('button', { name: 'Focus this', exact: true });
 async function openNight(ctx: Ctx) {
   await ctx.ui.goto('/');
   await ctx.page.getByRole('button', { name: 'Night', exact: true }).click();
@@ -149,12 +162,7 @@ export const planWriteRefetch: Scenario = {
       id: 'promote-focus',
       entry: 'ui',
       kind: 'edge',
-      what: 'Focus on an “Also today” row promotes it: several plan rows written at once, each replaced in place in today’s list',
-      offDev: {
-        file: 'app/src/data/hooks/usePlans.test.tsx',
-        test: 'an upsert by id replaces the row in place; a remove drops it; each refetches once',
-        why: 'same path as add-once (proven on dev): the same upsertPlan write-through and plans refetch; what differs — several rows at once, each replaced by id — runs entirely in the named test',
-      },
+      what: 'Home “Focus this” on an “Also today” row: several plan rows rewritten by id at once → it joins the Big 3, each task once, the same row ids; reload same',
     },
     {
       id: 'counts-exact',
@@ -195,12 +203,7 @@ export const planWriteRefetch: Scenario = {
       id: 'restart-refused',
       entry: 'ui',
       kind: 'edge',
-      what: 'The restart after a failed unplan is refused too → the row’s error line shows and the dock reports its own',
-      offDev: {
-        file: 'app/src/modules/pomodoro/PomodoroProvider.test.tsx',
-        test: 'startFocus resolves false and sets startError when the server refuses',
-        why: 'two injected failures on one tap: dev’s intercept fails a method, not the second call of a chain; the restart’s own answer is the provider’s contract and its test drives it',
-      },
+      what: 'The restart after a failed unplan is refused too (both injected) → the row’s error line and the dock’s own show; no timer, status in progress, the row stays; tap again → backlog',
     },
     {
       id: 'busy-disabled',
@@ -219,13 +222,13 @@ export const planWriteRefetch: Scenario = {
       id: 'setup',
       entry: 'api',
       title:
-        'Tasks (API): A to add, U to add after the API plans it, N the neighbour, P for a time, T for Tomorrow, S1–S3 started (timers on S1, S2)',
+        'Tasks (API): A to add, U to add after the API plans it, N the neighbour, P for a time, T for Tomorrow, S1–S4 started (timers on S1, S2, S4)',
       async run(ctx) {
         const { today } = await days(ctx);
-        for (const what of ['A', 'U', 'N', 'P', 'T', 'S1', 'S2', 'S3'])
+        for (const what of ['A', 'U', 'N', 'P', 'T', 'S1', 'S2', 'S3', 'S4'])
           made[what] = await ctx.api.writes.createTask({ title: name(ctx, what), estimateMin: 15 });
         let order = 0;
-        for (const what of ['N', 'P', 'T', 'S1', 'S2', 'S3'])
+        for (const what of ['N', 'P', 'T', 'S1', 'S2', 'S3', 'S4'])
           await ctx.api.writes.upsertPlan({
             taskId: made[what]!.id,
             day: today,
@@ -234,10 +237,11 @@ export const planWriteRefetch: Scenario = {
           });
         for (const what of ['N', 'P', 'T'])
           await ctx.api.writes.transitionTask(made[what]!.id, 'planned');
-        for (const what of ['S1', 'S2', 'S3'])
+        for (const what of ['S1', 'S2', 'S3', 'S4'])
           await ctx.api.writes.transitionTask(made[what]!.id, 'in_progress');
         await ctx.api.writes.startSession(made.S1!.id, today);
-        firstTimer = await ctx.api.writes.startSession(made.S2!.id, today);
+        timers.S2 = await ctx.api.writes.startSession(made.S2!.id, today);
+        timers.S4 = await ctx.api.writes.startSession(made.S4!.id, today);
       },
     },
     {
@@ -309,6 +313,42 @@ export const planWriteRefetch: Scenario = {
         await until('U to be planned', async () => (await statusOf(ctx, made.U!)) === 'planned');
         const rows = await rowsOf(ctx, today, made.U!);
         if (rows.length !== 1) throw new Error(`U rows: ${JSON.stringify(rows)}`);
+      },
+    },
+    {
+      id: 'promote-focus',
+      entry: 'ui',
+      proves: ['promote-focus'],
+      title:
+        'Home, Daytime: “Focus this” on U (Also today) → U in the Big 3, every row once; reload same; server: same ids, U at order 2',
+      async run(ctx) {
+        const { today } = await days(ctx);
+        const before = await ctx.api.reads.listPlansForDay(today);
+        const idsBefore = new Set(before.map((p) => p.id));
+        await ctx.ui.goto('/');
+        await ctx.page.getByRole('button', { name: 'Daytime', exact: true }).click();
+        const focus = focusThis(ctx, made.U!);
+        await focus.waitFor({ state: 'visible', timeout: 15_000 });
+        await focus.click();
+        await until('U to be promoted', async () => {
+          const u = await rowsOf(ctx, today, made.U!);
+          return u.length === 1 && u[0]!.order === 2;
+        });
+        const after = await ctx.api.reads.listPlansForDay(today);
+        if (after.length !== before.length || after.some((p) => !idsBefore.has(p.id)))
+          throw new Error(`rows changed identity: ${before.length} → ${after.length}`);
+        const perTask = new Map<string, number>();
+        for (const p of after) perTask.set(p.taskId, (perTask.get(p.taskId) ?? 0) + 1);
+        if ([...perTask.values()].some((n) => n > 1)) throw new Error('a task has two rows');
+        await ctx.ui.settle();
+        await ctx.page.reload();
+        await ctx.page.getByRole('button', { name: 'Daytime', exact: true }).click();
+        await ctx.ui.expectText(made.U!.title, 15_000);
+        for (const what of ['A', 'U', 'N', 'P', 'T']) {
+          const n = await ctx.page.getByText(made[what]!.title, { exact: true }).count();
+          if (n !== 1) throw new Error(`${what} shows ${n} times after the reload`);
+        }
+        await ctx.shot('focus-this');
       },
     },
     {
@@ -434,6 +474,8 @@ export const planWriteRefetch: Scenario = {
         if ((await rowsOf(ctx, today, made.S1!)).length) throw new Error('S1 still has a row');
         if ((await runningOn(ctx, made.S2!)).length !== 1)
           throw new Error('S2’s timer stopped too');
+        if ((await runningOn(ctx, made.S4!)).length !== 1)
+          throw new Error('S4’s timer stopped too');
         await nightRow(ctx, made.S3!).getByRole('button', { name: 'Backlog', exact: true }).click();
         await nightRow(ctx, made.S3!).waitFor({ state: 'hidden', timeout: 15_000 });
         await until('S3 to be backlog', async () => (await statusOf(ctx, made.S3!)) === 'backlog');
@@ -466,12 +508,12 @@ export const planWriteRefetch: Scenario = {
         }
         await until('a fresh timer on S2', async () => {
           const running = await runningOn(ctx, made.S2!);
-          return running.length === 1 && running[0]!.id !== firstTimer!.id;
+          return running.length === 1 && running[0]!.id !== timers.S2!.id;
         });
         if ((await statusOf(ctx, made.S2!)) !== 'in_progress')
           throw new Error('S2 left in progress');
         const done = (await ctx.api.reads.listSessionsForDay(today)).find(
-          (s) => s.id === firstTimer!.id,
+          (s) => s.id === timers.S2!.id,
         );
         if (done?.status !== 'completed')
           throw new Error(`S2’s first session: ${JSON.stringify(done)}`);
@@ -483,6 +525,45 @@ export const planWriteRefetch: Scenario = {
         await until('S2 to be backlog', async () => (await statusOf(ctx, made.S2!)) === 'backlog');
         if ((await runningOn(ctx, made.S2!)).length) throw new Error('S2’s timer still runs');
         if ((await rowsOf(ctx, today, made.S2!)).length) throw new Error('S2 still has a row');
+      },
+    },
+    {
+      id: 'restart-refused',
+      entry: 'ui',
+      proves: ['restart-refused'],
+      title:
+        'removePlan and startSession both fail once on S4: the row and the dock say so, no timer, in progress; again → backlog',
+      async run(ctx) {
+        const { today } = await days(ctx);
+        const unplan = await ctx.intercept('removePlan', { status: 500, times: 1 });
+        const restart = await ctx.intercept('startSession', { status: 500, times: 1 });
+        try {
+          await nightRow(ctx, made.S4!)
+            .getByRole('button', { name: 'Backlog', exact: true })
+            .click();
+          await ctx.ui.expectText(SAVE_FAILED, 15_000);
+          await ctx.ui.expectText(START_FAILED, 15_000);
+          if (unplan.hits() !== 1 || restart.hits() !== 1)
+            throw new Error(`hits: removePlan ${unplan.hits()}, startSession ${restart.hits()}`);
+          await ctx.shot('restart-refused');
+        } finally {
+          await restart.release();
+          await unplan.release();
+        }
+        if ((await runningOn(ctx, made.S4!)).length) throw new Error('S4 has a timer');
+        if ((await statusOf(ctx, made.S4!)) !== 'in_progress')
+          throw new Error('S4 left in progress');
+        const done = (await ctx.api.reads.listSessionsForDay(today)).find(
+          (s) => s.id === timers.S4!.id,
+        );
+        if (done?.status !== 'completed') throw new Error(`S4’s session: ${JSON.stringify(done)}`);
+        if ((await rowsOf(ctx, today, made.S4!)).length !== 1) throw new Error('S4 lost its row');
+        const row = nightRow(ctx, made.S4!);
+        await row.waitFor({ state: 'visible', timeout: 5_000 });
+        await row.getByRole('button', { name: 'Backlog', exact: true }).click();
+        await row.waitFor({ state: 'hidden', timeout: 15_000 });
+        await until('S4 to be backlog', async () => (await statusOf(ctx, made.S4!)) === 'backlog');
+        if ((await rowsOf(ctx, today, made.S4!)).length) throw new Error('S4 still has a row');
       },
     },
     {
