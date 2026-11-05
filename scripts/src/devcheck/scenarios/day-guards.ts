@@ -4,6 +4,9 @@
 // that tombstones. Tasks and the habit come from the API (ledger-recorded); the habit is ARCHIVED at
 // cleanup, not deleted — the API has no habit delete — so one archived habit per run stays on the test
 // user (DEV-CHECK.md → habit kind). "Today" is the app's day: before 4am LA the app is still on yesterday.
+// The run's eight tasks tip the Backlog's "No category" group past COLLAPSE_AT (8), which starts it
+// collapsed: the UI step expands it, and a teardown step deletes the tasks once the day rows are proven,
+// so later scenarios (attachment-delete, places) find the Backlog as they left it.
 import type { DevHabit, DevPlan, DevTask } from '../api';
 import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
@@ -207,6 +210,9 @@ export const dayGuards: Scenario = {
       title: 'Backlog: “+ Today” twice fast on G; Today shows it once, and after a reload',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=backlog');
+        // A group of COLLAPSE_AT (8) or more tasks starts collapsed; this run's tasks make one.
+        const folded = ctx.page.getByRole('button', { name: /^No category · /, expanded: false });
+        if ((await folded.count()) > 0) await folded.first().click();
         const add = ctx.page.getByRole('button', { name: `Add ${name(ctx, 'G')} to today` });
         await add.waitFor({ state: 'visible', timeout: 15_000 });
         await add.click();
@@ -287,6 +293,15 @@ export const dayGuards: Scenario = {
         // series must not run before this one (an occurrence it minted would be unledgered).
         if ((await ctx.api.reads.getDay(yesterday)).date !== yesterday)
           throw new Error('yesterday was refused');
+      },
+    },
+    {
+      id: 'teardown-tasks',
+      entry: 'api',
+      title:
+        'The run’s tasks go now (ledgered deletes), so the Backlog is as later scenarios expect',
+      async run(ctx) {
+        for (const task of Object.values(made)) await ctx.api.writes.deleteTask(task.id);
       },
     },
     {
