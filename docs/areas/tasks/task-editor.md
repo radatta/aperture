@@ -112,6 +112,9 @@ The card keeps only the actions you press without thinking. No overflow menu.
 
 - **Notes live in the details form** ([notes.md](notes.md)): rendered, with Edit / "Add notes…";
   once editing, a textarea until Save (which shows the rendered note again) or Close. Editable at any status, like the title.
+- **The reflection sits under Notes** ([reflection.md](reflection.md)), on a done task or one that already has
+  one: the same field with its own label and cap, in the same Save and dirty guard. The finish intent's Done
+  form takes it with the actual.
 
 ## Non-goals / deferred
 

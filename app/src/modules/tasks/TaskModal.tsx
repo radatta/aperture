@@ -47,7 +47,12 @@ export function TaskModal({
   const actualRef = useRef<HTMLInputElement>(null);
   // The forms write their slots (editState.ts); the tick re-renders this when one changes.
   const [editTick, changed] = useReducer((n: number) => n + 1, 0);
-  const [edits] = useState<EditSlots>(() => ({ details: 'clean', reveal: 'clean', changed }));
+  const [edits] = useState<EditSlots>(() => ({
+    details: 'clean',
+    reveal: 'clean',
+    finish: 'clean',
+    changed,
+  }));
   const [confirming, setConfirming] = useState(false);
   // An exit held back: by the confirm (dirty), or until a save in flight lands (saving).
   const [pending, setPending] = useState<Exit | null>(null);

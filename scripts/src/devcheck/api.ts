@@ -21,6 +21,8 @@ export interface DevTask {
   parentId?: string | null;
   place?: string | null; // a place slug — an errand (the places scenario)
   estimateLockedMin?: number | null;
+  actualAccruedMin?: number;
+  reflection?: string | null; // the reflection scenario
 }
 
 export interface CreateTaskInput {
@@ -298,6 +300,18 @@ export function createApiClient({
           `refusing to delete Flux set ${id} — the ledger never recorded it`,
         );
       await call<null>('deleteFluxSet', [id]);
+    },
+    // The reflection scenario's direct BFF call (its over-cap refusal), on a task this harness created.
+    async setTaskActual(
+      id: string,
+      actualMin: number,
+      reflection?: string | null,
+    ): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>(
+        'setTaskActual',
+        reflection === undefined ? [id, actualMin] : [id, actualMin, reflection],
+      );
     },
     async deleteTask(id: string): Promise<void> {
       assertLedgerTask(id);

@@ -136,6 +136,11 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         dueDay: null,
         dueTime: null,
         notes: null,
+        // Today's carries a reflection, so the night review and the done task's editor show one on first load.
+        reflection:
+          d === 0
+            ? 'Went fine, but I should have **outlined first** — the rewrite ate the time.'
+            : null,
         seriesId: null,
         rollId: null,
         estimateMin: est,
@@ -181,6 +186,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     dueDay: null,
     dueTime: null,
     notes: null,
+    reflection: null,
     seriesId: null,
     rollId: null,
     cancelledAt: null,
@@ -278,6 +284,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         dueAt !== null ? dayKey(dueAt, 0) : dueOffset === null ? null : addDays(today, dueOffset),
       dueTime: dueAt === null ? null : hhmmOfEpoch(dueAt),
       notes: notes ?? null,
+      reflection: null,
       seriesId: null,
       rollId: null,
       estimateMin: null,
@@ -424,6 +431,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       dueDay: null,
       dueTime: null,
       notes: notes ?? null,
+      reflection: null,
       seriesId: null,
       rollId: null,
       estimateMin: est,
@@ -520,6 +528,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       dueDay: null,
       dueTime: null,
       notes: null,
+      reflection: null,
       seriesId: null,
       rollId: roll.id,
       estimateMin: est,

@@ -32,6 +32,7 @@ function baseTask(over: Partial<Task> = {}): Task {
     dueDay: null,
     dueTime: null,
     notes: null,
+    reflection: null,
     estimateMin: 30,
     bufferMin: null,
     estimateLockedMin: 30,

@@ -187,7 +187,13 @@ export function TaskEditor({
     inProgress && !isParent ? (
       <section className="flex flex-col gap-2">
         <SectionHeading>Mark done</SectionHeading>
-        <DoneForm task={task} actualRef={actualRef} onDone={finished} onCancel={onRequestClose} />
+        <DoneForm
+          task={task}
+          actualRef={actualRef}
+          edits={edits}
+          onDone={finished}
+          onCancel={onRequestClose}
+        />
       </section>
     ) : null;
 

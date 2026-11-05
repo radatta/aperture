@@ -23,6 +23,7 @@ export function rollRepFields(roll: Roll): Omit<Task, keyof BaseEntity> {
     dueDay: null, // a Roll has no deadline — that's the whole point
     dueTime: null,
     notes: null,
+    reflection: null,
     estimateMin: roll.estimateMin,
     bufferMin: null,
     estimateLockedMin: null,

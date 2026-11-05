@@ -56,6 +56,7 @@ import {
   heartbeatSession,
   normalizeContentType,
   normalizeNotes,
+  normalizeReflection,
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
@@ -64,6 +65,7 @@ import {
   sanitizeFilename,
   seriesDueOn,
   setNotesArg,
+  setReflectionArg,
   followUpPlanDay,
   followUpPlanMinutes,
   assertCanBePart,
@@ -442,6 +444,7 @@ class StubClient implements ApiClient {
       categoryId: input.categoryId ?? null,
       ...normalizeDue(input.dueDay ?? null, input.dueTime ?? null),
       notes: normalizeNotes(input.notes),
+      reflection: null,
       seriesId: null,
       rollId: null,
       estimateMin: input.estimateMin ?? null,
@@ -892,6 +895,9 @@ class StubClient implements ApiClient {
   async setTaskNotes(id: string, notes: string | null): Promise<Task> {
     return this.writes.patch(this.store.tasks, id, { notes: setNotesArg(notes) });
   }
+  async setTaskReflection(id: string, reflection: string | null): Promise<Task> {
+    return this.writes.patch(this.store.tasks, id, { reflection: setReflectionArg(reflection) });
+  }
   async transitionTask(id: string, to: TaskStatus): Promise<Task> {
     const task = this.mustFind(this.store.tasks, id);
     const parts = partsOf(this.alive(this.store.tasks), id);
@@ -936,9 +942,11 @@ class StubClient implements ApiClient {
     if (to === 'cancelled' && task.gcalEventId) return this.deleteCalendarEvent(id);
     return next;
   }
-  async setTaskActual(id: string, actualMin: number): Promise<Task> {
+  async setTaskActual(id: string, actualMin: number, reflection?: string | null): Promise<Task> {
+    // Normalized before anything is read or written: an over-cap reflection lands nothing.
+    const note = reflection === undefined ? {} : { reflection: normalizeReflection(reflection) };
     if (hasParts(this.alive(this.store.tasks), id)) throw new Error(PARENT_NO_ACTUAL_ERROR);
-    return this.writes.patch(this.store.tasks, id, { actualAccruedMin: actualMin });
+    return this.writes.patch(this.store.tasks, id, { actualAccruedMin: actualMin, ...note });
   }
   async splitTask(
     id: string,
@@ -1310,6 +1318,7 @@ class StubClient implements ApiClient {
         dueDay: null,
         dueTime: null,
         notes: null,
+        reflection: null,
         seriesId: series.id,
         rollId: null,
         estimateMin: series.defaultEstimateMin,
@@ -2084,6 +2093,7 @@ class StubClient implements ApiClient {
         estimateLockedMin: t.estimateLockedMin!,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
+        reflection: t.reflection ?? null,
         parts: rollupParts(tasks, t.id),
       }))
       .filter((p) => p.day >= range.from && p.day <= range.to)

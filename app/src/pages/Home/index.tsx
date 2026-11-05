@@ -20,6 +20,7 @@ import { useTodayPlan } from '../../modules/tasks/useTodayPlan';
 import { AddToTodayButton } from '../../modules/tasks/AddToTodayDialog';
 import { HabitCheckList } from '../../modules/habits/HabitCheckList';
 import { reflectionPromptFor } from '../../modules/reflection/prompts';
+import { notesPlainText } from '../../modules/tasks/notes/parseNotes';
 import { CardLink, HomeCard } from './HomeCard';
 import { DayShapeCard } from './DayShapeCard';
 import { RightNowCard } from './RightNowCard';
@@ -235,6 +236,25 @@ function TimeBudgetCard() {
   );
 }
 
+// A task finished without an estimate: its actual, plainly — no bar to measure against.
+function NoEstimateRow({ label, actualMin }: { label: string; actualMin: number }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Text size="sm" tone="muted" className="truncate">
+        {label}
+      </Text>
+      <div className="flex items-baseline gap-2">
+        <Text size="sm" weight="medium" tabular>
+          {fmtDuration(actualMin)}
+        </Text>
+        <Text size="xs" tone="muted">
+          no estimate
+        </Text>
+      </div>
+    </div>
+  );
+}
+
 // Night: today's log peek + the estimate-vs-actual on tasks finished today.
 function ReviewCard({ today }: { today: string }) {
   const { data: settings } = useSettings();
@@ -299,30 +319,26 @@ function ReviewCard({ today }: { today: string }) {
             <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
               Done today · estimate vs actual
             </Text>
-            {doneToday.map((t) =>
-              contributesCalibration(t) ? (
-                <DeltaBar
-                  key={t.id}
-                  label={label(t)}
-                  estimateMin={t.estimateLockedMin!}
-                  actualMin={t.actualAccruedMin}
-                />
-              ) : (
-                <div key={t.id} className="flex flex-col gap-1">
-                  <Text size="sm" tone="muted" className="truncate">
-                    {label(t)}
+            {doneToday.map((t) => (
+              <div key={t.id} className="flex flex-col gap-1">
+                {contributesCalibration(t) ? (
+                  <DeltaBar
+                    label={label(t)}
+                    estimateMin={t.estimateLockedMin!}
+                    actualMin={t.actualAccruedMin}
+                  />
+                ) : (
+                  <NoEstimateRow label={label(t)} actualMin={t.actualAccruedMin} />
+                )}
+                {/* The why beside the delta: one line, italic so it doesn't read as another task's
+                    label; nothing at all when there's none. */}
+                {t.reflection && (
+                  <Text size="sm" tone="muted" className="truncate italic">
+                    {notesPlainText(t.reflection)}
                   </Text>
-                  <div className="flex items-baseline gap-2">
-                    <Text size="sm" weight="medium" tabular>
-                      {fmtDuration(t.actualAccruedMin)}
-                    </Text>
-                    <Text size="xs" tone="muted">
-                      no estimate
-                    </Text>
-                  </div>
-                </div>
-              ),
-            )}
+                )}
+              </div>
+            ))}
           </div>
         )}
         {!tasksFailed && <StillOpenSection today={today} dayStartHour={start} />}

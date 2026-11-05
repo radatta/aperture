@@ -43,6 +43,11 @@ export interface Task extends BaseEntity {
   // Free-form light markdown (see taskNotes.ts), capped at TASK_NOTES_MAX. Editable at any status, never
   // part of the estimate lock. Empty is null; pre-existing rows read back undefined, so readers use `!notes`.
   notes: string | null;
+  // The look back written at completion (what went well, what to do differently, where the time went) —
+  // same markdown subset as notes, capped at TASK_REFLECTION_MAX (taskNotes.ts). Editable at any status,
+  // never part of the estimate lock; every spawn path (split follow-up, series, roll rep) starts it null.
+  // Pre-existing rows read back undefined, so readers use `!reflection`.
+  reflection: string | null;
   // The WORKING estimate: editable at any open status (not done/cancelled) — rescoping mid-task is fine.
   estimateMin: number | null;
   bufferMin: number | null;
@@ -260,6 +265,7 @@ export interface CalibrationPoint {
   estimateLockedMin: number;
   actualAccruedMin: number;
   categoryId: string | null;
+  reflection: string | null; // the task's reflection, so a calibration read carries the why with the delta
   // > 0 = a done parent's rollup (parts.ts), over this many parts not dropped (the card's "2/2") — each
   // already a point of its own, so the headline skips it to count the work once.
   parts: number;

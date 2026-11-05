@@ -19,6 +19,7 @@ export const API_METHODS = [
   'setTaskDue',
   'setTaskTitle',
   'setTaskNotes',
+  'setTaskReflection',
   'setTaskParent',
   'transitionTask',
   'setTaskActual',

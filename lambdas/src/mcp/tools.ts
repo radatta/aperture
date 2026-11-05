@@ -2,6 +2,7 @@ import {
   ATTACHMENT_MAX_BYTES,
   AUTO_PLACED_ERROR,
   TASK_NOTES_MAX,
+  TASK_REFLECTION_MAX,
   UPLOAD_URL_TTL_MS,
   blockTitle,
   calendarSyncPlan,
@@ -11,6 +12,7 @@ import {
   isTimeKey,
   normalizeContentType,
   normalizeNotes,
+  normalizeReflection,
   PARENT_NO_ACTUAL_ERROR,
   parentOf,
   partsOf,
@@ -125,17 +127,27 @@ function syncRefusal(task: Task, settings: Settings, parent: boolean): string {
 }
 // Notes are checked here, before any dispatch, so an over-cap note is a param error that lands nothing —
 // not a half-applied update_task. The value passed on is already normalized (trim, '' → null).
-function nullableNotes(args: Record<string, unknown>, key: string): string | null {
+// The reflection goes through the same check with its own normalizer (and cap).
+function nullableText(
+  args: Record<string, unknown>,
+  key: string,
+  normalize: (v: string | null | undefined) => string | null,
+): string | null {
   const v = args[key];
   if (v !== null && v !== undefined && typeof v !== 'string')
     throw new RpcParamError(`"${key}" must be a string or null`);
   try {
-    return normalizeNotes(v);
+    return normalize(v);
   } catch (e) {
     throw new RpcParamError(`"${key}": ${e instanceof Error ? e.message : 'invalid'}`);
   }
 }
+const nullableNotes = (args: Record<string, unknown>, key: string) =>
+  nullableText(args, key, normalizeNotes);
+const nullableReflection = (args: Record<string, unknown>) =>
+  nullableText(args, 'reflection', normalizeReflection);
 const NOTES_SCHEMA_DESC = `light markdown (**bold**, *italic*, \`code\`, - bullets, 1. lists, [text](https://…), bare URLs; newlines kept), at most ${TASK_NOTES_MAX} characters after trimming (the server checks)`;
+const REFLECTION_SCHEMA_DESC = `the user's short look back at the finished task — what went well, what to do differently next time, where the time went. Only in the user's own words, when they say it; never invent or summarise one. Plain text or the notes' light markdown, at most ${TASK_REFLECTION_MAX} characters after trimming (the server checks)`;
 
 function enumArg<T extends string>(args: Record<string, unknown>, key: string, allowed: T[]): T {
   const s = reqStr(args, key);
@@ -306,7 +318,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      "Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent's baseline; an open part takes its parent's place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent's place and errors — set the parent's, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or \"\" clears; editable at any status), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).",
+      "Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent's baseline; an open part takes its parent's place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent's place and errors — set the parent's, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or \"\" clears; editable at any status), reflection (REPLACES the whole reflection; null or \"\" clears; usually on a done task — the look back written at completion), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→reflection→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -320,6 +332,10 @@ export const TOOLS: Tool[] = [
         notes: {
           type: ['string', 'null'],
           description: `${NOTES_SCHEMA_DESC}; replaces the whole note, null clears`,
+        },
+        reflection: {
+          type: ['string', 'null'],
+          description: `${REFLECTION_SCHEMA_DESC}; replaces the whole reflection, null clears`,
         },
         estimateMin: { type: 'integer', minimum: 0 },
         bufferMin: { type: 'integer', minimum: 0 },
@@ -338,6 +354,7 @@ export const TOOLS: Tool[] = [
         'dueDay',
         'dueTime',
         'notes',
+        'reflection',
         'estimateMin',
         'bufferMin',
         'status',
@@ -347,6 +364,7 @@ export const TOOLS: Tool[] = [
       }
       const notes = present(args, 'notes') ? nullableNotes(args, 'notes') : undefined; // before any write
       const place = present(args, 'place') ? placeArg(args, 'place') : undefined;
+      const reflection = present(args, 'reflection') ? nullableReflection(args) : undefined;
       const dueDay = present(args, 'dueDay') ? nullableDay(args, 'dueDay') : undefined;
       const dueTime = present(args, 'dueTime') ? nullableTime(args, 'dueTime') : undefined;
       const applied: string[] = [];
@@ -393,6 +411,10 @@ export const TOOLS: Tool[] = [
           await ctx.dispatch('setTaskNotes', [id, notes]);
           applied.push('notes');
         }
+        if (reflection !== undefined) {
+          await ctx.dispatch('setTaskReflection', [id, reflection]);
+          applied.push('reflection');
+        }
         if (present(args, 'estimateMin') || present(args, 'bufferMin')) {
           // Either half alone keeps the other (like split_task and the editor) — a rescope that sends
           // only estimateMin must not wipe the buffer.
@@ -422,7 +444,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'complete_task',
     description:
-      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin — its actual is what its parts took — and it is refused while any part is still open (complete, drop or delete that part first). An ERRAND (a task with a place) may omit actualMin too: it is checked off, never a calibration point.',
+      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin — its actual is what its parts took — and it is refused while any part is still open (complete, drop or delete that part first). An ERRAND (a task with a place) may omit actualMin too: it is checked off, never a calibration point. reflection (optional): the user’s look back, saved in the same write as actualMin (on a parent, after its parts’ rollup; on an errand without one, after the check-off); to add or fix one on a task already done, use update_task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -433,12 +455,15 @@ export const TOOLS: Tool[] = [
           description:
             'actual minutes the task took (required, except on a parent: omit it; optional on an errand)',
         },
+        reflection: { type: ['string', 'null'], description: REFLECTION_SCHEMA_DESC },
       },
       required: ['id'],
       additionalProperties: false,
     },
     async run(args, ctx) {
       const id = reqStr(args, 'id');
+      // Checked before any dispatch: an over-cap reflection is a param error that lands nothing.
+      const reflection = present(args, 'reflection') ? nullableReflection(args) : undefined;
       const task = (await ctx.dispatch('getTask', [id])) as Task | null;
       if (!task) throw new Error(`Not found: ${id}`);
       if (task.status === 'done' || task.status === 'cancelled') {
@@ -450,7 +475,9 @@ export const TOOLS: Tool[] = [
           throw new RpcParamError(`${PARENT_NO_ACTUAL_ERROR} Omit actualMin.`);
         // The server refuses while a part is open, naming it (parts.ts) — that message is the answer.
         const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
-        return { task: done, previousActualMin: 0 };
+        if (reflection === undefined) return { task: done, previousActualMin: 0 };
+        const noted = (await ctx.dispatch('setTaskReflection', [id, reflection])) as Task;
+        return { task: noted, previousActualMin: 0 };
       }
       // An errand is checked off — no actual needed (it never feeds calibration: contributesCalibration).
       const actualMin =
@@ -459,9 +486,16 @@ export const TOOLS: Tool[] = [
       if (task.status === 'backlog' || task.status === 'planned') {
         await ctx.dispatch('transitionTask', [id, 'in_progress']);
       }
-      if (actualMin !== null) await ctx.dispatch('setTaskActual', [id, actualMin]);
+      if (actualMin !== null)
+        await ctx.dispatch(
+          'setTaskActual',
+          reflection === undefined ? [id, actualMin] : [id, actualMin, reflection],
+        );
       const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
-      return { task: done, previousActualMin };
+      // An errand checked off with no actual has no setTaskActual for the reflection to ride.
+      if (actualMin !== null || reflection === undefined) return { task: done, previousActualMin };
+      const noted = (await ctx.dispatch('setTaskReflection', [id, reflection])) as Task;
+      return { task: noted, previousActualMin };
     },
   },
   {

@@ -93,6 +93,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   app's Backlog is the stronger same-partition proof. `ctx.mcp` (`mcp.ts`) mirrors `api.ts`: declared reads and
   writes, creates ledgered from the response (`via: mcp:create_task`), deletes only of ledger ids (a parent with
   an unrecorded part is refused; an attachment only when the server lists it on a recorded task).
+- **Edits only on the run's own tasks.** A write that changes a task — the API client's `setTaskActual`, MCP's
+  `completeTask` and `setReflection` — runs only on a ledger id (`LEDGER_GUARD` otherwise, before any request).
 - **Deletes by recorded id only.** Every task the run creates is recorded in a ledger from the server's create
   response — the API client's `createTask`, and the browser's `createTask`/`createTasks`/`splitTask`
   responses (a split's follow-up, and its parent only when the split task was already recorded and the parent

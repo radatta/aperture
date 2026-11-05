@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseInline, parseNotes, safeHref } from './parseNotes';
+import { notesPlainText, parseInline, parseNotes, safeHref } from './parseNotes';
 
 const text = (t: string) => ({ kind: 'text', text: t });
 
@@ -157,5 +157,15 @@ describe('link safety', () => {
     expect(parseInline('<script>alert(1)</script> &lt;b&gt;')).toEqual([
       text('<script>alert(1)</script> &lt;b&gt;'),
     ]);
+  });
+});
+
+describe('notesPlainText', () => {
+  it('drops the markers and joins lines and items with a space', () => {
+    expect(notesPlainText('Should have **outlined** first\n- *one*\n- `two`')).toBe(
+      'Should have outlined first one two',
+    );
+    expect(notesPlainText('see [the brief](https://example.com/b)')).toBe('see the brief');
+    expect(notesPlainText('')).toBe('');
   });
 });
