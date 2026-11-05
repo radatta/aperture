@@ -4,6 +4,7 @@
 // newest-first, so the tasks go before the categories they sit on. Titles use `devcheck-cat <nonce> …`,
 // never `devcheck <nonce>` — the parts scenarios sweep that prefix. The /tasks search text persists
 // across lenses, so every open searches for its own task and the last step clears it.
+import type { PwLocator } from '../pw-types';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const GARDEN = [
@@ -40,6 +41,10 @@ const STRANGER = 'quarterly filing';
 
 const name = (ctx: Ctx, what: string) => `devcheck-cat ${ctx.nonce} ${what}`;
 const chipName = (label: string) => `Use suggested category ${label}`;
+// By role, never getByLabel: that also matches the chip's aria-label, as a substring. The <label> wraps
+// the <select>, so its accessible name carries the options too; hence the prefix.
+const categorySelect = (dialog: PwLocator) => dialog.getByRole('combobox', { name: /^Category/ });
+const placeSelect = (dialog: PwLocator) => dialog.getByRole('combobox', { name: /^Place\b/ });
 
 // Opens a task's editor from the Backlog, searched down to that task.
 async function openTask(ctx: Ctx, title: string) {
@@ -49,7 +54,7 @@ async function openTask(ctx: Ctx, title: string) {
   await open.waitFor({ timeout: 15_000 });
   await open.click();
   const dialog = ctx.page.getByRole('dialog', { name: `Task: ${title}` });
-  await dialog.getByLabel('Category').waitFor({ timeout: 10_000 });
+  await categorySelect(dialog).waitFor({ timeout: 10_000 });
   return dialog;
 }
 
@@ -76,6 +81,12 @@ export const categorySuggest: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'An uncategorised task whose title matches the history shows "Garden?"; tap, Save, reload — the category is set',
+    },
+    {
+      id: 'steady',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'At phone width the tap removes the chip and moves nothing else: Category, Place and the Due field stay where they were',
     },
     {
       id: 'cancel',
@@ -157,10 +168,12 @@ export const categorySuggest: Scenario = {
     {
       id: 'seed',
       entry: 'api',
-      title: 'Two run categories, 24 categorised tasks, three uncategorised ones (API)',
+      title: 'Two run categories, a place, 24 categorised tasks, three uncategorised ones (API)',
       async run(ctx) {
         const garden = await ctx.api.writes.upsertCategory({ label: 'Garden', isWork: false });
         const kitchen = await ctx.api.writes.upsertCategory({ label: 'Kitchen', isWork: false });
+        // The Place select only renders with a place on the roster, and it's what the old layout moved.
+        await ctx.api.writes.upsertPlace({ name: `Devcheck ${ctx.nonce} Shed` });
         for (const t of GARDEN)
           await ctx.api.writes.createTask({ title: name(ctx, t), categoryId: garden.id });
         for (const t of KITCHEN)
@@ -173,12 +186,13 @@ export const categorySuggest: Scenario = {
       id: 'chip',
       entry: 'ui',
       proves: ['accept'],
-      title: 'The matching task opens with "Garden?" beside an empty Category select',
+      title: 'The matching task opens with "Garden?" above an empty Category select',
       async run(ctx) {
         const dialog = await openTask(ctx, name(ctx, MATCH));
         const chip = dialog.getByRole('button', { name: chipName('Garden') });
         await chip.waitFor({ timeout: 10_000 });
-        if ((await dialog.getByLabel('Category').inputValue()) !== '')
+        await placeSelect(dialog).waitFor({ timeout: 10_000 });
+        if ((await categorySelect(dialog).inputValue()) !== '')
           throw new Error('the select was pre-filled — the chip must be tap-only');
         await ctx.shot('chip');
       },
@@ -186,15 +200,25 @@ export const categorySuggest: Scenario = {
     {
       id: 'accept',
       entry: 'ui',
-      proves: ['accept'],
-      title: 'Tap fills the select; Save persists; a reload shows the category set',
+      proves: ['accept', 'steady'],
+      title:
+        'Tap fills the select and moves nothing else; Save persists; a reload shows the category set',
       async run(ctx) {
         const title = name(ctx, MATCH);
         const dialog = ctx.page.getByRole('dialog', { name: `Task: ${title}` });
+        const tops = async () => [
+          (await categorySelect(dialog).boundingBox())?.y,
+          (await placeSelect(dialog).boundingBox())?.y,
+          (await dialog.getByLabel('Due', { exact: true }).boundingBox())?.y,
+        ];
+        const before = await tops();
         await dialog.getByRole('button', { name: chipName('Garden') }).click();
+        const after = await tops();
+        if (before.includes(undefined) || before.join() !== after.join())
+          throw new Error(`the tap moved the form: ${before.join()} → ${after.join()}`);
         const garden = (await ctx.api.reads.listCategories()).find((c) => c.label === 'Garden');
         if (!garden) throw new Error('the Garden category is not on the server');
-        if ((await dialog.getByLabel('Category').inputValue()) !== garden.id)
+        if ((await categorySelect(dialog).inputValue()) !== garden.id)
           throw new Error('the tap did not fill the select');
         if ((await dialog.getByRole('button', { name: chipName('Garden') }).count()) !== 0)
           throw new Error('the chip stayed after the field was filled');
@@ -202,7 +226,7 @@ export const categorySuggest: Scenario = {
         const { id } = await mine(ctx, MATCH);
         await waitForCategory(ctx, id, garden.id);
         const again = await openTask(ctx, title);
-        if ((await again.getByLabel('Category').inputValue()) !== garden.id)
+        if ((await categorySelect(again).inputValue()) !== garden.id)
           throw new Error('after a reload the select does not show the saved category');
         if ((await again.getByRole('button', { name: /^Use suggested category/ }).count()) !== 0)
           throw new Error('a chip shows on a categorised task');
@@ -236,7 +260,7 @@ export const categorySuggest: Scenario = {
         const dialog = await openTask(ctx, name(ctx, STRANGER));
         if ((await dialog.getByRole('button', { name: /^Use suggested category/ }).count()) !== 0)
           throw new Error('a chip shows on a title nothing matches');
-        const options = dialog.getByLabel('Category').locator('option');
+        const options = categorySelect(dialog).locator('option');
         const labels: string[] = [];
         for (let i = 0, n = await options.count(); i < n; i++)
           labels.push((await options.nth(i).textContent()) ?? '');

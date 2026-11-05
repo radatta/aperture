@@ -108,6 +108,12 @@ export function TaskDetailsForm({
   const suggestedLabel = suggestion
     ? categoryOptions.options.find((o) => o.value === suggestion.categoryId)?.label
     : undefined;
+  // Once a chip has shown, its slot stays for the rest of this open: the tap (or a title edit) empties
+  // it without the row above the selects collapsing, so nothing under the finger moves. Set during
+  // render, like the reseed below, so the chip never arrives a frame late.
+  const [chipSlot, setChipSlot] = useState(false);
+  if (suggestion && !chipSlot) setChipSlot(true);
+  const categorySelect = useRef<HTMLSelectElement>(null);
   const showReflection =
     task.status === 'done' || (!!task.reflection && task.status !== 'in_progress');
   // A change that lands from elsewhere — a split's rename/rescope, a calendar pull (an edit made in
@@ -336,8 +342,14 @@ export function TaskDetailsForm({
             )}
           </div>
         )}
-        <div className="flex items-end gap-2">
+        {/* On a phone the chip sits above the label, not beside the select: beside it the group
+            outgrows the row and Place wraps, then jumps back when the tap removes the chip. Above (and
+            beside from sm, where the row has room), the selects stay aligned and only the chip itself
+            comes and goes. The select comes first in the DOM so Tab follows the row from sm, and the
+            chip's width is capped so a long label can't wrap that row either. */}
+        <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-end sm:gap-2">
           <Select
+            ref={categorySelect}
             label="Category"
             placeholder="Uncategorized"
             value={categoryId}
@@ -346,18 +358,27 @@ export function TaskDetailsForm({
             disabled={categoryOptions.failed}
             className="w-40"
           />
-          {suggestion && suggestedLabel && (
-            <Button
-              variant="quiet"
-              size="sm"
-              onClick={() => setCategoryId(suggestion.categoryId)}
-              aria-label={`Use suggested category ${suggestedLabel}`}
-              aria-description="From your other tasks — tap to use"
-              title="From your other tasks — tap to use"
-              className="border border-dashed border-line"
-            >
-              {suggestedLabel}?
-            </Button>
+          {chipSlot && (
+            <div className="flex min-h-8.5 items-center max-sm:order-first">
+              {suggestion && suggestedLabel && (
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  onClick={(e) => {
+                    setCategoryId(suggestion.categoryId);
+                    // The chip unmounts: Enter or Space keeps focus on the field it filled, not <body>.
+                    // Only then (detail 0): focusing on a tap would open the iOS picker.
+                    if (e.detail === 0) categorySelect.current?.focus();
+                  }}
+                  aria-label={`Use suggested category ${suggestedLabel}`}
+                  aria-description="From your other tasks — tap to use"
+                  title="From your other tasks — tap to use"
+                  className="max-w-36 border border-dashed border-line"
+                >
+                  <span className="min-w-0 truncate">{suggestedLabel}?</span>
+                </Button>
+              )}
+            </div>
           )}
         </div>
         {categoryOptions.failed && (

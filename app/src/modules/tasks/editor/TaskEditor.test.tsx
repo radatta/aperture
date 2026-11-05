@@ -1095,6 +1095,26 @@ describe('TaskEditor', () => {
       await waitFor(async () => expect((await client.getTask(t.id))?.categoryId).toBe(garden.id));
     });
 
+    it('keeps focus on the field when the chip goes by keyboard, and leaves a tap alone', async () => {
+      const { client, garden } = await seeded();
+      const t = await client.createTask({ title: 'mulch the tomato beds' });
+      const { user } = renderEditor(client, t);
+      const select = (await screen.findByLabelText('Category')) as HTMLSelectElement;
+
+      (await screen.findByRole('button', { name: /^Use suggested category/ })).focus();
+      await user.keyboard('{Enter}');
+      expect(select.value).toBe(garden.id);
+      expect(document.activeElement).toBe(select);
+      cleanup();
+
+      const other = await client.createTask({ title: 'mulch the rose beds' });
+      const { user: tapper } = renderEditor(client, other);
+      const again = (await screen.findByLabelText('Category')) as HTMLSelectElement;
+      await tapper.click(await screen.findByRole('button', { name: /^Use suggested category/ }));
+      expect(again.value).toBe(garden.id);
+      expect(document.activeElement).not.toBe(again); // focusing would open the iOS picker
+    });
+
     it('no chip when the task is categorised, when nothing in its title is known, or on a part', async () => {
       const { client, garden } = await seeded();
       const filed = await client.createTask({

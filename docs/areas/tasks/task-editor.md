@@ -118,7 +118,7 @@ The card keeps only the actions you press without thinking. No overflow menu.
   form takes it with the actual.
 
 - **Category suggestion (2026-11-05)** — an uncategorised task's editor shows a dashed ghost chip
-  `Garden?` beside the Category select when the task's own history is confident, scored on the client
+  `Garden?` above the Category select (beside it from `sm`) when the task's own history is confident, scored on the client
   (`packages/shared/src/categorySuggest.ts`, `useSuggestCategory`): naive Bayes over the words of title
   + the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing. Measured
   on prod 2026-11-05 (187 tasks, 142 categorised, 90 of them one category): ungated top-1 was 63%, no

@@ -1,4 +1,4 @@
-import type { SelectHTMLAttributes } from 'react';
+import type { Ref, SelectHTMLAttributes } from 'react';
 import { cx } from '../../lib/cx';
 import { Text } from '../Text';
 
@@ -11,6 +11,8 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
   options: SelectOption[];
   placeholder?: string;
+  // React 19 takes ref as a plain prop; it reaches the <select> through rest.
+  ref?: Ref<HTMLSelectElement>;
 }
 
 export function Select({ label, options, placeholder, className, ...rest }: SelectProps) {
