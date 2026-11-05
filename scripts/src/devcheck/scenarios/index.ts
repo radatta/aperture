@@ -16,6 +16,7 @@ import { partsV2bReads } from './parts-v2b-reads';
 import { phoneNits } from './phone-nits';
 import { places } from './places';
 import { reflectionLine } from './reflection-line';
+import { recurring } from './recurring';
 import { smoke } from './smoke';
 import { timerCredit } from './timer-credit';
 
@@ -33,6 +34,7 @@ export const SCENARIOS: Scenario[] = [
   reflectionLine,
   phoneNits,
   timerCredit,
+  recurring,
   finance,
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others

@@ -105,6 +105,8 @@ export interface UpsertSeriesInput {
   rule: RecurrenceRule;
   anchorDate: string;
   active?: boolean;
+  dueOffsetDays?: number | null; // omitted = none (recurring.md D1); an integer ≥ 0 or it throws before any write
+  until?: string | null; // omitted = open-ended (D2); a day key or it throws before any write
 }
 
 export interface StartSessionInput {
@@ -397,6 +399,9 @@ export interface ApiClient {
   listSeries(): Promise<TaskSeries[]>;
   upsertSeries(input: UpsertSeriesInput): Promise<TaskSeries>;
   deactivateSeries(id: string): Promise<TaskSeries>;
+  // Tombstones the series row — its occurrences stay (each is a real task). No UI or MCP surface: the dev
+  // check's cleanup by recorded id (recurring.md D7). Idempotent.
+  deleteSeries(id: string): Promise<void>;
 
   // Sessions (pomodoro)
   startSession(input: StartSessionInput): Promise<PomodoroSession>;

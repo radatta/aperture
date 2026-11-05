@@ -74,10 +74,10 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - `id · taskId · day · plannedMinutes · order`. A task may have plan rows on several days. A **timed** task (`dueDay` + `dueTime`) has none: its day is its time, and `upsertPlan` refuses it ([lenses.md](../areas/tasks/lenses.md) D13). Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateMin − actualAccruedMin` (the working estimate).
 - **Stale sweep (lazy rollover).** `getDay(today)` moves every `planned` task with no alive plan row on today or later back to `backlog`, and every timed `planned` task whatever its rows — a recurring untimed occurrence already superseded by its series' copy today is dropped (`cancelled`) instead. Plan rows stay as history; `in_progress` is untouched. Rule: shared `stalePlannedMoves`. It runs on app open, not on a schedule (the server has no timezone), so MCP reads lag until the app loads today. `getDay` must only ever be called with the client's current day — a future day would sweep today's plan.
 
-**taskSeries** — recurrence template.
-- `id · title · categoryId · defaultEstimateMin · rule · active · anchorDate`.
+**taskSeries** — recurrence template ([areas/tasks/recurring.md](../areas/tasks/recurring.md)).
+- `id · title · categoryId · defaultEstimateMin · rule · active · anchorDate · dueOffsetDays? · until?`. `dueOffsetDays` is the cadence: an occurrence spawns planned on its day, due that many days later, untimed (`null` = no due date). `until` is the last day it spawns (inclusive); past it the row stays `active` and reads "ended". Both read back `undefined` on older rows → `?? null`.
 - `rule` (**simple** for v1): `{ kind: daily | weekdays | weekly | everyN, interval?, daysOfWeek?[] }`. Full RRULE (nth-weekday-of-month, exceptions) is deferred.
-- Each occurrence is a real **task** instance with `seriesId` → its own estimate/actual → **its own calibration point**. Editing one occurrence doesn't touch siblings; editing the series affects future occurrences. Generation horizon/strategy (client vs scheduled Lambda) is an infra detail.
+- Each occurrence is a real **task** instance with `seriesId` → its own estimate/actual → **its own calibration point**, stamped `seriesDay` (the day it was spawned for). `getDay` spawns once per `(seriesId, seriesDay)` — shared `seriesHasOccurrence` — so an unplanned occurrence is never respawned (recurring.md §4). Editing one occurrence doesn't touch siblings; editing the series affects future occurrences. `deleteSeries` tombstones the template (API only, the dev check's cleanup); `deactivateSeries` is the user's Stop.
 
 **ideas** — `id · text · createdAt · status(open | triaged | discarded)`.
 

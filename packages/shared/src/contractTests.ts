@@ -4,6 +4,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from '.
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
+import { SERIES_OFFSET_ERROR, SERIES_UNTIL_ERROR } from './recurrence';
 import {
   PLACE_FINISHED_ERROR,
   PLACE_PART_ERROR,
@@ -1246,6 +1247,142 @@ export function runApiContract(
       expect(plans2).toHaveLength(1);
       expect(plans2[0]!.taskId).not.toBe(task!.id);
       expect((await api.getTask(plans2[0]!.taskId))?.status).toBe('planned');
+    });
+
+    it('series: unplanning an occurrence never respawns it; “+ Today” brings the same one back', async () => {
+      await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+      });
+      await api.getDay('2026-08-04');
+      const [plan] = await api.listPlansForDay('2026-08-04');
+      const occurrences = async () => (await api.listTasks()).filter((t) => t.seriesId);
+      expect((await occurrences()).map((t) => t.seriesDay)).toEqual(['2026-08-04']);
+
+      // Unplan: the row goes, the sweep sends the task to backlog — and getDay spawns no copy.
+      await api.removePlan(plan!.id);
+      await api.getDay('2026-08-04');
+      await api.getDay('2026-08-04');
+      expect(await api.listPlansForDay('2026-08-04')).toHaveLength(0);
+      expect((await api.getTask(plan!.taskId))?.status).toBe('backlog');
+      expect(await occurrences()).toHaveLength(1);
+
+      // "+ Today" plans the same task again; still the one occurrence.
+      await api.upsertPlan({
+        taskId: plan!.taskId,
+        day: '2026-08-04',
+        plannedMinutes: 60,
+        order: 1,
+      });
+      await api.transitionTask(plan!.taskId, 'planned');
+      await api.getDay('2026-08-04');
+      const plans = await api.listPlansForDay('2026-08-04');
+      expect(plans.map((p) => p.taskId)).toEqual([plan!.taskId]);
+      expect(await occurrences()).toHaveLength(1);
+    });
+
+    it('series: a due offset dates each occurrence from its day, untimed; a legacy series spawns undated', async () => {
+      const dated = await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 1,
+      });
+      expect(dated).toMatchObject({ dueOffsetDays: 1, until: null });
+      const sameDay = await api.upsertSeries({
+        title: 'Quiz',
+        categoryId: null,
+        defaultEstimateMin: 20,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 0,
+      });
+      const legacy = await api.upsertSeries({
+        title: 'Standup',
+        categoryId: null,
+        defaultEstimateMin: 15,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+      });
+      expect(legacy).toMatchObject({ dueOffsetDays: null, until: null });
+      await api.getDay('2026-08-31');
+      const byTitle = Object.fromEntries((await api.listTasks()).map((t) => [t.title, t]));
+      expect(byTitle['Pre-lab']).toMatchObject({
+        seriesId: dated.id,
+        seriesDay: '2026-08-31',
+        dueDay: '2026-09-01',
+        dueTime: null,
+        status: 'planned',
+      });
+      expect(byTitle['Quiz']).toMatchObject({ seriesId: sameDay.id, dueDay: '2026-08-31' });
+      expect(byTitle['Standup']).toMatchObject({ seriesId: legacy.id, dueDay: null });
+      expect(await api.listPlansForDay('2026-08-31')).toHaveLength(3);
+    });
+
+    it('series: nothing spawns after until; the row stays active', async () => {
+      const s = await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+        until: '2026-08-04',
+      });
+      await api.getDay('2026-08-04');
+      expect(await api.listPlansForDay('2026-08-04')).toHaveLength(1);
+      await api.getDay('2026-08-05');
+      expect(await api.listPlansForDay('2026-08-05')).toHaveLength(0);
+      expect((await api.listTasks()).filter((t) => t.seriesId === s.id)).toHaveLength(1);
+      expect((await api.listSeries()).find((x) => x.id === s.id)).toMatchObject({
+        active: true,
+        until: '2026-08-04',
+      });
+    });
+
+    it('series: a bad cadence is refused before any write, on create and on edit', async () => {
+      const input = {
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' } as const,
+        anchorDate: '2026-08-01',
+      };
+      await expect(api.upsertSeries({ ...input, dueOffsetDays: -1 })).rejects.toThrow(
+        SERIES_OFFSET_ERROR,
+      );
+      await expect(api.upsertSeries({ ...input, until: '2026-2-5' })).rejects.toThrow(
+        SERIES_UNTIL_ERROR,
+      );
+      expect(await api.listSeries()).toHaveLength(0);
+      const s = await api.upsertSeries(input);
+      await expect(api.upsertSeries({ ...input, id: s.id, dueOffsetDays: 1.5 })).rejects.toThrow(
+        SERIES_OFFSET_ERROR,
+      );
+      expect((await api.listSeries())[0]).toMatchObject({ dueOffsetDays: null });
+    });
+
+    it('series: deleteSeries tombstones the template; its occurrences stay; idempotent', async () => {
+      const s = await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+      });
+      await api.getDay('2026-08-04');
+      await api.deleteSeries(s.id);
+      await api.deleteSeries(s.id);
+      await api.deleteSeries('nope');
+      expect(await api.listSeries()).toHaveLength(0);
+      await api.getDay('2026-08-05');
+      const occurrences = (await api.listTasks()).filter((t) => t.seriesId === s.id);
+      expect(occurrences).toHaveLength(1);
+      expect(await api.listPlansForDay('2026-08-05')).toHaveLength(0);
     });
 
     it('day: a missed occurrence the series does not replace today goes to backlog', async () => {

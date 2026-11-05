@@ -381,6 +381,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.refundOfId != null;
       case 'financeRule':
         return (await client.reads.listFinanceRules()).some((x) => x.id === id);
+      case 'series':
+        return (await client.reads.listSeries()).some((x) => x.id === id);
       case 'task':
         return (await client.reads.getTask(id)) !== null;
     }
@@ -407,6 +409,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'financeRule':
         await client.writes.deleteFinanceRule(id);
+        return true;
+      case 'series':
+        await client.writes.deleteSeries(id); // its occurrences first, by this id (api.ts)
         return true;
       case 'task':
         return safeDelete(client, id);

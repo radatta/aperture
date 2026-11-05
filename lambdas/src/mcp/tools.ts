@@ -35,6 +35,7 @@ import type {
 import { FINANCE_TOOLS } from './financeTools';
 import { FLUX_TOOLS } from './fluxTools';
 import { PLACE_ARG_DESC, PLACE_TOOLS, placeArg } from './placeTools';
+import { SERIES_TOOLS } from './seriesTools';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
@@ -991,6 +992,7 @@ export const TOOLS: Tool[] = [
   ...FINANCE_TOOLS,
   ...FLUX_TOOLS,
   ...PLACE_TOOLS,
+  ...SERIES_TOOLS,
 ];
 
 // Guard against a duplicate name slipping in (both clients index tools by name).

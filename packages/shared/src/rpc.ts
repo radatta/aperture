@@ -31,6 +31,7 @@ export const API_METHODS = [
   'listSeries',
   'upsertSeries',
   'deactivateSeries',
+  'deleteSeries',
   'startSession',
   'heartbeatSession',
   'resumeSession',

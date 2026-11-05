@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import type { Task } from '@aperture/shared';
+import type { Task, TaskSeries } from '@aperture/shared';
 import {
   byDueHint,
   plannedDefault,
   remainingMin,
   ruleSummary,
   scopeLabel,
+  seriesSummary,
   SPLIT_MIN_REMAINDER,
   statusLabel,
   suggestedBuffer,
@@ -96,7 +97,10 @@ describe('splitDefaults', () => {
   });
 
   it('is null when nothing was scoped', () => {
-    expect(splitDefaults(task({ estimateMin: null }), 'keep')).toEqual({ thisPart: null, rest: null });
+    expect(splitDefaults(task({ estimateMin: null }), 'keep')).toEqual({
+      thisPart: null,
+      rest: null,
+    });
   });
 });
 
@@ -129,7 +133,10 @@ describe('byDueHint', () => {
     expect(out.map((t) => t.id)).toEqual(['dated', 'legacy']);
   });
   it('does not mutate the input array', () => {
-    const input = [task({ id: 'a', dueDay: '2026-06-20' }), task({ id: 'b', dueDay: '2026-06-10' })];
+    const input = [
+      task({ id: 'a', dueDay: '2026-06-20' }),
+      task({ id: 'b', dueDay: '2026-06-10' }),
+    ];
     const before = input.map((t) => t.id);
     byDueHint(input);
     expect(input.map((t) => t.id)).toEqual(before);
@@ -142,6 +149,45 @@ describe('ruleSummary', () => {
     expect(ruleSummary({ kind: 'weekdays' })).toBe('Weekdays');
     expect(ruleSummary({ kind: 'weekly', daysOfWeek: [1, 3, 5] })).toBe('Mon, Wed, Fri');
     expect(ruleSummary({ kind: 'everyN', interval: 3 })).toBe('Every 3 days');
+  });
+});
+
+describe('seriesSummary', () => {
+  const series = (over: Partial<TaskSeries>): TaskSeries => ({
+    id: 's',
+    userId: 'local',
+    createdAt: 0,
+    updatedAt: 0,
+    deletedAt: null,
+    title: 'Pre-lab',
+    categoryId: null,
+    defaultEstimateMin: 60,
+    rule: { kind: 'weekly', daysOfWeek: [2] },
+    active: true,
+    anchorDate: '2026-09-01',
+    dueOffsetDays: null,
+    until: null,
+    ...over,
+  });
+  it('the rule alone without a cadence (a legacy row too)', () => {
+    expect(seriesSummary(series({}), '2026-11-04')).toBe('Tue');
+    const legacy = series({});
+    delete (legacy as Partial<TaskSeries>).dueOffsetDays;
+    delete (legacy as Partial<TaskSeries>).until;
+    expect(seriesSummary(legacy, '2026-11-04')).toBe('Tue');
+  });
+  it('the due offset in words, and until / ended by today', () => {
+    expect(seriesSummary(series({ dueOffsetDays: 0 }), '2026-11-04')).toBe('Tue · due same day');
+    expect(seriesSummary(series({ dueOffsetDays: 1, until: '2026-12-05' }), '2026-11-04')).toBe(
+      'Tue · due next day · until Dec 5',
+    );
+    expect(seriesSummary(series({ dueOffsetDays: 3, until: '2026-11-03' }), '2026-11-04')).toBe(
+      'Tue · due in 3 days · ended Nov 3',
+    );
+    expect(seriesSummary(series({ until: '2026-11-04' }), '2026-11-04')).toBe('Tue · until Nov 4');
+    expect(seriesSummary(series({ until: '2027-03-20' }), '2026-11-04')).toBe(
+      'Tue · until Mar 20, 2027',
+    );
   });
 });
 
@@ -159,9 +205,9 @@ describe('scopeLabel', () => {
   it('Scope until estimated, Rescope while open (even started), Details once finished', () => {
     expect(scopeLabel(task({ estimateMin: null }))).toBe('Scope');
     expect(scopeLabel(task({ estimateMin: 30, estimateLockedMin: null }))).toBe('Rescope');
-    expect(scopeLabel(task({ status: 'in_progress', estimateMin: 30, estimateLockedMin: 30 }))).toBe(
-      'Rescope',
-    );
+    expect(
+      scopeLabel(task({ status: 'in_progress', estimateMin: 30, estimateLockedMin: 30 })),
+    ).toBe('Rescope');
     expect(scopeLabel(task({ status: 'done', estimateMin: 30, estimateLockedMin: 30 }))).toBe(
       'Details',
     );

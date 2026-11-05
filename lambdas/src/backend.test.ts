@@ -38,6 +38,39 @@ describe('backend story soft-delete', () => {
   });
 });
 
+// The respawn fix (recurring.md D4) on the Lambda's own path: an occurrence's identity is (series, day), so
+// getDay after removePlan spawns nothing — however many times it runs — and the one task goes to backlog.
+describe('backend recurrence', () => {
+  it('getDay twice after removePlan spawns no second occurrence', async () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => 1_700_000_000_000,
+    });
+    const series = await backend.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 60,
+      rule: { kind: 'daily' },
+      anchorDate: '2026-08-01',
+      dueOffsetDays: 1,
+    });
+    await backend.getDay('2026-08-04');
+    const [plan] = await backend.listPlansForDay('2026-08-04');
+    await backend.removePlan(plan!.id);
+    await backend.getDay('2026-08-04');
+    await backend.getDay('2026-08-04');
+    const mine = (await backend.listTasks()).filter((t) => t.seriesId === series.id);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({
+      status: 'backlog',
+      seriesDay: '2026-08-04',
+      dueDay: '2026-08-05',
+    });
+    expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
+  });
+});
+
 describe('backend attachments', () => {
   const setup = (userId = 'local') => {
     const doc = new InMemoryDoc();

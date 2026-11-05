@@ -183,10 +183,12 @@ purpose (_Injected failures_) are listed apart, under _Injected by the harness_,
 | `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`              |
 
 Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?}`, `op`
-one of `run-start`, `intent` (an API create about to be sent — one with no `created` after it is reported as a
-possible leak), `created`, `deleted`, `gone`, `swept`, `run-end`; `title` is for the report only. A `created`
+one of `run-start`, `intent` (an API create about to be sent — one with no `created` or `refused` after it is
+reported as a possible leak; `refused` is a param error the server raised before any write), `created`,
+`deleted`, `gone`, `swept`, `run-end`; `title` is for the report only. A `created`
 line's `via` names what cleanup reads back and removes (`api.ts` `ledgerKind`): a task, a Flux set, a place, the
-place token (`place-token:<run>`), a finance rule, and on the fixture bank's rows a bucket set
+place token (`place-token:<run>`), a finance rule, a recurring series (deleted with the occurrences `getDay`
+spawned for it — the series id is their record, [tasks/recurring](../areas/tasks/recurring.md) §6), and on the fixture bank's rows a bucket set
 (`finance-bucket:<run>:<row>`) or a refund link (`finance-link:<run>:<row>`) — recorded before the click that
 makes it, cleared (unsorted / unlinked) at cleanup; the row itself is the fixture's and stays. The MCP hook
 writes `{t, op, id, parent?, via, session}`, `op` one of `created`, `reparented`, `tainted` (the id has a part

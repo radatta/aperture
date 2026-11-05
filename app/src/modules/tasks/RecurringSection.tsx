@@ -14,10 +14,17 @@ import { useDeactivateSeries, useSeries, useUpsertSeries } from '../../data/hook
 import { useDisclosure } from '../../lib/useDisclosure';
 import { useSettings } from '../../data/hooks/useSettings';
 import { CategoryTag } from './CategoryTag';
-import { ruleSummary } from './taskMath';
+import { seriesSummary } from './taskMath';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 type Kind = RecurrenceRule['kind'];
+// The cadence's due offset (recurring.md D1, D6): '' = no due date, else days after the occurrence's day.
+const DUE_OPTIONS = [
+  { value: '', label: 'No due date' },
+  { value: '0', label: 'Same day' },
+  { value: '1', label: 'Next day' },
+  ...[2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `In ${n} days` })),
+];
 
 // Recurring tasks: each occurrence is a real task (its own estimate/actual → its own calibration
 // point), materialized lazily when its day loads. This tab creates/lists the templates.
@@ -54,6 +61,8 @@ export function RecurringSection() {
 
 function SeriesRow({ series }: { series: TaskSeries }) {
   const deactivate = useDeactivateSeries();
+  const { data: settings } = useSettings();
+  const today = todayKey(settings?.dayStartHour ?? 4);
   return (
     <Card>
       <div className="flex items-center justify-between gap-3">
@@ -64,7 +73,7 @@ function SeriesRow({ series }: { series: TaskSeries }) {
           <div className="flex items-center gap-2">
             <CategoryTag categoryId={series.categoryId} />
             <Text size="xs" tone="muted">
-              {ruleSummary(series.rule)}
+              {seriesSummary(series, today)}
             </Text>
           </div>
         </div>
@@ -88,6 +97,9 @@ function SeriesForm() {
   const [days, setDays] = useState<number[]>([1, 3, 5]);
   const [estimate, setEstimate] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  const [dueOffset, setDueOffset] = useState('');
+  const [until, setUntil] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   function buildRule(): RecurrenceRule {
     if (kind === 'daily') return { kind: 'daily' };
@@ -99,23 +111,33 @@ function SeriesForm() {
   async function create() {
     // `title` only clears after the await, so an unguarded second Enter would create two series.
     if (!title.trim() || upsert.isPending) return;
-    await upsert.mutateAsync({
-      title: title.trim(),
-      categoryId: categoryId || null,
-      defaultEstimateMin: estimate === '' ? null : Number(estimate),
-      rule: buildRule(),
-      anchorDate: todayKey(settings?.dayStartHour ?? 4),
-    });
+    setError(null);
+    try {
+      await upsert.mutateAsync({
+        title: title.trim(),
+        categoryId: categoryId || null,
+        defaultEstimateMin: estimate === '' ? null : Number(estimate),
+        rule: buildRule(),
+        anchorDate: todayKey(settings?.dayStartHour ?? 4),
+        dueOffsetDays: dueOffset === '' ? null : Number(dueOffset),
+        until: until || null,
+      });
+    } catch (err) {
+      // The draft stays: a refused save is said, never swallowed.
+      setError(err instanceof Error ? err.message : 'Couldn’t add the series.');
+      return;
+    }
     setTitle('');
     setEstimate('');
     onClose();
   }
 
-  // Cancel discards the draft; the rule/day selection stays, since that's the shape of series you
-  // tend to make repeatedly.
+  // Cancel discards the draft; the rule/day selection, due offset and until stay, since that's the shape
+  // of series you tend to make repeatedly (a quarter's courses share an end).
   function cancel() {
     setTitle('');
     setEstimate('');
+    setError(null);
     onClose();
   }
 
@@ -190,6 +212,21 @@ function SeriesForm() {
               Couldn’t load categories.
             </LoadError>
           )}
+          {/* The cadence: when each occurrence is due, counted from its day; the last day it recurs. */}
+          <Select
+            label="Due"
+            value={dueOffset}
+            onChange={(e) => setDueOffset(e.target.value)}
+            options={DUE_OPTIONS}
+            className="w-36"
+          />
+          <Field
+            label="Until"
+            type="date"
+            value={until}
+            onChange={(e) => setUntil(e.target.value)}
+            className="w-40"
+          />
         </div>
         {kind === 'weekly' && (
           <div className="flex flex-wrap gap-1.5">
@@ -212,6 +249,13 @@ function SeriesForm() {
                 </button>
               );
             })}
+          </div>
+        )}
+        {error && (
+          <div role="alert">
+            <Text size="xs" tone="danger">
+              {error}
+            </Text>
           </div>
         )}
         <div className="flex gap-2">

@@ -32,7 +32,10 @@ import {
   ROLL_PLAN_FALLBACK_MIN,
   rollRepFields,
   sanitizeFilename,
+  seriesCadence,
   seriesDueOn,
+  seriesHasOccurrence,
+  occurrenceFields,
   setNotesArg,
   setReflectionArg,
   followUpPlanDay,
@@ -1180,6 +1183,7 @@ export class BackendClient implements ApiClient {
       rule: input.rule,
       anchorDate: input.anchorDate,
       active: input.active ?? true,
+      ...seriesCadence(input), // throws before any write
     };
     if (input.id) {
       const existing = await this.repo.getSeries(input.id, { consistent: true });
@@ -1192,6 +1196,11 @@ export class BackendClient implements ApiClient {
     const existing = await this.repo.getSeries(id, { consistent: true });
     if (!existing) throw new Error(`Not found: ${id}`);
     return this.repo.putSeries({ ...existing, active: false, updatedAt: this.now() });
+  }
+  async deleteSeries(id: string): Promise<void> {
+    const existing = await this.repo.getSeries(id);
+    if (!existing) return; // idempotent — already tombstoned or never existed
+    await this.repo.putSeries({ ...existing, deletedAt: this.now(), updatedAt: this.now() });
   }
 
   // --- Sessions ---
@@ -1384,43 +1393,19 @@ export class BackendClient implements ApiClient {
       reflectionText: null,
     });
   }
+  // An occurrence is spawned once per (series, day) — identity by seriesDay (seriesHasOccurrence), so an
+  // unplanned occurrence isn't respawned (recurring.md D4). Stub parity. Spawns go through the repo's
+  // putTask/putPlan like every other task write (their item shapes are the repo's).
   private async materializeDueSeries(day: string): Promise<void> {
     const active = (await this.repo.listSeries()).filter((s) => s.active);
     if (active.length === 0) return;
-    const plans = await this.repo.listPlans(day);
-    const seriesIdsOnDay = new Set<string>();
-    for (const p of plans) {
-      const t = await this.repo.getTask(p.taskId);
-      if (t?.seriesId) seriesIdsOnDay.add(t.seriesId);
-    }
-    for (const series of active) {
-      if (!seriesDueOn(series, day)) continue;
-      if (seriesIdsOnDay.has(series.id)) continue;
-      const task = await this.repo.putTask({
-        ...this.base(),
-        title: series.title,
-        status: 'planned',
-        categoryId: series.categoryId,
-        dueDay: null,
-        dueTime: null,
-        notes: null,
-        reflection: null,
-        seriesId: series.id,
-        rollId: null,
-        estimateMin: series.defaultEstimateMin,
-        bufferMin: null,
-        estimateLockedMin: null,
-        parentId: null,
-        place: null,
-        actualAccruedMin: 0,
-        startedAt: null,
-        completedAt: null,
-        cancelledAt: null,
-        gcalAccountId: null,
-        gcalCalendarId: null,
-        gcalEventId: null,
-        gcalSyncError: null,
-      });
+    const due = active.filter((s) => seriesDueOn(s, day));
+    if (due.length === 0) return;
+    const tasks = await this.repo.listTasks();
+    const plansOnDay = await this.repo.listPlans(day);
+    for (const series of due) {
+      if (seriesHasOccurrence(series, day, tasks, plansOnDay)) continue;
+      const task = await this.repo.putTask({ ...this.base(), ...occurrenceFields(series, day) });
       await this.repo.putPlan({
         ...this.base(),
         taskId: task.id,

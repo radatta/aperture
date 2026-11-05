@@ -185,6 +185,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       getAttachmentDownloadUrl: async () => {
         throw new Error('unused');
       },
+      listSeries: async () => [],
       probePresigned: async () => {
         throw new Error('unused');
       },
@@ -247,6 +248,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       deleteCategory: async () => {
+        throw new Error('unused');
+      },
+      createSeries: async () => {
+        throw new Error('unused');
+      },
+      deleteSeries: async () => {
         throw new Error('unused');
       },
       upsertPlace: async () => {

@@ -9,6 +9,7 @@ export type LedgerOp =
   | 'run-start'
   | 'intent' // about to create via the API — a crash before `created` is reported, never silently lost
   | 'created'
+  | 'refused' // the server refused the create before any write (a param error) — the intent is resolved, nothing to clean
   | 'deleted'
   | 'gone' // the server already had no such task (deleted with its parent, or by hand)
   | 'swept' // a previous run's leftover, cleaned by this one
@@ -49,14 +50,21 @@ export function pendingIds(entries: LedgerEntry[]): string[] {
   return created.filter((id) => !resolved.has(id));
 }
 
-// An `intent` with no `created` after it in the same run: the create may have landed with its id unknown.
+// An `intent` with no `created` (or `refused`) after it in the same run: the create may have landed with its
+// id unknown.
 export function orphanIntents(entries: LedgerEntry[]): LedgerEntry[] {
   const out: LedgerEntry[] = [];
   for (const [i, e] of entries.entries()) {
     if (e.op !== 'intent') continue;
     const followed = entries
       .slice(i + 1)
-      .some((n) => n.run === e.run && n.op === 'created' && n.via === e.via && n.title === e.title);
+      .some(
+        (n) =>
+          n.run === e.run &&
+          (n.op === 'created' || n.op === 'refused') &&
+          n.via === e.via &&
+          n.title === e.title,
+      );
     if (!followed) out.push(e);
   }
   return out;
