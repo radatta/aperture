@@ -98,7 +98,9 @@ describe('taskTransition — estimate freeze', () => {
     const errand = baseTask({ status: 'done', estimateLockedMin: 5, place: 'safeway' });
     expect(contributesCalibration(errand)).toBe(false);
   });
+});
 
+describe('sessions — heartbeat lifecycle', () => {
   it('a work session accrues only to an open task — an errand included, never a done or cancelled one', () => {
     for (const status of ['backlog', 'planned', 'in_progress'] as const)
       expect(accruesTime(baseTask({ status }))).toBe(true);
@@ -106,9 +108,7 @@ describe('taskTransition — estimate freeze', () => {
     expect(accruesTime(baseTask({ status: 'done', estimateLockedMin: 60 }))).toBe(false);
     expect(accruesTime(baseTask({ status: 'cancelled' }))).toBe(false);
   });
-});
 
-describe('sessions — heartbeat lifecycle', () => {
   function running(over: Partial<PomodoroSession> = {}): PomodoroSession {
     return {
       id: 's1',

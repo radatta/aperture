@@ -710,6 +710,8 @@ describe('stopSession over RPC onto a finished task', () => {
         | 'transitionTask'
         | 'startSession'
         | 'stopSession'
+        | 'heartbeatSession'
+        | 'resolveStaleSession'
         | 'setTaskActual'
         | 'getTask',
       args: unknown[],
@@ -735,5 +737,33 @@ describe('stopSession over RPC onto a finished task', () => {
     clock += 3 * 60_000;
     await rpc('stopSession', [s2.id, 'completed']);
     expect((await rpc('getTask', [dropped.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
+  });
+
+  it('keeping a stale timer onto a finished task completes it with its minutes but adds none', async () => {
+    const doc = new InMemoryDoc();
+    let clock = 1_700_000_000_000;
+    const now = () => clock;
+    const rpc = (
+      method:
+        | 'createTask'
+        | 'transitionTask'
+        | 'startSession'
+        | 'heartbeatSession'
+        | 'resolveStaleSession'
+        | 'getTask',
+      args: unknown[],
+    ) => handleRpc(doc, { userId: 'local', method, args, now }, { presigner: fakePresigner() });
+    const t = (await rpc('createTask', [{ title: 'left running' }])) as Task;
+    await rpc('transitionTask', [t.id, 'in_progress']);
+    const s = (await rpc('startSession', [
+      { taskId: t.id, categoryId: null, kind: 'work', day: '2026-08-04' },
+    ])) as PomodoroSession;
+    clock += 3 * 60_000;
+    await rpc('heartbeatSession', [s.id]);
+    await rpc('transitionTask', [t.id, 'cancelled']);
+    clock += 60 * 60_000; // the app was closed; found stale on the next open
+    const kept = (await rpc('resolveStaleSession', [s.id, 'keep'])) as PomodoroSession;
+    expect(kept).toMatchObject({ status: 'completed', activeMinutes: 3 });
+    expect((await rpc('getTask', [t.id])) as Task).toMatchObject({ actualAccruedMin: 0 });
   });
 });
