@@ -280,6 +280,7 @@ export type SettingsPatch = Partial<
     | 'financePaymentDay'
     | 'fluxRollId'
     | 'fluxDisclaimerAckAt'
+    | 'fluxSets'
   >
 >;
 

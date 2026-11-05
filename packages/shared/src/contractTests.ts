@@ -1799,6 +1799,19 @@ export function runApiContract(
       expect((await api.getSettings()).fluxDisclaimerAckAt).toBeNull();
     });
 
+    it('flux sets (D61): default {}, round-trips, refuses a bad count or an unknown exercise', async () => {
+      expect((await api.getSettings()).fluxSets).toEqual({});
+      const one = await api.updateSettings({ fluxSets: { 'chin-tuck': 3 } });
+      expect(one.fluxSets).toEqual({ 'chin-tuck': 3 });
+      expect((await api.getSettings()).fluxSets['chin-tuck']).toBe(3);
+      await expect(api.updateSettings({ fluxSets: { 'chin-tuck': 9 } })).rejects.toThrow(/1 to 5/);
+      await expect(api.updateSettings({ fluxSets: { 'chin-tuck': 1.5 } })).rejects.toThrow(/whole/);
+      await expect(api.updateSettings({ fluxSets: { nope: 2 } as never })).rejects.toThrow(
+        /Unknown Flux exercise/,
+      );
+      expect((await api.getSettings()).fluxSets).toEqual({ 'chin-tuck': 3 }); // the refusals wrote nothing
+    });
+
     // --- Flux sets (D47) -----------------------------------------------------
     it('flux: records a set and lists it by range and exercise, newest first', async () => {
       const a = await api.recordFluxSet(fluxSet({ day: '2026-10-19', completedAt: 1_000 }));

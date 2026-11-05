@@ -78,6 +78,39 @@ export const fluxHistory: Scenario = {
         'a session run to its end needs a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel, until the next Start"',
     },
     {
+      id: 'sets-remembered',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Start with 3 sets → leave → reopen the exercise: the stepper reads 3; another exercise still opens at 2',
+      offDev: {
+        file: 'app/src/pages/Flux/ExerciseView.test.tsx',
+        test: 'opens at the last session’s count, and remembers a changed count on Start',
+        why: 'the count is written on Start camera, a Settings write the harness has no ledger for; the test runs the real stage over the stub API and reads the settings back',
+      },
+    },
+    {
+      id: 'sets-refused',
+      entry: 'api',
+      kind: 'edge',
+      what: 'updateSettings({ fluxSets: { "chin-tuck": 9 } }) is refused, and so is an unknown exercise',
+      offDev: {
+        file: 'packages/shared/src/flux/history.test.ts',
+        test: 'accepts a map of catalogue ids to whole numbers 1–5, and nothing else',
+        why: 'a refused write is a refusal the contract tests run against the stub and the Lambda alike; dev would need a settings write to clean up',
+      },
+    },
+    {
+      id: 'chip-order',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Deleting an exercise’s newest set leaves the History chips in the same order',
+      offDev: {
+        file: 'app/src/pages/Flux/HistoryTab.test.tsx',
+        test: 'chip order is stable across a delete',
+        why: 'the delete is a UI write the scenario’s ledger doesn’t cover for a set it would have to record first; the test drives the real tab over the stub',
+      },
+    },
+    {
       id: 'chin-tuck-neutral',
       entry: 'ui',
       kind: 'edge',

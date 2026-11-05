@@ -38,6 +38,38 @@ async function stage(
   return { api, user, fake: f };
 }
 
+describe('sets prescription (D61)', () => {
+  it('opens at the last session’s count, and remembers a changed count on Start', async () => {
+    const s = await stage('/flux/chin-tuck', (api) =>
+      api.updateSettings({ fluxSets: { 'chin-tuck': 3 } }).then(() => undefined),
+    );
+    expect(screen.getByRole('group', { name: 'Sets this session' }).textContent).toContain(
+      '3 sets',
+    );
+    await s.user.click(screen.getByRole('button', { name: 'More sets' }));
+    expect(screen.getByRole('group', { name: 'Sets this session' }).textContent).toContain(
+      '4 sets',
+    );
+    await s.user.click(screen.getByRole('button', { name: 'Start camera' }));
+    await waitFor(async () => expect((await s.api.getSettings()).fluxSets['chin-tuck']).toBe(4));
+    // Another exercise is untouched: it still opens at the default.
+    expect((await s.api.getSettings()).fluxSets['cervical-rotation']).toBeUndefined();
+  });
+
+  it('an untouched stepper never writes on Start', async () => {
+    const s = await stage('/flux/chin-tuck');
+    expect(screen.getByRole('group', { name: 'Sets this session' }).textContent).toContain(
+      '2 sets',
+    );
+    const before = (await s.api.getSettings()).updatedAt;
+    await s.user.click(screen.getByRole('button', { name: 'Start camera' }));
+    act(() => s.fake().ready('GPU'));
+    await screen.findByRole('button', { name: 'Calibrate neutral' });
+    expect((await s.api.getSettings()).updatedAt).toBe(before);
+    expect((await s.api.getSettings()).fluxSets).toEqual({});
+  });
+});
+
 // Start and reach the running HUD.
 async function running(s: Awaited<ReturnType<typeof stage>>) {
   await s.user.click(screen.getByRole('button', { name: 'Start camera' }));

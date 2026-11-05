@@ -31,6 +31,7 @@ import { UnsavedSetsStrip } from '../../modules/flux/UnsavedSetsStrip';
 import { useFluxOutbox } from '../../modules/flux/useFluxOutbox';
 import { DEFAULT_SETS, useFluxEngine, type SessionSummary } from '../../modules/flux/useFluxEngine';
 import { useVoice } from '../../modules/flux/useVoice';
+import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 
 // /flux/:exerciseId — one exercise's stage. Keyed by id, so moving between exercises is a fresh stage
 // (camera stopped, contraindication re-gated), as Back → pick did in flux-track.
@@ -61,7 +62,13 @@ function Stage({ id }: { id: ExerciseId }) {
   const sided = hasSide(def);
   const [side, setSide] = useState<Side>('a');
   const shown = mirrorForSide(def, side);
-  const [sets, setSets] = useState(DEFAULT_SETS);
+  // The stepper opens at this exercise's last started count (D61); a tap here wins until Start.
+  const { data: settings } = useSettings();
+  const updateSettings = useUpdateSettings();
+  const [pickedSets, setSets] = useState<number | null>(null);
+  const exerciseKey = def.id as ExerciseId; // the catalogue's own id, from getExercise
+  const storedSets = settings?.fluxSets[exerciseKey] ?? DEFAULT_SETS;
+  const sets = pickedSets ?? storedSets;
   const lastSide = useRef<Side>('a'); // the side the last finished set was done on
 
   const voice = useVoice();
@@ -96,6 +103,9 @@ function Stage({ id }: { id: ExerciseId }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const start = () => {
+    // Remember the count for next time — only a change, so an untouched stepper never writes.
+    if (settings && sets !== storedSets)
+      updateSettings.mutate({ fluxSets: { ...settings.fluxSets, [exerciseKey]: sets } });
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (video && canvas) void engine.start({ video, canvas });

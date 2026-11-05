@@ -157,7 +157,7 @@ import type {
   UpsertRollInput,
   UpsertSeriesInput,
 } from '@aperture/shared';
-import { fluxFilterError, fluxSetError, inRange } from '@aperture/shared/flux';
+import { fluxFilterError, fluxSetError, fluxSetsError, inRange } from '@aperture/shared/flux';
 import type { Repo } from './ddb/repo';
 import type { PlaceTokenPointer, PlaceTokenStore } from './ddb/placeTokens';
 import { ConditionFailedError } from './ddb/DocClient';
@@ -396,6 +396,7 @@ export class BackendClient implements ApiClient {
       financePaymentDay: FINANCE_DEFAULT_PAYMENT_DAY,
       fluxRollId: null,
       fluxDisclaimerAckAt: null,
+      fluxSets: {},
     };
     const row = await this.repo.getSettingsRow(opts);
     // Backfill defaults over an existing row: fields added later (the calendar set) read as their
@@ -1778,6 +1779,10 @@ export class BackendClient implements ApiClient {
     return this.ensureSettings();
   }
   async updateSettings(patch: SettingsPatch): Promise<Settings> {
+    if (patch.fluxSets !== undefined) {
+      const err = fluxSetsError(patch.fluxSets);
+      if (err) throw new Error(err);
+    }
     const current = await this.ensureSettings({ consistent: true });
     return this.repo.putSettings({ ...current, ...patch, updatedAt: this.now() });
   }
