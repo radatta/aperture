@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { EXERCISES } from '@aperture/shared/flux';
@@ -6,6 +6,10 @@ import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { setFluxEngineFactory } from '../../modules/flux/engine/engine';
 import { createFakeEngine } from '../../modules/flux/engine/fakeEngine';
+
+// The Flux pages are a lazy chunk (routes.tsx): load it once here, so the first render in this file
+// isn't a cold import inside a findBy's timeout.
+beforeAll(() => import('./flux-pages'));
 
 const freshApi = () => createStubClient({ seed: false, storageKey: `flux-${Math.random()}` });
 

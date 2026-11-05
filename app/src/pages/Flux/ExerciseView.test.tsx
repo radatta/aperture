@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
@@ -8,6 +8,10 @@ import { setFluxEngineFactory } from '../../modules/flux/engine/engine';
 import { createFakeEngine, type FakeControls } from '../../modules/flux/engine/fakeEngine';
 import { initialState } from '../../modules/flux/engine/evaluate';
 import { getExercise, type ExerciseId, type ExerciseState } from '@aperture/shared/flux';
+
+// The Flux pages are a lazy chunk (routes.tsx): load it once here, so the first render in this file
+// isn't a cold import inside a findBy's timeout.
+beforeAll(() => import('./flux-pages'));
 
 // The stage over a scripted engine: every status, overlay and gate, without a camera or a worker.
 

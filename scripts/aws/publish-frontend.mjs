@@ -6,8 +6,11 @@
 // commands (vite has its own --profile CPU-profiling flag, so never let it leak into the build). You can
 // equivalently `export AWS_PROFILE=<name>` and drop the flag; the aws CLI honors it natively.
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RAW_LENGTH_META, brotliWasm } from './flux-wasm.mjs';
 
 const args = process.argv.slice(2);
 const profileIdx = args.indexOf('--profile');
@@ -41,14 +44,29 @@ run('pnpm --filter @aperture/app build', {
 const bucket = app.SiteBucket;
 console.log(`\n▶ Syncing to s3://${bucket}`);
 // Two-pass sync so the app shell can't go stale. Hashed files in assets/ are immutable → cache forever.
-// .wasm is excluded here and uploaded by the cp below with a pinned Content-Type: Safari's streaming
-// compile refuses anything but application/wasm, and sync guesses by extension (docs/areas/flux).
+// .wasm is excluded here and uploaded one by one below: brotli-encoded (CloudFront compresses nothing over
+// 10 MB; flux-wasm.mjs), with a pinned Content-Type — Safari's streaming compile refuses anything but
+// application/wasm, and sync guesses by extension — and the decoded size as metadata for the progress bar.
+// The build names it *.br.wasm so the encoded body never lands under a key an edge holds uncompressed
+// (docs/areas/flux D63). The compressed copy is written to a temp dir; app/dist stays what the build made.
 run(
   `aws s3 sync app/dist/assets "s3://${bucket}/assets" --exclude "*.wasm" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
 );
-run(
-  `aws s3 cp app/dist/assets "s3://${bucket}/assets" --recursive --exclude "*" --include "*.wasm" --content-type "application/wasm" --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
-);
+const brDir = mkdtempSync(join(tmpdir(), 'aperture-wasm-'));
+try {
+  for (const name of readdirSync(`${root}/app/dist/assets`).filter((f) => f.endsWith('.br.wasm'))) {
+    const { body, rawLength } = brotliWasm(readFileSync(`${root}/app/dist/assets/${name}`));
+    console.log(
+      `  brotli ${name}: ${rawLength.toLocaleString()} → ${body.byteLength.toLocaleString()} B`,
+    );
+    writeFileSync(join(brDir, name), body);
+    run(
+      `aws s3 cp "${join(brDir, name)}" "s3://${bucket}/assets/${name}" --content-type "application/wasm" --content-encoding br --metadata ${RAW_LENGTH_META}=${rawLength} --cache-control "public,max-age=31536000,immutable"${profileFlag}`,
+    );
+  }
+} finally {
+  rmSync(brDir, { recursive: true, force: true });
+}
 // Everything else (index.html, icons, …) must revalidate so a client never holds a stale shell.
 // --exclude assets/* leaves the immutable pass above untouched and means old hashes are never deleted, so
 // in-flight clients can still load old chunks. sw.js and the manifest are excluded here (and so from

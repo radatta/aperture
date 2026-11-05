@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderResult } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
 import { useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import type { ApiClient } from '@aperture/shared';
@@ -40,13 +40,13 @@ export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }):
 // Render the whole app (real route table + all providers) at a starting path, over an isolated stub.
 // Used for routing + home-mode integration tests.
 export function renderApp(
-  opts: { api?: ApiClient; path?: string; seed?: boolean } = {},
+  opts: { api?: ApiClient; path?: string; seed?: boolean; routes?: RouteObject[] } = {},
 ): RenderResult & { api: ApiClient } {
   const api =
     opts.api ??
     createStubClient({ seed: opts.seed ?? true, storageKey: `app-test-${Math.random()}` });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const router = createMemoryRouter(routes, { initialEntries: [opts.path ?? '/'] });
+  const router = createMemoryRouter(opts.routes ?? routes, { initialEntries: [opts.path ?? '/'] });
   const result = render(
     <QueryClientProvider client={client}>
       <ApiContext value={api}>

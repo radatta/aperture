@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../test/utils';
 import { createStubClient } from '../data/stubClient';
 import { setFluxEngineFactory } from '../modules/flux/engine/engine';
 import { createFakeEngine } from '../modules/flux/engine/fakeEngine';
+
+// The Flux pages are a lazy chunk (routes.tsx): load it once here, so the first render in this file
+// isn't a cold import inside a findBy's timeout.
+beforeAll(() => import('../pages/Flux/flux-pages'));
 
 beforeEach(() => globalThis.localStorage?.clear());
 

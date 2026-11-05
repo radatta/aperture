@@ -11,11 +11,14 @@ import { RollsPage } from './pages/Rolls';
 import { InboxPage } from './pages/Inbox';
 import { SettingsPage } from './pages/Settings';
 import { FinancesAllTab, FinancesPage, FinancesRulesTab, FinancesSortTab } from './pages/Finances';
-import { FluxPage } from './pages/Flux';
-import { FluxExerciseView } from './pages/Flux/ExerciseView';
-import { FluxLibraryTab } from './pages/Flux/LibraryTab';
-import { FluxHistoryTab } from './pages/Flux/HistoryTab';
+import { lazyPage } from './lib/lazyPage';
 import type { RouteHandle } from './lib/routeHandle';
+
+// Flux is the one lazy area: its pages load as one chunk on the first Flux visit (pages/Flux/flux-pages.ts),
+// so `/` never fetches them; the shell stays up while it loads (lib/lazyPage, docs/areas/flux D64).
+type FluxPages = typeof import('./pages/Flux/flux-pages');
+const fluxPage = (pick: (m: FluxPages) => FluxPages[keyof FluxPages]) =>
+  lazyPage(() => import('./pages/Flux/flux-pages'), pick);
 
 // Route table, shared by the browser router (App) and the memory router used in tests. AppShell is
 // the layout; `/` is the glanceable home, the rest are deep views. Pomodoro + capture are not routes.
@@ -39,13 +42,13 @@ export const routes: RouteObject[] = [
       { path: 'rolls', element: <RollsPage /> },
       {
         path: 'flux',
-        element: <FluxPage />,
+        element: fluxPage((m) => m.FluxPage),
         children: [
-          { index: true, element: <FluxLibraryTab /> },
-          { path: 'history', element: <FluxHistoryTab /> },
+          { index: true, element: fluxPage((m) => m.FluxLibraryTab) },
+          { path: 'history', element: fluxPage((m) => m.FluxHistoryTab) },
           {
             path: ':exerciseId',
-            element: <FluxExerciseView />,
+            element: fluxPage((m) => m.FluxExerciseView),
             // Nothing to capture mid-set, and the bar ate the phone's bottom strip (flux D30).
             handle: { hideCapture: true } satisfies RouteHandle,
           },
