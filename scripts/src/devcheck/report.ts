@@ -74,7 +74,7 @@ export interface RunResult {
 }
 
 const STATUS_DETAIL_MAX = 200;
-// `FAIL: <codes>` exactly for a step-only failure (the Known 429s rule matches it literally), then the harness
+// `FAIL: <codes>` exactly for a step-only failure (a step's text is in its row; readers match the bare line), then the harness
 // failures' detail on one line — their one-liners name their cause, so the code isn't repeated here.
 export function statusLine(r: RunResult): string {
   if (r.status !== 'FAIL') return r.status;

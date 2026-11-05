@@ -43,8 +43,8 @@ Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--fea
 `PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else — stop the run before it starts:
 printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status, and when the
 harness itself failed (the deploy wait, a sign-in, the build check, cleanup) the error's text follows it, with a
-`**Failed:** <code> — <message>` line per failure under _Leftovers_ (a step's error is in its _Steps_ row; the
-_Known 429s_ line below is unchanged, since `STEP_FAILED` carries no text there) — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
+`**Failed:** <code> — <message>` line per failure under _Leftovers_ (a step's error is in its _Steps_ row, so a
+step-only failure's first line is exactly `# Dev check — FAIL: STEP_FAILED`) — then the screenshots. One run per container at a time (`localNotes/devcheck/run.lock`).
 
 ## One-time setup
 

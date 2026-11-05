@@ -72,7 +72,7 @@ describe('report', () => {
     expect(renderReport(two)).toContain(
       '\n**Failed:** DEV_CHANGED_MID_RUN — end build bbbbbbb\n≠ start aaaaaaa\n',
     );
-    // A step-only failure never has a Failed line, and its status line is the one the Known 429s rule matches.
+    // A step-only failure never has a Failed line, and its status line stays the bare, matchable `FAIL: STEP_FAILED`.
     const step: RunResult = { ...base, status: 'FAIL', codes: ['STEP_FAILED'] };
     expect(statusLine(step)).toBe('FAIL: STEP_FAILED');
     expect(renderReport(step)).not.toContain('**Failed:**');
