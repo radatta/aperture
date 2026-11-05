@@ -41,10 +41,11 @@ export function BrushPicker({
   return (
     <div
       // Padding and border always on (only their colour and `sticky` switch), so arming never shifts
-      // the list.
+      // the list. Armed, it sticks below the status bar (--safe-top), not under it: top-0 in the
+      // installed PWA put it beneath the clock.
       className={cx(
         '-mx-4 flex flex-col gap-2 border-b px-4 py-2 sm:mx-0 sm:px-0',
-        brush ? 'sticky top-0 z-10 border-line bg-surface' : 'border-transparent',
+        brush ? 'sticky top-[var(--safe-top)] z-10 border-line bg-surface' : 'border-transparent',
       )}
     >
       <div role="group" aria-label="Sort into" className="flex flex-col gap-1.5">
