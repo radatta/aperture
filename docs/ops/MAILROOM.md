@@ -2,7 +2,7 @@
 
 Opening a PR used to be the user's last manual step before a merge: running `gh pr create` on the Mac. The bot can't take it over. A squash commit's author is whoever opened the PR, and `main` must stay the user's (CI-BOT.md). The **mailroom** takes it over instead. Claude drops a job file into a folder the Mac shares with the container. A launchd agent on the Mac picks it up and opens the PR with the user's own **PR-only token**. The PR is the user's, and no one had to touch it.
 
-Think of it as a mailroom. The container drops off a form, the clerk follows a fixed checklist, and the form can only fill in blanks. Built 2026-11-01 on the `mac-mailroom` branch, PR 1 of mac-sim. PR 2 adds Simulator jobs on the same mailroom (_Adding a job_).
+Think of it as a mailroom. The container drops off a form, the clerk follows a fixed checklist, and the form can only fill in blanks. Built 2026-11-01 on the `mac-mailroom` branch, PR 1 of mac-sim. PR 2 added the `sim` job: the devcheck's iOS rows on the Mac's iOS Simulator, with its own home in [IOS-CHECK.md](IOS-CHECK.md).
 
 ```
 container (untrusted)                               Mac (trusted; nothing from the shared folder is executed)
@@ -99,6 +99,7 @@ Other uses:
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `pnpm mailroom open-pr --title "<title>" [--wait <s>]` | Opens this pushed branch's PR as the user, from the worktree's `localNotes/pr-<branch>.md`. Exit 0 prints `opened <url>` or `exists <url>`.                                                                                                                                    |
 | `pnpm mailroom probe [--wait <s>]`                     | Runs the whole path (inbox → launchd → Keychain → GitHub) on a pushed branch with a zero sha, so it stops at `HEAD_MISMATCH` before any write. Exit 0 prints the token expiry. `HEAD_MISSING` fails, because a pushed branch is invisible only to a token without repo access. |
+| `pnpm mailroom sim-probe [--sign-in]` / `sim-shutdown` | The `sim` job's whole path with no assertions (boot, launch the web app, screenshot), or a shutdown. IOS-CHECK.md → _Proving the Mac side_.                                                                                                                                    |
 
 `open-pr` works through these steps:
 
@@ -118,7 +119,7 @@ The title rule excludes `"`, `$`, backticks and `!`, so that line always pastes 
 
 ## Job and result
 
-The job is `inbox/<id>.json`, one JSON value, at most 72 KiB:
+The job is `inbox/<id>.json`, one JSON value, at most 72 KiB. The envelope below is every job's; `params` and the result's extra fields are the job's own (the `sim` job's: IOS-CHECK.md → _The op language_, _Results_). A result's `job` is the validated job name, or `null` for a file refused before its envelope was read:
 
 ```json
 {
@@ -215,13 +216,13 @@ Some entries never get a result:
 2. **Takes a lock.** `state/lock/` is taken over when it's older than 15 min. A run handles at most 5 entries, and launchd re-fires while the inbox isn't empty.
 3. **Takes each entry out of the shared folder, then makes a private copy.** It `mv`s the entry to `state/work/`. That file can still be the container's inode, through a hard link or a handle opened before the move. So it refuses symlinks, non-regular files and any file with a **link count above 1**. It then copies the content into a fresh file it creates itself (`head -c`, noclobber) and deletes the moved one. **Every later read uses that copy only.** A re-sent id runs nothing.
 4. **Validates fully before any network call.** It checks size, then exactly one JSON value, then the envelope, then the job's own params.
-5. **Makes `open-pr`'s calls, in this order:**
+5. **Runs the job.** `sim`: IOS-CHECK.md. `open-pr` makes these calls, in this order:
    1. `GET /user`: the login must be `radatta`, and the token's expiry is read here.
    2. `GET …/git/ref/heads/<branch>`: the ref must equal `sha`. A 404 is `HEAD_MISSING`.
    3. `GET …/pulls?head=radatta:<branch>&state=open`: a hit returns `exists`.
    4. `POST /markdown` on the title and body: the render check.
    5. `POST …/pulls` with `{title, head, base: "main", body, draft: false, maintainer_can_modify: false}`: it must return 201, and the response's URL and author are checked. **This is the one write, ever.** The CLI then compares the PR's head with the pushed sha.
-6. **Writes the result.** It `mkdir`s `results/<id>` from the pinned cwd, `cd`s in, re-verifies `pwd -P`, refuses a pre-existing `result.json`, and writes with noclobber.
+6. **Writes the result.** It `mkdir`s `results/<id>` from the pinned cwd — right before running a validated job (`make_rdir`: the job's artifacts and heartbeat go there, and the container reads its appearance as the pickup), or at write time for a file refused earlier — `cd`s in, re-verifies `pwd -P`, refuses a pre-existing `result.json`, and writes with noclobber. A job writes its artifacts the same way: pinned cwd, no existing entry, noclobber, and a rename (never a follow) for the heartbeat.
 
 ## Security
 
@@ -239,6 +240,7 @@ Some entries never get a result:
 | Replay, stale jobs                                        | Unique ids, `DUPLICATE`, expiry, the head-sha check (a branch that moved is refused), and the CLI's withdraw.                                                       |
 | DoS                                                       | Caps of 72 KiB, 5 per run and 30 s per call, plus the lock and ThrottleInterval 10 s.                                                                               |
 | Escalation                                                | A user LaunchAgent with no sudo. Egress goes only to api.github.com.                                                                                                |
+| The `sim` job (dev test user's password, driving the sim) | Keychain-only password, typed only on dev's Cognito page, never read back; allowlisted ops; no network from the job. IOS-CHECK.md → _Security_.                     |
 
 Residual risks:
 
@@ -311,12 +313,13 @@ Findings are in the worktree's `localNotes/trial/findings.md`, archived at Clean
   - no `gh`, `git`, `eval` or `sh -c`;
   - that `install.sh` reads only GitHub, at `$ref`.
 - **`job.test.ts`** runs the container's `validateJob` over the same JSONL cases (the `ts` field), so the two fast passes can't drift.
-- **`submit.test.ts` and `open-pr.test.ts`** cover the file drop, withdraw, unreachable, late pickup, a body-hash mismatch, the token and version warnings, and the probe.
+- **`submit.test.ts` and `open-pr.test.ts`** cover the file drop, withdraw, unreachable, late pickup, a body-hash mismatch, the token and version warnings, the probe, and the iPhone-checks banner.
+- **The `sim` job** has its own cases in the same JSONL (`kind: "sim"`, base `simBase`). `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` are exported-function stubs answering from a per-case **tape** (`{m: argv substring, rc, n: uses, out}`, first match wins, defaults on line 2); short `sleep`s return at once. Each case asserts the result, ordered tool calls that must happen and calls that must not, how often the test user's password was read and typed (and never on argv), artifact files, and that the password reaches no log or result. `sim.test.ts` covers pickup, withdraw, late pickup, the heartbeat and result mapping; `runner-fixtures.test.ts` pins the sim job's constants and its no-network, tools-by-name rules.
 
-## Adding a job (PR 2: Simulator)
+## Adding a job
 
-1. Add `jobs/<name>.sh`, defining `validate_<name> W` (prints a reason, or nothing) and `run_<name> W PREFIX` (prints `STATUS REASON EXTRA_JSON`).
-2. Add the name to `JOBS` in `runner.sh`, and its cases to `jobs.jsonl`.
-3. On the container side, add a module beside `open-pr.ts` using `submit`, `waitForResult` and `withdraw`. The devcheck's `ctx.ios` step calls it.
+1. Add one file `jobs/<name>.sh` (the installer and the CLI hash `jobs/*.sh` in name order, and a helper file's place in that order can differ by locale), defining `validate_<name> W` (prints a reason, or nothing) and `run_<name> W PREFIX RESULT_DIR` (prints `STATUS REASON EXTRA_JSON`; artifacts go under `RESULT_DIR`, written as in _The runner_ step 6).
+2. Add the name to `JOBS` in `runner.sh`, any new `error` reasons to `status_of`, and its cases to `gen-jobs.py`.
+3. On the container side, mirror the validator and wait for the result: `open-pr.ts` (one short wait) or `sim.ts` (pickup, then a heartbeat) are the two patterns.
 
-Artifacts such as screenshots go inside the pinned result dir. A second credential, such as the dev test user's password, follows the same Keychain-only rule.
+A second credential follows the same Keychain-only rule (the `sim` job's test-user password: IOS-CHECK.md).

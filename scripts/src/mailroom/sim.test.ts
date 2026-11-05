@@ -143,7 +143,7 @@ describe('runSimJob', () => {
       'ASSERT/BELOW_KEYBOARD at op 1 expect: bar bottom 831 vs keyboard top 493',
     );
     const err = await run({ status: 'error', reason: 'SIM_UNAVAILABLE', detail: 'KEYBOARD_SETUP' });
-    expect((err as IosUnavailable).reason).toBe('SIM_UNAVAILABLE');
+    expect((err as IosUnavailable).reason).toBe('SIM_UNAVAILABLE/KEYBOARD_SETUP');
     expect((err as Error).message).toContain('KEYBOARD_SETUP');
     expect(((await run({ status: 'expired', reason: 'EXPIRED' })) as IosUnavailable).reason).toBe(
       'MAC_UNREACHABLE',

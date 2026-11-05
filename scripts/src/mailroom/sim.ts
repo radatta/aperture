@@ -352,10 +352,8 @@ function settle(r: SimResult): SimResult {
     throw new Error(
       `the Mac refused the sim plan: ${r.reason} — a harness bug (IOS-CHECK.md → Ops)`,
     );
-  throw new IosUnavailable(
-    r.status === 'expired' ? 'MAC_UNREACHABLE' : (r.reason ?? 'SIM_UNAVAILABLE'),
-    failingNote(r),
-  );
+  const code = r.status === 'expired' ? 'MAC_UNREACHABLE' : (r.reason ?? 'SIM_UNAVAILABLE');
+  throw new IosUnavailable(r.detail ? `${code}/${r.detail}` : code, failingNote(r));
 }
 
 // Submit, wait for the Mac to take it (its result dir appears), then for the result while the heartbeat moves.

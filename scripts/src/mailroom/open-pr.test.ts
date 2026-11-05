@@ -108,7 +108,7 @@ describe('openPr: the iPhone-checks banner', () => {
     const { d, fs } = setup({
       body,
       mac: (j) => {
-        job = j as typeof job;
+        job = j as unknown as typeof job;
         return opened(j);
       },
     });

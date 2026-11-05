@@ -1,13 +1,22 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
-//   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full [--scenario a,b] [--feature a,b] [--sha <40-hex>]
+//   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full|all [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
 // Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per container: the
 // sweep of earlier runs' leftovers would otherwise race a live run.
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { run as sh } from '../bot/sh.ts';
+import { hostjobsDir, nodeFs } from '../mailroom/submit.ts';
 import { createApiClient } from './api';
 import { launch, loadPlaywright } from './browser';
 import {
@@ -27,9 +36,16 @@ import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
 import { ensureSignedIn, readCheckedSession, validateCachedState } from './login';
+import { createIos } from './ios';
 import { exitCode, runPipeline } from './pipeline';
 import { renderReport, statusLine } from './report';
-import { SCENARIOS, selectFeature, selectScenarios, type RunTier } from './scenarios/index';
+import {
+  SCENARIOS,
+  selectFeature,
+  selectScenarios,
+  slowScenarios,
+  type RunTier,
+} from './scenarios/index';
 
 const exec = promisify(execFile);
 
@@ -54,8 +70,8 @@ export function parseArgs(argv: string[]): Args {
     };
     if (a === '--tier') {
       const t = val();
-      if (t !== 'smoke' && t !== 'delta' && t !== 'full')
-        throw new Error(`--tier smoke|delta|full, got ${t}`);
+      if (t !== 'smoke' && t !== 'delta' && t !== 'full' && t !== 'all')
+        throw new Error(`--tier smoke|delta|full|all, got ${t}`);
       args.tier = t;
     } else if (a === '--scenario') args.scenarios = ids(val());
     else if (a === '--feature') args.feature = ids(val());
@@ -154,6 +170,15 @@ async function main(): Promise<number> {
   );
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
   const feature = selectFeature(args.feature, scenarios);
+  // The branch's diff against origin/main (committed and not) decides which slow steps run; unreadable → all.
+  const changed = await Promise.all([
+    git(['diff', '--name-only', 'origin/main...HEAD']),
+    git(['diff', '--name-only', 'HEAD']),
+  ]).then(
+    (outs) => [...new Set(outs.flatMap((o) => o.split('\n').filter(Boolean)))],
+    () => null,
+  );
+  const slow = slowScenarios(args.tier, feature, scenarios, changed);
   // Every scenario, whatever the tier: a broken matrix is a bug before anything waits on dev.
   const gaps = matrixProblems(SCENARIOS, worktree, {
     exists: existsSync,
@@ -185,6 +210,13 @@ async function main(): Promise<number> {
   log(
     `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} against ${sha.slice(0, 7)} → ${out}`,
   );
+  const deferred = scenarios.filter((s) => s.slowPaths && !slow.includes(s.id)).map((s) => s.id);
+  if (deferred.length)
+    log(`slow steps deferred (branch touches none of their paths): ${deferred.join(', ')}`);
+  const clock = {
+    now: Date.now,
+    sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+  };
 
   try {
     const result = await runPipeline({
@@ -196,6 +228,16 @@ async function main(): Promise<number> {
       scenarios,
       ledger,
       shotsDir,
+      slow,
+      ios: createIos({
+        fs: nodeFs,
+        clock,
+        dir: hostjobsDir(sh),
+        expectedSha: sha,
+        outDir: shotsDir,
+        copy: copyFileSync,
+        log,
+      }),
       waitForDeploy: args.deployWait
         ? () =>
             waitForDeploy(sha, {

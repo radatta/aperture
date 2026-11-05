@@ -26,6 +26,7 @@ pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages
 pnpm devcheck --tier full --feature attachment-delete  # the phase 8 run: every scenario, the feature's rows apart
 pnpm devcheck --tier full                              # every scenario, no feature (a branch with none of its own)
 pnpm devcheck --tier delta --scenario capture-task     # smoke + the named scenarios (--feature defaults to them)
+pnpm devcheck --tier all                               # every scenario, every slow step (Slow tier, below)
 ```
 
 `--sha <40-hex>` checks a commit other than `HEAD`; `--no-deploy-wait` skips the deploy and edge wait (dev
@@ -300,8 +301,9 @@ is stopped or discarded through the dock before the timer steps, judged by the s
 ### Rows
 
 A row is one entry point × one case, as the user would say it (`what`), `nominal` or `edge`. `entry` is `ui`,
-`api`, `mcp`, `ios`, `raycast` or `extension`; a step drives `ui`, `api` or `mcp` (`STEP_ENTRIES` in
-`scenario.ts`). Each row is exactly one of:
+`api`, `mcp`, `ios`, `raycast` or `extension`; a step drives `ui`, `api`, `mcp` or `ios` (`STEP_ENTRIES` in
+`scenario.ts`; an `ios` step runs a plan on the Mac's iOS Simulator through `ctx.ios` — IOS-CHECK.md). Each row
+is exactly one of:
 
 - **Proven on dev** — steps name it in `proves`. At least one must drive the row's own entry; every step naming
   it must pass. An `api` step can verify a UI row's server half, never stand in for the UI.
@@ -313,14 +315,29 @@ A row is one entry point × one case, as the user would say it (`what`), `nomina
   the same BFF method. What differs (another screen's copy, a pure decision) must run entirely in the named
   test. Its `why` starts `same path as <row> (proven on dev)`, and `matrix.ts` checks that row exists and dev
   proves it. The exception never covers a new entry point, a server-side effect, or a branch no dev row takes.
-- **Needs you** (`needsYou: '<why>'`) — what headless Chromium can't reach: iOS Safari specifics, Raycast, the
-  Safari extension, a camera, a Google account.
+- **Needs you** (`needsYou: '<why>'`) — what no step can reach: Raycast, the Safari extension, a camera, a Google
+  account, and the iOS cases the Simulator can't (IOS-CHECK.md).
 
 A step can say so at run time too — `needsYou(reason)` (`scenario.ts`) — for what the build can't help: the
 fixture bank not linked or aged out, the Mac asleep. That step and the rest of its scenario read `needs you`
 with the reason (they never ran because of it), the rows its steps prove likewise, the run stays green and the
 report's _Needs you_ list names it. It never counts among the run's own failures, and it is never for a bug: a
-real throw still fails the step.
+real throw still fails the step. An `ios` step whose sim couldn't run reads `iOS this run: <reason>`; when any
+does, the status line says `PASS — iOS NOT RUN (<reason>): <n> iPhone rows untested` and the PR's first line
+repeats it (IOS-CHECK.md → Results).
+
+### Slow tier
+
+A step can be **slow** (`cost: 'slow'`) — a wall-clock wait, a sim run — and its scenario then declares the paths
+that can affect it (`slowPaths`: repo-relative globs, `**` crosses folders; `matrix.ts` refuses one without the
+other). A slow step runs when the run is `--tier all`, a `delta` run (the scenario was named), `--feature` names its
+scenario, or the branch's diff against `origin/main` (committed and not) touches one of its `slowPaths`; an
+unreadable diff runs them all. Otherwise it is **deferred**: not run, its status `deferred`, the scenario's later
+steps still running — so a slow step is never a cheap step's prerequisite. A row whose proving steps were all
+deferred reads `deferred`, in the report's own _Deferred (slow tier)_ list, never in _Not proven_ or the paste
+lists. **For the all-clear a deferred row counts like off dev** — the branch touches none of its paths, so it
+can't have changed what the row proves. A row with any proving step that ran is judged on that step. Slow
+today: `ios-standalone` (every step; `app/**` and its harness) and two of `timed-reminders`' wait steps.
 
 Walk the plan's matrix through **the edge-case checklist**: empty / max / invalid input; cancel; repeat
 (idempotent); survives a reload; the neighbouring item unaffected; ownership (another user's id). `smoke` alone
@@ -336,9 +353,9 @@ has no rows (`MATRIX_EXEMPT`) — it proves the harness, not a feature.
   isn't this branch, the fallback is the fails-on-main baseline: the last green full run's report (the archived
   worktrees' `localNotes/devcheck/`), else redeploying `main` to dev and rerunning — two extra deploys, so last.
   A failure confirmed on `main` gets its own small PR, logged; it doesn't block this one.
-- **Every scenario runs on every full run.** When a full run passes 3 minutes, revisit: area tags (a PR runs
-  smoke, its own scenario and the areas its diff touches, the full suite on `main`), a time budget, a failure in
-  an untouched area reported apart, retiring scenarios a redesign replaced. Not before.
+- **Every scenario runs on every full run; its slow steps only where the branch can affect them** (_Slow tier_).
+  When a full run's cheap steps pass 3 minutes, revisit: area tags for whole scenarios, a time budget, a failure
+  in an untouched area reported apart, retiring scenarios a redesign replaced. Not before.
 
 ## Artifacts
 
