@@ -138,6 +138,44 @@ export const finance: Scenario = {
     },
   ],
   steps: [
+    // First, before the fixture gate: the two fields need no bank, so they're proven even while the rest
+    // reads needs-you.
+    {
+      id: 'field-size',
+      entry: 'ui',
+      proves: ['field-size'],
+      title: 'Rules bucket select and New focus input: computed font-size ≥ 16px',
+      async run(ctx) {
+        const rule = await ctx.api.writes.upsertFinanceRule({
+          pattern: `devcheck-${ctx.nonce}`,
+          bucket: 'budget',
+        });
+        await ctx.ui.goto('/finances/rules');
+        const select = ctx.page.getByRole('combobox', { name: `Bucket for ${rule.pattern}` });
+        await select.waitFor({ timeout: 15_000 });
+        const selectPx = await fontSizeOf(ctx, `select[aria-label="Bucket for ${rule.pattern}"]`);
+        if (selectPx < 16) throw new Error(`the rule’s bucket select is ${selectPx}px`);
+        // The New focus row lives in the running timer's bar: start a focus from the dock's idle Focus
+        // (a leftover one cleared first, as failed-reads does), open the row, measure, Cancel it, Stop the
+        // timer. Like failed-reads, this leaves a seconds-long completed session in the test user's history.
+        await clearTimers(ctx);
+        await ctx.page.locator(FOCUS).first().click();
+        const open = ctx.page.getByRole('button', { name: '+ New focus', exact: true });
+        await open.waitFor({ timeout: 15_000 });
+        await open.click();
+        const input = ctx.page.getByLabel('New focus label');
+        await input.waitFor({ timeout: 10_000 });
+        const inputPx = await fontSizeOf(ctx, 'input[aria-label="New focus label"]');
+        if (inputPx < 16) throw new Error(`the New focus input is ${inputPx}px`);
+        await ctx.shot('field-size');
+        await ctx.page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
+        await ctx.page.getByRole('button', { name: 'Stop', exact: true }).first().click();
+        for (let i = 0; (await ctx.api.reads.listRunningSessions()).length; i++) {
+          if (i >= 40) throw new Error('the focus timer never stopped on the server');
+          await wait(250);
+        }
+      },
+    },
     {
       id: 'fixture',
       entry: 'ui', // reads the server, then looks for the rows on the All tab
@@ -264,42 +302,6 @@ export const finance: Scenario = {
         if (button.x + button.width > width + 1) throw new Error('Link is off the right edge');
         await ctx.shot('row-layout');
         await closeDetail(ctx);
-      },
-    },
-    {
-      id: 'field-size',
-      entry: 'ui',
-      proves: ['field-size'],
-      title: 'Rules bucket select and New focus input: computed font-size ≥ 16px',
-      async run(ctx) {
-        const rule = await ctx.api.writes.upsertFinanceRule({
-          pattern: `devcheck-${ctx.nonce}`,
-          bucket: 'budget',
-        });
-        await ctx.ui.goto('/finances/rules');
-        const select = ctx.page.getByRole('combobox', { name: `Bucket for ${rule.pattern}` });
-        await select.waitFor({ timeout: 15_000 });
-        const selectPx = await fontSizeOf(ctx, `select[aria-label="Bucket for ${rule.pattern}"]`);
-        if (selectPx < 16) throw new Error(`the rule’s bucket select is ${selectPx}px`);
-        // The New focus row lives in the running timer's bar: start a focus from the dock's idle Focus
-        // (a leftover one cleared first, as failed-reads does), open the row, measure, Cancel it, Stop the
-        // timer. Like failed-reads, this leaves a seconds-long completed session in the test user's history.
-        await clearTimers(ctx);
-        await ctx.page.locator(FOCUS).first().click();
-        const open = ctx.page.getByRole('button', { name: '+ New focus', exact: true });
-        await open.waitFor({ timeout: 15_000 });
-        await open.click();
-        const input = ctx.page.getByLabel('New focus label');
-        await input.waitFor({ timeout: 10_000 });
-        const inputPx = await fontSizeOf(ctx, 'input[aria-label="New focus label"]');
-        if (inputPx < 16) throw new Error(`the New focus input is ${inputPx}px`);
-        await ctx.shot('field-size');
-        await ctx.page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
-        await ctx.page.getByRole('button', { name: 'Stop', exact: true }).first().click();
-        for (let i = 0; (await ctx.api.reads.listRunningSessions()).length; i++) {
-          if (i >= 40) throw new Error('the focus timer never stopped on the server');
-          await wait(250);
-        }
       },
     },
     noConsoleErrors,
