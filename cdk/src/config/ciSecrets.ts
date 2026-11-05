@@ -13,9 +13,12 @@ const FILE: Record<SecretKind, string> = {
   AGENT_TOKEN: 'agent-token',
 };
 
+// The gitignored dir the local fallbacks live in (cdk/.secrets/); bin/aperture.ts reads the device user id from it too.
+export const SECRETS_DIR = fileURLToPath(new URL('../../.secrets', import.meta.url));
+
 export interface StageSecretOptions {
   env?: NodeJS.ProcessEnv; // tests pass their own; the cdk app uses process.env
-  dir?: string; // the gitignored secrets dir; defaults to cdk/.secrets/
+  dir?: string; // tests pass a tmp dir; defaults to SECRETS_DIR
 }
 
 // In CI the value comes from the GitHub secret `<KIND>_<STAGE>` (prod's live in the `prod` environment, dev's are
@@ -34,7 +37,7 @@ export function stageSecret(kind: SecretKind, stage: string, opts: StageSecretOp
     const where = stage === 'prod' ? 'a secret in the prod GitHub environment' : 'a repository secret';
     throw new Error(`${name} is empty in CI — set ${kind}_${stage.toUpperCase()} (${where})`);
   }
-  const dir = opts.dir ?? fileURLToPath(new URL('../../.secrets', import.meta.url));
+  const dir = opts.dir ?? SECRETS_DIR;
   const file = `${dir}/${FILE[kind]}.${stage}`;
   if (existsSync(file)) return readFileSync(file, 'utf8').trim();
   mkdirSync(dir, { recursive: true });

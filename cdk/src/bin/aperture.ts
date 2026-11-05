@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { App, Validations } from 'aws-cdk-lib';
 import type { IConstruct } from 'constructs';
 import { AwsSolutionsChecks } from 'cdk-nag';
@@ -11,7 +10,7 @@ import { ApertureDevGuardStack } from '../lib/dev-guard-stack';
 import { ApertureOrgStack } from '../lib/org-stack';
 import { domainConfigFor } from '../config/domains';
 import { laneFor, synthesizerFor } from '../config/lane';
-import { stageSecret } from '../config/ciSecrets';
+import { SECRETS_DIR, stageSecret } from '../config/ciSecrets';
 
 // The Cognito `sub` device-token writes are attributed to, so captured attempts show under the
 // signed-in user. Not a secret, but account-specific → not committed: APERTURE_DEVICE_USER_ID (CI), else
@@ -19,8 +18,7 @@ import { stageSecret } from '../config/ciSecrets';
 function deviceUserIdFor(stage: string): string | undefined {
   const fromEnv = process.env.APERTURE_DEVICE_USER_ID;
   if (fromEnv) return fromEnv.trim();
-  const dir = fileURLToPath(new URL('../../.secrets', import.meta.url));
-  const file = `${dir}/device-user-id.${stage}`;
+  const file = `${SECRETS_DIR}/device-user-id.${stage}`;
   if (existsSync(file)) return readFileSync(file, 'utf8').trim();
   return undefined;
 }
