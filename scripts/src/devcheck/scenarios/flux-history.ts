@@ -36,6 +36,12 @@ export const fluxHistory: Scenario = {
       what: 'History lists both, the stopped one marked',
     },
     {
+      id: 'sparkline',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The rotation chip’s trend draws its sparkline across the whole tile, not a 240 px drawing centred in it',
+    },
+    {
       id: 'night-line',
       entry: 'ui',
       kind: 'nominal',
@@ -55,51 +61,91 @@ export const fluxHistory: Scenario = {
       needsYou:
         'the harness has no recorded pose clip to feed Chromium’s fake camera; the set is recorded the way the stage would send it',
     },
+    {
+      id: 'rest-line',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'After "Set complete" the HUD and the panel count the rest down: "Rest · 23 s · Set two next", gone when set two starts',
+      needsYou:
+        'a finished set needs a camera (the fake engine is stub-only); off dev: useFluxEngine.test "the rest countdown…" and ExercisePanel.test "between sets, the done block counts the rest down"',
+    },
+    {
+      id: 'idle-after-session',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The last set ends the session: the panel reads "Start the camera to begin." every time, never "Set complete · Again"',
+      needsYou:
+        'same — a session on a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel"',
+    },
+    {
+      id: 'chin-tuck-neutral',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Chin tuck: a tuck held still in the rest never flashes "Neutral reset"; rotation’s rest still does',
+      needsYou:
+        'engine internals on a camera; off dev: core.test "chin tuck’s rest never re-sets the neutral; upper trap’s still does (D60)"',
+    },
   ],
   steps: [
     {
       id: 'record',
       entry: 'api',
       proves: ['record'],
-      title: 'recordFluxSet as the test user — a finished set and one stopped early — read back',
+      title:
+        'recordFluxSet as the test user — a finished chin tuck, one stopped early, three rotation sets over five days — read back',
       async run(ctx) {
         // The app's day, not the calendar's: before the user's day start (4am) a set belongs to yesterday,
         // and History and the night line both read the app's today.
         const { dayStartHour } = await ctx.api.reads.getSettings();
-        const day = laDay(new Date(Date.now() - dayStartHour * 3_600_000));
-        const record = async (count: number, stoppedEarly: boolean, completedAt: number) => {
-          const id = devUlid(completedAt);
+        const dayOf = (at: number) => laDay(new Date(at - dayStartHour * 3_600_000));
+        const record = async (set: {
+          exerciseId: 'chin-tuck' | 'cervical-rotation';
+          count: number;
+          avgPeakDeg: number | null;
+          stoppedEarly: boolean;
+          completedAt: number;
+        }) => {
+          const id = devUlid(set.completedAt);
+          const rotation = set.exerciseId === 'cervical-rotation';
           await ctx.api.writes.recordFluxSet({
             id,
-            day,
-            exerciseId: 'chin-tuck',
-            kind: 'holdAtTarget',
+            day: dayOf(set.completedAt),
+            exerciseId: set.exerciseId,
+            kind: rotation ? 'romReps' : 'holdAtTarget',
             side: null,
             condition: null,
-            count,
-            avgPeakDeg: null,
+            count: set.count,
+            avgPeakDeg: set.avgPeakDeg,
             avgErrorDeg: null,
-            rom: { pitch: 9, yaw: 2, roll: 2 },
+            rom: rotation ? { pitch: 4, yaw: 100, roll: 5 } : { pitch: 9, yaw: 2, roll: 2 },
             calibrated: true,
             delegate: 'CPU',
             durationSec: 150,
-            completedAt,
+            completedAt: set.completedAt,
             repTaskId: null,
-            stoppedEarly,
-            planned: 6,
+            stoppedEarly: set.stoppedEarly,
+            planned: rotation ? 10 : 6,
           });
           if (!(await ctx.api.reads.getFluxSet(id))) throw new Error(`the server has no set ${id}`);
         };
         const now = Date.now();
-        await record(6, false, now - 1000);
-        await record(2, true, now); // stopped after two holds (D55)
+        const DAY = 86_400_000;
+        const tuck = { exerciseId: 'chin-tuck', avgPeakDeg: null } as const;
+        await record({ ...tuck, count: 6, stoppedEarly: false, completedAt: now - 1000 });
+        await record({ ...tuck, count: 2, stoppedEarly: true, completedAt: now }); // stopped after two holds (D55)
+        // Three rotation sets with an angle: the trend (and its sparkline) shows from three sets up (D50).
+        const turn = { exerciseId: 'cervical-rotation', count: 10, stoppedEarly: false } as const;
+        await record({ ...turn, avgPeakDeg: 44, completedAt: now - 4 * DAY });
+        await record({ ...turn, avgPeakDeg: 48, completedAt: now - 2 * DAY });
+        await record({ ...turn, avgPeakDeg: 53, completedAt: now - 2000 });
       },
     },
     {
       id: 'history',
       entry: 'ui',
-      proves: ['history'],
-      title: 'History lists both, the stopped one marked',
+      proves: ['history', 'sparkline'],
+      title:
+        'History lists both, the stopped one marked; the rotation trend’s sparkline spans its tile',
       async run(ctx) {
         await ctx.ui.goto('/flux/history');
         // A test user who never opened Flux sees the disclaimer gate first — accepting it is a Settings write
@@ -117,6 +163,19 @@ export const fluxHistory: Scenario = {
         await ctx.ui.expectText(/· 6 holds ·/, 15_000); // the finished one ("2 of 6 holds" doesn't match)
         await ctx.ui.expectText(/2 of 6 holds · stopped early/, 15_000);
         await ctx.shot('history');
+        // The rotation chip filters to its three sets and shows the trend tile; the sparkline measures its
+        // own width (viewBox = rendered width), so the line reaches the tile's edges instead of sitting in a
+        // 240 px drawing centred in it.
+        await ctx.page.getByRole('button', { name: 'rotation', exact: true }).click();
+        const spark = ctx.page.getByRole('img', { name: /rotation · avg peak, 3 sets/ });
+        await spark.waitFor({ state: 'visible', timeout: 15_000 });
+        const { viewBoxW, width } = await spark.evaluate((el) => ({
+          viewBoxW: Number(el.getAttribute('viewBox')?.split(' ')[2]),
+          width: el.getBoundingClientRect().width,
+        }));
+        if (!(width > 0) || Math.abs(viewBoxW - width) > 1)
+          throw new Error(`the sparkline draws ${viewBoxW} px in a ${width.toFixed(1)} px tile`);
+        await ctx.shot('history-trend');
       },
     },
     {
@@ -125,15 +184,18 @@ export const fluxHistory: Scenario = {
       proves: ['library-note'],
       title: 'Library: "link one in Settings." with no gap before the full stop',
       async run(ctx) {
-        // The note shows only while no active Roll is linked — the test user's state, unless someone linked one.
-        const { fluxRollId } = await ctx.api.reads.getSettings();
-        if (fluxRollId != null)
-          throw new Error(
-            `the test user has Roll ${fluxRollId} linked, so the Library has no note to check`,
-          );
         await ctx.ui.goto('/flux');
+        // The note shows only while no active Roll is linked — the test user's state, unless someone linked one;
+        // a missing note says which, loudly.
         const link = ctx.page.getByRole('link', { name: 'link one in Settings', exact: true });
-        await link.waitFor({ state: 'visible', timeout: 15_000 });
+        await link.waitFor({ state: 'visible', timeout: 15_000 }).catch(async () => {
+          const { fluxRollId } = await ctx.api.reads.getSettings();
+          throw new Error(
+            fluxRollId == null
+              ? 'the Library shows no "link one in Settings" note'
+              : `no "link one in Settings" note — the test user may have Roll ${fluxRollId} linked (an active one hides it)`,
+          );
+        });
         const note =
           (await link.locator('xpath=..').textContent())?.replace(/\s+/g, ' ').trim() ?? '';
         if (!/link one in Settings\.$/.test(note)) throw new Error(`the note reads "${note}"`);
