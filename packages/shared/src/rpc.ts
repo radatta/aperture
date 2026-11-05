@@ -58,6 +58,7 @@ export const API_METHODS = [
   'listCategories',
   'upsertCategory',
   'setCategoryWork',
+  'setCategoryArea',
   'deleteCategory',
   'listPlaces',
   'upsertPlace',

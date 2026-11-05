@@ -3,7 +3,10 @@ import { placeTasks } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import {
   applyQuery,
+  areaCardCounts,
+  areaShown,
   errandsByPlace,
+  foldedAreas,
   foldParts,
   groupTasks,
   inDueBucket,
@@ -17,6 +20,7 @@ import {
   placer,
   resetToLens,
   sortTasks,
+  toggleArea,
   type QueryCtx,
   type TaskQuery,
 } from './query';
@@ -64,6 +68,7 @@ const cat = (id: string, label: string, order: number, active = true): Category 
   isWork: true,
   order,
   active,
+  area: null,
 });
 
 const CATS = [cat('c2', 'CSCI 187', 2), cat('c1', 'CSEN 146', 1), cat('hw', 'Homework', 0, false)];
@@ -507,5 +512,83 @@ describe('override chips', () => {
   it('reset keeps the search text', () => {
     const r = resetToLens(q({ text: 'pset', due: 'dated', sort: 'title' }), 'week');
     expect(r).toEqual({ ...LENS_PRESET.week, text: 'pset' });
+  });
+});
+
+describe('areas (D14)', () => {
+  const AREA_CATS = [
+    { ...cat('ap', 'Aperture', 0), area: 'aperture' as const },
+    { ...cat('sc', 'CSEN 146', 1), area: 'school' as const },
+    cat('none', 'Misc', 2), // no area → Personal
+  ];
+  const actx = (planOrder: [string, number][] = []): QueryCtx => ({
+    ...ctx(planOrder),
+    categories: AREA_CATS,
+  });
+  const dev = task({ id: 'd', title: 'fix cache', categoryId: 'ap' });
+  const hw = task({ id: 'h', title: 'pset 4', categoryId: 'sc' });
+  const misc = task({ id: 'm', title: 'misc thing', categoryId: 'none' });
+  const orphan = task({ id: 'o', title: 'orphan', categoryId: 'gone' });
+
+  it('a1 only Backlog folds an area away, and it is Aperture', () => {
+    expect(foldedAreas('backlog')).toEqual(['aperture']);
+    for (const lens of ['today', 'week', 'places', 'done'] as const)
+      expect(foldedAreas(lens)).toEqual([]);
+    expect(LENS_PRESET.backlog.areas).toEqual(['school', 'recruiting', 'personal']);
+  });
+
+  it('a2 the Backlog preset hides Aperture-area tasks; no area and a deleted category read as Personal', () => {
+    const r = applyQuery([dev, hw, misc, orphan], 'backlog', q(), actx());
+    expect(r.groups.flatMap((g) => g.tasks.map((t) => t.id))).toEqual(['h', 'm', 'o']);
+    expect(r.count).toBe(3);
+  });
+
+  it('a3 showing Aperture (areas: []) lists it under its category', () => {
+    const r = applyQuery([dev, hw], 'backlog', q({ areas: [] }), actx());
+    expect(r.groups.map((g) => [g.label, g.tasks.length])).toEqual([
+      ['Aperture', 1],
+      ['CSEN 146', 1],
+    ]);
+  });
+
+  it('a4 a search finds an Aperture task on Backlog whatever the area filter', () => {
+    const r = applyQuery([dev, hw], 'backlog', q({ text: 'cache' }), actx());
+    expect(r.count).toBe(1);
+    expect(r.groups[0]!.tasks[0]!.id).toBe('d');
+  });
+
+  it('a5 Week and Today never filter by area', () => {
+    const due = { ...dev, dueDay: TODAY };
+    expect(applyQuery([due], 'week', q({}, 'week'), actx()).count).toBe(1);
+    expect(applyQuery([dev], 'today', q({}, 'today'), actx([['d', 0]])).count).toBe(1);
+  });
+
+  it('a6 toggleArea: hiding one lists the rest; showing the last hidden one reads as every area', () => {
+    const preset = q(); // ['school', 'recruiting', 'personal']
+    expect(areaShown(preset, 'aperture')).toBe(false);
+    const shown = toggleArea(preset, 'aperture');
+    expect(shown.areas).toEqual([]);
+    expect(areaShown(shown, 'aperture')).toBe(true);
+    expect(toggleArea(shown, 'aperture').areas).toEqual(['school', 'recruiting', 'personal']);
+    expect(toggleArea(shown, 'school').areas).toEqual(['aperture', 'recruiting', 'personal']);
+    expect(areaShown(q({ areas: [] }), 'school')).toBe(true);
+  });
+
+  it('a7 areaCardCounts counts cards in the lens by area, whatever the query — parts fold into their parent', () => {
+    const parent = task({ id: 'p', categoryId: 'ap' });
+    const part = task({ id: 'p1', parentId: 'p', categoryId: 'ap' });
+    const counts = areaCardCounts(
+      [dev, hw, misc, parent, part, { ...dev, id: 'd2', dueDay: TODAY }],
+      'backlog',
+      actx(),
+    );
+    expect(counts).toEqual({ aperture: 2, school: 1, personal: 1 }); // d2 is in Week, part folds into p
+    expect(areaCardCounts([dev], 'week', actx())).toEqual({});
+  });
+
+  it('a8 the area filter is no override chip and no narrowing — Clear and Reset put the fold back', () => {
+    expect(overrideChips(q({ areas: [] }), 'backlog', AREA_CATS)).toEqual([]);
+    expect(isNarrowing(q({ areas: [] }))).toBe(false);
+    expect(resetToLens(q({ areas: [] }), 'backlog').areas).toEqual(LENS_PRESET.backlog.areas);
   });
 });

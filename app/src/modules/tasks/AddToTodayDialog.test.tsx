@@ -57,6 +57,25 @@ describe('Home "+ Add" to today', () => {
     expect(dialog.getByText('pset 4')).toBeTruthy();
   });
 
+  it('lists the life backlog — no Aperture-area task — but typing finds one (D14)', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-today-${Math.random()}` });
+    const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });
+    await api.createTask({ title: 'fix cache policy', categoryId: ap.id });
+    await api.createTask({ title: 'pset 4' });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    expect(await screen.findByText(/1 waiting in the backlog/)).toBeTruthy(); // Home counts the same
+    await user.click(await screen.findByRole('button', { name: 'Add to today' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Add to today' }));
+    await dialog.findByText('pset 4');
+    expect(dialog.queryByText('fix cache policy')).toBeNull();
+
+    await user.type(dialog.getByLabelText('Find a task'), 'cache');
+    expect(await dialog.findByText('fix cache policy')).toBeTruthy();
+    expect(dialog.getByRole('button', { name: 'Add fix cache policy to today' })).toBeTruthy();
+  });
+
   it('offers to create what you typed when nothing matches exactly', async () => {
     const { api, user, dialog } = await openFromMorning();
 

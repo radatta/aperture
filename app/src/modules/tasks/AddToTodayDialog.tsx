@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fmtDueDay, isTimed, todayKey } from '@aperture/shared';
+import { fmtDueDay, isTimed, LIFE_AREAS, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -14,7 +14,7 @@ import { usePlansForDay } from '../../data/hooks/usePlans';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
 import { CategoryTag } from './CategoryTag';
-import { labelOfFrom, matchesText, normalize } from './query';
+import { areaOfFrom, labelOfFrom, matchesText, normalize } from './query';
 import { byDueHint } from './taskMath';
 
 // Enough to scan; past this, typing is faster than scrolling.
@@ -133,15 +133,19 @@ function DialogBody({
   useEffect(() => onDirtyChange(text.trim() !== ''), [text, onDirtyChange]);
 
   const labelOf = labelOfFrom(categories);
+  const areaOfTask = areaOfFrom(categories);
   const onToday = new Set(plans.map((p) => p.taskId));
   // A parent is never put on a day — its parts are (parts.ts), each labelled with what it's part of.
   const parentIds = new Set(tasks.map((t) => t.parentId).filter(Boolean));
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  // The unsearched list is the life backlog (useBacklog's rule, lenses.md D14); typing finds anything.
+  const typing = text.trim() !== '';
   const candidates = tasks.filter(
     (t) =>
       isOpen(t) &&
       !parentIds.has(t.id) &&
       (!onToday.has(t.id) || added.has(t.id)) &&
+      (typing || LIFE_AREAS.includes(areaOfTask(t))) &&
       matchesText(t, text, labelOf, false),
   );
   // A timed task's day is its time (lenses.md D13) — it lands on Today on its day, never added early.

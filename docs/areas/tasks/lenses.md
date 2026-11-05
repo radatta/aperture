@@ -162,6 +162,18 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   - **Right now:** the Big 3 stay the chosen plan; timed rows are a "By time" tier above Also today
     ([right-now.md](../home/right-now.md) D11).
 
+- **D14 — the Backlog is the life backlog (2026-11-05, [areas.md](areas.md)).** Every category has a life
+  area (School · Aperture · Recruiting · Personal; none reads as Personal). Backlog's preset shows the life
+  areas (`TaskQuery.areas = LIFE_AREAS`); the Aperture-area cards wait behind a toggle chip **"Aperture · N"**
+  in the chips row — pressed while shown, N = the Aperture cards in the Backlog whatever the query
+  (`areaCardCounts`), not drawn when N is 0. It is session state like every filter (D4: sticky for the
+  session, reset each day); it widens rather than narrows, so it is no override chip, never counts toward
+  "Filter · N", and Clear / Reset to lens fold it back. A search ignores it (D1: typing finds everything).
+  Today and Week never filter by area — a dev ticket due Friday is due Friday. Home's "N waiting" and the
+  "+ Add" picker's unsearched list are the same life backlog (`useBacklog`); typing in the picker finds
+  anything. Why: with Aperture work in the same list as coursework the plan pass started from the wrong
+  question; the chip keeps it one tap away.
+
 ## 3. Deferred
 
 - Find-from-anywhere (Cmd/Ctrl+K) reusing `query.ts` — **won't do** (2026-11-05): the daily device is the phone, where "find" is Tasks → type and D1 makes the lens moot; no usage note records a miss. The build shape, if a miss is ever reported, is on task 01M38GBZ6SYT21KV0GP2QXCW4P (a `?q=` link into `/tasks` first, a Find dialog only if still wanted).

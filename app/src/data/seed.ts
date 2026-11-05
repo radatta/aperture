@@ -15,6 +15,7 @@ import {
   weekdayOf,
 } from '@aperture/shared';
 import type {
+  Area,
   BaseEntity,
   Category,
   CompetencyTag,
@@ -42,13 +43,14 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     deletedAt: null,
   });
 
-  // Categories — the starting set (deep work · admin · learning · health · people).
-  const catDefs = [
-    { label: 'Deep Work', isWork: true },
-    { label: 'Admin', isWork: true },
-    { label: 'Learning', isWork: true },
-    { label: 'Health', isWork: false },
-    { label: 'People', isWork: false },
+  // Categories — the starting set (deep work · admin · learning · health · people), each with its life
+  // area (areas.ts) so the Backlog has an Aperture group to fold away.
+  const catDefs: { label: string; isWork: boolean; area: Area }[] = [
+    { label: 'Deep Work', isWork: true, area: 'aperture' },
+    { label: 'Admin', isWork: true, area: 'personal' },
+    { label: 'Learning', isWork: true, area: 'school' },
+    { label: 'Health', isWork: false, area: 'personal' },
+    { label: 'People', isWork: false, area: 'personal' },
   ];
   const cats: Category[] = catDefs.map((c, i) => ({
     ...mk(nowMs - 30 * DAY),
@@ -56,6 +58,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     isWork: c.isWork,
     order: i,
     active: true,
+    area: c.area,
   }));
   store.categories.push(...cats);
   const byLabel = (l: string) => cats.find((c) => c.label === l)!;

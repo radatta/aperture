@@ -58,6 +58,7 @@ export interface CreateTaskInput {
   notes?: string | null;
   parentId?: string | null; // a part of that task (the parts scenario)
   place?: string | null; // a place slug (the places scenario)
+  categoryId?: string | null; // one of this run's categories (the areas scenario)
 }
 
 // The slices of a category, a plan row and the day row the check reads (the parts-v2b-reads scenario:
@@ -68,6 +69,9 @@ export interface DevCategory {
   isWork: boolean;
   order: number;
   active: boolean;
+  // The life area (packages/shared/src/areas.ts AREAS — scripts doesn't depend on shared) or null; a row
+  // from before the field lists as null (the areas scenario).
+  area: 'school' | 'aperture' | 'recruiting' | 'personal' | null;
 }
 export interface DevPlan {
   id: string;
@@ -521,6 +525,7 @@ export function createApiClient({
       isWork: boolean;
       order?: number;
       active?: boolean;
+      area?: DevCategory['area']; // the areas scenario; omitted = none (reads as Personal)
     }): Promise<DevCategory> {
       if (input.id) {
         assertLedger(input.id, 'category');
@@ -532,8 +537,9 @@ export function createApiClient({
       return cat;
     },
     // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null. Cleanup runs
-    // newest-first, so a run's category (made after its tasks) goes before them: a run task on a run
-    // category would make the delete refuse, so no scenario puts one there.
+    // newest-first: a run task on a run category is fine when the category was made first (the areas
+    // scenario — its tasks go before it), and refused when the task was made first, so a scenario that
+    // makes the category last puts no task on it.
     async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
       assertLedger(id, 'category');
       await call<null>('deleteCategory', [id, reassignToId]);
@@ -555,6 +561,11 @@ export function createApiClient({
       for (const t of (await reads.listTasks()).filter((t) => t.seriesId === id))
         await call<null>('deleteTask', [t.id]);
       await call<null>('deleteSeries', [id]);
+    },
+    // The area write (setCategoryArea). `area` is sent as given — a step proving the refusal passes a bad one.
+    async setCategoryArea(id: string, area: string | null): Promise<DevCategory> {
+      assertLedger(id, 'category');
+      return call<DevCategory>('setCategoryArea', [id, area]);
     },
     // Mint an upload URL, PUT the bytes to S3 as the app does, then confirm — or leave it pending
     // (confirm: false), as an abandoned upload would.

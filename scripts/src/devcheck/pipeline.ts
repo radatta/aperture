@@ -443,7 +443,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         await client.writes.deletePlace(id, null); // any task still on it just leaves the list
         return true;
       case 'category':
-        await client.writes.deleteCategory(id, null); // newest-first: it goes before the run's tasks, so none may sit on it
+        await client.writes.deleteCategory(id, null); // newest-first: a run's tasks made after it went first
         return true;
       case 'habit':
         await client.writes.archiveHabit(id);

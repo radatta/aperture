@@ -32,6 +32,7 @@ import type {
   TaskSeries,
   TaskStatus,
 } from './types';
+import type { Area } from './areas';
 import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
@@ -143,6 +144,7 @@ export interface UpsertCategoryInput {
   isWork: boolean;
   order?: number;
   active?: boolean;
+  area?: Area | null; // patch-style too: omitted keeps it (create: null = Personal); off the set → refused
 }
 
 export interface DateRange {
@@ -453,6 +455,9 @@ export interface ApiClient {
     isWork: boolean,
     backfillPast: boolean,
   ): Promise<{ category: Category; backfilled: number }>;
+  // The category's life area (areas.ts). A value off the set is refused with nothing written; a retired
+  // category keeps its area. Nothing is snapshotted, so there is no backfill to ask about.
+  setCategoryArea(id: string, area: Area | null): Promise<Category>;
   deleteCategory(id: string, reassignToId: string | null): Promise<void>;
 
   // Places (errand lists — places.ts). list is alive, oldest first (the order you added them). A slug

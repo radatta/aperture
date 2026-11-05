@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ApiClient } from './api';
+import type { Area } from './areas';
 import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from './attachments';
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
@@ -1645,6 +1646,48 @@ export function runApiContract(
       await expect(api.deleteCategory(cat.id, null)).rejects.toThrow(); // referenced → needs a target
       await api.deleteCategory(cat.id, target.id);
       expect((await api.getTask(task.id))?.categoryId).toBe(target.id);
+    });
+
+    it('categories: area round-trips, defaults to null, is kept by a rename and a retire, and refuses a bad value', async () => {
+      const cat = await api.upsertCategory({ label: 'ECEN 21', isWork: true });
+      expect(cat.area).toBeNull(); // no area yet — reads as Personal (areaOf)
+      const set = await api.setCategoryArea(cat.id, 'school');
+      expect(set.area).toBe('school');
+      expect((await api.listCategories()).find((c) => c.id === cat.id)?.area).toBe('school');
+
+      // Patch-style on update: omitted keeps it; a rename and a retire never clear it.
+      const renamed = await api.upsertCategory({ id: cat.id, label: 'ECEN 21L', isWork: true });
+      expect(renamed.area).toBe('school');
+      const retired = await api.upsertCategory({
+        id: cat.id,
+        label: 'ECEN 21L',
+        isWork: true,
+        active: false,
+      });
+      expect(retired.area).toBe('school');
+      expect(retired.active).toBe(false);
+
+      // A value off the set is refused with nothing written, by both write paths.
+      await expect(api.setCategoryArea(cat.id, 'other' as unknown as Area)).rejects.toThrow(
+        /area must be one of/,
+      );
+      await expect(
+        api.upsertCategory({
+          id: cat.id,
+          label: 'x',
+          isWork: false,
+          area: 'Other' as unknown as Area,
+        }),
+      ).rejects.toThrow(/area must be one of/);
+      const unchanged = (await api.listCategories()).find((c) => c.id === cat.id);
+      expect(unchanged).toMatchObject({ label: 'ECEN 21L', isWork: true, area: 'school' });
+
+      // Create with one; clear it back to null.
+      const made = await api.upsertCategory({ label: 'LC', isWork: true, area: 'recruiting' });
+      expect(made.area).toBe('recruiting');
+      expect((await api.setCategoryArea(made.id, null)).area).toBeNull();
+      // The same code path a foreign user's id takes (the repo is partitioned by user): not found.
+      await expect(api.setCategoryArea('nope', 'school')).rejects.toThrow(/Not found/);
     });
 
     it('categories: update keeps order/active when omitted; retire and restore round-trip', async () => {

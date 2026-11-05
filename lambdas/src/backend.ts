@@ -1,5 +1,6 @@
 import {
   assertAttachmentAllowed,
+  assertArea,
   assertCategoryDeletable,
   AUTO_PLACED_ERROR,
   autoSyncOn,
@@ -91,6 +92,7 @@ import type {
   BusyInterval,
   CalendarBusy,
   CalibrationPoint,
+  Area,
   Category,
   CreateAttachmentInput,
   CreateLinkTokenInput,
@@ -1480,10 +1482,14 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Categories ---
+  // Rows from before `area` read back without it; every read lists it as null (areas.ts).
   async listCategories(): Promise<Category[]> {
-    return (await this.repo.listCategories()).sort((a, b) => a.order - b.order);
+    return (await this.repo.listCategories())
+      .map((c) => ({ ...c, area: c.area ?? null }))
+      .sort((a, b) => a.order - b.order);
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
+    if (input.area !== undefined) assertArea(input.area);
     if (input.id) {
       // Consistent: a work flip straight after a rename keeps the rename.
       const existing = await this.repo.getCategory(input.id, { consistent: true });
@@ -1494,6 +1500,7 @@ export class BackendClient implements ApiClient {
         isWork: input.isWork,
         order: input.order ?? existing.order,
         active: input.active ?? existing.active,
+        area: input.area === undefined ? (existing.area ?? null) : input.area,
         updatedAt: this.now(),
       });
     }
@@ -1503,7 +1510,14 @@ export class BackendClient implements ApiClient {
       isWork: input.isWork,
       order: input.order ?? (await this.repo.listCategories()).length,
       active: input.active ?? true,
+      area: input.area ?? null,
     });
+  }
+  async setCategoryArea(id: string, area: Area | null): Promise<Category> {
+    assertArea(area); // before any read: a bad value never reaches the table
+    const existing = await this.repo.getCategory(id);
+    if (!existing) throw new Error(`Not found: ${id}`);
+    return this.repo.putCategory({ ...existing, area, updatedAt: this.now() });
   }
   async setCategoryWork(
     id: string,

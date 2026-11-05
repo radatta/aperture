@@ -1,4 +1,5 @@
 import {
+  AREAS,
   ATTACHMENT_MAX_BYTES,
   AUTO_PLACED_ERROR,
   TASK_NOTES_MAX,
@@ -590,37 +591,39 @@ export const TOOLS: Tool[] = [
   {
     name: 'list_categories',
     description:
-      'List all categories (id, label, isWork, order). Use the id when creating/updating tasks.',
+      'List all categories (id, label, isWork, order, active, area). Use the id when creating/updating tasks. area is the life area the category belongs to — school, aperture, recruiting or personal; null reads as personal. The Backlog folds the aperture area away by default, so "park a dev ticket" = give it an aperture-area category.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: (_args, ctx) => ctx.dispatch('listCategories', []),
   },
   {
     name: 'create_category',
     description:
-      'Create a category. isWork tags it as work vs personal (the calibration/work split). order is an optional sort key.',
+      'Create a category. isWork tags it as work vs personal (the calibration/work split). order is an optional sort key. area is its life area — one of school, aperture, recruiting, personal (omitted = none, which reads as personal); a course is a school-area category.',
     inputSchema: {
       type: 'object',
       properties: {
         label: { type: 'string' },
         isWork: { type: 'boolean' },
         order: { type: 'integer' },
+        area: { type: 'string', enum: [...AREAS] },
       },
       required: ['label', 'isWork'],
       additionalProperties: false,
     },
     run(args, ctx) {
-      const input: { label: string; isWork: boolean; order?: number } = {
+      const input: UpsertCategoryInput = {
         label: reqStr(args, 'label'),
         isWork: reqBool(args, 'isWork'),
       };
       if (present(args, 'order')) input.order = reqInt(args, 'order');
+      if (present(args, 'area')) input.area = enumArg(args, 'area', [...AREAS]);
       return ctx.dispatch('upsertCategory', [input]);
     },
   },
   {
     name: 'update_category',
     description:
-      'Patch a category: label, isWork, order, active. Unsent fields keep their current value. active:false retires it (hidden from pickers; existing tasks keep the label), active:true restores it. isWork is forward-only here — past sessions keep their recorded work/personal split.',
+      'Patch a category: label, isWork, order, active, area. Unsent fields keep their current value. active:false retires it (hidden from pickers; existing tasks keep the label), active:true restores it. isWork is forward-only here — past sessions keep their recorded work/personal split. area is one of school, aperture, recruiting, personal (null clears it; a cleared area reads as personal) — the app regroups its Backlog on the next load.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -629,13 +632,14 @@ export const TOOLS: Tool[] = [
         isWork: { type: 'boolean' },
         order: { type: 'integer' },
         active: { type: 'boolean' },
+        area: { type: ['string', 'null'], enum: [...AREAS, null] },
       },
       required: ['id'],
       additionalProperties: false,
     },
     async run(args, ctx) {
       const id = reqStr(args, 'id');
-      if (!['label', 'isWork', 'order', 'active'].some((f) => present(args, f))) {
+      if (!['label', 'isWork', 'order', 'active', 'area'].some((f) => present(args, f))) {
         throw new RpcParamError('update_category needs at least one field to change');
       }
       // upsertCategory requires label + isWork, so those merge over the current row; order/active are
@@ -650,6 +654,9 @@ export const TOOLS: Tool[] = [
       };
       if (present(args, 'order')) input.order = reqInt(args, 'order');
       if (present(args, 'active')) input.active = reqBool(args, 'active');
+      // null clears; absent keeps (present() is the "sent" test, so a null goes through).
+      if (present(args, 'area'))
+        input.area = args.area === null ? null : enumArg(args, 'area', [...AREAS]);
       return ctx.dispatch('upsertCategory', [input]);
     },
   },

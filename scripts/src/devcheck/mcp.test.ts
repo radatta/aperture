@@ -67,6 +67,7 @@ describe('createMcpClient', () => {
       'getCalibration',
       'listAttachments',
       'listBacklog',
+      'listCategories',
       'listPlaceTasks',
       'listPlaces',
       'listSeries',
@@ -81,6 +82,7 @@ describe('createMcpClient', () => {
       'deleteTask',
       'stopSeries',
       'stopSeriesUnknown',
+      'updateCategory',
       'updateTask',
     ]);
   });

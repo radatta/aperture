@@ -3,6 +3,7 @@
 // branch touches the scenario's slowPaths or `--feature` names it — and `--tier all` runs every step.
 // `--feature <id>` marks whose rows are the feature's in the report.
 import type { Scenario, Tier } from '../scenario';
+import { areas } from './areas';
 import { attachmentDelete } from './attachment-delete';
 import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
@@ -40,6 +41,7 @@ export const SCENARIOS: Scenario[] = [
   phoneNits,
   timerCredit,
   recurring,
+  areas,
   finance,
   inflightCap, // late: its check reads the whole run's console for a 429
   failedReads, // last: its intercepts and a 30 s wait shouldn't sit in front of the others

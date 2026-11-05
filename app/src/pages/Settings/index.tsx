@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
-import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
+import { AREA_LABEL, AREAS, areaOf } from '@aperture/shared';
+import type { Area, CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
@@ -16,6 +17,7 @@ import { BUILD_SHA } from '../../shared/env';
 import {
   useCategories,
   useDeleteCategory,
+  useSetCategoryArea,
   useSetCategoryWork,
   useUpsertCategory,
 } from '../../data/hooks/useCategories';
@@ -74,6 +76,7 @@ function CategoriesSection() {
   const upsert = useUpsertCategory();
   const [label, setLabel] = useState('');
   const [isWork, setIsWork] = useState(true);
+  const [area, setArea] = useState<Area>('personal');
 
   return (
     <section className="flex flex-col gap-3">
@@ -118,11 +121,18 @@ function CategoriesSection() {
             ]}
             className="w-32"
           />
+          <Select
+            label="Area"
+            value={area}
+            onChange={(e) => setArea(e.target.value as Area)}
+            options={AREAS.map((a) => ({ value: a, label: AREA_LABEL[a] }))}
+            className="w-32"
+          />
           <Button
             size="sm"
             disabled={!label.trim() || upsert.isPending}
             onClick={async () => {
-              await upsert.mutateAsync({ label: label.trim(), isWork });
+              await upsert.mutateAsync({ label: label.trim(), isWork, area });
               setLabel('');
             }}
           >
@@ -134,7 +144,7 @@ function CategoriesSection() {
   );
 }
 
-type RowPanel = null | 'work' | 'delete' | 'retire';
+type RowPanel = null | 'work' | 'area' | 'delete' | 'retire';
 
 function CategoryRow({
   cat,
@@ -149,6 +159,7 @@ function CategoryRow({
 }) {
   const upsert = useUpsertCategory();
   const setWork = useSetCategoryWork();
+  const setAreaWrite = useSetCategoryArea();
   const del = useDeleteCategory();
   const [panel, setPanel] = useState<RowPanel>(null);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -201,6 +212,13 @@ function CategoryRow({
     closePanel();
   }
 
+  // One write, no backfill ask (nothing is snapshotted). A failure keeps the panel open with the error
+  // below it — the pressed chip still shows the area the row really has.
+  function pickArea(area: Area) {
+    if (area === areaOf(cat)) return closePanel();
+    setAreaWrite.mutate({ id: cat.id, area }, { onSuccess: closePanel });
+  }
+
   return (
     <Card className="px-3.5 py-2.5">
       <div ref={rowRef} className="flex items-center justify-between gap-3">
@@ -229,13 +247,14 @@ function CategoryRow({
               cat.active ? 'text-ink' : 'text-ink-muted',
             )}
           />
+          {/* Type, then the life area — "Work · School" — so the row says where its time lands. */}
           {cat.active ? (
             <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
-              {cat.isWork ? 'Work' : 'Non-work'}
+              {cat.isWork ? 'Work' : 'Non-work'} · {AREA_LABEL[areaOf(cat)]}
             </Text>
           ) : (
             <Text size="xs" tone="muted">
-              Retired
+              Retired · {AREA_LABEL[areaOf(cat)]}
             </Text>
           )}
         </div>
@@ -272,6 +291,7 @@ function CategoryRow({
                 label: `Make ${cat.isWork ? 'non-work' : 'work'}…`,
                 onSelect: () => setPanel('work'),
               },
+              { label: 'Area…', onSelect: () => setPanel('area') },
               cat.active
                 ? { label: 'Retire…', onSelect: () => setPanel('retire') }
                 : { label: 'Restore', onSelect: () => setActive(true) },
@@ -299,6 +319,38 @@ function CategoryRow({
           </Button>
           <Button variant="ghost" size="sm" onClick={() => flip(true)}>
             Reclassify past too
+          </Button>
+        </div>
+      )}
+
+      {panel === 'area' && (
+        <div
+          role="group"
+          aria-label={`Area for ${cat.label}`}
+          className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
+        >
+          <Text size="sm" tone="muted">
+            Which part of life is {cat.label}?
+          </Text>
+          {AREAS.map((a) => (
+            <button
+              key={a}
+              type="button"
+              aria-pressed={areaOf(cat) === a}
+              disabled={setAreaWrite.isPending}
+              onClick={() => pickArea(a)}
+              className={cx(
+                'rounded-lg border px-2.5 py-1 text-xs transition',
+                areaOf(cat) === a
+                  ? 'border-teal bg-teal-soft text-ink'
+                  : 'border-line text-ink-muted hover:text-ink',
+              )}
+            >
+              {AREA_LABEL[a]}
+            </button>
+          ))}
+          <Button variant="ghost" size="sm" onClick={() => closePanel()}>
+            Close
           </Button>
         </div>
       )}
@@ -346,7 +398,7 @@ function CategoryRow({
         </div>
       )}
 
-      {upsert.isError && (
+      {(upsert.isError || setAreaWrite.isError) && (
         <Text size="xs" tone="danger" className="mt-2">
           Couldn't save that change — try again.
         </Text>

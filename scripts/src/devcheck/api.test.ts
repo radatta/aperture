@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CATEGORY_VIA,
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
   FINANCE_RULE_VIA,
@@ -101,6 +102,7 @@ describe('createApiClient', () => {
       'removePlan',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'setCategoryArea',
       'setDayCapacity',
       'setDayIntent',
       'setTaskActual',
