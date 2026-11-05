@@ -7,7 +7,9 @@ import { join } from 'node:path';
 import { DevcheckError } from './errors';
 import type { PwBrowser, PwContext, PwModule } from './pw-types';
 
-export const PHONE = { width: 390, height: 844 } as const;
+// iPhone 18 Pro Max (Pro Max class since the 16): 440×956 CSS px — the phone the PWA runs on. 390×844 is the floor
+// the run-app Phone pass still covers; the check shows the phone the user holds.
+export const PHONE = { width: 440, height: 956 } as const;
 export const TIMEZONE = 'America/Los_Angeles';
 
 export function loadPlaywright(
