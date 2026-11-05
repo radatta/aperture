@@ -5,7 +5,8 @@
 # parent's prompt cache. Compaction waits for this hook.
 #
 # Always exits 0 and prints nothing — a failed handoff must never block or clutter compaction. Every run
-# appends one line to localNotes/handoffs/precompact.log; a fork that wrote to stderr keeps it beside it.
+# appends one line to localNotes/handoffs/precompact.log; a fork that wrote to stderr, or failed with output,
+# keeps it beside it (the keep rule: docs/ops/COMPACTION-HANDOFF.md → Failure).
 # Flags, permission model, measurements: docs/ops/COMPACTION-HANDOFF.md. Pairs with the PostCompact hook
 # (post-compact-summary.sh) and the SessionStart "compact" hook (post-compact-context.sh).
 

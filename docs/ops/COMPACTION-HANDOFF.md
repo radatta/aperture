@@ -34,7 +34,7 @@ followed 76 s later at 206,326 tokens.
 **Context-full is unmeasured, and probably degrades** (inference): the fork resumes a transcript already
 at the compaction threshold and adds the skill and tool output, so it may compact itself — writing the
 handoff from a summary — or overflow (`rc` ≠ 0). A `skip reason=fork` log line just before the parent's
-line is the fork compacting. Unmeasured as of 2026-11-05: 9 logged runs, no `skip reason=fork`, no `rc=124`;
+line is the fork compacting. Unmeasured as of 2026-11-04: 9 logged runs, no `skip reason=fork`, no `rc=124`;
 every `auto` line so far was idle compaction (places-shortcuts: last activity 02:56, hook 03:50 — the
 measured ~54 min).
 
@@ -63,7 +63,7 @@ The exact command is in the hook. What each choice is for:
   docs). Deny rules bind in every mode, so the scoped `--disallowedTools` list (push, commit, add, stash,
   checkout, switch, reset, rebase, `gh pr create/merge/close`, `rm`) is the second lock. The repo's
   guard hooks run in the fork too. The lock assumes no settings file adds allow rules of its own —
-  `~/.claude/settings.json` holds some 20 keys (2026-11-05) but no `permissions.allow`; a COI restart
+  `~/.claude/settings.json` holds some 20 keys (2026-11-04) but no `permissions.allow`; a COI restart
   rebuilds it from the Mac copy, so re-check when it changes. The stakes: the user-scope `aperture` (prod)
   and `aperture-dev` MCP tools are in the fork's tool array, and only `dontAsk` with no allow rule for
   them keeps them out.
@@ -89,9 +89,9 @@ outlive it and write its handoff after compaction, with no log line.
 
 **Failure** never blocks compaction: the hook exits 0 and prints nothing whatever happens. The log line
 carries `rc` (124 = timed out) and `subtype` (`error_max_turns` / `error_max_budget_usd` name a runaway
-stop); a fork that wrote to stderr, exited non-zero or returned an error result keeps
-`localNotes/handoffs/.fork-<sid8>-<ts>.err` — its stderr, then the result JSON (pruned once more than 7
-whole days old). The post-compact hook injects a handoff only when the log's last line for the
+stop); `localNotes/handoffs/.fork-<sid8>-<ts>.err` is kept when the fork wrote to stderr, or printed a
+result and either exited non-zero or marked it `is_error` — stderr first, then the result JSON; a silent
+timeout leaves nothing (pruned once more than 7 whole days old). The post-compact hook injects a handoff only when the log's last line for the
 session names it and is under 10 min old;
 otherwise it surfaces the newest handoff for the branch by path. Skips log `skip reason=` (`fork`,
 `bad-session-id`, `no-transcript`, `no-claude`, `locked`). Detached HEAD still gets one, named `detached`.
@@ -105,7 +105,7 @@ otherwise it surfaces the newest handoff for the branch by path. Skips log `skip
 ```
 
 `denials` > 0 means the skill asked for something the allowlist refuses — fix the skill or the list.
-`error=true` adds `err="…"`: the result's first 160 characters, stripped to `[A-Za-z0-9 ._:/-]`, placed
+`error=true` adds `err="…"` when the result has text: its first 160 characters, stripped to `[A-Za-z0-9 ._:/-]`, placed
 before `file=` because the post-compact hook anchors on `file=…md` at end of line. The one failure so far
 (places-shortcuts, 2026-11-04 03:50 PST: `trigger=auto rc=1 dur=5s turns=1 cache_read=0 error=true
 file=none`) left an empty stderr, so its `.err` was pruned and the cause — most likely the claude.ai usage
