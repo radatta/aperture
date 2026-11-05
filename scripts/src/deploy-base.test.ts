@@ -474,7 +474,7 @@ describe('withTimeout', () => {
       (async () => {
         for (let i = 0; i < 100; i++) await timed('https://x.test');
       })(),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 });
 

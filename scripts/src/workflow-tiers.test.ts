@@ -73,7 +73,9 @@ describe('deploy.yml classifies per stage', () => {
     expect(lines).toContain(
       "fetch-depth: 0 # need history to diff from each stage's last deployment",
     );
-    expect(changes).toContain('case "$mode" in none|app|full) ;; *)');
+    expect(lines).toContain(
+      'case "$mode" in none|app|full) ;; *) echo "::error::classifier returned \'$mode\'"; exit 1 ;; esac',
+    );
     expect(changes.indexOf('mode_prod=$(')).toBeLessThan(changes.indexOf('for mode in'));
     expect(changes.indexOf('for mode in')).toBeLessThan(changes.indexOf('>> "$GITHUB_OUTPUT"'));
     for (const unsafe of ['set +e', 'continue-on-error', '||'])
