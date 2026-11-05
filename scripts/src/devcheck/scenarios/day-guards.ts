@@ -266,6 +266,8 @@ export const dayGuards: Scenario = {
         'getDay(yesterday) → 200 (past days allowed); getDay(today) → 200; E (no rows), B (yesterday only), D (row removed) → backlog; C (tomorrow) and F (today) stay planned',
       async run(ctx) {
         const { today, yesterday } = await days(ctx);
+        // The browser's /tasks load (dedupe-ui) already ran today's sweep; this call re-confirms it
+        // through the same BFF path, then asserts what it left.
         const day = await ctx.api.reads.getDay(today);
         if (day.date !== today) throw new Error(`getDay returned ${JSON.stringify(day)}`);
         const want: Record<string, string> = {
@@ -280,7 +282,9 @@ export const dayGuards: Scenario = {
         for (const what of Object.keys(want)) got[what] = await statusOf(ctx, made[what]!);
         const wrong = Object.keys(want).filter((w) => got[w] !== want[w]);
         if (wrong.length) throw new Error(`after the sweep: ${JSON.stringify(got)}`);
-        // Then a past day: served (its sweep, relative to yesterday, moves nothing today's didn't).
+        // Then a past day: served (its sweep, relative to yesterday, moves nothing today's didn't). It
+        // also materializes series due yesterday — none exist on the test user; a scenario that adds a
+        // series must not run before this one (an occurrence it minted would be unledgered).
         if ((await ctx.api.reads.getDay(yesterday)).date !== yesterday)
           throw new Error('yesterday was refused');
       },
@@ -356,6 +360,12 @@ export const dayGuards: Scenario = {
         await ctx.api.writes.uncheckHabit(habit!.id, '2026-01-01');
         const left = (await checks()).map((c) => c.date);
         if (left.join() !== yesterday) throw new Error(`after the unchecks: ${left.join(', ')}`);
+        // The range's upper bound on the real table: a today-only read excludes yesterday's check.
+        const todayOnly = (await ctx.api.reads.listHabitChecks({ from: today, to: today })).filter(
+          (c) => c.habitId === habit!.id,
+        );
+        if (todayOnly.length)
+          throw new Error(`a today-only read returned ${JSON.stringify(todayOnly)}`);
         await ctx.api.writes.uncheckHabit(habit!.id, yesterday); // leave only tombstones behind the archive
         if ((await checks()).length) throw new Error('yesterday’s check did not uncheck');
       },

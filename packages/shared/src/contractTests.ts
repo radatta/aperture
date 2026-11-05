@@ -1187,6 +1187,7 @@ export function runApiContract(
       await api.uncheckHabit(h.id, '2026-08-02');
       const c3 = await api.checkHabit(h.id, '2026-08-04');
       expect(await api.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toEqual([c3]);
+      expect(await api.listHabitChecks({ from: '2026-08-07', to: '2026-08-01' })).toEqual([]); // reversed: empty, never an error
     });
 
     it('rolls: upsert lists, archive flags, and category-delete reassigns', async () => {

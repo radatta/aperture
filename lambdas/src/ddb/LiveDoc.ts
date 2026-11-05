@@ -61,6 +61,7 @@ export function createLiveDoc(tableName: string): DocClient {
       // One sort-key condition per query: a bound inside the prefix is BETWEEN, not begins_with AND >=.
       const bounded = opts?.from !== undefined || opts?.to !== undefined;
       const { from, to } = rangeOf(skPrefix, opts);
+      if (from > to) return []; // BETWEEN refuses a reversed range; the in-memory doc and the stub read it as empty
       return queryAll({
         KeyConditionExpression: bounded
           ? 'PK = :pk AND SK BETWEEN :from AND :to'
