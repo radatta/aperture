@@ -58,6 +58,14 @@ async function startAndOpen(ctx: Ctx, what: string) {
   return { id, dialog };
 }
 
+// The reflection box shows whole: at least its two rows (a 16px line is ~24px, so two rows plus padding
+// clear 48px) and its placeholder isn't clipped. A collapsed box was ~18px — just its padding.
+async function expectFullBox(scope: ReturnType<typeof dialogOf>, where: string) {
+  const box = await reflectionBox(scope).boundingBox();
+  if (!box || box.height < 48)
+    throw new Error(`${where}: the Reflection box is ${box ? Math.round(box.height) : 0}px tall`);
+}
+
 // Mark done, then wait for the modal to close — it closes only once the actual and the finish landed.
 async function markDone(dialog: ReturnType<typeof dialogOf>) {
   await dialog.getByRole('button', { name: 'Mark done' }).click();
@@ -73,7 +81,7 @@ export const reflectionLine: Scenario = {
       id: 'done-form',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Mark done with a reflection saves it with the actual',
+      what: 'Mark done with a reflection saves it with the actual (the box shows whole before typing)',
     },
     {
       id: 'done-untouched-keeps',
@@ -172,6 +180,10 @@ export const reflectionLine: Scenario = {
       title: 'Start → open → Actual 20 + a reflection → Mark done',
       async run(ctx) {
         const { id, dialog } = await startAndOpen(ctx, 'ui');
+        // Untouched, as it first shows: typing re-measures the box, so only this catches one that
+        // opened collapsed (its height measured inside the not-yet-open dialog — 2026-11-04).
+        await expectFullBox(dialog, 'the Done form, untouched');
+        await ctx.shot('done-form-untouched');
         await dialog.getByLabel('Actual (min)').fill('20');
         await reflectionBox(dialog).fill(FIRST);
         await ctx.shot('done-form');
@@ -191,6 +203,7 @@ export const reflectionLine: Scenario = {
         const { id, dialog } = await startAndOpen(ctx, 'keep');
         const box = reflectionBox(dialog);
         if ((await box.inputValue()) !== SEEDED) throw new Error('the Done form didn’t seed it');
+        await expectFullBox(dialog, 'the Done form, seeded');
         await box.fill(`${SEEDED} more`);
         await ctx.page.keyboard.press('Escape');
         const confirm = ctx.page.getByRole('dialog', { name: 'Discard unsaved changes?' });
@@ -243,6 +256,7 @@ export const reflectionLine: Scenario = {
           throw new Error(`clear saved ${JSON.stringify(cleared?.reflection)}`);
 
         await add.click();
+        await expectFullBox(dialog, 'the details form’s editor, untouched');
         await reflectionBox(dialog).fill(EDITED);
         await dialog.getByRole('button', { name: 'Save', exact: true }).click();
         await dialog.getByText('Saved', { exact: true }).waitFor({ timeout: 10_000 });

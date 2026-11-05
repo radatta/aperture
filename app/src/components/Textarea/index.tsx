@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Ref, TextareaHTMLAttributes } from 'react';
 import { cx } from '../../lib/cx';
 import { Text } from '../Text';
@@ -29,12 +29,29 @@ export function Textarea({ label, className, rows = 4, autogrow, ref, ...rest }:
 
   // Height follows content: collapse to auto, then take scrollHeight (padding included) plus the
   // border, since the box is border-box. Runs before paint, so there's no one-frame jump.
-  useLayoutEffect(() => {
+  // A box with no layout yet — inside a <dialog> whose showModal() runs in the modal's effect, after
+  // this one — measures 0: it keeps its rows' height instead of collapsing to its padding, and measures
+  // again once it has a width (and on any width change: a rotation rewraps the text).
+  const measure = useCallback(() => {
     const el = inner.current;
     if (!autogrow || !el) return;
     el.style.height = 'auto';
+    if (!el.scrollHeight) return void (el.style.height = '');
     el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
-  }, [autogrow, rest.value]);
+  }, [autogrow]);
+  useLayoutEffect(measure, [measure, rest.value]);
+  useEffect(() => {
+    const el = inner.current;
+    if (!autogrow || !el || typeof ResizeObserver === 'undefined') return;
+    let width = el.offsetWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.offsetWidth === width) return; // its own height change, not a new layout
+      width = el.offsetWidth;
+      measure();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [autogrow, measure]);
 
   return (
     <label className="flex flex-col gap-1">
