@@ -62,6 +62,7 @@ import {
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
+  extendSession,
   ROLL_PLAN_FALLBACK_MIN,
   rollRepFields,
   sanitizeFilename,
@@ -1157,6 +1158,10 @@ class StubClient implements ApiClient {
   async resumeSession(id: string): Promise<PomodoroSession> {
     const session = this.mustFind(this.store.sessions, id);
     return this.writes.put(this.store.sessions, resumeSession(session, this.now()));
+  }
+  async extendSession(id: string, opts?: { capMin?: number }): Promise<PomodoroSession> {
+    const session = this.mustFind(this.store.sessions, id);
+    return this.writes.put(this.store.sessions, extendSession(session, this.now(), opts?.capMin));
   }
   async stopSession(
     id: string,

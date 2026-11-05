@@ -41,7 +41,6 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
 
   const [sessions, setSessions] = useState<PomodoroSession[]>([]);
   const [pausedIds, setPausedIds] = useState<Set<string>>(() => new Set());
-  const [blocks, setBlocks] = useState<Record<string, number>>({}); // target multiplier per timer (extend)
   const [chimedIds, setChimedIds] = useState<Set<string>>(() => new Set());
   const [stale, setStale] = useState<PomodoroSession[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -71,14 +70,13 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     setSessions((cur) => cur.filter((x) => x.id !== id));
     setPausedIds((p) => withDeleted(p, id));
     setChimedIds((c) => withDeleted(c, id));
-    setBlocks((b) => without(b, id));
     setErrors((e) => without(e, id));
     setMissed((m) => without(m, id));
   }, []);
 
   const targetFor = useCallback(
-    (s: PomodoroSession) => targetSecFor(s.kind, settings) * (blocks[s.id] ?? 1),
-    [settings, blocks],
+    (s: PomodoroSession) => targetSecFor(s.kind, settings) * (s.blocks ?? 1),
+    [settings],
   );
 
   // Derived per-timer display state.
@@ -264,18 +262,21 @@ export function PomodoroProvider({ children }: { children: ReactNode }) {
     [api, upsert, clear, fail],
   );
 
-  // Give a done timer one more block: bump the target, clear the chime latch, and reset the clock so
-  // the time spent sitting on "done" isn't credited to the new block.
+  // Give a done timer one more block: the server credits the block's last stretch up to its target (the
+  // same cap as a stop, so the wait isn't credited and a locked phone's stretch isn't lost), raises the
+  // target on the row and restarts the clock; here, the chime latch clears.
   const extend = useCallback(
     (id: string) => {
       clear(id);
-      api.resumeSession(id).then(
+      const { timers: live, targetFor: tf } = beatRef.current;
+      const timer = live.find((t) => t.session.id === id);
+      const capMin = timer ? stopCapMin(timer, tf(timer.session)) : undefined;
+      api.extendSession(id, capMin === undefined ? undefined : { capMin }).then(
         (s) => {
           setMissed((m) => without(m, id));
           upsert(s);
           setChimedIds((c) => withDeleted(c, id));
           setPausedIds((p) => withDeleted(p, id));
-          setBlocks((b) => ({ ...b, [id]: (b[id] ?? 1) + 1 }));
         },
         () => fail(id, 'Couldn’t extend — try again.'),
       );

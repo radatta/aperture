@@ -3,6 +3,7 @@ import {
   accruesTime,
   canTransitionTask,
   completeSession,
+  extendSession,
   contributesCalibration,
   heartbeatSession,
   isTimed,
@@ -102,6 +103,20 @@ describe('taskTransition — estimate freeze', () => {
 });
 
 describe('sessions — heartbeat lifecycle', () => {
+  it('extendSession credits up to capMin, restarts the clock and raises the blocks', () => {
+    const s = running({ activeMinutes: 2, lastHeartbeatAt: 0 });
+    const later = 30 * 60_000;
+    const once = extendSession(s, later, 3);
+    expect(once).toMatchObject({
+      activeMinutes: 5,
+      lastHeartbeatAt: later,
+      blocks: 2,
+      status: 'running',
+    });
+    expect(extendSession(once, later, 0).blocks).toBe(3);
+    expect(() => extendSession(s, later, -1)).toThrow(/capMin/);
+  });
+
   it('completeSession caps the final beat at capMin; 0 credits nothing more; a bad cap throws', () => {
     const s = running({ activeMinutes: 2, lastHeartbeatAt: 2 * 60_000 });
     const later = 32 * 60_000; // 30 min since the beat

@@ -194,7 +194,6 @@ export const DEV_WORK_MIN = 25;
 // expects refused (stopSession, below).
 export interface DevSession {
   id: string;
-  taskId: string | null;
   status: string;
   startedAt: number;
   endedAt: number | null;

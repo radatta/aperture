@@ -30,6 +30,7 @@ import {
   normalizeVerdict,
   resolveStaleSession,
   resumeSession,
+  extendSession,
   ROLL_PLAN_FALLBACK_MIN,
   rollRepFields,
   sanitizeFilename,
@@ -1271,6 +1272,10 @@ export class BackendClient implements ApiClient {
     await this.repo.putSession(next);
     if (status === 'completed') await this.accrueToTask(next);
     return next;
+  }
+  async extendSession(id: string, opts?: { capMin?: number }): Promise<PomodoroSession> {
+    const session = await this.mustSession(id);
+    return this.repo.putSession(extendSession(session, this.now(), opts?.capMin));
   }
   async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
     return (await this.repo.listAllSessions()).filter((s) => s.day === day);

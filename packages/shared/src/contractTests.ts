@@ -1159,6 +1159,28 @@ export function runApiContract(
       expect((await api.getTask(task.id))?.actualAccruedMin).toBe(39);
     });
 
+    it('sessions: Again credits what was left to the target, not the wait, and the row keeps the new target', async () => {
+      const task = await api.createTask({ title: 'One more block', estimateMin: 30 });
+      const s = await api.startSession({
+        taskId: task.id,
+        categoryId: null,
+        kind: 'work',
+        day: '2026-08-04',
+      });
+      advance(2 * 60_000);
+      await api.heartbeatSession(s.id);
+      advance(30 * 60_000);
+      await expect(api.extendSession(s.id, { capMin: -1 })).rejects.toThrow(/capMin/);
+      expect(await api.extendSession(s.id, { capMin: 3 })).toMatchObject({
+        activeMinutes: 5,
+        blocks: 2,
+      });
+      expect((await api.listRunningSessions()).find((x) => x.id === s.id)?.blocks).toBe(2); // a reload's read
+      advance(60_000); // the new block counts from Again
+      expect((await api.stopSession(s.id, 'completed')).activeMinutes).toBe(6);
+      expect((await api.getTask(task.id))?.actualAccruedMin).toBe(6);
+    });
+
     it('plans: soft-delete removes them from the day', async () => {
       const task = await api.createTask({ title: 'Planned' });
       const plan = await api.upsertPlan({

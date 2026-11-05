@@ -171,6 +171,7 @@ export interface PomodoroSession extends BaseEntity {
   activeMinutes: number; // un-paused time only
   status: SessionStatus;
   lastHeartbeatAt: number; // running sessions persist a heartbeat → no orphans
+  blocks?: number; // the blocks this timer runs to, raised by Again; absent = 1
 }
 
 // --- Day (per-day singleton) ----------------------------------------------

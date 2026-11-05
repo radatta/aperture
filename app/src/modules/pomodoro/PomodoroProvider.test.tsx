@@ -56,7 +56,8 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     const api = stub();
     const stopS = api.stopSession.bind(api);
     // The first stop lands server-side but its response never arrives; the retry finds no running row.
-    api.stopSession = (id, st) => stopS(id, st).then(() => Promise.reject(new Error('Failed to fetch')));
+    api.stopSession = (id, st) =>
+      stopS(id, st).then(() => Promise.reject(new Error('Failed to fetch')));
     renderApp({ api, path: '/settings' });
     await startFocus(user);
     await user.click(screen.getByRole('button', { name: 'Stop' }));
@@ -120,7 +121,7 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     await waitFor(() => expect(screen.queryByText('not syncing')).toBeNull());
   });
 
-  it('Again on a done block resets its clock first, so the wait before it is never credited; the new block beats', async () => {
+  it('Again on a done block credits only what was left to its target and restarts the clock; the new block beats', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const api: ApiClient = stub();
@@ -133,21 +134,38 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     });
     // Adopted on Done: past its 25 minutes, last beat 30 s ago; nothing beats while it sits there.
     api.listRunningSessions = async () => [
-      { ...s0, activeMinutes: 25.5, lastHeartbeatAt: Date.now() - 30_000 },
+      { ...s0, activeMinutes: 24.75, lastHeartbeatAt: Date.now() - 30_000 },
     ];
     const calls: string[] = [];
-    const resume = api.resumeSession.bind(api);
+    const extend = api.extendSession.bind(api);
     const beat = api.heartbeatSession.bind(api);
-    api.resumeSession = (id) => (calls.push('resume'), resume(id));
+    api.extendSession = (id, opts) => (calls.push(`extend:${opts?.capMin}`), extend(id, opts));
     api.heartbeatSession = (id) => (calls.push('beat'), beat(id));
     renderApp({ api, path: '/settings' });
     await screen.findByText('Done');
     await act(async () => void vi.advanceTimersByTime(15_000));
     expect(calls).toEqual([]); // on Done the wait is never beaten
     await user.click(screen.getByRole('button', { name: 'Again' }));
-    await waitFor(() => expect(calls).toEqual(['resume'])); // the clock resets, crediting nothing
+    await waitFor(() => expect(calls).toEqual(['extend:0.25'])); // what was left, never the wait
     await act(async () => void vi.advanceTimersByTime(15_000));
-    await waitFor(() => expect(calls).toEqual(['resume', 'beat'])); // the new block counts
+    await waitFor(() => expect(calls).toEqual(['extend:0.25', 'beat'])); // the new block counts
+  });
+
+  it('a timer given another block stays on it across a reload: the target comes from the row', async () => {
+    const api: ApiClient = stub();
+    const s0 = await api.startSession({
+      taskId: null,
+      categoryId: null,
+      kind: 'work',
+      label: null,
+      day: '2026-01-01',
+    });
+    api.listRunningSessions = async () => [
+      { ...s0, blocks: 2, activeMinutes: 25, lastHeartbeatAt: Date.now() },
+    ];
+    renderApp({ api, path: '/settings' });
+    await screen.findByRole('button', { name: 'Pause' }); // running on its second block, not on Done
+    expect(screen.queryByText('Done')).toBeNull();
   });
 
   it('a failed keep keeps the stale prompt and says so', async () => {
@@ -187,7 +205,8 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     const stopS = api.stopSession.bind(api);
     api.resumeSession = (id) => (calls.push('resume'), resume(id));
     api.stopSession = (id, st, opts) => (
-      calls.push(opts?.capMin === undefined ? 'stop' : `stop:${opts.capMin}`), stopS(id, st, opts)
+      calls.push(opts?.capMin === undefined ? 'stop' : `stop:${opts.capMin}`),
+      stopS(id, st, opts)
     );
     return calls;
   }

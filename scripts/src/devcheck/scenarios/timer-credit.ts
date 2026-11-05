@@ -155,7 +155,13 @@ export const timerCredit: Scenario = {
       id: 'extend-on-done',
       entry: 'ui',
       kind: 'edge',
-      what: 'Again on a block that reached Done: the wait before it is not credited, the new block counts',
+      what: 'Again on a block that reached Done: credited to its target, not the wait, and the new block counts',
+    },
+    {
+      id: 'extend-reload',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A reload after Again keeps the timer running on its new block, not back on Done',
     },
     {
       id: 'done-prefill',
@@ -367,14 +373,14 @@ export const timerCredit: Scenario = {
     {
       id: 'done-stop',
       entry: 'ui',
-      proves: ['done-stop', 'neighbour-full-credit', 'extend-on-done'],
+      proves: ['done-stop', 'neighbour-full-credit', 'extend-on-done', 'extend-reload'],
       title:
         'Two 1-minute blocks → Done → a third timer starts → 15 s → Again on one, Stop the other (credit ≤ 1.05), then the rest',
       async run(ctx) {
         await ctx.api.writes.updateSettings({ pomodoroWorkMin: 1 });
         try {
           await startAndFocus(ctx, 'cap'); // a fresh page load, so the 1-minute target is in effect
-          const extId = await startAndFocus(ctx, 'ext');
+          await startAndFocus(ctx, 'ext');
           const again = ctx.page.getByRole('button', { name: 'Again', exact: true });
           await again.nth(1).waitFor({ timeout: 90_000 }); // both blocks reached Done
           const doneAt = Date.now();
@@ -383,25 +389,27 @@ export const timerCredit: Scenario = {
           await wait(Math.max(0, 15_000 - (Date.now() - doneAt))); // sit on Done 15 s in all
           await ctx.shot('done-held-and-neighbour');
 
-          // Again: what was banked, then the new block's run, and the 15 s on Done nowhere.
-          const banked = (await ctx.api.reads.listRunningSessions()).find(
-            (x) => x.taskId === extId,
-          );
-          if (!banked) throw new Error('the block to extend is not running on the server');
           await timerRow(ctx, 'ext').getByRole('button', { name: 'Again', exact: true }).click();
           const extendedAt = Date.now();
-          await timerRow(ctx, 'ext').getByRole('button', { name: 'Pause', exact: true }).waitFor();
+          const pause = () =>
+            timerRow(ctx, 'ext').getByRole('button', { name: 'Pause', exact: true });
+          await pause().waitFor();
 
           const capped = await stopTimer(ctx, 'cap', 2);
           if (capped.activeMinutes > 1.05 || capped.activeMinutes < 0.9)
             throw new Error(`the done block credited ${capped.activeMinutes} min, not ~1`);
 
           await wait(3_000); // the new block counts
+          await ctx.page.reload();
+          await pause().waitFor({ timeout: 15_000 }); // still its new block, not back on Done
+          await ctx.shot('again-after-reload');
           const extended = await stopTimer(ctx, 'ext', 1);
           const newRun = (Date.now() - extendedAt) / 60_000;
-          const gained = extended.activeMinutes - banked.activeMinutes;
+          const gained = extended.activeMinutes - 1; // the first block to its target; the wait nowhere
           if (gained < newRun - 0.1 || gained > newRun + 0.05)
-            throw new Error(`Again credited ${gained} min for a ${newRun.toFixed(2)} min new run`);
+            throw new Error(
+              `Again credited ${gained} min past the block for a ${newRun.toFixed(2)} min new run`,
+            );
 
           // The neighbour ran on: its stop credits its whole run, no cap.
           const nb = await stopTimer(ctx, 'nb2', 0);

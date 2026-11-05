@@ -416,6 +416,8 @@ export interface ApiClient {
     status: 'completed' | 'discarded',
     opts?: { capMin?: number },
   ): Promise<PomodoroSession>;
+  // Again on a timer on "done": one more block; capMin as on a stop, and the clock restarts.
+  extendSession(id: string, opts?: { capMin?: number }): Promise<PomodoroSession>;
   listSessionsForDay(day: string): Promise<PomodoroSession[]>;
   findRunningSession(): Promise<PomodoroSession | null>; // first running (kept for single-session callers)
   listRunningSessions(): Promise<PomodoroSession[]>; // ALL concurrently-running timers

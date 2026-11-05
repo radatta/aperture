@@ -36,6 +36,7 @@ export const API_METHODS = [
   'heartbeatSession',
   'resumeSession',
   'stopSession',
+  'extendSession',
   'listSessionsForDay',
   'findRunningSession',
   'listRunningSessions',
