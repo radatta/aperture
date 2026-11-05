@@ -18,6 +18,7 @@ export function StageReadout({
 }) {
   const r = liveReadout(def, state);
   if (!r) return null;
+  const [restLeft, restNext] = rest ? restParts(rest) : [];
   return (
     <section
       aria-label="Live readout"
@@ -44,11 +45,11 @@ export function StageReadout({
       {r.note ? (
         <span className="rounded-full bg-surface/85 px-2.5 py-1 text-xs text-ink">{r.note}</span>
       ) : (
-        rest && (
+        restLeft && (
           <p className="rounded-xl bg-surface/85 px-2.5 py-1 text-right text-xs text-ink tabular-nums">
-            {restParts(rest)[0]}
+            {restLeft}
             <br />
-            {restParts(rest)[1]}
+            {restNext}
           </p>
         )
       )}

@@ -26,8 +26,10 @@ function useMeasuredSize<T extends Element>(active: boolean) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!active || !el || typeof ResizeObserver === 'undefined') return;
-    const take = (w: number, h: number) =>
-      setSize(w > 0 && h > 0 ? { w: Math.round(w), h: Math.round(h) } : null);
+    const take = (w: number, h: number) => {
+      const next = w > 0 && h > 0 ? { w: Math.round(w), h: Math.round(h) } : null;
+      setSize((s) => (s?.w === next?.w && s?.h === next?.h ? s : next));
+    };
     const box = el.getBoundingClientRect();
     take(box.width, box.height);
     const ro = new ResizeObserver((entries) => {

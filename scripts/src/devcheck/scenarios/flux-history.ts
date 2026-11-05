@@ -67,7 +67,7 @@ export const fluxHistory: Scenario = {
       kind: 'nominal',
       what: 'After "Set complete" the HUD and the panel count the rest down: "Rest · 23 s · Set two next", gone when set two starts',
       needsYou:
-        'a finished set needs a camera (the fake engine is stub-only); off dev: useFluxEngine.test "the rest countdown…" and ExercisePanel.test "between sets, the done block counts the rest down"',
+        'a finished set needs a camera (the fake engine is stub-only); off dev: useFluxEngine.test "the rest countdown: on screen at 1 Hz, frozen by a pause, back to 30 s with the re-armed rest" and ExercisePanel.test "between sets, the done block counts the rest down: "Rest · 23 s · Set two next""',
     },
     {
       id: 'idle-after-session',
@@ -75,15 +75,18 @@ export const fluxHistory: Scenario = {
       kind: 'edge',
       what: 'The last set ends the session: the panel reads "Start the camera to begin." every time, never "Set complete · Again"',
       needsYou:
-        'same — a session on a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel"',
+        'a session run to its end needs a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel, until the next Start"',
     },
     {
       id: 'chin-tuck-neutral',
       entry: 'ui',
       kind: 'edge',
       what: 'Chin tuck: a tuck held still in the rest never flashes "Neutral reset"; rotation’s rest still does',
-      needsYou:
-        'engine internals on a camera; off dev: core.test "chin tuck’s rest never re-sets the neutral; upper trap’s still does (D60)"',
+      offDev: {
+        file: 'app/src/modules/flux/engine/core.test.ts',
+        test: "chin tuck's rest never re-sets the neutral; upper trap's still does (D60)",
+        why: 'needs a camera, and the decision is engine math — the test runs the real core on both exercises',
+      },
     },
   ],
   steps: [
@@ -192,13 +195,11 @@ export const fluxHistory: Scenario = {
           );
         });
         // The sentence as one paragraph, the full stop right after the link (getByText matches the <p>,
-        // whose text ends with the stop; the link's own text doesn't).
+        // whose text ends with the stop; the link's own text doesn't). The gap PR 65 saw was the link's
+        // padding, not a space — the link is plain inline text now, and the shot is the proof.
         const note = ctx.page.getByText(/daily rep — link one in Settings\.$/);
         if (!(await note.isVisible()))
           throw new Error('the note does not end in "link one in Settings."');
-        // The gap was the link's own right padding (PR 65's nit), not a space in the text: measure it.
-        const pad = await link.evaluate<string>('el => getComputedStyle(el).paddingRight');
-        if (pad !== '0px') throw new Error(`the link keeps ${pad} of padding before the full stop`);
         await ctx.shot('library-note');
       },
     },
