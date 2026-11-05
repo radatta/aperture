@@ -9,6 +9,7 @@ const base: RunResult = {
   endSha: 'a'.repeat(40),
   status: 'PASS',
   codes: [],
+  failures: [],
   feature: [],
   coverage: [],
   steps: [{ scenario: 'smoke', step: 'home', title: 'Home renders', status: 'pass', ms: 1200 }],
@@ -31,6 +32,55 @@ describe('report', () => {
     expect(
       statusLine({ ...base, status: 'FAIL', codes: ['STEP_FAILED', 'LEFTOVERS', 'STEP_FAILED'] }),
     ).toBe('FAIL: STEP_FAILED, LEFTOVERS');
+  });
+
+  it("keeps a harness failure's detail on the status line and in a Failed line; a step-only FAIL does not change", () => {
+    const r: RunResult = {
+      ...base,
+      status: 'FAIL',
+      codes: ['DEPLOY_NOT_FOUND'],
+      failures: [
+        { code: 'DEPLOY_NOT_FOUND', message: 'no dev deploy for 0000000 (latest dispatch: x)' },
+      ],
+    };
+    expect(statusLine(r)).toBe(
+      'FAIL: DEPLOY_NOT_FOUND — no dev deploy for 0000000 (latest dispatch: x)',
+    );
+    expect(renderReport(r)).toContain(
+      '\nLeftovers: **0**\n\n**Failed:** DEPLOY_NOT_FOUND — no dev deploy for 0000000 (latest dispatch: x)\n',
+    );
+    // Several: each in its own Failed line, all on the status line, newlines collapsed, 200 chars at most.
+    const two: RunResult = {
+      ...base,
+      status: 'FAIL',
+      codes: ['STEP_FAILED', 'LEFTOVERS', 'DEV_CHANGED_MID_RUN'],
+      failures: [
+        { code: 'LEFTOVERS', message: `left: ${'t'.repeat(190)}` },
+        { code: 'DEV_CHANGED_MID_RUN', message: 'end build bbbbbbb\n≠ start aaaaaaa' },
+      ],
+    };
+    const line = statusLine(two);
+    expect(line.startsWith('FAIL: STEP_FAILED, LEFTOVERS, DEV_CHANGED_MID_RUN — left: tttt')).toBe(
+      true,
+    );
+    expect(line.endsWith('…')).toBe(true);
+    expect(line.length).toBe('FAIL: STEP_FAILED, LEFTOVERS, DEV_CHANGED_MID_RUN — '.length + 200);
+    expect(statusLine({ ...two, failures: two.failures.slice(1) })).toBe(
+      'FAIL: STEP_FAILED, LEFTOVERS, DEV_CHANGED_MID_RUN — end build bbbbbbb ≠ start aaaaaaa',
+    );
+    expect(renderReport(two)).toContain('**Failed:** LEFTOVERS — left: ttt');
+    expect(renderReport(two)).toContain(
+      '\n**Failed:** DEV_CHANGED_MID_RUN — end build bbbbbbb\n≠ start aaaaaaa\n',
+    );
+    // A step-only failure never has a Failed line, and its status line is the one the Known 429s rule matches.
+    const step: RunResult = { ...base, status: 'FAIL', codes: ['STEP_FAILED'] };
+    expect(statusLine(step)).toBe('FAIL: STEP_FAILED');
+    expect(renderReport(step)).not.toContain('**Failed:**');
+    // CRASH keeps its word on the status line; a failure before the crash still gets its line.
+    expect(statusLine({ ...r, status: 'CRASH', crash: 'boom' })).toBe('CRASH');
+    expect(renderReport({ ...r, status: 'CRASH', crash: 'boom' })).toContain(
+      '**Failed:** DEPLOY_NOT_FOUND — no dev deploy for 0000000 (latest dispatch: x)\n\n**Crash:** boom\n',
+    );
   });
 
   it('names every throttled call, which the console lines cannot', () => {

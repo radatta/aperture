@@ -357,6 +357,7 @@ describe('runPipeline', () => {
     expect(r.steps.map((s) => s.status)).toEqual(['pass', 'fail', 'skipped']);
     expect(r.status).toBe('FAIL');
     expect(r.codes).toEqual(['STEP_FAILED']);
+    expect(r.failures).toEqual([]);
     expect(w.deleted).toEqual(['t1']);
     expect(exitCode(r)).toBe(1);
   });
@@ -420,6 +421,13 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc], memLedger(), { responseWaitMs: 5 }));
     expect(r.orphanIntents).toEqual(['ui:createTask sent, no response within the wait']);
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([
+      {
+        code: 'LEFTOVERS',
+        message: 'create sent, id never recorded: ui:createTask sent, no response within the wait',
+      },
+      { code: 'LEFTOVERS', message: 'appeared during the run, not in the ledger: t1' }, // the one that landed
+    ]);
   });
 
   it('a task that appears during the run without a ledger entry fails it, and is not deleted', async () => {
@@ -430,6 +438,9 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc]));
     expect(r.appeared).toEqual(['ghost']);
     expect(r.codes).toEqual(['LEFTOVERS']);
+    expect(r.failures).toEqual([
+      { code: 'LEFTOVERS', message: 'appeared during the run, not in the ledger: ghost' },
+    ]);
     expect(w.deleted).toEqual([]);
   });
 
@@ -438,6 +449,7 @@ describe('runPipeline', () => {
     w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
     const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
     expect(r.codes).toContain('WRONG_USER');
+    expect(r.failures).toEqual([{ code: 'WRONG_USER', message: 'x' }]);
     expect(w.deleted).toEqual([]);
   });
 
@@ -448,6 +460,7 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [], ledger));
     expect(r.created).toEqual([{ id: 'old1', via: 'swept', final: 'left' }]);
     expect(r.codes).toEqual(['LEFTOVERS']);
+    expect(r.failures).toEqual([{ code: 'LEFTOVERS', message: 'left: old1' }]);
   });
 
   it("never deletes a task whose server-side parts the ledger doesn't know — the cascade would take them", async () => {
@@ -460,6 +473,11 @@ describe('runPipeline', () => {
     expect(w.deleted).toEqual([]);
     expect(r.blockedDeletes).toEqual(['t1 (unrecorded parts: users-part)']);
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([
+      { code: 'LEFTOVERS', message: 't1 kept: unrecorded parts users-part' },
+      { code: 'LEFTOVERS', message: 'left: t1' },
+      { code: 'LEFTOVERS', message: 'appeared during the run, not in the ledger: users-part' },
+    ]);
   });
 
   it('the sweep also refuses to delete a leftover that has unrecorded parts', async () => {
@@ -471,6 +489,9 @@ describe('runPipeline', () => {
     expect(r.swept).toEqual([]);
     expect(r.blockedDeletes).toEqual(['old1 (unrecorded parts: users-part)']);
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([
+      { code: 'LEFTOVERS', message: 'old1 kept: unrecorded parts users-part' },
+    ]); // never in `created`, so this is its only line
   });
 
   it('LEFTOVERS when a delete does not take', async () => {
@@ -648,6 +669,7 @@ describe('runPipeline', () => {
     expect(ran).toEqual(['step']); // the run went on
     expect(r.status).toBe('FAIL');
     expect(r.codes).toContain('LEFTOVERS');
+    expect(r.failures).toEqual([{ code: 'LEFTOVERS', message: 'old1: HTTP 500 on deleteTask' }]);
   });
 
   it('a guard refusal during cleanup keeps its own code beside LEFTOVERS', async () => {
@@ -695,6 +717,9 @@ describe('runPipeline', () => {
     const w = world({ shells: [shell(SHA), shell('b'.repeat(40))] });
     const r = await runPipeline(deps(w, []));
     expect(r.codes).toEqual(['DEV_CHANGED_MID_RUN']);
+    expect(r.failures).toEqual([
+      { code: 'DEV_CHANGED_MID_RUN', message: `end build bbbbbbb ≠ start ${SHA.slice(0, 7)}` },
+    ]);
   });
 
   it('a setup DevcheckError is a FAIL with its code; anything else is a CRASH (exit 2)', async () => {
@@ -705,6 +730,7 @@ describe('runPipeline', () => {
       }),
     );
     expect([fail.status, fail.codes]).toEqual(['FAIL', ['DEPLOY_FAILED']]);
+    expect(fail.failures).toEqual([{ code: 'DEPLOY_FAILED', message: 'x' }]); // the text, not `DEPLOY_FAILED: x`
     const crash = await runPipeline(
       deps(w, [], memLedger(), {
         openBrowser: async () => Promise.reject(new Error('chromium died')),
@@ -811,6 +837,7 @@ describe('runPipeline', () => {
     );
     expect(r.steps[0]).toMatchObject({ status: 'fail', error: expect.stringMatching(/expired/) });
     expect(r.codes).toEqual(['STEP_FAILED']);
+    expect(r.failures).toEqual([]);
   });
 
   it('carries the feature ids into the result, [] when none', async () => {

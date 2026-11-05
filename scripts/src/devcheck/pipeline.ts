@@ -6,7 +6,7 @@ import { ledgerKind, type ApiClient } from './api';
 import { DEV_ORIGIN } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
-import { DevcheckError, codeOf, type ReasonCode } from './errors';
+import { DevcheckError, codeOf, detailOf, type ReasonCode } from './errors';
 import { orphanIntents, pendingIds, type Ledger } from './ledger';
 import { coverageOf } from './matrix';
 import type { McpClient } from './mcp';
@@ -71,6 +71,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     scenarioSha: d.scenarioSha,
     status: 'PASS',
     codes: [],
+    failures: [],
     coverage: [],
     steps: [],
     created: [],
@@ -85,9 +86,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     shots: [],
     durationMs: 0,
   };
-  const fail = (code: ReasonCode) => {
+  // A message keeps the failure's detail in the report (status line + a Failed line); a step's failure has
+  // its row, so STEP_FAILED passes none and the status line stays `FAIL: STEP_FAILED`.
+  const fail = (code: ReasonCode, message?: string) => {
     if (r.status !== 'CRASH') r.status = 'FAIL';
     r.codes.push(code);
+    if (message) r.failures.push({ code, message });
   };
   const runIds: string[] = []; // created in this run, oldest first
   const pendingRecords: Promise<void>[] = []; // one per create request, from the moment it's SENT
@@ -234,7 +238,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
   } catch (err) {
     const code = codeOf(err);
-    if (code) fail(code);
+    if (code) fail(code, detailOf(err));
     else {
       r.status = 'CRASH';
       r.crash = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -332,7 +336,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       .map((t) => t.id);
     if (unknownParts.length) {
       r.blockedDeletes.push(`${id} (unrecorded parts: ${unknownParts.join(', ')})`);
-      fail('LEFTOVERS');
+      fail('LEFTOVERS', `${id} kept: unrecorded parts ${unknownParts.join(', ')}`);
       return false;
     }
     await client.writes.deleteTask(id);
@@ -379,10 +383,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if (!(await exists(client, id))) return 'gone';
       return (await removeRecorded(client, id)) ? 'removed' : 'kept';
     } catch (err) {
-      r.failedDeletes.push(`${id}: ${err instanceof Error ? err.message : String(err)}`);
+      const what = `${id}: ${err instanceof Error ? err.message : String(err)}`;
+      r.failedDeletes.push(what);
       const code = codeOf(err); // a guard's refusal (LEDGER_GUARD…) keeps its own code too
-      if (code && code !== 'LEFTOVERS') fail(code);
-      fail('LEFTOVERS');
+      if (code && code !== 'LEFTOVERS') fail(code, detailOf(err));
+      fail('LEFTOVERS', what); // a swept id has no `left:` verdict later, so the why is recorded here
       return 'kept';
     }
   }
@@ -394,11 +399,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         (e) => `${e.via} "${e.title ?? ''}"`,
       ),
     );
-    if (r.orphanIntents.length) fail('LEFTOVERS');
+    if (r.orphanIntents.length)
+      fail('LEFTOVERS', `create sent, id never recorded: ${r.orphanIntents.join('; ')}`);
     const mine = entries.filter((e) => e.run === d.runId && e.op === 'created' && e.id);
     if (!api) {
       // Never signed in: nothing of this run can exist; earlier leftovers wait for the next run.
-      if (mine.length) fail('LEFTOVERS');
+      if (mine.length)
+        fail(
+          'LEFTOVERS',
+          `never signed in, yet this run recorded: ${mine.map((e) => e.id).join(', ')}`,
+        );
       return;
     }
     // The token may have renewed in the page since sign-in — and must still be the test user's.
@@ -407,7 +417,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if (fresh) session = fresh;
     } catch (err) {
       if (codeOf(err) === 'WRONG_USER') {
-        fail('WRONG_USER');
+        fail('WRONG_USER', detailOf(err));
         return;
       }
       // a dead page: keep the sign-in token
@@ -438,7 +448,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     }
     for (const id of r.swept)
       if (await stillThere(id)) r.created.push({ id, via: 'swept', final: 'left' });
-    if (r.created.some((c) => c.final === 'left')) fail('LEFTOVERS');
+    const left = r.created.filter((c) => c.final === 'left').map((c) => c.id);
+    if (left.length) fail('LEFTOVERS', `left: ${left.join(', ')}`);
 
     // A task the ledger doesn't know is never deleted. One that was there before the run is reported; one
     // that appeared during it came from a create path the recorder missed — a leak, so the run fails.
@@ -451,11 +462,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const places = (await api.reads.listPlaces()).map((p) => p.id).filter((id) => !known.has(id));
     r.unrecorded.push(...places.filter((id) => !placeBaseline || placeBaseline.has(id)));
     if (placeBaseline) r.appeared.push(...places.filter((id) => !placeBaseline!.has(id)));
-    if (r.appeared.length) fail('LEFTOVERS');
+    if (r.appeared.length)
+      fail('LEFTOVERS', `appeared during the run, not in the ledger: ${r.appeared.join(', ')}`);
 
     if (r.startSha) {
       r.endSha = parseMarker(await d.fetchShell());
-      if (r.endSha !== r.startSha) fail('DEV_CHANGED_MID_RUN');
+      if (r.endSha !== r.startSha)
+        fail(
+          'DEV_CHANGED_MID_RUN',
+          `end build ${r.endSha?.slice(0, 7) ?? 'none'} ≠ start ${r.startSha.slice(0, 7)}`,
+        );
     }
   }
 }

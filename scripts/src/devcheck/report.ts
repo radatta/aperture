@@ -37,6 +37,13 @@ export interface CreatedRecord {
   final: 'deleted' | 'gone' | 'left';
 }
 
+// A harness failure with what it said — the deploy wait, a sign-in, the build check, cleanup. A step's failure
+// is in its row instead, so STEP_FAILED never appears here.
+export interface Failure {
+  code: ReasonCode;
+  message: string;
+}
+
 export interface RunResult {
   runId: string;
   tier: string;
@@ -48,6 +55,7 @@ export interface RunResult {
   deployUrl?: string;
   status: 'PASS' | 'FAIL' | 'CRASH';
   codes: ReasonCode[];
+  failures: Failure[]; // the harness's own failures, with their detail (codes stays the dedup'd list)
   coverage: RowResult[]; // every selected scenario's rows, in order
   steps: StepResult[];
   created: CreatedRecord[];
@@ -65,8 +73,16 @@ export interface RunResult {
   crash?: string;
 }
 
-export const statusLine = (r: RunResult): string =>
-  r.status === 'FAIL' ? `FAIL: ${[...new Set(r.codes)].join(', ')}` : r.status;
+const STATUS_DETAIL_MAX = 200;
+// `FAIL: <codes>` exactly for a step-only failure (the Known 429s rule matches it literally), then the harness
+// failures' detail on one line — their one-liners name their cause, so the code isn't repeated here.
+export function statusLine(r: RunResult): string {
+  if (r.status !== 'FAIL') return r.status;
+  const line = `FAIL: ${[...new Set(r.codes)].join(', ')}`;
+  if (!r.failures.length) return line;
+  const detail = r.failures.map((f) => f.message.replace(/\s*\n\s*/g, ' ').trim()).join(' · ');
+  return `${line} — ${detail.length > STATUS_DETAIL_MAX ? `${detail.slice(0, STATUS_DETAIL_MAX - 1)}…` : detail}`;
+}
 
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
@@ -196,6 +212,8 @@ export function renderReport(r: RunResult): string {
     `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
+  if (r.failures.length)
+    lines.push('', ...r.failures.map((f) => `**Failed:** ${f.code} — ${f.message}`));
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);
   lines.push(...renderCoverage(r.coverage, r.status, r.feature));
   lines.push(
