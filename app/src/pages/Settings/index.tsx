@@ -213,17 +213,21 @@ function CategoryRow({
   }
 
   // One write, no backfill ask (nothing is snapshotted). A failure keeps the panel open with the error
-  // below it — the pressed chip still shows the area the row really has.
+  // below it — the pressed chip still shows the area the row really has. A second tap while the first
+  // is in flight is ignored (not `disabled`: that drops focus to <body> on the chip just tapped).
   function pickArea(area: Area) {
+    if (setAreaWrite.isPending) return;
     if (area === areaOf(cat)) return closePanel();
     setAreaWrite.mutate({ id: cat.id, area }, { onSuccess: closePanel });
   }
 
   return (
-    <Card className="px-3.5 py-2.5">
+    <Card role="group" aria-label={`Category ${cat.label}`} className="px-3.5 py-2.5">
       <div ref={rowRef} className="flex items-center justify-between gap-3">
-        {/* No wrap: at 390 the rename input gives way (min-w-0, ~128px) so the arrows stay on the row. */}
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        {/* No wrap: at 390 the rename input gives way (min-w-0, ~128px) so the arrows stay on the row. The
+            type · area line sits under the rename box, not beside it: beside, "Non-work · Recruiting" pushed
+            the arrows and menu under the box at 440 (and the menu off the left edge). */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
               form to fill in, but hover-only would leave the field unmarked on touch — and this is
               an installable phone app. */}
@@ -243,17 +247,18 @@ function CategoryRow({
               })
             }
             className={cx(
-              'min-w-0 flex-1 rounded-lg border border-line/60 sm:w-40 sm:flex-none bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
+              // Inside a column now: the column shrinks (flex-1 min-w-0), the box fills it; sm keeps w-40.
+              'w-full min-w-0 rounded-lg border border-line/60 sm:w-40 bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
               cat.active ? 'text-ink' : 'text-ink-muted',
             )}
           />
           {/* Type, then the life area — "Work · School" — so the row says where its time lands. */}
           {cat.active ? (
-            <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
+            <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'} className="px-2">
               {cat.isWork ? 'Work' : 'Non-work'} · {AREA_LABEL[areaOf(cat)]}
             </Text>
           ) : (
-            <Text size="xs" tone="muted">
+            <Text size="xs" tone="muted" className="px-2">
               Retired · {AREA_LABEL[areaOf(cat)]}
             </Text>
           )}
@@ -329,7 +334,8 @@ function CategoryRow({
           aria-label={`Area for ${cat.label}`}
           className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface p-3"
         >
-          <Text size="sm" tone="muted">
+          {/* The question takes its own line, so the four chips sit together under it. */}
+          <Text size="sm" tone="muted" className="basis-full">
             Which part of life is {cat.label}?
           </Text>
           {AREAS.map((a) => (
@@ -337,7 +343,7 @@ function CategoryRow({
               key={a}
               type="button"
               aria-pressed={areaOf(cat) === a}
-              disabled={setAreaWrite.isPending}
+              aria-disabled={setAreaWrite.isPending || undefined}
               onClick={() => pickArea(a)}
               className={cx(
                 'rounded-lg border px-2.5 py-1 text-xs transition',

@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { areaOf, isTimed, LIFE_AREAS } from '@aperture/shared';
+import { isTimed, lifeFrom } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { useCategories } from './useCategories';
@@ -13,9 +13,7 @@ import { tasksQuery } from './useTasks';
 // listBacklog rule — MCP keeps that.
 export const waiting = (ts: Task[], categories: Category[]): Task[] => {
   const parents = new Set(ts.map((t) => t.parentId).filter((id): id is string => !!id));
-  const byId = new Map(categories.map((c) => [c.id, c]));
-  const life = (t: Task) =>
-    LIFE_AREAS.includes(areaOf(t.categoryId ? byId.get(t.categoryId) : null));
+  const life = lifeFrom(categories);
   return ts
     .filter((t) => t.status === 'backlog' && !isTimed(t) && !parents.has(t.id) && life(t))
     .sort((a, b) => b.createdAt - a.createdAt);

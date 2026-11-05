@@ -388,14 +388,18 @@ export class Repo {
   }
 
   // --- Categories ---
+  // A row from before `area` has none; every read lists it as null (areas.ts), so a copy written back
+  // carries null too — one state for "no area", whichever path returns the row.
+  private category(i: Item): Category {
+    const c = toEntity<Category>(i);
+    return { ...c, area: c.area ?? null };
+  }
   async listCategories(): Promise<Category[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.catPrefix())).map((i) => toEntity<Category>(i)),
-    );
+    return alive((await this.doc.query(this.p(), sk.catPrefix())).map((i) => this.category(i)));
   }
   async getCategory(id: string, opts?: { consistent?: boolean }): Promise<Category | null> {
     const it = await this.doc.get(this.p(), sk.cat(id), opts);
-    return it ? toEntity<Category>(it) : null;
+    return it ? this.category(it) : null;
   }
   async putCategory(c: Category): Promise<Category> {
     await this.writes.put(entityItem(this.userId, sk.cat(c.id), c));

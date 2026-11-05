@@ -88,6 +88,7 @@ describe('stub — places', () => {
     expect(
       (await api.upsertCategory({ id: c.id, label: 'old cat', isWork: false })).area,
     ).toBeNull();
+    expect((await api.setCategoryWork(c.id, true, false)).category.area).toBeNull();
   });
 
   it('a store persisted before places loads with no places and its tasks off every list', async () => {

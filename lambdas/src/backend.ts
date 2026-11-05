@@ -1482,11 +1482,8 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Categories ---
-  // Rows from before `area` read back without it; every read lists it as null (areas.ts).
   async listCategories(): Promise<Category[]> {
-    return (await this.repo.listCategories())
-      .map((c) => ({ ...c, area: c.area ?? null }))
-      .sort((a, b) => a.order - b.order);
+    return (await this.repo.listCategories()).sort((a, b) => a.order - b.order);
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
     if (input.area !== undefined) assertArea(input.area);
@@ -1500,7 +1497,7 @@ export class BackendClient implements ApiClient {
         isWork: input.isWork,
         order: input.order ?? existing.order,
         active: input.active ?? existing.active,
-        area: input.area === undefined ? (existing.area ?? null) : input.area,
+        area: input.area === undefined ? existing.area : input.area,
         updatedAt: this.now(),
       });
     }

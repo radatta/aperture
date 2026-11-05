@@ -594,6 +594,8 @@ describe('backend category area', () => {
     expect((await backend.listCategories()).find((c) => c.id === cat.id)?.area).toBeNull();
     const renamed = await backend.upsertCategory({ id: cat.id, label: 'renamed', isWork: true });
     expect(renamed.area).toBeNull();
+    // Every path that returns the row says null, never undefined — setCategoryWork's copy included.
+    expect((await backend.setCategoryWork(cat.id, false, false)).category.area).toBeNull();
     expect((await backend.setCategoryArea(cat.id, 'school')).area).toBe('school');
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AREA_LABEL, AREAS, areaOf, assertArea, isArea } from './areas';
+import { AREA_LABEL, AREAS, areaOf, assertArea, isArea, LIFE_AREAS, lifeFrom } from './areas';
 
 describe('areas', () => {
   it('is a fixed, ordered set with a label each', () => {
@@ -13,6 +13,20 @@ describe('areas', () => {
     expect(areaOf({})).toBe('personal'); // a row from before the field
     expect(areaOf(null)).toBe('personal'); // no category
     expect(areaOf(undefined)).toBe('personal');
+  });
+
+  it('lifeFrom: every area but Aperture; no category, an unknown id and a null area are life', () => {
+    expect(LIFE_AREAS).toEqual(['school', 'recruiting', 'personal']);
+    const life = lifeFrom([
+      { id: 'ap', area: 'aperture' },
+      { id: 'sc', area: 'school' },
+      { id: 'none', area: null },
+    ]);
+    expect(life({ categoryId: 'ap' })).toBe(false);
+    expect(life({ categoryId: 'sc' })).toBe(true);
+    expect(life({ categoryId: 'none' })).toBe(true);
+    expect(life({ categoryId: null })).toBe(true);
+    expect(life({ categoryId: 'deleted' })).toBe(true);
   });
 
   it('assertArea refuses anything outside the set, allows null', () => {

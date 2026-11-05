@@ -1399,7 +1399,8 @@ class StubClient implements ApiClient {
     isWork: boolean,
     backfillPast: boolean,
   ): Promise<{ category: Category; backfilled: number }> {
-    const category = this.writes.patch(this.store.categories, id, { isWork });
+    const patched = this.writes.patch(this.store.categories, id, { isWork });
+    const category = { ...patched, area: patched.area ?? null }; // a legacy row reads null, as listed
     let backfilled = 0;
     if (backfillPast) {
       for (const s of this.alive(this.store.sessions).filter((x) => x.categoryId === id)) {

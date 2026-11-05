@@ -586,6 +586,19 @@ describe('areas (D14)', () => {
     expect(areaCardCounts([dev], 'week', actx())).toEqual({});
   });
 
+  it('a9 a part in the same list follows its parent’s area; a standalone part its own', () => {
+    const parent = task({ id: 'p', title: 'ship v2', categoryId: 'ap' });
+    const part = task({ id: 'p1', title: 'write tests', parentId: 'p', categoryId: 'sc' });
+    // Folded: the School part hides with its Aperture parent, and the chip counts the family once.
+    expect(applyQuery([parent, part], 'backlog', q(), actx()).count).toBe(0);
+    expect(areaCardCounts([parent, part], 'backlog', actx())).toEqual({ aperture: 1 });
+    // Shown: one card (the parent), the part inside it.
+    expect(applyQuery([parent, part], 'backlog', q({ areas: [] }), actx()).count).toBe(1);
+    // The parent on today's plan: the part stands alone in Backlog and reads by its own area.
+    const r = applyQuery([parent, part], 'backlog', q(), actx([['p', 0]]));
+    expect(r.groups.flatMap((g) => g.tasks.map((t) => t.id))).toEqual(['p1']);
+  });
+
   it('a8 the area filter is no override chip and no narrowing — Clear and Reset put the fold back', () => {
     expect(overrideChips(q({ areas: [] }), 'backlog', AREA_CATS)).toEqual([]);
     expect(isNarrowing(q({ areas: [] }))).toBe(false);

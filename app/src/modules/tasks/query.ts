@@ -349,12 +349,19 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
   const searching = normalize(q.text) !== '';
   const place = placer(tasks, ctx);
   const area = areaOfFrom(ctx.categories);
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  // A part folded under its parent's card (same list) is in its parent's area, as it is in its place —
+  // the card is one thing, and areaCardCounts counts it once, by the parent.
+  const areaOfOwner = (t: Task) => {
+    const parent = t.parentId ? byId.get(t.parentId) : undefined;
+    return area(parent && place(parent) === place(t) ? parent : t);
+  };
   // A part's due filter is its parent's deadline, like its place (its own time is when its block ends).
   const deadline = (t: Task) => ({ ...t, ...deadlineOf(t, tasks) });
   const matched = tasks.filter(
     (t) =>
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
-      (searching || areaShown(q, area(t))) &&
+      (searching || areaShown(q, areaOfOwner(t))) &&
       (q.categories.length === 0 || q.categories.includes(catOf(t))) &&
       matchesStatus(t, q.statuses) &&
       inDueBucket(deadline(t), q.due, ctx.today, ctx.dayStartHour) &&

@@ -7,13 +7,16 @@
 // matrix (localNotes/plan.md) plus dispatch's Settings-at-390 row for phone-nits.
 import { PHONE } from '../browser';
 import type { DevCategory, DevTask } from '../api';
-import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
+import { needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const title = (ctx: Ctx, what: string) => `devcheck-areas ${ctx.nonce} ${what}`;
 const catLabel = (ctx: Ctx, which: 'A' | 'B') => `Devcheck areas ${ctx.nonce} ${which}`;
 // 390×844 is the narrowest phone the UI pass covers (browser.ts); the Settings rows must keep their arrows there.
 const NARROW = { width: 390, height: 844 } as const;
 
+// Home's "N waiting in the backlog" with A as Aperture, before the last step moves it to School (null: the
+// line wasn't shown).
+let waitingBefore: number | null = null;
 let catA: DevCategory; // gets the Aperture area in Settings, then School over MCP
 let catB: DevCategory; // never given an area: reads as Personal
 // Its tasks, found on screen by title: `dev` on A, undated — folds away on Backlog; `fri` on A, due
@@ -37,6 +40,24 @@ async function waitForArea(ctx: Ctx, id: string, area: DevCategory['area'], what
 const apertureChip = (ctx: Ctx) => ctx.page.getByRole('button', { name: /^Aperture area · \d+$/ });
 const taskButton = (ctx: Ctx, what: string) =>
   ctx.page.getByRole('button', { name: title(ctx, what), exact: true });
+
+// A Settings category row (role group, "Category <label>") — the rename box, the type · area line, the menu.
+const categoryRow = (ctx: Ctx, which: 'A' | 'B') =>
+  ctx.page.getByRole('group', { name: `Category ${catLabel(ctx, which)}`, exact: true });
+
+// Home › Morning › "N waiting in the backlog" — shown only while no capacity is set for the day (the plan
+// card's other branch draws the bar instead), so null when it isn't there.
+async function waitingCount(ctx: Ctx): Promise<number | null> {
+  await ctx.ui.goto('/');
+  await ctx.page.getByRole('button', { name: 'Morning', exact: true }).click();
+  await ctx.page
+    .getByText('Plan today', { exact: true })
+    .waitFor({ state: 'visible', timeout: 15_000 });
+  await ctx.ui.settle();
+  const line = ctx.page.getByText(/\d+ waiting in the backlog/);
+  if ((await line.count()) === 0) return null;
+  return Number((await line.first().textContent())?.match(/(\d+) waiting in the backlog/)?.[1]);
+}
 
 async function clearSearch(ctx: Ctx) {
   await ctx.page.getByLabel('Search tasks').fill('');
@@ -111,12 +132,7 @@ export const areas: Scenario = {
       id: 'home-count',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Home’s "N waiting in the backlog" leaves Aperture-area tasks out',
-      offDev: {
-        file: 'app/src/data/hooks/useTasks.test.tsx',
-        test: 'leaves an Aperture-area task out; no area and a retired category read by their area',
-        why: 'the count line shows only while no capacity is set for the day, which the test user may have; home-picker (proven on dev) runs the same life-backlog rule',
-      },
+      what: 'Home’s "N waiting in the backlog" leaves Aperture-area tasks out: moving a category to School adds its two',
     },
     {
       id: 'stored-query-reset',
@@ -172,9 +188,13 @@ export const areas: Scenario = {
           }),
           await ctx.api.writes.createTask({ title: title(ctx, 'hw'), categoryId: catB.id }),
         ];
-        const ids = ctx.createdIds();
-        for (const id of [catA.id, catB.id, ...made.map((t) => t.id)])
-          if (!ids.includes(id)) throw new Error(`${id} never reached the ledger`);
+        // Read back (createdIds is the browser recorder's list; API creates are ledgered by api.ts itself).
+        const cats = await ctx.api.reads.listCategories();
+        for (const c of [catA, catB])
+          if (!cats.some((x) => x.id === c.id)) throw new Error(`${c.label} is not on the server`);
+        for (const t of made)
+          if (!(await ctx.api.reads.getTask(t.id)))
+            throw new Error(`${t.title} is not on the server`);
       },
     },
     {
@@ -221,16 +241,15 @@ export const areas: Scenario = {
       title: 'Settings › Area… › Aperture: the row reads it, the server has it after one write',
       async run(ctx) {
         await ctx.ui.goto('/settings');
-        const rowA = ctx.page
-          .getByRole('textbox', { name: `Rename ${catLabel(ctx, 'A')}`, exact: true })
-          .locator('xpath=ancestor::div[contains(@class,"flex-wrap")][1]');
+        const rowA = categoryRow(ctx, 'A');
         await rowA.waitFor({ state: 'visible', timeout: 15_000 });
         // No area yet: both rows read Personal.
         for (const which of ['A', 'B'] as const) {
-          const row = ctx.page
-            .getByRole('textbox', { name: `Rename ${catLabel(ctx, which)}`, exact: true })
-            .locator('xpath=ancestor::div[contains(@class,"flex-wrap")][1]');
-          if ((await row.getByText('Work · Personal', { exact: true }).count()) !== 1)
+          if (
+            (await categoryRow(ctx, which)
+              .getByText('Work · Personal', { exact: true })
+              .count()) !== 1
+          )
             throw new Error(`row ${which} doesn't read "Work · Personal" before an area is set`);
         }
         await ctx.page
@@ -326,31 +345,6 @@ export const areas: Scenario = {
       },
     },
     {
-      id: 'home-picker',
-      entry: 'ui',
-      proves: ['home-picker'],
-      title: 'Home › + Add lists the B task, not the A task; typing the A task’s title finds it',
-      async run(ctx) {
-        await ctx.ui.goto('/');
-        await ctx.page.getByRole('button', { name: 'Morning', exact: true }).click();
-        await ctx.page.getByRole('button', { name: 'Add to today', exact: true }).click();
-        const dialog = ctx.page.getByRole('dialog', { name: 'Add to today' });
-        await dialog
-          .getByText(title(ctx, 'hw'), { exact: true })
-          .waitFor({ state: 'visible', timeout: 15_000 });
-        if ((await dialog.getByText(title(ctx, 'dev'), { exact: true }).count()) !== 0)
-          throw new Error('the Aperture-area task is in the unsearched picker');
-        await ctx.shot('home-picker');
-        await dialog.getByLabel('Find a task').fill(title(ctx, 'dev'));
-        await dialog
-          .getByRole('button', { name: `Add ${title(ctx, 'dev')} to today`, exact: true })
-          .waitFor({ state: 'visible', timeout: 15_000 });
-        await dialog.getByLabel('Find a task').fill('');
-        await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-        await dialog.waitFor({ state: 'hidden', timeout: 10_000 });
-      },
-    },
-    {
       id: 'mcp-area',
       entry: 'mcp',
       proves: ['mcp-area'],
@@ -410,6 +404,67 @@ export const areas: Scenario = {
         const restored = await ctx.api.writes.upsertCategory({ ...base, active: true });
         if (!restored.active || restored.area !== 'school')
           throw new Error(`restored reads ${JSON.stringify(restored)}`);
+      },
+    },
+    // A needs-you leaves a scenario's later steps unrun, so the two Home steps (which may find the test
+    // user's own day in the way) come last — after the MCP step moved A to School, so put it back first.
+    {
+      id: 'aperture-again',
+      entry: 'api',
+      title: 'A back to Aperture for the Home steps',
+      async run(ctx) {
+        if ((await ctx.api.writes.setCategoryArea(catA.id, 'aperture')).area !== 'aperture')
+          throw new Error('setCategoryArea did not read back aperture');
+      },
+    },
+    {
+      id: 'home-picker',
+      entry: 'ui',
+      proves: ['home-picker'],
+      title: 'Home › + Add lists the B task, not the A task; typing the A task’s title finds it',
+      async run(ctx) {
+        waitingBefore = await waitingCount(ctx);
+        await ctx.page.getByRole('button', { name: 'Add to today', exact: true }).click();
+        const dialog = ctx.page.getByRole('dialog', { name: 'Add to today' });
+        await dialog.getByLabel('Find a task').waitFor({ state: 'visible', timeout: 15_000 });
+        await ctx.ui.settle();
+        // The unsearched list caps at 30, dated first: past the cap an absence proves nothing and the B task
+        // may be below it — that is the test user's backlog, not the build.
+        if ((await dialog.getByText(/more — narrow it down/).count()) !== 0)
+          needsYou(
+            'the test user’s life backlog is over the picker’s cap of 30; trim it, then rerun',
+          );
+        await dialog
+          .getByText(title(ctx, 'hw'), { exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
+        if ((await dialog.getByText(title(ctx, 'dev'), { exact: true }).count()) !== 0)
+          throw new Error('the Aperture-area task is in the unsearched picker');
+        await ctx.shot('home-picker');
+        await dialog.getByLabel('Find a task').fill(title(ctx, 'dev'));
+        await dialog
+          .getByRole('button', { name: `Add ${title(ctx, 'dev')} to today`, exact: true })
+          .waitFor({ state: 'visible', timeout: 15_000 });
+        await dialog.getByLabel('Find a task').fill('');
+        await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+        await dialog.waitFor({ state: 'hidden', timeout: 10_000 });
+      },
+    },
+    {
+      id: 'home-count',
+      entry: 'ui',
+      proves: ['home-count'],
+      title:
+        'Home’s waiting count rises by two once A moves to School (its two untimed backlog tasks)',
+      async run(ctx) {
+        await ctx.api.writes.setCategoryArea(catA.id, 'school');
+        const after = await waitingCount(ctx);
+        if (waitingBefore === null || after === null)
+          needsYou(
+            'the test user has capacity set today, so Home draws the bar instead of the waiting count; clear it, then rerun',
+          );
+        if (after !== waitingBefore + 2)
+          throw new Error(`waiting read ${waitingBefore} with A as Aperture, ${after} as School`);
+        await ctx.shot('home-count');
       },
     },
     noConsoleErrors,

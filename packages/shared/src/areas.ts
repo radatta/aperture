@@ -19,6 +19,15 @@ export const DEFAULT_AREA: Area = 'personal';
 // filter by area — a dev ticket due Friday is still due Friday.
 export const LIFE_AREAS: Area[] = AREAS.filter((a) => a !== 'aperture');
 
+// Is a task in the life backlog? Its category's area is a life area; no category (or an id with no category
+// behind it) reads as Personal, so it is. The one predicate Home's count and the "+ Add" picker share.
+export function lifeFrom(
+  categories: { id: string; area?: Area | null }[],
+): (t: { categoryId: string | null }) => boolean {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  return (t) => LIFE_AREAS.includes(areaOf(t.categoryId ? byId.get(t.categoryId) : null));
+}
+
 export const isArea = (v: unknown): v is Area => (AREAS as readonly unknown[]).includes(v);
 
 // The one place "no area" turns into Personal. Takes the category (or none — a task with no category).

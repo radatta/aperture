@@ -42,7 +42,8 @@ Category ──── area: 'school' | 'aperture' | 'recruiting' | 'personal' | 
 
 ## 2. Surfaces
 
-- **Settings → Categories.** Each row reads its type and area ("Work · School"); the row menu's **Area…**
+- **Settings → Categories.** Each row reads its type and area ("Work · School", under the rename box, so
+  the arrows and menu keep the line at 390); the row menu's **Area…**
   opens an inline panel of four chips, the current one pressed. A tap is one write (`setCategoryArea`),
   nothing to backfill, and the panel closes; a failure keeps it open with the inline error. The new-category
   form has an Area select beside Type (default Personal).
@@ -50,11 +51,15 @@ Category ──── area: 'school' | 'aperture' | 'recruiting' | 'personal' | 
   Aperture-area cards wait behind a toggle chip **"Aperture · N"** in the chips row — pressed while shown. It
   lives in the session query (D4: sticky for the session, reset each day), it widens rather than narrows so
   it is no override chip and never counts toward "Filter · N", and Clear / Reset to lens fold it back. A
-  search ignores the fold: typing finds everything (D1). Today and Week never filter by area — a dev
-  ticket due Friday is due Friday.
-- **Home "+ Add".** `useBacklog` (the "N waiting in the backlog" count) and the picker's unsearched list are
-  the life backlog; typing in the picker still finds anything. Until the categories roster is in, every task
-  reads as Personal, so the count is never blank for want of categories.
+  search ignores the fold: typing finds everything (D1). A part folded under its parent's card is in its
+  parent's area (as it is in its place): the card is one thing, hidden or shown whole, and counted once by
+  the parent; a part standing alone (its parent on today's plan, say) reads by its own category. Today and
+  Week never filter by area — a dev ticket due Friday is due Friday.
+- **Home "+ Add".** `useBacklog` (the "N waiting in the backlog" count) and the picker's unsearched list
+  apply the same life predicate (`lifeFrom`, `areas.ts`) — the hook adds "backlog, untimed, no parent", the
+  picker "open, not on today"; typing in the picker still finds anything, and a task added while typing
+  stays listed. Until the categories roster is in, every task reads as Personal, so the count is never
+  blank for want of categories.
 - **MCP.** `create_category` and `update_category` take `area` (the enum; `null` clears on update),
   `list_categories` returns it. The tool text says the Backlog folds Aperture away, so "park this" has a
   recipe.
