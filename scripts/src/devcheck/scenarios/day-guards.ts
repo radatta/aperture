@@ -210,9 +210,11 @@ export const dayGuards: Scenario = {
       title: 'Backlog: “+ Today” twice fast on G; Today shows it once, and after a reload',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=backlog');
-        // A group of COLLAPSE_AT (8) or more tasks starts collapsed; this run's tasks make one.
-        const folded = ctx.page.getByRole('button', { name: /^No category · /, expanded: false });
-        if ((await folded.count()) > 0) await folded.first().click();
+        // A group of COLLAPSE_AT (8) or more tasks starts collapsed; this run's tasks make one. The
+        // header reads "NO CATEGORY · n" (CSS-uppercased, which the accessible name follows).
+        const header = ctx.page.getByRole('button', { name: /^no category · /i });
+        await header.waitFor({ state: 'visible', timeout: 15_000 });
+        if ((await header.getAttribute('aria-expanded')) === 'false') await header.click();
         const add = ctx.page.getByRole('button', { name: `Add ${name(ctx, 'G')} to today` });
         await add.waitFor({ state: 'visible', timeout: 15_000 });
         await add.click();
