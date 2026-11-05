@@ -34,7 +34,9 @@ followed 76 s later at 206,326 tokens.
 **Context-full is unmeasured, and probably degrades** (inference): the fork resumes a transcript already
 at the compaction threshold and adds the skill and tool output, so it may compact itself — writing the
 handoff from a summary — or overflow (`rc` ≠ 0). A `skip reason=fork` log line just before the parent's
-line is the fork compacting.
+line is the fork compacting. Unmeasured as of 2026-11-05: 9 logged runs, no `skip reason=fork`, no `rc=124`;
+every `auto` line so far was idle compaction (places-shortcuts: last activity 02:56, hook 03:50 — the
+measured ~54 min).
 
 ## What you control
 
@@ -61,7 +63,8 @@ The exact command is in the hook. What each choice is for:
   docs). Deny rules bind in every mode, so the scoped `--disallowedTools` list (push, commit, add, stash,
   checkout, switch, reset, rebase, `gh pr create/merge/close`, `rm`) is the second lock. The repo's
   guard hooks run in the fork too. The lock assumes no settings file adds allow rules of its own —
-  today `~/.claude/settings.json` sets only `defaultMode`. The stakes: the user-scope `aperture` (prod)
+  `~/.claude/settings.json` holds some 20 keys (2026-11-05) but no `permissions.allow`; a COI restart
+  rebuilds it from the Mac copy, so re-check when it changes. The stakes: the user-scope `aperture` (prod)
   and `aperture-dev` MCP tools are in the fork's tool array, and only `dontAsk` with no allow rule for
   them keeps them out.
 - **Allowlist** — the skill's commands plus `git diff`, `head`, `tail`, `grep`, `ls`, `date`, Read/Grep/Glob.
@@ -86,8 +89,9 @@ outlive it and write its handoff after compaction, with no log line.
 
 **Failure** never blocks compaction: the hook exits 0 and prints nothing whatever happens. The log line
 carries `rc` (124 = timed out) and `subtype` (`error_max_turns` / `error_max_budget_usd` name a runaway
-stop); a fork that wrote to stderr keeps `localNotes/handoffs/.fork-<sid8>-<ts>.err` (pruned once more
-than 7 whole days old). The post-compact hook injects a handoff only when the log's last line for the
+stop); a fork that wrote to stderr, exited non-zero or returned an error result keeps
+`localNotes/handoffs/.fork-<sid8>-<ts>.err` — its stderr, then the result JSON (pruned once more than 7
+whole days old). The post-compact hook injects a handoff only when the log's last line for the
 session names it and is under 10 min old;
 otherwise it surfaces the newest handoff for the branch by path. Skips log `skip reason=` (`fork`,
 `bad-session-id`, `no-transcript`, `no-claude`, `locked`). Detached HEAD still gets one, named `detached`.
@@ -101,6 +105,14 @@ otherwise it surfaces the newest handoff for the branch by path. Skips log `skip
 ```
 
 `denials` > 0 means the skill asked for something the allowlist refuses — fix the skill or the list.
+`error=true` adds `err="…"`: the result's first 160 characters, stripped to `[A-Za-z0-9 ._:/-]`, placed
+before `file=` because the post-compact hook anchors on `file=…md` at end of line. The one failure so far
+(places-shortcuts, 2026-11-04 03:50 PST: `trigger=auto rc=1 dur=5s turns=1 cache_read=0 error=true
+file=none`) left an empty stderr, so its `.err` was pruned and the cause — most likely the claude.ai usage
+limit that session had hit at 01:01 — is unprovable; with `err=` the next one names itself. No retry:
+compaction waits for the hook, and a usage-limit refusal would fail again. There is no standing check of
+this log — read it when a compacted context opens with "Handoff available" (a path) instead of "Handoff
+written just before this compaction".
 The json's `total_cost_usd` is **cumulative over the resumed session's whole history** (a 1-turn fork
 reported $4.56), so the log carries tokens, not dollars. `--max-budget-usd 2` didn't stop a 9-turn fork
 of that session, so it appears not to use the cumulative figure — `subtype` will show if it ever does.
@@ -121,11 +133,14 @@ Measured, Claude Code 2.1.302–2.1.303, Opus, from a ~120–140k-token session:
 Inferred from those tokens: a handoff is roughly **$0.20–0.50** at API list price, mostly cache reads
 at 0.05× plus any cache write. Not billed as such — the fork uses the session's own login (claude.ai
 subscription here), so it draws subscription usage; an `ANTHROPIC_API_KEY` in the environment would
-bill that key instead, since the fork inherits it. **Unexplained:** the 14–29k-token writes on
-2026-10-19 (a long, many-times-compacted session) against ~1.8k on 2026-10-18 and 8k on 2026-10-30 —
-the fork's prefix diverges from the parent's somewhere near the end of the transcript. The `cache_new`
-field in the log will show what's typical. On idle compaction the cache may have
-expired; the fork then pays the write compaction would have paid anyway, and compaction reads it.
+bill that key instead, since the fork inherits it. **`cache_new` is 25–35k on every real run** — the 8
+successes logged 2026-10-31 → 11-04: 36–65 s, 3–5 turns, cache_read 1.03–2.64 M, cache_new 25.5–32.2k,
+out 3.3–4.9k, 0 denials. A worktree's first compaction and one session's fifth read alike (32.2k → 26.5k
+→ 25.5k → 27.1k → 31.3k), so it is not many-compactions drift or prefix divergence (1.5–3 % of the read):
+it is the fork's own work — the 8 KB handoff skill, `load-context.sh`'s 15 KB index, git status/log/diff
+output, its Reads, the written file. The 8k of 2026-10-30 was a near-empty session. Rule: 25–35k is
+normal; look only above ~50k. On idle compaction the cache may have expired; the fork then pays the
+write compaction would have paid anyway, and compaction reads it.
 
 ## Testing
 

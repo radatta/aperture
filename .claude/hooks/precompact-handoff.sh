@@ -79,8 +79,14 @@ DUR=$(($(date +%s) - START))
 # total_cost_usd is cumulative over the resumed session's whole history, so tokens are logged instead.
 # subtype names a max-turns / max-budget stop.
 STATS=$(jq -rs 'last | "fork=\(.session_id // "-" | .[0:8]) subtype=\(.subtype // "-") turns=\(.num_turns // "-") cache_read=\(.usage.cache_read_input_tokens // "-") cache_new=\(.usage.cache_creation_input_tokens // "-") out=\(.usage.output_tokens // "-") denials=\(.permission_denials // [] | length) error=\(.is_error)"' <<<"$OUT" 2>/dev/null)
+# An error result (is_error: a refused API call, a usage limit) names its cause: its first 160 chars, stripped
+# to [A-Za-z0-9 ._:/-], go on the log line as err="…" — before file=, which post-compact-context.sh anchors
+# on at end of line — and the whole result JSON joins the fork's stderr in the .err file.
+ERRTXT=$(jq -rs 'last | select(.is_error==true) | .result // "" | tostring | .[0:160]' <<<"$OUT" 2>/dev/null)
+ERRTXT=${ERRTXT//[^A-Za-z0-9 ._:\/-]/}
 FILE=$(find "$DIR" -maxdepth 1 -name "handoff-*-$SID8.md" -newermt "@$START" -printf '%f\n' 2>/dev/null | sort | tail -1)
-log "trigger=$TRIGGER sid=$SID8 branch=$BRANCH rc=$RC dur=${DUR}s ${STATS:-stats=unparsable} file=${FILE:-none}"
+log "trigger=$TRIGGER sid=$SID8 branch=$BRANCH rc=$RC dur=${DUR}s ${STATS:-stats=unparsable}${ERRTXT:+ err=\"$ERRTXT\"} file=${FILE:-none}"
 
+if [ -n "$OUT" ] && { [ "$RC" -ne 0 ] || [ "${STATS##* error=}" = true ]; }; then printf '%s\n' "$OUT" >> "$ERR"; fi
 [ -s "$ERR" ] || rm -f "$ERR"
 exit 0
