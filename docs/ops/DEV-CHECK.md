@@ -124,7 +124,8 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's one
   non-ledger write: a test user who never opened Flux has the disclaimer accepted (a Settings field, logged).
 - **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
-  deleted with `deleteCategory(id, null)` after the run's tasks (cleanup runs newest-first). The same scenario sets the
+  deleted with `deleteCategory(id, null)`. Cleanup runs newest-first and the category is made after the run's tasks, so it goes
+  before them — a run task on a run category would make the delete refuse, so no scenario puts one there. The same scenario sets the
   test user's own day row (capacity, intent) through the UI and puts the prior values back in the step's `finally` —
   a singleton, nothing to ledger (an intent that was never set comes back as `''`; the API has no null intent).
 - **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).

@@ -432,8 +432,9 @@ export function createApiClient({
       ledger.append({ run, op: 'created', id: cat.id, via: CATEGORY_VIA, title: input.label });
       return cat;
     },
-    // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null, after the run's
-    // tasks are gone (newest-first).
+    // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null. Cleanup runs
+    // newest-first, so a run's category (made after its tasks) goes before them: a run task on a run
+    // category would make the delete refuse, so no scenario puts one there.
     async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
       assertLedger(id, 'category');
       await call<null>('deleteCategory', [id, reassignToId]);

@@ -394,7 +394,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         await client.writes.deletePlace(id, null); // any task still on it just leaves the list
         return true;
       case 'category':
-        await client.writes.deleteCategory(id, null); // the run's tasks went first (newest-first)
+        await client.writes.deleteCategory(id, null); // newest-first: it goes before the run's tasks, so none may sit on it
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

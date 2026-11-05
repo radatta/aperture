@@ -3,10 +3,12 @@
 // covers plans, the day row, categories; settings, stories and habits ride the same repo change, unit-
 // tested). Plus PR 77's Right-now nit: a timed part's second line at phone width. Tasks and the category
 // come from the API (ledger-recorded); the day row is the test user's own and is put back as found.
+import type { DevCategory } from '../api';
 import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck ${ctx.nonce} ${what}`;
 const PLANNED = ['pA', 'pB', 'pC', 'pD'] as const; // four planned rows: Big 3 + one "Also today"
+let cat: DevCategory | undefined; // the run's category, from the API create (never a UI create, so not in createdIds)
 
 // The app's today (its day starts at the test user's dayStartHour, not midnight).
 async function appToday(ctx: Ctx): Promise<string> {
@@ -281,7 +283,7 @@ export const partsV2bReads: Scenario = {
       entry: 'api',
       title: 'A non-work category (API, ledgered)',
       async run(ctx) {
-        await ctx.api.writes.upsertCategory({ label: name(ctx, 'cat'), isWork: false });
+        cat = await ctx.api.writes.upsertCategory({ label: name(ctx, 'cat'), isWork: false });
       },
     },
     {
@@ -320,12 +322,10 @@ export const partsV2bReads: Scenario = {
       title: 'The server has the new name and the work flag',
       async run(ctx) {
         const renamed = `${name(ctx, 'cat')} renamed`;
-        const cat = (await ctx.api.reads.listCategories()).find((c) =>
-          ctx.createdIds().includes(c.id),
-        );
-        if (!cat) throw new Error('the category never reached the ledger');
-        if (cat.label !== renamed || cat.isWork !== true)
-          throw new Error(`server has ${JSON.stringify(cat)}`);
+        const found = (await ctx.api.reads.listCategories()).find((c) => c.id === cat?.id);
+        if (!found) throw new Error('the server has no such category');
+        if (found.label !== renamed || found.isWork !== true)
+          throw new Error(`server has ${JSON.stringify(found)}`);
       },
     },
     {

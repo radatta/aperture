@@ -712,7 +712,7 @@ describe('backend read-then-write under lagging reads', () => {
     await backend.uncheckHabit(h.id, DAY);
     expect(await doc.get('u#local', key, { consistent: true })).toBeNull();
     const checked = await backend.checkHabit(h.id, DAY);
-    const live = await doc.get('u#local', key);
+    const live = await doc.get('u#local', key, { consistent: true });
     await backend.uncheckHabit(h.id, DAY);
     lagKey(doc, key, live); // the uncheck isn't visible yet: a plain read still shows the check
     const again = await backend.checkHabit(h.id, DAY);
