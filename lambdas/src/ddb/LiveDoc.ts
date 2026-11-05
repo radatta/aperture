@@ -95,6 +95,24 @@ export function createLiveDoc(tableName: string): DocClient {
     async delete(pk, sk) {
       await doc.delete({ TableName: tableName, Key: { PK: pk, SK: sk } });
     },
+    async deleteIf(pk, sk, expectedUpdatedAt) {
+      try {
+        await doc.delete({
+          TableName: tableName,
+          Key: { PK: pk, SK: sk },
+          ConditionExpression: 'updatedAt = :u',
+          ExpressionAttributeValues: { ':u': expectedUpdatedAt },
+        });
+      } catch (err) {
+        const name = err instanceof Error ? err.name : '';
+        if (
+          err instanceof ConditionalCheckFailedException ||
+          name === 'ConditionalCheckFailedException'
+        )
+          throw new ConditionFailedError();
+        throw err;
+      }
+    },
     async batchPut(items) {
       for (let i = 0; i < items.length; i += 25) {
         // BatchWriteItem is best-effort per item: under throttling it returns the rejected writes in

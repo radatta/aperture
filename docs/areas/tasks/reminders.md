@@ -31,6 +31,11 @@ Notifications:
 - Times are the user's zone (`userDueEpoch`), DST-safe. Only open tasks ping: not done, not cancelled, not
   tombstoned. Errands and parts ping like any task.
 - A task that is both due and planned on the same day pings once (due wins).
+- **Armed before it fires.** A reminder pings only if it was set before its fire time. A task created,
+  re-dated or reopened after its fire time stays quiet, and so does a plan made after 09:00 for that day (the
+  09:00–09:30 planning case). So does anything that fell due while its kind's toggle was off, or before the
+  user's first device. The 30-minute window still catches up a reminder that existed in time and was missed by
+  a failed tick. Send test is exempt. How it's checked: §3.
 - There is no user-facing cap and no quiet hours (both rejected).
 - **Same-tick batching:** several reminders in one minute become one notification ("3 reminders", titles joined).
 - **Tap-through:** `/tasks?lens=today&task=<id>&n=<tag>` opens the task's modal on Today. A batch opens Today.
@@ -57,17 +62,37 @@ EventBridge Scheduler rate(1 min) ──▶ aperture-push-dispatch-<stage>
   1. Lists the user registry (`PK=push`, `SK=user#<uid>`, written on first subscribe).
   2. Queries GSI1's third key space for each user: `GSI1PK=u#<uid>#remind`, `GSI1SK=fireAt`, set on task and
      plan items atomically with their write.
-  3. Re-reads each task consistently.
-  4. Applies the toggles.
+  3. Re-reads each task (or plan) consistently.
+  4. Applies the toggles and the arm rule (below).
   5. Writes the dedup row `psent#<fireAt>#<taskId>` with `putIf` **before** sending.
   6. Bumps the daily guard `pcount#<day>`.
   7. Sends.
   8. Writes the heartbeat `push/health`.
+- **The arm rule** (§2, "armed before it fires"). A candidate is skipped when any of these is later than its
+  fire time:
+  - the row's `remindArmedAt`: when its current fire time was set. It's a table-only attribute beside the GSI
+    keys, never on the entity, an API answer or the export. A write keeps the stored value while the row was
+    already on the remind index at the same fire time (a rename, an estimate, a reorder within the day), and
+    otherwise stamps the write's `updatedAt`: created, re-dated, reopened, or planned on a new day. Deciding
+    this costs one consistent read before writing a task or plan that can fire. `createdAt` alone would miss a
+    re-date or a reopen; `updatedAt` alone would silence a missed reminder whose title was edited.
+  - the kind's switch-on time (`u#<uid>/pusharm`, written when a toggle goes from off to on);
+  - the registry row's `createdAt`: when the user's first device turned reminders on. The backfill that runs
+    then arms what it re-keys at its own time, too.
+- **The registry can't lose a user.** A subscribe writes its device before it checks the registry. Every
+  removal of the user's row (the last device removed, or deleted by the poller after a 404/410) then re-reads
+  their devices strongly and puts the row back, keeping its `createdAt`, if one is alive. `getPushStatus` also
+  re-adds it when a live device exists. The poller's 404/410 delete is conditional on the version it read, so a
+  removal (tombstone) or a re-subscribe that lands mid-send stands.
 - **Fail-closed:** dedup and guard rows are written before the send and never refunded. A transient push-service
   error loses that one ping (logged, and shown in Settings) rather than risking a double ping. A reminder older
   than the 30-minute window is missed, never fired late. Retrying is a logged follow-up (prod task
   `01M6MXRGEDXWQG5E1T5X95YM1Q`).
 - **Hidden guard:** 50 sends per user per day. Past it the poller refuses and stamps the health error.
+- **Stage faults** are checked before anything is consumed: no VAPID private key ("No VAPID key on this
+  stage") or one that isn't a 32-octet P-256 key ("VAPID private key is malformed"). The poller logs it once per
+  container, writes it on the heartbeat, and sends nothing. A malformed key is never cached, so a fixed
+  parameter works on the next tick.
 - **Crypto is hand-rolled** in `node:crypto` (`lambdas/src/push/webpush.ts`): VAPID ES256 (RFC 8292) and
   aes128gcm (RFC 8291), pinned by RFC 8291 Appendix A's test vector. `web-push` (3.6.7, last published
   2024-01) stays a fallback only if Apple rejects output that passes the vector.
@@ -80,7 +105,9 @@ Settings › Notifications shows:
 - this device's permission and subscription state;
 - each device with its last delivery or last error;
 - the poller's last run ("Reminders paused since …" past 5 minutes);
-- the last send and error.
+- the last send and error. "Last sent" (`poller.lastSentAt`) is the last time a push service **accepted** a
+  notification for the user; a refusal moves only the error. The error names every device that refused in that
+  tick, joined by " · ". The stage's current fault outranks the user's last error.
 
 **Send test** queues a `ptest#` row in the remind key space. The poller sends it on the next tick, so the test
 proves the whole chain. The BFF never holds the private key.
@@ -98,7 +125,8 @@ different VAPID key, the app re-subscribes silently.
   - The VAPID private key lives in SSM `/aperture/<stage>/push/vapid_private_key` (SecureString) and is read by
     the poller's role only.
   - The public key is in `vapid_public_key` (String) and is read by the BFF only.
-- **Logs:** one JSON line per send or error (`push_sent | push_failed | push_guard_tripped | push_no_key`). Each
+- **Logs:** one JSON line per send or error (`push_sent | push_failed | push_guard_tripped | push_no_key |
+push_bad_key`). Each
   line carries the status, the task id and a sub-id prefix — never the endpoint, the keys or the title.
 - **Cost bound:**
   - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
@@ -118,8 +146,8 @@ different VAPID key, the app re-subscribes silently.
   them the poller logs `push_no_key` and Settings says "Reminders aren't set up on this stage".
 - **Rotation** (rare, deliberate):
   1. Put both parameters with `--overwrite`.
-  2. Every existing subscription then fails with 403/410. The poller deletes them and Settings says to
-     re-enable.
+  2. Every existing subscription then fails. On a 404/410 the poller deletes it; on a 403 it marks the device
+     with the error and drops its cached key. Settings says to re-enable either way.
   3. The phone heals on its next launch (`usePushSync`).
 - **Dev deploys** of this stack's new function, roles and schedule need the dev freeze opened for the dispatch
   (`docs/ops/CI-BOT.md` → _Kill switch_ → _Opening the freeze_).

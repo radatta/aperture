@@ -362,10 +362,150 @@ describe('sendTestPush', () => {
     const status = await api.getPushStatus();
     expect(status.poller).toMatchObject({
       lastRunAt: NOW + 40_000,
-      lastSentAt: NOW + 40_000,
+      lastSentAt: NOW + 40_000, // the push service accepted it
       lastError: null,
     });
     expect(status.devices).toEqual([{ ...device, lastOkAt: NOW + 40_000 }]);
+  });
+});
+
+// The poller's real tick over what the BFF wrote, at the env's clock.
+const tick = (e: ReturnType<typeof env>, push = new InMemoryPush()) =>
+  runPushTick({
+    doc: e.doc,
+    writes: liveWrites(e.doc),
+    push,
+    now: e.now,
+    appUrl: 'https://dev.example',
+    log: () => {},
+  }).then(() => push);
+const titles = (push: InMemoryPush) =>
+  push.sends.map((x) => (x.payload as { notification: { title: string } }).notification.title);
+
+describe('armed before it fires, through the BFF', () => {
+  it('a timed task created now for a minute already past never pings; one ahead does', async () => {
+    const e = env();
+    const api = e.make();
+    await api.subscribePush(input());
+    await api.createTask({ title: 'Late', dueDay: '2026-11-04', dueTime: '09:55' }); // 5 min ago
+    await api.createTask({ title: 'Ahead', dueDay: '2026-11-04', dueTime: '10:01' });
+    e.advance(61_000);
+    expect(titles(await tick(e))).toEqual(['Ahead']);
+  });
+
+  it('a task re-dated into the past window never pings; renaming one that was armed in time keeps it', async () => {
+    const e = env();
+    const api = e.make();
+    await api.subscribePush(input());
+    const kept = await api.createTask({ title: 'Kept', dueDay: '2026-11-04', dueTime: '10:02' });
+    const moved = await api.createTask({ title: 'Moved', dueDay: '2026-11-04', dueTime: '18:00' });
+    e.advance(3 * 60_000); // 10:03 — the 10:02 tick never ran
+    await api.setTaskTitle(kept.id, 'Kept, renamed');
+    await api.setTaskDue(moved.id, { dueDay: '2026-11-04', dueTime: '10:01' });
+    expect(titles(await tick(e))).toEqual(['Kept, renamed']);
+  });
+
+  it("a toggle switched back on doesn't fire the last 30 minutes", async () => {
+    const e = env();
+    const api = e.make();
+    await api.subscribePush(input());
+    await api.createTask({ title: 'While off', dueDay: '2026-11-04', dueTime: '10:05' });
+    await api.createTask({ title: 'After', dueDay: '2026-11-04', dueTime: '10:20' });
+    await api.updateSettings({ remindTimed: false });
+    e.advance(10 * 60_000); // 10:10, past While off
+    await api.updateSettings({ remindTimed: true });
+    expect(await tick(e).then(titles)).toEqual([]);
+    e.advance(10 * 60_000); // 10:20
+    expect(await tick(e).then(titles)).toEqual(['After']);
+    // Turning it on again when it's already on isn't a switch-on.
+    await api.updateSettings({ remindTimed: true, remindDueDay: true });
+    await expect(new Repo(e.doc, liveWrites(e.doc), 'u1').getPushArm()).resolves.toMatchObject({
+      remindTimed: NOW + 10 * 60_000,
+    });
+  });
+
+  it("the first device's backfill doesn't fire the last 30 minutes; what's ahead pings", async () => {
+    const e = env();
+    const raw = (id: string, dueTime: string) =>
+      e.doc.put(
+        entityItem('u1', sk.task(id), {
+          id,
+          userId: 'u1',
+          createdAt: 0,
+          updatedAt: 1,
+          deletedAt: null,
+          title: id,
+          status: 'backlog',
+          dueDay: '2026-11-04',
+          dueTime,
+        }),
+      ); // written before the index: no GSI keys, no arm
+    await raw('Behind', '09:50');
+    await raw('Ahead', '10:01');
+    await e.make().subscribePush(input()); // backfill at 10:00
+    expect(await tick(e).then(titles)).toEqual([]);
+    e.advance(60_000);
+    expect(await tick(e).then(titles)).toEqual(['Ahead']);
+  });
+});
+
+describe('the push registry under races', () => {
+  it("status puts a user with a live device back on the registry (a race's self-heal)", async () => {
+    const e = env();
+    const api = e.make();
+    await api.subscribePush(input());
+    await e.registry.removeUser('u1'); // as a lost race would leave it
+    await api.getPushStatus();
+    expect(await e.registry.hasUser('u1')).toBe(true);
+    // No device, no row.
+    await api.unsubscribePush((await api.getPushStatus()).devices[0]!.id);
+    await api.getPushStatus();
+    expect(await e.registry.hasUser('u1')).toBe(false);
+  });
+
+  it('a device subscribed while the last one is removed keeps the user registered', async () => {
+    const e = env();
+    const a = await e.make().subscribePush(input());
+    // The other device's subscribe lands between the remove's alive check and its registry delete: it wrote
+    // its device and saw the row still there, so it didn't add one.
+    let raced = false;
+    const original = e.registry.removeUser.bind(e.registry);
+    e.registry.removeUser = async (userId: string) => {
+      if (!raced) {
+        raced = true;
+        await e.doc.put(
+          entityItem('u1', sk.pushSub('other'), {
+            id: 'other',
+            userId: 'u1',
+            createdAt: NOW,
+            updatedAt: NOW,
+            deletedAt: null,
+            endpoint: 'https://fcm.googleapis.com/fcm/send/x',
+            p256dh: P256DH,
+            auth: AUTH,
+            label: 'Mac',
+            lastOkAt: null,
+            lastError: null,
+            lastErrorAt: null,
+          }),
+        );
+      }
+      return original(userId);
+    };
+    await e.make().unsubscribePush(a.id);
+    expect(raced).toBe(true);
+    expect(await e.registry.getUser('u1')).toEqual({ userId: 'u1', createdAt: NOW }); // createdAt kept
+  });
+
+  it('a revive puts the user back on the registry', async () => {
+    const e = env();
+    const api = e.make();
+    const a = await api.subscribePush(input());
+    await api.unsubscribePush(a.id);
+    expect(await e.registry.hasUser('u1')).toBe(false);
+    e.advance(1000);
+    await api.subscribePush(input());
+    expect(await e.registry.getUser('u1')).toEqual({ userId: 'u1', createdAt: NOW + 1000 });
   });
 });
 

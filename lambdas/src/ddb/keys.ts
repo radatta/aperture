@@ -115,6 +115,8 @@ export const sk = {
   pushTest: (id: string) => `ptest#${id}`,
   pushTestPrefix: () => `ptest#`,
   pushHealth: () => `pushhealth`,
+  // When each reminder kind's toggle was last switched back on: what fired while it was off stays quiet.
+  pushArm: () => `pusharm`,
 
   // Calendar two-way sync cursor, one per connected Google account (by `sub`).
   gcalSync: (sub: string) => `gcal#sync#${sub}`,

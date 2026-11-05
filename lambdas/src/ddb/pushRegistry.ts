@@ -33,16 +33,18 @@ export class PushRegistry {
       toEntity<PushRegistryUser>(i),
     );
   }
+  async getUser(userId: string): Promise<PushRegistryUser | null> {
+    const it = await this.doc.get(PUSH_PK, pushSk.user(userId), { consistent: true });
+    return it ? toEntity<PushRegistryUser>(it) : null;
+  }
   async hasUser(userId: string): Promise<boolean> {
-    return (await this.doc.get(PUSH_PK, pushSk.user(userId), { consistent: true })) !== null;
+    return (await this.getUser(userId)) !== null;
   }
   // Written only if absent. false = it was already there (another device's subscribe won the race).
-  async addUser(userId: string, now: number): Promise<boolean> {
+  // `createdAt` is when the user's reminders went live: nothing due before it pings (reminders.md → §3).
+  async addUser(userId: string, createdAt: number): Promise<boolean> {
     try {
-      await this.writes.putIf(
-        { PK: PUSH_PK, SK: pushSk.user(userId), userId, createdAt: now },
-        null,
-      );
+      await this.writes.putIf({ PK: PUSH_PK, SK: pushSk.user(userId), userId, createdAt }, null);
       return true;
     } catch (err) {
       if (err instanceof ConditionFailedError) return false;
@@ -51,6 +53,17 @@ export class PushRegistry {
   }
   async removeUser(userId: string): Promise<void> {
     await this.writes.delete(PUSH_PK, pushSk.user(userId));
+  }
+  // The last alive device went: take the user off — then re-read their devices strongly and put the row
+  // back (keeping its createdAt) if one is alive. A subscribe writes its device before it checks the
+  // registry, so one that saw the row still there and skipped adding it is always seen by this re-read:
+  // the user can't drop out for good. true = they stayed (or came back).
+  async dropUser(userId: string, hasAlive: () => Promise<boolean>, now: number): Promise<boolean> {
+    const had = await this.getUser(userId);
+    await this.removeUser(userId);
+    if (!(await hasAlive())) return false;
+    await this.addUser(userId, had?.createdAt ?? now);
+    return true;
   }
 
   async getPoller(): Promise<PushPollerRow | null> {

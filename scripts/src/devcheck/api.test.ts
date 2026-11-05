@@ -107,6 +107,7 @@ describe('createApiClient', () => {
       'recordPlaceTokenMint',
       'recordReminderToggles',
       'removePlan',
+      'restoreReminderToggles',
       'revokePlaceToken',
       'rotatePlaceToken',
       'sendTestPush',
@@ -729,6 +730,30 @@ describe('createApiClient', () => {
         'pushsub',
         'reminderToggles',
       ]);
+    });
+
+    it('restoring the toggles records nothing new, and needs some run to have flipped them', async () => {
+      const fetch = vi.fn<FetchLike>(async () => reply(200, {}));
+      const ledger = memLedger();
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r2' });
+      await expect(api.writes.restoreReminderToggles()).rejects.toThrow(/no run recorded flipping/);
+      expect(fetch).not.toHaveBeenCalled();
+      ledger.append({
+        run: 'r1',
+        op: 'created',
+        id: 'reminder-toggles:r1',
+        via: REMINDER_TOGGLES_VIA,
+      });
+      await api.writes.restoreReminderToggles(); // the sweep restoring r1's flip
+      expect(fetch).toHaveBeenLastCalledWith(
+        `${DEV_ORIGIN}/api/updateSettings`,
+        expect.objectContaining({
+          body: JSON.stringify({
+            args: [{ remindTimed: true, remindDueDay: true, remindPlanned: true }],
+          }),
+        }),
+      );
+      expect(ledger.entries.map((e) => e.id)).toEqual(['reminder-toggles:r1']); // no r2 entry
     });
 
     it('writes only the three reminder toggles to settings, recording the run before the first', async () => {

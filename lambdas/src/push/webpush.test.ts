@@ -154,10 +154,18 @@ describe('RFC 8292 VAPID', () => {
   it('derives the public key from a stored private key, refusing one that is not P-256', () => {
     const e = createECDH('prime256v1');
     e.generateKeys();
-    expect(publicKeyOf(e.getPrivateKey().toString('base64url'))).toBe(
-      e.getPublicKey().toString('base64url'),
-    );
-    expect(() => publicKeyOf('')).toThrow(/P-256/);
-    expect(() => publicKeyOf(Buffer.alloc(33, 1).toString('base64url'))).toThrow(/P-256/);
+    const raw = e.getPrivateKey();
+    const priv = Buffer.concat([Buffer.alloc(32 - raw.length), raw]).toString('base64url');
+    expect(publicKeyOf(priv)).toBe(e.getPublicKey().toString('base64url'));
+    for (const bad of [
+      '',
+      'not-a-key', // decodes to 6 octets
+      Buffer.alloc(33, 1).toString('base64url'),
+      Buffer.alloc(31, 1).toString('base64url'),
+      `${priv.slice(0, 20)}!${priv.slice(21)}`, // a stray character Buffer would skip
+      Buffer.alloc(32, 0).toString('base64url'), // the zero scalar
+      Buffer.alloc(32, 0xff).toString('base64url'), // past the curve order
+    ])
+      expect(() => publicKeyOf(bad), bad).toThrow(/P-256/);
   });
 });

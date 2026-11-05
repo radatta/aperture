@@ -24,17 +24,20 @@ export interface PushResult {
   reason?: 'timeout' | 'network' | 'keys';
 }
 
+// Whether this stage can send at all: its VAPID private key is present (`no-key` otherwise) and is a P-256
+// key (`bad-key` otherwise). Read before any dedup row is written, so a stage that can't sign consumes no
+// reminder.
+export type PushReadiness = 'ok' | 'no-key' | 'bad-key';
+
 export interface PushGateway {
-  // Whether this stage can send at all (its VAPID private key is present). Read before any dedup row is
-  // written, so a stage without a key consumes no reminder.
-  configured(): Promise<boolean>;
+  readiness(): Promise<PushReadiness>;
   send(target: PushTarget, payload: string, opts: PushSendOpts): Promise<PushResult>;
 }
 
 export function noopPush(): PushGateway {
   return {
     // The selection logic still runs in a smoke tick; the send is where it stops.
-    configured: async () => true,
+    readiness: async () => 'ok',
     send: async () => {
       throw new Error('Push sends are disabled in testMode');
     },
@@ -50,10 +53,10 @@ export interface RecordedSend {
 // The test double: records every send; `status` (per endpoint, or a function) is the answer to give.
 export class InMemoryPush implements PushGateway {
   sends: RecordedSend[] = [];
-  ready = true;
+  readyAs: PushReadiness = 'ok';
   status: number | ((target: PushTarget) => number | PushResult) = 201;
-  async configured(): Promise<boolean> {
-    return this.ready;
+  async readiness(): Promise<PushReadiness> {
+    return this.readyAs;
   }
   async send(target: PushTarget, payload: string, opts: PushSendOpts): Promise<PushResult> {
     this.sends.push({ target, payload: JSON.parse(payload) as unknown, opts });

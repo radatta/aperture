@@ -33,11 +33,17 @@ const hmac = (key: Uint8Array, data: Uint8Array): Buffer =>
   createHmac('sha256', key).update(data).digest();
 
 // A P-256 key pair from its raw 32-byte private scalar (base64url, as stored in SSM).
+// Exactly 32 octets of base64url (Buffer would skip stray characters, and a short value isn't a key that
+// was ever generated), and a scalar the curve accepts.
 function p256(privateKeyB64: string) {
-  const raw = unb64u(privateKeyB64);
-  if (raw.length === 0 || raw.length > 32) throw new Error('VAPID private key is not a P-256 key');
+  const raw = /^[A-Za-z0-9_-]+$/.test(privateKeyB64) ? unb64u(privateKeyB64) : Buffer.alloc(0);
+  if (raw.length !== 32) throw new Error('VAPID private key is not a P-256 key');
   const ecdh = createECDH('prime256v1');
-  ecdh.setPrivateKey(Buffer.concat([Buffer.alloc(32 - raw.length), raw]));
+  try {
+    ecdh.setPrivateKey(raw);
+  } catch {
+    throw new Error('VAPID private key is not a P-256 key'); // zero, or past the curve order
+  }
   return ecdh;
 }
 

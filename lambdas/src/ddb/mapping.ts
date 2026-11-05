@@ -7,7 +7,10 @@ import { gsi1, pk, sk } from './keys';
 // finance transactions) and, on dev, a tombstone's `expiresAt` (writes.ts); the domain entities never see
 // them. `toEntity` is the read side; the `*Item` builders are the write side.
 
-const ITEM_ATTRS = ['PK', 'SK', 'GSI1PK', 'GSI1SK', 'expiresAt'];
+// When a task's or plan's current fire time was set (reminders.md → §3, armed before it fires): a table-only
+// attribute beside the keys, so no entity, API answer or export ever carries it.
+export const REMIND_ARMED_AT = 'remindArmedAt';
+const ITEM_ATTRS = ['PK', 'SK', 'GSI1PK', 'GSI1SK', 'expiresAt', REMIND_ARMED_AT];
 
 export function toEntity<T>(item: Item): T {
   const rest: Record<string, unknown> = { ...item };
@@ -30,34 +33,55 @@ function fireAt(at: () => number | null): number | null {
     return null;
   }
 }
+export const taskRemindAt = (t: Task): number | null => fireAt(() => taskFireAt(t, userDueEpoch));
+export const planRemindAt = (p: TaskPlan): number | null =>
+  fireAt(() => planFireAt(p, userDueEpoch));
+
+// The arm time a write keeps: the stored row's, while it was already on the remind index at this same fire
+// time (an edit that doesn't move the reminder), else `fallback` — the write's own time: created, re-dated,
+// reopened or re-planned now.
+export function remindArm(
+  prev: Item | null,
+  userId: string,
+  fire: number,
+  fallback: number,
+): number {
+  const kept = prev?.[REMIND_ARMED_AT];
+  return prev?.GSI1PK === gsi1.remindPk(userId) && prev.GSI1SK === fire && typeof kept === 'number'
+    ? kept
+    : fallback;
+}
 
 // A task is on GSI1 in one of two key spaces, written atomically with the task so neither can drift: a
 // done task with a completion time in the calibration index; an open one with a deadline in the remind
 // index at its fire time (reminders.ts taskFireAt — the user's zone, not the Lambda's UTC). Anything else
-// carries no GSI keys, so it shows up in neither window read.
-export function taskItem(userId: string, task: Task): Item {
+// carries no GSI keys, so it shows up in neither window read. `armedAt` (remindArm) defaults to the task's
+// updatedAt.
+export function taskItem(userId: string, task: Task, armedAt?: number): Item {
   const item: Item = { PK: pk(userId), SK: sk.task(task.id), ...task };
   if (task.status === 'done' && task.completedAt != null) {
     item.GSI1PK = gsi1.donePk(userId);
     item.GSI1SK = gsi1.doneSk(task.completedAt);
     return item;
   }
-  const at = fireAt(() => taskFireAt(task, userDueEpoch));
+  const at = taskRemindAt(task);
   if (at !== null) {
     item.GSI1PK = gsi1.remindPk(userId);
     item.GSI1SK = gsi1.remindSk(at);
+    item[REMIND_ARMED_AT] = armedAt ?? task.updatedAt;
   }
   return item;
 }
 
 // A plan is on the remind index at DAY_REMINDER_TIME on its day; a tombstone drops out. Whether its task
 // is still open and untimed is the poller's check at fire time.
-export function planItem(userId: string, plan: TaskPlan): Item {
+export function planItem(userId: string, plan: TaskPlan, armedAt?: number): Item {
   const item: Item = { PK: pk(userId), SK: sk.plan(plan.day, plan.order, plan.id), ...plan };
-  const at = fireAt(() => planFireAt(plan, userDueEpoch));
+  const at = planRemindAt(plan);
   if (at !== null) {
     item.GSI1PK = gsi1.remindPk(userId);
     item.GSI1SK = gsi1.remindSk(at);
+    item[REMIND_ARMED_AT] = armedAt ?? plan.updatedAt;
   }
   return item;
 }

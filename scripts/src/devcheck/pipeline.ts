@@ -2,7 +2,7 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { DEV_WORK_MIN, financeRowOf, ledgerKind, REMINDERS_ON, type ApiClient } from './api';
+import { DEV_WORK_MIN, financeRowOf, ledgerKind, type ApiClient } from './api';
 import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -523,7 +523,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         await client.writes.unsubscribePush(id);
         return true;
       case 'reminderToggles':
-        await client.writes.setReminderSettings({ ...REMINDERS_ON });
+        await client.writes.restoreReminderToggles();
         return true;
       case 'task':
         return safeDelete(client, id);
@@ -594,7 +594,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       });
     for (const rec of r.created) {
       if (await stillThere(rec.id)) continue; // stays 'left'
-      rec.final = after.some((e) => e.id === rec.id && e.op === 'gone') ? 'gone' : 'deleted';
+      // This run's own `gone` — a reused id (a push device) may carry an older run's.
+      rec.final = after.some((e) => e.id === rec.id && e.op === 'gone' && e.run === d.runId)
+        ? 'gone'
+        : 'deleted';
     }
     for (const id of r.swept)
       if (await stillThere(id)) r.created.push({ id, via: 'swept', final: 'left' });

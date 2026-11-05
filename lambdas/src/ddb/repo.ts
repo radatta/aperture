@@ -36,7 +36,11 @@ import {
   entityItem,
   financeTxnItem,
   planItem,
+  planRemindAt,
+  REMIND_ARMED_AT,
+  remindArm,
   taskItem,
+  taskRemindAt,
   toEntity,
   toFinanceSyncState,
   toFinanceTxn,
@@ -64,6 +68,15 @@ export type RemindRow =
   | { kind: 'task'; fireAt: number; task: Task }
   | { kind: 'plan'; fireAt: number; sk: string; plan: TaskPlan }
   | { kind: 'test'; fireAt: number; id: string };
+
+// What a candidate must have been armed by (reminders.md → §3): its own row's remindArmedAt — when its
+// current fire time was set — and, for each kind, when that toggle was last switched back on.
+export interface PushArmRow {
+  remindTimed?: number;
+  remindDueDay?: number;
+  remindPlanned?: number;
+  updatedAt: number;
+}
 
 // A Send-test candidate (sendTestPush): sent by the poller's next tick, then deleted.
 export interface PushTestRow {
@@ -209,13 +222,39 @@ export class Repo {
     const t = it ? toEntity<Task>(it) : null;
     return t && t.deletedAt === null ? t : null;
   }
+  // A write that puts a reminder on the index keeps the stored row's arm time when the fire time didn't
+  // move, else arms it now (remindArm) — one consistent read, only for a task that can fire.
+  private async armFor(
+    skStr: string,
+    fire: number | null,
+    now: number,
+  ): Promise<number | undefined> {
+    if (fire === null) return undefined;
+    return remindArm(
+      await this.doc.get(this.p(), skStr, { consistent: true }),
+      this.userId,
+      fire,
+      now,
+    );
+  }
+  private async taskItemArmed(t: Task): Promise<Item> {
+    return taskItem(this.userId, t, await this.armFor(sk.task(t.id), taskRemindAt(t), t.updatedAt));
+  }
   async putTask(t: Task): Promise<Task> {
-    await this.writes.put(taskItem(this.userId, t));
+    await this.writes.put(await this.taskItemArmed(t));
     return t;
   }
   async putTasks(tasks: Task[]): Promise<Task[]> {
-    await this.writes.batchPut(tasks.map((t) => taskItem(this.userId, t)));
+    await this.writes.batchPut(await mapLimit(tasks, 8, (t) => this.taskItemArmed(t)));
     return tasks;
+  }
+  // A task as the poller re-reads it, strongly, with its arm time (rows from before the stamp: updatedAt).
+  async getTaskForRemind(id: string): Promise<{ task: Task; armedAt: number } | null> {
+    const it = await this.doc.get(this.p(), sk.task(id), { consistent: true });
+    const task = it ? toEntity<Task>(it) : null;
+    if (!it || !task || task.deletedAt !== null) return null;
+    const armed = it[REMIND_ARMED_AT];
+    return { task, armedAt: typeof armed === 'number' ? armed : task.updatedAt };
   }
   async doneTasksInWindow(fromMs: number, toMs: number): Promise<Task[]> {
     const rows = await this.doc.queryIndex(gsi1.donePk(this.userId), { from: fromMs, to: toMs });
@@ -258,8 +297,10 @@ export class Repo {
   async putPlan(p: TaskPlan, previous?: TaskPlan): Promise<TaskPlan> {
     const row = previous ? { ...p, updatedAt: Math.max(p.updatedAt, previous.updatedAt + 1) } : p;
     const nextSk = sk.plan(row.day, row.order, row.id);
-    // planItem keys the row at nextSk (and on the remind index while it can still ping).
-    await this.writes.put(planItem(this.userId, row));
+    // The arm time comes from the row as it was (a reorder within the day keeps it; a new day re-arms).
+    const fromSk = previous ? sk.plan(previous.day, previous.order, previous.id) : nextSk;
+    const armed = await this.armFor(fromSk, planRemindAt(row), row.updatedAt);
+    await this.writes.put(planItem(this.userId, row, armed));
     if (previous) {
       const prevSk = sk.plan(previous.day, previous.order, previous.id);
       if (prevSk !== nextSk) await this.writes.delete(this.p(), prevSk);
@@ -267,11 +308,13 @@ export class Repo {
     return row;
   }
   // A plan row by its SK (a remind-index hit carries it), strongly consistent: a plan moved or deleted a
-  // moment ago must not ping.
-  async getPlanAt(skStr: string): Promise<TaskPlan | null> {
+  // moment ago must not ping. With its arm time, like getTaskForRemind.
+  async getPlanForRemind(skStr: string): Promise<{ plan: TaskPlan; armedAt: number } | null> {
     const it = await this.doc.get(this.p(), skStr, { consistent: true });
-    const p = it ? toEntity<TaskPlan>(it) : null;
-    return p && p.deletedAt === null ? p : null;
+    const plan = it ? toEntity<TaskPlan>(it) : null;
+    if (!it || !plan || plan.deletedAt !== null) return null;
+    const armed = it[REMIND_ARMED_AT];
+    return { plan, armedAt: typeof armed === 'number' ? armed : plan.updatedAt };
   }
 
   // --- Series ---
@@ -719,11 +762,12 @@ export class Repo {
       throw err;
     }
   }
-  async rekeyTask(t: Task): Promise<boolean> {
-    return this.rekey(taskItem(this.userId, t), t.updatedAt);
+  // Armed at `armedAt` (the backfill's own time: what fell due before it stays quiet).
+  async rekeyTask(t: Task, armedAt: number): Promise<boolean> {
+    return this.rekey(taskItem(this.userId, t, armedAt), t.updatedAt);
   }
-  async rekeyPlan(p: TaskPlan): Promise<boolean> {
-    return this.rekey(planItem(this.userId, p), p.updatedAt);
+  async rekeyPlan(p: TaskPlan, armedAt: number): Promise<boolean> {
+    return this.rekey(planItem(this.userId, p, armedAt), p.updatedAt);
   }
 
   // A device's subscription carries its keys (a credential): the BFF strips them before anything leaves.
@@ -756,8 +800,23 @@ export class Repo {
       throw err;
     }
   }
-  async deletePushSub(id: string): Promise<void> {
-    await this.writes.delete(this.p(), sk.pushSub(id));
+  // Only the version read: a removal (tombstone) or a revive that landed since wins. false = lost.
+  async deletePushSubIf(id: string, expectedUpdatedAt: number): Promise<boolean> {
+    try {
+      await this.writes.deleteIf(this.p(), sk.pushSub(id), expectedUpdatedAt);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+
+  async getPushArm(): Promise<PushArmRow | null> {
+    const it = await this.doc.get(this.p(), sk.pushArm(), { consistent: true });
+    return it ? toEntity<PushArmRow>(it) : null;
+  }
+  async putPushArm(row: PushArmRow): Promise<void> {
+    await this.writes.put(entityItem(this.userId, sk.pushArm(), row));
   }
 
   // The remind index in [from, to], ascending by fire time. Eventually consistent (a GSI is never

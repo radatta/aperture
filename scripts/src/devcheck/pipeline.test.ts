@@ -402,9 +402,13 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       sendTestPush: async () => {
         throw new Error('unused');
       },
-      setReminderSettings: async (patch) => {
-        reminderWrites.push(patch);
-        Object.assign(reminders, patch);
+      setReminderSettings: async () => {
+        throw new Error('unused');
+      },
+      restoreReminderToggles: async () => {
+        const on = { remindTimed: true, remindDueDay: true, remindPlanned: true };
+        reminderWrites.push(on);
+        Object.assign(reminders, on);
       },
       recordReminderToggles: () => {
         throw new Error('unused');

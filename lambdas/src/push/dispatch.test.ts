@@ -10,7 +10,13 @@ import { Repo } from '../ddb/repo';
 import { liveWrites, noopWrites } from '../ddb/writes';
 import { InMemoryPush, noopPush } from './gateway';
 import type { PushTarget } from './gateway';
-import { PSENT_KEEP_MS, PUSH_NO_KEY_ERROR, resetColdStart, runPushTick } from './dispatch';
+import {
+  PSENT_KEEP_MS,
+  PUSH_BAD_KEY_ERROR,
+  PUSH_NO_KEY_ERROR,
+  resetColdStart,
+  runPushTick,
+} from './dispatch';
 
 const U = 'u1';
 const APP = 'https://app.example';
@@ -406,7 +412,7 @@ describe('push dispatch — fail-closed sending', () => {
         `iPhone S1 stopped accepting reminders (push service answered ${status}) — turn them on again on that device`,
       );
       expect(health?.lastErrorAt).toBe(TWO_PM);
-      expect(health?.lastSentAt).toBe(TWO_PM);
+      expect(health?.lastSentAt).toBeNull(); // a refusal is an error, never a send
       expect(await w.registry.hasUser(U)).toBe(false);
     }
   });
@@ -538,7 +544,7 @@ describe('push dispatch — the tick', () => {
     const w = world();
     await w.device();
     await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
-    w.push.ready = false;
+    w.push.readyAs = 'no-key';
     const report = await w.tick();
     expect(report.error).toBe(PUSH_NO_KEY_ERROR);
     w.set(TWO_PM + MIN);
@@ -551,7 +557,7 @@ describe('push dispatch — the tick', () => {
       lastErrorAt: TWO_PM + MIN,
     });
     // The key arrives: the reminder (still in the window) goes, and the stage error clears.
-    w.push.ready = true;
+    w.push.readyAs = 'ok';
     w.set(TWO_PM + 2 * MIN);
     await w.tick();
     expect(w.push.sends).toHaveLength(1);
@@ -593,6 +599,7 @@ describe('push dispatch — the tick', () => {
       put: inner.put.bind(inner),
       putIf: inner.putIf.bind(inner),
       delete: inner.delete.bind(inner),
+      deleteIf: inner.deleteIf.bind(inner),
       batchPut: inner.batchPut.bind(inner),
       queryIndex: inner.queryIndex.bind(inner),
       query: async (p, prefix, opts) => {
@@ -632,6 +639,256 @@ describe('push dispatch — the tick', () => {
     for (const line of w.logs)
       for (const leak of ['secret-', P256DH, AUTH, 'Secret title', 'web.push.apple.com', 'iPhone'])
         expect(line).not.toContain(leak);
+  });
+});
+
+describe('push dispatch — armed before it fires', () => {
+  // A task's arm time is its remindArmedAt: the updatedAt of the write that set its current fire time.
+  it('a task created after its fire time never pings, even inside the window', async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00', updatedAt: TWO_PM + 20_000 }));
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0);
+  });
+
+  it('a task re-dated into the past window never pings', async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '18:00', updatedAt: 0 })); // armed early, for 18:00
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00', updatedAt: TWO_PM + 5 * MIN }));
+    w.set(TWO_PM + 6 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0);
+  });
+
+  it('a task reopened after its fire time never pings', async () => {
+    const w = world();
+    await w.device();
+    const due = { dueDay: TODAY, dueTime: '14:00' };
+    await w.repo().putTask(task({ ...due, updatedAt: 0 }));
+    await w.repo().putTask(task({ ...due, status: 'done', completedAt: 1, updatedAt: 1 }));
+    await w.repo().putTask(task({ ...due, updatedAt: TWO_PM + MIN })); // reopened at 14:01
+    w.set(TWO_PM + 2 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0);
+  });
+
+  it('a task that existed before its fire time and was missed by a failed tick still pings', async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00', updatedAt: TWO_PM - 3600_000 }));
+    // An edit that doesn't move the fire time keeps the arm: renamed at 14:05, the 14:00 tick never ran.
+    await w
+      .repo()
+      .putTask(
+        task({ dueDay: TODAY, dueTime: '14:00', title: 'Renamed', updatedAt: TWO_PM + 5 * MIN }),
+      );
+    w.set(TWO_PM + 10 * MIN);
+    await w.tick();
+    expect(w.notes()).toEqual([expect.objectContaining({ title: 'Renamed' })]);
+  });
+
+  it('a plan made after 9:00 for today never pings; one made before, missed by a tick, does', async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putTask(task({ id: 'A', title: 'Early' }));
+    await w.repo().putTask(task({ id: 'B', title: 'Late' }));
+    await w.repo().putPlan(plan({ id: 'P1', taskId: 'A', updatedAt: NINE_AM - 3600_000 }));
+    await w
+      .repo()
+      .putPlan(plan({ id: 'P2', taskId: 'B', order: 1, updatedAt: NINE_AM + 10 * MIN }));
+    w.set(NINE_AM + 15 * MIN);
+    await w.tick();
+    expect(w.notes()).toEqual([
+      expect.objectContaining({ title: 'Early', body: 'Planned for today' }),
+    ]);
+  });
+
+  it('a plan reordered within its day keeps its arm; moved to another day it re-arms', async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putTask(task({ id: 'A', title: 'Kept' }));
+    const p = plan({ id: 'P1', taskId: 'A', updatedAt: 0 });
+    await w.repo().putPlan(p);
+    const reordered = { ...p, order: 3, updatedAt: NINE_AM + 5 * MIN };
+    await w.repo().putPlan(reordered, p);
+    w.set(NINE_AM + 6 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+    // Off to tomorrow and back to today at 9:20: re-planned after 9:00, so quiet.
+    const w2 = world();
+    await w2.device();
+    await w2.repo().putTask(task({ id: 'A', title: 'Moved' }));
+    const q = plan({ id: 'P1', taskId: 'A', updatedAt: 0 });
+    await w2.repo().putPlan(q);
+    const tomorrow = { ...q, day: '2026-11-05', updatedAt: NINE_AM + 10 * MIN };
+    await w2.repo().putPlan(tomorrow, q);
+    await w2.repo().putPlan({ ...tomorrow, day: TODAY, updatedAt: NINE_AM + 20 * MIN }, tomorrow);
+    w2.set(NINE_AM + 21 * MIN);
+    await w2.tick();
+    expect(w2.push.sends).toHaveLength(0);
+  });
+
+  it('nothing due before the user had reminders on pings (the registry row is when they went live)', async () => {
+    const w = world();
+    await w.repo().putPushSub(sub('S1'));
+    await w.registry.addUser(U, TWO_PM + 5 * MIN); // first device at 14:05
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00', updatedAt: 0 }));
+    await w
+      .repo()
+      .putTask(task({ id: 'T2', title: 'Later', dueDay: TODAY, dueTime: '14:06', updatedAt: 0 }));
+    w.set(TWO_PM + 6 * MIN);
+    await w.tick();
+    expect(w.notes()).toEqual([expect.objectContaining({ title: 'Later' })]);
+  });
+
+  it("a kind switched back on doesn't fire what fell due while it was off", async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putPushArm({ remindTimed: TWO_PM + 5 * MIN, updatedAt: 1 }); // back on at 14:05
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00', updatedAt: 0 }));
+    await w.repo().putTask(task({ id: 'D', title: 'Day-only', dueDay: TODAY, updatedAt: 0 }));
+    w.set(TWO_PM + 6 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0); // 14:00 fell due while Timed was off
+    w.set(NINE_AM + MIN);
+    await w.tick(); // the day-only kind was never off: its 9:00 pings
+    expect(w.notes()).toEqual([expect.objectContaining({ title: 'Day-only' })]);
+  });
+
+  it('Send test is exempt: it pings even when the user just went live', async () => {
+    const w = world();
+    await w.repo().putPushSub(sub('S1'));
+    await w.registry.addUser(U, TWO_PM);
+    await w.repo().putPushTest({ id: 'X', createdAt: TWO_PM });
+    w.set(TWO_PM + 30_000);
+    await w.tick();
+    expect(w.notes()).toEqual([expect.objectContaining({ title: 'Aperture test' })]);
+  });
+});
+
+describe('push dispatch — races with the BFF', () => {
+  it('a removal (tombstone) that lands during the send survives the 410', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = () => {
+      // Settings › Remove, mid-send: the row becomes a keyless tombstone with a newer updatedAt.
+      w.mem.putNow(
+        entityItem(
+          U,
+          sk.pushSub('S1'),
+          sub('S1', { endpoint: '', p256dh: '', auth: '', deletedAt: 9, updatedAt: 9 }),
+        ),
+      );
+      return 410;
+    };
+    await w.tick();
+    expect(await w.repo().getPushSub('S1')).toMatchObject({ deletedAt: 9 }); // removal sticks
+    expect(w.events()).toEqual(['push_failed']);
+    expect(JSON.parse(w.logs[0]!)).toMatchObject({ status: 410, changed: true });
+    // The removal's own unsubscribe settles the registry; failing that, the next tick finds no alive device.
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(await w.registry.hasUser(U)).toBe(false);
+    expect(await w.repo().getPushSub('S1')).toMatchObject({ deletedAt: 9 });
+  });
+
+  it('a revive (re-subscribe) that lands during the send survives the 410, and keeps the user registered', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = () => {
+      w.mem.putNow(
+        entityItem(U, sk.pushSub('S1'), sub('S1', { auth: 'fresh-auth', updatedAt: 9 })),
+      );
+      return 410;
+    };
+    await w.tick();
+    expect(await w.repo().getPushSub('S1')).toMatchObject({ auth: 'fresh-auth', deletedAt: null });
+    expect(await w.registry.hasUser(U)).toBe(true);
+  });
+
+  it('a subscribe that lands as the last device goes keeps the user registered, createdAt kept', async () => {
+    // The poller's first list misses the new device (it was written a moment later); the re-read after the
+    // registry delete sees it, and the row comes back as it was.
+    const inner = new InMemoryDoc();
+    let missNext = 1;
+    const racing: DocClient = Object.assign(Object.create(inner) as InMemoryDoc, {
+      query: async (p: string, prefix: string, opts?: { consistent?: boolean }) => {
+        if (prefix === sk.pushSubPrefix() && missNext-- > 0) {
+          await inner.put(entityItem(U, sk.pushSub('S2'), sub('S2')));
+          return [];
+        }
+        return inner.query(p, prefix, opts);
+      },
+    });
+    const w = world(racing);
+    await w.registry.addUser(U, 1234);
+    await w.tick();
+    expect(await w.registry.getUser(U)).toEqual({ userId: U, createdAt: 1234 });
+    expect(w.events()).not.toContain('push_user_dropped');
+  });
+});
+
+describe('push dispatch — what the health line says', () => {
+  it('lastSentAt is the last time a push service accepted one; a refusal moves only the error', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ id: 'A', dueDay: TODAY, dueTime: '14:00' }));
+    await w.tick();
+    expect((await w.repo().getPushUserHealth())?.lastSentAt).toBe(TWO_PM);
+    await w.repo().putTask(task({ id: 'B', dueDay: TODAY, dueTime: '14:05' }));
+    w.push.status = 503;
+    w.set(TWO_PM + 5 * MIN);
+    await w.tick();
+    expect(await w.repo().getPushUserHealth()).toMatchObject({
+      lastSentAt: TWO_PM,
+      lastErrorAt: TWO_PM + 5 * MIN,
+    });
+  });
+
+  it('every device that refused this tick is named', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = (t: PushTarget) =>
+      t.endpoint.endsWith('S1') ? 410 : { status: 0, reason: 'keys' };
+    await w.tick();
+    expect((await w.repo().getPushUserHealth())?.lastError).toBe(
+      'iPhone S1 stopped accepting reminders (push service answered 410) — turn them on again on that device · ' +
+        'iPhone S2 stopped accepting reminders (its keys are invalid) — turn them on again on that device',
+    );
+  });
+
+  it("a send that throws says it couldn't send, by the error's name", async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = () => {
+      throw new RangeError('bad');
+    };
+    await w.tick();
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+      "Last reminder didn't reach this device (couldn't send: RangeError)",
+    );
+  });
+
+  it('a malformed VAPID key is a stage fault: nothing consumed or sent, shown, logged once', async () => {
+    const w = world();
+    await w.device();
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.readyAs = 'bad-key';
+    expect((await w.tick()).error).toBe(PUSH_BAD_KEY_ERROR);
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0);
+    expect(await w.repo().listPushSent()).toEqual([]);
+    expect(w.events()).toEqual(['push_bad_key']);
+    expect(await w.registry.getPoller()).toMatchObject({ lastError: PUSH_BAD_KEY_ERROR });
   });
 });
 

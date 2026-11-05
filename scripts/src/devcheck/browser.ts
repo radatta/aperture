@@ -48,8 +48,9 @@ export async function launch(
     hasTouch: true,
     timezoneId: TIMEZONE,
     locale: 'en-US',
-    // Settings' Enable asks for it inside the tap; granted, so the run drives the subscribe itself (headless
-    // Chromium's push service then answers it, or refuses — both on screen) rather than only the denied copy.
+    // Settings' Enable asks for it inside the tap. Granted here, but headless Chromium still reports
+    // Notification.permission as 'denied', so on a headless run Settings shows the denied line instead of
+    // the button (timed-reminders' ui-enable row accepts either); a headed run would get the prompt-less grant.
     permissions: ['notifications'],
     ...(storageStatePath && existsSync(storageStatePath) ? { storageState: storageStatePath } : {}),
   });

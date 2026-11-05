@@ -50,7 +50,7 @@ function live(
 describe('live push gateway', () => {
   it('POSTs the encrypted body to the endpoint with the D14 headers, no redirects, a timeout', async () => {
     const { gw, sent, ssmCalls } = live();
-    expect(await gw.configured()).toBe(true);
+    expect(await gw.readiness()).toBe('ok');
     expect(await gw.send(target, '{"web_push":8030}', opts)).toEqual({ status: 201 });
     const [{ url, init }] = sent as [{ url: string; init: RequestInit }];
     expect(url).toBe(target.endpoint);
@@ -115,14 +115,47 @@ describe('live push gateway', () => {
   });
 
   it('is not configured without the key parameter or an app URL; other SSM failures throw', async () => {
-    expect(await live({ key: notFound }).gw.configured()).toBe(false);
-    expect(await live({ appUrl: '' }).gw.configured()).toBe(false);
-    await expect(live({ key: () => new Error('AccessDenied') }).gw.configured()).rejects.toThrow(
+    expect(await live({ key: notFound }).gw.readiness()).toBe('no-key');
+    expect(await live({ appUrl: '' }).gw.readiness()).toBe('no-key');
+    await expect(live({ key: () => new Error('AccessDenied') }).gw.readiness()).rejects.toThrow(
       'AccessDenied',
     );
     await expect(live({ key: notFound }).gw.send(target, '{}', opts)).rejects.toThrow(
       /not configured/,
     );
+  });
+
+  // A value that isn't a P-256 private key is the stage's fault, read as such before any send — never a
+  // "network error" — and never cached, so a fixed parameter works on the next tick.
+  it('a malformed private key reads as bad-key, sends nothing, and is re-read until fixed', async () => {
+    let value: string | Error = 'not-a-key';
+    const { gw, sent, ssmCalls } = live({ key: () => value });
+    expect(await gw.readiness()).toBe('bad-key');
+    await expect(gw.send(target, '{}', opts)).rejects.toThrow(/not configured/);
+    expect(sent).toHaveLength(0);
+    value = Buffer.alloc(33, 7).toString('base64url'); // 33 octets: not a P-256 scalar
+    expect(await gw.readiness()).toBe('bad-key');
+    value = PRIVATE;
+    expect(await gw.readiness()).toBe('ok');
+    expect(await gw.send(target, '{}', opts)).toEqual({ status: 201 });
+    expect(ssmCalls).toHaveLength(4); // every read until it's good (the send's too), then held
+  });
+
+  it('signs before the request: a signing fault throws, it is not a network error', async () => {
+    const { gw, sent } = live();
+    // An endpoint the allowlist admits but whose origin can't be signed for can't occur, so break `now`.
+    const broken = createLivePush({
+      stage: 'dev',
+      appUrl: 'https://dev.example',
+      fetch: (async () => new Response(null, { status: 201 })) as unknown as typeof fetch,
+      ssm: ssmWith(() => PRIVATE).ssm,
+      now: () => {
+        throw new RangeError('clock');
+      },
+    });
+    await expect(broken.send(target, '{}', opts)).rejects.toThrow('clock');
+    expect(await gw.send(target, '{}', opts)).toEqual({ status: 201 });
+    expect(sent).toHaveLength(1);
   });
 });
 

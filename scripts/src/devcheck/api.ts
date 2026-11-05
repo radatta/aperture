@@ -844,6 +844,17 @@ export function createApiClient({
     },
     // The ledger half alone, for a Settings toggle click: called before it. Writes nothing to dev.
     recordReminderToggles: (): void => recordToggles(),
+    // Cleanup's restore (this run's or a swept older one's): all three on, recording nothing new — a sweep
+    // must not open a `reminder-toggles:<this run>` it never flipped. Only while some run's flip is pending.
+    async restoreReminderToggles(): Promise<void> {
+      const entries = ledger.read();
+      if (!pendingIds(entries).some((id) => ledgerKind(entries, id) === 'reminderToggles'))
+        throw new DevcheckError(
+          'LEDGER_GUARD',
+          'refusing to restore the reminder toggles — no run recorded flipping them',
+        );
+      await call<unknown>('updateSettings', [{ ...REMINDERS_ON }]);
+    },
   };
 
   return { reads, writes };

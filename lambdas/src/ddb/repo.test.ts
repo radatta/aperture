@@ -283,7 +283,7 @@ describe('Repo reminders (the remind index + push rows)', () => {
     ]);
     await r.putPlan({ ...moved, deletedAt: 2, updatedAt: 2 }, moved);
     expect(await r.remindRowsInWindow(0, Number.MAX_SAFE_INTEGER)).toEqual([]);
-    expect(await r.getPlanAt(sk.plan('2026-11-05', 0, 'p1'))).toBeNull();
+    expect(await r.getPlanForRemind(sk.plan('2026-11-05', 0, 'p1'))).toBeNull();
   });
 
   it('reads the window by fire time and tells tasks, plans and Send-test rows apart', async () => {
@@ -307,9 +307,9 @@ describe('Repo reminders (the remind index + push rows)', () => {
     const t = task({ id: 'old', dueDay: '2026-11-04', updatedAt: 3 });
     await doc.put({ PK: `u#${U}`, SK: sk.task('old'), ...t }); // written before the index existed
     expect(await r.remindRowsInWindow(0, AT_9AM)).toEqual([]);
-    expect(await r.rekeyTask(t)).toBe(true);
+    expect(await r.rekeyTask(t, 9)).toBe(true);
     expect((await r.remindRowsInWindow(0, AT_9AM)).map((x) => x.kind)).toEqual(['task']);
-    expect(await r.rekeyTask({ ...t, updatedAt: 2 })).toBe(false); // the row moved on — nothing to do
+    expect(await r.rekeyTask({ ...t, updatedAt: 2 }, 9)).toBe(false); // the row moved on — nothing to do
     expect((await doc.get(`u#${U}`, sk.task('old')))?.updatedAt).toBe(3);
   });
 
@@ -355,5 +355,37 @@ describe('Repo reminders (the remind index + push rows)', () => {
     for (const it of doc.snapshot()) expect(it.GSI1PK).toBeUndefined();
     await r.putPushTest({ id: 'x', createdAt: 9 });
     expect(await keysOf(doc, sk.pushTest('x'))).toEqual({ GSI1PK: gsi1.remindPk(U), GSI1SK: 9 });
+  });
+
+  it('the arm stamp stays in the table: kept by an edit that keeps the fire time, renewed by one that moves it', async () => {
+    const { doc, repo: r } = repo();
+    const armOf = async (id: string) => (await doc.get(`u#${U}`, sk.task(id)))?.remindArmedAt;
+    await r.putTask(task({ id: 'a', dueDay: '2026-11-04', dueTime: '14:00', updatedAt: 5 }));
+    expect(await armOf('a')).toBe(5);
+    await r.putTask(
+      task({ id: 'a', dueDay: '2026-11-04', dueTime: '14:00', title: 'renamed', updatedAt: 6 }),
+    );
+    expect(await armOf('a')).toBe(5);
+    await r.putTask(task({ id: 'a', dueDay: '2026-11-04', dueTime: '15:00', updatedAt: 7 }));
+    expect(await armOf('a')).toBe(7);
+    await r.putTask(
+      task({
+        id: 'a',
+        dueDay: '2026-11-04',
+        dueTime: '15:00',
+        status: 'done',
+        completedAt: 8,
+        updatedAt: 8,
+      }),
+    );
+    expect(await armOf('a')).toBeUndefined();
+    await r.putTasks([task({ id: 'a', dueDay: '2026-11-04', dueTime: '15:00', updatedAt: 9 })]); // reopened
+    expect(await armOf('a')).toBe(9);
+    // Never part of the entity: not on a read, a list or the window's rows.
+    expect(await r.getTask('a')).not.toHaveProperty('remindArmedAt');
+    expect((await r.listTasks())[0]).not.toHaveProperty('remindArmedAt');
+    const [row] = await r.remindRowsInWindow(0, Number.MAX_SAFE_INTEGER);
+    expect(row?.kind === 'task' && row.task).not.toHaveProperty('remindArmedAt');
+    expect(await r.getTaskForRemind('a')).toMatchObject({ armedAt: 9 });
   });
 });

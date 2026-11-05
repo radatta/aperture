@@ -8,6 +8,7 @@ export interface Writes {
   put(item: Item): Promise<void>;
   putIf(item: Item, expectedUpdatedAt: number | null): Promise<void>; // see DocClient.putIf
   delete(pk: string, sk: string): Promise<void>;
+  deleteIf(pk: string, sk: string, expectedUpdatedAt: number): Promise<void>; // see DocClient.deleteIf
   batchPut(items: Item[]): Promise<void>;
 }
 
@@ -33,6 +34,7 @@ export function liveWrites(doc: DocClient, stage = process.env.STAGE): Writes {
     put: (item) => doc.put(out(item)),
     putIf: (item, expected) => doc.putIf(out(item), expected),
     delete: (pk, sk) => doc.delete(pk, sk),
+    deleteIf: (pk, sk, expected) => doc.deleteIf(pk, sk, expected),
     batchPut: (items) => doc.batchPut(items.map(out)),
   };
 }
@@ -42,6 +44,7 @@ export function noopWrites(): Writes {
     put: async () => {},
     putIf: async () => {},
     delete: async () => {},
+    deleteIf: async () => {},
     batchPut: async () => {},
   };
 }

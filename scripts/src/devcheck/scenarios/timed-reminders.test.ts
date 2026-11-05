@@ -1,7 +1,7 @@
 import { createECDH } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DevPushDevice, DevPushStatus } from '../api';
-import { e2eOutcome, laClock, pushKeys } from './timed-reminders';
+import { droppedForKeys, e2eOutcome, laClock, pushKeys, sameTick } from './timed-reminders';
 
 // The end-to-end step reads the poller's own words back (lambdas/src/push/dispatch.ts — scripts doesn't
 // depend on lambdas): the strings below are what it writes for each answer Apple can give a never-issued
@@ -31,23 +31,30 @@ const goneError = (code: number) =>
 const keptError = (code: number) =>
   `Last reminder didn't reach this device (push service answered ${code})`;
 
+const C = 'Devcheck C n0nce';
+const cDropped = `${C} stopped accepting reminders (its keys are invalid) — turn them on again on that device`;
+const AT = SINCE + 30_000; // the tick's time
+
 describe('e2eOutcome', () => {
-  it('waits while no send is stamped since the run armed', () => {
+  it('waits while no refusal is stamped since the reminder fell due', () => {
     expect(e2eOutcome(status({ devices: [device()] }), 'A', LABEL, SINCE)).toBeNull();
-    const old = status({ devices: [device()], poller: { lastSentAt: SINCE - 60_000 } });
+    const old = status({
+      devices: [device({ lastError: keptError(400), lastErrorAt: SINCE - 60_000 })],
+      poller: { lastError: goneError(410), lastErrorAt: SINCE - 60_000 },
+    });
     expect(e2eOutcome(old, 'A', LABEL, SINCE)).toBeNull();
   });
 
-  it('404 and 410: the poller deleted the device and named it — a pass', () => {
+  it('404 and 410: the poller deleted the device and named it — a pass, alone or beside C’s drop', () => {
     for (const code of [404, 410])
-      expect(
-        e2eOutcome(
-          status({ poller: { lastSentAt: SINCE + 30_000, lastError: goneError(code) } }),
-          'A',
-          LABEL,
-          SINCE,
-        ),
-      ).toEqual({ ok: true, how: `Apple answered ${code}: the poller deleted the device` });
+      for (const lastError of [
+        goneError(code),
+        `${goneError(code)} · ${cDropped}`,
+        `${cDropped} · ${goneError(code)}`,
+      ])
+        expect(
+          e2eOutcome(status({ poller: { lastError, lastErrorAt: AT } }), 'A', LABEL, SINCE),
+        ).toEqual({ ok: true, how: `Apple answered ${code}: the poller deleted the device` });
   });
 
   it('400 and 403: the device stays, carrying the error — a pass', () => {
@@ -55,8 +62,8 @@ describe('e2eOutcome', () => {
       expect(
         e2eOutcome(
           status({
-            devices: [device({ lastError: keptError(code), lastErrorAt: SINCE + 30_000 })],
-            poller: { lastSentAt: SINCE + 30_000, lastError: `${LABEL}: ${keptError(code)}` },
+            devices: [device({ lastError: keptError(code), lastErrorAt: AT })],
+            poller: { lastError: `${LABEL}: ${keptError(code)}`, lastErrorAt: AT },
           }),
           'A',
           LABEL,
@@ -66,40 +73,45 @@ describe('e2eOutcome', () => {
   });
 
   it('anything else a send can produce is a named failure', () => {
-    const sent = { lastSentAt: SINCE + 30_000 };
+    const tick = { lastErrorAt: AT };
     for (const lastError of [
       "Last reminder didn't reach this device (push service answered 503)",
       "Last reminder didn't reach this device (timed out)",
       "Last reminder didn't reach this device (network error)",
-    ]) {
-      const o = e2eOutcome(
-        status({ devices: [device({ lastError })], poller: sent }),
-        'A',
-        LABEL,
-        SINCE,
-      );
-      expect(o).toMatchObject({ ok: false });
-    }
-    // Delivered?! Apple took a never-issued endpoint.
+      "Last reminder didn't reach this device (couldn't send: RangeError)",
+    ])
+      expect(
+        e2eOutcome(
+          status({ devices: [device({ lastError, lastErrorAt: AT })], poller: tick }),
+          'A',
+          LABEL,
+          SINCE,
+        ),
+      ).toMatchObject({ ok: false });
+    // Delivered?! Apple took a never-issued endpoint (only an acceptance moves lastSentAt).
     expect(
       e2eOutcome(
-        status({ devices: [device({ lastOkAt: SINCE + 1 })], poller: sent }),
+        status({ devices: [device({ lastOkAt: AT })], poller: { lastSentAt: AT } }),
         'A',
         LABEL,
         SINCE,
       ),
-    ).toMatchObject({ ok: false });
+    ).toMatchObject({ ok: false, why: expect.stringMatching(/accepted/) });
     // Gone without a 404/410, or gone because the user removed it.
-    expect(e2eOutcome(status({ poller: sent }), 'A', LABEL, SINCE)).toMatchObject({ ok: false });
+    expect(
+      e2eOutcome(status({ poller: { ...tick, lastError: cDropped } }), 'A', LABEL, SINCE),
+    ).toMatchObject({
+      ok: false,
+    });
     expect(
       e2eOutcome(
-        status({ removedDeviceIds: ['A'], poller: { ...sent, lastError: goneError(410) } }),
+        status({ removedDeviceIds: ['A'], poller: { ...tick, lastError: goneError(410) } }),
         'A',
         LABEL,
         SINCE,
       ),
     ).toMatchObject({ ok: false });
-    // The test user's daily guard is shut (26+ runs in one LA day).
+    // The test user's daily guard is shut.
     expect(
       e2eOutcome(
         status({
@@ -114,23 +126,43 @@ describe('e2eOutcome', () => {
         SINCE,
       ),
     ).toMatchObject({ ok: false, why: expect.stringMatching(/daily guard/) });
-    // The stage can't sign at all.
-    expect(
-      e2eOutcome(
-        status({ poller: { lastError: 'No VAPID key on this stage — reminders are off' } }),
-        'A',
-        LABEL,
-        SINCE,
-      ),
-    ).toMatchObject({ ok: false, why: expect.stringMatching(/can't send/) });
+    // The stage can't sign at all: no key, or a malformed one.
+    for (const lastError of [
+      'No VAPID key on this stage — reminders are off',
+      'VAPID private key is malformed — reminders are off',
+    ])
+      expect(e2eOutcome(status({ poller: { lastError } }), 'A', LABEL, SINCE)).toMatchObject({
+        ok: false,
+        why: expect.stringMatching(/can't send/),
+      });
   });
 
   it('a label with regex characters still matches only itself', () => {
     const odd = 'Devcheck (A) n0nce';
     const err = `${odd} stopped accepting reminders (push service answered 410) — turn them on again on that device`;
-    const s = status({ poller: { lastSentAt: SINCE, lastError: err } });
+    const s = status({ poller: { lastError: err, lastErrorAt: AT } });
     expect(e2eOutcome(s, 'A', odd, SINCE)).toMatchObject({ ok: true });
     expect(e2eOutcome(s, 'A', 'Devcheck XAX n0nce', SINCE)).toMatchObject({ ok: false });
+  });
+});
+
+describe('sameTick', () => {
+  it('holds when A’s refusal and C’s drop are entries of one tick’s error', () => {
+    expect(
+      sameTick(status({ poller: { lastError: `${goneError(410)} · ${cDropped}` } }), LABEL, C),
+    ).toBe(true);
+    expect(
+      sameTick(
+        status({ poller: { lastError: `${LABEL}: ${keptError(400)} · ${cDropped}` } }),
+        LABEL,
+        C,
+      ),
+    ).toBe(true);
+  });
+  it('fails when either went in another tick', () => {
+    expect(sameTick(status({ poller: { lastError: cDropped } }), LABEL, C)).toBe(false);
+    expect(sameTick(status({ poller: { lastError: goneError(410) } }), LABEL, C)).toBe(false);
+    expect(droppedForKeys(C)).toBe(cDropped.split(' — ')[0]);
   });
 });
 

@@ -139,6 +139,7 @@ import type {
   PushDevice,
   PushStatus,
   PushSub,
+  ReminderSettingKey,
   RecordLeetcodeAttemptInput,
   Roll,
   Settings,
@@ -1837,7 +1838,22 @@ export class BackendClient implements ApiClient {
       if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
     }
     const current = await this.ensureSettings({ consistent: true });
-    return this.repo.putSettings({ ...current, ...patch, updatedAt: this.now() });
+    const now = this.now();
+    // A kind switched back on pings from now on: nothing that fell due while it was off (reminders.md → §3).
+    const switchedOn = REMINDER_KEYS.filter(
+      (k) =>
+        (patch as Record<string, unknown>)[k] === true &&
+        current[k as ReminderSettingKey] === false,
+    );
+    if (switchedOn.length > 0) {
+      const arm = await this.repo.getPushArm();
+      await this.repo.putPushArm({
+        ...arm,
+        ...Object.fromEntries(switchedOn.map((k) => [k, now])),
+        updatedAt: Math.max(now, (arm?.updatedAt ?? 0) + 1),
+      });
+    }
+    return this.repo.putSettings({ ...current, ...patch, updatedAt: now });
   }
 
   // --- Reminders (reminders.md) ---
@@ -1903,8 +1919,9 @@ export class BackendClient implements ApiClient {
       deletedAt: now,
       updatedAt: Math.max(now, prev.updatedAt + 1),
     });
-    if ((await this.repo.listPushSubs({ consistent: true })).length === 0)
-      await this.pushRegistry.removeUser(this.userId);
+    const alive = async () => (await this.repo.listPushSubs({ consistent: true })).length > 0;
+    // dropUser re-reads after its delete, so a subscribe on another device racing this one stays registered.
+    if (!(await alive())) await this.pushRegistry.dropUser(this.userId, alive, now);
   }
   // Health in three signals (D6): this user's devices, the poller's heartbeat (stage-wide), and the last
   // send / error — the stage's current error when there is one, else this user's last.
@@ -1916,6 +1933,8 @@ export class BackendClient implements ApiClient {
       this.repo.getPushUserHealth(),
     ]);
     const stageError = poller?.lastError ?? null;
+    // Cheap self-heal: a user with a live device must be on the poller's registry (one consistent read).
+    if (rows.some((r) => r.deletedAt === null)) await this.ensurePushUser(this.now());
     return {
       configured: key !== null,
       vapidPublicKey: key,
@@ -1929,7 +1948,7 @@ export class BackendClient implements ApiClient {
         .sort(),
       poller: {
         lastRunAt: poller?.lastRunAt ?? null,
-        lastSentAt: mine?.lastSentAt ?? null,
+        lastSentAt: mine?.lastSentAt ?? null, // a push service last ACCEPTED one (a refusal is an error)
         lastError: stageError ?? mine?.lastError ?? null,
         lastErrorAt: stageError ? (poller?.lastErrorAt ?? null) : (mine?.lastErrorAt ?? null),
       },
@@ -1951,18 +1970,19 @@ export class BackendClient implements ApiClient {
     await this.pushRegistry.addUser(this.userId, now);
   }
   // Re-key every alive task and plan that can still fire (from the window's start on) onto the remind
-  // index, each conditional on the version read (Repo.rekey — a write since already keyed it). Idempotent.
+  // index, each conditional on the version read (Repo.rekey — a write since already keyed it), armed now: what
+  // fell due before this backfill stays quiet. Idempotent. Consistent: a task written a moment ago counts.
   private async backfillReminders(now: number): Promise<void> {
     const from = now - REMINDER_WINDOW_MS;
     const live = (at: number | null) => at !== null && at >= from;
-    const tasks = (await this.repo.listTasks()).filter((t) =>
+    const tasks = (await this.repo.listTasks({ consistent: true })).filter((t) =>
       live(fireAtOrNull(() => taskFireAt(t, this.dueEpoch))),
     );
-    const plans = (await this.repo.listAllPlans()).filter((p) =>
+    const plans = (await this.repo.listAllPlans({ consistent: true })).filter((p) =>
       live(fireAtOrNull(() => planFireAt(p, this.dueEpoch))),
     );
-    await mapLimit(tasks, 8, (t) => this.repo.rekeyTask(t));
-    await mapLimit(plans, 8, (p) => this.repo.rekeyPlan(p));
+    await mapLimit(tasks, 8, (t) => this.repo.rekeyTask(t, now));
+    await mapLimit(plans, 8, (p) => this.repo.rekeyPlan(p, now));
   }
 
   // --- Google Calendar (multi-account) ---

@@ -1,7 +1,7 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { pushEndpointOk } from '@aperture/shared';
-import type { PushGateway, PushResult, PushSendOpts, PushTarget } from './gateway';
-import { encryptAes128Gcm, PushKeysError, vapidAuthorization } from './webpush';
+import type { PushGateway, PushReadiness, PushResult, PushSendOpts, PushTarget } from './gateway';
+import { encryptAes128Gcm, publicKeyOf, PushKeysError, vapidAuthorization } from './webpush';
 
 // The live push gateway: one POST per device to its stored endpoint, encrypted (RFC 8291) and signed
 // (RFC 8292) with the stage's VAPID private key from SSM SecureString
@@ -26,24 +26,38 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
   const ssm: SsmLike = cfg.ssm ?? new SSMClient({});
   const now = cfg.now ?? Date.now;
   const keyParam = `/aperture/${cfg.stage}/push/vapid_private_key`;
-  let key: string | null = null;
+  let key: string | null = null; // only ever a key that derives a public one
+  let bad = false; // the last read found a value that isn't a P-256 private key
 
-  // A missing parameter is "not set up" (null); any other SSM failure throws — the tick fails loudly.
+  // A missing parameter is "not set up" (null); a value that isn't a P-256 key is held as `bad` (never
+  // cached as the key, so a fixed parameter is read on the next tick); any other SSM failure throws — the
+  // tick fails loudly.
   async function privateKey(): Promise<string | null> {
     if (key) return key;
+    bad = false;
+    let value: string | null = null;
     try {
       const res = await ssm.send(new GetParameterCommand({ Name: keyParam, WithDecryption: true }));
-      key = res.Parameter?.Value || null;
+      value = res.Parameter?.Value || null;
     } catch (err) {
       if (!(err instanceof Error && err.name === 'ParameterNotFound')) throw err;
+    }
+    if (value === null) return null;
+    try {
+      publicKeyOf(value);
+      key = value;
+    } catch {
+      bad = true;
     }
     return key;
   }
   const isTimeout = (err: unknown) => ['TimeoutError', 'AbortError'].includes((err as Error).name);
 
   return {
-    async configured() {
-      return cfg.appUrl !== '' && (await privateKey()) !== null;
+    async readiness(): Promise<PushReadiness> {
+      if (!cfg.appUrl) return 'no-key';
+      if ((await privateKey()) !== null) return 'ok';
+      return bad ? 'bad-key' : 'no-key';
     },
     async send(target: PushTarget, payload: string, opts: PushSendOpts): Promise<PushResult> {
       // The allowlist gate ran at subscribe; checked again here so a row that never passed it (written
@@ -58,12 +72,14 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
         if (err instanceof PushKeysError) return { status: 0, reason: 'keys' };
         throw err;
       }
+      // Signed before the request: a signing fault is never mistaken for the network's.
+      const authorization = vapidAuthorization(target.endpoint, k, cfg.appUrl, now());
       let res: Response;
       try {
         res = await doFetch(target.endpoint, {
           method: 'POST',
           headers: {
-            authorization: vapidAuthorization(target.endpoint, k, cfg.appUrl, now()),
+            authorization,
             'content-encoding': 'aes128gcm',
             'content-type': 'application/octet-stream',
             ttl: String(opts.ttlSeconds),
