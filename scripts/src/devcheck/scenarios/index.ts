@@ -5,6 +5,7 @@ import type { Scenario, Tier } from '../scenario';
 import { attachmentDelete } from './attachment-delete';
 import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
+import { dayGuards } from './day-guards';
 import { failedReads } from './failed-reads';
 import { finance } from './finance';
 import { fluxHistory } from './flux-history';
@@ -27,6 +28,7 @@ export const SCENARIOS: Scenario[] = [
   partsV2,
   partsV2b,
   partsV2bReads,
+  dayGuards,
   fluxHistory,
   fluxPerf,
   attachmentDelete,

@@ -5,6 +5,7 @@ import {
   FINANCE_RULE_VIA,
   PLACE_TOKEN_VIA,
   CATEGORY_VIA,
+  HABIT_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
   SERIES_VIA,
@@ -68,6 +69,8 @@ describe('createApiClient', () => {
       'listFinanceRules',
       'listFinanceTransactions',
       'listFluxSets',
+      'listHabitChecks',
+      'listHabits',
       'listPlaceTasks',
       'listPlaces',
       'listPlansForDay',
@@ -79,6 +82,8 @@ describe('createApiClient', () => {
       'probePresigned',
     ]);
     expect(Object.keys(api.writes).sort()).toEqual([
+      'archiveHabit',
+      'checkHabit',
       'createAttachment',
       'createSeries',
       'createTask',
@@ -93,15 +98,19 @@ describe('createApiClient', () => {
       'recordFinanceLink',
       'recordFluxSet',
       'recordPlaceTokenMint',
+      'removePlan',
       'revokePlaceToken',
       'rotatePlaceToken',
       'setDayCapacity',
       'setDayIntent',
       'setTaskActual',
+      'transitionTask',
+      'uncheckHabit',
       'unlinkFinanceRefund',
       'unsetFinanceBucket',
       'upsertCategory',
       'upsertFinanceRule',
+      'upsertHabit',
       'upsertPlace',
       'upsertPlan',
     ]);
@@ -309,6 +318,7 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'S', via: SERIES_VIA },
         { run: 'r', op: 'created' as const, id: 'S2', via: UI_SERIES_VIA },
         { run: 'r', op: 'created' as const, id: 'S3', via: MCP_SERIES_VIA },
+        { run: 'r', op: 'created' as const, id: 'H', via: HABIT_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -324,6 +334,7 @@ describe('createApiClient', () => {
           'S',
           'S2',
           'S3',
+          'H',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -339,6 +350,7 @@ describe('createApiClient', () => {
         'series',
         'series',
         'series',
+        'habit',
         'task',
       ]);
     });

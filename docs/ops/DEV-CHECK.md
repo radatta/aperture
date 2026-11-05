@@ -128,6 +128,10 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   before them — a run task on a run category would make the delete refuse, so no scenario puts one there. The same scenario sets the
   test user's own day row (capacity, intent) through the UI and puts the prior values back in the step's `finally` —
   a singleton, nothing to ledger (an intent that was never set comes back as `''`; the API has no null intent).
+- **A habit is one more kind** (`scenarios/day-guards.ts`): recorded from the create's id (`via: api:upsertHabit`). The API
+  has no habit delete, so cleanup *archives* it (`upsertHabit({ …, active: false })`) and "exists" means listed and active —
+  the run ends at 0 leftovers, and one archived `devcheck <nonce> habit` per run stays on the dev test user, by design, until a
+  tombstoning `deleteHabit` lands (day-guards' follow-up). Its checks are tombstones the archive leaves behind.
 - **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
   A place is recorded from the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's
   request has no `id` — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is
