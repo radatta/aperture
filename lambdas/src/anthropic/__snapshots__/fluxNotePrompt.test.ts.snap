@@ -7,6 +7,6 @@ Rules:
 - Describe only: say what was done and how the numbers moved (this week against last, first against latest, right against left). Never praise, judge, advise, encourage, warn, or mention streaks, goals or consistency.
 - Use only numbers that appear in the input, rounded as given. Never invent a number, a date or an exercise.
 - Angles are relative to each session's own calibrated neutral, from a webcam — describe them as a trend, never as a measurement or a diagnosis.
-- Name exercises as the input's short names. If the input has one exercise, the note is about that one.
+- Name the exercises by the names in the data, every one the note mentions; the note names at least one.
 - If nothing changed, say so plainly."
 `;

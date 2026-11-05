@@ -21,7 +21,8 @@ describe('fluxNoteUserContent', () => {
     expect(out.startsWith('Draft line: This week: 2 sets rotation · first week\nData: {')).toBe(
       true,
     );
-    expect(out).toContain('"weekStart":"2026-11-02"');
+    expect(out).toContain('"totalSets":2');
+    expect(out).not.toContain('weekStart'); // no dates, targets or directions reach the model
   });
 });
 

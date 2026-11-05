@@ -298,13 +298,17 @@ export interface FluxWeekSummary {
   exercises: FluxWeekExercise[]; // most sets first, then as first done
 }
 
-const inWeek = (set: Pick<FluxSet, 'day'>, weekStart: string): boolean =>
-  set.day >= weekStart && set.day <= addDays(weekStart, 6);
+// The sets of the week starting `weekStart`, by the set's own day — the one filter the summary, the
+// fingerprint and both servers use.
+export const fluxWeekSets = <S extends Pick<FluxSet, 'day'>>(
+  sets: readonly S[],
+  weekStart: string,
+): S[] => sets.filter((s) => s.day >= weekStart && s.day <= addDays(weekStart, 6));
 
 // This week against last, from alive sets (the caller filters deleted ones).
 export function fluxWeekSummary(sets: readonly FluxSet[], weekStart: string): FluxWeekSummary {
-  const week = sets.filter((s) => inWeek(s, weekStart));
-  const prev = sets.filter((s) => inWeek(s, addDays(weekStart, -7)));
+  const week = fluxWeekSets(sets, weekStart);
+  const prev = fluxWeekSets(sets, addDays(weekStart, -7));
   const last = new Map(fluxExerciseSummary(prev).map((e) => [e.exerciseId, e]));
   const exercises = fluxExerciseSummary(week)
     .map((e): FluxWeekExercise => {
@@ -363,19 +367,81 @@ function clip(text: string, max: number): string {
 // only when this week's alive sets change.
 export const fluxNoteFingerprint = (
   weekSets: readonly Pick<FluxSet, 'id' | 'completedAt'>[],
-): string =>
-  `${weekSets.length}:${[...weekSets].sort((a, b) => b.completedAt - a.completedAt)[0]?.id ?? ''}`;
+): string => {
+  const newest = [...weekSets].sort(
+    (a, b) => b.completedAt - a.completedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  )[0];
+  return `${weekSets.length}:${newest?.id ?? ''}`;
+};
 
 export const FLUX_NOTE_MIN_SETS = 2;
 
-// A note the server may hand back: a trimmed, non-empty line within the cap, carrying no number the
-// summary doesn't (the model is asked to describe, never to invent). Anything else → the line.
+// What the model is shown (fluxNotePrompt): the summary without its dates, targets or directions — only
+// what a descriptive line may repeat, each exercise by the short name History uses.
+export interface FluxNoteData {
+  totalSets: number;
+  lastWeekSets: number;
+  exercises: {
+    name: string;
+    sets: number;
+    stoppedEarly: number;
+    first?: number;
+    latest?: number;
+    unit?: string;
+    sides: FluxWeekExercise['sides'];
+    lastWeek: FluxWeekExercise['lastWeek'];
+  }[];
+}
+
+export function fluxNoteData(s: FluxWeekSummary): FluxNoteData {
+  return {
+    totalSets: s.totalSets,
+    lastWeekSets: s.lastWeekSets,
+    exercises: s.exercises.map((e) => ({
+      name: isExerciseId(e.exerciseId) ? SHORT_NAMES[e.exerciseId] : e.exerciseId,
+      sets: e.sets,
+      stoppedEarly: e.stoppedEarly,
+      ...(e.first !== undefined ? { first: Math.round(e.first) } : {}),
+      ...(e.latest !== undefined ? { latest: Math.round(e.latest) } : {}),
+      ...(e.unit !== undefined ? { unit: e.unit } : {}),
+      sides: e.sides,
+      lastWeek: e.lastWeek
+        ? {
+            sets: e.lastWeek.sets,
+            ...(e.lastWeek.latest !== undefined ? { latest: Math.round(e.lastWeek.latest) } : {}),
+          }
+        : null,
+    })),
+  };
+}
+
+// A note the server may hand back: a trimmed, non-empty line within the cap that names at least one of
+// the week's exercises and carries no number the data lacks (the model is asked to describe, never to
+// invent — a number from nowhere is the one slip that reads as a score). Anything else → the line.
 export function fluxNoteText(note: unknown, line: string, s: FluxWeekSummary): string | null {
   if (typeof note !== 'string') return null;
   const text = note.trim().replace(/\s+/g, ' ');
   if (!text || text.length > FLUX_NOTE_MAX) return null;
-  const allowed = new Set((line + ' ' + JSON.stringify(s)).match(/\d+(?:\.\d+)?/g) ?? []);
-  for (const n of text.match(/\d+(?:\.\d+)?/g) ?? []) if (!allowed.has(n)) return null;
+  const data = fluxNoteData(s);
+  if (!data.exercises.some((e) => text.toLowerCase().includes(e.name.toLowerCase()))) return null;
+  const allowed = new Set<string>();
+  const add = (n: number | undefined) => {
+    if (n !== undefined) allowed.add(String(n));
+  };
+  add(data.totalSets);
+  add(data.lastWeekSets);
+  for (const e of data.exercises) {
+    add(e.sets);
+    add(e.stoppedEarly);
+    add(e.first);
+    add(e.latest);
+    add(e.sides?.right);
+    add(e.sides?.left);
+    add(e.lastWeek?.sets);
+    add(e.lastWeek?.latest);
+  }
+  for (const n of line.match(/\d+/g) ?? []) allowed.add(n);
+  for (const n of text.match(/\d+/g) ?? []) if (!allowed.has(n)) return null;
   return text;
 }
 

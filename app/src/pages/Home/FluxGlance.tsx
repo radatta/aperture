@@ -44,7 +44,7 @@ export function FluxGlance({ today }: { today: string }) {
           )
         )}
       </span>
-      <Text size="sm" tone="muted" aria-hidden>
+      <Text size="sm" tone="muted" aria-hidden className="shrink-0 whitespace-nowrap">
         History →
       </Text>
     </Link>

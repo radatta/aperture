@@ -160,6 +160,7 @@ import {
   fluxSetError,
   fluxSetsError,
   fluxWeekLine,
+  fluxWeekSets,
   fluxWeekStart,
   fluxWeekSummary,
   inRange,
@@ -681,10 +682,11 @@ export class BackendClient implements ApiClient {
     const settings = await this.ensureSettings();
     const today = dayKeyInZone(this.now(), USER_TIME_ZONE, settings.dayStartHour);
     const weekStart = fluxWeekStart(today);
-    const sets = inRange(await this.repo.listAllFluxSets());
+    // Consistent: a set saved a moment ago must be in the fingerprint, or the note is stored stale.
+    const sets = inRange(await this.repo.listAllFluxSets({ consistent: true }));
     const summary = fluxWeekSummary(sets, weekStart);
     if (summary.totalSets < FLUX_NOTE_MIN_SETS) return null;
-    const week = sets.filter((x) => x.day >= weekStart && x.day <= summary.weekEnd);
+    const week = fluxWeekSets(sets, weekStart);
     const fingerprint = fluxNoteFingerprint(week);
     const stored = await this.repo.getFluxWeekNote(weekStart);
     if (stored && stored.fingerprint === fingerprint) return fluxNoteOf(stored);

@@ -89,10 +89,16 @@ export const fluxHistory: Scenario = {
         'a session run to its end needs a camera; off dev: useFluxEngine.test "no state post after a self-ended session reaches the panel, until the next Start"',
     },
     {
+      id: 'note-null',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Before the scenario’s sets (under two this week), getFluxWeekNote is null',
+    },
+    {
       id: 'week-note',
       entry: 'api',
       kind: 'nominal',
-      what: 'After the scenario’s sets, getFluxWeekNote is a line of at most 140 characters naming chin tuck; a second call keeps generatedAt',
+      what: 'After the scenario’s sets, getFluxWeekNote is a line of at most 140 characters naming one of the week’s exercises; a second call keeps generatedAt',
     },
     {
       id: 'night-note',
@@ -107,14 +113,14 @@ export const fluxHistory: Scenario = {
       what: 'History shows the week’s note above the exercise chips',
     },
     {
-      id: 'note-under-two',
+      id: 'note-last-week',
       entry: 'api',
       kind: 'edge',
-      what: 'One set this week → no note (null); last week’s sets count only as last week',
+      what: 'Last week’s sets count only as last week: one set this week beside them is still no note',
       offDev: {
         file: 'lambdas/src/backend.fluxNote.test.ts',
         test: 'is null under two sets this week, and last week’s sets only count as last week',
-        why: 'dev’s test user keeps the scenario’s sets only during a run; the week’s count can’t be held at one without deleting what another step needs, and the test drives the real backend over the real week maths',
+        why: 'which of the scenario’s backdated sets fall in last week depends on the weekday the run happens on; the test drives the real backend over fixed days',
       },
     },
     {
@@ -166,6 +172,22 @@ export const fluxHistory: Scenario = {
     },
   ],
   steps: [
+    {
+      id: 'note-empty',
+      entry: 'api',
+      proves: ['note-null'],
+      title: 'getFluxWeekNote is null while the test user has under two sets this week',
+      async run(ctx) {
+        // The sweep cleared earlier runs' sets; anything left is someone else's doing — say so.
+        const sets = await ctx.api.reads.listFluxSets();
+        if (sets.length >= 2)
+          throw new Error(
+            `the test user already has ${sets.length} sets: ${sets.map((s) => s.id).join(', ')}`,
+          );
+        const note = await ctx.api.reads.getFluxWeekNote();
+        if (note) throw new Error(`a note with under two sets: ${note.text}`);
+      },
+    },
     {
       id: 'record',
       entry: 'api',
@@ -226,14 +248,17 @@ export const fluxHistory: Scenario = {
       entry: 'api',
       proves: ['week-note'],
       title:
-        'getFluxWeekNote: at most 140 characters, names chin tuck, stable across a second call',
+        'getFluxWeekNote: at most 140 characters, names one of the week’s exercises, stable across a second call',
       async run(ctx) {
         const note = await ctx.api.reads.getFluxWeekNote();
         if (!note)
           throw new Error('no note after the scenario’s sets (expected at least two this week)');
         if (note.text.length > 140)
           throw new Error(`note is ${note.text.length} chars: ${note.text}`);
-        if (!/chin tuck/i.test(note.text)) throw new Error(`note names no chin tuck: ${note.text}`);
+        // The server refuses a note naming none of the week's exercises (fluxNoteText), so this is the
+        // contract, whichever the model leads with — chin tuck and rotation are this run's two.
+        if (!/chin[ -]?tucks?|rotation/i.test(note.text))
+          throw new Error(`note names neither chin tuck nor rotation: ${note.text}`);
         const again = await ctx.api.reads.getFluxWeekNote();
         if (again?.generatedAt !== note.generatedAt || again.text !== note.text)
           throw new Error('a second read rebuilt the note');

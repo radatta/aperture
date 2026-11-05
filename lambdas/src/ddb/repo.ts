@@ -152,8 +152,9 @@ export class Repo {
   }
 
   // --- Flux weekly note (D62) ---
+  // Consistent: the decision to re-ask the model is taken straight after the previous request's put.
   async getFluxWeekNote(weekStart: string): Promise<FluxWeekNoteRow | null> {
-    const it = await this.doc.get(this.p(), sk.fluxNote(weekStart));
+    const it = await this.doc.get(this.p(), sk.fluxNote(weekStart), { consistent: true });
     return it ? toEntity<FluxWeekNoteRow>(it) : null;
   }
   async putFluxWeekNote(n: FluxWeekNoteRow): Promise<FluxWeekNoteRow> {
