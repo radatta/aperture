@@ -215,6 +215,10 @@ export interface PushStatus {
   configured: boolean; // this stage has a VAPID public key
   vapidPublicKey: string | null; // base64url — the browser's applicationServerKey
   devices: PushDevice[];
+  // Devices the user removed (unsubscribePush), so the removed device's own launch-time resync stops
+  // instead of re-adding itself. A subscription the push service expired (404/410) is just gone — not
+  // listed here — so that device heals itself on its next launch. Re-subscribing takes an id off.
+  removedDeviceIds: string[];
   poller: PushPollerHealth;
 }
 

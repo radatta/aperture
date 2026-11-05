@@ -502,7 +502,8 @@ export interface ApiClient {
   // Reminders (reminders.ts) — Web Push to this user's devices; the push-dispatch poller is the only
   // sender. subscribe upserts by endpoint (one device per endpoint) and refuses a host off
   // PUSH_ENDPOINT_HOSTS (PUSH_ENDPOINT_ERROR) or a stage with no VAPID key (PUSH_UNCONFIGURED_ERROR);
-  // unsubscribe removes the caller's device (an unknown id is a no-op). Status never carries a
+  // unsubscribe removes the caller's device and remembers it in status.removedDeviceIds, so that device
+  // stops instead of re-adding itself on launch (an unknown id is a no-op). Status never carries a
   // subscription's keys. sendTestPush queues a test the poller sends on its next tick (within a minute),
   // so it proves the whole chain; it refuses with no devices.
   subscribePush(input: SubscribePushInput): Promise<PushDevice>;

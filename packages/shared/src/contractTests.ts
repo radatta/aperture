@@ -2927,6 +2927,7 @@ export function runApiContract(
       expect(status.configured).toBe(true);
       expect(status.vapidPublicKey).toBeTruthy();
       expect(status.devices).toEqual([]);
+      expect(status.removedDeviceIds).toEqual([]);
       const a = await api.subscribePush(pushSub());
       expect(a).toMatchObject({
         label: 'iPhone · Safari',
@@ -2943,9 +2944,16 @@ export function runApiContract(
         [a.id, b.id].sort(),
       );
       await api.unsubscribePush(a.id);
-      expect((await api.getPushStatus()).devices.map((d) => d.id)).toEqual([b.id]);
-      await api.unsubscribePush(a.id); // an unknown id is a no-op
+      const after = await api.getPushStatus();
+      expect(after.devices.map((d) => d.id)).toEqual([b.id]);
+      expect(after.removedDeviceIds).toEqual([a.id]); // the removed device stops, not re-adds
+      await api.unsubscribePush(a.id); // removing twice is a no-op
+      await api.unsubscribePush('nope'); // so is an unknown id
       expect((await api.getPushStatus()).devices).toHaveLength(1);
+      expect((await api.getPushStatus()).removedDeviceIds).toEqual([a.id]);
+      const back = await api.subscribePush(pushSub()); // Enable again revives it
+      expect(back.id).toBe(a.id);
+      expect((await api.getPushStatus()).removedDeviceIds).toEqual([]);
     });
 
     it('reminders: refuses an endpoint off the push-service allowlist, and writes nothing', async () => {
