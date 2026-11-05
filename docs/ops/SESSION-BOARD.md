@@ -332,8 +332,8 @@ carry the same list.
   so it runs main's code. Edit `sampler.sh` / `lib.sh` only through a rename (`sed -i`, write-then-`mv`) —
   overwriting a file in place under the running sampler has killed it once. The lock is taken with `flock -w 5`,
   so a `status` / `json` / SessionStart probe (a microsecond hold) never costs a `start`; `start` confirms the
-  lock within 1 s or says `sampler: did not start — see sampler.log` (exit 1), and `sampler_running` asks three
-  times before calling a busy lock the sampler. Tests point the lock and pid file elsewhere
+  lock within 1 s or says `sampler: did not start — see sampler.log` (exit 1), and `sampler_running` probes with
+  `flock -w 0.2` — only the sampler keeps the lock that long — so a live sampler costs `status`/`json` 200 ms. Tests point the lock and pid file elsewhere
   (`APERTURE_SAMPLER_LOCK`, `APERTURE_SAMPLER_PID`).
 - On the Mac there is no `timeout` (coreutils), so `devlock.sh refresh` doesn't peek there and `board.sh status`
   shows the container's last cache, marked stale once it's 5 min old.

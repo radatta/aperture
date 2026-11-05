@@ -1,5 +1,5 @@
 // End-to-end over the bash layer: board.sh / heavy.sh against a temp board, a fake cgroup, and real pids.
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   mkdtempSync,
@@ -17,6 +17,9 @@ const boardDir = fileURLToPath(new URL('../../board/', import.meta.url));
 const GiB = 1073741824;
 const children: ChildProcess[] = [];
 afterAll(() => children.forEach((c) => c.kill()));
+// Each test here is several bash + node cold starts (cli.ts decide / barriers): 0.5–1 s idle, 5 s+ when the gate
+// runs beside the other packages at 9 cores — a timeout then is contention, not a bug (Rahul, 2026-11-05).
+vi.setConfig({ testTimeout: 20_000 });
 
 let tmp: string;
 let env: NodeJS.ProcessEnv;
@@ -409,7 +412,7 @@ describe('board.sh sampler', () => {
       prober.kill();
     }
     expect(sampler('status').stdout).toMatch(/^sampler: stopped/);
-  }, 30_000);
+  });
 });
 
 describe('heavy.sh', () => {

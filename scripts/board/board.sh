@@ -90,14 +90,11 @@ cmd_note() {
 # --- views ---
 
 # In the container: is the sampler holding its lock? Elsewhere (the Mac): did it write in the last 90 s?
-# Every other probe (status, json, SessionStart, the restart poll) takes the lock for microseconds: one busy try
-# may be a probe, three in a row is the sampler.
+# The probe waits 200 ms for the lock rather than failing at once: every other probe (status, json, SessionStart,
+# the restart poll) holds it only for the life of a `true` — microseconds idle, milliseconds under load — so a
+# brief wait gets past them, and only the sampler keeps it the whole 200 ms.
 sampler_running() {
-  if [ -r "$CG/memory.stat" ]; then
-    local i
-    for ((i = 0; i < 3; i++)); do flock -n "$SAMPLER_LOCK" true 2>/dev/null && return 1; done
-    return 0
-  fi
+  if [ -r "$CG/memory.stat" ]; then ! flock -w 0.2 "$SAMPLER_LOCK" true 2>/dev/null; return; fi
   local last; last=$(ls -t "$BOARD_DIR"/history/samples-*.jsonl 2>/dev/null | head -n 1)
   [ -n "$last" ] && [ -n "$(find "$last" -mtime -90s 2>/dev/null || find "$last" -mmin -2 2>/dev/null)" ]
 }
@@ -189,8 +186,8 @@ cmd_sampler() {
       p=$(cat "$SAMPLER_PID" 2>/dev/null)
       # Kill by the PID the holder recorded, never by name; only if it still holds the lock.
       if [ -n "$p" ] && sampler_running && [ "$(sb_comm "$p")" = bash ]; then kill "$p" && echo "sampler: stopped $p"; fi
-      # Up to 5 s: one mid-tick finishes the tick before its TERM trap runs.
-      for ((i = 0; i < 25; i++)); do sampler_running || break; sleep 0.2; done
+      # Up to ~5 s (each probe of a live sampler costs 200 ms): one mid-tick finishes the tick before its TERM trap runs.
+      for ((i = 0; i < 12; i++)); do sampler_running || break; sleep 0.2; done
       [ "$1" = restart ] && cmd_sampler start ;;
     status)
       local last
