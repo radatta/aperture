@@ -183,6 +183,7 @@ export const reflectionLine: Scenario = {
         // Untouched, as it first shows: typing re-measures the box, so only this catches one that
         // opened collapsed (its height measured inside the not-yet-open dialog — 2026-11-04).
         await expectFullBox(dialog, 'the Done form, untouched');
+        await reflectionBox(dialog).scrollIntoViewIfNeeded(); // the Done form sits below the fold
         await ctx.shot('done-form-untouched');
         await dialog.getByLabel('Actual (min)').fill('20');
         await reflectionBox(dialog).fill(FIRST);

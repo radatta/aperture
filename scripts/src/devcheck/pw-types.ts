@@ -29,6 +29,7 @@ export interface PwLocator {
   or(other: PwLocator): PwLocator;
   textContent(): Promise<string | null>;
   inputValue(): Promise<string>;
+  scrollIntoViewIfNeeded(opts?: { timeout?: number }): Promise<void>;
   count(): Promise<number>;
   getByRole(role: string, opts?: { name?: string | RegExp; exact?: boolean }): PwLocator;
   getByLabel(text: string | RegExp, opts?: { exact?: boolean }): PwLocator;
