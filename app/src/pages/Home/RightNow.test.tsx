@@ -342,6 +342,22 @@ describe('Right now card', () => {
     );
   });
 
+  it('a hero’s open Done form never carries over to the task that takes the hero', async () => {
+    const api = stub();
+    const off = await api.createTask({ title: 'Off plan', estimateMin: 30 });
+    await api.transitionTask(off.id, 'in_progress');
+    const next = await plan(api, 'Big three', { est: 20, order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Done' }));
+    await user.type(await screen.findByLabelText('Actual (min)'), '40');
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(async () => expect((await api.getTask(next.id))?.status).toBe('in_progress'));
+    await waitFor(() => expect(screen.queryByLabelText('Actual (min)')).toBeNull());
+    expect((await api.getTask(next.id))?.actualAccruedMin).toBe(0);
+  });
+
   it('Start on a scoped row starts at once, with no chips', async () => {
     const api = stub();
     const t = await plan(api, 'Scoped', { est: 30, order: 0 });

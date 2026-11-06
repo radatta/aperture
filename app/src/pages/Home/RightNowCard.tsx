@@ -147,7 +147,9 @@ export function RightNowCard() {
   // renumbers whatever is off).
   const alsoRef = useRef<HTMLDivElement>(null);
   const focusAction = useRowAction(alsoRef);
-  const [doneInitial, setDoneInitial] = useState<number | null>(null);
+  // The hero the Done form is open for: if another task takes the hero, the form goes with its own, so typed
+  // minutes never land on the wrong task.
+  const [doneOpen, setDoneOpen] = useState<{ taskId: string; initialMin: number } | null>(null);
   // Done opens the form with Actual focused, as the task modal's finish intent does — you tapped Done to
   // enter the number. Stable, so it focuses once on mount, not on every render.
   const focusActual = useCallback((el: HTMLInputElement | null) => el?.focus(), []);
@@ -239,18 +241,18 @@ export function RightNowCard() {
                     ))
                   )
                     return;
-                  setDoneInitial(elapsed);
+                  setDoneOpen({ taskId: hero.id, initialMin: elapsed });
                 }}
               >
                 Done
               </Button>
             </div>
-            {doneInitial !== null && (
+            {doneOpen?.taskId === hero.id && (
               <DoneForm
                 task={hero}
-                initialActualMin={doneInitial}
+                initialActualMin={doneOpen.initialMin}
                 actualRef={focusActual}
-                onDone={() => setDoneInitial(null)}
+                onDone={() => setDoneOpen(null)}
               />
             )}
           </Hero>

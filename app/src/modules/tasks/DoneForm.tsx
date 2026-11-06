@@ -49,7 +49,7 @@ export function DoneForm({
 }: {
   task: Task;
   initialActualMin?: number;
-  initialEstimateMin?: number; // prefills a missing estimate (Flux's rep: Mark done stays one tap)
+  initialEstimateMin?: number; // prefills a missing estimate (Flux's rep: nothing new to type)
   actualRef?: Ref<HTMLInputElement>;
   edits?: EditSlots;
 } & DoneProps) {

@@ -64,10 +64,14 @@ export function splitDefaults(
 ): { thisPart: number | null; rest: number | null } {
   if (task.estimateMin == null) return { thisPart: null, rest: null };
   const left = Math.max(0, task.estimateMin - task.actualAccruedMin);
-  if (finish === 'done') return { thisPart: null, rest: Math.max(SPLIT_MIN_REMAINDER, left) };
+  if (finish === 'done')
+    return { thisPart: null, rest: Math.max(SPLIT_MIN_REMAINDER, Math.round(left)) };
   const rest = Math.max(SPLIT_MIN_REMAINDER, Math.round(left / 2));
   // Never below what's already logged — an overrun part's growth then shows in "Both parts … · was …".
-  return { thisPart: Math.max(Math.round(task.actualAccruedMin), task.estimateMin - rest), rest };
+  return {
+    thisPart: Math.max(1, Math.round(task.actualAccruedMin), task.estimateMin - rest),
+    rest,
+  };
 }
 
 // Soonest-due-first HINT for the morning backlog pull: dated tasks ascending by dueDay — within a day,

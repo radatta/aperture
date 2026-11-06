@@ -120,7 +120,7 @@ export function SplitForm({
   const calibrated = isCalibrated(task);
   const estimateOk = (v: string, seed: string) => v === seed || !typedBadMinutes(v);
   const numbersOk =
-    (done && calibrated ? !typedBadMinutes(actual) : valid(actual)) &&
+    (!done || (calibrated ? !typedBadMinutes(actual) : valid(actual))) &&
     (done ? !askEstimate || !typedBadMinutes(estimate) : estimateOk(estimate, initial.estimate)) &&
     estimateOk(restEstimate, str(splitDefaults(task, finish).rest));
   const negative = [done ? actual : estimate, restEstimate].some((v) => Number(v) < 0);

@@ -372,11 +372,11 @@ export const calibrationIntegrity: Scenario = {
           .locator('xpath=ancestor::div[.//button[normalize-space()="Start"]][1]')
           .getByRole('button', { name: 'Start', exact: true })
           .click();
-        await ctx.page
-          .getByRole('group', { name: `Estimate for ${title}` })
-          .getByRole('button', { name: 'Start without one' })
-          .click();
+        const chips = ctx.page.getByRole('group', { name: `Estimate for ${title}` });
+        await chips.getByRole('button', { name: 'Start without one' }).click();
         await untilInProgress(ctx, id);
+        // Gone once the browser has the start, so the hero, and its one Done, is this task's.
+        await chips.waitFor({ state: 'hidden', timeout: 15_000 });
         await ctx.page.getByRole('button', { name: 'Done', exact: true }).click();
         const estimate = ctx.page.getByLabel('Estimate in hindsight');
         await estimate.waitFor({ timeout: 15_000 });

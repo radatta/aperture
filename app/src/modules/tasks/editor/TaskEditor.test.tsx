@@ -773,6 +773,19 @@ describe('TaskEditor', () => {
     expect(split().disabled).toBe(false); // none is still fine: it arrives unscoped
   });
 
+  it('a negative actual hidden by Keep going does not block the split', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Scoped', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.type(screen.getByLabelText("This part's actual (min)"), '-5');
+    await user.click(screen.getByRole('button', { name: 'Keep going' }));
+    expect(screen.queryByText('Whole minutes, at least 1.')).toBeNull();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(false);
+  });
+
   it('a done split of an errand takes an actual of 0, as it always did', async () => {
     const client = api();
     await client.upsertPlace({ name: 'Corner Shop', slug: 'corner' });

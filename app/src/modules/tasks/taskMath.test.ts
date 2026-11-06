@@ -71,6 +71,11 @@ describe('remainingMin', () => {
 });
 
 describe('splitDefaults', () => {
+  it('never defaults to 0 minutes on this part, or to a fraction of one on the rest', () => {
+    expect(splitDefaults(task({ estimateMin: 5, actualAccruedMin: 0 }), 'keep').thisPart).toBe(1);
+    expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 12.37 }), 'done').rest).toBe(33);
+  });
+
   it('done: the rest is what is left of the working estimate, floored', () => {
     expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 12 }), 'done').rest).toBe(33);
     expect(splitDefaults(task({ estimateMin: 45, actualAccruedMin: 80 }), 'done').rest).toBe(
