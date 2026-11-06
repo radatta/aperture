@@ -414,6 +414,11 @@ sfail('sim: a failure screenshot that fails leaves the row at VALUE', 'VALUE', [
       tape=[{'m': 'axe screenshot', 'rc': 1}], notes={'2': 'bar value is'})
 sfail('sim: a plan already at 20 shots takes no 21st on failure', 'VALUE', [L, F('Capture log', 220, 895, 'bar')] + [{'op': 'shot', 'name': f's{i}'} for i in range(20)] + [{'op': 'expect', 'as': 'bar', 'valueIs': 'zzqx'}],
       simCount={'screenshot --output': 20})
+sfail('sim: one hung read while launching, the rest answering and seeing neither landmark, is LANDMARK', 'LANDMARK', [L],
+      tape=[{'m': '--point 220,895', 'rc': 124, 'n': 1}, pt(220, 895, {}), pt(220, 530, {})])
+sc('sim: one hung read after the reboot, the rest seeing the Sign in card, is LANDMARK', [L, {'op': 'signIn'}],
+   tape=[pt(220, 895, {}, n=1), pt(220, 895, CAPTURE, n=1), pt(220, 895, {}, n=2), {'m': '--point 220,895', 'rc': 124, 'n': 1}, pt(220, 895, {}), pt(220, 530, SIGNIN, n=2), pt(220, 530, {}, n=1), pt(220, 530, SIGNIN)] + FORM + [pt(220, 588, {})],
+   expect={'status': 'fail', 'reason': 'ASSERT', 'detail': 'LANDMARK', 'signedIn': 'false'}, pwTyped=1)
 serr('sim: hung reads while launching are AX_TIMEOUT, not a landmark failure', 'AX_TIMEOUT', tape=[{'m': '--point 220,895', 'rc': 124}, {'m': '--point 220,530', 'rc': 124}])
 sc('sim: a hung read after the reboot is AX_TIMEOUT, not signed out', [L, {'op': 'signIn'}],
    tape=[pt(220, 895, {}, n=1), pt(220, 895, CAPTURE, n=1), pt(220, 895, {}, n=1), pt(220, 530, SIGNIN, n=2), pt(220, 530, {}, n=1), pt(220, 530, SIGNIN, n=1), pt(220, 530, {}), {'m': '--point 220,895', 'rc': 124}] + FORM + [pt(220, 588, {})],

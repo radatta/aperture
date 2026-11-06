@@ -422,15 +422,16 @@ sim_find_icon() {
 
 # --- ops ----------------------------------------------------------------------------------------------------------
 sim_op_launch() {
-  local i s
+  local i s clean=""
   sim_ready || return 1
   ax batch --step "button home" --step "sleep 1" >/dev/null 2>&1 || true
   sim_find_icon || return 1
   sim_tap_el "$SIM_ICON" || return 1
-  rm -f "$SIM_P.unread"
   i=0
   while :; do
+    rm -f "$SIM_P.unread"
     s="$(sim_landmark)" || return 1
+    [ -e "$SIM_P.unread" ] || clean=1 # at least one pass read every point and got an answer
     if [ -n "$s" ]; then
       SIM_SIGNED="$s"
       SIM_NOTE="signed in: $s; booted $SIM_BOOTED"
@@ -438,7 +439,7 @@ sim_op_launch() {
     fi
     i=$((i + 1))
     if [ "$i" -ge 20 ]; then
-      if [ -e "$SIM_P.unread" ]; then # reads that hung saw nothing, which isn't the page being wrong
+      if [ -z "$clean" ]; then # every pass had a read hang: that saw nothing, which isn't the page being wrong
         sim_err SIM_UNAVAILABLE AX_TIMEOUT "point reads timed out looking for Home or the sign-in card"
         return 1
       fi
@@ -524,7 +525,7 @@ sim_op_signIn() {
   return "$rc"
 }
 sim_sign_in() {
-  local e ef fp n pf pt i s app
+  local e ef fp n pf pt i s app clean
   if [ "$SIM_SIGNED" != false ]; then SIM_NOTE="already signed in"; return 0; fi
   sim_cap 30 security find-generic-password -s "$SIM_KEYCHAIN" -a "$SIM_EMAIL" >/dev/null 2>&1 \
     || { sim_err PASSWORD_MISSING "" "no readable Keychain item $SIM_KEYCHAIN"; return 1; }
@@ -602,15 +603,17 @@ sim_sign_in() {
   sim_op_launch || return 1
   # The session should survive a restart, so this is the row's failure, not the environment's; the card can show for a
   # moment before the tokens are restored (inference), so give it a few reads first.
-  rm -f "$SIM_P.unread"
+  clean=""
   i=0
   while [ "$SIM_SIGNED" != already ] && [ "$i" -lt 5 ]; do
     sleep 2
+    rm -f "$SIM_P.unread"
     s="$(sim_landmark)" || return 1
+    [ -e "$SIM_P.unread" ] || clean=1
     [ "$s" != already ] || SIM_SIGNED=already
     i=$((i + 1))
   done
-  if [ "$SIM_SIGNED" != already ] && [ -e "$SIM_P.unread" ]; then # a hung read isn't "signed out"
+  if [ "$SIM_SIGNED" != already ] && [ -z "$clean" ]; then # reads that all hung aren't "signed out"
     sim_err SIM_UNAVAILABLE AX_TIMEOUT "a point read timed out looking for Home after the reboot"
     return 1
   fi

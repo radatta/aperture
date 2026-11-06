@@ -175,6 +175,15 @@ describe('ctx.ios', () => {
     expect(logs.filter((l) => l.includes('reinstall'))).toHaveLength(1);
   });
 
+  it('a plan the old runner refuses says so', async () => {
+    const { client, logs } = mac(
+      () => ({ status: 'rejected', reason: 'BAD_OP', runnerVersion: 'old' }),
+      () => 'new',
+    );
+    await caught(client.run('a', [{ op: 'launch' }]));
+    expect(logs.filter((l) => l.includes('reinstall'))).toHaveLength(1);
+  });
+
   it('a repo version that throws fails nothing', async () => {
     const { client } = mac(
       () => ({ runnerVersion: 'old' }),

@@ -338,9 +338,19 @@ const GRACE_MS = 60_000;
 // The sim couldn't run (Mac asleep, Device Hub down, no password, …): the rows are "needs you", never a failure.
 export class IosUnavailable extends Error {
   readonly reason: string;
-  constructor(reason: string, message: string) {
+  readonly runnerVersion?: string; // the Mac answered: which runner did
+  constructor(reason: string, message: string, runnerVersion?: string) {
     super(`${reason}: ${message}`);
     this.reason = reason;
+    if (runnerVersion) this.runnerVersion = runnerVersion;
+  }
+}
+// The Mac refused the plan. A harness bug, or a runner older than the plan (ios.ts says which).
+export class IosRejected extends Error {
+  readonly runnerVersion?: string;
+  constructor(message: string, runnerVersion?: string) {
+    super(message);
+    if (runnerVersion) this.runnerVersion = runnerVersion;
   }
 }
 // The sim ran and an assertion didn't hold: the row fails.
@@ -368,8 +378,9 @@ function settle(r: SimResult): SimResult {
   if (r.status === 'pass') return r;
   if (r.status === 'fail') throw new IosAssert(failingNote(r), r);
   if (r.status === 'rejected')
-    throw new Error(
+    throw new IosRejected(
       `the Mac refused the sim plan: ${r.reason} — a harness bug (IOS-CHECK.md → Ops)`,
+      r.runnerVersion,
     );
   // runner.sh's fallback when run_sim itself died: a bug in the runner, not an unavailable Mac.
   if (r.status === 'error' && r.reason === 'API_FAILED')
@@ -377,7 +388,11 @@ function settle(r: SimResult): SimResult {
       'the Mac runner crashed in the sim job — a harness bug (the Mac’s agent.log, MAILROOM.md)',
     );
   const code = r.status === 'expired' ? 'MAC_UNREACHABLE' : (r.reason ?? 'SIM_UNAVAILABLE');
-  throw new IosUnavailable(r.detail ? `${code}/${r.detail}` : code, failingNote(r));
+  throw new IosUnavailable(
+    r.detail ? `${code}/${r.detail}` : code,
+    failingNote(r),
+    r.runnerVersion,
+  );
 }
 
 // Submit, wait for the Mac to take it (its result dir appears), then for the result while the heartbeat moves.

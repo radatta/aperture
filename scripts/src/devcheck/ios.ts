@@ -7,6 +7,7 @@ import { basename, join } from 'node:path';
 import type { Clock } from '../bot/dispatch.ts';
 import {
   IosAssert,
+  IosRejected,
   IosUnavailable,
   makeSimJob,
   runSimJob,
@@ -64,7 +65,7 @@ export function createIos(d: IosDeps): Ios {
   let lastBooted: string | undefined;
   let warned = false;
   // A line only: nothing here may fail a row.
-  const warnStaleRunner = (r: SimResult) => {
+  const warnStaleRunner = (r: { runnerVersion?: string | undefined }) => {
     if (warned || !d.repoVersion || !r.runnerVersion) return;
     let want: string;
     try {
@@ -75,7 +76,7 @@ export function createIos(d: IosDeps): Ios {
     if (r.runnerVersion === want) return;
     warned = true;
     d.log(
-      `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall (from merged main; a branch that changes the runner: with --ref <its sha>, MAILROOM.md → Install): ${INSTALL_LINE}`,
+      `  the Mac runs runner ${r.runnerVersion.slice(0, 12)}, the repo has ${want.slice(0, 12)} — reinstall (from merged main; a branch that changes the runner: its sha in ?ref= and --ref, MAILROOM.md → Install): ${INSTALL_LINE}`,
     );
   };
   const jobs: IosJobSummary[] = [];
@@ -135,6 +136,7 @@ export function createIos(d: IosDeps): Ios {
         try {
           r = await runSimJob({ fs: d.fs, clock: d.clock, dir: d.dir, log: d.log }, job);
         } catch (err) {
+          if (err instanceof IosRejected || err instanceof IosUnavailable) warnStaleRunner(err);
           if (err instanceof IosAssert) {
             keepShots(scenarioId, name, err.result);
             jobs.push(summarize(name, err.result));
