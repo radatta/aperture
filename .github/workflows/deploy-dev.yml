@@ -4,7 +4,8 @@ name: Deploy dev (dispatch)
 # `dev` branch; the DEV_DEPLOY_ISOLATED check below is the user's pause switch. The bot
 # (`pnpm bot deploy-dev`) dispatches this on `ref: main` — main's YAML runs and the feature commit only supplies
 # the tree — or, for a branch that changes `.github/`, on that branch, so its own workflows are what run on dev
-# (only the user can push workflow changes: the bot has no `workflows` permission).
+# (only the user can push workflow changes: the bot has no `workflows` permission). `verify` also prints what merging
+# the commit would deploy to each stage, with the same script deploy.yml's `changes` job runs.
 # The run-name is a contract: `deploy-dev <40-hex sha> <key>`. Dispatch returns no run id, so the bot finds
 # its run by that title, and dev-e2e's devcheck matches dispatched runs by it (head_sha is the ref's, not sha).
 run-name: deploy-dev ${{ inputs.sha }} ${{ inputs.key }}
@@ -39,9 +40,11 @@ jobs:
   # main-ref dispatch, by the branch's own on a branch-ref one.
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # a checkout and a few git checks
+    timeout-minutes: 5 # a checkout, a few git checks and the preview's API reads (a walk that stalls times out to `full`)
     permissions:
       contents: read
+      deployments: read # the merge preview: each stage's deployment records
+      actions: read # the merge preview: the recorded job's steps
     outputs:
       mode: ${{ steps.verify.outputs.mode }}
     steps:
@@ -54,6 +57,7 @@ jobs:
           SHA: ${{ inputs.sha }}
           KEY: ${{ inputs.key }}
           BASE: ${{ inputs.base }}
+          GITHUB_TOKEN: ${{ github.token }}
           # Set to `true` by the user at dev-cutover, once dev ran in its own account under the SCPs; `false` pauses every
           # dispatch. A repository variable: the bot can't set it (the App has no Variables permission).
           DEV_DEPLOY_ISOLATED: ${{ vars.DEV_DEPLOY_ISOLATED }}
@@ -87,7 +91,7 @@ jobs:
           if [ -z "$base" ]; then
             mode=full; echo "Base $BASE unknown — full deploy."
           else
-            changed=$(git diff --name-only "$base" "$SHA")
+            changed=$(git diff --name-only --no-renames "$base" "$SHA")
             echo "Changed vs $base:"; echo "$changed"
             mode=$(printf '%s\n' "$changed" | node scripts/src/classify-changes.ts)
           fi
@@ -97,6 +101,13 @@ jobs:
           if [ "$mode" = none ]; then mode=app; fi
           echo "Deploy mode: $mode"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          # A preview, not this dispatch's mode. It says whether a merge would run CDK (read the cdk diff first, INFRA §9),
+          # and it is the only run of deploy-base.ts against the real API before a merge: main-push classification runs
+          # only on main. Read the log lines above this one for that proof, not the modes: a broken walk also prints `full`. API
+          # trouble prints `full` with a ::warning; a crash fails here, on purpose. Assigned, so a crash can't be masked.
+          merged_dev=$(node scripts/src/deploy-base.ts dev-main "$SHA")
+          merged_prod=$(node scripts/src/deploy-base.ts prod "$SHA")
+          echo "If merged now: dev-main=$merged_dev prod=$merged_prod"
 
   deploy:
     needs: [verify]
