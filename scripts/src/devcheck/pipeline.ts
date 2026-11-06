@@ -101,6 +101,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   };
   // A message keeps the failure's detail in the report (status line + a Failed line); a step's failure has
   // its row, so STEP_FAILED passes none and the status line stays `FAIL: STEP_FAILED`.
+  // The token may have renewed in the page since sign-in, and must still be the test user's (throws WRONG_USER);
+  // a dead page keeps the token we have.
+  const renewSession = async () => {
+    try {
+      const fresh = await browser?.readSession();
+      if (fresh) session = fresh;
+    } catch (err) {
+      if (codeOf(err) === 'WRONG_USER') throw err;
+    }
+  };
   const fail = (code: ReasonCode, message?: string) => {
     if (r.status !== 'CRASH') r.status = 'FAIL';
     r.codes.push(code);
@@ -240,6 +250,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         }
         const s0 = d.now();
         try {
+          await renewSession(); // a cached token can lapse mid-run, and a run with sim steps is minutes long
           await step.run(ctx);
           await Promise.all(pendingRecords); // a create's id is in the ledger before the next step reads it
           res.status = 'pass';
@@ -493,16 +504,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         );
       return;
     }
-    // The token may have renewed in the page since sign-in — and must still be the test user's.
     try {
-      const fresh = await browser?.readSession();
-      if (fresh) session = fresh;
+      await renewSession();
     } catch (err) {
-      if (codeOf(err) === 'WRONG_USER') {
-        fail('WRONG_USER', detailOf(err));
-        return;
-      }
-      // a dead page: keep the sign-in token
+      fail('WRONG_USER', detailOf(err));
+      return;
     }
 
     const pending = new Set(pendingIds(entries));

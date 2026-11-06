@@ -540,11 +540,46 @@ describe('runPipeline', () => {
 
   it('a page session that is no longer the test user stops cleanup with WRONG_USER', async () => {
     const w = world();
-    w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
-    const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+    let ran = false;
+    w.browser.readSession = async () =>
+      ran ? Promise.reject(new DevcheckError('WRONG_USER', 'x')) : null;
+    const sc = scenario(async (x) => {
+      await x.uiCreate('a');
+      ran = true;
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
     expect(r.codes).toContain('WRONG_USER');
     expect(r.failures).toEqual([{ code: 'WRONG_USER', message: 'x' }]);
     expect(w.deleted).toEqual([]);
+  });
+
+  it('each step runs on the token the page holds now, renewed mid-run', async () => {
+    const w = world();
+    const seen: string[] = [];
+    let token: () => string = () => '';
+    w.browser.readSession = async () =>
+      seen.length ? { accessToken: 'renewed', expiresAt: 0, email: 'x', sub: 's' } : null;
+    const base = scenario(async () => void seen.push(token()))(w);
+    const sc = { ...base, steps: [base.steps[0]!, { ...base.steps[0]!, id: 'second' }] };
+    const r = await runPipeline({
+      ...deps(w, [sc]),
+      makeApi: (t) => {
+        token = t;
+        return w.api;
+      },
+    });
+    expect(r.steps.map((x) => x.status)).toEqual(['pass', 'pass']);
+    expect(seen).toEqual(['tok', 'renewed']);
+  });
+
+  it('a page session that stopped being the test user mid-run fails the step before it runs', async () => {
+    const w = world();
+    let ran = false;
+    w.browser.readSession = async () => Promise.reject(new DevcheckError('WRONG_USER', 'x'));
+    const r = await runPipeline(deps(w, [scenario(async () => void (ran = true))(w)]));
+    expect(ran).toBe(false);
+    expect(r.codes).toContain('WRONG_USER');
+    expect(r.steps[0]?.status).toBe('fail');
   });
 
   it('a swept id that survives its delete is a leftover', async () => {

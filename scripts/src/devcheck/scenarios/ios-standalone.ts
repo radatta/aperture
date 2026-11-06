@@ -105,7 +105,7 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'keys', text: 'zzqx' },
   { op: 'erase', n: 4 },
   { op: 'blur' },
-  { op: 'tap', label: 'Cancel', scan: { x: 120, from: 150, to: 720 }, role: 'AXButton' },
+  { op: 'tap', label: 'Cancel', scan: { x: 190, from: 150, to: 720 }, role: 'AXButton' },
   { op: 'shot', name: 'done-form-closed' },
 ];
 
