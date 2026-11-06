@@ -185,6 +185,60 @@ describe('useAddToDay', () => {
     await act(async () => void (await done));
   });
 
+  it('a second add whose pre-read joined a refetch the first add cancels still lands', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-to-day-${Math.random()}` });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ApiContext value={api}>{children}</ApiContext>
+      </QueryClientProvider>
+    );
+    const hook = renderHook(
+      () => {
+        usePlansForDay(todayKey(4));
+        return useAddToDay();
+      },
+      { wrapper },
+    );
+    await ready(hook);
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    const [a, b] = [await api.createTask({ title: 'a' }), await api.createTask({ title: 'b' })];
+    const list = api.listPlansForDay.bind(api);
+    const getTask = api.getTask.bind(api);
+    let letRead = () => {};
+    const readHeld = new Promise<void>((r) => (letRead = r));
+    let letStatus = () => {};
+    const statusHeld = new Promise<void>((r) => (letStatus = r));
+    let rowWritten = false;
+    const write = api.upsertPlan.bind(api);
+    api.upsertPlan = (input) => write(input).finally(() => (rowWritten = true));
+    let heldReads = 0;
+    api.listPlansForDay = async (day) => {
+      if (rowWritten && ++heldReads === 1) await readHeld; // A's refetch hangs, B's pre-read joins it
+      return list(day);
+    };
+    let held = true;
+    api.getTask = async (id) => {
+      if (held && id === a.id) await statusHeld; // A's status write waits until B has joined
+      return getTask(id);
+    };
+    let first: Promise<unknown> = Promise.resolve();
+    let second: Promise<unknown> = Promise.resolve();
+    act(() => void (first = hook.result.current.addToDay(a)));
+    await waitFor(() => expect(heldReads).toBe(1));
+    act(() => void (second = hook.result.current.addToDay(b)));
+    await new Promise((r) => setTimeout(r, 20));
+    held = false;
+    letStatus(); // A's status write invalidates the plans and cancels the refetch B joined
+    await act(async () => {
+      await first;
+      letRead();
+      await second;
+    });
+    expect((await api.getTask(b.id))?.status).toBe('planned');
+    expect((await list(todayKey(4))).map((p) => p.taskId).sort()).toEqual([a.id, b.id].sort());
+  });
+
   it('an add finishes after its component leaves (an in-app navigation)', async () => {
     const { api, hook } = setup();
     await ready(hook);

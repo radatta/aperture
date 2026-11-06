@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { CancelledError, useQueryClient } from '@tanstack/react-query';
 import { isTimed, todayKey } from '@aperture/shared';
 import type { CreateTaskInput, Task, TaskPlan, TaskStatus } from '@aperture/shared';
 import { useApi } from '../api-context';
@@ -16,8 +16,9 @@ export type AddResult = 'added' | 'already' | 'timed';
 // The one way a task lands on (or leaves) a day's plan — the tasks page, Home "+ Add", capture
 // "→ today", the night "Tomorrow". It owns the write order and the dedupe so no surface re-derives
 // them. `day` defaults to today; never pass it to getDay (other days are read via listPlansForDay).
-// Each write's hook refetches what it changed and resolves only once the lists are new, so a caller
-// acting on "done" (moving focus off a row that just left its list) sees the new lists — one tasks
+// Each write's hook refetches what it changed. The row's write doesn't wait for its refetch, so the status
+// write follows at once and a closed app can cut off as little as possible; the status write does wait, so
+// a caller acting on "done" (moving focus off a row that just left its list) sees the new lists — one tasks
 // read and no day read per add (useAddToDay.test.tsx counts them; lenses.md D5).
 export function useAddToDay(day?: string) {
   const api = useApi();
@@ -51,10 +52,16 @@ export function useAddToDay(day?: string) {
     inFlight.current.add(key);
     try {
       // A fresh read, not the cached list: another tab, device or the MCP may have planned it since.
-      const plans = await qc.fetchQuery({
-        queryKey: qk.plans(target),
-        queryFn: () => api.listPlansForDay(target),
-        staleTime: 0,
+      // Once more if cancelled: this read can join a refetch another add's status write then restarts.
+      const read = () =>
+        qc.fetchQuery({
+          queryKey: qk.plans(target),
+          queryFn: () => api.listPlansForDay(target),
+          staleTime: 0,
+        });
+      const plans = await read().catch((err: unknown) => {
+        if (err instanceof CancelledError) return read();
+        throw err;
       });
       const exists = plans.some((p) => p.taskId === task.id);
       // Row first: a task moved to planned before its row exists is what the stale sweep moves back.

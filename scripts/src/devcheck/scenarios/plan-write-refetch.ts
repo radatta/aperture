@@ -14,6 +14,7 @@ const name = (ctx: Ctx, what: string) => `devcheck-pw ${ctx.nonce} ${what}`;
 const SAVE_FAILED = "Couldn't save that — try again."; // StillOpenSection's straight apostrophe
 const START_FAILED = 'Couldn’t start the timer — try again.'; // the dock's (PomodoroProvider)
 const made: Record<string, DevTask> = {}; // scenario-scoped, set by setup
+let neighbour = ''; // N's plan row just before the unplan, compared after it
 const timers: Record<string, DevSession> = {}; // S2's and S4's timers before their failed unplans
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -222,7 +223,7 @@ export const planWriteRefetch: Scenario = {
       id: 'setup',
       entry: 'api',
       title:
-        'Tasks (API): A to add, U to add after the API plans it, N the neighbour, P for a time, T for Tomorrow, S1–S4 started (timers on S1, S2, S4)',
+        'Tasks (API): A to add, U to add after the API plans it, N the neighbour, P for a time, T for Tomorrow, S1–S4 started',
       async run(ctx) {
         const { today } = await days(ctx);
         for (const what of ['A', 'U', 'N', 'P', 'T', 'S1', 'S2', 'S3', 'S4'])
@@ -239,9 +240,6 @@ export const planWriteRefetch: Scenario = {
           await ctx.api.writes.transitionTask(made[what]!.id, 'planned');
         for (const what of ['S1', 'S2', 'S3', 'S4'])
           await ctx.api.writes.transitionTask(made[what]!.id, 'in_progress');
-        await ctx.api.writes.startSession(made.S1!.id, today);
-        timers.S2 = await ctx.api.writes.startSession(made.S2!.id, today);
-        timers.S4 = await ctx.api.writes.startSession(made.S4!.id, today);
       },
     },
     {
@@ -284,9 +282,9 @@ export const planWriteRefetch: Scenario = {
         if ((await statusOf(ctx, made.A!)) !== 'planned') throw new Error('A is not planned');
         const a = await rowsOf(ctx, today, made.A!);
         if (a.length !== 1) throw new Error(`A rows: ${JSON.stringify(a)}`);
-        const n = await rowsOf(ctx, today, made.N!);
-        if (n.length !== 1 || n[0]!.order !== 0 || n[0]!.plannedMinutes !== 15)
-          throw new Error(`N moved: ${JSON.stringify(n)}`);
+        // Compared with itself just before the unplan: "Focus this" renumbered the day earlier in this run.
+        const n = JSON.stringify(await rowsOf(ctx, today, made.N!));
+        if (n !== neighbour) throw new Error(`N moved: ${neighbour} → ${n}`);
         if ((await statusOf(ctx, made.N!)) !== 'planned') throw new Error('N changed status');
       },
     },
@@ -367,6 +365,8 @@ export const planWriteRefetch: Scenario = {
       title:
         'Unplan A on Today: exactly one getDay on the wire; A back in the Backlog, and after a reload',
       async run(ctx) {
+        const { today } = await days(ctx);
+        neighbour = JSON.stringify(await rowsOf(ctx, today, made.N!));
         await ctx.ui.goto('/tasks');
         const unplan = unplanButton(ctx, made.A!);
         await unplan.waitFor({ state: 'visible', timeout: 15_000 });
@@ -396,9 +396,9 @@ export const planWriteRefetch: Scenario = {
         const { today } = await days(ctx);
         if ((await statusOf(ctx, made.A!)) !== 'backlog') throw new Error('A is not backlog');
         if ((await rowsOf(ctx, today, made.A!)).length) throw new Error('A still has a row');
-        const n = await rowsOf(ctx, today, made.N!);
-        if (n.length !== 1 || n[0]!.order !== 0 || n[0]!.plannedMinutes !== 15)
-          throw new Error(`N moved: ${JSON.stringify(n)}`);
+        // Compared with itself just before the unplan: "Focus this" renumbered the day earlier in this run.
+        const n = JSON.stringify(await rowsOf(ctx, today, made.N!));
+        if (n !== neighbour) throw new Error(`N moved: ${neighbour} → ${n}`);
       },
     },
     {
@@ -456,6 +456,18 @@ export const planWriteRefetch: Scenario = {
         if ((await statusOf(ctx, made.T!)) !== 'planned') throw new Error('T changed status');
         await until('N to be backlog', async () => (await statusOf(ctx, made.N!)) === 'backlog');
         if ((await rowsOf(ctx, today, made.N!)).length) throw new Error('N still has a row');
+      },
+    },
+    {
+      id: 'timers-start',
+      entry: 'api',
+      // Here, not in setup: a step failing before this leaves no timer running on the test user.
+      title: 'Timers on S1, S2 and S4 (API)',
+      async run(ctx) {
+        const { today } = await days(ctx);
+        await ctx.api.writes.startSession(made.S1!.id, today);
+        timers.S2 = await ctx.api.writes.startSession(made.S2!.id, today);
+        timers.S4 = await ctx.api.writes.startSession(made.S4!.id, today);
       },
     },
     {

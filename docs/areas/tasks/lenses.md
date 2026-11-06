@@ -67,8 +67,8 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
     in_progress.
   - Row buttons disable while their write runs, a failure shows "Couldn't save that", and focus moves
     to the list (not `<body>`) when the row leaves it.
-  - **One write path, one refetch (2026-11).** Each write's hook refetches what it changed and resolves
-    once the lists are new: a plan write lands in its day's list at once and refetches the plans keys
+  - **One write path, one refetch (2026-11).** Each write's hook refetches what it changed, and an add or unplan
+    resolves once the lists are new: a plan write lands in its day's list at once and refetches the plans keys
     only; a task write refetches tasks, plans and calibration — never the day singleton, whose own
     refetch cascades into tasks and plans again (`useDay`). The one task write that needs the day's
     sweep, a planned task gaining a time (D13), asks for it itself (`useSetDue`); so does a new series
