@@ -104,11 +104,11 @@ export function RepTieStrip({ handle, activeMs }: { handle: RepTieHandle; active
             Log today&apos;s {roll.name} rep
           </Text>
           {/* Hands-free once loaded (flux docs): the gate must not add a typed field here. A rep that lost its
-              estimate takes its Roll's, visible and editable, and the server marks it retro. */}
+              estimate takes its Roll's, visible and editable; with no lock from the start it's marked retro. */}
           <DoneForm
             task={tie.task}
             initialActualMin={doneMin}
-            initialEstimateMin={Math.max(1, roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN)}
+            initialEstimateMin={Math.max(1, Math.round(roll.estimateMin ?? ROLL_PLAN_FALLBACK_MIN))}
             onDone={closeDone}
           />
         </div>

@@ -17,7 +17,7 @@ No silent holes in calibration: every finished task that can be measured has an 
 | **Backfill, once.** `withEstimate` on a done calibrated task with no baseline (from before the gate, or a parent whose parts all went) sets estimate, lock and `retro`; after that it's history like any other. Reachable over `update_task`, never offered in the UI (`canEditEstimate` stays false). Cancelled stays read-only.                                                          | `machines.ts`                              |                    |
 | **A done actual is a measurement.** `setTaskActual` takes 0 while open and refuses it once done.                                                                                                                                                                                                                                                                                           | `assertActualAllowed`                      |                    |
 
-**Flux stays hands-free.** A rep carries its Roll's estimate, so Done normally asks nothing new. A rep that lost it (cleared by hand, or a Roll without one) gets its Roll's, or the 30-minute plan fallback, prefilled at Stop: Mark done stays one tap, the number is visible and editable, and the server marks it retro. The set is saved either way.
+**Flux stays hands-free.** A rep carries its Roll's estimate, so Done normally asks nothing new. A rep that lost it (cleared by hand, or a Roll without one) gets its Roll's, rounded, or the 30-minute plan fallback, prefilled at Stop: nothing new to type, the number visible and editable, and retro unless a lock froze at start. The set is saved either way.
 
 ## Rejected
 

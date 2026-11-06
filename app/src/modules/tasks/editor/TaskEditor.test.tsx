@@ -675,11 +675,11 @@ describe('TaskEditor', () => {
     await user.type(screen.getByLabelText("This part's actual (min)"), '20');
     const go = screen.getByRole<HTMLButtonElement>('button', { name: 'Split' });
     expect(go.disabled).toBe(true);
-    await user.type(screen.getByLabelText("This part's estimate (min)"), '0');
-    expect(screen.getByText(/this part's are whole minutes, at least 1/)).toBeTruthy();
+    await user.type(screen.getByLabelText("This part's estimate in hindsight"), '0');
+    expect(screen.getByText('Whole minutes, at least 1.')).toBeTruthy();
     expect(go.disabled).toBe(true);
-    await user.clear(screen.getByLabelText("This part's estimate (min)"));
-    await user.type(screen.getByLabelText("This part's estimate (min)"), '15');
+    await user.clear(screen.getByLabelText("This part's estimate in hindsight"));
+    await user.type(screen.getByLabelText("This part's estimate in hindsight"), '15');
     expect(go.disabled).toBe(false);
     await user.click(go);
     await waitFor(() => expect(split).toHaveBeenCalled());
@@ -701,7 +701,7 @@ describe('TaskEditor', () => {
     const user = userEvent.setup();
     renderEditor(client, t);
     await user.click(screen.getByRole('button', { name: /^Split/ }));
-    expect(screen.queryByLabelText("This part's estimate (min)")).toBeNull();
+    expect(screen.queryByLabelText("This part's estimate in hindsight")).toBeNull();
     await user.type(screen.getByLabelText("This part's actual (min)"), '0');
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(true);
   });
@@ -714,13 +714,15 @@ describe('TaskEditor', () => {
     renderEditor(client, t);
     await user.click(screen.getByRole('button', { name: /^Split/ }));
     await user.type(screen.getByLabelText("This part's actual (min)"), '20');
-    await user.type(screen.getByLabelText("This part's estimate (min)"), '15');
+    await user.type(screen.getByLabelText("This part's estimate in hindsight"), '15');
     await user.click(screen.getByRole('button', { name: 'Keep going' }));
     expect(screen.getByLabelText<HTMLInputElement>("This part's estimate (min)").value).toBe('15');
     expect(screen.queryByLabelText("This part's actual (min)")).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Done with this part' }));
     expect(screen.getByLabelText<HTMLInputElement>("This part's actual (min)").value).toBe('20');
-    expect(screen.getByLabelText<HTMLInputElement>("This part's estimate (min)").value).toBe('15');
+    expect(screen.getByLabelText<HTMLInputElement>("This part's estimate in hindsight").value).toBe(
+      '15',
+    );
   });
 
   it('a negative typed in Keep going, on a scoped task, does not block a done split it no longer shows', async () => {
@@ -736,6 +738,50 @@ describe('TaskEditor', () => {
     await user.type(est, '-5');
     await user.click(screen.getByRole('button', { name: 'Done with this part' }));
     await user.type(screen.getByLabelText("This part's actual (min)"), '20');
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(false);
+  });
+
+  it('Keep going refuses a 0 or fractional estimate on either part; Scope refuses them too', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Scoped', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderEditor(client, t);
+    const save = () => screen.getByRole('button', { name: 'Save' });
+    const scope = screen.getByLabelText('Estimate (min)');
+    await user.clear(scope);
+    await user.type(scope, '0');
+    expect(save().getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByText('Whole minutes, at least 1.')).toBeTruthy();
+    await user.clear(scope);
+    await user.type(scope, '45');
+    expect(save().getAttribute('aria-disabled')).toBe('false');
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.click(screen.getByRole('button', { name: 'Keep going' }));
+    const split = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Split' });
+    const here = screen.getByLabelText("This part's estimate (min)");
+    await user.clear(here);
+    await user.type(here, '1.5');
+    expect(split().disabled).toBe(true);
+    await user.clear(here);
+    await user.type(here, '10');
+    const next = screen.getByLabelText("Next part's estimate (min)");
+    await user.clear(next);
+    await user.type(next, '0');
+    expect(split().disabled).toBe(true);
+    await user.clear(next);
+    expect(split().disabled).toBe(false); // none is still fine: it arrives unscoped
+  });
+
+  it('a done split of an errand takes an actual of 0, as it always did', async () => {
+    const client = api();
+    await client.upsertPlace({ name: 'Corner Shop', slug: 'corner' });
+    let t = await client.createTask({ title: 'stamps', place: 'corner' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.type(screen.getByLabelText("This part's actual (min)"), '0');
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(false);
   });
 

@@ -384,8 +384,9 @@ function FocusRow({
               <Button
                 variant="quiet"
                 size="sm"
+                ref={startRef}
                 aria-expanded={needsEstimate(t) ? asking : undefined}
-                onClick={() => (needsEstimate(t) ? setAsking((a) => !a) : onStart(t.id))}
+                onClick={() => (needsEstimate(t) ? setAsking(true) : onStart(t.id))}
               >
                 Start
               </Button>

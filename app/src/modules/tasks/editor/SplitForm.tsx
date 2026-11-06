@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import { canTransitionTask, isTimed, needsEstimate, STANDALONE_PART_TITLE } from '@aperture/shared';
+import {
+  canTransitionTask,
+  isCalibrated,
+  isTimed,
+  needsEstimate,
+  STANDALONE_PART_TITLE,
+} from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../../components/Button';
 import { Field } from '../../../components/Field';
@@ -9,7 +15,12 @@ import { useSplitTask } from '../../../data/hooks/useTasks';
 import { fmtDuration } from '../../../lib/format';
 import { liveElapsedMin } from '../../home/rightNow';
 import { usePomodoro } from '../../pomodoro/pomodoro-context';
-import { SPLIT_TITLE_SUFFIX, splitDefaults, typedBadMinutes } from '../taskMath';
+import {
+  SPLIT_TITLE_SUFFIX,
+  splitDefaults,
+  typedBadMinutes,
+  WHOLE_MINUTES_ERROR,
+} from '../taskMath';
 import { useEditSlot } from './editState';
 import type { EditSlots } from './editState';
 
@@ -104,10 +115,15 @@ export function SplitForm({
   const thisPart = done ? minutes(actual) : minutes(estimate);
   const rest = minutes(restEstimate);
   // Only what shows counts: a done part's estimate field is there only when it's asked for.
+  // An estimate is whole minutes or none (0 would read as scoped); what the form prefilled always passes, an
+  // older fractional estimate included. An errand's actual takes what it always did.
+  const calibrated = isCalibrated(task);
+  const estimateOk = (v: string, seed: string) => v === seed || !typedBadMinutes(v);
   const numbersOk =
-    (done ? !typedBadMinutes(actual) : valid(actual)) &&
-    (done ? !askEstimate || !typedBadMinutes(estimate) : valid(estimate)) &&
-    valid(restEstimate);
+    (done && calibrated ? !typedBadMinutes(actual) : valid(actual)) &&
+    (done ? !askEstimate || !typedBadMinutes(estimate) : estimateOk(estimate, initial.estimate)) &&
+    estimateOk(restEstimate, str(splitDefaults(task, finish).rest));
+  const negative = [done ? actual : estimate, restEstimate].some((v) => Number(v) < 0);
   const total = numbersOk && thisPart != null && rest != null ? thisPart + rest : null;
   const canSubmit =
     !!title.trim() &&
@@ -202,30 +218,30 @@ export function SplitForm({
         />
         {done ? (
           <div className="flex flex-wrap items-end gap-3">
-            {askEstimate && (
-              <Field
-                label="Estimate (min)"
-                aria-label="This part's estimate (min)"
-                type="number"
-                min={1}
-                inputMode="numeric"
-                placeholder="in hindsight"
-                value={estimate}
-                onChange={(e) => setEstimate(e.target.value)}
-                className="w-28"
-              />
-            )}
             <Field
               label="Actual (min)"
               aria-label="This part's actual (min)"
               type="number"
-              min={1}
+              min={calibrated ? 1 : 0}
               inputMode="numeric"
               placeholder="minutes"
               value={actual}
               onChange={(e) => setActual(e.target.value)}
               className="w-28"
             />
+            {askEstimate && (
+              <Field
+                label="Estimate in hindsight"
+                aria-label="This part's estimate in hindsight"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                placeholder="minutes"
+                value={estimate}
+                onChange={(e) => setEstimate(e.target.value)}
+                className="w-28"
+              />
+            )}
           </div>
         ) : (
           <Field
@@ -275,11 +291,14 @@ export function SplitForm({
         )}
       </div>
 
+      {askEstimate && (task.estimateLockedMin ?? 0) < 1 && (
+        <Text size="xs" tone="muted">
+          No estimate yet — what would you have said? It counts as estimated after the fact.
+        </Text>
+      )}
       {!numbersOk && (
         <Text size="xs" tone="danger">
-          {done
-            ? "Minutes can't be negative, and this part's are whole minutes, at least 1."
-            : "Minutes can't be negative."}
+          {negative ? "Minutes can't be negative." : WHOLE_MINUTES_ERROR}
         </Text>
       )}
       <div className="flex gap-2">

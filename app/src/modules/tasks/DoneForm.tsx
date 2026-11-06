@@ -27,7 +27,7 @@ import { typedBadMinutes, WHOLE_MINUTES_ERROR, wholeMinutes } from './taskMath';
 // Nothing tracked starts EMPTY, not "0" (you'd type over it), and neither empty nor 0 can be submitted —
 // a quiet 0 would land in calibration as a real actual (the done gate refuses it: machines.ts).
 // A task with no estimate asks for one here, in hindsight: every finished task is a calibration point, and
-// the server marks this one retro. It lands before the actual and the finish.
+// with no lock from the start the server marks this one retro. It lands before the actual and the finish.
 // The optional reflection (what went well, what to do differently) rides the same write as the actual;
 // focus stays on Actual. Left as it was seeded, it's not sent at all, so one saved meanwhile (MCP, another
 // device) is kept; cleared, it sends null. Over the cap, Mark done disables (no maxLength, so a paste is
@@ -149,7 +149,7 @@ export function DoneForm({
           )
         )}
       </div>
-      {askEstimate && (
+      {askEstimate && lock < 1 && (
         <Text size="xs" tone="muted">
           No estimate yet — what would you have said? It counts as estimated after the fact.
         </Text>

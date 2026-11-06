@@ -305,6 +305,15 @@ describe('DoneForm', () => {
       expect(screen.getByText(/counted as estimated after the fact/)).toBeTruthy();
     });
 
+    it('an estimate cleared after the start is asked for, without saying it counts as after the fact', async () => {
+      const client = api();
+      const scoped = await started(client);
+      renderDone(client, await client.setTaskEstimate(scoped.id, null, null));
+      expect(screen.getByLabelText('Estimate in hindsight')).toBeTruthy();
+      expect(screen.queryByText(/counts as estimated after the fact/)).toBeNull();
+      expect(screen.getByText(/vs 30m estimated at start/)).toBeTruthy();
+    });
+
     it('a fractional estimate is refused', async () => {
       const client = api();
       const { user } = renderDone(client, await unscoped(client));

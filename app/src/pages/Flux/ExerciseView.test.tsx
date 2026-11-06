@@ -490,7 +490,7 @@ describe('Flux Roll tie', () => {
     expect(await screen.findByText(/Neck rep done today/)).toBeTruthy();
   });
 
-  it('a rep with no estimate takes its Roll’s at Stop: Mark done stays one tap, marked retro', async () => {
+  it('a rep with no estimate takes its Roll’s at Stop, nothing new to type, marked retro', async () => {
     const s = await linked(true);
     await screen.findByText(/your first set starts it/);
     await s.api.setTaskEstimate((await s.rep())!.id, null, null);
@@ -511,6 +511,26 @@ describe('Flux Roll tie', () => {
         estimateSource: 'retro',
       }),
     );
+  });
+
+  it('a Roll’s fractional estimate prefills whole, so it never blocks Mark done', async () => {
+    let rollId = '';
+    const s = await stage('/flux/chin-tuck', async (api) => {
+      const roll = await api.upsertRoll({ name: 'Neck', categoryId: null, estimateMin: 12.5 });
+      rollId = roll.id;
+      await api.updateSettings({ fluxRollId: roll.id });
+      await api.pickRollToday(roll.id, (await import('@aperture/shared')).todayKey(4));
+    });
+    const rep = async () => (await s.api.listTasks()).find((t) => t.rollId === rollId);
+    await screen.findByText(/your first set starts it/);
+    await s.api.setTaskEstimate((await rep())!.id, null, null);
+    await running(s);
+    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
+    await waitFor(async () => expect((await rep())?.status).toBe('in_progress'));
+    await s.user.click(await screen.findByRole('button', { name: 'Stop' }));
+    const estimate = await screen.findByLabelText<HTMLInputElement>('Estimate in hindsight');
+    expect(estimate.value).toBe('13');
+    expect(screen.queryByText('Whole minutes, at least 1.')).toBeNull();
   });
 
   it('a set stopped part-way starts the rep and offers the DoneForm, like a finished one (D55)', async () => {

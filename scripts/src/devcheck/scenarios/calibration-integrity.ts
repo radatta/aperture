@@ -13,12 +13,15 @@ async function mine(ctx: Ctx, what: string) {
   if (!t) throw new Error(`${what}: not on the server`);
   return t;
 }
-// Any range: the app's day boundary can put today's point on yesterday.
+// Any range: the app's day boundary can put today's point on yesterday. The list read lags a write.
 async function pointOf(ctx: Ctx, id: string) {
-  const all = await ctx.api.reads.getCalibration({ from: '2000-01-01', to: '2100-01-01' });
-  const p = all.find((x) => x.taskId === id);
-  if (!p) throw new Error(`${id}: no calibration point`);
-  return p;
+  for (let i = 0; ; i++) {
+    const all = await ctx.api.reads.getCalibration({ from: '2000-01-01', to: '2100-01-01' });
+    const p = all.find((x) => x.taskId === id);
+    if (p?.estimateSource) return p;
+    if (i >= 40) throw new Error(`${id}: no calibration point: ${JSON.stringify(p)}`);
+    await new Promise((r) => setTimeout(r, 250));
+  }
 }
 const dialogOf = (ctx: Ctx, title: string) =>
   ctx.page.getByRole('dialog', { name: `Task: ${title}` });
@@ -91,6 +94,12 @@ export const calibrationIntegrity: Scenario = {
       what: 'Start on a Home “Right now” row opens the same chips',
     },
     {
+      id: 'hero-done',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Done on Home’s hero for a task started without an estimate asks for it there, and finishes retro',
+    },
+    {
       id: 'chips-write-fails',
       entry: 'ui',
       kind: 'edge',
@@ -142,10 +151,10 @@ export const calibrationIntegrity: Scenario = {
       id: 'flux-rep-unscoped',
       entry: 'ui',
       kind: 'edge',
-      what: 'Flux: a rep that lost its estimate takes its Roll’s at Done, so Mark done stays one tap, marked retro',
+      what: 'Flux: a rep that lost its estimate takes its Roll’s at Done, with nothing new to type, marked retro',
       offDev: {
         file: 'app/src/pages/Flux/ExerciseView.test.tsx',
-        test: 'a rep with no estimate takes its Roll’s at Stop: Mark done stays one tap, marked retro',
+        test: 'a rep with no estimate takes its Roll’s at Stop, nothing new to type, marked retro',
         why: 'Flux’s stage needs a camera to save a set, which dev’s browser has none of; the prefill is client-only, on the setTaskEstimate path chips-start proves',
       },
     },
@@ -221,6 +230,7 @@ export const calibrationIntegrity: Scenario = {
           'retried',
           'splitme',
           'homerow',
+          'herorow',
         ])
           await ctx.api.writes.createTask({ title: name(ctx, what) });
         for (const what of ['zeroed', 'drifted'])
@@ -287,6 +297,7 @@ export const calibrationIntegrity: Scenario = {
           throw new Error('0 left “Start with this” enabled');
         await ctx.shot('custom-zero');
         await field.fill('1.5');
+        await chips.getByText('Whole minutes, at least 1.').waitFor({ timeout: 5_000 });
         if (!(await chips.getByRole('button', { name: 'Start with this' }).isDisabled()))
           throw new Error('1.5 left “Start with this” enabled');
         await field.fill('25');
@@ -338,6 +349,45 @@ export const calibrationIntegrity: Scenario = {
         await untilInProgress(ctx, id);
         if ((await ctx.api.reads.getTask(id))?.estimateLockedMin !== 45)
           throw new Error('the Home chip locked something else');
+        // Off the plan's top: the hero step needs its own task to be the one in progress there.
+        await ctx.api.writes.deleteTask(id);
+      },
+    },
+    {
+      id: 'hero-done',
+      entry: 'ui',
+      proves: ['hero-done'],
+      title: 'Home › Daytime: Start without one → the hero’s Done asks for the estimate → retro',
+      async run(ctx) {
+        const { id } = await mine(ctx, 'herorow');
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const { today } = datesFor(new Date(Date.now() - dayStartHour * 3_600_000));
+        await ctx.api.writes.upsertPlan({ taskId: id, day: today, plannedMinutes: 30, order: -1 });
+        await ctx.ui.goto('/');
+        await ctx.page.getByRole('button', { name: 'Daytime' }).click();
+        const title = name(ctx, 'herorow');
+        await ctx.ui.expectText(title, 15_000);
+        await ctx.page
+          .getByText(title, { exact: true })
+          .locator('xpath=ancestor::div[.//button[normalize-space()="Start"]][1]')
+          .getByRole('button', { name: 'Start', exact: true })
+          .click();
+        await ctx.page
+          .getByRole('group', { name: `Estimate for ${title}` })
+          .getByRole('button', { name: 'Start without one' })
+          .click();
+        await untilInProgress(ctx, id);
+        await ctx.page.getByRole('button', { name: 'Done', exact: true }).click();
+        const estimate = ctx.page.getByLabel('Estimate in hindsight');
+        await estimate.waitFor({ timeout: 15_000 });
+        await estimate.scrollIntoViewIfNeeded();
+        await ctx.shot('hero-done-asks');
+        await ctx.page.getByLabel('Actual (min)').fill('18');
+        await estimate.fill('12');
+        await ctx.page.getByRole('button', { name: 'Mark done' }).click();
+        const p = await pointOf(ctx, id);
+        if (p.estimateLockedMin !== 12 || p.estimateSource !== 'retro')
+          throw new Error(`point ${JSON.stringify(p)}`);
       },
     },
     {
@@ -454,7 +504,7 @@ export const calibrationIntegrity: Scenario = {
         await actual.fill('20');
         const split = dialog.getByRole('button', { name: 'Split', exact: true });
         if (!(await split.isDisabled())) throw new Error('Split is enabled with no estimate');
-        await dialog.getByLabel("This part's estimate (min)").fill('15');
+        await dialog.getByLabel("This part's estimate in hindsight").fill('15');
         await ctx.shot('split-asks-estimate');
         await dialog.getByRole('button', { name: 'Keep going' }).click();
         await dialog.getByRole('button', { name: 'Done with this part' }).click();
@@ -466,10 +516,11 @@ export const calibrationIntegrity: Scenario = {
         if (p.estimateLockedMin !== 15 || p.estimateSource !== 'retro')
           throw new Error(`point ${JSON.stringify(p)}`);
         const t = await ctx.api.reads.getTask(id);
+        if (!t?.parentId) throw new Error(`this part has no parent: ${JSON.stringify(t)}`);
         const next = (await ctx.api.reads.listTasks()).find(
-          (x) => x.parentId === t?.parentId && x.id !== id,
+          (x) => x.parentId === t.parentId && x.id !== id,
         );
-        if (!next || next.estimateMin != null || next.estimateLockedMin != null)
+        if (next?.title !== 'Part 2' || next.estimateMin != null || next.estimateLockedMin != null)
           throw new Error(`the next part is ${JSON.stringify(next)}`);
       },
     },
@@ -590,6 +641,10 @@ export const calibrationIntegrity: Scenario = {
         await ctx.mcp.writes.completeTask(part.id, 7, undefined, 7);
         await ctx.mcp.writes.completeTask(ex.id);
         await ctx.mcp.writes.deleteTask(part.id);
+        for (let i = 0; (await ctx.api.reads.listTasks()).some((x) => x.id === part.id); i++) {
+          if (i >= 40) throw new Error('the deleted part stays on the list');
+          await new Promise((r) => setTimeout(r, 250));
+        }
         await ctx.mcp.writes.updateTask(ex.id, { estimateMin: 30 });
         const e = await pointOf(ctx, ex.id);
         if (e.estimateLockedMin !== 30 || e.estimateSource !== 'retro')
@@ -623,7 +678,6 @@ export const calibrationIntegrity: Scenario = {
           'failing',
           'zeroed',
           'mstatus',
-          'homerow',
           'splitme',
           'msplit',
         ])
