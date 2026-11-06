@@ -162,26 +162,31 @@ describe('suggestCategory', () => {
       expect(ask({ title: line }, h, c)).toBeNull();
     });
 
-    it('never names a category whose tasks hold no words at all', () => {
-      // Titles the tokeniser reads as nothing leave it the smallest denominator of all.
-      const empty = [...h, ...rows(['?', '!!', '…'], 'cat-empty', 'e')];
-      const roster = [...c, { id: 'cat-empty', active: true }];
-      const line = gardenWords.slice(0, 10).join(' ');
-      expect(ask({ title: line }, empty, roster)?.categoryId).not.toBe('cat-empty');
-    });
-
-    it('never names a small category that hasn’t seen the line, when the big one’s words repeat', () => {
+    describe('when the big one’s words repeat', () => {
       // 120 tasks over 100 common words plus one once-used word each: the words the line uses cost more
-      // in this big denominator than absence does in the small one, so the margin alone would pick Ledger.
+      // in this big denominator than absence does in a small one, so the margin alone would pick it.
       const common = words('crop', 100);
       const big = Array.from({ length: 120 }, (_, i) =>
         [`rare${i}`, ...[0, 1, 2, 3, 4].map((k) => common[(i * 5 + k) % 100]!)].join(' '),
       );
       const skewed = [...rows(big, GARDEN, 'g'), ...rows(titles(words('sum', 20), 5), LEDGER, 'l')];
-      for (const n of [4, 8, 15]) {
-        const line = Array.from({ length: n }, (_, i) => `rare${i}`).join(' ');
-        expect(ask({ title: line }, skewed, c)?.categoryId).not.toBe(LEDGER);
-      }
+      const rareLine = (n: number) => Array.from({ length: n }, (_, i) => `rare${i}`).join(' ');
+
+      it('never names a small category that hasn’t seen the line', () => {
+        for (const n of [4, 8, 15])
+          expect(ask({ title: rareLine(n) }, skewed, c)?.categoryId).not.toBe(LEDGER);
+      });
+
+      it('never names a category whose tasks hold no words at all', () => {
+        // Titles the tokeniser reads as nothing leave it the smallest denominator of all.
+        // Alone with the big one: a second small category would stop it at the margin instead.
+        const empty = [...rows(big, GARDEN, 'g'), ...rows(['?', '!!', '…'], 'cat-empty', 'e')];
+        const roster = [
+          { id: GARDEN, active: true },
+          { id: 'cat-empty', active: true },
+        ];
+        expect(ask({ title: rareLine(10) }, empty, roster)?.categoryId).not.toBe('cat-empty');
+      });
     });
   });
 
