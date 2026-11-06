@@ -72,7 +72,7 @@ export interface RunResult {
   failedDeletes: string[]; // `<id>: <error>` — a removal (still pending, the sweep retries) or read-back that threw; the loop went on
   consoleErrors: string[];
   throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
-  injected: string[]; // failures the harness itself served (ctx.intercept): `/api/<method> → 429|dropped`
+  injected: string[]; // responses the harness itself served (ctx.intercept): `/api/<method> → <status>|dropped`
   shots: string[];
   durationMs: number;
   crash?: string;
@@ -325,7 +325,7 @@ export function renderReport(r: RunResult): string {
     '',
     ...(r.throttled.length ? r.throttled.map((t) => `- \`${cell(t)}\``) : ['None.']),
   );
-  // A scenario's own injected failures (ctx.intercept) — kept apart from real throttles, so neither reads as the other.
+  // A scenario's own injected responses (ctx.intercept) — kept apart from real throttles, so neither reads as the other.
   lines.push(
     '',
     '## Injected by the harness',

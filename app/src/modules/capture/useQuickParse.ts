@@ -23,6 +23,7 @@ export function withTimeout(p: Promise<ParseTaskResult>, ms: number): Promise<Pa
 export interface QuickPreview {
   text: string;
   result: ParseTaskResult | null;
+  tookSuggestion?: boolean; // the chip's tap filled the category; it stays in the chip's slot
 }
 
 // Quick add's parse state for the capture bar (docs/areas/tasks/quick-add.md). Two callers:
@@ -62,17 +63,40 @@ export function useQuickParse() {
     (text: string): void => {
       setPreview({ text, result: null });
       void parse(text).then((result) =>
-        setPreview((p) => (p?.text === text ? { text, result } : p)),
+        // Only into a preview still waiting: an earlier parse of this text landing late can't undo a tap.
+        setPreview((p) => (p?.text === text && p.result === null ? { text, result } : p)),
       );
     },
     [parse],
   );
 
+  // The Review chip's tap: the preview, which is what the next press saves, now carries the category.
+  const takeCategory = useCallback((text: string, categoryId: string, label: string): void => {
+    setPreview((p) =>
+      p?.text === text && p.result?.ok
+        ? {
+            text,
+            tookSuggestion: true,
+            result: {
+              ...p.result,
+              categoryLabel: label,
+              input: { ...p.result.input, categoryId },
+            },
+          }
+        : p,
+    );
+  }, []);
+
   const clear = useCallback(() => setPreview(null), []);
+  // A failed create put the text back: its tapped preview comes back with it, or the retry would re-parse
+  // and save without the category.
+  const reinstate = useCallback((p: QuickPreview) => setPreview(p), []);
 
   return {
     parse,
     review,
+    takeCategory,
+    reinstate,
     previewFor: (text: string): QuickPreview | null => (preview?.text === text ? preview : null),
     clear,
   };

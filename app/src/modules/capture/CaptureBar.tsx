@@ -46,6 +46,7 @@ import {
   type Parked,
 } from './captureOutbox';
 import { previewLine, savedSummary } from './parsePreview';
+import { PreviewCategory } from './PreviewCategory';
 
 const RECEIPT_MS = 1800;
 // A quick add's receipt carries what was parsed — more to read than "Logged", so it stays longer.
@@ -234,8 +235,11 @@ export function CaptureBar({
   const awaitingFailed = awaitingCategories ? categoriesFailed : placesFailed;
   // A Review's preview — only while the field still holds exactly the text it was parsed from.
   // A parse resolves "tmw" against its day, so one made before the 4am rollover is dropped after it.
-  const previewed = mode === 'task' && !line ? quick.previewFor(text.trim()) : null;
-  const preview = previewed?.result?.ok && previewed.result.today !== today ? null : previewed;
+  const livePreview = (value: string) => {
+    const p = quick.previewFor(value);
+    return p?.result?.ok && p.result.today !== today ? null : p;
+  };
+  const preview = mode === 'task' && !line ? livePreview(text.trim()) : null;
   // A refusal notice tracks the live state: once the cause is gone (categories arrived, mode switched,
   // line fixed) it goes too, and its text always names the current cause. A 'held' one stays while its
   // promise does (heldAck) and the line still warns.
@@ -354,6 +358,7 @@ export function CaptureBar({
     // a second or more between Enter and the write, which made that window wide open.
     // Back into the field only while it's empty: a newer capture typed meanwhile is never overwritten —
     // the failed one is parked below instead, in full, and the receipt says where it went.
+    const reviewedPreview = submitted === 'task' && !line ? livePreview(value) : null;
     const restore = () => {
       if (textRef.current.trim()) {
         park({ text: value, mode: submitted, toToday: goesToday, why: 'failed' });
@@ -366,6 +371,7 @@ export function CaptureBar({
       changeMode(submitted);
       setToToday(goesToday); // the retry goes where the first attempt was headed, and nowhere else
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
+      if (reviewedPreview?.tookSuggestion) quick.reinstate(reviewedPreview);
     };
     const done = () => setReceipt({ mode: submitted, at: Date.now() });
     if (submitted === 'task' && line) saveTask(toCreateInput(line), goesToday, restore, null, {});
@@ -373,7 +379,7 @@ export function CaptureBar({
       // Quick add (Auto): saves the shown preview if there is one, else waits on the parse — a Review
       // still in flight for this text is reused, never asked twice. A failed parse saves the line raw.
       // Until the create settles the capture is also in the outbox, so closing the app can't lose it.
-      const reviewed = quick.previewFor(value)?.result;
+      const reviewed = reviewedPreview?.result;
       const sent = outboxAdd({ text: value, mode: 'task', toToday: goesToday, at: Date.now() });
       ownSent.current.add(sent);
       const settled = () => {
@@ -487,7 +493,7 @@ export function CaptureBar({
   function review() {
     const value = text.trim();
     if (mode !== 'task' || !value) return;
-    const p = quick.previewFor(value);
+    const p = livePreview(value);
     if (line || p?.result?.ok) submit();
     else if (!p || p.result) quick.review(value); // null result = a parse already running: wait for it
     inputRef.current?.focus();
@@ -687,14 +693,15 @@ export function CaptureBar({
         </button>
       </div>
       <TokenSuggestions items={suggestions} onPick={accept} />
-      {/* Live, unlike the grammar row: it changes only on a Review press, so it speaks once per parse
-          (busy while parsing, so "Reading it…" isn't read first). */}
+      {/* Live, unlike the grammar row: it changes on a Review press, so it speaks once per parse (busy
+          while parsing, so "Reading it…" isn't read first), and when the chip's tap fills the category.
+          Children don't shrink: past the cap it scrolls, rather than squeezing the notes away. */}
       {preview && (
         <div
           id={parseId}
           aria-live="polite"
           aria-busy={preview.result === null || undefined}
-          className="flex max-h-24 flex-col gap-0.5 overflow-auto px-2 pt-1"
+          className="flex max-h-24 flex-col gap-0.5 overflow-auto px-2 pt-1 *:shrink-0"
         >
           {preview.result === null ? (
             <Text size="xs" tone="muted">
@@ -706,13 +713,24 @@ export function CaptureBar({
                 <Text size="xs" weight="medium" className="break-words">
                   {preview.result.input.title}
                 </Text>
-                {preview.result.categoryLabel === null && (
-                  <Text size="xs" tone="muted">
-                    no category
-                  </Text>
+                {(preview.result.categoryLabel === null || preview.tookSuggestion) && (
+                  <PreviewCategory
+                    title={preview.result.input.title}
+                    notes={preview.result.input.notes}
+                    taken={preview.tookSuggestion ? preview.result.categoryLabel : null}
+                    onTake={(id, label, byKeyboard) => {
+                      quick.takeCategory(preview.text, id, label);
+                      // The chip goes: Enter or Space keeps focus in the field, not on <body>.
+                      if (byKeyboard) inputRef.current?.focus();
+                    }}
+                  />
                 )}
                 <TaskTokenChips
-                  line={previewLine(preview.result)}
+                  line={previewLine(
+                    preview.tookSuggestion
+                      ? { ...preview.result, categoryLabel: null } // shown in the chip's slot
+                      : preview.result,
+                  )}
                   today={preview.result.today}
                   dayStartHour={dayStartHour}
                 />

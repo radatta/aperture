@@ -125,7 +125,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   let session: Session | undefined;
   let api: ApiClient | undefined;
   let prefix = 'setup';
-  const intercepts = new Set<{ method: string; release: () => Promise<void> }>(); // live ctx.intercept()s
+  const intercepts = new Set<{ method: string; fails: boolean; release: () => Promise<void> }>(); // live ctx.intercept()s
+  const failing = () => [...intercepts].some((i) => i.fails); // a canned 200 opens no console window
   const injectedRequests = new WeakSet<object>(); // the requests an intercept answered itself
 
   d.ledger.append({ run: d.runId, op: 'run-start' });
@@ -136,7 +137,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const page = browser.page;
     page.on('console', (m) => {
       if (m.type() !== 'error') return;
-      if (intercepts.size && INJECTED_CONSOLE.test(m.text())) return;
+      if (failing() && INJECTED_CONSOLE.test(m.text())) return;
       r.consoleErrors.push(m.text());
     });
     page.on('pageerror', (e) => r.consoleErrors.push(String(e)));
@@ -146,7 +147,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       const method = url.origin === DEV_ORIGIN ? methodOf(res.url()) : undefined;
       // While an intercept is live the console's failed-load lines are dropped (they name no URL), so a real
       // failed load in that window — /api or anything else — is recorded from its response instead.
-      if (intercepts.size && res.status() >= 400 && res.status() !== 429)
+      if (failing() && res.status() >= 400 && res.status() !== 429)
         r.consoleErrors.push(
           `HTTP ${res.status()} on ${method ? `/api/${method}` : url.host + url.pathname} (during an injected failure)`,
         );
@@ -347,12 +348,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       injectedRequests.add(route.request());
       r.injected.push(`/api/${method} → ${opts.abort ? 'dropped' : status}`);
       if (opts.abort) return route.abort('failed');
-      return route.fulfill({ status, body: '{}', headers: { 'content-type': 'application/json' } });
+      return route.fulfill({
+        status,
+        body: JSON.stringify(opts.body ?? {}),
+        headers: { 'content-type': 'application/json' },
+      });
     };
     await page.route(match, handler);
     let released = false;
     const entry = {
       method,
+      fails: !!opts.abort || status >= 400,
       // Unrouted, not just switched off: a live page route turns off the page's HTTP cache.
       release: async () => {
         if (released) return;

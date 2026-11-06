@@ -85,6 +85,7 @@ export interface InterceptOpts {
   status?: number; // default 429 — the one the app retries for every call
   times?: number;
   abort?: boolean;
+  body?: unknown; // the JSON the injected response carries (default {}), e.g. a canned model reply at status 200
 }
 
 export interface Interception {

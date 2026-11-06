@@ -285,8 +285,10 @@ step, proving no row, so a console error fails the run without unproving the row
 
 A failure dev won't produce on demand (a read that 429s, a dropped connection, a stop that doesn't land) is
 injected **by the harness**, never by a switch in shipped code: `ctx.intercept(method, { status?, times?,
-abort? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
-every call) get `status` (default 429) or a dropped connection, and the rest pass through. The returned handle
+abort?, body? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
+every call) get `status` (default 429) with `body` as JSON (default `{}`), or a dropped connection, and the rest
+pass through. A Review preview has no grammar path, so `category-suggest` answers `parseTask` this way (status
+200, a canned parse): no Haiku spend, no model output to flake a row about the chip. The returned handle
 counts `hits()` and `passed()`; `release()` unroutes it, because a live page route turns off the page's HTTP
 cache. The pipeline releases any a step left live when its scenario ends, so a step that threw mid-intercept
 can't fail the next scenario's reads.
