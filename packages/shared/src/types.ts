@@ -26,6 +26,7 @@ export interface LogEntry extends BaseEntity {
 
 // --- Tasks -----------------------------------------------------------------
 export type TaskStatus = 'backlog' | 'planned' | 'in_progress' | 'done' | 'cancelled';
+export type EstimateSource = 'planned' | 'revised' | 'retro';
 
 export interface Task extends BaseEntity {
   title: string;
@@ -61,6 +62,10 @@ export interface Task extends BaseEntity {
   // Never edited after — a later estimate edit moves estimateMin only. The one exception: a parent whose
   // last part goes is plain again, and the lock frozen for its parts goes with them (parts.ts releaseParent).
   estimateLockedMin: number | null;
+  // How the headline number came to be, set once at done (machines.ts): planned = the lock is the estimate;
+  // revised = rescoped after start; retro = no lock until the finish, so hindsight. A parent, an errand and
+  // any row older than the done gate have none (undefined on read).
+  estimateSource?: EstimateSource | null;
   // The task this one is a part of (parts.ts): the parent holds the deadline, its parts hold the work. One
   // level — a parent can't have a parent, a part can't have parts. Parenthood is derived (some task points
   // here), never stored. Pre-existing rows read back undefined → `!parentId`.
@@ -281,7 +286,9 @@ export interface Settings extends BaseEntity {
 export interface CalibrationPoint {
   taskId: string;
   day: string; // completion day
-  estimateLockedMin: number;
+  estimateLockedMin: number; // the headline: frozen at start
+  estimateMin: number | null; // the working estimate at the finish ("est 30 → 60"); null on a parent
+  estimateSource: EstimateSource | null; // null: a parent, or a row older than the done gate
   actualAccruedMin: number;
   categoryId: string | null;
   reflection: string | null; // the task's reflection, so a calibration read carries the why with the delta

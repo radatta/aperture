@@ -14,7 +14,9 @@ import {
   normalizeContentType,
   normalizeNotes,
   normalizeReflection,
+  needsEstimate,
   PARENT_NO_ACTUAL_ERROR,
+  PARENT_NO_ESTIMATE_ERROR,
   parentOf,
   partsOf,
   partsSummary,
@@ -332,7 +334,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline; an open part takes its parent\'s place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent\'s place and errors — set the parent\'s, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), reflection (REPLACES the whole reflection; null or "" clears; usually on a done task — the look back written at completion), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→reflection→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).',
+      'Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline; an open part takes its parent\'s place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent\'s place and errors — set the parent\'s, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), reflection (REPLACES the whole reflection; null or "" clears; usually on a done task — the look back written at completion), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→reflection→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. The one exception: a done task with no baseline takes one retro estimate (it becomes the baseline, marked retro; a second is refused). If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress and, except on an errand, needs an estimate and an actual of at least 1 minute; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -458,7 +460,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'complete_task',
     description:
-      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. Chains through in_progress if needed (which freezes the calibration baseline). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin — its actual is what its parts took — and it is refused while any part is still open (complete, drop or delete that part first). An ERRAND (a task with a place) may omit actualMin too: it is checked off, never a calibration point. reflection (optional): the user’s look back, saved in the same write as actualMin (on a parent, after its parts’ rollup; on an errand without one, after the check-off); to add or fix one on a task already done, use update_task.',
+      'Mark a task done and record how long it ACTUALLY took (actualMin, minutes). This is what feeds calibration, so actualMin is required — never guess a round number silently, ask the user if unsure. estimateMin (minutes) is required when the task has no estimate: ask the user what they would have estimated; it is stored as an after-the-fact (retro) estimate. On a task that has one it is optional, and a revision: the baseline stays what it was at start. Chains through in_progress if needed (which freezes the calibration baseline, before estimateMin applies). If only part of the task is finished, use split_task instead. actualMin REPLACES any timer-tracked minutes; the previous value is returned so an overwrite is visible. A PARENT (a task with parts) is the exception: omit actualMin and estimateMin — its numbers are what its parts took and were sized at — and it is refused while any part is still open (complete, drop or delete that part first). An ERRAND (a task with a place) may omit both too: it is checked off, never a calibration point. reflection (optional): the user’s look back, saved in the same write as actualMin (on a parent, after its parts’ rollup; on an errand without one, after the check-off); to add or fix one on a task already done, use update_task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -468,6 +470,12 @@ export const TOOLS: Tool[] = [
           minimum: 1,
           description:
             'actual minutes the task took (required, except on a parent: omit it; optional on an errand)',
+        },
+        estimateMin: {
+          type: 'integer',
+          minimum: 1,
+          description:
+            'estimate in minutes: required when the task has none (retro), a revision when it has one; a parent takes none, optional on an errand',
         },
         reflection: { type: ['string', 'null'], description: REFLECTION_SCHEMA_DESC },
       },
@@ -487,6 +495,8 @@ export const TOOLS: Tool[] = [
       if (partsOf(all, id).length) {
         if (present(args, 'actualMin'))
           throw new RpcParamError(`${PARENT_NO_ACTUAL_ERROR} Omit actualMin.`);
+        if (present(args, 'estimateMin'))
+          throw new RpcParamError(`${PARENT_NO_ESTIMATE_ERROR} Omit estimateMin.`);
         // The server refuses while a part is open, naming it (parts.ts) — that message is the answer.
         const done = (await ctx.dispatch('transitionTask', [id, 'done'])) as Task;
         if (reflection === undefined) return { task: done, previousActualMin: 0 };
@@ -495,10 +505,19 @@ export const TOOLS: Tool[] = [
       // An errand is checked off — no actual needed (it never feeds calibration: contributesCalibration).
       const actualMin =
         task.place && !present(args, 'actualMin') ? null : reqInt(args, 'actualMin', 1);
+      const estimateMin = present(args, 'estimateMin') ? reqInt(args, 'estimateMin', 1) : null;
+      // Checked before any write: this refusal leaves the task exactly as it was.
+      if (estimateMin === null && needsEstimate(task))
+        throw new RpcParamError(
+          'This task has no estimate: pass estimateMin (ask the user what they would have estimated) — it is stored as after-the-fact.',
+        );
       const previousActualMin = task.actualAccruedMin;
       if (task.status === 'backlog' || task.status === 'planned') {
         await ctx.dispatch('transitionTask', [id, 'in_progress']);
       }
+      // After the start, so the baseline froze on what the task said then: a revision can't launder it.
+      if (estimateMin !== null)
+        await ctx.dispatch('setTaskEstimate', [id, estimateMin, task.bufferMin ?? null]);
       if (actualMin !== null)
         await ctx.dispatch(
           'setTaskActual',
@@ -513,7 +532,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'split_task',
     description:
-      'Split a task when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess) or keeps going (finish="keep"), and the rest becomes a new PART (followUpTitle, followUpEstimateMin). A split always yields parent + parts: a standalone task becomes "Part 1" (unless title renames it) under a NEW parent that takes its title (or parentTitle), deadline and calibration baseline; splitting a part adds a sibling under the same parent (parentTitle is refused there). A parent itself can\'t be split — create a part instead — and nor can a roll rep or a recurring occurrence (one rep of a repeating thing: rescope it with update_task or finish it with complete_task). Optional title/estimateMin/bufferMin rename or rescope this part. The new part keeps the category, time and notes, and lands on this task\'s latest plan day when this task is planned or in progress and untimed (else the backlog; a timed follow-up is on its day by its time). Each part is its own calibration point; the parent is scored as the whole job once marked done. Nothing is cancelled. Calendar: a timed follow-up gets its own Google Calendar block ending at its time — on finish="done" it takes over this task’s block, if it has one (never the parent’s: a parent has none); a sync failure shows as gcalSyncError on whichever task it failed for (sync_calendar_event retries it). Returns { parent, original, followUp }.',
+      'Split a task when the work turned out bigger, or part of it is finished: this part either finishes (finish="done" — only for a started task; actualMin is required and feeds calibration, so ask the user, never guess; on a task with no estimate estimateMin is required too, stored as after-the-fact) or keeps going (finish="keep"), and the rest becomes a new PART (followUpTitle, followUpEstimateMin). A split always yields parent + parts: a standalone task becomes "Part 1" (unless title renames it) under a NEW parent that takes its title (or parentTitle), deadline and calibration baseline; splitting a part adds a sibling under the same parent (parentTitle is refused there). A parent itself can\'t be split — create a part instead — and nor can a roll rep or a recurring occurrence (one rep of a repeating thing: rescope it with update_task or finish it with complete_task). Optional title/estimateMin/bufferMin rename or rescope this part. The new part keeps the category, time and notes, and lands on this task\'s latest plan day when this task is planned or in progress and untimed (else the backlog; a timed follow-up is on its day by its time). Each part is its own calibration point; the parent is scored as the whole job once marked done. Nothing is cancelled. Calendar: a timed follow-up gets its own Google Calendar block ending at its time — on finish="done" it takes over this task’s block, if it has one (never the parent’s: a parent has none); a sync failure shows as gcalSyncError on whichever task it failed for (sync_calendar_event retries it). Returns { parent, original, followUp }.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -663,7 +682,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'get_calibration',
     description:
-      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. Every part is a point; a done parent is one too (parts > 0, the parts not dropped): its frozen lock against what its parts took. Its parts are already points, so leave parents out when totalling, or the work counts twice. This is the signature metric — use it to advise better estimates.',
+      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. estimateLockedMin is the headline (frozen at start); estimateMin is where the working estimate ended up; estimateSource says how the headline came to be: planned, revised (rescoped after start), retro (estimated after the fact), null (a parent, or older than the rule). Every part is a point; a done parent is one too (parts > 0, the parts not dropped): its frozen lock against what its parts took. Its parts are already points, so leave parents out when totalling, or the work counts twice. This is the signature metric — use it to advise better estimates.',
     inputSchema: {
       type: 'object',
       properties: { from: { type: 'string' }, to: { type: 'string' } },

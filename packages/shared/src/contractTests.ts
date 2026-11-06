@@ -377,6 +377,7 @@ export function runApiContract(
       expect([original.dueDay, followUp.dueDay]).toEqual([null, null]);
       for (const id of [original.id, followUp.id]) {
         await api.transitionTask(id, 'in_progress');
+        await api.setTaskActual(id, 25);
         await api.transitionTask(id, 'done');
       }
       const ids = (await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' })).map(
@@ -560,9 +561,10 @@ export function runApiContract(
 
     it('parts: cancelling the parent drops its open parts; a done part stays as history', async () => {
       const p = await api.createTask({ title: 'P2' });
-      const a = await api.createTask({ title: 'a', parentId: p.id });
+      const a = await api.createTask({ title: 'a', parentId: p.id, estimateMin: 30 });
       const b = await api.createTask({ title: 'b', parentId: p.id });
       await api.transitionTask(a.id, 'in_progress');
+      await api.setTaskActual(a.id, 30);
       await api.transitionTask(a.id, 'done');
       expect(await api.transitionTask(p.id, 'cancelled')).toMatchObject({ status: 'cancelled' });
       expect((await api.getTask(a.id))?.status).toBe('done');
@@ -891,8 +893,14 @@ export function runApiContract(
     });
 
     it('tasks: split carries the due time to the follow-up', async () => {
-      const t = await api.createTask({ title: 'pset', dueDay: '2026-08-07', dueTime: '17:00' });
+      const t = await api.createTask({
+        title: 'pset',
+        estimateMin: 30,
+        dueDay: '2026-08-07',
+        dueTime: '17:00',
+      });
       await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 20);
       const { followUp } = await api.splitTask(t.id, {
         finish: 'done',
         followUp: { title: 'pset, part 2', estimateMin: null },
@@ -938,6 +946,7 @@ export function runApiContract(
       const mid = await api.setTaskNotes(t.id, 'mid-flight');
       expect(mid.notes).toBe('mid-flight');
       expect(mid.estimateLockedMin).toBe(30); // notes ≠ scope change
+      await api.setTaskActual(t.id, 30);
       const done = await api.transitionTask(t.id, 'done');
       expect((await api.setTaskNotes(done.id, 'after the fact')).notes).toBe('after the fact');
 
@@ -971,8 +980,13 @@ export function runApiContract(
     });
 
     it('tasks: split carries notes to the follow-up, and export includes them', async () => {
-      const t = await api.createTask({ title: 'Big thing', notes: 'links + context' });
+      const t = await api.createTask({
+        title: 'Big thing',
+        estimateMin: 60,
+        notes: 'links + context',
+      });
       await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 40);
       const { followUp } = await api.splitTask(t.id, {
         finish: 'done',
         followUp: { title: 'Big thing, part 2', estimateMin: null },
@@ -1303,6 +1317,7 @@ export function runApiContract(
 
       // Once the rep is done, picking again spawns a FRESH task (a second rep is honest).
       await api.transitionTask(first.task.id, 'in_progress');
+      await api.setTaskActual(first.task.id, 30);
       await api.transitionTask(first.task.id, 'done');
       const fresh = await api.pickRollToday(roll.id, '2026-08-05');
       expect(fresh.task.id).not.toBe(first.task.id);
@@ -1901,6 +1916,99 @@ export function runApiContract(
     // spread, or an `as` cast, and it can't see a declared-but-actually-undefined value or a key the
     // HTTP layer's JSON round-trip drops. Listing the collections here is deliberate double-entry —
     // don't replace it with a constant the implementations also import.
+    it('calibration integrity: done without an estimate or with actual 0 is refused', async () => {
+      const bare = await api.createTask({ title: 'bare' });
+      await api.transitionTask(bare.id, 'in_progress');
+      await api.setTaskActual(bare.id, 10);
+      await expect(api.transitionTask(bare.id, 'done')).rejects.toThrow(/estimate and an actual/);
+      const idle = await api.createTask({ title: 'idle', estimateMin: 30 });
+      await api.transitionTask(idle.id, 'in_progress');
+      await expect(api.transitionTask(idle.id, 'done')).rejects.toThrow(/estimate and an actual/);
+      await api.setTaskActual(idle.id, 0); // still fine while open
+      await expect(api.transitionTask(idle.id, 'done')).rejects.toThrow(/estimate and an actual/);
+      expect((await api.getTask(idle.id))?.status).toBe('in_progress');
+    });
+
+    it('calibration integrity: a retro estimate locks at done, and the source says how', async () => {
+      const finish = async (id: string, actual: number) => {
+        await api.setTaskActual(id, actual);
+        return api.transitionTask(id, 'done');
+      };
+      const late = await api.createTask({ title: 'late' });
+      await api.transitionTask(late.id, 'in_progress');
+      await api.setTaskEstimate(late.id, 25, null);
+      expect(await finish(late.id, 40)).toMatchObject({
+        estimateLockedMin: 25,
+        estimateSource: 'retro',
+      });
+      const planned = await api.createTask({ title: 'planned', estimateMin: 30 });
+      await api.transitionTask(planned.id, 'in_progress');
+      expect((await finish(planned.id, 40)).estimateSource).toBe('planned');
+      const revised = await api.createTask({ title: 'revised', estimateMin: 30 });
+      await api.transitionTask(revised.id, 'in_progress');
+      await api.setTaskEstimate(revised.id, 60, null);
+      expect(await finish(revised.id, 75)).toMatchObject({
+        estimateLockedMin: 30,
+        estimateSource: 'revised',
+      });
+      const points = await api.getCalibration({ from: '2000-01-01', to: '2100-01-01' });
+      expect(points.find((p) => p.taskId === revised.id)).toMatchObject({
+        estimateLockedMin: 30,
+        estimateMin: 60,
+        estimateSource: 'revised',
+      });
+      expect(points.find((p) => p.taskId === late.id)?.estimateSource).toBe('retro');
+    });
+
+    it('calibration integrity: rollover keeps the lock through a rescope', async () => {
+      const t = await api.createTask({ title: 'rolled', estimateMin: 30 });
+      await api.transitionTask(t.id, 'in_progress');
+      await api.transitionTask(t.id, 'backlog');
+      await api.setTaskEstimate(t.id, 45, null);
+      await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 50);
+      expect(await api.transitionTask(t.id, 'done')).toMatchObject({
+        estimateLockedMin: 30,
+        estimateSource: 'revised',
+      });
+    });
+
+    it('calibration integrity: a done task takes no actual of 0, a cancelled estimate stays read-only', async () => {
+      const t = await api.createTask({ title: 'measured', estimateMin: 30 });
+      await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 20);
+      await api.transitionTask(t.id, 'done');
+      await expect(api.setTaskActual(t.id, 0)).rejects.toThrow(/estimate and an actual/);
+      expect((await api.getTask(t.id))?.actualAccruedMin).toBe(20);
+      await expect(api.setTaskEstimate(t.id, 90, null)).rejects.toThrow(/history/); // it has a lock
+      const gone = await api.createTask({ title: 'gone' });
+      await api.transitionTask(gone.id, 'cancelled');
+      await expect(api.setTaskEstimate(gone.id, 90, null)).rejects.toThrow(/history/);
+    });
+
+    it('calibration integrity: a done split of an unscoped task needs its estimate; the follow-up is unaffected', async () => {
+      const t = await api.createTask({ title: 'unscoped split' });
+      await api.transitionTask(t.id, 'in_progress');
+      const followUp = { title: 'rest', estimateMin: null };
+      await expect(
+        api.splitTask(t.id, { finish: 'done', actualMin: 20, followUp }),
+      ).rejects.toThrow(/estimate and an actual/);
+      expect((await api.listTasks()).filter((x) => x.title === 'rest')).toEqual([]); // nothing written
+      const split = await api.splitTask(t.id, {
+        finish: 'done',
+        actualMin: 20,
+        estimateMin: 15,
+        followUp,
+      });
+      expect(split.original).toMatchObject({
+        status: 'done',
+        estimateLockedMin: 15,
+        estimateSource: 'retro',
+      });
+      expect(split.followUp).toMatchObject({ estimateMin: null, estimateLockedMin: null });
+      expect(split.followUp.estimateSource ?? null).toBeNull();
+    });
+
     it('export: exposes exactly the known collections, with created entities in them', async () => {
       const t = await api.createTask({ title: 'exportable' });
       const lc = await api.recordLeetcodeAttempt({
@@ -2746,6 +2854,7 @@ export function runApiContract(
       await api.upsertPlace({ name: 'Safeway' });
       const errand = await api.createTask({ title: 'shampoo', place: 'safeway', estimateMin: 5 });
       const work = await api.createTask({ title: 'pset', estimateMin: 60 });
+      await api.setTaskActual(work.id, 45);
       for (const t of [errand, work]) {
         await api.transitionTask(t.id, 'in_progress');
         await api.transitionTask(t.id, 'done');

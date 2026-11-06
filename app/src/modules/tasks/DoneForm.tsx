@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { Ref } from 'react';
-import { TASK_REFLECTION_MAX } from '@aperture/shared';
+import { needsEstimate, TASK_REFLECTION_MAX } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
 import { Text } from '../../components/Text';
 import { fmtDuration } from '../../lib/format';
-import { useSetActual, useTransitionTask } from '../../data/hooks/useTasks';
+import { useSetActual, useSetEstimate, useTransitionTask } from '../../data/hooks/useTasks';
 import { liveElapsedMin } from '../home/rightNow';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { useEditSlot } from './editor/editState';
@@ -23,14 +23,19 @@ import { notesValue } from './notes/parseNotes';
 // the task takes no more session time (accruesTime), so a timer anywhere else can't double-count it.
 // A stop that doesn't land keeps the form and the timer, and the error below says so.
 // `actualRef` lets the task editor's finish-intent focus the Actual field when the dialog opens.
-// Nothing tracked starts EMPTY, not "0" (you'd type over it), and an empty field can't be submitted —
-// a quiet 0 would land in calibration as a real actual.
+// Nothing tracked starts EMPTY, not "0" (you'd type over it), and neither empty nor 0 can be submitted —
+// a quiet 0 would land in calibration as a real actual (the done gate refuses it: machines.ts).
+// A task with no estimate asks for one here, in hindsight: every finished task is a calibration point, and
+// the server marks this one retro. It lands before the actual and the finish.
 // The optional reflection (what went well, what to do differently) rides the same write as the actual;
 // focus stays on Actual. Left as it was seeded, it's not sent at all, so one saved meanwhile (MCP, another
 // device) is kept; cleared, it sends null. Over the cap, Mark done disables (no maxLength, so a paste is
 // never silently cut). In the task modal (`edits`), a changed reflection makes leaving ask first.
 // Either onDone uses the finished task and Cancel is its own (the task modal, which asks about unsaved
 // edits), or onDone is the caller's plain close and Cancel just closes too.
+const atLeastOne = (v: string) => v.trim() !== '' && Number(v) >= 1;
+const typedTooLow = (v: string) => v.trim() !== '' && !(Number(v) >= 1);
+
 type DoneProps =
   | { onDone: (task: Task) => void; onCancel: () => void }
   | { onDone: () => void; onCancel?: undefined };
@@ -49,12 +54,17 @@ export function DoneForm({
   edits?: EditSlots;
 } & DoneProps) {
   const setActual = useSetActual();
+  const setEstimate = useSetEstimate();
   const transition = useTransitionTask();
   const { timers, stop } = usePomodoro();
   const [actual, setActual_] = useState<string>(() => {
     const tracked = Math.round(initialActualMin ?? liveElapsedMin(task, timers));
     return tracked > 0 ? String(tracked) : '';
   });
+  const [estimate, setEstimate_] = useState('');
+  const askEstimate = needsEstimate(task);
+  const estimateBad = askEstimate && !atLeastOne(estimate);
+  const actualBad = !atLeastOne(actual);
   const [seed] = useState(() => task.reflection ?? '');
   const [reflection, setReflection] = useState(seed);
   const reflectionTrimmed = notesValue(reflection);
@@ -77,6 +87,12 @@ export function DoneForm({
             setStopFailed(true);
             throw e;
           });
+      if (askEstimate)
+        await setEstimate.mutateAsync({
+          id: task.id,
+          estimateMin: Number(estimate),
+          bufferMin: task.bufferMin,
+        });
       await setActual.mutateAsync({
         id: task.id,
         actualMin: Number(actual),
@@ -96,13 +112,25 @@ export function DoneForm({
           ref={actualRef}
           label="Actual (min)"
           type="number"
-          min={0}
+          min={1}
           inputMode="numeric"
           placeholder="minutes"
           value={actual}
           onChange={(e) => setActual_(e.target.value)}
           className="w-32"
         />
+        {askEstimate && (
+          <Field
+            label="Estimate (min)"
+            type="number"
+            min={1}
+            inputMode="numeric"
+            placeholder="in hindsight"
+            value={estimate}
+            onChange={(e) => setEstimate_(e.target.value)}
+            className="w-32"
+          />
+        )}
         {task.estimateLockedMin != null && (
           <Text size="sm" tone="muted" tabular>
             vs {fmtDuration(task.estimateLockedMin)} estimated
@@ -110,6 +138,16 @@ export function DoneForm({
           </Text>
         )}
       </div>
+      {askEstimate && (
+        <Text size="xs" tone="muted">
+          No estimate yet — what would you have said? It counts as estimated after the fact.
+        </Text>
+      )}
+      {(typedTooLow(actual) || (askEstimate && typedTooLow(estimate))) && (
+        <Text size="xs" tone="danger">
+          Minutes need to be at least 1.
+        </Text>
+      )}
       <NotesField
         {...REFLECTION_FIELD}
         placeholder="How did it go? Optional."
@@ -125,7 +163,7 @@ export function DoneForm({
           size="sm"
           onClick={submit}
           aria-disabled={busy}
-          disabled={actual.trim() === '' || reflectionOver}
+          disabled={actualBad || estimateBad || reflectionOver}
           className="aria-disabled:pointer-events-none aria-disabled:opacity-50"
         >
           Mark done
@@ -134,7 +172,7 @@ export function DoneForm({
           Cancel
         </Button>
       </div>
-      {(stopFailed || setActual.isError || transition.isError) && (
+      {(stopFailed || setEstimate.isError || setActual.isError || transition.isError) && (
         <div role="alert">
           <Text size="sm" tone="danger">
             Couldn’t mark it done — try again.

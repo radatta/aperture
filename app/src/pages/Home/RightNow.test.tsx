@@ -291,4 +291,31 @@ describe('Right now card', () => {
     expect(await screen.findByText('Nothing planned today.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Start 25-min focus' })).toBeTruthy();
   });
+  it('Start on an unscoped row asks for an estimate, and a chip starts it', async () => {
+    const api = stub();
+    const t = await plan(api, 'Unscoped', { order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+    expect((await api.getTask(t.id))?.status).not.toBe('in_progress'); // asking, not started
+    await user.click(screen.getByRole('button', { name: '45' }));
+    await waitFor(async () =>
+      expect(await api.getTask(t.id)).toMatchObject({
+        status: 'in_progress',
+        estimateLockedMin: 45,
+      }),
+    );
+  });
+
+  it('Start on a scoped row starts at once, with no chips', async () => {
+    const api = stub();
+    const t = await plan(api, 'Scoped', { est: 30, order: 0 });
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await user.click(await screen.findByRole('button', { name: 'Start' }));
+    await waitFor(async () => expect((await api.getTask(t.id))?.status).toBe('in_progress'));
+    expect(screen.queryByRole('button', { name: '45' })).toBeNull();
+  });
 });

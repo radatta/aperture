@@ -466,6 +466,7 @@ describe('TaskEditor', () => {
     const client = api();
     let t = await client.createTask({ title: 'Finished', estimateMin: 30 });
     t = await client.transitionTask(t.id, 'in_progress');
+    await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
     expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
@@ -575,7 +576,9 @@ describe('TaskEditor', () => {
     );
     expect(order).toEqual(['stop', 'split']);
     expect(await client.listRunningSessions()).toEqual([]);
-    const stopped = (await client.listSessionsForDay('2026-08-04')).find((s) => s.id === session.id);
+    const stopped = (await client.listSessionsForDay('2026-08-04')).find(
+      (s) => s.id === session.id,
+    );
     expect(stopped?.status).toBe('completed');
     expect(stopped?.activeMinutes).toBeCloseTo(7, 0);
     expect(await client.getTask(t.id)).toMatchObject({ status: 'done', actualAccruedMin: 20 });
@@ -659,6 +662,48 @@ describe('TaskEditor', () => {
     await act(async () => release());
     await waitFor(() => expect(screen.queryByLabelText("This part's title")).toBeNull());
     expect(editState(edits)).toBe('clean');
+  });
+
+  it('a done split of an unscoped task asks for its estimate and sends it; a scoped one is not asked', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Unscoped' });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    const split = vi.spyOn(client, 'splitTask');
+    renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    await user.type(screen.getByLabelText("This part's actual (min)"), '20');
+    const go = screen.getByRole<HTMLButtonElement>('button', { name: 'Split' });
+    expect(go.disabled).toBe(true);
+    await user.type(screen.getByLabelText("This part's estimate (min)"), '0');
+    expect(screen.getByText(/this part's need to be at least 1/)).toBeTruthy();
+    expect(go.disabled).toBe(true);
+    await user.clear(screen.getByLabelText("This part's estimate (min)"));
+    await user.type(screen.getByLabelText("This part's estimate (min)"), '15');
+    expect(go.disabled).toBe(false);
+    await user.click(go);
+    await waitFor(() => expect(split).toHaveBeenCalled());
+    expect(split.mock.calls[0]![1]).toMatchObject({
+      finish: 'done',
+      actualMin: 20,
+      estimateMin: 15,
+    });
+    expect(await client.getTask(t.id)).toMatchObject({
+      estimateLockedMin: 15,
+      estimateSource: 'retro',
+    });
+  });
+
+  it('a done split of a scoped task has no estimate field, and 0 actual blocks it', async () => {
+    const client = api();
+    let t = await client.createTask({ title: 'Scoped', estimateMin: 30 });
+    t = await client.transitionTask(t.id, 'in_progress');
+    const user = userEvent.setup();
+    renderEditor(client, t);
+    await user.click(screen.getByRole('button', { name: /^Split/ }));
+    expect(screen.queryByLabelText("This part's estimate (min)")).toBeNull();
+    await user.type(screen.getByLabelText("This part's actual (min)"), '0');
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Split' }).disabled).toBe(true);
   });
 
   it('rejects negative minutes inline, and Cancel returns focus to Split…', async () => {
@@ -1021,6 +1066,7 @@ describe('TaskEditor', () => {
     const client = api();
     let t = await client.createTask({ title: 'Done', estimateMin: 30 });
     t = await client.transitionTask(t.id, 'in_progress');
+    await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
     expect(screen.queryByLabelText('Due')).toBeNull(); // read-only once finished
@@ -1186,6 +1232,7 @@ describe('TaskEditor', () => {
     const client = api();
     let t = await client.createTask({ title: 'Done', estimateMin: 30 });
     t = await client.transitionTask(t.id, 'in_progress');
+    await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
     expect(screen.queryByRole('button', { name: /Split/ })).toBeNull();
@@ -1359,6 +1406,7 @@ describe('TaskEditor', () => {
       const client = api();
       let t = await client.createTask({ title: 'Done', estimateMin: 30 });
       t = await client.transitionTask(t.id, 'in_progress');
+      await client.setTaskActual(t.id, 30);
       t = await client.transitionTask(t.id, 'done');
       renderEditor(client, t);
       expect(screen.getByRole('button', { name: 'Add notes…' })).toBeTruthy();
@@ -1521,8 +1569,9 @@ describe('the task’s place', () => {
   it('a finished task off every list reads "No place"', async () => {
     const client = api();
     await client.upsertPlace({ name: 'Market' });
-    let t = await client.createTask({ title: 'pset' });
+    let t = await client.createTask({ title: 'pset', estimateMin: 30 });
     t = await client.transitionTask(t.id, 'in_progress');
+    await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
     expect(await screen.findByText('No place')).toBeTruthy();

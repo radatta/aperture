@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   deadlineOf,
@@ -6,6 +6,7 @@ import {
   fmtDueDay,
   isKeptNote,
   isPullFresh,
+  needsEstimate,
   parentOf,
   partsOf,
   partsSummary,
@@ -25,6 +26,7 @@ import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks, useTransitionTask } from '../../data/hooks/useTasks';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { CategoryTag } from './CategoryTag';
+import { EstimateChips } from './EstimateChips';
 import { PlaceTag } from './PlaceTag';
 import { RollTag } from '../rolls/RollTag';
 import { PartsList } from './PartRow';
@@ -35,7 +37,7 @@ import { urgencyClass, urgencyLabel } from './dueStyle';
 import { remainingMin } from './taskMath';
 import type { TaskEditorIntent } from './editor/TaskEditor';
 
-const ROW_CONTROLS = 'button, a, input, select, textarea, label';
+const ROW_CONTROLS = 'button, a, input, select, textarea, label, [data-row-control]';
 
 // One task, slimmed to the lifecycle actions you press without thinking — Start, Focus, Done, plus the
 // section's `actions` slot (add-to-today / remove-from-plan). Everything else — scoping, due, split,
@@ -69,6 +71,7 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
   const pomodoro = usePomodoro();
   const openTask = useOpenTask()!;
   const titleRef = useRef<HTMLButtonElement>(null);
+  const [asking, setAsking] = useState(false); // Start on an unscoped task: EstimateChips is open
   const { data: tasks = [] } = useAllTasks();
   const parts = partsOf(tasks, task.id);
   const summary = parts.length ? partsSummary(parts) : null;
@@ -105,7 +108,15 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
         <div className="flex shrink-0 items-center gap-1.5">
           {actions}
           {canScope && (
-            <Button size="sm" onClick={() => transition.mutate({ id: task.id, to: 'in_progress' })}>
+            <Button
+              size="sm"
+              aria-expanded={needsEstimate(task) ? asking : undefined}
+              onClick={() =>
+                needsEstimate(task)
+                  ? setAsking((a) => !a)
+                  : transition.mutate({ id: task.id, to: 'in_progress' })
+              }
+            >
               Start
             </Button>
           )}
@@ -125,6 +136,9 @@ function TaskRow({ task, actions, notesHit = false, showParts = false }: TaskCar
           )}
         </div>
       </div>
+      {asking && canScope && (
+        <EstimateChips task={task} onClose={() => setAsking(false)} className="mt-2" />
+      )}
       {summary && showParts && <PartsList parts={parts} />}
     </Card>
   );

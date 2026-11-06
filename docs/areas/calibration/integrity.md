@@ -1,0 +1,39 @@
+# Calibration integrity
+
+No silent holes in calibration: every finished task that can be measured has an estimate and an actual. History and the original conversation: decisions 1–4 of 2026-10-04 (3 and 4 shipped in PR 51, [split.md](../tasks/split.md)).
+
+## The rules
+
+| Rule                                                                                                                                                                                                                                                                                                                                                                                       | Where                                      | Undo               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ | ------------------ |
+| **Done gate.** `taskTransition(→ done)` throws without `estimateMin ≥ 1` and `actualAccruedMin ≥ 1`: "Needs an estimate and an actual (minutes) before it's marked done". A done split goes through it too.                                                                                                                                                                                | `packages/shared/src/machines.ts`          | `finishCalibrated` |
+| **Who it covers.** `isCalibrated(task)`: everything but an errand, which is checked off, not timed. One predicate behind the gate, the nudge and `contributesCalibration`. A parent bypasses the machine (`completeParent`): its numbers are Σ its parts.                                                                                                                                  | `machines.ts`, `parts.ts`                  | the predicate      |
+| **Every new done task is a point.** Done sets `estimateLockedMin` when there was none (a lock of 0 was never a baseline).                                                                                                                                                                                                                                                                  | `machines.ts`                              |                    |
+| **`estimateSource`**, set once at done: `retro` (no lock until the finish), `revised` (lock ≠ estimate), `planned`. Older rows, parents and errands have none. Stored, not derived: `complete_task`'s chain through in_progress would otherwise make a retro number look honest.                                                                                                           | `Task`, `CalibrationPoint`                 |                    |
+| **The headline stays the frozen-at-start lock.** Retro points count in it, footnoted ("3 of 12 estimated after the fact") and never scored.                                                                                                                                                                                                                                                | `calibration.ts`, `CalibrationSection.tsx` |                    |
+| **Start is a nudge, not a wall.** Start on an unscoped task opens chips (15, 30, 45, 60, 90, 120, custom) with a quiet "Start without one" and Cancel. A chip lands the estimate before the start, so the lock freezes on it. In "I shouldn't, but I should be able to": a machine throw would also ripple into rolls, series and MCP. Flux's own rep start doesn't ask: it's mid-session. | `EstimateChips.tsx`                        | one `if` per Start |
+| **Done and a done split ask** when the estimate is missing, and refuse 0 minutes with a message.                                                                                                                                                                                                                                                                                           | `DoneForm.tsx`, `SplitForm.tsx`            |                    |
+| **`complete_task`** writes → in_progress, then `estimateMin` (new, optional), actual, done, so the lock stays honest. `estimateMin` is required when the task has none, refused before any write; on a scoped task it's a revision.                                                                                                                                                        | `lambdas/src/mcp/tools.ts`                 |                    |
+| **Backfill, once.** `withEstimate` on a done calibrated task with no lock sets estimate, lock and `retro`; after that it's history like any other. Reachable over `update_task`, never offered in the UI (`canEditEstimate` stays false). Cancelled stays read-only.                                                                                                                       | `machines.ts`                              |                    |
+| **A done actual is a measurement.** `setTaskActual` takes 0 while open and refuses it once done.                                                                                                                                                                                                                                                                                           | `assertActualAllowed`                      |                    |
+
+## Rejected
+
+- **Hard lock on the estimate at start** (the original rule): it just made the user delete and recreate the task, which destroys more than the edit would.
+- **Refusing a retro estimate**: "that will happen. that's fine." Hindsight is allowed and marked; forcing a fake number or a lost point is worse.
+- **The revised estimate as the headline**: a rescope would erase the gap this app exists to show. It's "est 30 → 60" beside the lock instead.
+- **A machine throw at start**: above.
+
+## Drift
+
+"The estimate moved after start" shows on the Calibration page only: a point whose `estimateMin` differs from its lock reads "est 30m → 1h · actual 1h 15m". The night review stays ≤5 elements, and its bar already shows the delta. A retro point never reads as revised (its lock is its estimate), and a parent has no drift of its own: its estimate is derived, so its drift is its parts' rows.
+
+**One aggregate line, later, gated on data:** "Re-estimated 4 of 12 · at start ran 1.6×, revised 1.1×", under the headline, never a score, and never "0 of N". Build it when the page shows ≥10 revised rows; on 2026-11-05 prod had 0 of 86. Before building, re-read `get_calibration` on prod and count `estimateMin !== estimateLockedMin`. It adds `revisedCount`, `totalRevisedMin`, `revisedRatio` to `aggregate`, with a retro point counted as neither revised nor at-start.
+
+## A Google start-drag on a done task
+
+Stays ignored, decided 2026-11-05 ([calendar](../calendar/index.md) → Status). Once done the estimate is history: the lock is the headline, and if a number on a done task is wrong it's the actual, which Google can't carry. Stretching a finished block is calendar tidying, not a rescope, and writing it would give a locked done task a path the editor refuses. Undo: delete `task.status !== 'done' &&` in `calendarPull.ts` and its matching clause in the "Aperture changed it" check, and flip the `calendarPull.test.ts` case.
+
+## Legacy rows
+
+Rows finished before the gate keep their shape: no `estimateSource`, and possibly no lock, in which case the night review keeps its "no estimate" row and `update_task {estimateMin}` can backfill it once.

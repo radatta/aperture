@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { addDays, dayKey, hhmmOfEpoch, todayKey } from '@aperture/shared';
+import type { Task } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 
@@ -386,7 +387,9 @@ describe('due-time urgency', () => {
   it('a finished task is never coloured, even past its time', async () => {
     const api = freshApi();
     const t = await timed(api, 'Finished late', -60);
+    await api.setTaskEstimate(t.id, 30, 0);
     await api.transitionTask(t.id, 'in_progress');
+    await api.setTaskActual(t.id, 30);
     await api.transitionTask(t.id, 'done');
     const user = userEvent.setup();
     renderApp({ api, path: '/tasks' });
@@ -444,6 +447,7 @@ describe('parent + parts', () => {
     const b = await api.createTask({ title: 'draft', estimateMin: 60, parentId: p.id });
     for (const t of doneBoth ? [a, b] : [a]) {
       await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 30);
       await api.transitionTask(t.id, 'done');
     }
     return { api, p, a, b };
@@ -968,6 +972,7 @@ describe('parent + parts', () => {
     for (const title of ['read', 'draft']) {
       const part = await api.createTask({ title, parentId: p.id, estimateMin: 10 });
       await api.transitionTask(part.id, 'in_progress');
+      await api.setTaskActual(part.id, 10);
       await api.transitionTask(part.id, 'done');
     }
     renderApp({ api, path: '/tasks?lens=backlog' });
@@ -1104,9 +1109,20 @@ describe('parent + parts', () => {
 
   it('“unscoped” counts open parts only — a done one’s estimate can’t be set any more', async () => {
     const { api, p } = await seeded(false);
-    const c = await api.createTask({ title: 'cite', parentId: p.id });
+    const c = await api.createTask({ title: 'cite', parentId: p.id, estimateMin: 5 });
     await api.transitionTask(c.id, 'in_progress');
+    await api.setTaskActual(c.id, 5);
     await api.transitionTask(c.id, 'done');
+    // A done part from before the done gate, with no estimate: the API can't make one any more.
+    const { store } = api as unknown as { store: { tasks: Task[] } };
+    Object.assign(
+      store.tasks.find((t) => t.id === c.id)!,
+      {
+        estimateMin: null,
+        estimateLockedMin: null,
+        estimateSource: null,
+      },
+    );
     const { unmount } = renderApp({ api, path: '/tasks?lens=week' });
     const row = await waitFor(() => rowOf('P2'));
     expect(within(row).getByText(/2\/3 · est 1h 45m/)).toBeTruthy();
@@ -1181,6 +1197,48 @@ describe('parent + parts', () => {
     const card = await waitFor(() => rowOf('P2'));
     expect(within(card).getByText('ends tomorrow 3pm')).toBeTruthy();
     expect(within(card).queryByRole('button', { name: 'Add draft to today' })).toBeNull();
+  });
+});
+
+describe('Start on an unscoped task', () => {
+  async function row(input: { title: string; estimateMin?: number; place?: string }) {
+    const api = freshApi();
+    if (input.place) await api.upsertPlace({ name: 'Corner Shop', slug: input.place });
+    // Dated, so an errand shows here too (undated, it lives on its list).
+    const task = await api.createTask({ ...input, dueDay: todayKey(4) });
+    renderApp({ api, path: '/tasks?lens=week' });
+    await screen.findByRole('button', { name: input.title });
+    return { api, task, user: userEvent.setup() };
+  }
+
+  it('opens the chips without opening the modal; a chip starts it; a tap inside opens nothing', async () => {
+    const { api, task, user } = await row({ title: 'Unscoped' });
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    const group = screen.getByRole('group', { name: 'Estimate for Unscoped' });
+    expect((await api.getTask(task.id))?.status).toBe('backlog');
+    await user.click(within(group).getByText(/How long/));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await user.click(within(group).getByRole('button', { name: '60' }));
+    await waitFor(async () =>
+      expect(await api.getTask(task.id)).toMatchObject({
+        status: 'in_progress',
+        estimateLockedMin: 60,
+      }),
+    );
+  });
+
+  it('a scoped task starts at once', async () => {
+    const { api, task, user } = await row({ title: 'Scoped', estimateMin: 30 });
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    expect(screen.queryByRole('group', { name: /^Estimate for/ })).toBeNull();
+    await waitFor(async () => expect((await api.getTask(task.id))?.status).toBe('in_progress'));
+  });
+
+  it('an errand starts at once: it is never measured', async () => {
+    const { api, task, user } = await row({ title: 'stamps', place: 'corner' });
+    await user.click(screen.getByRole('button', { name: 'Start' }));
+    expect(screen.queryByRole('group', { name: /^Estimate for/ })).toBeNull();
+    await waitFor(async () => expect((await api.getTask(task.id))?.status).toBe('in_progress'));
   });
 });
 

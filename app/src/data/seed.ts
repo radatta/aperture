@@ -151,7 +151,9 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         rollId: null,
         estimateMin: est,
         bufferMin: Math.round(est * 0.25),
-        estimateLockedMin: est,
+        // One finished in hindsight and one rescoped after start, so the page's footnote and "→" show.
+        estimateLockedMin: d === 2 ? Math.round(est * 0.5) : est,
+        estimateSource: d === 2 ? 'revised' : d === 4 ? 'retro' : 'planned',
         parentId: null,
         place: null,
         actualAccruedMin: actual,

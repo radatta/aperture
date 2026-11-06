@@ -60,6 +60,7 @@ import {
   rescopedPlanMinutes,
   splitOriginal,
   stalePlannedMoves,
+  assertActualAllowed,
   taskTransition,
   UPLOAD_URL_TTL_MS,
   USER_TIME_ZONE,
@@ -1007,6 +1008,7 @@ export class BackendClient implements ApiClient {
     const note = reflection === undefined ? {} : { reflection: normalizeReflection(reflection) };
     const t = await this.mustTask(id);
     if (hasParts(await this.repo.listTasks(), id)) throw new Error(PARENT_NO_ACTUAL_ERROR);
+    assertActualAllowed(t, actualMin);
     return this.repo.putTask({ ...t, actualAccruedMin: actualMin, ...note, updatedAt: this.now() });
   }
   async splitTask(
@@ -2044,6 +2046,8 @@ export class BackendClient implements ApiClient {
         taskId: t.id,
         day: dayKey(t.completedAt as number, start),
         estimateLockedMin: t.estimateLockedMin as number,
+        estimateMin: t.estimateMin,
+        estimateSource: t.estimateSource ?? null,
         actualAccruedMin: t.actualAccruedMin,
         categoryId: t.categoryId,
         reflection: t.reflection ?? null,

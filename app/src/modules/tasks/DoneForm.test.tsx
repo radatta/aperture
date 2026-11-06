@@ -216,4 +216,66 @@ describe('DoneForm', () => {
     expect(screen.getByLabelText<HTMLTextAreaElement>('Reflection').value).toBe('Keep me');
     expect(onDone).not.toHaveBeenCalled();
   });
+  describe('the done gate', () => {
+    async function unscoped(client: ApiClient) {
+      const t = await client.createTask({ title: 'Unscoped' });
+      return client.transitionTask(t.id, 'in_progress');
+    }
+    const markDone = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Mark done' });
+
+    it('a scoped task is not asked for an estimate', async () => {
+      const client = api();
+      renderDone(client, await started(client));
+      expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
+    });
+
+    it('an unscoped task needs the estimate, which lands first and marks it retro', async () => {
+      const client = api();
+      const task = await unscoped(client);
+      const { onDone, user } = renderDone(client, task);
+      expect(markDone().disabled).toBe(true);
+      await user.type(screen.getByLabelText('Estimate (min)'), '25');
+      expect(markDone().disabled).toBe(false);
+      const estimate = vi.spyOn(client, 'setTaskEstimate');
+      const actual = vi.spyOn(client, 'setTaskActual');
+      await user.click(markDone());
+      await waitFor(() => expect(onDone).toHaveBeenCalled());
+      expect(estimate.mock.invocationCallOrder[0]).toBeLessThan(
+        actual.mock.invocationCallOrder[0]!,
+      );
+      expect(await client.getTask(task.id)).toMatchObject({
+        status: 'done',
+        estimateMin: 25,
+        estimateLockedMin: 25,
+        estimateSource: 'retro',
+        actualAccruedMin: 40,
+      });
+    });
+
+    it('a typed 0 blocks Mark done and says why, on either number', async () => {
+      const client = api();
+      const { user } = renderDone(client, await unscoped(client));
+      await user.type(screen.getByLabelText('Estimate (min)'), '0');
+      expect(screen.getByText('Minutes need to be at least 1.')).toBeTruthy();
+      expect(markDone().disabled).toBe(true);
+      await user.clear(screen.getByLabelText('Estimate (min)'));
+      await user.type(screen.getByLabelText('Estimate (min)'), '20');
+      await user.clear(screen.getByLabelText('Actual (min)'));
+      await user.type(screen.getByLabelText('Actual (min)'), '0');
+      expect(screen.getByText('Minutes need to be at least 1.')).toBeTruthy();
+      expect(markDone().disabled).toBe(true);
+    });
+
+    it('an estimate write that fails keeps the form and says so', async () => {
+      const client = api();
+      const task = await unscoped(client);
+      const { onDone, user } = renderDone(client, task);
+      vi.spyOn(client, 'setTaskEstimate').mockRejectedValueOnce(new Error('nope'));
+      await user.type(screen.getByLabelText('Estimate (min)'), '25');
+      await user.click(markDone());
+      expect(await screen.findByRole('alert')).toBeTruthy();
+      expect(onDone).not.toHaveBeenCalled();
+      expect((await client.getTask(task.id))?.status).toBe('in_progress');
+    });
+  });
 });

@@ -125,6 +125,10 @@ export interface DevPlaceTokenStatus {
 export interface DevCalibrationPoint {
   taskId: string;
   day: string;
+  estimateLockedMin: number;
+  estimateMin: number | null;
+  estimateSource: 'planned' | 'revised' | 'retro' | null;
+  actualAccruedMin: number;
 }
 
 // The slice of a saved Flux set the check writes and reads (docs/areas/flux D47). Its id is minted here,

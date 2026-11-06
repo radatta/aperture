@@ -88,6 +88,7 @@ Notes that matter (carried in the tool descriptions, since the model can't infer
   any timer-tracked minutes, echoing the previous value so an overwrite is visible. **A parent** (a task with
   parts, [tasks/parts.md](../tasks/parts.md)) is the exception: `actualMin` is a param error there (its actual
   is Σ its parts), and the call is refused while a part is open, with the shared message naming the parts.
+  **`estimateMin`** is required too when the task has no estimate (stored as after-the-fact, `retro`), refused before any write, and a revision when it has one: it lands after the start, so the baseline stays honest. `update_task {status: 'done'}` meets the same done gate, and `update_task {estimateMin}` backfills a done task with no baseline once ([calibration/integrity.md](../calibration/integrity.md)).
   **An errand** (a task with a `place`) is the other: `actualMin` is optional, since errands never count in
   calibration.
 - **Parent + parts** ([tasks/parts.md](../tasks/parts.md)): `parentId` on `create_task`/`create_tasks` makes a

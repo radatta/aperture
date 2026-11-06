@@ -8,7 +8,7 @@ import { fmtDuration } from '../../lib/format';
 import { useCalibration } from '../../data/hooks/useCalibration';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
-import { aggregate, recentPoints, rollupLabel } from './calibration';
+import { aggregate, driftLabel, recentPoints, rollupLabel } from './calibration';
 
 // Estimate-vs-actual, read as evidence not judgment. The per-task deltas are drawn, not listed:
 // a column of "1h 18m · 1h est · +30%" makes you do the subtraction yourself, which is exactly the
@@ -78,6 +78,11 @@ export function CalibrationSection() {
               estimated · {agg.count} {agg.count === 1 ? 'task' : 'tasks'} · last 30 days
               {agg.count < 5 ? ' · still sparse, read it lightly' : ''}
             </Text>
+            {agg.retroCount > 0 && (
+              <Text size="xs" tone="subtle">
+                {agg.retroCount} of {agg.count} estimated after the fact
+              </Text>
+            )}
           </div>
         )}
       </Card>
@@ -91,15 +96,23 @@ export function CalibrationSection() {
               densest possible way to say very little. */}
           <Card>
             <div className="flex flex-col divide-y divide-line">
-              {recent.map((p, i) => (
-                <div key={p.taskId} className={i === 0 ? 'pb-3' : 'py-3 last:pb-0'}>
-                  <DeltaBar
-                    label={label(p)}
-                    estimateMin={p.estimateLockedMin}
-                    actualMin={p.actualAccruedMin}
-                  />
-                </div>
-              ))}
+              {recent.map((p, i) => {
+                const drift = driftLabel(p);
+                return (
+                  <div key={p.taskId} className={i === 0 ? 'pb-3' : 'py-3 last:pb-0'}>
+                    <DeltaBar
+                      label={label(p)}
+                      estimateMin={p.estimateLockedMin}
+                      actualMin={p.actualAccruedMin}
+                    />
+                    {drift && (
+                      <Text size="xs" tone="subtle" tabular className="mt-1">
+                        {drift}
+                      </Text>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </Card>
         </div>

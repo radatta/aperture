@@ -1,4 +1,5 @@
 import type { CalibrationPoint } from '@aperture/shared';
+import { fmtDuration } from '../../lib/format';
 
 // Aggregate estimate-vs-actual over a set of done tasks. `ratio` > 1 means you run over estimate
 // (the honest bias this app exists to surface). Null ratio = nothing to compare yet — kept honest
@@ -10,6 +11,7 @@ export interface CalibrationAggregate {
   totalActualMin: number;
   ratio: number | null;
   overPct: number | null;
+  retroCount: number; // of `count`: estimated after the fact (footnoted, never a score)
 }
 
 export function aggregate(all: CalibrationPoint[]): CalibrationAggregate {
@@ -23,6 +25,7 @@ export function aggregate(all: CalibrationPoint[]): CalibrationAggregate {
     totalActualMin,
     ratio,
     overPct: ratio === null ? null : Math.round((ratio - 1) * 100),
+    retroCount: points.filter((p) => p.estimateSource === 'retro').length,
   };
 }
 
@@ -38,6 +41,14 @@ export function recentPoints(
     .sort((a, b) => a.day.localeCompare(b.day) || at(a) - at(b))
     .slice(-n)
     .reverse();
+}
+
+// The row's drift label (docs/areas/calibration/integrity.md → Drift): the working estimate moved after the
+// lock froze. Null when it didn't — a retro point's lock is its estimate, so it never reads as revised — and
+// on a rollup, whose estimate is derived (an older Lambda's point has no estimateMin at all).
+export function driftLabel(p: CalibrationPoint): string | null {
+  if (p.parts || p.estimateMin == null || p.estimateMin === p.estimateLockedMin) return null;
+  return `est ${fmtDuration(p.estimateLockedMin)} → ${fmtDuration(p.estimateMin)} · actual ${fmtDuration(p.actualAccruedMin)}`;
 }
 
 // A done parent's bar label: the rollup says how many parts it covers.

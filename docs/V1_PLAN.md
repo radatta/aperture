@@ -518,6 +518,7 @@ scoping_, and **earning the morning + night ritual**):
 - [ ] Estimate **freezes at start-of-work**; scope change is a **split**, not an edit.
 - [ ] "Done" captures actual (pomodoro-prefilled, editable); night review shows **per-task
       estimate-vs-actual** + a simple aggregate ratio (honestly sparse early). `cancelled` excluded.
+      _As built (2026-11): nothing calibrated finishes without both numbers; a retro estimate at Done is marked ([integrity](areas/calibration/integrity.md))._
 
 **Modules & data integrity**
 
