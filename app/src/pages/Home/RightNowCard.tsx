@@ -139,7 +139,7 @@ export function RightNowCard() {
   const { data: allTasks = [] } = useAllTasks();
   const { timers, startFocus, startBreak, stop } = usePomodoro();
   const transition = useTransitionTask();
-  const upsertPlan = useUpsertPlan();
+  const upsertPlan = useUpsertPlan({ settled: true }); // the lock below holds through the refetch
   // One "Focus this" at a time: a second tap computed from a half-applied renumbering leaves two rows on
   // one order. Resolves once the plan is refetched. A partial failure heals on the next tap (`promote`
   // renumbers whatever is off).

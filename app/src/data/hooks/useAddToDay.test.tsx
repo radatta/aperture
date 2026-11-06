@@ -150,6 +150,57 @@ describe('useAddToDay', () => {
     expect((await api.getTask(t.id))?.status).toBe('planned'); // the next getDay sweeps it
   });
 
+  it('an add sends its status write without waiting on the plan refetch', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-to-day-${Math.random()}` });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ApiContext value={api}>{children}</ApiContext>
+      </QueryClientProvider>
+    );
+    // A mounted day list, as every page has: the row's write refetches it.
+    const hook = renderHook(
+      () => {
+        usePlansForDay(todayKey(4));
+        return useAddToDay();
+      },
+      { wrapper },
+    );
+    await ready(hook);
+    const t = await api.createTask({ title: 'quick' });
+    const list = api.listPlansForDay.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let rowWritten = false;
+    const write = api.upsertPlan.bind(api);
+    api.upsertPlan = (input) => write(input).finally(() => (rowWritten = true));
+    api.listPlansForDay = async (day) => {
+      if (rowWritten) await held; // every read after the row hangs
+      return list(day);
+    };
+    let done: Promise<unknown> = Promise.resolve();
+    act(() => void (done = hook.result.current.addToDay(t)));
+    await waitFor(async () => expect((await api.getTask(t.id))?.status).toBe('planned'));
+    release();
+    await act(async () => void (await done));
+  });
+
+  it('an add finishes after its component leaves (an in-app navigation)', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const t = await api.createTask({ title: 'left' });
+    const list = api.listPlansForDay.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    api.listPlansForDay = async (day) => (await held, list(day));
+    const done = hook.result.current.addToDay(t);
+    hook.unmount();
+    release();
+    await done;
+    expect(await plansFor(api, todayKey(4))).toHaveLength(1);
+    expect((await api.getTask(t.id))?.status).toBe('planned');
+  });
+
   it('a retry repairs a half-done add: row written, transition lost', async () => {
     const { api, hook } = setup();
     await ready(hook);

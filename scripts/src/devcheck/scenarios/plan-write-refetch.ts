@@ -103,7 +103,7 @@ const nightRow = (ctx: Ctx, task: DevTask) => ctx.page.getByRole('group', { name
 const focusThis = (ctx: Ctx, task: DevTask) =>
   ctx.page
     .getByText(task.title, { exact: true })
-    .locator('xpath=ancestor::*[.//button[normalize-space()="Focus this"]][1]')
+    .locator('xpath=ancestor::div[.//button][1]') // the row itself, or a row without the button finds another's
     .getByRole('button', { name: 'Focus this', exact: true });
 async function openNight(ctx: Ctx) {
   await ctx.ui.goto('/');
@@ -301,6 +301,8 @@ export const planWriteRefetch: Scenario = {
         await openBacklog(ctx);
         const add = addButton(ctx, made.U!);
         await add.waitFor({ state: 'visible', timeout: 15_000 });
+        // The page's load reads are done, or one of them would pick up the row below and take the button.
+        await countApi(ctx).settle();
         // Another device plans it while this page's Backlog still lists it.
         await ctx.api.writes.upsertPlan({
           taskId: made.U!.id,
@@ -309,10 +311,10 @@ export const planWriteRefetch: Scenario = {
           order: 9,
         });
         await add.click();
-        // The row leaves the Backlog once the add is done; navigating sooner would abort its status write.
-        await add.waitFor({ state: 'hidden', timeout: 15_000 });
-        await onceOnToday(ctx, made.U!, 'after the add');
+        // The server's status, not the row: the pre-read shows the plan first, and navigating then aborts
+        // the status write still to come (measured on dev: the button goes 65 ms before that write answers).
         await until('U to be planned', async () => (await statusOf(ctx, made.U!)) === 'planned');
+        await onceOnToday(ctx, made.U!, 'after the add');
         const rows = await rowsOf(ctx, today, made.U!);
         if (rows.length !== 1) throw new Error(`U rows: ${JSON.stringify(rows)}`);
       },
@@ -413,6 +415,7 @@ export const planWriteRefetch: Scenario = {
         await dialog.getByLabel('Due', { exact: true }).waitFor({ timeout: 10_000 });
         await dialog.getByLabel('Due', { exact: true }).fill(today);
         await dialog.getByLabel('Due time', { exact: true }).fill('23:58');
+        await dialog.getByRole('button', { name: 'Save', exact: true }).click();
         await until('the sweep to settle P', async () => {
           const t = await ctx.api.reads.getTask(made.P!.id);
           return t?.status === 'backlog' && t.dueTime === '23:58';

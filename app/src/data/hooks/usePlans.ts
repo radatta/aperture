@@ -10,8 +10,10 @@ export function usePlansForDay(day: string) {
 
 // A plan write touches no task, so the plan hooks own their key: the row the server returned goes into
 // that day's list now, then every mounted plans query refetches once (the server dedupes per (task, day)
-// and may have answered with a row another device wrote). Resolves once that refetch lands.
-export function useUpsertPlan() {
+// and may have answered with a row another device wrote). Resolves on the write's own answer, so a next
+// write isn't held back by a read; `settled`: only once that refetch lands, for a caller computing its next
+// write from the list.
+export function useUpsertPlan({ settled = false }: { settled?: boolean } = {}) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
@@ -25,7 +27,10 @@ export function useUpsertPlan() {
             ? rows.map((r) => (r.id === row.id ? row : r))
             : [...rows, row]),
       ),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['plans'] }),
+    onSettled: () => {
+      const refetch = qc.invalidateQueries({ queryKey: ['plans'] });
+      return settled ? refetch : undefined;
+    },
   });
 }
 
