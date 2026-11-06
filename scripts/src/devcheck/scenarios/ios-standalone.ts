@@ -87,7 +87,8 @@ const doneForm = (ctx: Ctx): IosOp[] => [
   { op: 'absent', label: 'Capture log', near: { x: 200, y: 480 }, radius: 40, role: 'AXTextArea' },
   { op: 'keys', text: marker(ctx) },
   { op: 'blur' },
-  { op: 'tap', label: title(ctx), scan: { x: 100, from: 390, to: 840 }, role: 'AXButton' },
+  // The row's Done opens the modal with the Done form on top, as on the phone. Opening only: the form's own button submits.
+  { op: 'tap', label: 'Done', scan: { x: 395, from: 390, to: 840 }, role: 'AXButton' },
   { op: 'wait', s: 2 },
   { op: 'find', label: 'Reflection', scan: { x: 200, from: 150, to: 720 }, as: 'box0' },
   { op: 'tap', label: 'Reflection', scan: { x: 200, from: 150, to: 720 } },

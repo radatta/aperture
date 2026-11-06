@@ -454,7 +454,7 @@ export async function simCommand(
         ];
   const job = makeSimJob(
     cmd,
-    { sha: '0'.repeat(40), timeoutSec: 300, shutdown: false, steps },
+    { sha: '0'.repeat(40), timeoutSec: 300, shutdown: cmd === 'probe', steps },
     d.clock.now(),
   );
   try {
