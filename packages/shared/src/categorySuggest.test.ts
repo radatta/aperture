@@ -123,13 +123,23 @@ describe('suggestCategory', () => {
     expect(ask({ title: 'file the quarterly report' })).toBeNull();
   });
 
+  it('never a category none of whose tasks hold a word', () => {
+    // Three titles the tokeniser reads as nothing: the category has no words, so nothing is its evidence.
+    const h = [...history(), ...rows(['?', '!!', '…'], 'cat-empty', 'e')];
+    const c = cats([{ id: 'cat-empty' }]);
+    expect(ask({ title: 'mulch the tomato beds' }, h, c)?.categoryId).toBe(GARDEN);
+    expect(ask({ title: 'water prune spread sow stake weed' }, h, c)?.categoryId).not.toBe(
+      'cat-empty',
+    );
+  });
+
   it('says nothing when no word has been seen before', () => {
     expect(ask({ title: 'quarterly filing' })).toBeNull();
   });
 
   describe('a big category against a small one, on a long line', () => {
-    // Garden 17 tasks of three once-used words each, Ledger 4: every word here is rare, the case where
-    // a word's cost must not depend on how few tasks a category has.
+    // Garden 17 tasks of three once-used words each, Ledger 4: every word here is rare, where a small
+    // category's smaller denominator pulls hardest.
     const words = (stem: string, n: number) => Array.from({ length: n }, (_, i) => `${stem}${i}`);
     const titles = (w: string[], per: number) =>
       Array.from({ length: Math.floor(w.length / per) }, (_, i) =>
@@ -155,6 +165,25 @@ describe('suggestCategory', () => {
 
     it('a clear line of the small category’s own words still names it', () => {
       expect(ask({ title: ledgerWords.slice(0, 8).join(' ') }, h, c)?.categoryId).toBe(LEDGER);
+    });
+
+    it('a line split evenly between them says nothing', () => {
+      const line = [...gardenWords.slice(0, 6), ...ledgerWords.slice(0, 6)].join(' ');
+      expect(ask({ title: line }, h, c)).toBeNull();
+    });
+
+    it('never names a small category that hasn’t seen the line, when the big one’s words repeat', () => {
+      // 120 tasks over 100 common words plus one once-used word each: the words the line uses cost more
+      // in this big denominator than absence does in the small one, so the margin alone would pick Ledger.
+      const common = words('crop', 100);
+      const big = Array.from({ length: 120 }, (_, i) =>
+        [`rare${i}`, ...[0, 1, 2, 3, 4].map((k) => common[(i * 5 + k) % 100]!)].join(' '),
+      );
+      const skewed = [...rows(big, GARDEN, 'g'), ...rows(titles(words('sum', 20), 5), LEDGER, 'l')];
+      for (const n of [4, 8, 15]) {
+        const line = Array.from({ length: n }, (_, i) => `rare${i}`).join(' ');
+        expect(ask({ title: line }, skewed, c)?.categoryId).not.toBe(LEDGER);
+      }
     });
   });
 

@@ -122,11 +122,13 @@ The card keeps only the actions you press without thinking. No overflow menu.
   (`packages/shared/src/categorySuggest.ts`, `useSuggestCategory`): multinomial naive Bayes over the words of title
   + the first 200 chars of notes from every categorised live task, log prior, add-0.5 smoothing over each
   category's words. Per-task probabilities drifted long lines to the smallest category (a word absent from
-  a 4-task category outscored one present in a 17-task category), so the denominator is the category's
-  word count plus half the vocabulary. Leave-one-out on prod 2026-11-05 (171 categorised, 71% in one
-  category): ungated top-1 81%; gated to a 2-nat margin it spoke on 78% of tasks at 95% precision, and at
-  80% (12 of 15) when it named anything but the biggest category. A line split evenly between a big and a
-  small category's rare words can still lean to the small one. So the gates carry it — margin ≥ 2 nats, ≥ 20 categorised tasks, ≥ 3 behind the winner,
+  a 4-task category outscored one present once in a 17-task category), so the denominator is the category's
+  word count plus half the vocabulary. A rare word still scores higher in a small category, so the winner
+  must also hold more than half the line's known words. Leave-one-out on prod 2026-11-05 (171 categorised
+  tasks, active categories only, 71% in one): ungated top-1 81%; gated it spoke on 78% of them at 95.5%
+  precision, and at 79% (11 of 14) when it named anything but the biggest category; on the 46 uncategorised
+  tasks, the ones it's for, it spoke on 25. On a skewed roster a lone common word can name the biggest
+  category. So the gates carry it — margin ≥ 2 nats, ≥ 20 categorised tasks, ≥ 3 behind the winner, most of the line seen by the winner,
   active categories only, the task's own row excluded — and below them nothing is said. **Tap-only, never
   pre-selected:** the chip fills the select, the form goes dirty, Save writes it like a manual pick (a
   wrong tag snapshots `wasWork` into sessions, so no auto-assign; PRODUCT §2 — it lives in the enrichment

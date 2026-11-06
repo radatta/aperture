@@ -98,7 +98,7 @@ export const categorySuggest: Scenario = {
       id: 'no-match',
       entry: 'ui',
       kind: 'edge',
-      what: 'A title matching nothing shows no chip; the Category select still lists every category',
+      what: 'A title with nothing distinctive in it shows no chip; the Category select still lists every category',
     },
     {
       id: 'categorised',
