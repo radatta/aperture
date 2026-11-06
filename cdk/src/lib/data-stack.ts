@@ -46,6 +46,8 @@ export class ApertureDataStack extends Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
       ...devThroughput,
+      // Dev expires tombstones (TECH §2.3): the Lambda stamps `expiresAt` on dev only. Prod has no TTL.
+      ...(stage === 'dev' ? { timeToLiveAttribute: 'expiresAt' } : {}),
     });
     // GSI1 — done tasks by completion time (calibration window read). GSI1SK is numeric epoch-ms.
     this.table.addGlobalSecondaryIndex({

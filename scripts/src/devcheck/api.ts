@@ -435,7 +435,8 @@ export function createApiClient({
     // mid-call still leaves the id for the next run's sweep.
     async recordFluxSet(input: DevFluxSetInput): Promise<DevFluxSet> {
       const title = `flux ${input.exerciseId}`;
-      ledger.append({ run, op: 'created', id: input.id, via: FLUX_SET_VIA, title });
+      if (!pendingIds(ledger.read()).includes(input.id))
+        ledger.append({ run, op: 'created', id: input.id, via: FLUX_SET_VIA, title });
       return call<DevFluxSet>('recordFluxSet', [input]);
     },
     async deleteFluxSet(id: string): Promise<void> {
