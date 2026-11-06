@@ -5,13 +5,14 @@
 // `devcheck-tc <nonce>` — the parts scenarios sweep `devcheck <nonce>` — and no task's word sits inside another's,
 // since the search matches substrings. A step with several timers scopes to the row (timerRow); elsewhere one
 // runs at a time, so the bar's bare Stop is this run's.
-import { DEV_WORK_MIN, type DevSession } from '../api';
+import { DEV_WORK_MIN, type DevSession, type DevTask } from '../api';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 import { clearTimers, isCompleted, sessionsAround } from './failed-reads';
 
 const name = (ctx: Ctx, what: string) => `devcheck-tc ${ctx.nonce} ${what}`;
 const STOP_FAILED = 'Couldn’t mark it done — try again.';
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const CREDIT_WINDOW_MS = 1_500;
 
 const dialogOf = (ctx: Ctx, title: string) =>
   ctx.page.getByRole('dialog', { name: `Task: ${title}` });
@@ -20,6 +21,19 @@ async function mine(ctx: Ctx, what: string) {
   const t = (await ctx.api.reads.listTasks()).find((x) => x.title === name(ctx, what));
   if (!t) throw new Error(`${what}: not on the server`);
   return t;
+}
+
+// A task's row as a step expects it. A stop drops the running row before it credits the task, and these reads
+// are eventual, so neither a row gone from the running list nor a closed form says the task has caught up.
+// Polled, never relaxed: past 10 s the row is what's wrong, and `what` throws with it.
+async function untilTask(ctx: Ctx, id: string, ok: (t: DevTask | null) => boolean, what: string) {
+  let t = await ctx.api.reads.getTask(id);
+  for (let i = 0; !ok(t); i++) {
+    if (i >= 40) throw new Error(`${what} ${JSON.stringify(t)}`);
+    await wait(250);
+    t = await ctx.api.reads.getTask(id);
+  }
+  return t!;
 }
 
 async function untilRunning(ctx: Ctx, n: number, what: string) {
@@ -272,9 +286,7 @@ export const timerCredit: Scenario = {
         await dialog.getByLabel('Actual (min)').fill('30');
         await dialog.getByRole('button', { name: 'Mark done' }).click();
         await dialog.waitFor({ state: 'hidden', timeout: 15_000 });
-        const t = await ctx.api.reads.getTask(id);
-        if (t?.status !== 'done' || t.actualAccruedMin !== 30)
-          throw new Error(`saved ${JSON.stringify(t)}`);
+        await untilTask(ctx, id, (t) => t?.status === 'done' && t.actualAccruedMin === 30, 'saved');
         await untilRunning(ctx, 1, 'after Mark done');
         // The bar: the neighbour's row only — the done task's title is nowhere (not in the bar, and the
         // lens no longer lists a done task).
@@ -290,9 +302,12 @@ export const timerCredit: Scenario = {
         // The neighbour: still in progress, and its stop credits it its own seconds.
         await stopButton(ctx).click();
         await untilRunning(ctx, 0, 'stopping the neighbour');
-        const other = await ctx.api.reads.getTask(nb);
-        if (other?.status !== 'in_progress' || !((other.actualAccruedMin ?? 0) > 0))
-          throw new Error(`the neighbour got ${JSON.stringify(other)}`);
+        await untilTask(
+          ctx,
+          nb,
+          (t) => t?.status === 'in_progress' && (t.actualAccruedMin ?? 0) > 0,
+          'the neighbour got',
+        );
         if ((await ctx.api.reads.getTask(id))?.actualAccruedMin !== 30)
           throw new Error('the neighbour’s stop changed the done task');
       },
@@ -314,12 +329,19 @@ export const timerCredit: Scenario = {
         await actual.fill('20');
         await dialog.getByRole('button', { name: 'Split', exact: true }).click();
         await dialog.waitFor({ state: 'hidden', timeout: 15_000 });
-        const t = await ctx.api.reads.getTask(id);
-        if (t?.status !== 'done' || t.actualAccruedMin !== 20 || !t.parentId)
-          throw new Error(`this part saved ${JSON.stringify(t)}`);
-        const followUp = (await ctx.api.reads.listTasks()).find(
-          (x) => x.parentId === t.parentId && x.id !== id,
+        const t = await untilTask(
+          ctx,
+          id,
+          (x) => x?.status === 'done' && x.actualAccruedMin === 20 && !!x.parentId,
+          'this part saved',
         );
+        const followUpOf = async () =>
+          (await ctx.api.reads.listTasks()).find((x) => x.parentId === t.parentId && x.id !== id);
+        let followUp = await followUpOf();
+        for (let i = 0; !followUp && i < 40; i++) {
+          await wait(250); // the list read can lag the split's write
+          followUp = await followUpOf();
+        }
         if (!followUp || followUp.actualAccruedMin !== 0)
           throw new Error(`the follow-up is ${JSON.stringify(followUp)}`);
         await untilRunning(ctx, 0, 'after the done split');
@@ -352,9 +374,7 @@ export const timerCredit: Scenario = {
         await dialog.getByRole('button', { name: 'Mark done' }).click();
         await dialog.waitFor({ state: 'hidden', timeout: 15_000 });
         await untilRunning(ctx, 0, 'after the second Mark done');
-        const done = await ctx.api.reads.getTask(id);
-        if (done?.status !== 'done' || done.actualAccruedMin !== 10)
-          throw new Error(`saved ${JSON.stringify(done)}`);
+        await untilTask(ctx, id, (t) => t?.status === 'done' && t.actualAccruedMin === 10, 'saved');
       },
     },
     {
@@ -413,6 +433,8 @@ export const timerCredit: Scenario = {
         await ctx.shot('mcp-done-timer-still-running');
         await stopButton(ctx).click();
         await untilRunning(ctx, 0, 'stopping onto the MCP-finished task');
+        // What must NOT land can't be polled for: wait out the credit's window, or this reads before it.
+        await wait(CREDIT_WINDOW_MS);
         const t = await ctx.api.reads.getTask(id);
         if (t?.status !== 'done' || t.actualAccruedMin !== 20)
           throw new Error(`the stop changed it: ${JSON.stringify(t)}`);
