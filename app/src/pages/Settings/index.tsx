@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
-import type { CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
+import { AREA_LABEL, AREAS, areaOf } from '@aperture/shared';
+import type { Area, CalendarRef, Category, GoogleCalendar, Settings } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { Field } from '../../components/Field';
@@ -16,6 +17,7 @@ import { BUILD_SHA } from '../../shared/env';
 import {
   useCategories,
   useDeleteCategory,
+  useSetCategoryArea,
   useSetCategoryWork,
   useUpsertCategory,
 } from '../../data/hooks/useCategories';
@@ -74,6 +76,7 @@ function CategoriesSection() {
   const upsert = useUpsertCategory();
   const [label, setLabel] = useState('');
   const [isWork, setIsWork] = useState(true);
+  const [area, setArea] = useState<Area>('personal');
 
   return (
     <section className="flex flex-col gap-3">
@@ -118,11 +121,18 @@ function CategoriesSection() {
             ]}
             className="w-32"
           />
+          <Select
+            label="Area"
+            value={area}
+            onChange={(e) => setArea(e.target.value as Area)}
+            options={AREAS.map((a) => ({ value: a, label: AREA_LABEL[a] }))}
+            className="w-32"
+          />
           <Button
             size="sm"
             disabled={!label.trim() || upsert.isPending}
             onClick={async () => {
-              await upsert.mutateAsync({ label: label.trim(), isWork });
+              await upsert.mutateAsync({ label: label.trim(), isWork, area });
               setLabel('');
             }}
           >
@@ -134,7 +144,7 @@ function CategoriesSection() {
   );
 }
 
-type RowPanel = null | 'work' | 'delete' | 'retire';
+type RowPanel = null | 'work' | 'area' | 'delete' | 'retire';
 
 function CategoryRow({
   cat,
@@ -149,6 +159,7 @@ function CategoryRow({
 }) {
   const upsert = useUpsertCategory();
   const setWork = useSetCategoryWork();
+  const setAreaWrite = useSetCategoryArea();
   const del = useDeleteCategory();
   const [panel, setPanel] = useState<RowPanel>(null);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -201,11 +212,23 @@ function CategoryRow({
     closePanel();
   }
 
+  // One write, no backfill ask (nothing is snapshotted). A failure keeps the panel open with the error
+  // below it — the pressed chip still shows the area the row really has. A second tap while the first
+  // is in flight is ignored (not `disabled`: that drops focus to <body> on the chip just tapped).
+  function pickArea(area: Area) {
+    if (setAreaWrite.isPending) return;
+    if (area === areaOf(cat)) return closePanel();
+    setAreaWrite.mutate({ id: cat.id, area }, { onSuccess: closePanel });
+  }
+
   return (
-    <Card className="px-3.5 py-2.5">
-      <div ref={rowRef} className="flex items-center justify-between gap-3">
-        {/* No wrap: at 390 the rename input gives way (min-w-0, ~128px) so the arrows stay on the row. */}
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+    <Card role="group" aria-label={`Category ${cat.label}`} className="px-3.5 py-2.5">
+      <div ref={rowRef} className="flex items-start justify-between gap-3">
+        {/* No wrap: at 390 the rename input gives way (min-w-0, ~128px) so the arrows stay on the row. The
+            type · area line sits under the rename box, not beside it: beside, "Non-work · Recruiting" pushed
+            the arrows and menu under the box at 440 (and the menu off the left edge). items-start: the arrows
+            line up with the box, not with the box and its caption together. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           {/* A faint resting border, not a full input box: five bordered boxes stacked read as a
               form to fill in, but hover-only would leave the field unmarked on touch — and this is
               an installable phone app. */}
@@ -225,17 +248,19 @@ function CategoryRow({
               })
             }
             className={cx(
-              'min-w-0 flex-1 rounded-lg border border-line/60 sm:w-40 sm:flex-none bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
+              // Inside a column now: the column shrinks (flex-1 min-w-0), the box fills it; sm keeps w-40.
+              'w-full min-w-0 rounded-lg border border-line/60 sm:w-40 bg-transparent px-2 py-1.5 outline-none transition hover:border-line-strong focus:border-teal focus:bg-surface',
               cat.active ? 'text-ink' : 'text-ink-muted',
             )}
           />
+          {/* Type, then the life area — "Work · School" — so the row says where its time lands. */}
           {cat.active ? (
-            <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'}>
-              {cat.isWork ? 'Work' : 'Non-work'}
+            <Text size="xs" tone={cat.isWork ? 'teal' : 'muted'} className="px-2">
+              {cat.isWork ? 'Work' : 'Non-work'} · {AREA_LABEL[areaOf(cat)]}
             </Text>
           ) : (
-            <Text size="xs" tone="muted">
-              Retired
+            <Text size="xs" tone="muted" className="px-2">
+              Retired · {AREA_LABEL[areaOf(cat)]}
             </Text>
           )}
         </div>
@@ -272,6 +297,7 @@ function CategoryRow({
                 label: `Make ${cat.isWork ? 'non-work' : 'work'}…`,
                 onSelect: () => setPanel('work'),
               },
+              { label: 'Area…', onSelect: () => setPanel('area') },
               cat.active
                 ? { label: 'Retire…', onSelect: () => setPanel('retire') }
                 : { label: 'Restore', onSelect: () => setActive(true) },
@@ -300,6 +326,44 @@ function CategoryRow({
           <Button variant="ghost" size="sm" onClick={() => flip(true)}>
             Reclassify past too
           </Button>
+        </div>
+      )}
+
+      {panel === 'area' && (
+        <div
+          role="group"
+          aria-label={`Area for ${cat.label}`}
+          // gap-1.5 and px-2 chips: four chips are 276px, inside the 294px a 390 phone leaves (gap-2 and
+          // px-2.5 were 298 — Personal wrapped alone beside Close, round 2).
+          className="mt-3 flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface p-3"
+        >
+          {/* The question takes its own line, so the four chips sit together under it. */}
+          <Text size="sm" tone="muted" className="basis-full">
+            Which part of life is {cat.label}?
+          </Text>
+          {AREAS.map((a) => (
+            <button
+              key={a}
+              type="button"
+              aria-pressed={areaOf(cat) === a}
+              aria-disabled={setAreaWrite.isPending || undefined}
+              onClick={() => pickArea(a)}
+              className={cx(
+                'rounded-lg border px-2 py-1 text-xs transition',
+                areaOf(cat) === a
+                  ? 'border-teal bg-teal-soft text-ink'
+                  : 'border-line text-ink-muted hover:text-ink',
+              )}
+            >
+              {AREA_LABEL[a]}
+            </button>
+          ))}
+          {/* Its own line: a Close beside the last chip reads as a fifth choice. */}
+          <div className="basis-full pt-1">
+            <Button variant="ghost" size="sm" onClick={() => closePanel()}>
+              Close
+            </Button>
+          </div>
         </div>
       )}
 
@@ -346,7 +410,7 @@ function CategoryRow({
         </div>
       )}
 
-      {upsert.isError && (
+      {(upsert.isError || setAreaWrite.isError) && (
         <Text size="xs" tone="danger" className="mt-2">
           Couldn't save that change — try again.
         </Text>

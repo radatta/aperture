@@ -55,6 +55,12 @@ export interface PwPage {
     opts?: { waitUntil?: 'load' | 'domcontentloaded' | 'networkidle'; timeout?: number },
   ): Promise<unknown>;
   reload(opts?: { waitUntil?: 'load' | 'domcontentloaded' }): Promise<unknown>;
+  waitForResponse(
+    match: (res: PwResponse) => boolean,
+    opts?: { timeout?: number },
+  ): Promise<PwResponse>;
+  // A narrower phone for one step (390×844, the floor); set it back to PHONE after the shot.
+  setViewportSize(size: { width: number; height: number }): Promise<void>;
   url(): string;
   setViewportSize(size: { width: number; height: number }): Promise<void>;
   locator(selector: string): PwLocator;

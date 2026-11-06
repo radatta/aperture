@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ApiClient, Task } from '@aperture/shared';
 import { ApiContext } from '../api-context';
+import { qk } from '../queryKeys';
 import { createStubClient } from '../stubClient';
 import { LOCAL_WRITE_TTL_MS } from '../taskCache';
 import { useBacklog } from './useBacklog';
@@ -247,6 +248,28 @@ describe('the tasks list carries what writes returned', () => {
     expect(hook.result.current.backlog.data?.map((x) => x.id).sort()).toEqual(
       [plain.id, part!.id].sort(),
     );
+  });
+});
+
+describe('the life backlog (D14)', () => {
+  it('leaves an Aperture-area task out; no area and a retired category read by their area', async () => {
+    const { api, qc, hook } = setup();
+    const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });
+    const sc = await api.upsertCategory({ label: 'CSEN', isWork: true, area: 'school' });
+    const none = await api.upsertCategory({ label: 'Misc', isWork: false });
+    const dev = await api.createTask({ title: 'dev', categoryId: ap.id });
+    const hw = await api.createTask({ title: 'hw', categoryId: sc.id });
+    const misc = await api.createTask({ title: 'misc', categoryId: none.id });
+    const bare = await api.createTask({ title: 'bare' });
+    // The roster was read before these existed (Settings' writes invalidate it; a direct api call doesn't).
+    await run(() => qc.invalidateQueries({ queryKey: qk.categories() }));
+    await reload(hook);
+    await waitFor(() =>
+      expect(hook.result.current.backlog.data?.map((x) => x.id).sort()).toEqual(
+        [hw.id, misc.id, bare.id].sort(),
+      ),
+    );
+    expect(hook.result.current.backlog.data?.map((x) => x.id)).not.toContain(dev.id);
   });
 });
 

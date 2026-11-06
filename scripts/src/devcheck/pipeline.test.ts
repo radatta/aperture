@@ -4,8 +4,10 @@ import {
   FINANCE_LINK_VIA,
   FINANCE_RULE_VIA,
   FLUX_SET_VIA,
+  CATEGORY_VIA,
   PLACE_TOKEN_VIA,
   type ApiClient,
+  type DevCategory,
   type DevFinanceRule,
   type DevFinanceTransaction,
   type DevFluxSet,
@@ -51,6 +53,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const fluxDeleted: string[] = [];
   const places = new Map<string, DevPlace>();
   const placesDeleted: string[] = [];
+  const categories = new Map<string, DevCategory>();
+  const categoriesDeleted: string[] = [];
   const placeToken = { active: false, revokes: 0 };
   // The fixture bank's rows and the run's rules: cleanup clears a bucket / a link, deletes a rule.
   const finance = {
@@ -182,7 +186,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listRunningSessions: async () => [],
       listSessionsForDay: async () => [],
       getTask: async (id) => tasks.get(id) ?? null,
-      listCategories: async () => [],
+      listCategories: async () => [...categories.values()],
       listPlansForDay: async () => [],
       listHabits: async () => [],
       listHabitChecks: async () => [],
@@ -272,12 +276,6 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       setDayIntent: async () => {
         throw new Error('unused');
       },
-      upsertCategory: async () => {
-        throw new Error('unused');
-      },
-      deleteCategory: async () => {
-        throw new Error('unused');
-      },
       createSeries: async () => {
         throw new Error('unused');
       },
@@ -321,6 +319,16 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         finance.rulesDeleted.push(id);
         finance.rules.delete(id);
       },
+      upsertCategory: async () => {
+        throw new Error('unused');
+      },
+      setCategoryArea: async () => {
+        throw new Error('unused');
+      },
+      deleteCategory: async (id) => {
+        categoriesDeleted.push(id);
+        categories.delete(id);
+      },
     },
   };
   const shells = [...(opts.shells ?? [shell(SHA)])];
@@ -348,6 +356,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     tasks,
     deleted,
     fluxSets,
+    categories,
+    categoriesDeleted,
     fluxDeleted,
     places,
     placesDeleted,
@@ -709,6 +719,56 @@ describe('runPipeline', () => {
     expect(r.appeared).toEqual(['ghost']);
     expect(r.codes).toContain('LEFTOVERS');
     expect(w.placesDeleted).toEqual([]);
+  });
+
+  it('deletes a category this run created (after its tasks — cleanup is newest-first), by its recorded id only', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const cat = (id: string): DevCategory => ({
+      id,
+      label: id,
+      isWork: true,
+      order: 0,
+      active: true,
+      area: 'school',
+    });
+    w.categories.set('users', cat('users')); // the test user's own: never touched
+    let taskId = '';
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'c1', via: CATEGORY_VIA, title: 'c1' });
+      x.categories.set('c1', cat('c1'));
+      taskId = x.uiCreate('on c1'); // created after the category, so cleaned before it
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.categoriesDeleted).toEqual(['c1']);
+    expect(w.deleted).toEqual([taskId]);
+    expect(w.categories.has('users')).toBe(true);
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['c1', 'deleted'],
+      [taskId, 'deleted'],
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a category that appears during the run without a ledger entry fails it; one from before is reported', async () => {
+    const w = world();
+    const cat = (id: string): DevCategory => ({
+      id,
+      label: id,
+      isWork: true,
+      order: 0,
+      active: true,
+      area: null,
+    });
+    w.categories.set('users', cat('users'));
+    const sc = scenario(async (x) => {
+      x.categories.set('ghost', cat('ghost'));
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.appeared).toEqual(['ghost']);
+    expect(r.unrecorded).toEqual(['users']);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(w.categoriesDeleted).toEqual([]);
   });
 
   it('revokes a token this run minted, and verifies it inactive', async () => {

@@ -1,5 +1,15 @@
-import { addDays, deadlineOf, isTimed, placedByTime, placeTasks, timedDay } from '@aperture/shared';
-import type { Category, Task } from '@aperture/shared';
+import {
+  addDays,
+  AREAS,
+  areaOf,
+  deadlineOf,
+  isTimed,
+  LIFE_AREAS,
+  placedByTime,
+  placeTasks,
+  timedDay,
+} from '@aperture/shared';
+import type { Area, Category, Task } from '@aperture/shared';
 import { byDueHint } from './taskMath';
 import { byDeadline } from './todayRows';
 
@@ -24,6 +34,9 @@ export interface TaskQuery {
   due: DueBucket;
   sort: SortKey;
   groupBy: GroupKey;
+  // Life areas shown (areas.ts): [] = every area. Backlog's preset is the life areas — Aperture folds away
+  // behind its chip (lenses.md D14). Ignored while searching: typing finds everything (D1).
+  areas: Area[];
 }
 
 export interface QueryCtx {
@@ -111,16 +124,61 @@ export function foldParts(tasks: Task[]): Task[] {
 
 // Presets carry only how a lens sorts and groups; which tasks it shows is placeOf's job (errandsByPlace's,
 // on Places).
-const BLANK = { text: '', due: 'any' } as const;
+const BLANK = { text: '', due: 'any', areas: [] as Area[] } as const;
 export const LENS_PRESET: Record<Place, TaskQuery> = {
   today: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
   // Flat: the only question on Week is what's due next, and every row already carries its category.
   week: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'none' },
   // Drawn by PlacesLens (grouped by store, oldest first); this preset only shapes a search from it.
   places: { ...BLANK, categories: [], statuses: [], sort: 'oldest', groupBy: 'none' },
-  backlog: { ...BLANK, categories: [], statuses: [], sort: 'due', groupBy: 'category' },
+  // The life backlog: Aperture-area work waits behind "Aperture · N" (D14).
+  backlog: {
+    ...BLANK,
+    categories: [],
+    statuses: [],
+    sort: 'due',
+    groupBy: 'category',
+    areas: LIFE_AREAS,
+  },
   done: { ...BLANK, categories: [], statuses: [], sort: 'newest', groupBy: 'none' },
 };
+
+// A task's life area is its category's; no category (or an id with no category behind it) reads as Personal.
+export function areaOfFrom(categories: Category[]): (t: Task) => Area {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  return (t) => areaOf(t.categoryId ? byId.get(t.categoryId) : null);
+}
+
+// Which areas a lens's preset folds away — the ones its chips toggle (Backlog: Aperture; the rest: none).
+export const foldedAreas = (lens: Place): Area[] => {
+  const shown = LENS_PRESET[lens].areas;
+  return shown.length ? AREAS.filter((a) => !shown.includes(a)) : [];
+};
+
+export const areaShown = (q: TaskQuery, area: Area): boolean =>
+  q.areas.length === 0 || q.areas.includes(area);
+
+// Show or hide one area. Showing the last hidden one reads as "every area" ([]), so a query never carries
+// the full list by accident.
+export function toggleArea(q: TaskQuery, area: Area): TaskQuery {
+  const shown = q.areas.length ? q.areas : [...AREAS];
+  const next = areaShown(q, area) ? shown.filter((a) => a !== area) : [...shown, area];
+  return { ...q, areas: next.length === AREAS.length ? [] : AREAS.filter((a) => next.includes(a)) };
+}
+
+// Cards per area among the tasks living in `lens` — the chips' counts, whatever the query hides or shows.
+export function areaCardCounts(
+  tasks: Task[],
+  lens: Place,
+  ctx: QueryCtx,
+): Partial<Record<Area, number>> {
+  const place = placer(tasks, ctx);
+  const area = areaOfFrom(ctx.categories);
+  const counts: Partial<Record<Area, number>> = {};
+  for (const t of foldParts(tasks.filter((t) => place(t) === lens)))
+    counts[area(t)] = (counts[area(t)] ?? 0) + 1;
+  return counts;
+}
 
 // Lowercase, accents stripped, whitespace collapsed — "Café  Run" finds "cafe run".
 export function normalize(s: string): string {
@@ -290,11 +348,20 @@ export function applyQuery(tasks: Task[], lens: Place, q: TaskQuery, ctx: QueryC
   const catOf = (t: Task) => (t.categoryId && known.has(t.categoryId) ? t.categoryId : '');
   const searching = normalize(q.text) !== '';
   const place = placer(tasks, ctx);
+  const area = areaOfFrom(ctx.categories);
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  // A part folded under its parent's card (same list) is in its parent's area, as it is in its place —
+  // the card is one thing, and areaCardCounts counts it once, by the parent.
+  const areaOfOwner = (t: Task) => {
+    const parent = t.parentId ? byId.get(t.parentId) : undefined;
+    return area(parent && place(parent) === place(t) ? parent : t);
+  };
   // A part's due filter is its parent's deadline, like its place (its own time is when its block ends).
   const deadline = (t: Task) => ({ ...t, ...deadlineOf(t, tasks) });
   const matched = tasks.filter(
     (t) =>
       (searching ? (lens === 'done') === (place(t) === 'done') : place(t) === lens) &&
+      (searching || areaShown(q, areaOfOwner(t))) &&
       (q.categories.length === 0 || q.categories.includes(catOf(t))) &&
       matchesStatus(t, q.statuses) &&
       inDueBucket(deadline(t), q.due, ctx.today, ctx.dayStartHour) &&

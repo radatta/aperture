@@ -435,6 +435,32 @@ describe('mcp tools — categories, calibration, leetcode', () => {
     expect(reordered).toMatchObject({ label: 'CS 61B', order: 1, active: false });
   });
 
+  it('create_category / update_category carry area; list_categories returns it; a bad value is refused', async () => {
+    const { call } = makeEnv();
+    const cat = (await call('create_category', {
+      label: 'CSEN 146',
+      isWork: true,
+      area: 'school',
+    })) as Category;
+    expect(cat.area).toBe('school');
+    const noArea = (await call('create_category', { label: 'Misc', isWork: false })) as Category;
+    expect(noArea.area).toBeNull();
+    const moved = (await call('update_category', { id: cat.id, area: 'aperture' })) as Category;
+    expect(moved).toMatchObject({ label: 'CSEN 146', isWork: true, area: 'aperture' });
+    const renamed = (await call('update_category', { id: cat.id, label: 'CSEN 146L' })) as Category;
+    expect(renamed.area).toBe('aperture'); // unsent keeps it
+    const cleared = (await call('update_category', { id: cat.id, area: null })) as Category;
+    expect(cleared.area).toBeNull();
+    await expect(
+      call('create_category', { label: 'x', isWork: true, area: 'other' }),
+    ).rejects.toThrow(/must be one of: school, aperture, recruiting, personal/);
+    await expect(call('update_category', { id: cat.id, area: 'School' })).rejects.toThrow(
+      /must be one of/,
+    );
+    const listed = (await call('list_categories')) as Category[];
+    expect(listed.find((c) => c.id === cat.id)).toMatchObject({ label: 'CSEN 146L', area: null });
+  });
+
   it('update_category retires and restores via active', async () => {
     const { call } = makeEnv();
     const cat = (await call('create_category', { label: 'Studying', isWork: true })) as Category;

@@ -96,7 +96,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **days** — per-day singleton: `date(pk) · capacityHours · intent · reflectionPrompt · reflectionText`.
 
-**categories** — `id · label · isWork · order · active`.
+**categories** — `id · label · isWork · order · active · area`.
+- **`area`** — the life area the category belongs to: `school | aperture | recruiting | personal | null` (a fixed set, `shared/src/areas.ts`); `null` and a row from before the field both list as `null` and read as Personal. Set in Settings (Area…) or MCP; patch-style on update, so a rename or retire keeps it. A live grouping — never snapshotted — so changing it regroups history. The Backlog folds the Aperture area away; Home's "+ Add" counts the rest. Design: [areas/tasks/areas.md](../areas/tasks/areas.md).
 - **Retire** = `active: false` (Settings → Retire…, or MCP `update_category`): hidden from every picker, sorted after active ones in Settings, but the label still resolves on existing tasks and an edit form shows the item's own retired category as "X (retired)". On update `order`/`active` are patch-style — omitted keeps the current value, so a rename never un-retires.
 - Referenced by **id**. **Labels resolve live** (renames propagate to display). **`isWork` is snapshotted** onto sessions (`wasWork`) so history is frozen. Flipping `isWork` prompts an **optional retroactive backfill** ("also reclassify N past records?"). **Deleting** forces reassignment of all referencing items to another category first, then soft-deletes the empty one.
 

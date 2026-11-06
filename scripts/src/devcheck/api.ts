@@ -58,6 +58,7 @@ export interface CreateTaskInput {
   notes?: string | null;
   parentId?: string | null; // a part of that task (the parts scenario)
   place?: string | null; // a place slug (the places scenario)
+  categoryId?: string | null; // one of this run's categories (the areas scenario)
 }
 
 // The slices of a category, a plan row and the day row the check reads (the parts-v2b-reads scenario:
@@ -68,6 +69,9 @@ export interface DevCategory {
   isWork: boolean;
   order: number;
   active: boolean;
+  // The life area (packages/shared/src/areas.ts AREAS — scripts doesn't depend on shared) or null; a row
+  // from before the field lists as null (the areas scenario).
+  area: 'school' | 'aperture' | 'recruiting' | 'personal' | null;
 }
 export interface DevPlan {
   id: string;
@@ -191,8 +195,12 @@ export const FLUX_SET_VIA = 'api:recordFluxSet';
 // A place this harness created (through the API, or the browser's upsertPlace create — recorder.ts).
 export const PLACE_VIA = 'api:upsertPlace';
 export const UI_PLACE_VIA = 'ui:upsertPlace';
-// A category this harness created, recorded from the create response like a place.
+// A category this harness created — through the API (upsertCategory with no id), Settings' Add (the browser's
+// upsertCategory create, recorder.ts) or MCP create_category. Cleaned by deleteCategory on the recorded id
+// (newest-first, so after the run's tasks on it); never an existing category of the test user's.
 export const CATEGORY_VIA = 'api:upsertCategory';
+export const UI_CATEGORY_VIA = 'ui:upsertCategory';
+export const MCP_CATEGORY_VIA = 'mcp:create_category';
 // A habit this harness created. The API has no habit delete, so cleanup ARCHIVES it (`active: false`) and
 // "exists" means listed and active — archived `devcheck …` habits stay on the test user, by design, until
 // a tombstoning deleteHabit lands (day-guards' follow-up).
@@ -238,7 +246,8 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FLUX_SET_VIA) return 'flux';
   if (via !== undefined && SERIES_VIAS.includes(via)) return 'series';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
-  if (via === CATEGORY_VIA) return 'category';
+  if (via === CATEGORY_VIA || via === UI_CATEGORY_VIA || via === MCP_CATEGORY_VIA)
+    return 'category';
   if (via === HABIT_VIA) return 'habit';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
@@ -521,6 +530,7 @@ export function createApiClient({
       isWork: boolean;
       order?: number;
       active?: boolean;
+      area?: DevCategory['area']; // the areas scenario; omitted = none (reads as Personal)
     }): Promise<DevCategory> {
       if (input.id) {
         assertLedger(input.id, 'category');
@@ -532,8 +542,9 @@ export function createApiClient({
       return cat;
     },
     // Its tasks move to `reassignToId`, or to no category (null) — cleanup passes null. Cleanup runs
-    // newest-first, so a run's category (made after its tasks) goes before them: a run task on a run
-    // category would make the delete refuse, so no scenario puts one there.
+    // newest-first: a run task on a run category is fine when the category was made first (the areas
+    // scenario — its tasks go before it), and refused when the task was made first, so a scenario that
+    // makes the category last puts no task on it.
     async deleteCategory(id: string, reassignToId: string | null): Promise<void> {
       assertLedger(id, 'category');
       await call<null>('deleteCategory', [id, reassignToId]);
@@ -555,6 +566,11 @@ export function createApiClient({
       for (const t of (await reads.listTasks()).filter((t) => t.seriesId === id))
         await call<null>('deleteTask', [t.id]);
       await call<null>('deleteSeries', [id]);
+    },
+    // The area write (setCategoryArea). `area` is sent as given — a step proving the refusal passes a bad one.
+    async setCategoryArea(id: string, area: string | null): Promise<DevCategory> {
+      assertLedger(id, 'category');
+      return call<DevCategory>('setCategoryArea', [id, area]);
     },
     // Mint an upload URL, PUT the bytes to S3 as the app does, then confirm — or leave it pending
     // (confirm: false), as an abandoned upload would.

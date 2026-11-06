@@ -76,6 +76,21 @@ describe('stub — places', () => {
     expect((await api.listPlaceTasks(places[0]!.slug)).count).toBeGreaterThan(0);
   });
 
+  it('a store persisted before areas lists its categories with area null (reads as Personal)', async () => {
+    const key = `legacy-areas.${FIXED}`;
+    const legacy = createStubClient({ now: () => FIXED, storageKey: key, seed: false });
+    const c = await legacy.upsertCategory({ label: 'old cat', isWork: true });
+    const raw = JSON.parse(localStorage.getItem(key)!) as Record<string, unknown>;
+    for (const cat of raw.categories as Record<string, unknown>[]) delete cat.area;
+    localStorage.setItem(key, JSON.stringify(raw));
+    const api = createStubClient({ now: () => FIXED, storageKey: key });
+    expect((await api.listCategories()).find((x) => x.id === c.id)?.area).toBeNull();
+    expect(
+      (await api.upsertCategory({ id: c.id, label: 'old cat', isWork: false })).area,
+    ).toBeNull();
+    expect((await api.setCategoryWork(c.id, true, false)).category.area).toBeNull();
+  });
+
   it('a store persisted before places loads with no places and its tasks off every list', async () => {
     const key = `legacy.${FIXED}`;
     const legacy = createStubClient({ now: () => FIXED, storageKey: key, seed: false });

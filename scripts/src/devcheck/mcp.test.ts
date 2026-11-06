@@ -67,6 +67,7 @@ describe('createMcpClient', () => {
       'getCalibration',
       'listAttachments',
       'listBacklog',
+      'listCategories',
       'listPlaceTasks',
       'listPlaces',
       'listSeries',
@@ -75,12 +76,14 @@ describe('createMcpClient', () => {
     ]);
     expect(Object.keys(c.writes).sort()).toEqual([
       'completeTask',
+      'createCategory',
       'createSeries',
       'createTask',
       'deleteAttachment',
       'deleteTask',
       'stopSeries',
       'stopSeriesUnknown',
+      'updateCategory',
       'updateTask',
     ]);
   });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fmtDueDay, isTimed, todayKey } from '@aperture/shared';
+import { fmtDueDay, isTimed, lifeFrom, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -133,15 +133,20 @@ function DialogBody({
   useEffect(() => onDirtyChange(text.trim() !== ''), [text, onDirtyChange]);
 
   const labelOf = labelOfFrom(categories);
+  const life = lifeFrom(categories);
   const onToday = new Set(plans.map((p) => p.taskId));
   // A parent is never put on a day — its parts are (parts.ts), each labelled with what it's part of.
   const parentIds = new Set(tasks.map((t) => t.parentId).filter(Boolean));
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  // The unsearched list is the life backlog (the predicate Home's count uses, lenses.md D14); typing finds
+  // anything, and a task added while typing stays listed once the box clears, like any other add.
+  const typing = text.trim() !== '';
   const candidates = tasks.filter(
     (t) =>
       isOpen(t) &&
       !parentIds.has(t.id) &&
       (!onToday.has(t.id) || added.has(t.id)) &&
+      (typing || added.has(t.id) || life(t)) &&
       matchesText(t, text, labelOf, false),
   );
   // A timed task's day is its time (lenses.md D13) — it lands on Today on its day, never added early.
@@ -225,23 +230,31 @@ function DialogBody({
         {!listFailed &&
           matches.slice(0, CAP).map((t) => (
             <div key={t.id} className="flex items-center justify-between gap-3 py-0.5">
-              <div className="flex min-w-0 items-center gap-2">
-                <Text size="sm" className="min-w-0 truncate">
-                  {t.title}
-                </Text>
-                <CategoryTag categoryId={t.categoryId} />
-                {t.parentId && byId.get(t.parentId) && (
-                  <Text size="xs" tone="muted" className="min-w-0 truncate">
-                    of {byId.get(t.parentId)!.title}
+              {/* The title keeps the line; what it's part of and when sit under it, so at a phone width
+                  one thing truncates, not three. */}
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Text size="sm" className="min-w-0 truncate">
+                    {t.title}
                   </Text>
-                )}
-                {t.dueDay && (
-                  <Text size="xs" tone="subtle" className="shrink-0">
-                    {fmtDueDay(t.dueDay, today, t.dueTime, {
-                      verb: t.parentId ? 'ends' : 'due',
-                      dayStartHour,
-                    })}
-                  </Text>
+                  <CategoryTag categoryId={t.categoryId} />
+                </div>
+                {(t.dueDay || (t.parentId && byId.get(t.parentId))) && (
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {t.parentId && byId.get(t.parentId) && (
+                      <Text size="xs" tone="muted" className="min-w-0 truncate">
+                        of {byId.get(t.parentId)!.title}
+                      </Text>
+                    )}
+                    {t.dueDay && (
+                      <Text size="xs" tone="subtle" className="shrink-0">
+                        {fmtDueDay(t.dueDay, today, t.dueTime, {
+                          verb: t.parentId ? 'ends' : 'due',
+                          dayStartHour,
+                        })}
+                      </Text>
+                    )}
+                  </div>
                 )}
               </div>
               {added.has(t.id) ? (

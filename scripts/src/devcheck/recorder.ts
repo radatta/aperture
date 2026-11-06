@@ -1,16 +1,17 @@
 // Tasks the UI creates get their ids from the server's responses: the browser's POST /api/<create> replies
 // are read here and appended to the ledger, so cleanup can delete them by id like any API-made task. A
-// place added in Settings (upsertPlace with no id) is recorded the same way, and so is a recurring series added
-// on the Recurring tab (upsertSeries with no id); an upsert naming an id is an edit of an existing row and is
-// never recorded — cleanup would delete a row the run didn't make.
+// place, category or recurring series added in the app (upsertPlace / upsertCategory / upsertSeries with no id) is
+// recorded the same way; an upsert naming an id is an edit of an existing row and is never recorded — cleanup would
+// delete a row the run didn't make.
 export const CREATE_METHODS = [
   'createTask',
   'createTasks',
   'splitTask',
   'upsertPlace',
   'upsertSeries',
+  'upsertCategory',
 ] as const;
-const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries'];
+const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries', 'upsertCategory'];
 type CreateMethod = (typeof CREATE_METHODS)[number];
 
 const isCreate = (m: string): m is CreateMethod =>
@@ -26,8 +27,8 @@ export function methodOf(url: string): string | undefined {
   return m?.[1];
 }
 
-// Whether this POST creates: always, except an upsert whose input names an id (an edit). A body that can't
-// be read isn't recorded — the run's end-of-run place check then reports the place as appeared.
+// Whether this POST creates: always, except an upsert whose input names an id (an edit). A body that can't be
+// read isn't recorded — the run's end-of-run place/category check then reports the row as appeared.
 export function isCreateRequest(method: string, postData: string | null): boolean {
   if (!isCreate(method)) return false;
   if (!UPSERTS.includes(method)) return true;

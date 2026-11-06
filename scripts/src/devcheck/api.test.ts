@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CATEGORY_VIA,
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
   FINANCE_RULE_VIA,
+  MCP_CATEGORY_VIA,
   PLACE_TOKEN_VIA,
-  CATEGORY_VIA,
   HABIT_VIA,
   PLACE_VIA,
   MCP_SERIES_VIA,
   SERIES_VIA,
+  UI_CATEGORY_VIA,
   UI_PLACE_VIA,
   UI_SERIES_VIA,
   createApiClient,
@@ -101,6 +103,7 @@ describe('createApiClient', () => {
       'removePlan',
       'revokePlaceToken',
       'rotatePlaceToken',
+      'setCategoryArea',
       'setDayCapacity',
       'setDayIntent',
       'setTaskActual',
@@ -319,6 +322,8 @@ describe('createApiClient', () => {
         { run: 'r', op: 'created' as const, id: 'S2', via: UI_SERIES_VIA },
         { run: 'r', op: 'created' as const, id: 'S3', via: MCP_SERIES_VIA },
         { run: 'r', op: 'created' as const, id: 'H', via: HABIT_VIA },
+        { run: 'r', op: 'created' as const, id: 'C2', via: UI_CATEGORY_VIA },
+        { run: 'r', op: 'created' as const, id: 'C3', via: MCP_CATEGORY_VIA },
       ].map((e) => ({ t: '', ...e }));
       expect(
         [
@@ -335,6 +340,8 @@ describe('createApiClient', () => {
           'S2',
           'S3',
           'H',
+          'C2',
+          'C3',
           'never',
         ].map((id) => ledgerKind(entries, id)),
       ).toEqual([
@@ -351,6 +358,8 @@ describe('createApiClient', () => {
         'series',
         'series',
         'habit',
+        'category',
+        'category',
         'task',
       ]);
     });

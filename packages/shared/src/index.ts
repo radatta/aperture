@@ -1,5 +1,6 @@
 // @aperture/shared — the cross-cutting contract. Barrel export.
 export * from './types';
+export * from './areas';
 export * from './ulid';
 export * from './dates';
 export * from './machines';

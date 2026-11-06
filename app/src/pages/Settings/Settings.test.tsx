@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
@@ -34,7 +34,7 @@ describe('categories: retire / restore', () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByLabelText('More actions for Homework')),
     );
-    expect(await screen.findByText('Retired')).toBeTruthy();
+    expect(await screen.findByText('Retired · Personal')).toBeTruthy(); // the area rides along
     expect(renameFields()).toEqual(['Courses', 'Homework']);
     expect(screen.queryByLabelText('Move Homework up')).toBeNull(); // arrows are for active rows
 
@@ -64,6 +64,71 @@ describe('categories: retire / restore', () => {
       expect((await api.listCategories()).find((c) => c.id === hw.id)?.label).toBe('Old homework'),
     );
     expect((await api.listCategories()).find((c) => c.id === hw.id)?.active).toBe(false);
+  });
+});
+
+describe('categories: area (D14)', () => {
+  it('Area… opens a panel; one tap is one write, the row reads it, focus returns to the menu', async () => {
+    const { api, hw } = await twoCats();
+    const user = userEvent.setup();
+    const writes = vi.spyOn(api, 'setCategoryArea');
+    renderApp({ api, path: '/settings' });
+
+    expect(await screen.findAllByText('Work · Personal')).toHaveLength(2); // no area yet reads Personal
+    await user.click(screen.getByLabelText('More actions for Homework'));
+    await user.click(screen.getByRole('menuitem', { name: 'Area…' }));
+    const panel = within(screen.getByRole('group', { name: 'Area for Homework' }));
+    expect(panel.getByRole('button', { name: 'Personal' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    await user.click(panel.getByRole('button', { name: 'School' }));
+
+    await waitFor(async () =>
+      expect((await api.listCategories()).find((c) => c.id === hw.id)?.area).toBe('school'),
+    );
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes).toHaveBeenCalledWith(hw.id, 'school');
+    expect(await screen.findByText('Work · School')).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: 'Area for Homework' })).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText('More actions for Homework')),
+    );
+  });
+
+  it('a failed write says so inline and keeps the panel open on the real area', async () => {
+    const { api } = await twoCats();
+    vi.spyOn(api, 'setCategoryArea').mockRejectedValue(new Error('offline'));
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    await user.click(await screen.findByLabelText('More actions for Homework'));
+    await user.click(screen.getByRole('menuitem', { name: 'Area…' }));
+    const panel = within(screen.getByRole('group', { name: 'Area for Homework' }));
+    await user.click(panel.getByRole('button', { name: 'Aperture' }));
+    expect(await screen.findByText("Couldn't save that change — try again.")).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Personal' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(panel.getByRole('button', { name: 'Aperture' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(screen.getAllByText('Work · Personal')).toHaveLength(2);
+  });
+
+  it('a new category takes the Area picked beside its type', async () => {
+    const { api } = await twoCats();
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    await user.type(await screen.findByLabelText('New category'), 'LeetCode');
+    await user.selectOptions(screen.getByLabelText('Area'), 'recruiting');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(async () =>
+      expect((await api.listCategories()).find((c) => c.label === 'LeetCode')?.area).toBe(
+        'recruiting',
+      ),
+    );
+    expect(await screen.findByText('Work · Recruiting')).toBeTruthy();
   });
 });
 

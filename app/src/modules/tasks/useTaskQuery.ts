@@ -6,7 +6,7 @@ import { isPlace, LENS_PRESET, resetToLens } from './query';
 import type { LensId, Place, TaskQuery } from './query';
 
 const LENSES: LensId[] = ['today', 'week', 'places', 'backlog', 'done', 'recurring', 'calibration'];
-const QUERY_KEY = 'aperture.tasks.query';
+export const QUERY_KEY = 'aperture.tasks.query';
 const COLLAPSE_KEY = 'aperture.tasks.collapsed';
 
 // Storage can throw (private mode, blocked site data) — every read/write degrades to "not stored".
@@ -26,14 +26,15 @@ function write(store: 'session' | 'local', key: string, value: unknown): void {
   }
 }
 
-interface Stored {
+export interface Stored {
   day: string;
   lens: Place;
   query: TaskQuery;
 }
 
-// Storage is outside our types — a hand-edited or older-shaped value must not crash the page.
-function isStored(s: Stored | null): s is Stored {
+// Storage is outside our types — a hand-edited or older-shaped value must not crash the page. A query
+// stored before a field existed (areas, 2026-11) fails here and the lens loads on its preset.
+export function isStored(s: Stored | null): s is Stored {
   const q = s?.query;
   return (
     !!q &&
@@ -41,6 +42,7 @@ function isStored(s: Stored | null): s is Stored {
     typeof q.text === 'string' &&
     Array.isArray(q.categories) &&
     Array.isArray(q.statuses) &&
+    Array.isArray(q.areas) &&
     typeof q.due === 'string' &&
     typeof q.sort === 'string' &&
     typeof q.groupBy === 'string'

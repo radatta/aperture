@@ -1,22 +1,34 @@
+import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { isTimed } from '@aperture/shared';
-import type { Task } from '@aperture/shared';
+import { isTimed, lifeFrom } from '@aperture/shared';
+import type { Category, Task } from '@aperture/shared';
 import { useApi } from '../api-context';
+import { useCategories } from './useCategories';
 import { tasksQuery } from './useTasks';
 
 // What's waiting to be planned, newest first — derived from the one tasks query so it moves with every
 // write (taskCache.ts). The morning "plan today" card counts it: the backlog tasks "+ Add" can pull in —
-// no timed task (its time is its day, lenses.md D13), no parent (its parts are the work). Not the
-// server's listBacklog rule — MCP keeps that.
-const waiting = (ts: Task[]) => {
+// no timed task (its time is its day, lenses.md D13), no parent (its parts are the work), and only the
+// life areas (no Aperture-area task: it waits behind the Backlog's chip, D14). Not the server's
+// listBacklog rule — MCP keeps that.
+export const waiting = (ts: Task[], categories: Category[]): Task[] => {
   const parents = new Set(ts.map((t) => t.parentId).filter((id): id is string => !!id));
+  const life = lifeFrom(categories);
   return ts
-    .filter((t) => t.status === 'backlog' && !isTimed(t) && !parents.has(t.id))
+    .filter((t) => t.status === 'backlog' && !isTimed(t) && !parents.has(t.id) && life(t))
     .sort((a, b) => b.createdAt - a.createdAt);
 };
 
 export function useBacklog() {
   const api = useApi();
   const qc = useQueryClient();
-  return useQuery({ ...tasksQuery(api, qc), select: waiting });
+  // Nothing while the roster loads: counting then would include the Aperture-area tasks and drop on arrival.
+  // If it failed, every task reads as Personal — the same fallback as a task with no category — so the count
+  // isn't blank for want of categories.
+  const { data: categories, isPending: rosterPending } = useCategories();
+  const select = useCallback(
+    (ts: Task[]) => (rosterPending ? [] : waiting(ts, categories ?? [])),
+    [categories, rosterPending],
+  );
+  return useQuery({ ...tasksQuery(api, qc), select });
 }

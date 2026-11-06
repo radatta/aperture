@@ -16,7 +16,13 @@ import { PlacesLens } from '../../modules/tasks/PlacesLens';
 import { RecurringSection } from '../../modules/tasks/RecurringSection';
 import { CalibrationSection } from '../../modules/calibration/CalibrationSection';
 import { BulkAddDialog } from '../../modules/tasks/BulkAddDialog';
-import { errandsByPlace, foldParts, normalize, placer } from '../../modules/tasks/query';
+import {
+  areaCardCounts,
+  errandsByPlace,
+  foldParts,
+  normalize,
+  placer,
+} from '../../modules/tasks/query';
 import type { QueryCtx } from '../../modules/tasks/query';
 import { useTaskQuery } from '../../modules/tasks/useTaskQuery';
 
@@ -68,6 +74,8 @@ export function TasksPage() {
     lens === 'places' ||
     lens === 'backlog' ||
     lens === 'done';
+  // The area chips' counts (Backlog: "Aperture · N") — cards in this lens's place, by area.
+  const areaCounts = pending || !isList ? {} : areaCardCounts(tasks, place, ctx);
   const retry = () => {
     if (tasksQ.isError) void tasksQ.refetch();
     if (plansQ.isError) void plansQ.refetch();
@@ -104,7 +112,9 @@ export function TasksPage() {
         </div>
       </div>
       <LensStrip lens={lens} counts={counts} onChange={setLens} />
-      {isList && <QueryControls place={place} query={query} onChange={setQuery} />}
+      {isList && (
+        <QueryControls place={place} query={query} onChange={setQuery} areaCounts={areaCounts} />
+      )}
       {/* The task modal lives here, above the rows, so Save can keep it open while a row moves. */}
       <TaskModalHost className="flex flex-col gap-4">
         {lens === 'today' && !searching ? (

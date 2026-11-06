@@ -15,13 +15,13 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 
 `placeOf(task, { today, planOrder, dayStartHour }, parent?, isParent?)`:
 
-| Task                                                                                                                                                                | Place   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| done or dropped                                                                                                                                                     | Done    |
-| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress                                                             | Today   |
-| due today through today+6, or past due                                                                                                                              | Week    |
-| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places  |
-| everything else                                                                                                                                                     | Backlog |
+| Task | Place |
+| --- | --- |
+| done or dropped | Done |
+| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
+| due today through today+6, or past due | Week |
+| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places |
+| everything else | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
 shows under Week or Backlog by its due day. That is deliberate and transient: tomorrow's `getDay` makes
@@ -161,6 +161,19 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
     Home's "N waiting in the backlog" counts what "+ Add" can pull in — no timed task, no parent.
   - **Right now:** the Big 3 stay the chosen plan; timed rows are a "By time" tier above Also today
     ([right-now.md](../home/right-now.md) D11).
+
+- **D14 — the Backlog is the life backlog (2026-11-05, [areas.md](areas.md)).** Every category has a life
+  area (School · Aperture · Recruiting · Personal; none reads as Personal). Backlog's preset shows the life
+  areas (`TaskQuery.areas = LIFE_AREAS`); the Aperture-area cards wait behind a toggle chip **"Aperture · N"**
+  in the chips row — pressed while shown, N = the Aperture cards in the Backlog whatever the query
+  (`areaCardCounts`), not drawn when N is 0. A part in the same list follows its parent's area, as it
+  follows its place. It is session state like every filter (D4: sticky for the session, reset each day);
+  it widens rather than narrows, so it is no override chip, never counts toward "Filter · N", and Clear /
+  Reset to lens fold it back. A search ignores it (D1: typing finds everything). Today and Week never
+  filter by area — a dev ticket due Friday is due Friday. Home's "N waiting" (`useBacklog`) and the
+  "+ Add" picker's unsearched list apply the same life predicate (`lifeFrom`); typing in the picker finds
+  anything. Why: with Aperture work in the same list as coursework the plan pass started from the wrong
+  question; the chip keeps it one tap away.
 
 ## 3. Deferred
 

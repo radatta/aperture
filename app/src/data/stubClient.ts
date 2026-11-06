@@ -30,6 +30,7 @@ import {
   refundLinkError,
   todayKey,
   toCents,
+  assertArea,
   assertCategoryDeletable,
   calendarPullPlan,
   seenFromTask,
@@ -116,6 +117,7 @@ import type {
   BaseEntity,
   CalendarBusy,
   CalibrationPoint,
+  Area,
   Category,
   CreateAttachmentInput,
   CreateLinkTokenInput,
@@ -1360,10 +1362,14 @@ class StubClient implements ApiClient {
   }
 
   // --- Categories ----------------------------------------------------------
+  // A store row from before `area` has none; every read lists it as null (areas.ts), as the Lambda does.
   async listCategories(): Promise<Category[]> {
-    return this.alive(this.store.categories).sort((a, b) => a.order - b.order);
+    return this.alive(this.store.categories)
+      .map((c) => ({ ...c, area: c.area ?? null }))
+      .sort((a, b) => a.order - b.order);
   }
   async upsertCategory(input: UpsertCategoryInput): Promise<Category> {
+    if (input.area !== undefined) assertArea(input.area);
     if (input.id) {
       const existing = this.mustFind(this.store.categories, input.id);
       return this.writes.patch(this.store.categories, input.id, {
@@ -1371,6 +1377,7 @@ class StubClient implements ApiClient {
         isWork: input.isWork,
         order: input.order ?? existing.order,
         active: input.active ?? existing.active,
+        area: input.area === undefined ? (existing.area ?? null) : input.area,
       });
     }
     return this.writes.insert(this.store.categories, {
@@ -1379,14 +1386,21 @@ class StubClient implements ApiClient {
       isWork: input.isWork,
       order: input.order ?? this.alive(this.store.categories).length,
       active: input.active ?? true,
+      area: input.area ?? null,
     });
+  }
+  async setCategoryArea(id: string, area: Area | null): Promise<Category> {
+    assertArea(area); // refused before the lookup: nothing is written
+    this.mustFind(this.store.categories, id);
+    return this.writes.patch(this.store.categories, id, { area });
   }
   async setCategoryWork(
     id: string,
     isWork: boolean,
     backfillPast: boolean,
   ): Promise<{ category: Category; backfilled: number }> {
-    const category = this.writes.patch(this.store.categories, id, { isWork });
+    const patched = this.writes.patch(this.store.categories, id, { isWork });
+    const category = { ...patched, area: patched.area ?? null }; // a legacy row reads null, as listed
     let backfilled = 0;
     if (backfillPast) {
       for (const s of this.alive(this.store.sessions).filter((x) => x.categoryId === id)) {

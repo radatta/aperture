@@ -575,6 +575,46 @@ describe('backend task notes on a legacy row', () => {
   });
 });
 
+describe('backend category area', () => {
+  const make = (doc: InMemoryDoc, userId: string) =>
+    new BackendClient(new Repo(doc, liveWrites(doc), userId), {
+      userId,
+      now: () => 1_700_000_000_000,
+    });
+
+  it('a row from before the field lists as area null, and a rename keeps it null, not undefined', async () => {
+    const doc = new InMemoryDoc();
+    const backend = make(doc, 'local');
+    const cat = await backend.upsertCategory({ label: 'from before areas', isWork: true });
+    const raw = await doc.get('u#local', sk.cat(cat.id));
+    const legacy = { ...raw! };
+    delete legacy.area;
+    await doc.put(legacy);
+
+    expect((await backend.listCategories()).find((c) => c.id === cat.id)?.area).toBeNull();
+    const renamed = await backend.upsertCategory({ id: cat.id, label: 'renamed', isWork: true });
+    expect(renamed.area).toBeNull();
+    // Every path that returns the row says null, never undefined — setCategoryWork's copy included.
+    expect((await backend.setCategoryWork(cat.id, false, false)).category.area).toBeNull();
+    expect((await backend.setCategoryArea(cat.id, 'school')).area).toBe('school');
+  });
+
+  it('another user’s id is not found — through the real RPC dispatch — and nothing is written', async () => {
+    const doc = new InMemoryDoc();
+    const alice = make(doc, 'alice');
+    const cat = await alice.upsertCategory({ label: 'alice’s', isWork: true, area: 'school' });
+    const now = () => 1_700_000_000_000;
+    await expect(
+      handleRpc(doc, { userId: 'bob', method: 'setCategoryArea', args: [cat.id, 'aperture'], now }),
+    ).rejects.toThrow(/Not found/);
+    await expect(
+      handleRpc(doc, { userId: 'bob', method: 'setCategoryArea', args: [cat.id, 'nope'], now }),
+    ).rejects.toThrow(/area must be one of/);
+    expect((await alice.listCategories()).find((c) => c.id === cat.id)?.area).toBe('school');
+    expect(await doc.get('u#bob', sk.cat(cat.id))).toBeNull();
+  });
+});
+
 // Every read whose copy is written back is strongly consistent: two quick RPCs on one task (a title,
 // then its due) must never write the first one's older copy back over it.
 describe('backend read-then-write under lagging reads', () => {

@@ -3,6 +3,7 @@
 // from these later; nothing here assumes DynamoDB.
 
 import type { AttachmentStatus } from './attachments';
+import type { Area } from './areas';
 import type { CompetencyTag } from './stories';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 
@@ -183,11 +184,14 @@ export interface Day extends BaseEntity {
 
 // --- Categories ------------------------------------------------------------
 // Referenced by id; labels resolve live (renames propagate). isWork is snapshotted onto sessions.
+// area (areas.ts) is the life area the category belongs to — a live grouping, never snapshotted; null
+// reads as Personal (areaOf). Rows from before the field read back undefined → both impls list it as null.
 export interface Category extends BaseEntity {
   label: string;
   isWork: boolean;
   order: number;
   active: boolean;
+  area: Area | null;
 }
 
 // --- Places (errand lists) -------------------------------------------------

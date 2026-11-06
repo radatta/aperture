@@ -304,6 +304,76 @@ describe('/tasks lenses', () => {
   });
 });
 
+describe('Backlog folds the Aperture area away (D14)', () => {
+  async function withAreas() {
+    const { api, csen } = await seeded();
+    const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });
+    await api.createTask({ title: 'fix cache policy', categoryId: ap.id });
+    await api.createTask({ title: 'retune palette', categoryId: ap.id });
+    await api.createTask({ title: 'pset 4', categoryId: csen.id });
+    await api.createTask({ title: 'no category task' });
+    return { api, ap, csen };
+  }
+
+  it('hides Aperture-area tasks behind "Aperture · N"; the chip shows them, and again hides them', async () => {
+    const { api } = await withAreas();
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=backlog' });
+
+    expect(await screen.findByRole('button', { name: 'pset 4' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'no category task' })).toBeTruthy(); // Personal
+    expect(screen.queryByRole('button', { name: 'fix cache policy' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Aperture · 2$/ })).toBeNull(); // no group yet
+    const chip = screen.getByRole('button', { name: 'Aperture area · 2' });
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Filter' })).toBeTruthy(); // the fold is no filter
+    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+
+    await user.click(chip);
+    expect(await screen.findByRole('button', { name: 'fix cache policy' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Aperture · 2$/ })).toBeTruthy(); // the group header
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Filter' })).toBeTruthy(); // still no filter count
+
+    await user.click(chip);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'fix cache policy' })).toBeNull(),
+    );
+  });
+
+  it('a search finds an Aperture task while it is folded away', async () => {
+    const { api } = await withAreas();
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    await user.type(await screen.findByLabelText('Search tasks'), 'palette');
+    expect(await screen.findByRole('button', { name: 'retune palette' })).toBeTruthy();
+  });
+
+  it('an Aperture task due this week sits in Week; a retired Aperture category still folds', async () => {
+    const { api, ap } = await withAreas();
+    await api.createTask({ title: 'ship it', categoryId: ap.id, dueDay: addDays(today(), 2) });
+    await api.upsertCategory({ id: ap.id, label: 'Aperture', isWork: true, active: false });
+    const user = userEvent.setup();
+    renderApp({ api, path: '/tasks?lens=week' });
+    expect(await screen.findByRole('button', { name: 'ship it' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Aperture area · / })).toBeNull(); // no chip off Backlog
+
+    await user.click(pill('Backlog'));
+    expect(await screen.findByRole('button', { name: 'pset 4' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'fix cache policy' })).toBeNull();
+    expect((await api.listCategories()).find((c) => c.id === ap.id)?.area).toBe('aperture');
+  });
+
+  it('with only Aperture work waiting, Backlog reads clear but the chip still offers it', async () => {
+    const api = createStubClient({ seed: false, storageKey: `tasklist-${Math.random()}` });
+    const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });
+    await api.createTask({ title: 'fix cache policy', categoryId: ap.id });
+    renderApp({ api, path: '/tasks?lens=backlog' });
+    expect(await screen.findByText('Backlog is clear.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Aperture area · 1' })).toBeTruthy();
+  });
+});
+
 describe('Today: a time decides the day (option 3)', () => {
   it('a timed task due today is under "By time", with no Unplan, and counts toward the day', async () => {
     const api = createStubClient({ seed: false, storageKey: `tasklist-bytime-${Math.random()}` });

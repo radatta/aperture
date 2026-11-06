@@ -8,7 +8,17 @@ import { cx } from '../../lib/cx';
 import { useDisclosure } from '../../lib/useDisclosure';
 import { useActiveCategories, useCategories } from '../../data/hooks/useCategories';
 import { LoadError } from '../../components/LoadError';
-import { overrideChips, resetToLens, SORT_LABEL, STATUS_LABEL } from './query';
+import { AREA_LABEL } from '@aperture/shared';
+import type { Area } from '@aperture/shared';
+import {
+  areaShown,
+  foldedAreas,
+  overrideChips,
+  resetToLens,
+  SORT_LABEL,
+  STATUS_LABEL,
+  toggleArea,
+} from './query';
 import type { DueBucket, Place, SortKey, StatusChip, TaskQuery } from './query';
 
 const DUE_LABEL: Record<DueBucket, string> = {
@@ -29,15 +39,21 @@ const DUE_OPTIONS: Record<Place, DueBucket[]> = {
 
 // Search box + "Filter" disclosure + the chips for whatever differs from the lens preset. On Today
 // it's search only: the plan's order is the point there, so there's nothing to sort or group — and on
-// Places, where the store is the grouping and a list reads oldest first.
+// Places, where the store is the grouping and a list reads oldest first. On Backlog, one toggle chip per
+// area the lens folds away ("Aperture · N", lenses.md D14) — pressed while that area shows. It widens
+// rather than narrows, so it is no override chip and never counts toward "Filter · N"; Clear and Reset
+// fold it back. `areaCounts` is the cards in each area on this lens (areaCardCounts); a chip with 0 is
+// not drawn — there is nothing to show or hide.
 export function QueryControls({
   place,
   query,
   onChange,
+  areaCounts = {},
 }: {
   place: Place;
   query: TaskQuery;
   onChange: (q: TaskQuery) => void;
+  areaCounts?: Partial<Record<Area, number>>;
 }) {
   const categoriesQ = useCategories();
   const { data: categories = [] } = categoriesQ;
@@ -46,6 +62,9 @@ export function QueryControls({
   const panel = useDisclosure();
   const searchOnly = place === 'today' || place === 'places';
   const chips = searchOnly ? [] : overrideChips(query, place, categories);
+  const areaChips = foldedAreas(place)
+    .map((a) => ({ area: a, count: areaCounts[a] ?? 0 }))
+    .filter((c) => c.count > 0);
 
   return (
     <div className="flex flex-col gap-2">
@@ -81,8 +100,26 @@ export function QueryControls({
           Couldn’t load categories — labels and category filters are off.
         </LoadError>
       )}
-      {chips.length > 0 && (
+      {(chips.length > 0 || areaChips.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5">
+          {areaChips.map((c) => (
+            <button
+              key={`area:${c.area}`}
+              type="button"
+              aria-pressed={areaShown(query, c.area)}
+              // "Aperture area · 2": the group header below reads "Aperture · 2" — two names, two things.
+              aria-label={`${AREA_LABEL[c.area]} area · ${c.count}`}
+              onClick={() => onChange(toggleArea(query, c.area))}
+              className={cx(
+                'rounded-full border px-2.5 py-1 text-xs transition',
+                areaShown(query, c.area)
+                  ? 'border-teal bg-teal-soft text-ink'
+                  : 'border-line text-ink-muted hover:text-ink',
+              )}
+            >
+              {AREA_LABEL[c.area]} · {c.count}
+            </button>
+          ))}
           {chips.map((c) => (
             <button
               key={c.id}
@@ -94,9 +131,11 @@ export function QueryControls({
               {c.label} ×
             </button>
           ))}
-          <Button variant="quiet" size="sm" onClick={() => onChange(resetToLens(query, place))}>
-            Clear
-          </Button>
+          {chips.length > 0 && (
+            <Button variant="quiet" size="sm" onClick={() => onChange(resetToLens(query, place))}>
+              Clear
+            </Button>
+          )}
         </div>
       )}
       {panel.open && (
