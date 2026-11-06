@@ -474,6 +474,15 @@ export const timerCredit: Scenario = {
       },
     },
     {
+      id: 'open-tasks-gone',
+      entry: 'api',
+      title: 'Delete the tasks this run left open, so they don’t fill the Backlog group later scenarios read',
+      async run(ctx) {
+        for (const what of ['nb', 'cap', 'ext', 'other'])
+          await ctx.api.writes.deleteTask((await mine(ctx, what)).id);
+      },
+    },
+    {
       id: 'clear-search',
       entry: 'ui',
       title: 'Clear the /tasks search, so the scenarios after start unfiltered',
