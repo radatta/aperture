@@ -55,9 +55,14 @@ export const placedByTime = (
 ): boolean => timedDay(t, dayStartHour) === day;
 export const TIMED_NO_PLAN_ERROR =
   'A timed task is on the day its time falls on — change its time instead of planning it.';
+// getDay's guard: its sweep is monotone, so a day after the user's current app day would move every
+// task whose rows are all before it — today's plan included. A future call is a client bug, refused.
+export const FUTURE_DAY_ERROR =
+  "getDay is for the current day — a future day would sweep today's plan.";
 
 // Stale-planned sweep (getDay's lazy rollover): a planned task with no alive plan row on `day` or later
-// was left behind. A timed `planned` task is swept whatever its rows — option 3's standing invariant,
+// was left behind. `plans` is the alive rows dated `day` or later — earlier rows never change a move, so
+// a caller may pass only those (the Lambda's range read does). A timed `planned` task is swept whatever its rows — option 3's standing invariant,
 // and the lazy migration of rows made before it (the rows stay as history). It goes back to backlog —
 // unless it's a recurring occurrence already superseded by its series' copy on `day`, which is dropped
 // instead (a missed daily would otherwise pile up one backlog copy per day). An occurrence carrying a

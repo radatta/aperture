@@ -8,7 +8,8 @@ import { useSettings } from './useSettings';
 // (stub + Lambda both). Sibling task queries may have resolved before those writes landed, so refetch
 // them once the day comes back — once per real fetch, not per mounted consumer. Waits for settings:
 // callers derive `day` from dayStartHour with a fallback, and a fallback that lands on tomorrow would
-// sweep today's plan.
+// be refused by the server (FUTURE_DAY_ERROR, a visible error) — the guard is the server's; waiting
+// just avoids showing it.
 export function useDay(day: string) {
   const api = useApi();
   const qc = useQueryClient();

@@ -15,13 +15,13 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 
 `placeOf(task, { today, planOrder, dayStartHour }, parent?, isParent?)`:
 
-| Task | Place |
-| --- | --- |
-| done or dropped | Done |
-| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress | Today |
-| due today through today+6, or past due | Week |
-| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places |
-| everything else | Backlog |
+| Task                                                                                                                                                                | Place   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| done or dropped                                                                                                                                                     | Done    |
+| timed (not a parent), its deadline's **app day** is today; or on today's plan (untimed); or in progress                                                             | Today   |
+| due today through today+6, or past due                                                                                                                              | Week    |
+| an errand (has a `place`) not otherwise in Today/Week — [places.md](places.md) §3. **Places also lists every open errand**, so a dated or started one shows in both | Places  |
+| everything else                                                                                                                                                     | Backlog |
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
 shows under Week or Backlog by its due day. That is deliberate and transient: tomorrow's `getDay` makes
@@ -55,9 +55,12 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   off:
   - add = plan row **first**, then backlog → planned (a planned task without a row is what the stale
     sweep moves back). A planned task stays planned; an in-progress task keeps its status.
-  - dedupe: `upsertPlan` has none, so the hook reads that day's plan fresh and skips writing a row the
-    task already has, and ignores a second call while the first is in flight. The status step still
-    runs on that path, so retrying repairs a half-done add. Server-side dedupe is a follow-up (§3).
+  - dedupe: `upsertPlan` keeps one alive row per (task, day) on both impls — an id-less insert for a
+    task already on that day returns the row untouched (no resize, no reorder; edits go through `id`),
+    on a consistent read so two taps in one second see each other (`day-guards`, 2026-11). The hook
+    still reads that day's plan fresh (it sets `order` and `already`) and ignores a second call while
+    the first is in flight, so the status step still runs on that path and retrying repairs a
+    half-done add.
   - unplan (today's row) = remove the row, then `getDay(today)`: the stale sweep moves the task to
     backlog unless it has a row on a later day. The sweep owns that rule, so the client doesn't
     re-derive it. A started task (night "Backlog") is moved explicitly first — the sweep never touches
@@ -142,7 +145,9 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   - **One write rule, one healer:** `upsertPlan` refuses a timed task; a planned task that gains a time
     (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
     back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its
-    rows stay as history. That sweep is also the migration: zero Google writes, status only. The
+    rows stay as history. The sweep is monotone, so `getDay` refuses a day after the user's app day
+    (`FUTURE_DAY_ERROR`, both impls, `day-guards` 2026-11; the Lambda's today is LA's, so a device whose own day is ahead of LA's — travelling east — sees that error on Home and Tasks until LA's day catches up, where before it silently swept today's plan) — a future call is a client bug surfaced
+    loudly, never served unswept. That sweep is also the migration: zero Google writes, status only. The
     Lambda re-judges each move on a consistent re-read, and `upsertPlan` reads the list consistently
     (a time cleared a moment ago is honoured). A timed occurrence is never dropped as superseded — it
     goes to backlog and sits overdue in Week until dealt with; rare, and safer than cancelling an
@@ -159,5 +164,4 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
 
 ## 3. Deferred
 
-- Server-side plan dedupe (both impls, contract-tested).
-- Find-from-anywhere (Cmd/Ctrl+K) reusing `query.ts`, only if searching outside `/tasks` is missed.
+- Find-from-anywhere (Cmd/Ctrl+K) reusing `query.ts` — **won't do** (2026-11-05): the daily device is the phone, where "find" is Tasks → type and D1 makes the lens moot; no usage note records a miss. The build shape, if a miss is ever reported, is on task 01M38GBZ6SYT21KV0GP2QXCW4P (a `?q=` link into `/tasks` first, a Find dialog only if still wanted).

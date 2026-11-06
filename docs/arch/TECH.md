@@ -48,7 +48,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **IDs:** client-generated **ULIDs** (unique across devices, time-sortable). Exception: Plaid-owned finance rows (items and their sync states, accounts, transactions) use Plaid's ids — [finances/](../areas/finances/index.md).
 - **Ownership:** every item scoped to `userId`.
 - **Timestamps:** epoch-ms. `day` / `date` strings are computed with the **configurable day-start offset** (`settings.dayStartHour`, default **4am** — so late-night work lands on the right day).
-- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. One live violation — see **[Tech debt](#tech-debt)**.
+- **Soft-delete everywhere:** every entity has `createdAt`, `updatedAt`, `deletedAt`. **Never hard-delete**; queries filter out tombstones. No live violation since `day-guards` (2026-11) — the last, `uncheckHabit`, is kept as a record under **[Tech debt](#tech-debt)**.
 - **`exportData` excludes tombstones.** The "you own your data" snapshot returns live rows only, on both impls, asserted by the export contract test. So a soft-deleted row is **unrecoverable from an export** — deliberate while the export is a one-way download with no import path. If restore/merge ever lands it will need tombstones plus a versioned envelope; revisit then. The bundle's shape is the shared `ExportBundle` type, and every collection is required — omitting one is a compile error, not a silent gap (which is how `leetcodeAttempts` once shipped missing).
 
 ### 2.2 Entities
@@ -71,8 +71,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 - **Drop vs Delete are different.** Drop = `transitionTask(→cancelled)`, which keeps the row as history (excluded from calibration). Delete = `deleteTask`, a **permanent** action that tombstones the task **and cascades** — its plan rows and attachment metadata are tombstoned too, and any calendar event is hard-deleted via the [cancel path](../areas/calendar/index.md#delete-on-cancel); each attachment's S3 bytes are deleted first ([attachments D7](../areas/tasks/attachments.md)). Delete is hidden on a recurring occurrence (`seriesId != null`) — `getDay` would just respawn it; Drop, or `deactivateSeries` for the whole series, is the tool there.
 
 **taskPlans** — scheduling (the *when*), separate from the task (the *what*). Enables multi-day + ordering.
-- `id · taskId · day · plannedMinutes · order`. A task may have plan rows on several days. A **timed** task (`dueDay` + `dueTime`) has none: its day is its time, and `upsertPlan` refuses it ([lenses.md](../areas/tasks/lenses.md) D13). Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateMin − actualAccruedMin` (the working estimate).
-- **Stale sweep (lazy rollover).** `getDay(today)` moves every `planned` task with no alive plan row on today or later back to `backlog`, and every timed `planned` task whatever its rows — a recurring untimed occurrence already superseded by its series' copy today is dropped (`cancelled`) instead. Plan rows stay as history; `in_progress` is untouched. Rule: shared `stalePlannedMoves`. It runs on app open, not on a schedule (the server has no timezone), so MCP reads lag until the app loads today. `getDay` must only ever be called with the client's current day — a future day would sweep today's plan.
+- `id · taskId · day · plannedMinutes · order`. One alive row per (task, day): an id-less `upsertPlan` for a task already on that day returns it (`day-guards`, 2026-11). A task may have plan rows on several days. A **timed** task (`dueDay` + `dueTime`) has none: its day is its time, and `upsertPlan` refuses it ([lenses.md](../areas/tasks/lenses.md) D13). Morning "planned hours" for a day = Σ `plannedMinutes` on that day. "Remaining" = `estimateMin − actualAccruedMin` (the working estimate).
+- **Stale sweep (lazy rollover).** `getDay(today)` moves every `planned` task with no alive plan row on today or later back to `backlog`, and every timed `planned` task whatever its rows — a recurring untimed occurrence already superseded by its series' copy today is dropped (`cancelled`) instead. Plan rows stay as history; `in_progress` is untouched. Rule: shared `stalePlannedMoves`, fed one consistent range read of the plan rows dated today or later (`listPlansFrom` — `SK BETWEEN plan#<today># AND plan#\uffff`; rows before today never decide a move, and plan history only grows — `day-guards`, 2026-11). It runs on app open, not on a schedule (the server has no timezone), so MCP reads lag until the app loads today. `getDay` refuses a day after the user's app day (`FUTURE_DAY_ERROR` → HTTP 400, both impls; a malformed key is `Invalid day`), since a future day would sweep today's plan; past days are allowed (`day-guards`, 2026-11).
 
 **taskSeries** — recurrence template ([areas/tasks/recurring.md](../areas/tasks/recurring.md)).
 - `id · title · categoryId · defaultEstimateMin · rule · active · anchorDate · dueOffsetDays? · until?`. `dueOffsetDays` is the cadence: an occurrence spawns planned on its day, due that many days later, untimed (`null` = no due date). `until` is the last day it spawns (inclusive); past it the row stays `active` and reads "ended". Both read back `undefined` on older rows → `?? null`.
@@ -238,7 +238,9 @@ falling back to `CLAUDE_PROJECT_DIR` then `$(pwd)`; verified empirically both wa
 hooks: `.claude/hooks/README.md`. Note the fix only takes effect once merged to `main` and the main
 checkout pulls it — the executing copy is always `${CLAUDE_PROJECT_DIR}`'s (the main checkout).
 
-### Hard-deletes — breaks §2.1 "Soft-delete everywhere"
+### Hard-deletes — RESOLVED 2026-11-05 (`day-guards`)
+
+Kept as a record. **Fix:** `uncheckHabit` writes a tombstone at the same key (`putCheck` with `deletedAt`) and `repo.deleteCheck` is gone; a re-check writes a fresh row (new id) over it, as the stub does. The proof lives in `lambdas/` as the record below said it must: `backend.test.ts` "uncheck keeps the row as a tombstone…" reads the raw item after the uncheck. `listChecks` also became one date-bounded range read. The text below is as written when the violation was live.
 
 **The rule: nothing is ever hard-deleted.** Every entity carries `deletedAt`, deleting sets it, reads
 filter tombstones. This isn't fastidiousness. `updatedAt` is **last-write-wins across devices**, so a row
@@ -246,7 +248,7 @@ that simply vanishes is indistinguishable from a row that never synced — the t
 one device can tell another that something was deliberately removed rather than lost. Destroy the row and
 a stale device silently resurrects it on next write.
 
-**Live violation: `uncheckHabit`.** `BackendClient.uncheckHabit` calls `repo.deleteCheck`, a real
+**Live violation (then): `uncheckHabit`.** `BackendClient.uncheckHabit` called `repo.deleteCheck`, a real
 DynamoDB `DeleteItem` — the row is gone. The stub soft-deletes the same row. Every other delete in the
 app follows the rule (`deleteCategory` and `removePlan` both write `deletedAt`), so this is the lone
 outlier, and two things make it worse than an ordinary bug:

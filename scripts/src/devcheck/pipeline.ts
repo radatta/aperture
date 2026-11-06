@@ -373,6 +373,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.listPlaces()).some((p) => p.id === id);
       case 'category':
         return (await client.reads.listCategories()).some((c) => c.id === id);
+      case 'habit': // archived reads as gone: the API has no habit delete (api.ts HABIT_VIA)
+        return (await client.reads.listHabits()).some((h) => h.id === id && h.active);
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
@@ -397,6 +399,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'category':
         await client.writes.deleteCategory(id, null); // newest-first: it goes before the run's tasks, so none may sit on it
+        return true;
+      case 'habit':
+        await client.writes.archiveHabit(id);
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

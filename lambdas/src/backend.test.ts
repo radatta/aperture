@@ -9,7 +9,17 @@ import { handleRpc } from './handler';
 import { fakePresigner } from './s3/presigner';
 import { fakeObjectStore } from './s3/objects';
 import type { Presigner } from './s3/presigner';
-import { ulid, type PomodoroSession, type RecordFluxSetInput, type Task } from '@aperture/shared';
+import {
+  ulid,
+  USER_TIME_ZONE,
+  zonedEpoch,
+  type PomodoroSession,
+  type RecordFluxSetInput,
+  type Task,
+} from '@aperture/shared';
+
+// Noon LA on 2026-08-04: the day the getDay cases read (a future day is refused).
+const AUG_4_NOON = zonedEpoch('2026-08-04', '12:00', USER_TIME_ZONE);
 
 // The contract suite proves list-level behavior against both impls, but it can't tell a soft-delete from a
 // hard one — both just make the row vanish from the list. TECH.md's tech-debt ledger asks any new delete
@@ -45,7 +55,7 @@ describe('backend recurrence', () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
       userId: 'local',
-      now: () => 1_700_000_000_000,
+      now: () => AUG_4_NOON, // reads 2026-08-04, which getDay refuses from a 2023 clock
     });
     const series = await backend.upsertSeries({
       title: 'Pre-lab',
@@ -572,7 +582,7 @@ describe('backend read-then-write under lagging reads', () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
       userId: 'local',
-      now: () => 1_700_000_000_000,
+      now: () => AUG_4_NOON, // the day cases read 2026-08-04, which getDay refuses from a 2023 clock
     });
     // Plain gets (and list queries) of `id` keep showing the copy from before the next write.
     const snapshot = async (id: string) => {
@@ -765,6 +775,26 @@ describe('backend read-then-write under lagging reads', () => {
     });
   });
 
+  it('uncheck keeps the row as a tombstone — gone from every list, kept in the table; a re-check is a fresh alive row', async () => {
+    const { backend, doc } = setup();
+    const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
+    const key = sk.hcheck(DAY, h.id);
+    const first = await backend.checkHabit(h.id, DAY);
+    await backend.uncheckHabit(h.id, DAY);
+    const raw = await doc.get('u#local', key, { consistent: true });
+    expect(raw).toMatchObject({ id: first.id });
+    expect(raw?.deletedAt).not.toBeNull();
+    expect(await backend.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toEqual([]);
+    expect((await backend.exportData()).habitChecks).toEqual([]);
+    await backend.uncheckHabit(h.id, DAY); // again, and on a day never checked: no-ops
+    await backend.uncheckHabit(h.id, '2026-08-02');
+    const again = await backend.checkHabit(h.id, DAY);
+    expect(again.id).not.toBe(first.id);
+    expect(await backend.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toEqual([
+      again,
+    ]);
+  });
+
   it('a habit unchecked straight after a check leaves no check, and the reverse re-checks it', async () => {
     const { backend, doc } = setup();
     const h = await backend.upsertHabit({ name: 'run', categoryId: null, cadencePerWeek: 3 });
@@ -772,7 +802,7 @@ describe('backend read-then-write under lagging reads', () => {
     await backend.checkHabit(h.id, DAY);
     lagKey(doc, key, null); // the check isn't visible to a plain read yet
     await backend.uncheckHabit(h.id, DAY);
-    expect(await doc.get('u#local', key, { consistent: true })).toBeNull();
+    expect((await doc.get('u#local', key, { consistent: true }))?.deletedAt).not.toBeNull(); // tombstoned
     const checked = await backend.checkHabit(h.id, DAY);
     const live = await doc.get('u#local', key, { consistent: true });
     await backend.uncheckHabit(h.id, DAY);
@@ -791,7 +821,7 @@ describe('backend decisions under a lagging task list', () => {
     const doc = new InMemoryDoc();
     const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
       userId: 'local',
-      now: () => 1_700_000_000_000,
+      now: () => AUG_4_NOON,
     });
     // Every non-consistent list read for the next while shows `id` as it is now.
     const lagging = async (id: string) =>
@@ -837,6 +867,43 @@ describe('backend decisions under a lagging task list', () => {
     await backend.getDay('2026-08-04');
     expect((await backend.getTask(t.id))?.status).toBe('planned');
     expect(doc.gets.some((g) => g.key.endsWith(sk.task(t.id)) && g.consistent)).toBe(true);
+  });
+
+  it('a second insert straight after the first sees the row though the plain list lags', async () => {
+    const { backend, doc } = setup();
+    const t = await backend.createTask({ title: 'pset' });
+    const row = { taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+    const first = await backend.upsertPlan(row);
+    doc.staleNextQueries('u#local', sk.plan('2026-08-04', 0, first.id), null, 20); // not visible yet
+    expect((await backend.upsertPlan(row)).id).toBe(first.id);
+    const rows = await doc.query('u#local', sk.planPrefix('2026-08-04'), { consistent: true });
+    expect(rows.filter((r) => r.taskId === t.id)).toHaveLength(1);
+  });
+
+  it('the sweep reads only plan rows dated today or later, consistently', async () => {
+    const { backend, doc } = setup();
+    const planned = async (title: string, days: string[]) => {
+      const t = await backend.createTask({ title });
+      for (const day of days)
+        await backend.upsertPlan({ taskId: t.id, day, plannedMinutes: 30, order: 0 });
+      await backend.transitionTask(t.id, 'planned');
+      return t;
+    };
+    const gone = await planned('yesterday only', ['2026-08-03']);
+    const later = await planned('yesterday and tomorrow', ['2026-08-03', '2026-08-05']);
+    const today = await planned('today', ['2026-08-04']);
+    doc.queries.length = 0;
+    await backend.getDay('2026-08-04');
+    const status = async (id: string) => (await backend.getTask(id))?.status;
+    expect([await status(gone.id), await status(later.id), await status(today.id)]).toEqual([
+      'backlog',
+      'planned',
+      'planned',
+    ]);
+    const planReads = doc.queries.filter((q) => q.prefix === sk.planAllPrefix());
+    expect(planReads).toEqual([
+      { prefix: 'plan#', from: sk.planPrefix('2026-08-04'), to: undefined, consistent: true },
+    ]);
   });
 
   it('option 3: the sweep reads plan rows consistently — a row just written keeps its task planned', async () => {

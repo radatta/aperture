@@ -4,6 +4,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_TASK, UPLOAD_URL_TTL_MS } from '.
 import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, todayKey } from './dates';
 import { REP_NO_SPLIT_ERROR } from './split';
+import { FUTURE_DAY_ERROR } from './machines';
 import { SERIES_OFFSET_ERROR, SERIES_UNTIL_ERROR } from './recurrence';
 import {
   PLACE_FINISHED_ERROR,
@@ -68,6 +69,12 @@ export function runApiContract(
     });
     const advance = (ms: number) => {
       clock += ms;
+    };
+    // getDay refuses a day after the user's app day: a case that reads a 2026-08 day sets the clock to
+    // that day first (20:00Z = early afternoon LA, well past any day start). The stub compares against
+    // the runner's local day, so this suite assumes a runner at or west of UTC (CI is UTC, the container LA).
+    const at = (day: string) => {
+      clock = Date.parse(`${day}T20:00:00Z`);
     };
 
     it('logs: create is retrievable by its own day, and updates', async () => {
@@ -656,6 +663,7 @@ export function runApiContract(
     });
 
     it('parts: a roll rep or a recurring occurrence can’t be split — no parent is minted', async () => {
+      at('2026-08-04');
       const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
       const { task: rep } = await api.pickRollToday(roll.id, '2026-08-04');
       await api.upsertSeries({
@@ -1134,6 +1142,38 @@ export function runApiContract(
       expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).not.toContain(plan.id);
     });
 
+    it('plans: a second insert for one task and day returns the existing row; an id write still edits it; a removed row can be re-added', async () => {
+      const task = await api.createTask({ title: 'Planned' });
+      const other = await api.createTask({ title: 'Neighbour' });
+      const row = { taskId: task.id, day: '2026-08-04', plannedMinutes: 30, order: 0 };
+      const first = await api.upsertPlan(row);
+      const again = await api.upsertPlan({ ...row, plannedMinutes: 60, order: 2 });
+      expect(again).toEqual(first); // untouched: no resize, no reorder
+      await api.upsertPlan({ ...row, taskId: other.id, order: 1 });
+      const rows = () => api.listPlansForDay('2026-08-04');
+      expect((await rows()).filter((p) => p.taskId === task.id)).toHaveLength(1);
+      // A day apart is another row; an id write edits in place.
+      await api.upsertPlan({ ...row, day: '2026-08-05' });
+      expect(
+        (await api.listPlansForDay('2026-08-05')).filter((p) => p.taskId === task.id),
+      ).toHaveLength(1);
+      const edited = await api.upsertPlan({ ...row, id: first.id, plannedMinutes: 45 });
+      expect(edited.id).toBe(first.id);
+      expect((await rows()).filter((p) => p.taskId === task.id)).toEqual([
+        expect.objectContaining({ id: first.id, plannedMinutes: 45 }),
+      ]);
+      expect((await rows()).find((p) => p.taskId === other.id)).toMatchObject({
+        plannedMinutes: 30,
+        order: 1,
+      });
+      await api.removePlan(first.id);
+      const readded = await api.upsertPlan(row);
+      expect(readded.id).not.toBe(first.id);
+      expect((await rows()).filter((p) => p.taskId === task.id)).toEqual([
+        expect.objectContaining({ id: readded.id, plannedMinutes: 30 }),
+      ]);
+    });
+
     it('habits: check is idempotent per day and uncheck clears it', async () => {
       const h = await api.upsertHabit({ name: 'Read', categoryId: null, cadencePerWeek: 5 });
       const c1 = await api.checkHabit(h.id, '2026-08-04');
@@ -1142,6 +1182,12 @@ export function runApiContract(
       expect(await api.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toHaveLength(1);
       await api.uncheckHabit(h.id, '2026-08-04');
       expect(await api.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toHaveLength(0);
+      // Unchecking again, or a day never checked, is a no-op; a re-check is exactly one again.
+      await api.uncheckHabit(h.id, '2026-08-04');
+      await api.uncheckHabit(h.id, '2026-08-02');
+      const c3 = await api.checkHabit(h.id, '2026-08-04');
+      expect(await api.listHabitChecks({ from: '2026-08-01', to: '2026-08-07' })).toEqual([c3]);
+      expect(await api.listHabitChecks({ from: '2026-08-07', to: '2026-08-01' })).toEqual([]); // reversed: empty, never an error
     });
 
     it('rolls: upsert lists, archive flags, and category-delete reassigns', async () => {
@@ -1220,6 +1266,7 @@ export function runApiContract(
     });
 
     it('day: getDay materializes due recurrence exactly once', async () => {
+      at('2026-08-05');
       await api.upsertSeries({
         title: 'Daily standup',
         categoryId: null,
@@ -1257,6 +1304,7 @@ export function runApiContract(
         rule: { kind: 'daily' },
         anchorDate: '2026-08-01',
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       const [plan] = await api.listPlansForDay('2026-08-04');
       const occurrences = async () => (await api.listTasks()).filter((t) => t.seriesId);
@@ -1310,6 +1358,7 @@ export function runApiContract(
         anchorDate: '2026-08-01',
       });
       expect(legacy).toMatchObject({ dueOffsetDays: null, until: null });
+      at('2026-08-31');
       await api.getDay('2026-08-31');
       const byTitle = Object.fromEntries((await api.listTasks()).map((t) => [t.title, t]));
       expect(byTitle['Pre-lab']).toMatchObject({
@@ -1335,6 +1384,7 @@ export function runApiContract(
         anchorDate: '2026-08-01',
         dueOffsetDays: 1,
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       const [plan] = await api.listPlansForDay('2026-08-04');
       await api.removePlan(plan!.id);
@@ -1344,6 +1394,7 @@ export function runApiContract(
         plannedMinutes: 60,
         order: 1,
       });
+      at('2026-08-05');
       await api.getDay('2026-08-05');
       const rows = await api.listPlansForDay('2026-08-05');
       expect(rows).toHaveLength(2);
@@ -1363,8 +1414,10 @@ export function runApiContract(
         anchorDate: '2026-08-01',
         until: '2026-08-04',
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       expect(await api.listPlansForDay('2026-08-04')).toHaveLength(1);
+      at('2026-08-05');
       await api.getDay('2026-08-05');
       expect(await api.listPlansForDay('2026-08-05')).toHaveLength(0);
       expect((await api.listTasks()).filter((t) => t.seriesId === s.id)).toHaveLength(1);
@@ -1404,12 +1457,14 @@ export function runApiContract(
         rule: { kind: 'daily' },
         anchorDate: '2026-08-01',
       });
+      at('2026-08-04');
       await api.getDay('2026-08-04');
       await api.deleteSeries(s.id);
       await api.deleteSeries(s.id);
       await api.deleteSeries('nope');
       expect(await api.listSeries()).toHaveLength(0);
       await expect(api.deactivateSeries(s.id)).rejects.toThrow(/Not found/);
+      at('2026-08-05');
       await api.getDay('2026-08-05');
       const occurrences = (await api.listTasks()).filter((t) => t.seriesId === s.id);
       expect(occurrences).toHaveLength(1);
@@ -1417,6 +1472,7 @@ export function runApiContract(
     });
 
     it('day: a missed occurrence the series does not replace today goes to backlog', async () => {
+      at('2026-08-05');
       await api.upsertSeries({
         title: 'Laundry',
         categoryId: null,
@@ -1432,6 +1488,7 @@ export function runApiContract(
     });
 
     it('day: getDay sweeps stale planned tasks to backlog and leaves the rest', async () => {
+      at('2026-08-04');
       const plan = async (
         title: string,
         days: string[],
@@ -1501,6 +1558,7 @@ export function runApiContract(
     });
 
     it('option 3: a planned task that gains a time goes back to backlog on the next getDay; its row stays as history', async () => {
+      at('2026-08-04');
       const t = await api.createTask({ title: 'pset' });
       await api.upsertPlan({ taskId: t.id, day: '2026-08-04', plannedMinutes: 30, order: 0 });
       await api.transitionTask(t.id, 'planned');
@@ -1539,7 +1597,25 @@ export function runApiContract(
       );
     });
 
+    it('day: getDay refuses a future day and changes nothing', async () => {
+      at('2026-08-04');
+      const t = await api.createTask({ title: 'pset' });
+      const row = await api.upsertPlan({
+        taskId: t.id,
+        day: '2026-08-04',
+        plannedMinutes: 30,
+        order: 0,
+      });
+      await api.transitionTask(t.id, 'planned');
+      await expect(api.getDay('2026-08-05')).rejects.toThrow(FUTURE_DAY_ERROR);
+      await expect(api.getDay('2026-13-01')).rejects.toThrow('Invalid day');
+      expect((await api.getTask(t.id))?.status).toBe('planned');
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.id)).toEqual([row.id]);
+      expect((await api.getDay('2026-08-03')).date).toBe('2026-08-03'); // past days are allowed
+    });
+
     it('day: intent persists on the singleton', async () => {
+      at('2026-08-04');
       const d = await api.setDayIntent('2026-08-04', 'Protect the morning');
       expect(d.intent).toBe('Protect the morning');
       expect((await api.getDay('2026-08-04')).intent).toBe('Protect the morning');

@@ -54,6 +54,8 @@ import {
   PARENT_NO_PLAN_ERROR,
   isTimed,
   TIMED_NO_PLAN_ERROR,
+  FUTURE_DAY_ERROR,
+  isDayKey,
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
@@ -1160,6 +1162,13 @@ export class BackendClient implements ApiClient {
       if (!existing) throw new Error(`Not found: ${input.id}`);
       return this.repo.putPlan({ ...existing, ...fields, updatedAt: this.now() }, existing);
     }
+    // One alive row per (task, day): an id-less insert means "put it on this day", so a task already
+    // there is returned untouched — no resize, no reorder (edits go through `id`). Consistent, so a
+    // second "+ Today" straight after the first sees the first one's row.
+    const dup = (await this.repo.listPlans(input.day, { consistent: true })).find(
+      (p) => p.taskId === input.taskId,
+    );
+    if (dup) return dup;
     return this.repo.putPlan({ ...this.base(), ...fields });
   }
   async removePlan(id: string): Promise<void> {
@@ -1308,9 +1317,16 @@ export class BackendClient implements ApiClient {
     if (existing) return existing;
     return this.repo.putCheck({ ...this.base(), habitId, date }, date, habitId);
   }
+  // A tombstone at the same key, like every other delete (TECH §2.1): a stale device can tell "removed"
+  // from "never synced". A re-check writes a fresh row over it (new id) — stub parity.
   async uncheckHabit(habitId: string, date: string): Promise<void> {
     const existing = await this.repo.getCheck(date, habitId, { consistent: true });
-    if (existing) await this.repo.deleteCheck(date, habitId);
+    if (existing)
+      await this.repo.putCheck(
+        { ...existing, deletedAt: this.now(), updatedAt: this.now() },
+        date,
+        habitId,
+      );
   }
   async listHabitChecks(range: DateRange): Promise<HabitCheck[]> {
     return this.repo.listChecks(range.from, range.to);
@@ -1380,6 +1396,12 @@ export class BackendClient implements ApiClient {
   // `consistent` for the setters below, whose copy is written back: a capacity then an intent typed
   // straight after must both land. The app's load read stays eventual.
   async getDay(day: string, opts?: { consistent?: boolean }): Promise<Day> {
+    // Refused, never clamped: a day after the user's app day (their zone, their day start) would sweep
+    // today's plan. Past days stay allowed — Night at 2am reads yesterday's key by design.
+    if (!isDayKey(day)) throw new Error('Invalid day');
+    const { dayStartHour } = await this.ensureSettings();
+    if (day > dayKeyInZone(this.now(), USER_TIME_ZONE, dayStartHour))
+      throw new Error(FUTURE_DAY_ERROR);
     await this.materializeDueSeries(day);
     await this.sweepStalePlanned(day);
     const existing = await this.repo.getDayRow(day, opts);
@@ -1421,9 +1443,10 @@ export class BackendClient implements ApiClient {
   private async sweepStalePlanned(day: string): Promise<void> {
     const tasks = await this.repo.listTasks();
     if (!tasks.some((t) => t.status === 'planned')) return;
-    // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing.
-    if (stalePlannedMoves(tasks, await this.repo.listAllPlans(), day).length === 0) return;
-    const plans = await this.repo.listAllPlans({ consistent: true });
+    // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing. Rows
+    // before `day` never decide one (stalePlannedMoves reads `p.day >= day`), so this is one bounded
+    // read from today's rows on — not a scan of every plan row ever written.
+    const plans = await this.repo.listPlansFrom(day, { consistent: true });
     for (const { task } of stalePlannedMoves(tasks, plans, day)) {
       const fresh = await this.repo.getTask(task.id, { consistent: true });
       if (!fresh) continue;

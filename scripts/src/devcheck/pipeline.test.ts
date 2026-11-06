@@ -176,6 +176,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       getTask: async (id) => tasks.get(id) ?? null,
       listCategories: async () => [],
       listPlansForDay: async () => [],
+      listHabits: async () => [],
+      listHabitChecks: async () => [],
       getDay: async () => {
         throw new Error('unused');
       },
@@ -236,6 +238,24 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         tasks.delete(id);
       },
       upsertPlan: async () => {
+        throw new Error('unused');
+      },
+      removePlan: async () => {
+        throw new Error('unused');
+      },
+      transitionTask: async () => {
+        throw new Error('unused');
+      },
+      upsertHabit: async () => {
+        throw new Error('unused');
+      },
+      archiveHabit: async () => {
+        throw new Error('unused');
+      },
+      checkHabit: async () => {
+        throw new Error('unused');
+      },
+      uncheckHabit: async () => {
         throw new Error('unused');
       },
       setDayCapacity: async () => {

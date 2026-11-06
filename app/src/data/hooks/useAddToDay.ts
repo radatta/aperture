@@ -24,7 +24,8 @@ export function useAddToDay(day?: string) {
   const removePlan = useRemovePlan();
   const transition = useTransitionTask();
   const createTask = useCreateTask();
-  // upsertPlan has no server-side dedupe, so a double tap must not reach it twice.
+  // upsertPlan dedupes per (task, day) server-side; the set still guards the status step from a
+  // double tap, and the pre-read below still sets `order` and `already`.
   const inFlight = useRef(new Set<string>());
 
   // Settings may still be loading at first render, when `target` is the 4am fallback — resolve the

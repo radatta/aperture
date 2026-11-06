@@ -81,6 +81,19 @@ export interface DevDay {
   capacityHours: number | null;
   intent: string | null;
 }
+// The slices of a habit and a check the day-guards scenario reads.
+export interface DevHabit {
+  id: string;
+  name: string;
+  categoryId: string | null;
+  cadencePerWeek: number;
+  active: boolean;
+}
+export interface DevHabitCheck {
+  id: string;
+  habitId: string;
+  date: string;
+}
 
 // The slices of @aperture/shared's places contract the check reads (packages/shared/src/places.ts).
 export interface DevPlace {
@@ -180,6 +193,10 @@ export const PLACE_VIA = 'api:upsertPlace';
 export const UI_PLACE_VIA = 'ui:upsertPlace';
 // A category this harness created, recorded from the create response like a place.
 export const CATEGORY_VIA = 'api:upsertCategory';
+// A habit this harness created. The API has no habit delete, so cleanup ARCHIVES it (`active: false`) and
+// "exists" means listed and active — archived `devcheck …` habits stay on the test user, by design, until
+// a tombstoning deleteHabit lands (day-guards' follow-up).
+export const HABIT_VIA = 'api:upsertHabit';
 // The test user's Shortcut token. It has no id, so a rotate records `place-token:<run>` — before the call, like
 // a Flux set: a crash mid-call still leaves a token for the next run's sweep to revoke.
 // A recurring series this harness created — through the API, the browser's upsertSeries create (recorder.ts)
@@ -211,6 +228,7 @@ export type LedgerKind =
   | 'place'
   | 'placeToken'
   | 'category'
+  | 'habit'
   | 'financeBucket'
   | 'financeLink'
   | 'financeRule'
@@ -221,6 +239,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via !== undefined && SERIES_VIAS.includes(via)) return 'series';
   if (via === PLACE_VIA || via === UI_PLACE_VIA) return 'place';
   if (via === CATEGORY_VIA) return 'category';
+  if (via === HABIT_VIA) return 'habit';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
@@ -328,6 +347,9 @@ export function createApiClient({
     getTask: (id: string) => call<DevTask | null>('getTask', [id]),
     listCategories: () => call<DevCategory[]>('listCategories', []),
     listPlansForDay: (day: string) => call<DevPlan[]>('listPlansForDay', [day]),
+    listHabits: () => call<DevHabit[]>('listHabits', []),
+    listHabitChecks: (range: { from: string; to: string }) =>
+      call<DevHabitCheck[]>('listHabitChecks', [range]),
     // The app's own day read (it materializes due series and sweeps the day) — today only, as the app.
     getDay: (day: string) => call<DevDay>('getDay', [day]),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
@@ -444,6 +466,47 @@ export function createApiClient({
     }): Promise<DevPlan> {
       assertLedgerTask(input.taskId);
       return call<DevPlan>('upsertPlan', [input]);
+    },
+    // The row itself, so the guard can see whose task it is (plan ids are never ledgered).
+    async removePlan(plan: DevPlan): Promise<void> {
+      assertLedgerTask(plan.taskId);
+      await call<null>('removePlan', [plan.id]);
+    },
+    async transitionTask(id: string, status: 'backlog' | 'planned'): Promise<DevTask> {
+      assertLedgerTask(id);
+      return call<DevTask>('transitionTask', [id, status]);
+    },
+    // Create (no id) is ledgered like a category; an update must name a habit the ledger recorded.
+    async upsertHabit(input: {
+      id?: string;
+      name: string;
+      categoryId: string | null;
+      cadencePerWeek: number;
+      active?: boolean;
+    }): Promise<DevHabit> {
+      if (input.id) {
+        assertLedger(input.id, 'habit');
+        return call<DevHabit>('upsertHabit', [input]);
+      }
+      ledger.append({ run, op: 'intent', via: HABIT_VIA, title: input.name });
+      const habit = await call<DevHabit>('upsertHabit', [input]);
+      ledger.append({ run, op: 'created', id: habit.id, via: HABIT_VIA, title: input.name });
+      return habit;
+    },
+    // Cleanup's "delete": the API has none for habits, so the recorded habit is archived (HABIT_VIA).
+    async archiveHabit(id: string): Promise<void> {
+      assertLedger(id, 'habit');
+      const habit = (await reads.listHabits()).find((h) => h.id === id);
+      if (!habit) return; // never there, or gone some other way — nothing to archive
+      await call<DevHabit>('upsertHabit', [{ ...habit, active: false }]);
+    },
+    checkHabit: (habitId: string, date: string) => {
+      assertLedger(habitId, 'habit');
+      return call<DevHabitCheck>('checkHabit', [habitId, date]);
+    },
+    uncheckHabit: (habitId: string, date: string) => {
+      assertLedger(habitId, 'habit');
+      return call<null>('uncheckHabit', [habitId, date]);
     },
     // The test user's own day row — a singleton, nothing to ledger; a step that sets it puts the prior
     // values back (parts-v2b-reads).
