@@ -255,7 +255,7 @@ DynamoDB `DeleteItem` — the row is gone. The stub soft-deletes the same row. E
 app follows the rule (`deleteCategory` and `removePlan` both write `deletedAt`), so this is the lone
 outlier, and two things make it worse than an ordinary bug:
 
-*(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; every plan read keeps one row per id, the newest, so no read misses it and a failed write never loses it), and the running-copy
+*(Grepping `writes.delete` finds two other hits — a plan's old SK when it moves day or order (put first, then delete; a plan read keeps one row per id within what it reads, the newest, so no read misses it and a failed write never loses it), and the running-copy
 of a session on stop. Those are **key migrations**: the entity still exists under a different sort key.
 `deleteCheck` is the only one that destroys a row. The attachment delete's S3 `DeleteObject` (2026-11-01) isn't an entity delete: the metadata row is the tombstone, and the versioned bucket keeps the bytes 30 days. The place token's lookup rows (`placetoken#<hash>`, 2026-11-04) are deleted for real on rotate and revoke, on purpose: a credential that must stop working, not synced data — a tombstoned lookup row would still be a row a bug could read as valid. The token's pointer is never deleted; revoke writes it inactive ([tasks/places](../areas/tasks/places.md#4-the-shortcut-route)).)*
 

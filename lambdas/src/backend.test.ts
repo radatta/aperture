@@ -757,6 +757,15 @@ describe('backend read-then-write under lagging reads', () => {
     return { backend, doc, plan };
   };
 
+  it('a day’s plan list straight after a reorder shows the new order, not a lagging copy', async () => {
+    const { backend, doc, plan } = await movingPlan();
+    const first = await doc.get('u#local', sk.plan(DAY, 0, plan.id));
+    await backend.upsertPlan({ ...plan, order: 1 });
+    lagKey(doc, sk.plan(DAY, 0, plan.id), first);
+    lagKey(doc, sk.plan(DAY, 1, plan.id), null);
+    expect((await backend.listPlansForDay(DAY)).map((p) => p.order)).toEqual([1]);
+  });
+
   it('a reader during a plan move sees the row once, at every step', async () => {
     const { backend, doc, plan } = await movingPlan();
     const seen: number[] = [];

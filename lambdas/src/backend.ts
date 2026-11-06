@@ -1151,8 +1151,9 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Plans ---
+  // Consistent: the app refetches this straight after a plan write and computes the next reorder from it.
   async listPlansForDay(day: string): Promise<TaskPlan[]> {
-    return (await this.repo.listPlans(day)).sort((a, b) => a.order - b.order);
+    return (await this.repo.listPlans(day, { consistent: true })).sort((a, b) => a.order - b.order);
   }
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
     // Consistent: "+ Today" can follow straight on the editor's save that cleared the time.

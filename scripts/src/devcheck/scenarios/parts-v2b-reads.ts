@@ -48,6 +48,12 @@ export const partsV2bReads: Scenario = {
       what: '“Focus this” on two rows straight after each other → each task once after a reload, one live plan row each',
     },
     {
+      id: 'aborted-write',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'One write of a “Focus this” never reaches the server (a real dropped request), then a reload → each row once, two share an order; the next tap heals it',
+    },
+    {
       id: 'reload-mid-write',
       entry: 'api',
       kind: 'edge',
@@ -273,6 +279,61 @@ export const partsV2bReads: Scenario = {
         const orders = new Set(rows.map((r) => r.order));
         if (rows.length !== 4 || tasks.size !== 4 || orders.size !== 4)
           throw new Error(`plan rows: ${JSON.stringify(rows.map((r) => [r.taskId, r.order]))}`);
+      },
+    },
+    {
+      id: 'aborted-write',
+      entry: 'ui',
+      proves: ['aborted-write'],
+      title:
+        'A dropped write of a “Focus this”, then a reload: each row once, a tie on the server; the next tap heals it',
+      async run(ctx) {
+        const today = await appToday(ctx);
+        const mine = new Set(
+          (await ctx.api.reads.listTasks())
+            .filter((t) => PLANNED.some((w) => t.title === name(ctx, w)))
+            .map((t) => t.id),
+        );
+        const orders = async () =>
+          (await ctx.api.reads.listPlansForDay(today))
+            .filter((p) => mine.has(p.taskId))
+            .map((p) => p.order);
+        const until = async (what: string, ok: (o: number[]) => boolean) => {
+          let last: number[] = [];
+          for (let i = 0; i < 75; i++) {
+            last = await orders();
+            if (ok(last)) return;
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          throw new Error(`${what}: orders ${JSON.stringify(last)}`);
+        };
+        const distinct = (o: number[]) => new Set(o).size;
+        const dropped = await ctx.intercept('upsertPlan', { abort: true, times: 1 });
+        try {
+          await rowOf(ctx, name(ctx, 'pD')).getByRole('button', { name: 'Focus this' }).click();
+          await ctx.ui.expectText("Couldn't save that — try again.", 15_000);
+          if (dropped.hits() !== 1 || dropped.passed() !== 1)
+            throw new Error(`upsertPlan: ${dropped.hits()} dropped, ${dropped.passed()} sent`);
+        } finally {
+          await dropped.release();
+        }
+        await until('the sent write to leave a tie', (o) => o.length === 4 && distinct(o) === 3);
+        await ctx.page.reload();
+        await ctx.page.getByRole('button', { name: 'Daytime' }).click();
+        await ctx.ui.expectText(name(ctx, 'pD'), 15_000);
+        for (const what of PLANNED) {
+          const n = await ctx.page.getByText(name(ctx, what), { exact: true }).count();
+          if (n !== 1) throw new Error(`${what} shows ${n} times with a tie`);
+        }
+        await ctx.shot('tie');
+        const offers = [];
+        for (const what of PLANNED) {
+          const b = rowOf(ctx, name(ctx, what)).getByRole('button', { name: 'Focus this' });
+          if (await b.count()) offers.push(b);
+        }
+        if (offers.length !== 1) throw new Error(`${offers.length} rows offer “Focus this”`);
+        await offers[0]!.click();
+        await until('the next tap to heal the tie', (o) => o.length === 4 && distinct(o) === 4);
       },
     },
     {

@@ -85,6 +85,37 @@ describe('Right now card', () => {
     await waitFor(() => expect(screen.queryByText("Couldn't save that — try again.")).toBeNull());
   });
 
+  it('a “Focus this” with one failed write holds the buttons until its other writes are back', async () => {
+    const api = stub();
+    const tasks = [];
+    for (let i = 0; i < 5; i++) tasks.push(await plan(api, `Task ${i}`, { est: 30, order: i }));
+    const write = api.upsertPlan.bind(api);
+    let release = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    api.upsertPlan = async (input) => {
+      if (++calls === 1) throw new Error('upsertPlan failed (503)');
+      await held;
+      return write(input);
+    };
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(await screen.findByRole('button', { name: 'Daytime' }));
+    const buttons = await screen.findAllByRole('button', { name: 'Focus this' });
+    await user.click(buttons.at(-1)!);
+    await waitFor(() => expect(calls).toBe(3));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText("Couldn't save that — try again.")).toBeNull();
+    for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    release();
+    await screen.findByText("Couldn't save that — try again.");
+    await waitFor(() => {
+      for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
+        expect((b as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
   it('splits today’s plan into the Big 3 and Also today', async () => {
     const api = stub();
     for (let i = 0; i < 5; i++) await plan(api, `Task ${i}`, { est: 30, order: i });

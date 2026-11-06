@@ -291,9 +291,12 @@ export function RightNowCard() {
                 row={r}
                 busy={focusAction.isBusy(PROMOTE)}
                 onFocus={(id) =>
-                  focusAction.run(PROMOTE, () =>
-                    Promise.all(promote(rows, id).map((u) => upsertPlan.mutateAsync(u))),
-                  )
+                  focusAction.run(PROMOTE, async () => {
+                    // allSettled: the lock holds until every write is back, a failed one or not.
+                    const writes = promote(rows, id).map((u) => upsertPlan.mutateAsync(u));
+                    const results = await Promise.allSettled(writes);
+                    if (results.some((r) => r.status === 'rejected')) throw new Error('promote');
+                  })
                 }
               />
             ))}
