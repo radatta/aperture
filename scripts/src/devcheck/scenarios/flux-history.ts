@@ -5,6 +5,7 @@
 // so the sweep's delete of it is a no-op. The Library
 // tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
 import { randomInt } from 'node:crypto';
+import { DEV_ORIGIN, assertDevOrigin } from '../config';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 // A ULID like the app mints (the server refuses anything else): 10 time chars, 16 random, Crockford base32.
@@ -18,6 +19,12 @@ export function devUlid(now = Date.now()): string {
 }
 
 const EXERCISE = 'Chin Tuck (Cervical Retraction)';
+// The stage hides the capture bar, which ui.goto waits for; here the stepper is the page being up.
+const openStage = async (ctx: Ctx, id: string) => {
+  const url = `${DEV_ORIGIN}/flux/${id}`;
+  assertDevOrigin(url);
+  await ctx.page.goto(url, { waitUntil: 'domcontentloaded' });
+};
 const stepperOf = (ctx: Ctx) => ctx.page.getByRole('group', { name: 'Sets this session' });
 const expectSets = (ctx: Ctx, n: number) =>
   stepperOf(ctx).getByText(`${n} sets`, { exact: true }).waitFor({ timeout: 15_000 });
@@ -228,7 +235,7 @@ export const fluxHistory: Scenario = {
         const prior = (await ctx.api.reads.getSettings()).fluxSets;
         await ctx.api.writes.updateSettings({ fluxSets: {} });
         try {
-          await ctx.ui.goto('/flux/chin-tuck');
+          await openStage(ctx, 'chin-tuck');
           await expectSets(ctx, 2);
           await ctx.page.getByRole('button', { name: 'More sets' }).click();
           await expectSets(ctx, 3);
@@ -240,9 +247,9 @@ export const fluxHistory: Scenario = {
             if (held !== 3) await new Promise((r) => setTimeout(r, 500));
           }
           if (held !== 3) throw new Error(`the server holds ${held} sets for chin tuck, not 3`);
-          await ctx.ui.goto('/flux/cervical-rotation');
+          await openStage(ctx, 'cervical-rotation');
           await expectSets(ctx, 2);
-          await ctx.ui.goto('/flux/chin-tuck');
+          await openStage(ctx, 'chin-tuck');
           await expectSets(ctx, 3);
           await ctx.shot('sets-remembered');
         } finally {
